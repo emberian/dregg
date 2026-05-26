@@ -1034,17 +1034,18 @@ impl TurnExecutor {
             }
             (Some(vc_bytes), rp_opt) => {
                 // Decode the compressed Ristretto point.
-                let vc =
-                    ValueCommitment::from_bytes(&ValueCommitmentBytes(*vc_bytes)).ok_or_else(
-                        || {
-                            (
-                                TurnError::InvalidEffect {
-                                    reason: "NoteCreate value_commitment is not a valid Ristretto point".into(),
-                                },
-                                path.to_vec(),
-                            )
-                        },
-                    )?;
+                let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(*vc_bytes)).ok_or_else(
+                    || {
+                        (
+                            TurnError::InvalidEffect {
+                                reason:
+                                    "NoteCreate value_commitment is not a valid Ristretto point"
+                                        .into(),
+                            },
+                            path.to_vec(),
+                        )
+                    },
+                )?;
                 // Range proof is required when a value commitment is present.
                 let rp_bytes = rp_opt.ok_or_else(|| {
                     (
@@ -1069,10 +1070,7 @@ impl TurnExecutor {
                 bulletproof.verify_range(&vc).map_err(|e| {
                     (
                         TurnError::InvalidEffect {
-                            reason: format!(
-                                "NoteCreate range proof verification failed: {}",
-                                e
-                            ),
+                            reason: format!("NoteCreate range proof verification failed: {}", e),
                         },
                         path.to_vec(),
                     )

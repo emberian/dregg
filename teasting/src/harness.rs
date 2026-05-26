@@ -13,14 +13,17 @@
 //! online peers, and `tau` produces a total order.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use ed25519_dalek::SigningKey as DalekSigningKey;
 use pyana_blocklace::finality::{Blocklace, Payload};
 use pyana_captp::{FederationId as GroupId, PyanaUri};
 use pyana_cell::{AuthRequired, Ledger};
-use pyana_federation::{Federation, LocalSeat};
+use pyana_federation::{
+    Federation, FederationReceipt, FederationReceiptBody, KnownFederations, LocalSeat,
+};
 use pyana_turn::executor::{ComputronCosts, TurnExecutor};
-use pyana_turn::{Turn, TurnResult};
+use pyana_turn::{Turn, TurnReceipt, TurnResult};
 use pyana_types::{AttestedRoot, CellId, PublicKey as FedPublicKey, SigningKey};
 
 use crate::captp_sim::SimCapTpSession;
@@ -460,6 +463,13 @@ pub struct SimulationHarness {
     pub captp_sessions: HashMap<(usize, usize), SimCapTpSession>,
     /// Federation IDs for each federation (derived deterministically from name).
     pub federation_ids: Vec<GroupId>,
+    /// Cross-federation peer registry for Seam 6 receipt-lift verification.
+    ///
+    /// `known_federations[i]` holds the federation registry *as seen by
+    /// federation `i`*. A federation knows about itself (own entry) plus any
+    /// peers that were explicitly registered via
+    /// [`SimulationHarness::register_peer_federation`].
+    pub known_federations: Vec<KnownFederations>,
 }
 
 impl SimulationHarness {
@@ -473,6 +483,9 @@ impl SimulationHarness {
     pub fn new_federation(num_nodes: usize) -> Self {
         let fed = SimFederation::new("fed-alpha", num_nodes);
         let fed_id = Self::derive_federation_id("fed-alpha");
+        // Build the own-federation entry so receipt verification works.
+        let mut kf = KnownFederations::new();
+        kf.register(Arc::new(fed.canonical.clone()));
         Self {
             federations: vec![fed],
             clock: SimClock::new(),
@@ -480,6 +493,7 @@ impl SimulationHarness {
             ledger: Ledger::new(),
             captp_sessions: HashMap::new(),
             federation_ids: vec![fed_id],
+            known_federations: vec![kf],
         }
     }
 
@@ -489,6 +503,11 @@ impl SimulationHarness {
         let fed_b = SimFederation::new("fed-beta", nodes_b);
         let id_a = Self::derive_federation_id("fed-alpha");
         let id_b = Self::derive_federation_id("fed-beta");
+        // Each federation's KnownFederations starts with its own entry only.
+        let mut kf_a = KnownFederations::new();
+        kf_a.register(Arc::new(fed_a.canonical.clone()));
+        let mut kf_b = KnownFederations::new();
+        kf_b.register(Arc::new(fed_b.canonical.clone()));
         Self {
             federations: vec![fed_a, fed_b],
             clock: SimClock::new(),
@@ -496,6 +515,7 @@ impl SimulationHarness {
             ledger: Ledger::new(),
             captp_sessions: HashMap::new(),
             federation_ids: vec![id_a, id_b],
+            known_federations: vec![kf_a, kf_b],
         }
     }
 

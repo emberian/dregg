@@ -11076,8 +11076,7 @@ mod binding_proof_executor_tests {
         // Build a two-cell ledger: agent has enough balance for the fee, and
         // the target is reachable via a capability on the agent.
         let agent_balance: u64 = 1_000;
-        let (mut ledger, agent_id, target_id) =
-            super::setup_two_open_cells(agent_balance, 500);
+        let (mut ledger, agent_id, target_id) = super::setup_two_open_cells(agent_balance, 500);
 
         let executor = super::zero_cost_executor();
 
@@ -11699,7 +11698,7 @@ fn test_adversarial_exercise_via_cap_transfer_foreign_from_no_cap() {
             .effect(Effect::ExerciseViaCapability {
                 cap_slot: 0,
                 inner_effects: vec![Effect::Transfer {
-                    from: foreign_id,   // NOT cap_target -- actor has no cap here
+                    from: foreign_id, // NOT cap_target -- actor has no cap here
                     to: agent_id,
                     amount: 500,
                 }],
@@ -11721,10 +11720,7 @@ fn test_adversarial_exercise_via_cap_transfer_foreign_from_no_cap() {
                 reason
             );
         }
-        other => panic!(
-            "Expected Rejected (no cap to foreign), got: {:?}",
-            other
-        ),
+        other => panic!("Expected Rejected (no cap to foreign), got: {:?}", other),
     }
 
     // Verify foreign's balance is unchanged (no funds moved).
@@ -11827,7 +11823,11 @@ fn test_adversarial_fulfill_obligation_no_verifier_stark_proof() {
     }
     let turn = builder.fee(0).build();
     let result = executor.execute(&turn, &mut ledger);
-    assert!(result.is_committed(), "CreateObligation must succeed: {:?}", result);
+    assert!(
+        result.is_committed(),
+        "CreateObligation must succeed: {:?}",
+        result
+    );
 
     // Derive the obligation_id (must include the condition now -- #113 fix).
     let obligation_id = {
@@ -11881,7 +11881,9 @@ fn test_adversarial_fulfill_obligation_no_verifier_stark_proof() {
 
     // Verify the obligation is still unresolved (stake not returned).
     let obligations = executor.obligations.lock().unwrap();
-    let record = obligations.get(&obligation_id).expect("obligation must still exist");
+    let record = obligations
+        .get(&obligation_id)
+        .expect("obligation must still exist");
     assert!(!record.resolved, "obligation must remain unresolved");
     drop(obligations);
 
@@ -11928,7 +11930,11 @@ fn test_adversarial_create_obligation_distinct_ids_for_distinct_conditions() {
     }
     let turn_a = builder_a.fee(0).build();
     let result_a = executor.execute(&turn_a, &mut ledger);
-    assert!(result_a.is_committed(), "CreateObligation A must succeed: {:?}", result_a);
+    assert!(
+        result_a.is_committed(),
+        "CreateObligation A must succeed: {:?}",
+        result_a
+    );
 
     // Create obligation B: TurnExecuted condition (same payer/payee/stake/deadline).
     let mut builder_b = TurnBuilder::new(agent_id, 1);
@@ -11949,7 +11955,11 @@ fn test_adversarial_create_obligation_distinct_ids_for_distinct_conditions() {
     }
     let turn_b_built = builder_b.fee(0).build();
     let result_b = execute_chained(&executor, &turn_b_built, &mut ledger);
-    assert!(result_b.is_committed(), "CreateObligation B must succeed: {:?}", result_b);
+    assert!(
+        result_b.is_committed(),
+        "CreateObligation B must succeed: {:?}",
+        result_b
+    );
 
     // Derive both obligation IDs using the same hash logic as the executor.
     let id_a = {
@@ -12054,7 +12064,10 @@ fn test_queue_enqueue_unauthorized_actor_rejected() {
     // Verify queue is still empty.
     let queue_cell = ledger.get(&queue_id).unwrap();
     let length = u64::from_le_bytes(queue_cell.state.fields[1][..8].try_into().unwrap());
-    assert_eq!(length, 0, "queue must remain empty after unauthorized enqueue attempt");
+    assert_eq!(
+        length, 0,
+        "queue must remain empty after unauthorized enqueue attempt"
+    );
 }
 
 /// Adversarial test: QueuePipelineStep from owned source to victim's
@@ -12070,14 +12083,13 @@ fn test_queue_pipeline_step_into_restricted_sink_rejected() {
     {
         let nonce = ledger.get(&owner_id).unwrap().state.nonce();
         let mut builder = TurnBuilder::new(owner_id, nonce);
-        let action =
-            ActionBuilder::new_unchecked_for_tests(owner_id, "fill_source", owner_id)
-                .effect(Effect::QueueEnqueue {
-                    queue: source_id,
-                    message_hash: [0xAAu8; 32],
-                    deposit: 10,
-                })
-                .build();
+        let action = ActionBuilder::new_unchecked_for_tests(owner_id, "fill_source", owner_id)
+            .effect(Effect::QueueEnqueue {
+                queue: source_id,
+                message_hash: [0xAAu8; 32],
+                deposit: 10,
+            })
+            .build();
         builder.add_action(action);
         let turn = builder.fee(0).build();
         let result = execute_chained(&executor, &turn, &mut ledger);
@@ -12100,14 +12112,13 @@ fn test_queue_pipeline_step_into_restricted_sink_rejected() {
     let nonce = ledger.get(&owner_id).unwrap().state.nonce();
     let mut builder = TurnBuilder::new(owner_id, nonce);
     {
-        let action =
-            ActionBuilder::new_unchecked_for_tests(owner_id, "pipeline_attack", owner_id)
-                .effect(Effect::QueuePipelineStep {
-                    pipeline_id: [0u8; 32],
-                    source: source_id,
-                    sinks: vec![victim_sink_id],
-                })
-                .build();
+        let action = ActionBuilder::new_unchecked_for_tests(owner_id, "pipeline_attack", owner_id)
+            .effect(Effect::QueuePipelineStep {
+                pipeline_id: [0u8; 32],
+                source: source_id,
+                sinks: vec![victim_sink_id],
+            })
+            .build();
         builder.add_action(action);
     }
     let turn = builder.fee(0).build();
@@ -12190,7 +12201,10 @@ fn test_note_create_invalid_range_proof_rejected() {
                     "expected range proof error, got: {msg}"
                 );
             }
-            other => panic!("expected InvalidEffect for bad range proof, got: {:?}", other),
+            other => panic!(
+                "expected InvalidEffect for bad range proof, got: {:?}",
+                other
+            ),
         },
         other => panic!("expected Rejected, got: {:?}", other),
     }
@@ -12210,25 +12224,24 @@ fn test_note_spend_malformed_value_commitment_rejected() {
 
     let mut builder = TurnBuilder::new(agent_id, 0);
     {
-        let action =
-            ActionBuilder::new_unchecked_for_tests(agent_id, "bad_vc_spend", agent_id)
-                .effect(Effect::NoteSpend {
-                    nullifier,
-                    note_tree_root: [0x01u8; 32],
-                    value: 0,
-                    asset_type: 0,
-                    spending_proof: vec![0x01u8],
-                    value_commitment: Some(bad_vc_bytes),
-                })
-                .effect(Effect::NoteCreate {
-                    commitment: pyana_cell::NoteCommitment([0xCCu8; 32]),
-                    value: 0,
-                    asset_type: 0,
-                    encrypted_note: vec![],
-                    value_commitment: None,
-                    range_proof: None,
-                })
-                .build();
+        let action = ActionBuilder::new_unchecked_for_tests(agent_id, "bad_vc_spend", agent_id)
+            .effect(Effect::NoteSpend {
+                nullifier,
+                note_tree_root: [0x01u8; 32],
+                value: 0,
+                asset_type: 0,
+                spending_proof: vec![0x01u8],
+                value_commitment: Some(bad_vc_bytes),
+            })
+            .effect(Effect::NoteCreate {
+                commitment: pyana_cell::NoteCommitment([0xCCu8; 32]),
+                value: 0,
+                asset_type: 0,
+                encrypted_note: vec![],
+                value_commitment: None,
+                range_proof: None,
+            })
+            .build();
         builder.add_action(action);
     }
     let turn = builder.fee(0).build();
@@ -12242,10 +12255,7 @@ fn test_note_spend_malformed_value_commitment_rejected() {
                     "expected Ristretto point error, got: {msg}"
                 );
             }
-            other => panic!(
-                "expected InvalidEffect for malformed vc, got: {:?}",
-                other
-            ),
+            other => panic!("expected InvalidEffect for malformed vc, got: {:?}", other),
         },
         other => panic!("expected Rejected, got: {:?}", other),
     }

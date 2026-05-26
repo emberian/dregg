@@ -40,6 +40,29 @@ class PyanaReceipt extends InspectorBase {
             · ${String(r.computrons_used)} comp
           </span>`;
       }
+      // Per-action authorization list (Refactor 3: actions: Vec<ActionView>)
+      const actions = Array.isArray(r.actions) ? r.actions : [];
+      const actionList = actions.length
+        ? html`
+          <dt>actions</dt>
+          <dd>
+            <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;">
+              ${actions.map((a, i) => {
+                const authJson = a.authorization ? JSON.stringify(a.authorization) : null;
+                return html`
+                  <li style="display:flex;align-items:center;gap:6px;">
+                    <span style="color:var(--fg-dim);font-size:0.75rem;min-width:1.4em;">${String(i)}.</span>
+                    <code style="font-size:0.78rem;" title=${a.target_cell || ''}>${shortHex(a.target_cell, 10)}</code>
+                    <span style="color:var(--fg-dim);font-size:0.78rem;">${shortHex(a.method, 8)}</span>
+                    ${authJson
+                      ? html`<pyana-authorization data=${authJson} mode="compact"></pyana-authorization>`
+                      : null}
+                  </li>`;
+              })}
+            </ul>
+          </dd>`
+        : html`<dt>actions</dt><dd>${String(r.action_count)}</dd>`;
+
       return html`
         <div class="pyana-inspector pyana-inspector--cell">
           <header>
@@ -52,8 +75,12 @@ class PyanaReceipt extends InspectorBase {
             <dt>post state</dt><dd><code>${r.post_state_hash}</code></dd>
             <dt>timestamp</dt><dd>${String(r.timestamp)}</dd>
             <dt>computrons</dt><dd>${String(r.computrons_used)}</dd>
-            <dt>actions</dt><dd>${String(r.action_count)}</dd>
+            ${actionList}
           </dl>
+          <details style="margin-top:var(--s3,8px);">
+            <summary style="cursor:pointer;color:var(--fg-dim);font-size:0.82rem;user-select:none;">Proof</summary>
+            <pyana-proof uri=${`pyana://receipt/${r.turn_hash}`} mode="default"></pyana-proof>
+          </details>
         </div>`;
     };
 

@@ -403,6 +403,40 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
                 hasher_inputs.push(*sink_new_root);
                 hasher_inputs.push(*message_hash);
             }
+            // ---- Near-miss aliasing closure (#100 follow-up) ----
+            // Domain-tag bytes are reserved in the selector index space
+            // (46, 47, 48 — matching `sel::BURN`, `sel::CELL_DESTROY`,
+            // `sel::ATTENUATE_CAPABILITY`).
+            Effect::Burn {
+                target_hash,
+                amount_lo,
+                amount_full,
+            } => {
+                hasher_inputs.push(BabyBear::new(46));
+                hasher_inputs.push(*target_hash);
+                hasher_inputs.push(*amount_lo);
+                // Bind the full u64 via 4×16-bit limbs (mirrors
+                // BridgeMint / BridgeLock / CreateEscrow) so the proof
+                // commits to the entire amount, not just the low 30 bits.
+                let limbs = u64_to_4_limbs_16(*amount_full);
+                hasher_inputs.extend_from_slice(&limbs);
+            }
+            Effect::CellDestroy {
+                target_hash,
+                death_certificate_hash,
+            } => {
+                hasher_inputs.push(BabyBear::new(47));
+                hasher_inputs.push(*target_hash);
+                hasher_inputs.push(*death_certificate_hash);
+            }
+            Effect::AttenuateCapability {
+                cap_slot_hash,
+                narrower_commitment,
+            } => {
+                hasher_inputs.push(BabyBear::new(48));
+                hasher_inputs.push(*cap_slot_hash);
+                hasher_inputs.push(*narrower_commitment);
+            }
         }
     }
     let h = hash_many(&hasher_inputs);

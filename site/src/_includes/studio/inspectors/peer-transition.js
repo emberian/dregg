@@ -42,12 +42,12 @@ class PyanaPeerTransition extends HTMLElement {
   }
 
   async connectedCallback() {
-    // Wait for pyana ready — gives us h/render/html/effect.
-    if (window.pyana) {
-      this._api = window.pyana;
+    // Wait for pyanaUi ready — gives us h/render/html/effect.
+    if (window.pyanaUi) {
+      this._api = window.pyanaUi;
     } else {
       this._api = await new Promise(resolve => {
-        window.addEventListener('pyana:ready', e => resolve(e.detail), { once: true });
+        window.addEventListener('pyanaUi:ready', e => resolve(e.detail), { once: true });
       });
     }
     this._tryFindWasm();

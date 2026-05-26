@@ -1150,8 +1150,7 @@ pub fn generate_effect_vm_trace_ext(
                 row[PARAM_BASE + param::ATTN_NARROWER_COMMITMENT] = *narrower_commitment;
 
                 let leaf = hash_2_to_1(*cap_slot_hash, *narrower_commitment);
-                new_state.capability_root =
-                    hash_2_to_1(new_state.capability_root, leaf);
+                new_state.capability_root = hash_2_to_1(new_state.capability_root, leaf);
                 new_state.nonce += 1;
             }
         }

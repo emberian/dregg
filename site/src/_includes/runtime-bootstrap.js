@@ -1,8 +1,8 @@
 /**
  * Pyana runtime bootstrap.
  *
- * Loads Preact + signals + htm from CDN, exposes a single `window.pyana`
- * namespace, and mounts every `<[data-vizzer]>` element on the page once
+ * Loads Preact + signals + htm from CDN, exposes `window.pyanaUi` for Studio
+ * use, and mounts every `<[data-vizzer]>` element on the page once
  * its visualizer module has registered.
  *
  * Usage in any HTML page:
@@ -186,10 +186,14 @@ function makeApi({ preact, signals, html }) {
   try {
     const mods = await loadModules();
     const api = makeApi(mods);
-    window.pyana = api;
+    window.pyanaUi = api;
 
-    // Dispatch an event so visualizer modules can wait for readiness.
-    window.dispatchEvent(new CustomEvent('pyana:ready', { detail: api }));
+    // Dispatch an event so Studio modules can wait for readiness.
+    // NOTE: window.pyana is the canonical user-facing dapp API owned by the
+    // Cipherclerk browser extension. This bootstrap uses window.pyanaUi
+    // to avoid the silent-failure collision (the extension claims window.pyana
+    // via Object.defineProperty writable:false).
+    window.dispatchEvent(new CustomEvent('pyanaUi:ready', { detail: api }));
 
     // Auto-mount any visualizers already in the document.
     if (document.readyState === 'loading') {

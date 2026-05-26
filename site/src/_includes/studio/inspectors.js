@@ -16,8 +16,8 @@ import { findRuntime } from './context.js';
 
 function ready() {
   return new Promise(resolve => {
-    if (window.pyana) return resolve(window.pyana);
-    window.addEventListener('pyana:ready', e => resolve(e.detail), { once: true });
+    if (window.pyanaUi) return resolve(window.pyanaUi);
+    window.addEventListener('pyanaUi:ready', e => resolve(e.detail), { once: true });
   });
 }
 
@@ -85,6 +85,22 @@ class PyanaCell extends InspectorBase {
             balance ${String(c.balance)} · ${String(c.num_capabilities)} caps
           </span>`;
       }
+      // Program section: render <pyana-cell-program> if a program is present.
+      // We pass data-program as a JSON attribute (the element supports this).
+      const hasProg = c.program && c.program.kind !== 'None';
+      const progDataAttr = hasProg ? JSON.stringify(c.program) : null;
+      const progSection = hasProg
+        ? html`
+          <details style="margin-top:var(--s3,8px);">
+            <summary style="cursor:pointer;color:var(--fg-dim);font-size:0.82rem;user-select:none;">Program</summary>
+            <pyana-cell-program mode="default" data-program=${progDataAttr}></pyana-cell-program>
+          </details>`
+        : html`
+          <details style="margin-top:var(--s3,8px);">
+            <summary style="cursor:pointer;color:var(--fg-dim);font-size:0.82rem;user-select:none;">Program</summary>
+            <div style="color:var(--fg-dim);font-size:0.82rem;padding:4px 0;">no program — any authorized state change is valid.</div>
+          </details>`;
+
       return html`
         <div class="pyana-inspector pyana-inspector--cell">
           <header>
@@ -99,6 +115,7 @@ class PyanaCell extends InspectorBase {
             <dt>delegation epoch</dt><dd>${String(c.delegation_epoch)}</dd>
             <dt>permissions</dt><dd><code>${JSON.stringify(c.permissions)}</code></dd>
           </dl>
+          ${progSection}
         </div>`;
     };
 
@@ -155,3 +172,10 @@ import './inspectors/intent.js';
 import './inspectors/federation.js';
 import './inspectors/block.js';
 import './inspectors/delegation-graph.js';
+import './inspectors/authorization.js';
+import './inspectors/cell-program.js';
+import './inspectors/turn-debugger.js';
+import './inspectors/peer-transition.js';
+import './inspectors/proof.js';
+import './inspectors/merkle-tree.js';
+import './inspectors/stealth-address.js';

@@ -19,6 +19,7 @@ import type {
   InternalCipherclerkState,
   Intent,
   IntentConstraint,
+  KnownFederation,
   LogEntry,
   MatchSpec,
   MessageType,
@@ -67,6 +68,7 @@ const PRIVACY_STATE_KEY = "pyana_privacy_state";
 const DEFAULT_INTENT_EXPIRY_MS = 5 * 60 * 1000;
 const INTENT_GC_INTERVAL = 60_000;
 const LIVE_REFS_KEY = "pyana_live_refs";
+const KNOWN_FEDERATIONS_KEY = "pyana_known_federations";
 const WS_MAX_RECONNECT_DELAY = 60000;
 const WS_AUTH_TIMEOUT_MS = 5000;
 
@@ -1724,9 +1726,13 @@ async function signTurn(turnSpec: TurnSpec): Promise<SignTurnResult> {
   }
   if (!cc.secretKey) return { error: "Cipherclerk secret key not available", submitted: false };
 
-  let turnData: { turn_id: string; turn_bytes: Uint8Array; signature?: Uint8Array };
-  if (w.build_turn) {
-    turnData = w.build_turn(JSON.stringify({
+  // Require the v3 build_turn export. The old JSON-only fallback produced
+  // non-v3-format turns that the executor rejects post-soundness-sweep.
+  if (!w.build_turn) {
+    throw new Error("signTurnV3: build_turn export required (v3 message format)");
+  }
+  const turnData: { turn_id: string; turn_bytes: Uint8Array; signature?: Uint8Array } =
+    w.build_turn(JSON.stringify({
       sender_pubkey: cc.publicKey,
       sender_privkey: cc.secretKey,
       action: turnSpec.action,
@@ -1736,30 +1742,6 @@ async function signTurn(turnSpec: TurnSpec): Promise<SignTurnResult> {
       metadata: turnSpec.metadata || null,
       timestamp: Date.now(),
     }));
-  } else {
-    const turnJson = JSON.stringify({
-      sender: cc.publicKey,
-      action: turnSpec.action,
-      resource: turnSpec.resource || "*",
-      amount: turnSpec.amount || 0,
-      recipient: turnSpec.recipient || null,
-      metadata: turnSpec.metadata || null,
-      timestamp: Date.now(),
-    });
-    if (!w.sign_message) {
-      return { error: "WASM sign_message export not available", submitted: false };
-    }
-    const signature = w.sign_message(
-      new Uint8Array(cc.secretKey),
-      new TextEncoder().encode(turnJson)
-    );
-    turnData = {
-      turn_id: "js:" + Array.from(crypto.getRandomValues(new Uint8Array(16)))
-        .map(b => b.toString(16).padStart(2, "0")).join(""),
-      turn_bytes: new TextEncoder().encode(turnJson),
-      signature,
-    };
-  }
 
   const resp = await nodeRequest(nodeConfig, "/turns/submit", {
     method: "POST",
@@ -1787,6 +1769,55 @@ async function queryBalance(): Promise<{ balance?: number; error?: string }> {
   const resp = await nodeRequest<{ balance?: number }>(nodeConfig, `/accounts/${pubkeyHex}/balance`);
   if (!resp.ok) return { error: `Failed to query balance: ${resp.error}` };
   return { balance: resp.data?.balance ?? 0 };
+}
+
+/**
+ * Sign and submit a pre-built postcard-encoded Turn (v3 wire format).
+ * starbridge-apps turn-builders produce raw bytes; this is the canonical
+ * surface for that path.
+ *
+ * TODO(wasm): The wasm module does not yet export `sign_turn_v3`. When the
+ * export lands, replace the stub error below with:
+ *   w.sign_turn_v3(turnBytes)
+ * and update the PyanaWasm interface in types.ts accordingly.
+ */
+async function signTurnV3(_turnBytes: Uint8Array): Promise<SignTurnResult> {
+  // TODO: wire to w.sign_turn_v3 when the wasm export is available.
+  return { error: "signTurnV3: wasm sign_turn_v3 export not yet available", submitted: false };
+}
+
+/**
+ * Register a known federation in local chrome.storage.local.
+ * Keyed by federation_id under KNOWN_FEDERATIONS_KEY.
+ */
+async function registerFederation(federationId: string, name: string, committeePubkeys: string[]): Promise<{ success: boolean }> {
+  const stored = await chrome.storage.local.get(KNOWN_FEDERATIONS_KEY);
+  const registry: Record<string, KnownFederation> = stored[KNOWN_FEDERATIONS_KEY] || {};
+  registry[federationId] = { federationId, name, committeePubkeys, registeredAt: Date.now() };
+  await chrome.storage.local.set({ [KNOWN_FEDERATIONS_KEY]: registry });
+  return { success: true };
+}
+
+/**
+ * List all known federations from the local registry.
+ */
+async function listKnownFederations(): Promise<KnownFederation[]> {
+  const stored = await chrome.storage.local.get(KNOWN_FEDERATIONS_KEY);
+  const registry: Record<string, KnownFederation> = stored[KNOWN_FEDERATIONS_KEY] || {};
+  return Object.values(registry);
+}
+
+/**
+ * Build a serialized Authorization::CapTpDelivered envelope for attaching
+ * to a turn during a CapTP handoff.
+ *
+ * TODO(wasm): The wasm module does not yet export `create_captp_delivered_auth`.
+ * When the export lands, replace the stub below with the real wasm call and
+ * update PyanaWasm in types.ts.
+ */
+function createCapTpDeliveredAuth(_handoffCertB58: string, _introducerPk: string, _senderPk: string): { authBytes: number[]; error?: string } {
+  // TODO: wire to w.create_captp_delivered_auth when the wasm export is available.
+  return { authBytes: [], error: "createCapTpDeliveredAuth: wasm export not yet available" };
 }
 
 // ---------------------------------------------------------------------------
@@ -1898,11 +1929,13 @@ const PAGE_ALLOWED_METHODS = new Set<MessageType>([
   "pyana:createBearerCap", "pyana:verifyBearerCap",
   "pyana:createFromFactory", "pyana:verifyProvenance",
   "pyana:makeCellSovereign", "pyana:peerExchange", "pyana:composeProofs",
-  "pyana:signTurn", "pyana:queryBalance", "pyana:getNodeConfig",
+  "pyana:signTurn", "pyana:signTurnV3", "pyana:queryBalance",
   "pyana:shareCapability", "pyana:acceptCapability", "pyana:createHandoff",
   "pyana:mountService", "pyana:discoverServices", "pyana:resolvePath",
   "pyana:storageWrite", "pyana:storageRead", "pyana:storageQuota",
   "pyana:federationStatus", "pyana:proposeRoutes", "pyana:voteOnProposal",
+  "pyana:registerFederation", "pyana:listKnownFederations",
+  "pyana:createCapTpDeliveredAuth",
 ]);
 
 const POPUP_ONLY_METHODS = new Set<MessageType>([
@@ -2578,6 +2611,39 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       }
     }
 
+    // Turn v3: pre-built postcard-encoded Turn bytes signed by the cipherclerk.
+    case "pyana:signTurnV3": {
+      const turnBytes = new Uint8Array(message.turnBytes as number[]);
+      const result = await signTurnV3(turnBytes);
+      resetLockTimer();
+      return { id: message.id, result };
+    }
+
+    // Federation registry
+    case "pyana:registerFederation": {
+      const result = await registerFederation(
+        message.federationId as string,
+        message.name as string,
+        message.committeePubkeys as string[],
+      );
+      return { id: message.id, result };
+    }
+
+    case "pyana:listKnownFederations": {
+      const result = await listKnownFederations();
+      return { id: message.id, result };
+    }
+
+    // CapTP delivered authorization
+    case "pyana:createCapTpDeliveredAuth": {
+      const result = createCapTpDeliveredAuth(
+        message.handoffCertB58 as string,
+        message.introducerPk as string,
+        message.senderPk as string,
+      );
+      return { id: message.id, result };
+    }
+
     default:
       return { id: message.id, error: "Unknown message type" };
   }
@@ -2747,6 +2813,37 @@ function tryConnect(url: string, onFail: () => void): void {
         if (intent && intent.expiry > Date.now() && !intentPool.has(intent.id)) {
           intentPool.set(intent.id, { intent, receivedAt: Date.now() });
         }
+        break;
+      }
+      case "note_announcement": {
+        // Check whether any held stealth keypair owns this note.
+        if (!wasm || !wasmLoaded) break;
+        const w = wasm;
+        const cc = await loadState();
+        if (cc.locked || !cc.stealthPrivate || !cc.stealthMeta) break;
+        const ephemeralPubkey = new Uint8Array(msg.ephemeral_pubkey as number[]);
+        const oneTimePubkey = new Uint8Array(msg.one_time_pubkey as number[]);
+        const viewPrivkey = new Uint8Array(cc.stealthPrivate.viewPrivkey);
+        const spendPubkey = new Uint8Array(cc.stealthMeta.spendPubkey);
+        let ownershipResult: { is_ours: boolean; one_time_privkey: Uint8Array | null };
+        try {
+          ownershipResult = w.check_stealth_ownership(viewPrivkey, spendPubkey, ephemeralPubkey, oneTimePubkey);
+        } catch (_e) {
+          break;
+        }
+        if (!ownershipResult.is_ours) break;
+        const note: StealthNote = {
+          noteId: msg.note_id as string,
+          amount: (msg.amount as number) ?? null,
+          assetType: (msg.asset_type as string) || "unknown",
+          oneTimePrivkey: ownershipResult.one_time_privkey ? Array.from(ownershipResult.one_time_privkey) : null,
+          ephemeralPubkey: Array.from(ephemeralPubkey),
+          memo: (msg.memo as string) || null,
+          receivedAt: Date.now(),
+        };
+        cc.stealthNotes.push(note);
+        await saveState();
+        notifySubscribers("stealthNoteReceived", { note });
         break;
       }
     }

@@ -202,12 +202,8 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                         let mut out = [BabyBear::ZERO; 8];
                         for i in 0..8 {
                             let off = i * 4;
-                            let v = u32::from_le_bytes([
-                                b[off],
-                                b[off + 1],
-                                b[off + 2],
-                                b[off + 3],
-                            ]);
+                            let v =
+                                u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
                             out[i] = BabyBear::new(v % pyana_circuit::field::BABYBEAR_P);
                         }
                         out

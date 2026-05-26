@@ -803,15 +803,13 @@ impl StarkAir for EffectVmAir {
         if public_inputs.len() >= pi::BASE_COUNT {
             for i in 0..4 {
                 let pi_topic_i = public_inputs[pi::EMIT_EVENT_TOPIC_HASH_BASE + i];
-                let c_topic =
-                    s_emitevent * (local[PARAM_BASE + i] - pi_topic_i);
+                let c_topic = s_emitevent * (local[PARAM_BASE + i] - pi_topic_i);
                 combined = combined + alpha_pow * c_topic;
                 alpha_pow = alpha_pow * alpha;
             }
             for i in 0..4 {
                 let pi_payload_i = public_inputs[pi::EMIT_EVENT_PAYLOAD_HASH_BASE + i];
-                let c_payload =
-                    s_emitevent * (local[PARAM_BASE + 4 + i] - pi_payload_i);
+                let c_payload = s_emitevent * (local[PARAM_BASE + 4 + i] - pi_payload_i);
                 combined = combined + alpha_pow * c_payload;
                 alpha_pow = alpha_pow * alpha;
             }

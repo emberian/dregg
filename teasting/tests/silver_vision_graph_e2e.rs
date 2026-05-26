@@ -73,8 +73,9 @@ use std::collections::HashMap;
 use ed25519_dalek::{Signer as _, SigningKey as DalekSigningKey};
 use pyana_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use pyana_circuit::{
-    BabyBear, CellState as VmCellState, Effect as VmEffect, EffectVmAir, generate_effect_vm_trace,
+    BabyBear, CellState as VmCellState, Effect as VmEffect, EffectVmAir,
     effect_vm::pi as vm_pi,
+    generate_effect_vm_trace,
     stark::{self, proof_to_bytes},
 };
 use pyana_commit::typed::canonical_32_to_felts_4;
@@ -82,9 +83,7 @@ use pyana_turn::{
     ActionBuilder, CallForest, CommitmentMode, ComputronCosts, DelegationMode, Effect, Turn,
     TurnExecutor, TurnReceipt, TurnResult,
 };
-use pyana_types::{
-    AttestedRoot, PublicKey, Signature, merkle_root_of_receipt_hashes,
-};
+use pyana_types::{AttestedRoot, PublicKey, Signature, merkle_root_of_receipt_hashes};
 use pyana_verifier::{
     ReplayEntry, ReplayVerdict, ReplayWitnessAvailability, ReplayWitnessBundle, replay_chain,
 };
@@ -125,7 +124,13 @@ fn permissive_cell(seed: &str, balance: u64) -> Cell {
 fn make_graph_ledger() -> (Ledger, [CellId; 5]) {
     let mut ledger = Ledger::new();
     let mut ids = [CellId::from_bytes([0u8; 32]); 5];
-    let seeds = ["A-issuer", "B-registry", "C-subscription", "D-worker", "E-settlement"];
+    let seeds = [
+        "A-issuer",
+        "B-registry",
+        "C-subscription",
+        "D-worker",
+        "E-settlement",
+    ];
     let balances = [1_000_000u64, 1_000_000, 5_000_000, 100_000, 1_000_000];
     for i in 0..5 {
         let cell = permissive_cell(seeds[i], balances[i]);
@@ -570,7 +575,10 @@ fn silver_vision_graph_e2e() {
 
     // ── Stage 2: replay on a fresh ledger ─────────────────────────────
     let (mut replay_ledger, replay_ids) = make_graph_ledger();
-    assert_eq!(replay_ids, ids, "replay ledger must produce the same cell ids");
+    assert_eq!(
+        replay_ids, ids,
+        "replay ledger must produce the same cell ids"
+    );
     let replay_executor = TurnExecutor::new(ComputronCosts::default_costs());
     for step in &steps {
         let r = replay_executor.execute(&step.turn, &mut replay_ledger);

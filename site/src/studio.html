@@ -100,7 +100,7 @@
         <h2 style="margin-top:var(--s4);">Spike findings</h2>
         <ul style="font-size:0.9rem;color:var(--fg-dim);line-height:1.6;">
           <li><strong>Runtime substrate works.</strong> wasm <code>PyanaRuntime</code> creates cells, accepts turns, reports state. Signals propagate mutations to <code>&lt;pyana-cell&gt;</code> live.</li>
-          <li><strong>Mutation gap.</strong> The sim runtime's <code>execute_turn_for_agent</code> doesn't sign turns, so <em>Send</em> / <em>SetState</em> effects are rejected by the executor (<code>permission denied … requires Signature</code>). The <em>fee is still deducted</em> on rejection — observe Alice's balance decreasing on each failed transfer.</li>
+          <li><strong>Transfers commit.</strong> The sim runtime signs turns internally via <code>AgentCipherclerk::sign_action</code>. The transfer button declares <code>excess=500</code> to satisfy the conservation law (fee burn), so transfers now <strong>commit</strong> rather than reject.</li>
           <li><strong>Read paths fully exercised.</strong> <code>get_all_cells</code>, <code>get_cell_state</code>, version-based invalidation all work.</li>
           <li><strong>Token mint works.</strong> <code>agent_mint_token</code> attaches a held capability without needing a turn — minted tokens accumulate on the agent record (visible only via state dump for now; needs a <code>&lt;pyana-capability&gt;</code> inspector).</li>
           <li><strong>Next:</strong> JS-side signing (Ed25519 on the agent's private key), or a wasm-side helper that signs internally using the deterministic sim keys.</li>
@@ -115,8 +115,8 @@
   // Wait for the bootstrap to fire pyana:ready, then init wasm and the runtime.
   function ready() {
     return new Promise(resolve => {
-      if (window.pyana) return resolve(window.pyana);
-      window.addEventListener('pyana:ready', e => resolve(e.detail), { once: true });
+      if (window.pyanaUi) return resolve(window.pyanaUi);
+      window.addEventListener('pyanaUi:ready', e => resolve(e.detail), { once: true });
     });
   }
 
@@ -139,10 +139,8 @@
       const { createInMemoryRuntime } = await import('/_includes/studio/runtime-in-memory.js');
       const runtime = await createInMemoryRuntime({ wasm: wasmMod, signals: api });
 
-      // Inspector custom elements register on import.
+      // Inspector custom elements register on import (barrel includes all Wave 2 inspectors).
       await import('/_includes/studio/inspectors.js');
-      // Peer-transition inspector (not yet in barrel — load standalone).
-      await import('/_includes/studio/inspectors/peer-transition.js');
 
       // Attach to context provider.
       const app = document.getElementById('app');
@@ -186,11 +184,13 @@
       });
       document.getElementById('btn-transfer').addEventListener('click', () => {
         // Fee is the per-turn computron budget AND is deducted from balance.
-        // Transfer uses 100 computrons; 500 leaves headroom. Note: this will
-        // be rejected — the sim runtime doesn't sign turns yet. See findings.
+        // Transfer 100 tokens; declare excess=500 so the conservation law
+        // accounts for both the transfer amount and the fee burn.
+        // (excess=500 tells the executor 500 units are intentionally consumed
+        // as the fee, satisfying the "excess not zero at turn end" check.)
         const result = runtime.executeTurn(
           alice.agent_index,
-          [{ type: 'transfer', to: bob.cell_id, amount: 100 }],
+          [{ type: 'transfer', to: bob.cell_id, amount: 100, excess: 500 }],
           500,
         );
         console.log('[studio] turn result:', JSON.stringify(result));

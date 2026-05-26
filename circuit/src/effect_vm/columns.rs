@@ -58,10 +58,12 @@
 /// Total trace width.
 /// Stage 2: 105 (46 selectors + 14 state_before + 8 params + 14 state_after + 23 aux).
 /// Sovereign-witness teeth: 110 (+ 5 sovereign-witness aux cols).
-pub const EFFECT_VM_WIDTH: usize = 110;
+/// Near-miss aliasing closure (#100 follow-up): 113 (+ 3 selectors for Burn,
+/// CellDestroy, AttenuateCapability — see those variants on `Effect`).
+pub const EFFECT_VM_WIDTH: usize = 113;
 
 /// Number of effect types (selectors).
-pub const NUM_EFFECTS: usize = 46;
+pub const NUM_EFFECTS: usize = 49;
 
 /// Selector column indices.
 pub mod sel {
@@ -193,6 +195,21 @@ pub mod sel {
     pub const RELEASE_COMMITTED_ESCROW: usize = 44;
     /// RefundCommittedEscrow: same as REFUND_ESCROW but committed variant.
     pub const REFUND_COMMITTED_ESCROW: usize = 45;
+    /// Burn: explicit, non-conservation balance reduction. Distinct from
+    /// `TRANSFER` with `direction == 1` (no destination credit) and from
+    /// `NOTE_CREATE` (no commitment hidden in the row). The AIR pins
+    /// `was_burn_flag == 1` and binds the target via params[0].
+    pub const BURN: usize = 46;
+    /// CellDestroy: permanently retire a cell. Lifecycle lives off-trace
+    /// but the AIR binds both `target_hash` (params[0]) and
+    /// `death_certificate_hash` (params[1]) into effects_hash, distinct
+    /// from any SetPermissions alias.
+    pub const CELL_DESTROY: usize = 47;
+    /// AttenuateCapability: narrow an existing c-list slot's commitment.
+    /// Distinct from REVOKE_CAPABILITY: revoke folds a `slot_hash` into
+    /// cap_root in a single step; attenuate folds a 2-of-2 leaf
+    /// `hash_2_to_1(cap_slot_hash, narrower_commitment)` into cap_root.
+    pub const ATTENUATE_CAPABILITY: usize = 48;
 
     // ---- Stage 7-γ.2 Phase 1.5 (planned): bilateral role selectors ----
     //
@@ -462,6 +479,25 @@ pub mod param {
     /// This is the sum of deposits paid by enqueue ops minus refunds from dequeue ops.
     /// Allows the circuit to prove the correct balance delta for atomic transactions.
     pub const ATOMIC_TX_NET_DEPOSIT: usize = 4;
+    // Burn params (near-miss aliasing closure, #100 follow-up).
+    /// Hash of the target cell whose balance is reduced.
+    pub const BURN_TARGET: usize = 0;
+    /// Burn amount (low 30 bits). Constraints subtract from balance_lo.
+    pub const BURN_AMOUNT_LO: usize = 1;
+    /// Disclosure flag — constrained to 1 on any Burn row so that a
+    /// verifier replaying the trace cannot confuse this with a
+    /// Transfer-direction-1 row.
+    pub const BURN_WAS_BURN_FLAG: usize = 2;
+    // CellDestroy params (near-miss aliasing closure).
+    /// Hash of the cell being destroyed.
+    pub const CELL_DESTROY_TARGET: usize = 0;
+    /// `DeathCertificate::certificate_hash()` truncated into a BabyBear.
+    pub const CELL_DESTROY_CERT_HASH: usize = 1;
+    // AttenuateCapability params (near-miss aliasing closure).
+    /// Hash of the c-list slot being narrowed.
+    pub const ATTN_CAP_SLOT_HASH: usize = 0;
+    /// Commitment to the new (narrower) permissions / facet / expiry.
+    pub const ATTN_NARROWER_COMMITMENT: usize = 1;
     // PipelineStep params.
     /// Pipeline identity hash (content-addressed from stage descriptions).
     pub const PIPELINE_ID: usize = 0;

@@ -4848,8 +4848,7 @@ impl AgentCipherclerk {
             let mut out = [BabyBear::ZERO; 8];
             for i in 0..8 {
                 let off = i * 4;
-                let v =
-                    u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
+                let v = u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
                 out[i] = BabyBear::new(v % pyana_circuit::field::BABYBEAR_P);
             }
             out
@@ -5105,8 +5104,7 @@ impl AgentCipherclerk {
                     // and treat archive_hash as the payload so the (topic,
                     // payload) PI slots distinguish ReceiptArchive from a
                     // genuine event emission.
-                    let topic_bytes =
-                        *blake3::hash(b"pyana-receipt-archive-v1").as_bytes();
+                    let topic_bytes = *blake3::hash(b"pyana-receipt-archive-v1").as_bytes();
                     vm_effects.push(VmEffect::EmitEvent {
                         topic_hash: bytes32_to_8_felts(&topic_bytes),
                         payload_hash: bytes32_to_8_felts(&archive_hash_bytes),

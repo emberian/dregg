@@ -517,8 +517,7 @@ pub const EMIT_EVENT_PAYLOAD_HASH_BASE: usize =
     EMIT_EVENT_TOPIC_HASH_BASE + EMIT_EVENT_TOPIC_HASH_LEN; // 182
 pub const EMIT_EVENT_PAYLOAD_HASH_LEN: usize = 8;
 
-pub const BASE_COUNT: usize =
-    EMIT_EVENT_PAYLOAD_HASH_BASE + EMIT_EVENT_PAYLOAD_HASH_LEN; // 190
+pub const BASE_COUNT: usize = EMIT_EVENT_PAYLOAD_HASH_BASE + EMIT_EVENT_PAYLOAD_HASH_LEN; // 190
 /// Elements per custom effect entry in PI (8 vk_hash + 4 proof_commit).
 /// Was 8 in PI layout v1; widened to 12 in v2 (`VK_PI_LAYOUT_VERSION == 2`).
 pub const CUSTOM_ENTRY_SIZE: usize = 12;

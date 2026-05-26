@@ -1111,7 +1111,9 @@ fn renounced_accepts_when_sender_not_in_set() {
     // the SortedNeighborNonMembershipVerifier (registered in default_builtins)
     // must accept the proof and the program must evaluate Ok(()).
     use pyana_cell::predicate::{NonMembershipNeighborProof, WitnessedPredicateRegistry};
-    use pyana_cell::program::{RenouncedSet, TransitionMeta, WitnessBundle, WitnessBlobView, WitnessKindTag};
+    use pyana_cell::program::{
+        RenouncedSet, TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag,
+    };
 
     let commitment = [0xABu8; 32];
     let candidate = [0x05u8; 32];
@@ -1136,7 +1138,10 @@ fn renounced_accepts_when_sender_not_in_set() {
         ..Default::default()
     };
     let result = p.evaluate_full(&new, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle);
-    assert!(result.is_ok(), "valid non-membership proof must be accepted, got: {result:?}");
+    assert!(
+        result.is_ok(),
+        "valid non-membership proof must be accepted, got: {result:?}"
+    );
 }
 
 #[test]
@@ -1144,7 +1149,9 @@ fn renounced_rejects_when_sender_in_set() {
     // Adversarial: sender == lower neighbor — the prover IS in the set.
     // The neighbor invariant `lower < candidate` is violated; verifier rejects.
     use pyana_cell::predicate::{NonMembershipNeighborProof, WitnessedPredicateRegistry};
-    use pyana_cell::program::{RenouncedSet, TransitionMeta, WitnessBundle, WitnessBlobView, WitnessKindTag};
+    use pyana_cell::program::{
+        RenouncedSet, TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag,
+    };
 
     let commitment = [0xABu8; 32];
     let candidate = [0x05u8; 32];

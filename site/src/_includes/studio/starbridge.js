@@ -12,12 +12,12 @@
 import { parseRef, isRef } from './uri.js';
 
 // ----------------------------------------------------------------------------
-// Bootstrap: wait for window.pyana (Preact + signals + htm) to load.
+// Bootstrap: wait for window.pyanaUi (Preact + signals + htm) to load.
 // ----------------------------------------------------------------------------
 function whenPyana() {
   return new Promise(resolve => {
-    if (window.pyana) return resolve(window.pyana);
-    window.addEventListener('pyana:ready', e => resolve(e.detail), { once: true });
+    if (window.pyanaUi) return resolve(window.pyanaUi);
+    window.addEventListener('pyanaUi:ready', e => resolve(e.detail), { once: true });
   });
 }
 
@@ -387,7 +387,7 @@ function writeUrlState({ at, runtime }) {
       e.addEventListener('click', () => {
         try { fn(); } catch (err) {
           console.warn(`[starbridge] ${id} failed:`, err);
-          window.pyana?.toast?.(`${id}: ${err.message || err}`, 'err');
+          window.pyanaUi?.toast?.(`${id}: ${err.message || err}`, 'err');
         }
       });
     };

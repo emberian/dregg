@@ -372,4 +372,68 @@ pub enum Effect {
         /// Message hash (what was routed).
         message_hash: BabyBear,
     },
+    /// Burn: explicit, non-conservation reduction of the cell's balance.
+    /// Unlike `Transfer { direction: 1 }`, no destination credit happens —
+    /// the supply is provably reduced and the row is distinguishable from
+    /// a Transfer at the algebraic level (selector + dedicated
+    /// `was_burn_flag == 1` constraint).
+    ///
+    /// Relationship to `effect_action_air::SCHEMA_BURN`:
+    ///   The two coexist as complementary attestations. `SCHEMA_BURN`
+    ///   carries a per-`Effect::Burn` binding proof with the snapshot-
+    ///   aware algebraic invariant `old_balance - new_balance == amount`
+    ///   (executor-injected via `effect_binding_proofs`). This
+    ///   `VmEffect::Burn` lives inside the cell's whole-turn Effect-VM
+    ///   trace and attests "this Burn occupied row X in the cell's
+    ///   effect sequence, distinct from any Transfer / NoteCreate".
+    ///   The two layers cover different gaps; the SCHEMA_BURN remains
+    ///   the canonical place for the balance-subtraction algebraic
+    ///   binding.
+    ///
+    /// 30-bit-trunc note: `amount_lo` carries the low 30 bits for the
+    /// balance-debit constraint (BabyBear can hold values < 2^31);
+    /// `amount_full` carries the full u64 for `compute_effects_hash`
+    /// binding via 4×16-bit limbs (matches the BridgeMint/BridgeLock
+    /// shape).
+    Burn {
+        /// Hash of the target cell whose balance is reduced. Pinned to
+        /// params[0] and folded into effects_hash so the proof binds to
+        /// the specific cell.
+        target_hash: BabyBear,
+        /// Burn amount, low 30 bits (for the balance-debit constraint).
+        amount_lo: BabyBear,
+        /// Full u64 amount (binds via the 4×16-bit-limb path in
+        /// `compute_effects_hash`).
+        amount_full: u64,
+    },
+    /// CellDestroy: permanently retire a cell. Lifecycle lives off-trace,
+    /// but the AIR binds the `target_hash` and the `death_certificate_hash`
+    /// into params (and through them into effects_hash) so a verifier
+    /// replaying the trace can distinguish a CellDestroy from a generic
+    /// SetPermissions row.
+    ///
+    /// State passthrough: balance, fields, and cap_root all unchanged;
+    /// nonce ticks like any non-NoOp effect.
+    CellDestroy {
+        /// Hash of the cell being destroyed.
+        target_hash: BabyBear,
+        /// `DeathCertificate::certificate_hash()` truncated to a BabyBear.
+        death_certificate_hash: BabyBear,
+    },
+    /// AttenuateCapability: monotonically narrow an existing c-list cap.
+    /// Distinct from RevokeCapability: revoke removes a slot from the
+    /// c-list root by hashing `slot_hash` in; attenuate REPLACES the
+    /// slot's existing entry with a strictly narrower commitment. The
+    /// AIR's cap_root advance encodes BOTH the slot identity and the
+    /// new narrower entry, so a `RevokeCapability` proof cannot pass as
+    /// an `AttenuateCapability` proof.
+    ///
+    /// State: balance / fields unchanged; cap_root advances to
+    /// `hash_2_to_1(old_cap_root, hash_2_to_1(cap_slot_hash, narrower_commitment))`.
+    AttenuateCapability {
+        /// Hash of the c-list slot being narrowed.
+        cap_slot_hash: BabyBear,
+        /// Commitment to the new (narrower) permissions / facet / expiry.
+        narrower_commitment: BabyBear,
+    },
 }

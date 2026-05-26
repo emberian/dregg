@@ -24,9 +24,9 @@
 
 use pyana_cell::{
     CellProgram, CellState, StateConstraint,
-    predicate::{NonMembershipNeighborProof, WitnessedPredicateRegistry},
     preconditions::EvalContext,
-    program::{RenouncedSet, TransitionMeta, WitnessBundle, WitnessBlobView, WitnessKindTag},
+    predicate::{NonMembershipNeighborProof, WitnessedPredicateRegistry},
+    program::{RenouncedSet, TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag},
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,7 +61,13 @@ fn eval_with_default_registry(
     };
     let state = CellState::new(0);
     let ctx = ctx_with_sender(sender);
-    program.evaluate_full(&state, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
+    program.evaluate_full(
+        &state,
+        None,
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &bundle,
+    )
 }
 
 // ─── Positive case ────────────────────────────────────────────────────────────
@@ -315,7 +321,13 @@ fn renounced_no_registry_returns_sentinel() {
     let program = renounced_blinded(commitment);
 
     let err = program
-        .evaluate_full(&state, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
+        .evaluate_full(
+            &state,
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &bundle,
+        )
         .expect_err("absent registry must surface SenderMembershipWitnessMissing");
     assert!(
         matches!(
@@ -355,8 +367,16 @@ fn renounced_public_root_reads_commitment_from_slot() {
         set: RenouncedSet::PublicRoot { set_root_index: 2 },
     }]);
     program
-        .evaluate_full(&state, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
-        .expect("PublicRoot variant must accept valid non-membership proof keyed to the slot value");
+        .evaluate_full(
+            &state,
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &bundle,
+        )
+        .expect(
+            "PublicRoot variant must accept valid non-membership proof keyed to the slot value",
+        );
 }
 
 /// PublicRoot variant: proof keyed to the WRONG commitment is rejected,
@@ -387,7 +407,13 @@ fn renounced_public_root_wrong_commitment_rejected() {
         set: RenouncedSet::PublicRoot { set_root_index: 2 },
     }]);
     let err = program
-        .evaluate_full(&state, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
+        .evaluate_full(
+            &state,
+            None,
+            Some(&ctx),
+            &TransitionMeta::wildcard(),
+            &bundle,
+        )
         .expect_err("proof keyed to wrong commitment must be rejected");
     assert!(
         matches!(

@@ -306,6 +306,32 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     return result;
   }
 
+  // --- Turn trace -----------------------------------------------------------
+  // Signal-cached per turn_hash (traces are immutable once committed).
+  const turnTraceCache = new Map();
+  function getTurnTrace(turnHash) {
+    if (!turnTraceCache.has(turnHash)) {
+      turnTraceCache.set(turnHash, computed(() => {
+        // Trace is immutable after commit; version dep ensures we pick it up
+        // once the turn lands in the receipt chain.
+        version.value;
+        try {
+          const raw = wasm.get_turn_trace(handle, String(turnHash));
+          return raw || { steps: [], computrons_total: 0, trace_gap_note: '' };
+        } catch (e) {
+          return { steps: [], computrons_total: 0, trace_gap_note: String(e?.message || e), _error: true };
+        }
+      }));
+    }
+    return turnTraceCache.get(turnHash);
+  }
+
+  // --- Peer transition decode -----------------------------------------------
+  // Non-cached; called per-paste. Bytes is a Uint8Array.
+  function decodePeerTransition(bytes) {
+    return wasm.decode_peer_transition(bytes);
+  }
+
   // --- Peer exchange (sovereign-cell P2P) ---------------------------------
   // Thin signal-cached facade over the canonical `pyana_cell::PeerExchange`
   // surface exposed by the wasm crate. Mutations bump `version`; reads come
@@ -410,6 +436,8 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     getFederation,
     getBlock,
     listBlocks,
+    getTurnTrace,
+    decodePeerTransition,
 
     // Peer exchange
     getPeerView,

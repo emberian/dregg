@@ -13,8 +13,8 @@ import { findRuntime } from '../context.js';
 
 export function ready() {
   return new Promise(resolve => {
-    if (window.pyana) return resolve(window.pyana);
-    window.addEventListener('pyana:ready', e => resolve(e.detail), { once: true });
+    if (window.pyanaUi) return resolve(window.pyanaUi);
+    window.addEventListener('pyanaUi:ready', e => resolve(e.detail), { once: true });
   });
 }
 

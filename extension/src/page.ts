@@ -6,6 +6,7 @@
 import type {
   AuthorizeRequest,
   AuthorizeResult,
+  KnownFederation,
   MessageType,
   PageRequestMessage,
   StealthMetaAddress,
@@ -180,6 +181,28 @@ export interface PyanaAPI {
   federationStatus(): Promise<{ mode: string; height: number; peerCount: number; merkleRoot: string }>;
   proposeRoutes(routes: unknown[]): Promise<{ proposalId: string; submitted: boolean }>;
   voteOnProposal(proposalId: string, approve: boolean): Promise<{ accepted: boolean; proposalId: string }>;
+  /**
+   * Sign and submit a pre-built postcard-encoded Turn (v3 wire format).
+   * starbridge-apps' turn-builders produce raw bytes; use this instead of
+   * `signTurn` when the turn is already serialized.
+   *
+   * Note: requires the wasm `sign_turn_v3` export (stub until it lands).
+   */
+  signTurnV3(turnBytes: Uint8Array): Promise<{ turnId?: string; submitted: boolean; error?: string }>;
+  /**
+   * Register a known federation in the local KnownFederations registry.
+   * Persisted in chrome.storage.local under `pyana_known_federations`.
+   */
+  registerFederation(federationId: string, name: string, committeePubkeys: string[]): Promise<{ success: boolean }>;
+  /** List all locally registered federations. */
+  listKnownFederations(): Promise<KnownFederation[]>;
+  /**
+   * Build a serialized Authorization::CapTpDelivered envelope for attaching
+   * to a turn during a CapTP handoff.
+   *
+   * Note: requires the wasm `create_captp_delivered_auth` export (stub until it lands).
+   */
+  createCapTpDeliveredAuth(params: { handoffCertB58: string; introducerPk: string; senderPk: string }): Promise<{ authBytes: number[]; error?: string }>;
   on(event: PyanaEvent, callback: (payload: unknown) => void): void;
   off(event: PyanaEvent, callback: (payload: unknown) => void): void;
 }
@@ -324,6 +347,22 @@ const pyana: PyanaAPI = {
 
   voteOnProposal(proposalId, approve) {
     return sendMessage("pyana:voteOnProposal", { proposalId, approve }) as Promise<{ accepted: boolean; proposalId: string }>;
+  },
+
+  signTurnV3(turnBytes) {
+    return sendMessage("pyana:signTurnV3", { turnBytes: Array.from(turnBytes) }) as Promise<{ turnId?: string; submitted: boolean; error?: string }>;
+  },
+
+  registerFederation(federationId, name, committeePubkeys) {
+    return sendMessage("pyana:registerFederation", { federationId, name, committeePubkeys }) as Promise<{ success: boolean }>;
+  },
+
+  listKnownFederations() {
+    return sendMessage("pyana:listKnownFederations", {}) as Promise<KnownFederation[]>;
+  },
+
+  createCapTpDeliveredAuth({ handoffCertB58, introducerPk, senderPk }) {
+    return sendMessage("pyana:createCapTpDeliveredAuth", { handoffCertB58, introducerPk, senderPk }) as Promise<{ authBytes: number[]; error?: string }>;
   },
 
   on(event, callback) {

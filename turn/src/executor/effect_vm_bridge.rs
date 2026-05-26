@@ -476,12 +476,8 @@ pub(super) fn convert_turn_effects_to_vm(
                         let mut out = [BabyBear::ZERO; 8];
                         for i in 0..8 {
                             let off = i * 4;
-                            let v = u32::from_le_bytes([
-                                b[off],
-                                b[off + 1],
-                                b[off + 2],
-                                b[off + 3],
-                            ]);
+                            let v =
+                                u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
                             // Reduce mod p so we always land in canonical BabyBear.
                             out[i] = BabyBear::new(v % pyana_circuit::field::BABYBEAR_P);
                         }
@@ -946,6 +942,83 @@ pub(super) fn convert_turn_effects_to_vm(
                         recipient_pk: recipient_pk_bb,
                         introducer_pk: introducer_pk_bb,
                         approved_set_root: BabyBear::ZERO,
+                    });
+                }
+
+                // ────────────────────────────────────────────────────
+                // Near-miss aliasing closure (#100 follow-up): three
+                // runtime variants whose VM-side AIR coverage previously
+                // either fell through to `_` (no projection) or aliased
+                // to a sibling VmEffect (Transfer-dir-1 / SetPermissions /
+                // RevokeCapability). Each now projects to a dedicated
+                // VmEffect whose AIR constraints are algebraically
+                // distinct from the sibling — see the matching variant
+                // arms in `circuit/src/effect_vm/air.rs`.
+                // ────────────────────────────────────────────────────
+                Effect::Burn {
+                    target,
+                    slot: _,
+                    amount,
+                } if target == cell_id => {
+                    use pyana_circuit::field::BabyBear;
+                    let target_hash = hash_to_bb(target.as_bytes());
+                    // Low 30 bits drive the AIR balance debit; the full
+                    // u64 is bound through `compute_effects_hash`.
+                    let amount_lo = BabyBear::new((*amount & ((1u64 << 30) - 1)) as u32);
+                    vm_effects.push(VmEffect::Burn {
+                        target_hash,
+                        amount_lo,
+                        amount_full: *amount,
+                    });
+                }
+                Effect::CellDestroy {
+                    target,
+                    certificate,
+                } if target == cell_id => {
+                    let target_hash = hash_to_bb(target.as_bytes());
+                    let cert_hash = certificate.certificate_hash();
+                    vm_effects.push(VmEffect::CellDestroy {
+                        target_hash,
+                        death_certificate_hash: hash_to_bb(&cert_hash),
+                    });
+                }
+                Effect::AttenuateCapability {
+                    cell,
+                    slot,
+                    narrower_permissions,
+                    narrower_effects,
+                    narrower_expiry,
+                } if cell == cell_id => {
+                    // Bind the slot identifier (low 4 bytes of its LE
+                    // encoding) into the first param, and a commitment
+                    // over (permissions, effect_mask, expiry) into the
+                    // second. The narrower_commitment is the canonical
+                    // BLAKE3 over the same byte stream the runtime's
+                    // journal entry / receipt-hash will absorb, so a
+                    // forged "wider" attenuation cannot collide.
+                    let slot_bytes = slot.to_le_bytes();
+                    let cap_slot_hash = hash_to_bb(blake3::hash(&slot_bytes).as_bytes());
+                    let mut h = blake3::Hasher::new();
+                    h.update(b"PYANA_ATTN_NARROWER/v1");
+                    let perm_bytes =
+                        postcard::to_allocvec(narrower_permissions).unwrap_or_default();
+                    h.update(&perm_bytes);
+                    if let Some(mask) = narrower_effects {
+                        h.update(&[1u8]);
+                        h.update(&mask.to_le_bytes());
+                    } else {
+                        h.update(&[0u8]);
+                    }
+                    if let Some(exp) = narrower_expiry {
+                        h.update(&[1u8]);
+                        h.update(&exp.to_le_bytes());
+                    } else {
+                        h.update(&[0u8]);
+                    }
+                    let narrower_commitment = hash_to_bb(h.finalize().as_bytes());
+                    vm_effects.push(VmEffect::AttenuateCapability {
+                        cap_slot_hash,
+                        narrower_commitment,
                     });
                 }
 

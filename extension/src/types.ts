@@ -176,12 +176,13 @@ export type MessageType =
   | "pyana:revokeOriginPermission"
   | "pyana:getDisclosurePrefs"
   | "pyana:clearDisclosurePref"
-  // Queue operations
-  | "pyana:queueAllocate"
-  | "pyana:queueEnqueue"
-  | "pyana:queueDequeue"
-  | "pyana:queueAtomicTx"
-  | "pyana:queueStatus"
+  // Turn v3 (pre-built postcard bytes)
+  | "pyana:signTurnV3"
+  // Federation registry
+  | "pyana:registerFederation"
+  | "pyana:listKnownFederations"
+  // CapTP delivered authorization
+  | "pyana:createCapTpDeliveredAuth"
   // Internal decision messages
   | "pyana:provisionDecision"
   | "pyana:intentConfirmation"
@@ -190,21 +191,15 @@ export type MessageType =
   | "pyana:getPendingDecision";
 
 // ---------------------------------------------------------------------------
-// Queue types
+// Known federation types
 // ---------------------------------------------------------------------------
 
-/** An operation within an atomic queue transaction. */
-export type QueueTxOp =
-  | { type: "enqueue"; queue: string; messageHash: string; deposit: number }
-  | { type: "dequeue"; queue: string };
-
-/** Status of a queue cell. */
-export interface QueueStatus {
-  queueId: string;
-  occupancy: number;
-  capacity: number;
-  owner: string;
-  programVk?: string;
+/** A federation registered in the local KnownFederations registry. */
+export interface KnownFederation {
+  federationId: string;
+  name: string;
+  committeePubkeys: string[];
+  registeredAt: number;
 }
 
 // ---------------------------------------------------------------------------

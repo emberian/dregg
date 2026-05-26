@@ -3114,7 +3114,11 @@ fn test_stage2_trailing_custom_gets_pad_row() {
     let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
     // n_effects=2, last is Custom → need_extra_pad → (2+1).next_power_of_two()=4,
     // then .max(MIN_TRACE_HEIGHT=64) = 64.
-    assert_eq!(trace.len(), 64, "trace should be padded to MIN_TRACE_HEIGHT=64 rows");
+    assert_eq!(
+        trace.len(),
+        64,
+        "trace should be padded to MIN_TRACE_HEIGHT=64 rows"
+    );
     // Last row must be NoOp.
     assert_eq!(
         trace[trace.len() - 1][sel::NOOP],
@@ -3773,4 +3777,210 @@ fn test_emit_event_forged_trace_payload_rejected() {
     );
 }
 
+// ============================================================================
+// Near-miss aliasing closure (#100 follow-up): tests for the three dedicated
+// VmEffect variants — Burn, CellDestroy, AttenuateCapability.
+//
+// Per variant:
+//   * Honest-happy-path: prove + verify succeeds, and the row's algebraic
+//     fingerprint is distinct from the previous aliasing sibling.
+//   * Adversarial: forge a single trace cell (the disclosure flag for Burn,
+//     the second-param binding for CellDestroy, the cap_root advance for
+//     AttenuateCapability) and assert the verifier rejects.
+// ============================================================================
 
+#[test]
+fn test_burn_happy_path() {
+    let state = make_initial_state(1000);
+    let effect = Effect::Burn {
+        target_hash: BabyBear::new(0xCE11),
+        amount_lo: BabyBear::new(250),
+        amount_full: 250,
+    };
+    let (trace, _public_inputs, _air) =
+        assert_single_effect_roundtrip(&state, effect, "Burn happy path");
+
+    // Sibling-distinction check: a TRANSFER row with direction=1 would
+    // leave params[BURN_WAS_BURN_FLAG] == 0; the Burn row pins it to 1.
+    let burn_row = trace
+        .iter()
+        .position(|row| row[sel::BURN] == BabyBear::ONE)
+        .expect("at least one row must carry sel::BURN");
+    assert_eq!(
+        trace[burn_row][PARAM_BASE + param::BURN_WAS_BURN_FLAG],
+        BabyBear::ONE,
+        "Burn row must pin was_burn_flag to 1"
+    );
+    assert_eq!(
+        trace[burn_row][sel::TRANSFER],
+        BabyBear::ZERO,
+        "Burn row must not also activate sel::TRANSFER"
+    );
+
+    // Balance debited by amount_lo.
+    let old_bal = trace[burn_row][STATE_BEFORE_BASE + state::BALANCE_LO];
+    let new_bal = trace[burn_row][STATE_AFTER_BASE + state::BALANCE_LO];
+    assert_ne!(old_bal, new_bal, "Burn must debit balance");
+}
+
+#[test]
+fn test_burn_forged_flag_rejected() {
+    // Adversary: drop the was_burn disclosure (set to 0).
+    let state = make_initial_state(1000);
+    let effects = vec![Effect::Burn {
+        target_hash: BabyBear::new(0xCE11),
+        amount_lo: BabyBear::new(100),
+        amount_full: 100,
+    }];
+    let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+    let burn_row = trace
+        .iter()
+        .position(|row| row[sel::BURN] == BabyBear::ONE)
+        .expect("at least one row must carry sel::BURN");
+    trace[burn_row][PARAM_BASE + param::BURN_WAS_BURN_FLAG] = BabyBear::ZERO;
+
+    let air = EffectVmAir::new(trace.len());
+    let proof = prove(&air, &trace, &public_inputs);
+    let result = verify(&air, &proof, &public_inputs);
+    assert!(
+        result.is_err(),
+        "Burn with forged was_burn_flag=0 must be rejected"
+    );
+}
+
+#[test]
+fn test_cell_destroy_happy_path() {
+    let state = make_initial_state(700);
+    let effect = Effect::CellDestroy {
+        target_hash: BabyBear::new(0xDEAD),
+        death_certificate_hash: BabyBear::new(0xC0DE),
+    };
+    let (trace, _public_inputs, _air) =
+        assert_single_effect_roundtrip(&state, effect, "CellDestroy happy path");
+
+    let cd_row = trace
+        .iter()
+        .position(|row| row[sel::CELL_DESTROY] == BabyBear::ONE)
+        .expect("at least one row must carry sel::CELL_DESTROY");
+    // Sibling-distinction: a SetPermissions row only writes params[0]; a
+    // CellDestroy row writes both params[0] and params[1].
+    assert_eq!(
+        trace[cd_row][PARAM_BASE + param::CELL_DESTROY_TARGET],
+        BabyBear::new(0xDEAD),
+        "CellDestroy must bind target_hash in params[0]"
+    );
+    assert_eq!(
+        trace[cd_row][PARAM_BASE + param::CELL_DESTROY_CERT_HASH],
+        BabyBear::new(0xC0DE),
+        "CellDestroy must bind death_certificate_hash in params[1]"
+    );
+    assert_eq!(
+        trace[cd_row][sel::SET_PERMISSIONS],
+        BabyBear::ZERO,
+        "CellDestroy row must not also activate sel::SET_PERMISSIONS"
+    );
+
+    // Passthrough check: balance and cap_root unchanged.
+    let old_bal = trace[cd_row][STATE_BEFORE_BASE + state::BALANCE_LO];
+    let new_bal = trace[cd_row][STATE_AFTER_BASE + state::BALANCE_LO];
+    assert_eq!(old_bal, new_bal, "CellDestroy must not change balance");
+    let old_cap = trace[cd_row][STATE_BEFORE_BASE + state::CAP_ROOT];
+    let new_cap = trace[cd_row][STATE_AFTER_BASE + state::CAP_ROOT];
+    assert_eq!(old_cap, new_cap, "CellDestroy must not change cap_root");
+}
+
+#[test]
+fn test_cell_destroy_forged_passthrough_rejected() {
+    // Adversary: claim a CellDestroy actually changed the balance (so the
+    // proof would attest to destruction AND a debit). The passthrough
+    // constraint rejects.
+    let state = make_initial_state(700);
+    let effects = vec![Effect::CellDestroy {
+        target_hash: BabyBear::new(0xDEAD),
+        death_certificate_hash: BabyBear::new(0xC0DE),
+    }];
+    let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+    let cd_row = trace
+        .iter()
+        .position(|row| row[sel::CELL_DESTROY] == BabyBear::ONE)
+        .expect("at least one row must carry sel::CELL_DESTROY");
+    // Forge: new_balance_lo decremented; row's state-passthrough constraint
+    // must reject.
+    let old_bal = trace[cd_row][STATE_BEFORE_BASE + state::BALANCE_LO];
+    trace[cd_row][STATE_AFTER_BASE + state::BALANCE_LO] = old_bal - BabyBear::ONE;
+
+    let air = EffectVmAir::new(trace.len());
+    let proof = prove(&air, &trace, &public_inputs);
+    let result = verify(&air, &proof, &public_inputs);
+    assert!(
+        result.is_err(),
+        "CellDestroy with forged balance change must be rejected"
+    );
+}
+
+#[test]
+fn test_attenuate_capability_happy_path() {
+    let state = make_initial_state(500);
+    let effect = Effect::AttenuateCapability {
+        cap_slot_hash: BabyBear::new(0x510),
+        narrower_commitment: BabyBear::new(0xA110),
+    };
+    let (trace, _public_inputs, _air) =
+        assert_single_effect_roundtrip(&state, effect, "AttenuateCapability happy path");
+
+    let attn_row = trace
+        .iter()
+        .position(|row| row[sel::ATTENUATE_CAPABILITY] == BabyBear::ONE)
+        .expect("at least one row must carry sel::ATTENUATE_CAPABILITY");
+
+    // Sibling-distinction: RevokeCapability advances cap_root by
+    // hash_2_to_1(old_root, slot_hash); AttenuateCapability advances by
+    // hash_2_to_1(old_root, hash_2_to_1(slot, narrower)). The two are
+    // distinct (with overwhelming probability over hash collisions).
+    let old_cap = trace[attn_row][STATE_BEFORE_BASE + state::CAP_ROOT];
+    let new_cap = trace[attn_row][STATE_AFTER_BASE + state::CAP_ROOT];
+    let leaf = hash_2_to_1(BabyBear::new(0x510), BabyBear::new(0xA110));
+    let expected = hash_2_to_1(old_cap, leaf);
+    assert_eq!(
+        new_cap, expected,
+        "AttenuateCapability cap_root advance must equal hash_2_to_1(old, hash_2_to_1(slot, narrower))"
+    );
+    let revoke_shape = hash_2_to_1(old_cap, BabyBear::new(0x510));
+    assert_ne!(
+        new_cap, revoke_shape,
+        "AttenuateCapability advance must NOT match the RevokeCapability single-hash shape"
+    );
+    assert_eq!(
+        trace[attn_row][sel::REVOKE_CAPABILITY],
+        BabyBear::ZERO,
+        "AttenuateCapability row must not also activate sel::REVOKE_CAPABILITY"
+    );
+}
+
+#[test]
+fn test_attenuate_capability_forged_cap_root_rejected() {
+    // Adversary: rewrite the new cap_root to the RevokeCapability shape
+    // hash_2_to_1(old_cap, slot_hash). The attenuate-specific nested-hash
+    // constraint must reject.
+    let state = make_initial_state(500);
+    let effects = vec![Effect::AttenuateCapability {
+        cap_slot_hash: BabyBear::new(0x510),
+        narrower_commitment: BabyBear::new(0xA110),
+    }];
+    let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+    let attn_row = trace
+        .iter()
+        .position(|row| row[sel::ATTENUATE_CAPABILITY] == BabyBear::ONE)
+        .expect("at least one row must carry sel::ATTENUATE_CAPABILITY");
+    let old_cap = trace[attn_row][STATE_BEFORE_BASE + state::CAP_ROOT];
+    let revoke_shape = hash_2_to_1(old_cap, BabyBear::new(0x510));
+    trace[attn_row][STATE_AFTER_BASE + state::CAP_ROOT] = revoke_shape;
+
+    let air = EffectVmAir::new(trace.len());
+    let proof = prove(&air, &trace, &public_inputs);
+    let result = verify(&air, &proof, &public_inputs);
+    assert!(
+        result.is_err(),
+        "AttenuateCapability with RevokeCapability-shaped cap_root must be rejected"
+    );
+}

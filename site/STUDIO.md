@@ -21,6 +21,18 @@ one tells you nothing about the same cell in the other.
 The Studio vision: **all three surfaces are the same IDE**, fed by different
 data sources.
 
+**The IDE is the meta-program; cells are the base layer.** Houyhnhnm computing
+(Ch.1) insists that "a computing system is the larger system that includes the
+sentient users" — not just the silicon. Studio embodies this: the user is not
+outside the system, issuing commands to cells; the user is *part* of the
+computing system, and the IDE is the meta-program that gives the user legible
+access to the base layer (cells, turns, receipts, proofs). Inspectors are not
+dashboards bolted onto a finished protocol; they are the meta-level through
+which all protocol activity becomes observable, navigable, and actionable. A
+cell program that is not inspectable through the Studio's platform vocabulary
+is a gap in the meta-program, not a gap in the UI. (HOUYHNHNM-COMPARISON.md
+§ 3.4, Ch.8.)
+
 - **Playground** — runs a `pyana::PyanaRuntime` in the browser. You drive a
   simulated testnet: create cells, post intents, execute turns, advance
   blockheight. State is yours; you can fork, undo, export.
@@ -129,6 +141,29 @@ A fourth runtime eventually: `RelayedRuntime` — an in-browser node that
 joins a real blocklace via a relaying server (since browsers can't open
 QUIC). Out of scope for this doc; the interface already accommodates it.
 
+### Trust tier
+
+Every receipt view and proof view **MUST** carry a visible trust-tier badge.
+Three tiers are defined (STARBRIDGE-PLAN.md § 1; HOUYHNHNM-COMPARISON.md
+§ 4.6 and Ch.11 blame-subadditivity):
+
+| Tier | Meaning |
+|---|---|
+| `Placeholder` | No proof attached. Sim runtime (scope-0); `MockProofVerifier`. The transition happened but its validity is asserted, not proven. |
+| `Silver` | A real STARK is present, but some executor-trusted boundaries remain: e.g. placeholder Effect VM PI variants (`QueueAtomicTx`, `ValidateHandoff`, etc.), 30-bit value truncations on bridge effects, or sovereign-witness AIR gaps. See NEW-WORLD.md "What's not done" §1–2 for the exhaustive list. |
+| `Golden` | Full γ.2 bilateral PI; no executor-trusted cuts; all Effect VM PI variants non-placeholder; all StateConstraint AIR teeth closed. |
+
+The UI **must** surface the tier visually — a colored badge is the minimum
+acceptable presentation (Placeholder = grey, Silver = silver/blue, Golden =
+gold). Blame is sub-additive (Ch.11): a receipt that is Silver because *one*
+boundary cut remains is still Silver even if 90% of the constraints are
+AIR-enforced. The UI does not average, blend, or hide the tier. A `Silver`
+badge means "real STARK, but not all the way"; a `Placeholder` badge means
+"trust the executor, full stop." The tier flows from the proof; inspectors
+read it from `ProofView.trust_tier` (or derive it from
+`ProofView.bilateral_pi` presence + `is_sovereign_cell` + the known list of
+open gaps).
+
 ---
 
 ## 4. URI scheme
@@ -212,9 +247,42 @@ defineInspector('pyana-cell', ({ ref, runtime, mode }) => {
 2. All data fetched through `runtime.get*()` — never directly from wasm.
 3. All embedded sub-objects use the same `<pyana-X uri="...">` pattern. No
    special "embedded vs. standalone" code paths.
-4. Capability-gates UI on `runtime.caps`. Read-only runtimes hide mutation
-   affordances entirely; they don't show greyed-out buttons.
+4. Capability-gates UI on `runtime.caps`. **Read-only runtimes show no mutation
+   affordances at all — not greyed-out, not present.** The activity has no
+   direct way to determine that access was denied (Houyhnhnm Ch.7; see also
+   HOUYHNHNM-COMPARISON.md § 4.14).
 5. Static fallback under `<noscript>`: the JSON of the object as a `<pre>`.
+6. **Inspectors are the meta-program for cells.** An inspector that requires
+   cell *cooperation* to function is an anti-pattern. Inspectors read receipts
+   and render — they never participate in protocol semantics. (Houyhnhnm Ch.3;
+   HOUYHNHNM-COMPARISON.md § 3.4.)
+
+### Platform vocabulary
+
+The following elements are **platform-level** — never per-app. They belong to
+the Studio's inspector registry and must be reused by all starbridge-apps:
+
+| Element | What it inspects |
+|---|---|
+| `<pyana-cell>` | Cell state, capabilities, program, history |
+| `<pyana-capability>` | Capability token — facet, bearer, slot |
+| `<pyana-proof>` | STARK proof with trust-tier badge (Placeholder/Silver/Golden) |
+| `<pyana-credential>` | Credential envelope + caveat chain |
+| `<pyana-slot>` | Named slot on a cell, with caveat constraints |
+| `<pyana-caveat>` | Individual caveat in a caveat chain |
+| `<pyana-turn>` | Turn + action list + authorization |
+| `<pyana-receipt>` | WitnessedReceipt + embedded proof view |
+| `<pyana-authorization>` | Authorization variant (all 7 kinds) |
+| `<pyana-federation>` | Federation state + committee |
+| `<pyana-block>` | Blocklace vertex + QC threshold |
+
+A starbridge-app that reimplements any of these inspectors is the **silo
+anti-pattern** (HOUYHNHNM-COMPARISON.md § 7.3; STARBRIDGE-PLAN.md § 1).
+Apps register *additional* inspectors for app-specific protocol objects (e.g.
+`<pyana-name>`, `<pyana-name-registry>` for the nameservice app) via the
+manifest-based registry (STARBRIDGE-PLAN.md § 8 Q3). They do not fork or
+shadow existing platform-level elements. The platform vocabulary is the
+meta-program's shared clipboard; forking it creates a new silo.
 
 **Initial inspector set** (matches existing protocol objects):
 
@@ -290,6 +358,21 @@ federations, conditional turns). What we need to add:
 Round-trip property: a snapshot taken from sim, ingested into `pyana-node`,
 re-exported from the node, should hash-match (modulo timestamps).
 
+**The snapshot/export feature is not a convenience.** It is the mechanism by
+which the Studio IDE session enters the `WitnessedReceipt` persistence stream.
+(HOUYHNHNM-COMPARISON.md § 3.1, Ch.3; STARBRIDGE-PLAN.md § 5.9.) Houyhnhnm
+computing treats the *transition log* — not the byte heap — as the canonical
+source of truth. Pyana agrees: `WitnessedReceipt` is pyana's persistence layer.
+Studio session state that is NOT in the receipt stream is a
+**protocol-correctness gap**, not a UI feature gap. A session where the user
+drove turns through the sim runtime but never committed those turns to the
+`WitnessedReceipt` chain has lost history that the protocol requires to be
+present. The export format must therefore be **canonical-pyana-replayable**:
+`Vec<Turn>` with a bootstrap header (agent identities, genesis parameters),
+readable by `pyana-node import-snapshot`. An export that can only be consumed
+by the Studio's own `RecordedRuntime` is insufficient; the receipts must be
+portable across any pyana verifier.
+
 ---
 
 ## 9. Migration plan
@@ -349,3 +432,48 @@ as educational standalone widgets in `/playground/learn/`.
 5. **Schema evolution.** As the protocol changes, old snapshots break. Same
    problem as on-disk ledger; defer to the same versioning strategy
    (`pyana_types::Version`).
+
+6. *(resolved)* **`window.pyana` collision.** Q1 is resolved: the Studio
+   bootstrap is being renamed to `window.pyanaUi`. The extension keeps
+   `window.pyana` as the user-facing dapp API (`Object.defineProperty` with
+   `writable: false`). All Studio JS that reads `window.pyana` for its own
+   bootstrap is updated to `window.pyanaUi`; the `pyana:ready` event name is
+   unchanged. Acted on in STARBRIDGE-PLAN.md Task #29. (STARBRIDGE-PLAN.md §
+   4.2; § 8 Q1.)
+
+---
+
+## 11. Monitor mode
+
+Houyhnhnm Ch.3 describes a *monitor* as a complete, simpler meta-system that
+inspects a wedged base-level system. The monitor's defining property is that it
+operates *without* the cooperation of the wedged system — it reads what is
+already present and committed, not what the stuck system is willing to report.
+
+Starbridge's debug surface must be framed in this role. When a federation is
+stuck — no progress, missing quorum, equivocator detected, or operator just
+wants to answer "what is true right now?" — the operator opens **Monitor mode**
+and sees the canonical wedge state:
+
+- **Last attested root** — the most recent `AttestedRoot v3` with
+  `finality_round`, `federation_id`, `blocklace_block_id`.
+- **Missing votes** — which committee members have not signed the current
+  proposal; rendered via `<pyana-federation>` committee view.
+- **Signed-but-unincluded blocks** — blocklace vertices with QC signatures but
+  not yet finalized; rendered via `<pyana-block-dag>` DAG view.
+- **Recovery options** — what the operator can do: wait for more votes, trigger
+  a view-change, import a snapshot from a peer, or declare a byzantine member.
+
+Monitor mode is **not** a power-user side feature or an advanced tab hidden in
+the debugger. It is the canonical "we are stuck, show me what is true" surface.
+It is the thing an operator opens *first* when something goes wrong, before
+looking at logs or metrics. Its authority is entirely read-only — it does not
+issue commands; it does not participate in protocol rounds; it reads committed
+state and renders it.
+
+Implementation: Monitor mode reads from `RemoteRuntime` (live node) or from
+`RecordedRuntime` (snapshot of a wedged session). It uses only platform-level
+inspectors (`<pyana-block>`, `<pyana-federation>`, `<pyana-receipt>`,
+`<pyana-proof>`). It is a layout variant of Starbridge — same components,
+different workspace configuration pre-loaded with the wedge-diagnosis
+inspector set. (HOUYHNHNM-COMPARISON.md § 3.4, Ch.3.)
