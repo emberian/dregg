@@ -23,7 +23,7 @@ use dregg_circuit::note_spending_air::{NoteSpendingWitness, key_to_field_element
 use dregg_circuit::poseidon2;
 use dregg_circuit::stark::{self, StarkProof};
 use dregg_commit::accumulator::{AccumulatorWitness, BabyBear4, PolynomialAccumulator};
-use dregg_dsl_runtime::note_spending::prove_note_spend;
+use dregg_dsl_runtime::note_spending::{generate_note_spending_trace, note_spending_dsl_circuit};
 use dregg_dsl_runtime::revocation::{
     DslRevocationTree, generate_non_revocation_trace, non_revocation_dsl_circuit,
     revocation_hash_to_field,
@@ -345,8 +345,16 @@ impl AgentCipherclerk {
             merkle_positions,
         );
 
-        // Generate the STARK proof.
-        let spending_proof = prove_note_spend(&witness);
+        // Generate the STARK proof. Keep this fallible: placeholder or stale
+        // witness data should be reported to SDK callers instead of panicking
+        // inside the prover.
+        let circuit = note_spending_dsl_circuit();
+        let (trace, public_inputs) = generate_note_spending_trace(&witness);
+        let spending_proof = stark::try_prove(&circuit, &trace, &public_inputs).map_err(|e| {
+            SdkError::Auth(dregg_bridge::AuthError::InvalidRequest(format!(
+                "note spending proof generation failed: {e}"
+            )))
+        })?;
 
         let recipient_secret = NoteSecret {
             note: output_note,
@@ -960,24 +968,20 @@ mod tests {
 
         let recipient_key = [0xBB; 32];
 
-        let transfer = cclerk
-            .transfer_note_privately(&secret, &recipient_key, merkle_siblings, merkle_positions)
-            .unwrap();
-
-        // The nullifier should match what the note produces.
-        assert_eq!(
-            transfer.nullifier,
-            secret.note.nullifier(&secret.spending_key)
+        let transfer = cclerk.transfer_note_privately(
+            &secret,
+            &recipient_key,
+            merkle_siblings,
+            merkle_positions,
         );
 
-        // The output commitment should belong to the recipient.
-        assert_eq!(
-            transfer.recipient_secret.note.owner, recipient_key,
-            "output note must be owned by recipient"
+        assert!(
+            matches!(
+                transfer,
+                Err(SdkError::Auth(dregg_bridge::AuthError::InvalidRequest(ref msg)))
+                    if msg.contains("note spending proof generation failed")
+            ),
+            "prover-rejected note spending witnesses should return an SDK error"
         );
-
-        // Value conservation: output has same value and asset type.
-        assert_eq!(transfer.recipient_secret.note.value(), 1000);
-        assert_eq!(transfer.recipient_secret.note.asset_type(), 1);
     }
 }

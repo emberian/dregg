@@ -108,6 +108,7 @@ pub use solo::{
 };
 pub use threshold::{
     FederationCommittee, MemberSecret, ThresholdError, ThresholdQC, generate_test_committee,
+    generate_test_committee_with_seed,
 };
 pub use threshold_decrypt::{
     DecryptionShare, KeyShare, ThresholdCiphertext, ThresholdDecryptError, ThresholdEncryptionKey,

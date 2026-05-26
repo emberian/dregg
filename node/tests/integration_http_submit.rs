@@ -10,10 +10,10 @@
 //!   3. Chain links are correct after multiple commits.
 //!   4. `was_encrypted = false` on the cleartext path.
 
-use dregg_cell::{CellId, Ledger};
+use dregg_cell::{Cell, CellId, Ledger};
 use dregg_sdk::AgentCipherclerk;
 use dregg_turn::{
-    CallForest, ComputronCosts, Turn, TurnExecutor, TurnResult, verify_receipt_chain,
+    ActionBuilder, CallForest, ComputronCosts, Turn, TurnExecutor, TurnResult, verify_receipt_chain,
 };
 use zeroize::Zeroizing;
 
@@ -26,13 +26,17 @@ fn test_key(label: &str) -> [u8; 32] {
 }
 
 fn make_turn(agent: CellId, nonce: u64, prev: Option<[u8; 32]>) -> Turn {
+    let mut call_forest = CallForest::new();
+    call_forest
+        .add_root(ActionBuilder::new_unchecked_for_tests(agent, "http_submit_noop", agent).build());
+
     Turn {
         agent,
         nonce,
-        fee: 0,
+        fee: 100,
         memo: None,
         valid_until: None,
-        call_forest: CallForest::new(),
+        call_forest,
         depends_on: vec![],
         previous_receipt_hash: prev,
         conservation_proof: None,
@@ -51,6 +55,15 @@ fn make_cclerk(label: &str) -> AgentCipherclerk {
     AgentCipherclerk::from_key_bytes(Zeroizing::new(test_key(label)))
 }
 
+fn make_ledger(cclerk: &AgentCipherclerk) -> Ledger {
+    let mut ledger = Ledger::new();
+    let cell = Cell::with_balance(cclerk.public_key().0, [0u8; 32], 1_000_000);
+    ledger
+        .insert_cell(cell)
+        .expect("test cell insert must succeed");
+    ledger
+}
+
 /// Derive the agent CellId from a cipherclerk the same way the node handler does.
 fn agent_from_cclerk(cclerk: &AgentCipherclerk) -> CellId {
     CellId(dregg_cell::CellId::derive_raw(&cclerk.public_key().0, &[0u8; 32]).0)
@@ -66,7 +79,7 @@ fn valid_cleartext_turn_commits_and_has_was_encrypted_false() {
     let agent = agent_from_cclerk(&cclerk);
 
     let executor = TurnExecutor::new(ComputronCosts::default());
-    let mut ledger = Ledger::new();
+    let mut ledger = make_ledger(&cclerk);
 
     let turn = make_turn(agent, 0, None);
     match executor.execute(&turn, &mut ledger) {
@@ -96,7 +109,7 @@ fn committed_receipts_appended_to_cclerk_chain_verify() {
     let agent = agent_from_cclerk(&cclerk);
 
     let executor = TurnExecutor::new(ComputronCosts::default());
-    let mut ledger = Ledger::new();
+    let mut ledger = make_ledger(&cclerk);
 
     // Genesis turn.
     let t0 = make_turn(agent, 0, None);
@@ -140,7 +153,7 @@ fn chain_links_correct_after_sequential_commits() {
     let agent = agent_from_cclerk(&cclerk);
 
     let executor = TurnExecutor::new(ComputronCosts::default());
-    let mut ledger = Ledger::new();
+    let mut ledger = make_ledger(&cclerk);
 
     // Genesis.
     let t0 = make_turn(agent, 0, None);
@@ -184,7 +197,7 @@ fn rejected_turn_does_not_append_to_chain() {
     let agent = agent_from_cclerk(&cclerk);
 
     let executor = TurnExecutor::new(ComputronCosts::default());
-    let mut ledger = Ledger::new();
+    let mut ledger = make_ledger(&cclerk);
 
     // First turn commits.
     let t0 = make_turn(agent, 0, None);
@@ -193,18 +206,16 @@ fn rejected_turn_does_not_append_to_chain() {
     }
     assert_eq!(cclerk.receipt_chain_length(), 1);
 
-    // Second turn with valid_until in the past — should be rejected or expired.
-    // The key insight: we only call append_receipt on Committed.
-    let mut t1 = make_turn(
+    // Second turn reuses nonce 0. It carries the correct chain head, but must
+    // be rejected by the executor's nonce gate and must not append a receipt.
+    let t1 = make_turn(
         agent,
-        1,
+        0,
         Some(cclerk.receipt_head().unwrap().receipt_hash()),
     );
-    t1.valid_until = Some(1); // Unix epoch 1 — always in the past.
     match executor.execute(&t1, &mut ledger) {
         TurnResult::Committed { receipt, .. } => {
-            // If the executor committed it anyway, append normally.
-            cclerk.append_receipt(receipt).unwrap();
+            panic!("replayed nonce must reject; got committed receipt {receipt:?}");
         }
         TurnResult::Rejected { .. } | TurnResult::Expired => {
             // Do not append — mirrors the handler's behavior.
@@ -214,14 +225,9 @@ fn rejected_turn_does_not_append_to_chain() {
         }
     }
 
-    // Chain is either 1 or 2; crucially it was not appended with a bad receipt.
-    let len = cclerk.receipt_chain_length();
-    assert!(
-        len == 1 || len == 2,
-        "chain must not grow spuriously; got {len}"
-    );
+    assert_eq!(cclerk.receipt_chain_length(), 1);
     assert!(
         verify_receipt_chain(cclerk.receipt_chain()).is_ok(),
-        "chain must verify regardless of expired-turn outcome"
+        "chain must verify after rejected replay"
     );
 }

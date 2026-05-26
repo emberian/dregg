@@ -39,7 +39,7 @@ use dregg_cell::note_bridge::{
     BridgePhase, BridgePhaseLog, BridgeReceiptEnvelope, compute_bridge_id,
 };
 use dregg_federation::threshold::{
-    FederationCommittee, MemberSecret, ThresholdQC, generate_test_committee,
+    FederationCommittee, MemberSecret, ThresholdQC, generate_test_committee_with_seed,
 };
 
 /// Sign `body_hash` with `threshold` of the committee's members.
@@ -68,10 +68,10 @@ fn cross_federation_lock_witness_finalize_roundtrip() {
     // exercised in `federation::receipt` unit tests.)
     let threshold_u64 = 4u64;
     let threshold = threshold_u64 as usize;
-    let (committee_a, members_a) =
-        generate_test_committee(4, threshold_u64).expect("federation A committee");
-    let (committee_b, members_b) =
-        generate_test_committee(4, threshold_u64).expect("federation B committee");
+    let (committee_a, members_a) = generate_test_committee_with_seed(4, threshold_u64, [31u8; 32])
+        .expect("federation A committee");
+    let (committee_b, members_b) = generate_test_committee_with_seed(4, threshold_u64, [32u8; 32])
+        .expect("federation B committee");
 
     let fed_a_id: [u8; 32] = [0xAA; 32];
     let fed_b_id: [u8; 32] = [0xBB; 32];
@@ -187,8 +187,10 @@ fn cross_federation_lock_witness_finalize_roundtrip() {
 fn cross_federation_replay_rejected_after_finalize() {
     let threshold_u64 = 4u64;
     let threshold = threshold_u64 as usize;
-    let (committee_a, members_a) = generate_test_committee(4, threshold_u64).unwrap();
-    let (committee_b, members_b) = generate_test_committee(4, threshold_u64).unwrap();
+    let (committee_a, members_a) =
+        generate_test_committee_with_seed(4, threshold_u64, [41u8; 32]).unwrap();
+    let (committee_b, members_b) =
+        generate_test_committee_with_seed(4, threshold_u64, [42u8; 32]).unwrap();
 
     let fed_a_id: [u8; 32] = [0xAA; 32];
     let fed_b_id: [u8; 32] = [0xBB; 32];

@@ -11,9 +11,9 @@
 //!   4. Malformed postcard body (simulating a bad HTTP body) → deserialization
 //!      error, not panic.
 
-use dregg_cell::{CellId, Ledger};
+use dregg_cell::{Cell, CellId, Ledger};
 use dregg_sdk::AgentCipherclerk;
-use dregg_turn::{CallForest, ComputronCosts, Turn, TurnExecutor};
+use dregg_turn::{ActionBuilder, CallForest, ComputronCosts, Turn, TurnExecutor};
 use zeroize::Zeroizing;
 
 /// The same domain string used by the node handler to derive the unsealer.
@@ -31,14 +31,28 @@ fn make_cclerk(label: &str) -> AgentCipherclerk {
     AgentCipherclerk::from_key_bytes(Zeroizing::new(test_key(label)))
 }
 
-fn empty_turn(agent: CellId, nonce: u64) -> Turn {
+fn make_ledger(cclerk: &AgentCipherclerk) -> Ledger {
+    let mut ledger = Ledger::new();
+    let cell = Cell::with_balance(cclerk.public_key().0, [0u8; 32], 1_000_000);
+    ledger
+        .insert_cell(cell)
+        .expect("test cell insert must succeed");
+    ledger
+}
+
+fn valid_turn(agent: CellId, nonce: u64) -> Turn {
+    let mut call_forest = CallForest::new();
+    call_forest.add_root(
+        ActionBuilder::new_unchecked_for_tests(agent, "encrypted_submit_noop", agent).build(),
+    );
+
     Turn {
         agent,
         nonce,
-        fee: 0,
+        fee: 100,
         memo: None,
         valid_until: None,
-        call_forest: CallForest::new(),
+        call_forest,
         depends_on: vec![],
         previous_receipt_hash: None,
         conservation_proof: None,
@@ -78,14 +92,14 @@ fn encrypted_turn_with_node_derived_sealer_commits() {
         let raw = dregg_cell::CellId::derive_raw(&sender_cclerk.public_key().0, &[0u8; 32]);
         CellId(raw.0)
     };
-    let turn = empty_turn(agent, 0);
+    let turn = valid_turn(agent, 0);
     let encrypted = sender_cclerk
         .make_encrypted_turn(&turn, &sealer_public, 0)
         .expect("make_encrypted_turn must succeed");
 
     // The executor decrypts + applies.
     let executor = TurnExecutor::new(ComputronCosts::default());
-    let mut ledger = Ledger::new();
+    let mut ledger = make_ledger(&sender_cclerk);
     let receipt = executor
         .apply_encrypted_turn(&encrypted, &sealer_secret, &mut ledger)
         .expect("apply_encrypted_turn with correct sealer must succeed");
@@ -131,14 +145,14 @@ fn encrypted_turn_with_forged_sealer_is_rejected() {
         let raw = dregg_cell::CellId::derive_raw(&sender_cclerk.public_key().0, &[0u8; 32]);
         CellId(raw.0)
     };
-    let turn = empty_turn(agent, 0);
+    let turn = valid_turn(agent, 0);
     let encrypted = sender_cclerk
         .make_encrypted_turn(&turn, &attacker_public, 0)
         .expect("encryption itself must succeed");
 
     // The executor tries to decrypt with its own (real) secret → must fail.
     let executor = TurnExecutor::new(ComputronCosts::default());
-    let mut ledger = Ledger::new();
+    let mut ledger = make_ledger(&sender_cclerk);
     let result = executor.apply_encrypted_turn(&encrypted, &real_sealer_secret, &mut ledger);
     assert!(
         result.is_err(),
@@ -185,13 +199,13 @@ fn was_encrypted_flag_is_bound_into_receipt_hash() {
         let raw = dregg_cell::CellId::derive_raw(&sender_cclerk.public_key().0, &[0u8; 32]);
         CellId(raw.0)
     };
-    let turn = empty_turn(agent, 0);
+    let turn = valid_turn(agent, 0);
     let encrypted = sender_cclerk
         .make_encrypted_turn(&turn, &sealer_public, 0)
         .expect("encryption must succeed");
 
     let executor = TurnExecutor::new(ComputronCosts::default());
-    let mut ledger = Ledger::new();
+    let mut ledger = make_ledger(&sender_cclerk);
     let mut receipt = executor
         .apply_encrypted_turn(&encrypted, &sealer_secret, &mut ledger)
         .expect("apply must succeed");

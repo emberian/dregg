@@ -13,7 +13,7 @@
 use dregg_federation::{
     Federation, FederationReceipt, FederationReceiptBody,
     identity::derive_federation_id_with_epoch,
-    threshold::generate_test_committee,
+    threshold::{generate_test_committee, generate_test_committee_with_seed},
     types::{PublicKey, SigningKey, generate_keypair, sign},
 };
 use dregg_types::CellId;
@@ -176,7 +176,8 @@ fn old_attested_root_still_verifies_under_old_committee_vk() {
     let threshold_u64 = 3u64;
 
     // Epoch 0 committee
-    let (committee_e0, members_e0) = generate_test_committee(n, threshold_u64).unwrap();
+    let (committee_e0, members_e0) =
+        generate_test_committee_with_seed(n, threshold_u64, [1u8; 32]).unwrap();
     let kps_e0 = pk_vec(n);
     let ed_e0: Vec<PublicKey> = kps_e0.iter().map(|(_, pk)| pk.clone()).collect();
     let fed_id_e0 = derive_federation_id_with_epoch(&ed_e0, 0);
@@ -192,7 +193,8 @@ fn old_attested_root_still_verifies_under_old_committee_vk() {
     let old_receipt = FederationReceipt::with_threshold_qc(fed_id_e0, 0, body, &qc_e0);
 
     // Now the federation rotates to epoch 1 (different committee entirely).
-    let (committee_e1, _members_e1) = generate_test_committee(n, threshold_u64).unwrap();
+    let (committee_e1, _members_e1) =
+        generate_test_committee_with_seed(n, threshold_u64, [2u8; 32]).unwrap();
     let kps_e1 = pk_vec(n);
     let ed_e1: Vec<PublicKey> = kps_e1.iter().map(|(_, pk)| pk.clone()).collect();
 

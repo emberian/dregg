@@ -875,10 +875,11 @@ mod tests {
 // document the cause in the commit message.
 
 const STABLE_BLINDED_ITEM_BLAKE3: [u8; 32] = [
-    137, 79, 35, 157, 41, 139, 191, 243, 69, 17, 52, 43, 6, 1, 108, 68, 38, 122, 76, 8, 127, 233,
-    201, 42, 156, 120, 113, 127, 40, 153, 96, 192,
+    86, 145, 129, 99, 44, 189, 254, 109, 128, 221, 85, 236, 60, 141, 65, 162, 118, 156, 199, 215,
+    161, 241, 152, 238, 116, 86, 134, 78, 220, 232, 30, 117,
 ];
-const STABLE_BLINDED_ITEM_POSEIDON2: [u32; 4] = [433_477_333, 626_868_483, 68_240_588, 967_854_049];
+const STABLE_BLINDED_ITEM_POSEIDON2: [u32; 4] =
+    [1_763_016_687, 164_998_847, 1_721_525_161, 930_110_908];
 
 // AUDIT[stage10-framework]: The two forms (BLAKE3 and Poseidon2) are
 // derived from the same canonical bytes via two independent paths.

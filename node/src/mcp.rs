@@ -6465,8 +6465,9 @@ mod tests {
 
     use crate::state::NodeState;
 
-    /// Build a fresh NodeState in a tempdir, unlock the cipherclerk, and
-    /// return it ready for tool dispatch.
+    /// Build a fresh NodeState in a tempdir, unlock the cipherclerk, seed the
+    /// agent cell with enough balance to pay turn fees, and return it ready for
+    /// tool dispatch.
     async fn fresh_unlocked_state() -> (NodeState, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
         // Deterministic seed so the test is reproducible.
@@ -6479,6 +6480,11 @@ mod tests {
         {
             let mut s = state.write().await;
             s.unlocked = true;
+            let pk_bytes = s.cclerk.public_key().0;
+            let cell = dregg_cell::Cell::with_balance(pk_bytes, [0u8; 32], 1_000_000);
+            s.ledger
+                .insert_cell(cell)
+                .expect("test agent cell insert must succeed");
         }
         (state, tmp)
     }
@@ -6768,6 +6774,7 @@ mod tests {
         });
         let result = dispatch_tool("dregg_register_name", params, &state).await;
         let j = extract_json(&result);
+        assert_proof_populated("forged_proof_honest_setup", &j);
         let proof_hex = j
             .get("effect_vm_proof_hex")
             .and_then(|v| v.as_str())

@@ -9,7 +9,9 @@
 //! - Cross-committee confusion: QC from committee A rejected by committee B
 
 use dregg_federation::identity::derive_federation_id;
-use dregg_federation::threshold::{FederationCommittee, MemberSecret, generate_test_committee};
+use dregg_federation::threshold::{
+    FederationCommittee, MemberSecret, generate_test_committee, generate_test_committee_with_seed,
+};
 use dregg_federation::{FederationReceipt, FederationReceiptBody};
 use dregg_types::{CellId, generate_keypair};
 
@@ -120,8 +122,8 @@ fn tampered_body_fails_verification() {
 
 #[test]
 fn cross_committee_qc_rejected() {
-    let (committee_a, members_a) = generate_test_committee(4, 3).unwrap();
-    let (committee_b, _members_b) = generate_test_committee(4, 3).unwrap();
+    let (committee_a, members_a) = generate_test_committee_with_seed(4, 3, [11u8; 32]).unwrap();
+    let (committee_b, _members_b) = generate_test_committee_with_seed(4, 3, [22u8; 32]).unwrap();
 
     let ed_keys: Vec<_> = (0..4).map(|_| generate_keypair().1).collect();
     let fed_id = derive_federation_id(&ed_keys);

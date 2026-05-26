@@ -51,7 +51,6 @@ use serde::{Deserialize, Serialize};
 /// - [`RetentionPolicy::UntilArchive`] — prune receipts at heights at
 ///   or below a known archival attestation's `archive_end_height`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind")]
 pub enum RetentionPolicy {
     /// Never prune. The operator commits to serving the full receipt
     /// chain back to genesis.
@@ -67,7 +66,7 @@ pub enum RetentionPolicy {
     /// [`dregg_wire::message::ReceiptUnavailable::CoveredByAttestedRoot`].
     RollingWindow {
         /// Number of recent block-heights to retain in the hot tail.
-        /// A receipt at height `h` is pruned when `tip - h > blocks`.
+        /// A receipt at height `h` is pruned when `tip - h >= blocks`.
         blocks: u64,
     },
 
@@ -128,7 +127,7 @@ impl RetentionPolicy {
                 if *blocks == 0 {
                     false
                 } else {
-                    tip_height.saturating_sub(receipt_height) > *blocks
+                    tip_height.saturating_sub(receipt_height) >= *blocks
                 }
             }
             Self::UntilArchive { archive_height } => receipt_height <= *archive_height,

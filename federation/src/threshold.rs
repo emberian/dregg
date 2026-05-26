@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use ark_ff::One;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
+use ark_std::rand::{SeedableRng, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 
 use hints::{
@@ -280,6 +281,10 @@ impl FederationCommittee {
 
     /// Verify a threshold QC against this committee.
     pub fn verify(&self, qc: &ThresholdQC, message: &[u8]) -> Result<(), ThresholdError> {
+        if qc.threshold < self.threshold {
+            return Err(ThresholdError::VerificationFailed);
+        }
+
         let verifier = self.universe.verifier();
         verify_aggregate(&verifier, &qc.signature, message)
             .map_err(|_| ThresholdError::VerificationFailed)
@@ -371,15 +376,37 @@ pub fn generate_test_committee(
     n: usize,
     threshold: u64,
 ) -> Result<(FederationCommittee, Vec<MemberSecret>), ThresholdError> {
+    generate_test_committee_with_rng(n, threshold, &mut ark_std::test_rng())
+}
+
+/// Generate a full test committee with `n` members and threshold `t` from a
+/// caller-supplied seed.
+///
+/// This keeps integration fixtures reproducible while allowing tests to build
+/// two genuinely distinct committees in the same process.
+pub fn generate_test_committee_with_seed(
+    n: usize,
+    threshold: u64,
+    seed: [u8; 32],
+) -> Result<(FederationCommittee, Vec<MemberSecret>), ThresholdError> {
+    let mut rng = StdRng::from_seed(seed);
+    generate_test_committee_with_rng(n, threshold, &mut rng)
+}
+
+fn generate_test_committee_with_rng(
+    n: usize,
+    threshold: u64,
+    rng: &mut impl ark_std::rand::RngCore,
+) -> Result<(FederationCommittee, Vec<MemberSecret>), ThresholdError> {
     let domain_size = (n + 1).next_power_of_two();
 
-    let mut rng = ark_std::test_rng();
-    let gd = GlobalData::new(domain_size, &mut rng)?;
+    let gd = GlobalData::new(domain_size, rng)?;
 
-    // Generate member secrets (each with their own deterministic key from test_rng)
+    // Generate member secrets from the same fixture RNG so repeated seeded
+    // calls are reproducible.
     let members: Vec<MemberSecret> = (0..n)
         .map(|i| {
-            let sk = BlsSecretKey::random(&mut rng);
+            let sk = BlsSecretKey::random(&mut *rng);
             let pk = sk.public(&gd);
             MemberSecret {
                 secret_key: sk,
@@ -455,6 +482,28 @@ mod tests {
 
         // Verify with wrong message should fail
         assert!(committee.verify(&qc, wrong_message).is_err());
+    }
+
+    #[test]
+    fn test_threshold_qc_below_committee_threshold_rejected() {
+        let (weak_committee, members) =
+            generate_test_committee_with_seed(4, 2, [77u8; 32]).unwrap();
+        let strong_committee =
+            FederationCommittee::from_global_data(weak_committee.global.clone(), &members, 3)
+                .unwrap();
+
+        let message = b"threshold downgrade attempt";
+        let shares: Vec<(usize, PartialSignature)> = members[0..2]
+            .iter()
+            .map(|m| (m.index, weak_committee.sign_share(m, message)))
+            .collect();
+
+        let qc = weak_committee.aggregate(&shares, message).unwrap();
+        assert!(weak_committee.verify(&qc, message).is_ok());
+        assert!(
+            strong_committee.verify(&qc, message).is_err(),
+            "QC aggregated below the committee threshold must not verify"
+        );
     }
 
     #[test]
