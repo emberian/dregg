@@ -2254,6 +2254,10 @@ pub enum StateConstraintView {
         index: u8,
         value: String,
     },
+    FieldLteField {
+        left_index: u8,
+        right_index: u8,
+    },
     SumEquals {
         indices: Vec<u8>,
         value: String,
@@ -2413,6 +2417,13 @@ fn state_constraint_to_view(sc: &StateConstraint) -> StateConstraintView {
         StateConstraint::FieldLte { index, value } => StateConstraintView::FieldLte {
             index: *index,
             value: hex_encode(value),
+        },
+        StateConstraint::FieldLteField {
+            left_index,
+            right_index,
+        } => StateConstraintView::FieldLteField {
+            left_index: *left_index,
+            right_index: *right_index,
         },
         StateConstraint::SumEquals { indices, value } => StateConstraintView::SumEquals {
             indices: indices.clone(),
