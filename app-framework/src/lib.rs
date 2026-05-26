@@ -54,6 +54,7 @@ pub mod discovery;
 pub mod dispute;
 pub mod escrow;
 pub mod fee_policy;
+pub mod fields;
 pub mod hex;
 pub mod inbox_endpoint;
 pub mod middleware;
@@ -173,6 +174,14 @@ pub use pyana_cell::{
     FactoryDescriptor, FieldConstraint, ProvingSystemId, StateConstraint, VerifierFingerprint,
     VkComponents, canonical_vk_v2,
 };
+// Re-export the types needed to build non-trivial CellProgram::Cases — previously
+// every app had to add pyana-cell to its own Cargo.toml just to get these.
+pub use pyana_cell::program::{AuthorizedSet, TransitionCase, TransitionGuard};
+pub use pyana_cell::predicate::{InputRef, WitnessedPredicate, WitnessedPredicateKind};
+
+// Re-export the canonical field-element encoding helpers so apps can use them
+// without duplicating these in every crate.
+pub use fields::{field_from_bytes, field_from_u64, hex_encode_32};
 
 // VK v2: re-export the layered VK encoders from `vk` module at the
 // framework root. These *shadow* the cell crate's v1 `canonical_program_vk`
