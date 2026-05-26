@@ -20,22 +20,31 @@
 //! FieldDeltaInRange, SumEqualsAcross, MonotonicSequence,
 //! AllowedTransitions, TemporalGate, AnyOf) and structural-only for a
 //! handful more. Sentinel variants (`TemporalPredicate`, `BoundDelta`,
-//! `Witnessed`, `Custom`) propagate through the conjunction; we test
-//! that they DO break the whole program until the caveat-correctness
-//! lane lands.
+//! `Witnessed`, `TemporalPredicate`, and `Custom`) now dispatch when an
+//! explicit registry and witness bundle are provided; `BoundDelta`
+//! remains a cross-cell/gamma-layer sentinel and is intentionally not
+//! modeled as accepted here.
 //!
 //! Discipline:
 //! - Tests that compose only honest variants are *not* ignored —
 //!   they're the regression guard for §8 of CAVEAT-LAYER-COVERAGE.
-//! - Tests that mix in sentinel variants ARE ignored on the
-//!   caveat-correctness lane (the sentinel collapses the program
-//!   today; once the lane lands, these tests must invert).
+//! - Tests that mix in registry-backed variants install exact
+//!   test-local verifiers rather than permissive stubs.
 
 #![allow(clippy::field_reassign_with_default)]
 
-use dregg_cell::program::{SimpleStateConstraint, TransitionCase, TransitionGuard, TransitionMeta};
+use std::sync::Arc;
+
+use dregg_cell::predicate::{
+    PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
+    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
+};
+use dregg_cell::program::{
+    CustomDescriptor, ReadSet, SimpleStateConstraint, TransitionCase, TransitionGuard,
+    TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag,
+};
 use dregg_cell::{
-    CellProgram, CellState, EvalContext, FIELD_ZERO, StateConstraint, field_from_u64,
+    CellProgram, CellState, EvalContext, FIELD_ZERO, InputRef, StateConstraint, field_from_u64,
 };
 
 // ---------------------------------------------------------------------------
@@ -52,6 +61,72 @@ fn state_with(field_values: &[(usize, u64)]) -> CellState {
 
 fn ctx_at(block_height: u64, timestamp: i64) -> EvalContext {
     EvalContext::minimal(block_height, timestamp)
+}
+
+struct ExactProofVerifier {
+    kind: WitnessedPredicateKind,
+    name: &'static str,
+    expected_commitment: [u8; 32],
+    expected_proof: &'static [u8],
+}
+
+impl WitnessedPredicateVerifier for ExactProofVerifier {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        self.kind
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        _input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        if commitment != &self.expected_commitment {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "commitment mismatch".into(),
+            });
+        }
+        if proof_bytes != self.expected_proof {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "proof mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn stress_registry(custom_hash: [u8; 32]) -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(ExactProofVerifier {
+        kind: WitnessedPredicateKind::Dfa,
+        name: "stress-dfa-verifier",
+        expected_commitment: [0xD1u8; 32],
+        expected_proof: b"shared-proof",
+    }));
+    registry.register_builtin(Arc::new(ExactProofVerifier {
+        kind: WitnessedPredicateKind::Temporal,
+        name: "stress-temporal-verifier",
+        expected_commitment: [0xD2u8; 32],
+        expected_proof: b"shared-proof",
+    }));
+    registry.register_custom(
+        custom_hash,
+        Arc::new(ExactProofVerifier {
+            kind: WitnessedPredicateKind::Custom {
+                vk_hash: custom_hash,
+            },
+            name: "stress-custom-verifier",
+            expected_commitment: custom_hash,
+            expected_proof: b"shared-proof",
+        }),
+    );
+    registry
 }
 
 // ===========================================================================
@@ -609,19 +684,150 @@ fn sentinel_variant_inside_long_conjunction_collapses_program() {
 }
 
 #[test]
-#[ignore = "INVERTED form: once caveat-correctness lane wires WitnessedPredicateRegistry from cell-program path (CAVEAT-LAYER-COVERAGE.md §6.6), the 16-honest+1-witnessed conjunction must accept when the witness verifies"]
 fn sentinel_variant_inside_long_conjunction_accepts_when_witness_verifies() {
-    panic!("blocked");
+    let constraints = vec![
+        StateConstraint::FieldEquals {
+            index: 0,
+            value: field_from_u64(1),
+        },
+        StateConstraint::Monotonic { index: 1 },
+        StateConstraint::Witnessed {
+            wp: WitnessedPredicate::dfa([0xD1u8; 32], InputRef::Sender, 0),
+        },
+        StateConstraint::Immutable { index: 2 },
+        StateConstraint::TemporalGate {
+            not_before: Some(0),
+            not_after: None,
+        },
+    ];
+    let program = CellProgram::Predicate(constraints);
+    let old = state_with(&[(1, 1), (2, 5)]);
+    let new = state_with(&[(0, 1), (1, 2), (2, 5)]);
+    let mut ctx = ctx_at(10, 0);
+    ctx.sender = Some([0xA5u8; 32]);
+    let registry = stress_registry([0xC3u8; 32]);
+    let blobs = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: b"shared-proof",
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+
+    let result = program.evaluate_full(
+        &new,
+        Some(&old),
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    );
+    assert!(
+        result.is_ok(),
+        "honest conjunction plus verified Witnessed predicate must accept, got: {result:?}"
+    );
 }
 
 // ===========================================================================
-// Programs that declare ALL 21+ variants at once
+// Programs that declare all locally dispatchable variants at once
 // ===========================================================================
 
 #[test]
-#[ignore = "blocks on caveat-correctness lane: full 21+ variant declaration cannot accept any transition today because TemporalPredicate/BoundDelta/Witnessed/Custom collapse the conjunction (CAVEAT-LAYER-COVERAGE.md §6.1). Once the lane lands, this test asserts the maximally-rich cell program can transition."]
-fn all_21_state_constraint_variants_declared_and_satisfied() {
-    panic!("blocked");
+fn all_locally_dispatchable_state_constraint_variants_declared_and_satisfied() {
+    let custom_hash = [0xC3u8; 32];
+    let registry = stress_registry(custom_hash);
+    let blobs = [
+        WitnessBlobView {
+            kind: WitnessKindTag::ProofBytes,
+            bytes: b"shared-proof",
+        },
+        WitnessBlobView {
+            kind: WitnessKindTag::Cleartext,
+            bytes: b"temporal-window",
+        },
+    ];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let program = CellProgram::Predicate(vec![
+        StateConstraint::FieldEquals {
+            index: 0,
+            value: field_from_u64(1),
+        },
+        StateConstraint::FieldGte {
+            index: 1,
+            value: field_from_u64(100),
+        },
+        StateConstraint::StrictMonotonic { index: 1 },
+        StateConstraint::FieldLte {
+            index: 2,
+            value: field_from_u64(200),
+        },
+        StateConstraint::WriteOnce { index: 3 },
+        StateConstraint::Immutable { index: 4 },
+        StateConstraint::FieldDelta {
+            index: 5,
+            delta: field_from_u64(5),
+        },
+        StateConstraint::MonotonicSequence { seq_index: 6 },
+        StateConstraint::AllowedTransitions {
+            slot_index: 7,
+            allowed: vec![(field_from_u64(1), field_from_u64(2))],
+        },
+        StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::FieldEquals {
+                    index: 7,
+                    value: field_from_u64(2),
+                },
+                SimpleStateConstraint::FieldEquals {
+                    index: 7,
+                    value: field_from_u64(3),
+                },
+            ],
+        },
+        StateConstraint::TemporalGate {
+            not_before: Some(10),
+            not_after: Some(100),
+        },
+        StateConstraint::TemporalPredicate {
+            dsl_hash: [0xD2u8; 32],
+            witness_index: 1,
+        },
+        StateConstraint::Witnessed {
+            wp: WitnessedPredicate::dfa([0xD1u8; 32], InputRef::Sender, 0),
+        },
+        StateConstraint::Custom {
+            ir_hash: custom_hash,
+            descriptor: CustomDescriptor::default(),
+            reads: ReadSet::default(),
+        },
+    ]);
+    let old = state_with(&[(1, 100), (3, 0), (4, 99), (5, 20), (6, 41), (7, 1)]);
+    let new = state_with(&[
+        (0, 1),
+        (1, 150),
+        (2, 150),
+        (3, 7),
+        (4, 99),
+        (5, 25),
+        (6, 42),
+        (7, 2),
+    ]);
+    let mut ctx = ctx_at(50, 0);
+    ctx.sender = Some([0xA5u8; 32]);
+    let result = program.evaluate_full(
+        &new,
+        Some(&old),
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    );
+    assert!(
+        result.is_ok(),
+        "all locally dispatchable variants should compose when exact witnesses verify; got {result:?}"
+    );
 }
 
 // ===========================================================================

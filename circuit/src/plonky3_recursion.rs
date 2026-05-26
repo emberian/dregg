@@ -332,7 +332,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "SLOW: Plonky3 recursive proof over 2 sub-proofs; structural prove+verify diagnostic, too slow for CI"]
     fn recursive_proof_two_proofs() {
         let input1 = make_test_proof(1111);
         let input2 = make_test_proof(2222);
@@ -353,7 +352,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "SLOW: Plonky3 recursive proof over 4 sub-proofs; structural prove+verify diagnostic, too slow for CI"]
     fn recursive_proof_four_proofs() {
         let inputs: Vec<RecursionInput> = (1..=4).map(|i| make_test_proof(i * 1000)).collect();
 
@@ -376,7 +374,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "SLOW: Plonky3 pair aggregation prove+verify; too slow for CI"]
     fn aggregate_pair_works() {
         let input1 = make_test_proof(5555);
         let input2 = make_test_proof(6666);

@@ -1505,7 +1505,6 @@ mod tests {
 
     #[cfg(feature = "plonky3")]
     #[test]
-    #[ignore = "SLOW: generates a real Plonky3 membership proof via the Plonky3Backend API; too slow for CI"]
     fn membership_prove_verify_plonky3() {
         use crate::poseidon2::hash_4_to_1;
 

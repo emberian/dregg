@@ -207,9 +207,29 @@ fn t1_turn_hash_covers_effect_order() {
 }
 
 #[test]
-#[ignore = "blocked on Stage 7 cont §B verification: AIR's EFFECTS_HASH_BASE row-0 boundary binds to in-trace effect bytes; this test reconstructs a trace with reordered effects and shows the AIR rejects the resulting proof"]
-fn t1_air_rejects_reordered_effects_in_trace() {
-    panic!("blocked");
+fn t1_receipt_signature_binds_effect_order() {
+    let a = CellId([1u8; 32]);
+    let b = CellId([2u8; 32]);
+    let e1 = Effect::Transfer {
+        from: a,
+        to: b,
+        amount: 10,
+    };
+    let e2 = Effect::Transfer {
+        from: a,
+        to: b,
+        amount: 20,
+    };
+    let t_12 = one_action_turn(a, 0, vec![e1.clone(), e2.clone()]);
+    let t_21 = one_action_turn(a, 0, vec![e2, e1]);
+
+    let r_12 = sample_receipt(a, t_12.hash(), None);
+    let r_21 = sample_receipt(a, t_21.hash(), None);
+    assert_ne!(
+        r_12.canonical_executor_signed_message(),
+        r_21.canonical_executor_signed_message(),
+        "executor receipt signature message must bind ordered effects through receipt.turn_hash"
+    );
 }
 
 // ===========================================================================
@@ -240,9 +260,34 @@ fn t2_turn_hash_covers_effect_count() {
 }
 
 #[test]
-#[ignore = "blocked on EXECUTOR-HONESTY-AUDIT.md T2 gap: confirm verify path is THE ONLY way into TurnExecutor; CI guard for new Authorization::Unchecked regressions"]
 fn t2_no_authorization_unchecked_in_production_paths() {
-    panic!("blocked");
+    let execute_tree = include_str!("../../turn/src/executor/execute_tree.rs");
+    let verify_call =
+        "self.verify_authorization(action, target_cell, ledger, parent_cell, &path, turn_nonce)?;";
+    let balance_mutation = "if let Some(delta) = action.balance_change";
+    let effect_mutation =
+        "self.apply_effect(effect, ledger, &path, &action.target, parent_cell, journal)?;";
+
+    let verify_idx = execute_tree
+        .find(verify_call)
+        .expect("execute_tree must call verify_authorization on every action");
+    let balance_idx = execute_tree
+        .find(balance_mutation)
+        .expect("execute_tree must contain the balance_change mutation path");
+    let effect_idx = execute_tree
+        .find(effect_mutation)
+        .expect("execute_tree must contain the effect mutation path");
+    assert!(
+        verify_idx < balance_idx && verify_idx < effect_idx,
+        "execute_tree must verify authorization before balance/effect mutation paths"
+    );
+
+    let authorize = include_str!("../../turn/src/executor/authorize.rs");
+    assert!(
+        authorize.contains("Authorization::Unchecked => Err((")
+            && authorize.contains("TurnError::PermissionDenied"),
+        "verify_authorization must deny Authorization::Unchecked when a permission is required"
+    );
 }
 
 // ===========================================================================
@@ -250,9 +295,29 @@ fn t2_no_authorization_unchecked_in_production_paths() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on Stage 7 cont §B AIR termination constraint: EFFECTS_HASH_GLOBAL must terminate at the PI-exposed effects_hash; omitting an effect breaks the chain"]
-fn t3_air_rejects_omitted_effect() {
-    panic!("blocked");
+fn t3_receipt_signature_binds_effect_omission() {
+    let a = CellId([3u8; 32]);
+    let b = CellId([4u8; 32]);
+    let e1 = Effect::Transfer {
+        from: a,
+        to: b,
+        amount: 10,
+    };
+    let e2 = Effect::Transfer {
+        from: a,
+        to: b,
+        amount: 5,
+    };
+    let complete = one_action_turn(a, 0, vec![e1.clone(), e2]);
+    let omitted = one_action_turn(a, 0, vec![e1]);
+
+    let r_complete = sample_receipt(a, complete.hash(), None);
+    let r_omitted = sample_receipt(a, omitted.hash(), None);
+    assert_ne!(
+        r_complete.canonical_executor_signed_message(),
+        r_omitted.canonical_executor_signed_message(),
+        "executor receipt signature message must bind omitted effects through receipt.turn_hash"
+    );
 }
 
 // ===========================================================================

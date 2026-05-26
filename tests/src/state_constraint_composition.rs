@@ -12,11 +12,23 @@
 //! require pieces of the caveat-correctness lane to land carry an
 //! `#[ignore = "..."]` with unblock label.
 
-use dregg_cell::predicate::WitnessedPredicate;
-use dregg_cell::program::SimpleStateConstraint;
-use dregg_cell::{
-    CellProgram, CellState, EvalContext, InputRef, ProgramError, StateConstraint, field_from_u64,
+use std::sync::Arc;
+
+use dregg_cell::predicate::{
+    PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
+    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
+use dregg_cell::program::{
+    SimpleStateConstraint, TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag,
+};
+use dregg_cell::{
+    AuthRequired, Cell, CellId, CellProgram, CellState, EvalContext, InputRef, Ledger, Permissions,
+    ProgramError, StateConstraint, field_from_u64,
+};
+use dregg_turn::action::{
+    Action, Authorization, CommitmentMode, DelegationMode, WitnessBlob, symbol,
+};
+use dregg_turn::{ComputronCosts, Effect, TurnBuilder, TurnExecutor};
 
 fn state_with(field_values: &[(usize, u64)]) -> CellState {
     let mut s = CellState::default();
@@ -24,6 +36,153 @@ fn state_with(field_values: &[(usize, u64)]) -> CellState {
         s.fields[*idx] = field_from_u64(*val);
     }
     s
+}
+
+struct ExactSlotVerifier {
+    vk_hash: [u8; 32],
+    expected_commitment: [u8; 32],
+    expected_slot: dregg_cell::FieldElement,
+    expected_proof: &'static [u8],
+}
+
+impl WitnessedPredicateVerifier for ExactSlotVerifier {
+    fn name(&self) -> &'static str {
+        "composition-exact-slot-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Custom {
+            vk_hash: self.vk_hash,
+        }
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        if commitment != &self.expected_commitment {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "commitment mismatch".into(),
+            });
+        }
+        match input {
+            PredicateInput::Slot(slot) if **slot == self.expected_slot => {}
+            PredicateInput::Slot(_) => {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: self.name(),
+                    reason: "slot snapshot mismatch".into(),
+                });
+            }
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "Slot",
+                    actual: "non-Slot",
+                });
+            }
+        }
+        if proof_bytes != self.expected_proof {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "fresh witness proof mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+struct ExpectedCustomAuthVerifier {
+    vk_hash: [u8; 32],
+    expected_message: Vec<u8>,
+    expected_proof: Vec<u8>,
+}
+
+impl WitnessedPredicateVerifier for ExpectedCustomAuthVerifier {
+    fn name(&self) -> &'static str {
+        "composition-expected-custom-auth-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Custom {
+            vk_hash: self.vk_hash,
+        }
+    }
+
+    fn verify(
+        &self,
+        _commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        match input {
+            PredicateInput::SigningMessage(bytes) if *bytes == self.expected_message.as_slice() => {
+            }
+            PredicateInput::SigningMessage(_) => {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: self.name(),
+                    reason: "signing message mismatch".into(),
+                });
+            }
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "SigningMessage",
+                    actual: "non-SigningMessage",
+                });
+            }
+        }
+        if proof_bytes != self.expected_proof {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "proof mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn make_custom_authorized_cell(seed: u8, vk_hash: [u8; 32], program: CellProgram) -> Cell {
+    let mut public_key = [0u8; 32];
+    public_key[0] = seed;
+    let mut cell = Cell::with_balance(public_key, [0u8; 32], 1);
+    cell.permissions = Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::Custom { vk_hash },
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    cell.program = program;
+    cell
+}
+
+fn custom_set_field_action(
+    target: CellId,
+    predicate: WitnessedPredicate,
+    proof: Vec<u8>,
+) -> Action {
+    Action {
+        target,
+        method: symbol("composition_custom_set_field"),
+        args: vec![],
+        authorization: Authorization::Custom { predicate },
+        preconditions: Default::default(),
+        effects: vec![Effect::SetField {
+            cell: target,
+            index: 0,
+            value: field_from_u64(42),
+        }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
+        witness_blobs: vec![WitnessBlob::proof(proof)],
+    }
 }
 
 // ===========================================================================
@@ -310,34 +469,176 @@ fn conservation_with_state_machine_step() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: WitnessedPredicate snapshot replay (PREDICATE-INVENTORY §6.3) + registry dispatch"]
 fn caveat_snapshot_plus_fresh_witness_composition() {
-    // Composition target: a WitnessedPredicate kind whose evaluator reads
-    // BOTH a slot snapshot from the cell program's last-receipt commitment
-    // AND a fresh witness blob from the action — exercising the two-arm
-    // dispatch path documented in PREDICATE-INVENTORY §6.3.
-    panic!("blocked");
+    // Composes:
+    //   - FieldEquals on slot 0 (stable slot snapshot)
+    //   - Monotonic on slot 1 (transition caveat)
+    //   - Witnessed(Custom) that reads slot 0 and consumes fresh proof bytes.
+    let vk_hash = [0xA1u8; 32];
+    let commitment = [0xC1u8; 32];
+    let proof = b"fresh-proof";
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_custom(
+        vk_hash,
+        Arc::new(ExactSlotVerifier {
+            vk_hash,
+            expected_commitment: commitment,
+            expected_slot: field_from_u64(7),
+            expected_proof: proof,
+        }),
+    );
+    let blobs = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: proof,
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let program = CellProgram::Predicate(vec![
+        StateConstraint::FieldEquals {
+            index: 0,
+            value: field_from_u64(7),
+        },
+        StateConstraint::Monotonic { index: 1 },
+        StateConstraint::Witnessed {
+            wp: WitnessedPredicate::custom(vk_hash, commitment, InputRef::Slot { index: 0 }, 0),
+        },
+    ]);
+    let old = state_with(&[(1, 5)]);
+    let new = state_with(&[(0, 7), (1, 6)]);
+    program
+        .evaluate_full(
+            &new,
+            Some(&old),
+            None,
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect("slot caveats and fresh witnessed proof should compose");
+
+    let stale_blobs = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: b"stale-proof",
+    }];
+    let stale_witnesses = WitnessBundle {
+        blobs: &stale_blobs,
+        registry: Some(&registry),
+    };
+    assert!(
+        program
+            .evaluate_full(
+                &new,
+                Some(&old),
+                None,
+                &TransitionMeta::wildcard(),
+                &stale_witnesses,
+            )
+            .is_err(),
+        "stale proof bytes must reject even when slot caveats pass"
+    );
 }
 
 // ===========================================================================
-// Cross-cutting: slot caveats + cap caveats + Auth::Custom
+// Cross-cutting: slot caveats + Auth::Custom
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on AUTHORIZATION-CUSTOM-DESIGN lane + CapabilityCaveat enforcement (PREDICATE-INVENTORY §7.6 Phase 6)"]
-fn slot_caveats_plus_cap_caveats_plus_auth_custom() {
-    // Composition target (per the mandate's discipline):
-    //   - Slot caveats: Monotonic(0) ∧ TemporalGate(...) on the target cell.
-    //   - Cap caveats: CapabilityCaveat::Witnessed(...) on the cap the actor exercises.
-    //   - Authorization::Custom { predicate } with InputRef::SigningMessage.
-    // The turn passes only if ALL three layers accept.
-    panic!("blocked");
+fn slot_caveats_plus_auth_custom_accepts() {
+    // Executor-level composition for the currently-live layers:
+    //   - slot caveats: Monotonic(0) ∧ TemporalGate(...),
+    //   - Authorization::Custom over InputRef::SigningMessage.
+    //
+    // CapabilityCaveat enforcement is a separate layer and remains covered by
+    // its own blocked workstream; this test avoids pretending that cap caveats
+    // are enforced here.
+    let vk_hash = [0xB1u8; 32];
+    let federation_id = [0xF1u8; 32];
+    let proof = b"valid-proof".to_vec();
+    let program = CellProgram::Predicate(vec![
+        StateConstraint::TemporalGate {
+            not_before: Some(0),
+            not_after: None,
+        },
+        StateConstraint::Monotonic { index: 0 },
+    ]);
+    let cell = make_custom_authorized_cell(41, vk_hash, program);
+    let target = cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(cell).unwrap();
+
+    let predicate = WitnessedPredicate::custom(vk_hash, [0u8; 32], InputRef::SigningMessage, 0);
+    let action = custom_set_field_action(target, predicate.clone(), proof.clone());
+    let expected_message =
+        TurnExecutor::compute_custom_signing_message(&action, &predicate, 0, &federation_id, 0);
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_custom(
+        vk_hash,
+        Arc::new(ExpectedCustomAuthVerifier {
+            vk_hash,
+            expected_message,
+            expected_proof: proof,
+        }),
+    );
+    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    executor.set_local_federation_id(federation_id);
+    executor.set_witnessed_registry(registry);
+    let mut builder = TurnBuilder::new(target, 0);
+    builder.add_action(action);
+    let result = executor.execute(&builder.fee(0).build(), &mut ledger);
+    assert!(
+        result.is_committed(),
+        "slot-caveat-valid Authorization::Custom turn should commit, got {result:?}"
+    );
+    assert_eq!(
+        ledger.get(&target).unwrap().state.fields[0],
+        field_from_u64(42)
+    );
 }
 
 #[test]
-#[ignore = "blocked on AUTHORIZATION-CUSTOM-DESIGN lane: a tampered Auth::Custom predicate must reject even when slot caveats accept"]
 fn tampered_auth_custom_rejected_even_when_slot_caveats_pass() {
-    panic!("blocked");
+    // Executor-level composition:
+    //   - target cell requires Authorization::Custom for set_state,
+    //   - target cell program enforces slot caveats,
+    //   - Custom verifier rejects the proof while the slot caveats would pass.
+    let vk_hash = [0xB2u8; 32];
+    let federation_id = [0xF2u8; 32];
+    let program = CellProgram::Predicate(vec![
+        StateConstraint::TemporalGate {
+            not_before: Some(0),
+            not_after: None,
+        },
+        StateConstraint::Monotonic { index: 0 },
+    ]);
+    let cell = make_custom_authorized_cell(42, vk_hash, program);
+    let target = cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(cell).unwrap();
+
+    let predicate = WitnessedPredicate::custom(vk_hash, [0u8; 32], InputRef::SigningMessage, 0);
+    let action = custom_set_field_action(target, predicate.clone(), b"tampered-proof".to_vec());
+    let expected_message =
+        TurnExecutor::compute_custom_signing_message(&action, &predicate, 0, &federation_id, 0);
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_custom(
+        vk_hash,
+        Arc::new(ExpectedCustomAuthVerifier {
+            vk_hash,
+            expected_message,
+            expected_proof: b"valid-proof".to_vec(),
+        }),
+    );
+    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    executor.set_local_federation_id(federation_id);
+    executor.set_witnessed_registry(registry);
+    let mut builder = TurnBuilder::new(target, 0);
+    builder.add_action(action);
+    let result = executor.execute(&builder.fee(0).build(), &mut ledger);
+    assert!(
+        result.is_rejected(),
+        "tampered Authorization::Custom proof must reject before committing slot-caveat-valid state"
+    );
 }
 
 // ===========================================================================

@@ -1723,9 +1723,48 @@ fn sender_authorized_credential_set_sentinel_without_registry() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness: CredentialSet credential-gated voting path (starbridge-governed-namespace) — needs BlindedSet verifier + issuer cell out-of-band lookup"]
 fn sender_authorized_credential_set_accepts_with_valid_presentation() {
-    panic!("blocked");
+    let issuer_cell = [0x01u8; 32];
+    let credential_schema_id = [0x02u8; 32];
+    let sender = [0x05u8; 32];
+    let commitment = AuthorizedSet::credential_set_commitment(&issuer_cell, &credential_schema_id);
+    let p = single_predicate(StateConstraint::SenderAuthorized {
+        set: AuthorizedSet::CredentialSet {
+            issuer_cell,
+            credential_schema_id,
+        },
+    });
+    let registry = exact_sender_registry(
+        WitnessedPredicateKind::BlindedSet,
+        "exact-credential-set-state-constraint-test-verifier",
+        commitment,
+        sender,
+        b"valid-credential-presentation",
+    );
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: b"valid-credential-presentation",
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let ctx = EvalContext {
+        sender: Some(sender),
+        ..Default::default()
+    };
+
+    let result = p.evaluate_full(
+        &CellState::default(),
+        None,
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    );
+    assert!(
+        result.is_ok(),
+        "CredentialSet should dispatch through the BlindedSet verifier, got: {result:?}"
+    );
 }
 
 // ===========================================================================
