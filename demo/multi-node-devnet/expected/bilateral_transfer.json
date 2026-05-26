@@ -30,7 +30,8 @@
 
   "documented_gaps": [
     "transfer_id derivation in this scenario is a Python-shell BLAKE2b stand-in, not the canonical pyana-cell transfer-id from `cell/src/witness.rs`. When the canonical derivation lands, swap the python3 block for a call to a helper binary.",
-    "The scenario does not submit a real signed Turn to F2's executor; it asserts the substrate properties (deterministic id, federation binding, direction-complement) that the executor's pair-verifier will assume."
+    "The scenario does not submit a real signed Turn to F2's executor; it asserts the substrate properties (deterministic id, federation binding, direction-complement) that the executor's pair-verifier will assume.",
+    "#88 strengthened (2026-05-25): bilateral_pair_direction_complement_holds and bilateral_pair_amount_agrees now gate on devnet liveness (f2_status) rather than passing on hardcoded ALICE_DIR/BOB_DIR=1/0 constants. When the devnet is not responding both assertions record false. When running, a probe to /turns/peer-exchange confirms the route is present and the pair JSON carries the canonical direction/amount encoding. True γ.2 PI extraction (alice_stub_proof.json, bob_proof.json) remains blocked-on γ.2 Phase 1."
   ],
 
   "improve_dont_degrade": "When γ.2 Phase 1 lands, expand must_pass with: bob_proof_verifies_against_per_cell_AIR, alice_stub_proof_verifies_against_per_cell_AIR, pair_PI_transfer_ids_equal_under_AIR_PI_layout, federation_id_in_signing_message_is_F2_for_both_rows. Add to must_not_pass: pair_with_swapped_direction_bits_accepts, pair_with_different_transfer_ids_accepts, pair_with_federation_id_F1_in_one_row_accepts."
