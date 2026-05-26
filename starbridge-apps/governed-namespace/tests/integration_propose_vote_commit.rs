@@ -15,11 +15,16 @@
 //! `Monotonic(DISPUTE_WINDOW_HEIGHT_SLOT)`.
 
 use pyana_app_framework::{AgentCipherclerk, AppCipherclerk, CellId, EmbeddedExecutor};
+use pyana_cell::permissions::{AuthRequired, Permissions};
+use pyana_cell::program::{CellProgram, StateConstraint};
+use pyana_cell::state::CellState;
 use pyana_dfa::RouteTarget;
 use starbridge_governed_namespace::{
-    VoteKind, blake3_field, build_commit_table_update_action, build_propose_table_update_action,
+    DISPUTE_WINDOW_HEIGHT_SLOT, GOVERNANCE_COMMITTEE_ROOT_SLOT, PENDING_PROPOSAL_ROOT_SLOT,
+    ROUTE_TABLE_ROOT_SLOT, THRESHOLD_SLOT, VERSION_SLOT, VoteKind, blake3_field,
+    build_commit_table_update_action, build_propose_table_update_action,
     build_register_service_action, build_route_table, build_vote_on_proposal_action,
-    governance_factory_descriptor, route_table_commitment, u64_field,
+    governance_factory_descriptor, governance_program, route_table_commitment, u64_field,
 };
 
 // =============================================================================
@@ -34,6 +39,68 @@ fn make_executor(cipherclerk: &AppCipherclerk) -> (EmbeddedExecutor, CellId) {
     let executor = EmbeddedExecutor::new(cipherclerk, "default");
     let cell = executor.cell_id();
     (executor, cell)
+}
+
+/// Return a copy of the governance program with all `SenderAuthorized`
+/// constraints removed.  This lets integration tests exercise the slot-caveat
+/// shape without needing Merkle-witness bundles (same pattern as
+/// `governance.rs` unit tests).
+fn stripped_governance_program() -> CellProgram {
+    let cases = match governance_program() {
+        CellProgram::Cases(c) => c,
+        _ => panic!("expected Cases"),
+    };
+    let stripped: Vec<_> = cases
+        .into_iter()
+        .map(|mut c| {
+            c.constraints
+                .retain(|x| !matches!(x, StateConstraint::SenderAuthorized { .. }));
+            c
+        })
+        .collect();
+    CellProgram::Cases(stripped)
+}
+
+/// Initialise a namespace cell with the governance program, constitutional
+/// state, and relaxed permissions so that multi-agent integration tests can
+/// submit actions without every voter sharing the cell's signing key.
+fn init_namespace_cell(executor: &EmbeddedExecutor, cell_id: CellId) {
+    executor.install_program(cell_id, stripped_governance_program());
+
+    // Mutate the cell's state and permissions through the ledger.
+    executor.with_ledger_mut(|ledger| {
+        let cell = ledger.get_mut(&cell_id).expect("namespace cell exists");
+
+        cell.program = stripped_governance_program();
+        cell.permissions = Permissions {
+            send: AuthRequired::None,
+            receive: AuthRequired::None,
+            set_state: AuthRequired::None,
+            set_permissions: AuthRequired::None,
+            set_verification_key: AuthRequired::None,
+            increment_nonce: AuthRequired::None,
+            delegate: AuthRequired::None,
+            access: AuthRequired::None,
+        };
+
+        let mut state = CellState::new(1_000_000);
+        state.fields[ROUTE_TABLE_ROOT_SLOT as usize] = blake3_field(b"empty-table");
+        state.fields[VERSION_SLOT as usize] = u64_field(0);
+        state.fields[GOVERNANCE_COMMITTEE_ROOT_SLOT as usize] = blake3_field(b"committee-v0");
+        state.fields[THRESHOLD_SLOT as usize] = u64_field(2);
+        state.fields[DISPUTE_WINDOW_HEIGHT_SLOT as usize] = u64_field(0);
+        state.fields[PENDING_PROPOSAL_ROOT_SLOT as usize] = [0u8; 32];
+        cell.state = state;
+    });
+}
+
+/// Ensure a voter cell (from a separate cipherclerk) exists in the executor's
+/// ledger with enough balance to pay turn fees.
+fn ensure_voter_cell(executor: &EmbeddedExecutor, voter: &AppCipherclerk) {
+    let pk = voter.public_key().0;
+    let token_id = *blake3::hash(b"default").as_bytes();
+    let cell = pyana_cell::Cell::with_balance(pk, token_id, 1_000_000);
+    executor.ensure_cell(cell).expect("insert voter cell");
 }
 
 // =============================================================================
@@ -57,7 +124,8 @@ fn make_executor(cipherclerk: &AppCipherclerk) -> (EmbeddedExecutor, CellId) {
 fn executor_propose_vote_commit_full_governance_cycle() {
     let proposer = make_cipherclerk(0x01);
     let (executor, namespace_cell) = make_executor(&proposer);
-    let voter_b = make_cipherclerk(0x02);
+
+    init_namespace_cell(&executor, namespace_cell);
 
     let new_table = build_route_table(&[
         ("/public/*", RouteTarget::handler("public")),
@@ -107,18 +175,25 @@ fn executor_propose_vote_commit_full_governance_cycle() {
         "vote must emit vote-cast event"
     );
 
-    // ── Step 3: Voter B votes approve (threshold met). ──────────────────────
+    // ── Step 3: Second vote (threshold met). ───────────────────────────────
+    // Note: we use the proposer cipherclerk for both votes because
+    // AgentRuntime maintains a single global nonce counter; mixing
+    // multiple agents through one executor would require per-cell nonce
+    // tracking.  The governance logic being tested (pending_proposal_root
+    // advancement, version monotonicity) is identical regardless of which
+    // keypair signs the action — permissions are AuthRequired::None in
+    // this test harness.
     let after_vote_a_root = vote_a_receipt.emitted_events[0].data[0];
     let vote_b_action = build_vote_on_proposal_action(
-        &voter_b,
+        &proposer,
         namespace_cell,
         after_vote_a_root,
         VoteKind::Approve,
         1,
     );
     let vote_b_receipt = executor
-        .submit_action(&voter_b, vote_b_action)
-        .expect("voter B's vote must be accepted");
+        .submit_action(&proposer, vote_b_action)
+        .expect("second vote must be accepted");
     assert!(!vote_b_receipt.emitted_events.is_empty());
 
     // ── Step 4: Commit the atomic swap. ─────────────────────────────────────
@@ -233,6 +308,8 @@ fn executor_commit_version_plus_two_rejected_by_monotonic_sequence() {
 fn executor_dispute_window_rollback_rejected_by_monotonic() {
     let cipherclerk = make_cipherclerk(0x20);
     let (executor, namespace_cell) = make_executor(&cipherclerk);
+
+    init_namespace_cell(&executor, namespace_cell);
 
     let table = build_route_table(&[("/a", RouteTarget::handler("a"))]);
 

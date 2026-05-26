@@ -142,14 +142,13 @@ mod tests {
         assert_eq!(verdict.transfer_count, 1);
 
         // Rejection path: missing Bob's entry → bundle incomplete.
+        // The prover fails fast (Phase-1 precondition) before emitting a bundle.
         let incomplete_entries = vec![(alice, fabricate_wr(&turn, &alice))];
-        let incomplete_bundle = prove_aggregated_bundle(&turn, &incomplete_entries).expect("prove");
-        let incomplete_json = incomplete_bundle.to_json().expect("serialise");
-        let incomplete_verdict = verify_aggregated_bundle_json(&incomplete_json);
+        let incomplete_res = prove_aggregated_bundle(&turn, &incomplete_entries);
         assert!(
-            !incomplete_verdict.verified,
-            "incomplete bundle (missing peer) must be rejected: {:?}",
-            incomplete_verdict
+            incomplete_res.is_err(),
+            "incomplete bundle (missing peer) must be rejected at prove time: {:?}",
+            incomplete_res
         );
     }
 }

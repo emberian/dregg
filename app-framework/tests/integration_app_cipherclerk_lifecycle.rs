@@ -40,7 +40,7 @@ fn construct_sign_submit_receipt() {
     let cclerk = make_cclerk([1u8; 32]);
     let executor = make_executor(&cclerk);
 
-    let action = cclerk.make_action(target_cell(), "noop", vec![]);
+    let action = cclerk.make_self_action("noop", vec![]);
     let receipt = executor
         .submit_action(&cclerk, action)
         .expect("submit must succeed");
@@ -65,12 +65,12 @@ fn consecutive_turns_receipt_chain_advances() {
     let cclerk = make_cclerk([2u8; 32]);
     let executor = make_executor(&cclerk);
 
-    let a1 = cclerk.make_action(target_cell(), "step-1", vec![]);
+    let a1 = cclerk.make_self_action("step-1", vec![]);
     let r1 = executor
         .submit_action(&cclerk, a1)
         .expect("first submit must succeed");
 
-    let a2 = cclerk.make_action(target_cell(), "step-2", vec![]);
+    let a2 = cclerk.make_self_action("step-2", vec![]);
     let r2 = executor
         .submit_action(&cclerk, a2)
         .expect("second submit must succeed");
@@ -81,11 +81,11 @@ fn consecutive_turns_receipt_chain_advances() {
         "second receipt must carry previous_receipt_hash"
     );
 
-    // The previous_receipt_hash of receipt #2 must equal the turn_hash of receipt #1.
+    // The previous_receipt_hash of receipt #2 must equal the receipt_hash of receipt #1.
     assert_eq!(
         r2.previous_receipt_hash,
-        Some(r1.turn_hash),
-        "previous_receipt_hash must chain to prior turn_hash"
+        Some(r1.receipt_hash()),
+        "previous_receipt_hash must chain to prior receipt_hash"
     );
 
     // Turn hashes are distinct (different nonces / actions).
@@ -125,14 +125,14 @@ fn restarted_executor_can_submit_after_original_turns() {
     let cclerk = make_cclerk([6u8; 32]);
     let exec1 = make_executor(&cclerk);
 
-    let a1 = cclerk.make_action(target_cell(), "first", vec![]);
+    let a1 = cclerk.make_self_action("first", vec![]);
     exec1
         .submit_action(&cclerk, a1)
         .expect("first submit must succeed");
 
     // Second executor sharing same cclerk.
     let exec2 = EmbeddedExecutor::new(&cclerk, "default");
-    let a2 = cclerk.make_action(target_cell(), "after-restart", vec![]);
+    let a2 = cclerk.make_self_action("after-restart", vec![]);
     let r2 = exec2
         .submit_action(&cclerk, a2)
         .expect("post-restart submit must succeed");
@@ -149,10 +149,8 @@ fn multi_action_atomic_turn_both_roots_in_receipt() {
     let cclerk = make_cclerk([7u8; 32]);
     let executor = make_executor(&cclerk);
 
-    let t1 = CellId::from_bytes([10u8; 32]);
-    let t2 = CellId::from_bytes([11u8; 32]);
-    let a1 = cclerk.make_action(t1, "first-action", vec![]);
-    let a2 = cclerk.make_action(t2, "second-action", vec![]);
+    let a1 = cclerk.make_self_action("first-action", vec![]);
+    let a2 = cclerk.make_self_action("second-action", vec![]);
 
     let turn = cclerk.make_turn_with_actions(vec![a1, a2]);
     let receipt = executor

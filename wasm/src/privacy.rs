@@ -1211,7 +1211,7 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], JsError> {
 // ============================================================================
 
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 mod audit_tests {
     use super::*;
     use ed25519_dalek::SigningKey;

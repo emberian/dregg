@@ -331,7 +331,8 @@ impl EmbeddedExecutor {
     /// customized. Defaults to `"default"`.
     pub fn new(cipherclerk: &AppCipherclerk, domain: &str) -> Self {
         let shared = cipherclerk.shared_cipherclerk();
-        let runtime = AgentRuntime::new(shared, domain);
+        let mut runtime = AgentRuntime::new(shared, domain);
+        runtime.set_local_federation_id(*cipherclerk.federation_id());
         let cell_id = runtime.cell_id();
         Self {
             runtime: Arc::new(Mutex::new(runtime)),
@@ -358,6 +359,49 @@ impl EmbeddedExecutor {
         self.cell_id
     }
 
+    /// Ensure a cell exists in the embedded ledger.
+    ///
+    /// If the cell is not already present, it is inserted with the given
+    /// state.  Used by integration tests that need multiple agent cells
+    /// (e.g. a voter whose cell is distinct from the executor's primary
+    /// agent) in the same ledger.
+    pub fn ensure_cell(&self, cell: pyana_cell::Cell) -> Result<(), String> {
+        let rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ledger = rt.ledger().lock().unwrap();
+        let cell_id = cell.id();
+        if ledger.get(&cell_id).is_none() {
+            ledger.insert_cell(cell).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Install a [`CellProgram`] on an existing cell in the embedded ledger.
+    ///
+    /// Used by integration tests that need the executor to enforce
+    /// program constraints (e.g. `Monotonic`, `MonotonicSequence`) on a
+    /// cell created by `AgentRuntime::new`.
+    pub fn install_program(&self, cell_id: CellId, program: pyana_cell::CellProgram) {
+        let rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ledger = rt.ledger().lock().unwrap();
+        if let Some(cell) = ledger.get_mut(&cell_id) {
+            cell.program = program;
+        }
+    }
+
+    /// Run a closure with mutable access to the embedded ledger.
+    ///
+    /// Used by integration tests that need to set up a governance cell's
+    /// initial state (fields, permissions, program) before driving actions
+    /// through the executor.
+    pub fn with_ledger_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut pyana_cell::Ledger) -> R,
+    {
+        let rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ledger = rt.ledger().lock().unwrap();
+        f(&mut ledger)
+    }
+
     /// Submit a pre-built [`Turn`] to the embedded executor and return
     /// its [`TurnReceipt`].
     ///
@@ -368,8 +412,13 @@ impl EmbeddedExecutor {
     /// observe a receipt instead of building an action and dropping it.
     #[must_use = "dropping the receipt silently discards proof that the turn was committed"]
     pub fn submit_turn(&self, turn: &Turn) -> Result<TurnReceipt, ExecutorSubmitError> {
+        let mut turn = turn.clone();
         let rt = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
-        rt.execute_turn(turn)
+        if turn.fee == 0 {
+            turn.fee = 10_000;
+        }
+        turn.nonce = rt.nonce();
+        rt.execute_turn(&turn)
             .map_err(|e| ExecutorSubmitError(e.to_string()))
     }
 

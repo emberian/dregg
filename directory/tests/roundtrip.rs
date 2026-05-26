@@ -15,5 +15,5 @@ fn resource_handle_uri_contains_hex_fields() {
     let uri = h.to_uri();
     assert!(uri.starts_with("pyana://"), "URI must start with pyana://");
     // federation_id hex
-    assert!(uri.contains("abababababababababababababababababababababababababababababababababab"));
+    assert!(uri.contains("abababababababababababababababababababababababababababababababab"));
 }

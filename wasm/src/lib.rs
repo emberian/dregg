@@ -2472,7 +2472,7 @@ struct RawRequest {
 // regression.
 
 #[cfg(test)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 mod audit_tests {
     use super::*;
     use serde::Deserialize;

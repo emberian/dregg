@@ -1,12 +1,16 @@
-# Pyana
+# `dregg` - Dragon's Egg
 
-Capability-secure distributed runtime with ZK proofs. One shared fabric, emergent reference groups, provable everything.
+\[fka. Pyana, working on the rename!\]
+
+Dragon's Egg is my experiment in the metatheory of constructive knowledge, and a direct expression of my original impetus to build <https://rbg.systems>. Maybe Dragon's Egg will be a Robigalia userspace. In the meantime, here's what the LLMs have to say about it:
+
+(end-of-human-text)
 
 ## The Model
 
 Pyana is a **unified fabric**: a shared blocklace (DAG) where groups form emergently through mutual acknowledgment. There are no fixed federations to join or leave. Nodes participate in strands; reference groups crystallize from repeated interaction. Your phone is a node. A cloud cluster is a node. The sovereignty spectrum is continuous.
 
-Cells are isolated objects. Turns are atomic state transitions. The Effect VM (24 effects) proves each turn in a single STARK. CapTP sessions carry capability references across the fabric. Intents broadcast needs; ring trades solve them trustlessly.
+Cells are isolated objects. Turns are atomic state transitions. The Effect VM proves each turn in a single STARK. CapTP sessions carry capability references across the fabric. Intents broadcast needs; ring trades solve them trustlessly.
 
 ## Key Capabilities
 
@@ -15,31 +19,13 @@ Cells are isolated objects. Turns are atomic state transitions. The Effect VM (2
 - **DFA Routing** -- Governance-controlled route tables compiled to prefix-trie state machines. Constitutional amendments via threshold voting.
 - **Nameservice** -- Hierarchical names with rent-based anti-squatting, sub-delegation, cross-federation resolution.
 - **Intent Solving** -- Privacy-preserving marketplace. Commit-reveal frontrunning protection. Ring trades without a coordinator.
-- **Effect VM** -- 24-effect instruction set proven per-turn in one STARK. Transfer, seal, factory, CapTP ops, queue ops, all in circuit.
-
-## The Sovereignty Spectrum
-
-| Mode | Description |
-|------|-------------|
-| **Sovereign** | Your device runs a full node. State lives locally. Interact peer-to-peer with signed proofs. |
-| **Delegated** | Snapshot a capability list to a child cell. Acts offline with bounded staleness. Epoch-based revocation. |
-| **Replicated** | Participate in a reference group. Blocklace consensus orders nullifiers. Exit anytime with your proof chain. |
-
-The fabric is a notary for ordering and discovery. Between known parties, verification is just signed proofs exchanged directly.
-
-## Bridges
-
-| Chain | Mechanism | Status |
-|-------|-----------|--------|
-| **Mina** | Level 2 proof-carrying via Kimchi/Pickles. Recursive constant-size proofs. | Assisted recursion working |
-| **EVM** | SP1 sovereign cells. STARK wrapped in Groth16, ~200k gas on Base/Ethereum. VK governance. | Guest program in development |
-| **Midnight** | Attestation bridge + ZKIR v3 compilation. Cardano settlement. | DSL backend operational |
+- **Effect VM** -- Abstract instruction set proven per-turn in one STARK. Transfer, seal, factory, CapTP ops, queue ops, all in circuit.
 
 ## Quick Start
 
 ```sh
 # Build
-git clone https://github.com/emberian/pyana && cd pyana
+git clone https://github.com/emberian/dregg && cd dregg
 cargo build
 
 # Run a node
@@ -101,12 +87,6 @@ Three verification modes from the same Datalog rules:
 | Fully Private | One bit (allow/deny) | ~80 KB |
 
 All modes work offline. Proofs are post-quantum secure (BabyBear STARK + FRI).
-
-## Trust Model
-
-11 guarantees (capability confinement, turn atomicity, non-forgeable references, offline verification, proof-carrying state, monotonic attenuation, nullifier-based double-spend prevention, handoff integrity, forward secrecy, conservation, causal ordering).
-
-7 assumptions (honest supermajority for ordering, partial synchrony, collision-resistant hashing, discrete log for classical crypto, correct local execution, bounded staleness for delegation, relay liveness for availability).
 
 ## Links
 

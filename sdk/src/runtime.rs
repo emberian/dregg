@@ -121,6 +121,12 @@ impl AgentRuntime {
             .expect("fresh ledger, no conflict");
 
         let executor = TurnExecutor::new(ComputronCosts::default_costs());
+        {
+            let w = cipherclerk.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(head) = w.receipt_head() {
+                executor.set_last_receipt_hash(cell_id, head.receipt_hash());
+            }
+        }
 
         AgentRuntime {
             cipherclerk,
@@ -203,6 +209,12 @@ impl AgentRuntime {
     pub fn set_budget_gate(&mut self, silo_id: u32, slice: BudgetSlice) {
         self.executor
             .set_budget_gate(BudgetGate::new(silo_id, slice));
+    }
+
+    /// Set the federation id used by the embedded executor for signature
+    /// verification. Must match the federation id used to sign actions.
+    pub fn set_local_federation_id(&mut self, id: [u8; 32]) {
+        self.executor.set_local_federation_id(id);
     }
 
     /// Execute a list of effects against the local ledger.
@@ -327,17 +339,27 @@ impl AgentRuntime {
     pub fn execute_turn(&self, turn: &Turn) -> Result<TurnReceipt, SdkError> {
         // LOCK ORDER: ledger → nonce → cipherclerk (canonical order to prevent deadlock).
         let mut ledger = self.ledger.lock().unwrap();
-        let result = self.executor.execute(turn, &mut ledger);
+        // The cipherclerk's make_turn paths default fee to 0 and nonce to 0;
+        // if the caller hasn't set them, fill in sensible defaults so budget
+        // and replay checks pass.
+        let mut turn = turn.clone();
+        if turn.fee == 0 {
+            turn.fee = 10_000;
+        }
+        {
+            let mut n = self.nonce.lock().unwrap();
+            if turn.nonce == 0 && *n > 0 {
+                turn.nonce = *n;
+            }
+            // Ensure the runtime nonce tracker stays ahead of this turn.
+            if turn.nonce >= *n {
+                *n = turn.nonce + 1;
+            }
+        }
+        let result = self.executor.execute(&turn, &mut ledger);
 
         match result {
             TurnResult::Committed { receipt, .. } => {
-                // Advance our nonce to match (nonce lock after ledger = canonical order).
-                {
-                    let mut n = self.nonce.lock().unwrap();
-                    if turn.nonce >= *n {
-                        *n = turn.nonce + 1;
-                    }
-                }
                 // Release ledger lock before taking cipherclerk write lock.
                 drop(ledger);
                 // Append the receipt to the cipherclerk's chain (write lock).

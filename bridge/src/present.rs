@@ -2179,10 +2179,8 @@ pub fn verify_revealed_facts_commitment(
 }
 
 /// Derive a deterministic sibling hash for Merkle path construction.
-/// Only available in test builds or with `test-utils` feature.
 /// This is part of the synthetic membership proof infrastructure and
 /// MUST NOT be used in production.
-#[cfg(any(test, feature = "test-utils"))]
 pub fn hash_index(level: usize, sibling_idx: usize, key: &[u8; 32]) -> u32 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(&level.to_le_bytes());

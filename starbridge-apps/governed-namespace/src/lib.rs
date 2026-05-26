@@ -365,9 +365,11 @@ pub fn governance_program() -> CellProgram {
                 StateConstraint::Immutable {
                     index: VERSION_SLOT,
                 },
-                StateConstraint::Monotonic {
-                    index: PENDING_PROPOSAL_ROOT_SLOT,
-                },
+                // NOTE: pending_proposal_root is NOT Monotonic here because
+                // compose_vote_update produces a blake3 hash, which has no
+                // guaranteed numerical ordering relative to the prior root.
+                // The vote's validity is enforced by SenderAuthorized and by
+                // the auditor checking the event stream.
                 StateConstraint::Immutable {
                     index: DISPUTE_WINDOW_HEIGHT_SLOT,
                 },

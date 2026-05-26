@@ -1057,9 +1057,9 @@ mod tests {
         let v4_root = root_with_receipts([0xCC; 32], &[[0x99; 32]]);
         let msg = v4_root.signing_message();
         assert!(msg.starts_with(b"pyana-attested-root-v4"));
-        // Some marker that the receipt_stream_root tag (0x01) is present
-        // at the very end of the preimage.
-        assert_eq!(*msg.last().unwrap_or(&0u8), 0x99u8);
+        // The receipt_stream_root tag (0x01) precedes the 32-byte hash
+        // at the end of the preimage.
+        assert_eq!(msg[msg.len() - 33], 0x01u8);
     }
 
     #[test]
