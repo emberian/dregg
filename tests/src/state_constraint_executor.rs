@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use dregg_cell::{
     AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint, field_from_u64,
 };
-use dregg_turn::action::symbol;
+use dregg_turn::action::{WitnessBlob, symbol};
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor,
     TurnResult,
@@ -53,6 +53,16 @@ fn build_set_field_turn(
     field_idx: u8,
     value: dregg_cell::FieldElement,
 ) -> Turn {
+    build_set_field_turn_with_witnesses(agent, nonce, field_idx, value, vec![])
+}
+
+fn build_set_field_turn_with_witnesses(
+    agent: CellId,
+    nonce: u64,
+    field_idx: u8,
+    value: dregg_cell::FieldElement,
+    witness_blobs: Vec<WitnessBlob>,
+) -> Turn {
     let mut forest = CallForest::new();
     let action = Action {
         target: agent,
@@ -68,7 +78,7 @@ fn build_set_field_turn(
         may_delegate: DelegationMode::None,
         commitment_mode: Default::default(),
         balance_change: None,
-        witness_blobs: vec![],
+        witness_blobs,
     };
     forest.add_root(action);
 
@@ -281,19 +291,60 @@ fn executor_rate_limit_actually_limits() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: executor must populate revealed_preimage from action.witness_blobs (CAVEAT-LAYER-COVERAGE.md top-5 #2)"]
 fn executor_preimage_gate_with_valid_witness_accepts() {
-    // Today: executor supplies revealed_preimage: None unconditionally;
-    // PreimageGate always errors with MissingContextField. After the lane
-    // lands witness_blobs lookup for WitnessKind::Preimage32, this test
-    // submits a turn with the preimage witness blob and expects accept.
-    panic!("blocked");
+    let preimage = [0x42u8; 32];
+    let commitment = *blake3::hash(&preimage).as_bytes();
+    let program = CellProgram::Predicate(vec![StateConstraint::PreimageGate {
+        commitment_index: 0,
+        hash_kind: dregg_cell::program::HashKind::Blake3,
+    }]);
+    let agent_cell = make_cell_with_program(15, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let turn = build_set_field_turn_with_witnesses(
+        agent,
+        0,
+        0,
+        commitment,
+        vec![WitnessBlob::preimage(preimage)],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Committed { .. }),
+        "expected executor to accept valid PreimageGate witness, got: {result:?}"
+    );
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: PreimageGate witness tampering rejection"]
 fn executor_preimage_gate_with_wrong_witness_rejects() {
-    panic!("blocked");
+    let preimage = [0x42u8; 32];
+    let wrong_preimage = [0x24u8; 32];
+    let commitment = *blake3::hash(&preimage).as_bytes();
+    let program = CellProgram::Predicate(vec![StateConstraint::PreimageGate {
+        commitment_index: 0,
+        hash_kind: dregg_cell::program::HashKind::Blake3,
+    }]);
+    let agent_cell = make_cell_with_program(16, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let turn = build_set_field_turn_with_witnesses(
+        agent,
+        0,
+        0,
+        commitment,
+        vec![WitnessBlob::preimage(wrong_preimage)],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Rejected { .. }),
+        "expected executor to reject tampered PreimageGate witness, got: {result:?}"
+    );
 }
 
 // ===========================================================================

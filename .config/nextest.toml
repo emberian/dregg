@@ -1,7 +1,7 @@
 [profile.default]
-# Fast by default: exclude known slow backend test categories.
-# These tests individually run 60–120s+ (cryptographic proof generation).
-default-filter = 'not (test(~backends::kimchi_native) or test(~backends::mina) or test(~backends::stark_in_pickles) or test(~poseidon_stark_verifier_circuit) or test(~schnorr_dsl) or test(~preflight_) or test(~ivc_builder_finalize_with_backend_pickles))'
+# Default runs should execute backend coverage that is passing on the 24-core
+# test host. Keep only the currently failing/timeout diagnostics quarantined.
+default-filter = 'not (test(~test_kimchi_arithmetic_predicate_mul_passes) or test(~test_kimchi_arithmetic_predicate_neq_passes) or test(~test_kimchi_arithmetic_predicate_eq_passes) or test(~test_kimchi_arithmetic_predicate_gte_passes) or test(~test_kimchi_native_non_membership_max_ancestors) or test(~test_kimchi_native_non_membership_multi_ancestor) or test(~test_kimchi_native_non_membership_single_element) or test(~test_kimchi_native_non_membership_verifier_rejects_wrong_count) or test(~test_kimchi_native_non_membership_verifier_rejects_wrong_root) or test(~test_kimchi_native_non_membership_verifier_check) or test(~test_kimchi_native_non_membership_verifier_rejects_wrong_element) or test(~test_kimchi_native_derivation_prove_verify) or test(~test_kimchi_native_derivation_with_equal_check) or test(~test_kimchi_native_derivation_with_gte_check) or test(~test_kimchi_native_fold_multiple_removals_prove_verify) or test(~test_kimchi_native_fold_single_removal_prove_verify) or test(~test_p0_2_derivation_honest_still_verifies) or test(~test_kimchi_presentation_issuer_membership_valid) or test(~test_kimchi_presentation_revealed_facts_valid) or test(~test_kimchi_presentation_token_expiry_valid) or test(~test_section5_assertion_rejects_mismatch) or test(~preflight_apps) or test(~preflight_effect_vm) or test(~preflight_proofs) or test(~preflight_turns) or test(~preflight_cli) or test(~preflight_demo_agent) or test(~preflight_golden_master))'
 slow-timeout = { period = "30s", terminate-after = 3 }
 
 [profile.full]
@@ -9,7 +9,7 @@ slow-timeout = { period = "30s", terminate-after = 3 }
 slow-timeout = { period = "60s", terminate-after = 10 }
 
 [profile.ci]
-# CI profile: fast + fail-fast on first failure.
-default-filter = 'not (test(~backends::kimchi_native) or test(~backends::mina) or test(~backends::stark_in_pickles) or test(~poseidon_stark_verifier_circuit) or test(~schnorr_dsl) or test(~preflight_) or test(~ivc_builder_finalize_with_backend_pickles))'
+# CI keeps the same passing-backend coverage as default, but fail-fast.
+default-filter = 'not (test(~test_kimchi_arithmetic_predicate_mul_passes) or test(~test_kimchi_arithmetic_predicate_neq_passes) or test(~test_kimchi_arithmetic_predicate_eq_passes) or test(~test_kimchi_arithmetic_predicate_gte_passes) or test(~test_kimchi_native_non_membership_max_ancestors) or test(~test_kimchi_native_non_membership_multi_ancestor) or test(~test_kimchi_native_non_membership_single_element) or test(~test_kimchi_native_non_membership_verifier_rejects_wrong_count) or test(~test_kimchi_native_non_membership_verifier_rejects_wrong_root) or test(~test_kimchi_native_non_membership_verifier_check) or test(~test_kimchi_native_non_membership_verifier_rejects_wrong_element) or test(~test_kimchi_native_derivation_prove_verify) or test(~test_kimchi_native_derivation_with_equal_check) or test(~test_kimchi_native_derivation_with_gte_check) or test(~test_kimchi_native_fold_multiple_removals_prove_verify) or test(~test_kimchi_native_fold_single_removal_prove_verify) or test(~test_p0_2_derivation_honest_still_verifies) or test(~test_kimchi_presentation_issuer_membership_valid) or test(~test_kimchi_presentation_revealed_facts_valid) or test(~test_kimchi_presentation_token_expiry_valid) or test(~test_section5_assertion_rejects_mismatch) or test(~preflight_apps) or test(~preflight_effect_vm) or test(~preflight_proofs) or test(~preflight_turns) or test(~preflight_cli) or test(~preflight_demo_agent) or test(~preflight_golden_master))'
 slow-timeout = { period = "60s", terminate-after = 2 }
 fail-fast = true

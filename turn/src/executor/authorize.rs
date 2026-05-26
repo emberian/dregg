@@ -328,14 +328,16 @@ impl TurnExecutor {
             .copied()
             .map(|_| action.target) // path-driven; sender binds to action.target as below
             .unwrap_or(action.target);
-        let _ = agent_for_msg; // currently the message binds target only; agent is enforced via the Turn-level path.
-        // The signing message binds: cert.nonce, agent (= target_cell of this action's
-        // immediate frame), action.target, turn_nonce, and serialized effects.
+        // Currently the message binds target only; agent is enforced via the Turn-level path.
+        let _ = agent_for_msg;
+        // The signing message binds: federation_id, cert.nonce, agent (= target_cell of this
+        // action's immediate frame), action.target, turn_nonce, and serialized effects.
         // We use action.target as both "agent" and "target" here because at the
         // wire-construction site the agent cell IS the gateway and the action's
         // target IS the cell being mutated. The wire builder computes this exact
         // message; the executor recomputes it from the on-chain Turn.
-        let message = Authorization::captp_delivered_signing_message(
+        let message = Authorization::captp_delivered_signing_message_for_federation(
+            &self.local_federation_id,
             &handoff_cert.nonce,
             &action.target,
             &action.target,

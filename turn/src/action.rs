@@ -418,17 +418,9 @@ impl Authorization {
 
     /// Canonical signing message for `Authorization::CapTpDelivered`.
     ///
-    /// Binds the sender's signature to:
-    /// - domain separator (`b"dregg-captp-delivered-v1"`),
-    /// - the handoff certificate's nonce (cert-binding — same delegation),
-    /// - the agent CellId (who runs the turn at the receiving federation),
-    /// - the target CellId (which cell the action mutates),
-    /// - the turn nonce (replay protection),
-    /// - and the canonical postcard encoding of the action's effects.
-    ///
-    /// Verifiers MUST recompute this from the on-the-wire Turn fields and the
-    /// cert nonce — the recipient cannot retroactively repoint their signed
-    /// claim to a different turn.
+    /// Legacy v1 wrapper for callers that did not yet pass an explicit
+    /// federation id. New verification paths should use
+    /// [`Self::captp_delivered_signing_message_for_federation`].
     pub fn captp_delivered_signing_message(
         cert_nonce: &[u8; 32],
         agent: &dregg_cell::CellId,
@@ -438,6 +430,41 @@ impl Authorization {
     ) -> Vec<u8> {
         let mut msg = Vec::with_capacity(128);
         msg.extend_from_slice(b"dregg-captp-delivered-v1");
+        msg.extend_from_slice(cert_nonce);
+        msg.extend_from_slice(&agent.0);
+        msg.extend_from_slice(&target.0);
+        msg.extend_from_slice(&turn_nonce.to_le_bytes());
+        let effects_bytes = postcard::to_allocvec(effects).expect("effects serialization failed");
+        msg.extend_from_slice(&(effects_bytes.len() as u32).to_le_bytes());
+        msg.extend_from_slice(&effects_bytes);
+        msg
+    }
+
+    /// Federation-bound signing message for `Authorization::CapTpDelivered`.
+    ///
+    /// Binds the sender's signature to:
+    /// - domain separator (`b"dregg-captp-delivered-v2"`),
+    /// - the local federation id (cross-federation replay protection),
+    /// - the handoff certificate's nonce (cert-binding — same delegation),
+    /// - the agent CellId (who runs the turn at the receiving federation),
+    /// - the target CellId (which cell the action mutates),
+    /// - the turn nonce (replay protection),
+    /// - and the canonical postcard encoding of the action's effects.
+    ///
+    /// Verifiers MUST recompute this from the on-the-wire Turn fields and the
+    /// cert nonce — the recipient cannot retroactively repoint their signed
+    /// claim to a different turn.
+    pub fn captp_delivered_signing_message_for_federation(
+        federation_id: &[u8; 32],
+        cert_nonce: &[u8; 32],
+        agent: &dregg_cell::CellId,
+        target: &dregg_cell::CellId,
+        turn_nonce: u64,
+        effects: &[Effect],
+    ) -> Vec<u8> {
+        let mut msg = Vec::with_capacity(160);
+        msg.extend_from_slice(b"dregg-captp-delivered-v2");
+        msg.extend_from_slice(federation_id);
         msg.extend_from_slice(cert_nonce);
         msg.extend_from_slice(&agent.0);
         msg.extend_from_slice(&target.0);

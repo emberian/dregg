@@ -2277,13 +2277,16 @@ impl StarkAir for EffectVmAir {
 
         // -- CellUnseal: state-passthrough with 1-param binding --
         //
-        // AIR-impl lane (#119). `target_hash` (params[0]) folds into
-        // effects_hash (domain tag 50). The single-param shape distinguishes
-        // CellUnseal from CellSeal (two params) even if a prover zeros
-        // params[1] on a CellSeal row — the selector gate (`sel::CELL_UNSEAL`)
-        // is different and the domain tag is different. Full state passthrough.
+        // AIR-impl lane (#119). `target_hash` (params[0]) is mirrored into
+        // aux[0] and constrained here so post-generation target swaps are
+        // rejected. Full rolling effects_hash reconstruction is still outside
+        // this row-local AIR lane.
         let s_cell_unseal = local[sel::CELL_UNSEAL];
         {
+            let c_cu_target =
+                s_cell_unseal * (local[PARAM_BASE + param::CELL_UNSEAL_TARGET] - local[AUX_BASE]);
+            combined = combined + alpha_pow * c_cu_target;
+            alpha_pow = alpha_pow * alpha;
             let c_cu_bal_lo = s_cell_unseal * (new_bal_lo - old_bal_lo);
             combined = combined + alpha_pow * c_cu_bal_lo;
             alpha_pow = alpha_pow * alpha;

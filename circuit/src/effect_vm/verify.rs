@@ -7,7 +7,7 @@
 
 use crate::field::BabyBear;
 
-use super::{CellState, pi, split_u64};
+use super::{pi, split_u64, CellState};
 
 /// Verify that balance limbs in a CellState are within valid ranges.
 ///
@@ -158,11 +158,9 @@ pub fn verify_balance_limb_pis(public_inputs: &[BabyBear]) -> Result<(), String>
 ///
 /// `initial_fields` and `final_fields` are the cell's slot-0..7 4-byte
 /// truncated views (matching the AIR's per-row STATE_BEFORE_BASE /
-/// STATE_AFTER_BASE field columns). Variants whose enforcement needs
-/// the full 32-byte FieldElement value (e.g. `Monotonic` on big-endian
-/// 32-byte sequences) are deferred — they're documented in their
-/// `#[ignore]`'d adversarial tests until the AIR state expands to
-/// 4-felt per slot.
+/// STATE_AFTER_BASE field columns). Scalar caveats whose semantics fit
+/// that view are checked here; variants requiring external membership
+/// or transition context remain executor/verifier-schedule checks.
 pub fn verify_slot_caveat_manifest(
     public_inputs: &[BabyBear],
     initial_fields: &[BabyBear; 8],
@@ -249,6 +247,38 @@ pub fn verify_slot_caveat_manifest(
                     ));
                 }
             }
+            t if t == pi::SLOT_CAVEAT_TAG_FIELD_GTE => {
+                // new >= p0 in the verifier-visible 4-byte slot view.
+                if new_v < p0 {
+                    return Err(format!(
+                        "slot-caveat[{i}] FieldGte on slot {slot_idx}: expected >= {p0:?}, got {new_v:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_FIELD_LTE => {
+                // new <= p0 in the verifier-visible 4-byte slot view.
+                if new_v > p0 {
+                    return Err(format!(
+                        "slot-caveat[{i}] FieldLte on slot {slot_idx}: expected <= {p0:?}, got {new_v:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_MONOTONIC => {
+                // new >= old.
+                if new_v < old_v {
+                    return Err(format!(
+                        "slot-caveat[{i}] Monotonic on slot {slot_idx}: expected {new_v:?} >= {old_v:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_STRICT_MONOTONIC => {
+                // new > old.
+                if new_v <= old_v {
+                    return Err(format!(
+                        "slot-caveat[{i}] StrictMonotonic on slot {slot_idx}: expected {new_v:?} > {old_v:?}"
+                    ));
+                }
+            }
             t if t == pi::SLOT_CAVEAT_TAG_TEMPORAL_GATE => {
                 // not_before = p0 (u32-fitting); not_after = p1
                 // (u32-fitting). 0 sentinel means "no bound on that
@@ -266,19 +296,12 @@ pub fn verify_slot_caveat_manifest(
                     ));
                 }
             }
-            // Variants whose enforcement needs more than the 4-byte
-            // truncated state-column form (full 32B compare, Merkle
-            // gadgets, set-membership, etc.) accept the manifest
-            // entry at this layer and defer to the executor's
-            // evaluator. They round-trip through PI for shape
-            // honesty (the verifier still rejects malformed
-            // entries: bad slot_idx, out-of-range count) but the
-            // boundary teeth land in a follow-up commit.
-            t if t == pi::SLOT_CAVEAT_TAG_FIELD_GTE
-                || t == pi::SLOT_CAVEAT_TAG_FIELD_LTE
-                || t == pi::SLOT_CAVEAT_TAG_MONOTONIC
-                || t == pi::SLOT_CAVEAT_TAG_STRICT_MONOTONIC
-                || t == pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED
+            // Variants whose enforcement needs context outside the 4-byte
+            // state-column form (set-membership, transition tables, etc.)
+            // accept the manifest entry at this layer and defer to the
+            // executor/verifier schedule. They still round-trip through PI
+            // for shape honesty, and malformed entries are rejected above.
+            t if t == pi::SLOT_CAVEAT_TAG_SENDER_AUTHORIZED
                 || t == pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS =>
             {
                 // Defer.

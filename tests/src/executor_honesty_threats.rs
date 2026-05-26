@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
-use dregg_turn::action::{Action, Authorization, BearerCapProof, DelegationProofData, symbol};
+use dregg_turn::action::{symbol, Action, Authorization, BearerCapProof, DelegationProofData};
 use dregg_turn::{
     CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor, TurnResult,
 };
@@ -73,6 +73,29 @@ fn one_action_turn(agent: CellId, nonce: u64, effects: Vec<Effect>) -> Turn {
         cross_effect_dependencies: Vec::new(),
         effect_witness_index_map: Vec::new(),
     }
+}
+
+fn effect_vm_rejects_tampered_pi(pi_index: usize, label: &str) {
+    let initial_state = dregg_circuit::CellState::new(1_000, 7);
+    let effects = vec![dregg_circuit::effect_vm::Effect::Transfer {
+        amount: 1,
+        direction: 1,
+    }];
+    let (trace, public_inputs) =
+        dregg_circuit::effect_vm::generate_effect_vm_trace(&initial_state, &effects);
+    let air = dregg_circuit::EffectVmAir::new(trace.len());
+    let proof = dregg_circuit::stark::prove(&air, &trace, &public_inputs);
+
+    dregg_circuit::stark::verify(&air, &proof, &public_inputs)
+        .expect("control Effect VM proof must verify before PI tampering");
+
+    let mut tampered = public_inputs.clone();
+    tampered[pi_index] = tampered[pi_index] + dregg_circuit::field::BabyBear::ONE;
+
+    assert!(
+        dregg_circuit::stark::verify(&air, &proof, &tampered).is_err(),
+        "Effect VM verifier accepted a proof after tampering PI[{pi_index}] ({label})"
+    );
 }
 
 // ===========================================================================
@@ -158,15 +181,19 @@ fn t3_air_rejects_omitted_effect() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on EXECUTOR-HONESTY-AUDIT.md T4 open question: row-0/row-last aux-bind of STATE_BEFORE_BASE / STATE_AFTER_BASE in effect_vm.rs"]
 fn t4_air_binds_pre_state_hash_to_trace() {
-    panic!("blocked");
+    effect_vm_rejects_tampered_pi(
+        dregg_circuit::effect_vm::pi::OLD_COMMIT_BASE,
+        "OLD_COMMIT_BASE",
+    );
 }
 
 #[test]
-#[ignore = "blocked on T4: same for post-state"]
 fn t4_air_binds_post_state_hash_to_trace() {
-    panic!("blocked");
+    effect_vm_rejects_tampered_pi(
+        dregg_circuit::effect_vm::pi::NEW_COMMIT_BASE,
+        "NEW_COMMIT_BASE",
+    );
 }
 
 // ===========================================================================
@@ -201,9 +228,8 @@ fn t5_executor_rejects_replayed_nonce() {
 }
 
 #[test]
-#[ignore = "blocked on Stage 7 cont §B: AIR's row-0 BoundaryConstraint on STATE_BEFORE_BASE+NONCE == PI[ACTOR_NONCE]; this test confirms the AIR layer's defense (executor-layer covered above)"]
 fn t5_air_rejects_proof_with_wrong_nonce_pi() {
-    panic!("blocked");
+    effect_vm_rejects_tampered_pi(dregg_circuit::effect_vm::pi::ACTOR_NONCE, "ACTOR_NONCE");
 }
 
 // ===========================================================================
@@ -341,9 +367,20 @@ fn t14_receipt_without_proof_rejected_at_wire_level() {
 }
 
 #[test]
-#[ignore = "blocked on protocol requirement: standalone dregg-verifier binary rejects receipt with malformed proof bytes"]
 fn t14_malformed_proof_bytes_rejected() {
-    panic!("blocked");
+    let (out, code) = dregg_verifier::verify_effect_vm_proof(
+        b"not a serialized STARK proof",
+        &[],
+        dregg_verifier::EFFECT_VM_VK_HASH_HEX,
+    );
+
+    assert!(!out.verified, "malformed proof bytes must not verify");
+    assert_eq!(code, dregg_verifier::exit_code::ERROR);
+    assert!(
+        out.reason.contains("deserial"),
+        "expected deserialisation failure, got: {}",
+        out.reason
+    );
 }
 
 // ===========================================================================

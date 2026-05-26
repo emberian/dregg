@@ -23,18 +23,18 @@
 //! | 2 | `capacity` | `Immutable` | Max in-flight. |
 //! | 3 | `program_vk` | `Immutable` | Hash of the cell-program's `state_constraints`. Bound at creation. |
 //! | 4 | `owner_pk_hash` | `Immutable` | Owner identity. |
-//! | 5 | `sender_set_root` | `Monotonic` | Authorized senders (Merkle or BlindedSet). |
-//! | 6 | `content_pattern_root` | `Monotonic` | DFA route table commitment (optional). |
-//! | 7 | `ring_root` | `Monotonic` | Message ring root. |
+//! | 5 | `sender_set_root` | changes + non-zero on grant_sender | Authorized senders (Merkle or BlindedSet). |
+//! | 6 | `content_pattern_root` | `Immutable` | DFA route table commitment (optional). |
+//! | 7 | `ring_root` | changes + non-zero on enqueue | Message ring root. |
 //!
 //! ## Operations
 //!
-//! - `enqueue` — head + 1; ring_root grows; sender_set/owner/capacity
+//! - `enqueue` — head + 1; ring_root changes; sender_set/owner/capacity
 //!   frozen. Caller-supplied `extra_constraints` (e.g. `RateLimit`,
 //!   `TemporalGate`, `Witnessed { Dfa }` for content-pattern) attach
 //!   to this case.
 //! - `dequeue` — tail + 1; head/ring_root frozen.
-//! - `grant_sender` — sender_set_root advances; everything else
+//! - `grant_sender` — sender_set_root changes; everything else
 //!   frozen.
 //!
 //! ## Parameterization
@@ -68,11 +68,13 @@
 //! holding only the root.
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
-    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
+    canonical_program_vk, symbol, Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate,
+    CellId, CellMode, ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint,
+    FieldElement, InspectorDescriptor, StarbridgeAppContext, StateConstraint,
 };
-use dregg_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
+use dregg_cell::program::{
+    AuthorizedSet, CellProgram, SimpleStateConstraint, TransitionCase, TransitionGuard,
+};
 
 use crate::{hex_encode, u64_field};
 
@@ -192,6 +194,14 @@ pub fn grant_sender_method_symbol() -> [u8; 32] {
     symbol("grant_sender")
 }
 
+fn slot_changed(index: u8) -> StateConstraint {
+    StateConstraint::AnyOf {
+        variants: vec![SimpleStateConstraint::Not(Box::new(
+            SimpleStateConstraint::Immutable { index },
+        ))],
+    }
+}
+
 // =============================================================================
 // CellProgram
 // =============================================================================
@@ -218,8 +228,10 @@ pub fn programmable_queue_program_with(cfg: &ProgrammableQueueConfig) -> CellPro
         StateConstraint::Immutable {
             index: CONTENT_PATTERN_ROOT_SLOT,
         },
-        StateConstraint::Monotonic {
+        slot_changed(RING_ROOT_SLOT),
+        StateConstraint::FieldGte {
             index: RING_ROOT_SLOT,
+            value: u64_field(1),
         },
     ];
     enqueue.extend(cfg.enqueue_extras.iter().cloned());
@@ -273,14 +285,16 @@ pub fn programmable_queue_program_with(cfg: &ProgrammableQueueConfig) -> CellPro
             },
             constraints: dequeue,
         },
-        // grant_sender — sender_set_root grows; everything else frozen.
+        // grant_sender — sender_set_root changes; everything else frozen.
         TransitionCase {
             guard: TransitionGuard::MethodIs {
                 method: symbol("grant_sender"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                slot_changed(SENDER_SET_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: SENDER_SET_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::Immutable {
                     index: HEAD_SEQ_SLOT,
@@ -386,12 +400,8 @@ pub fn programmable_queue_factory_descriptor_with(
             StateConstraint::Monotonic {
                 index: TAIL_SEQ_SLOT,
             },
-            StateConstraint::Monotonic {
-                index: SENDER_SET_ROOT_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: RING_ROOT_SLOT,
-            },
+            // Hash roots are opaque commitments, not ordered integers.
+            // Operation cases constrain when they may change.
         ],
         default_mode: CellMode::Hosted,
         creation_budget: Some(DEFAULT_CREATION_BUDGET),

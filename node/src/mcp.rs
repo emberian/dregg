@@ -4308,7 +4308,9 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
     let agent_cell_id = target_cell_id;
 
     let turn_nonce = s.cclerk.receipt_chain_length() as u64;
-    let signing_msg = dregg_turn::Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_msg = dregg_turn::Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &agent_cell_id,
         &target_cell_id,
@@ -4603,7 +4605,9 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
     // ── Sender signature (recipient signs the canonical delivery message) ─────
     let agent_cell_id = target_cell_id;
     let turn_nonce = s.cclerk.receipt_chain_length() as u64;
-    let signing_msg = dregg_turn::Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_msg = dregg_turn::Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &agent_cell_id,
         &target_cell_id,

@@ -8,7 +8,7 @@
 //! [`dregg_storage_templates::pubsub_topic`], whose
 //! `pubsub_topic_factory_descriptor()` exports a `FactoryDescriptor`
 //! whose `CellProgram::Cases` enforces publisher-authorization,
-//! monotonic event-root growth, and per-subscriber cursor advancement
+//! opaque event-root changes, and per-subscriber cursor-root changes
 //! on every turn. The underlying [`MerkleQueue`] data structure
 //! stays. The legacy [`DeduplicationFilter`] folds into the template's
 //! `dedup_root` slot (slot 7).
@@ -62,7 +62,7 @@ impl From<QueueError> for PubSubError {
 /// Subscribers can be added/removed dynamically.
 #[deprecated(
     since = "0.1.0",
-    note = "Use `dregg_storage_templates::pubsub_topic::pubsub_topic_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.3. The cell-program template's publisher-`SenderAuthorized`, monotonic `event_root`, monotonic `subscriber_cursors_root`, and monotonic `dedup_root` constraints are enforced by the executor on every turn."
+    note = "Use `dregg_storage_templates::pubsub_topic::pubsub_topic_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.3. The cell-program template's publisher-`SenderAuthorized`, opaque-root changed+non-zero `event_root`, `subscriber_cursors_root`, and `dedup_root` constraints are enforced by the executor on every turn."
 )]
 #[derive(Debug, Clone)]
 pub struct PubSubTopic {

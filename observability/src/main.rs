@@ -567,7 +567,9 @@ fn build_captp_authorization() -> Authorization {
     let mut agent_bytes = [0u8; 32];
     agent_bytes[0] = 0xCD;
     let agent_cell = dregg_cell::CellId(agent_bytes);
-    let msg = Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let msg = Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &agent_cell,
         &target_cell,

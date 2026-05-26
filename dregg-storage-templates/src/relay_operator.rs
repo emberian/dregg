@@ -19,14 +19,14 @@
 //! | 1 | `bond_min` | `Immutable` | Floor on bond. |
 //! | 2 | `quota_bytes_per_epoch` | `Immutable` | Per-epoch byte quota. |
 //! | 3 | `bytes_relayed_this_epoch` | `RateLimitBySum` | Current-epoch byte counter. |
-//! | 4 | `hosted_inbox_root` | `Monotonic` (register-scoped) | Merkle root over hosted inbox ids. |
+//! | 4 | `hosted_inbox_root` | changes + non-zero on register_inbox | Merkle root over hosted inbox ids. |
 //! | 5 | `operator_pk_hash` | `Immutable` | Operator identity. |
 //! | 6 | `route_table_root` | `Immutable` | DFA route table commitment. |
 //! | 7 | `dispute_count` | `Monotonic` (slash-scoped) | Dispute counter. |
 //!
 //! ## Operations
 //!
-//! - `register_inbox` — `hosted_inbox_root` grows; everything else
+//! - `register_inbox` — `hosted_inbox_root` changes; everything else
 //!   frozen. Operator-only (`SenderAuthorized` against slot 5).
 //! - `relay` — `bytes_relayed_this_epoch` grows under
 //!   `RateLimitBySum`; everything else frozen. Routes are
@@ -58,12 +58,14 @@
 //!   `EmitEvent` data is the carrier, optionally encrypted).
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
-    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
+    canonical_program_vk, symbol, Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate,
+    CellId, CellMode, ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint,
+    FieldElement, InspectorDescriptor, StarbridgeAppContext, StateConstraint,
 };
 use dregg_cell::predicate::{InputRef, WitnessedPredicate};
-use dregg_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
+use dregg_cell::program::{
+    AuthorizedSet, CellProgram, SimpleStateConstraint, TransitionCase, TransitionGuard,
+};
 
 use crate::{hex_encode, u64_field};
 
@@ -119,6 +121,14 @@ pub fn slash_method_symbol() -> [u8; 32] {
     symbol("slash")
 }
 
+fn slot_changed(index: u8) -> StateConstraint {
+    StateConstraint::AnyOf {
+        variants: vec![SimpleStateConstraint::Not(Box::new(
+            SimpleStateConstraint::Immutable { index },
+        ))],
+    }
+}
+
 // =============================================================================
 // CellProgram
 // =============================================================================
@@ -157,15 +167,17 @@ pub fn relay_operator_program_with(max_bytes_per_epoch: u64, epoch_duration: u64
                 },
             ],
         },
-        // register_inbox: hosted_inbox_root grows; everything else
+        // register_inbox: hosted_inbox_root changes; everything else
         // frozen. Operator-only.
         TransitionCase {
             guard: TransitionGuard::MethodIs {
                 method: symbol("register_inbox"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                slot_changed(HOSTED_INBOX_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: HOSTED_INBOX_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::Immutable {
                     index: BOND_AMOUNT_SLOT,
@@ -329,9 +341,8 @@ pub fn relay_operator_factory_descriptor() -> FactoryDescriptor {
             StateConstraint::Immutable {
                 index: ROUTE_TABLE_ROOT_SLOT,
             },
-            StateConstraint::Monotonic {
-                index: HOSTED_INBOX_ROOT_SLOT,
-            },
+            // hosted_inbox_root is an opaque commitment, not an ordered integer.
+            // The register_inbox case constrains when it may change.
             StateConstraint::Monotonic {
                 index: DISPUTE_COUNT_SLOT,
             },

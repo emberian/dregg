@@ -1176,9 +1176,10 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::CellUnseal { target } => {
-                // State passthrough; single target param distinguishes from
-                // CellSeal by param count and by selector.
+                // State passthrough; mirror the single target param into aux so
+                // AIR rejects post-generation param swaps.
                 row[PARAM_BASE + param::CELL_UNSEAL_TARGET] = *target;
+                row[AUX_BASE] = *target;
                 new_state.nonce += 1;
             }
             Effect::ReceiptArchive {

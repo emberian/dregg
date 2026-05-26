@@ -19,9 +19,9 @@
 //!    hard reject).
 
 use dregg_app_framework::symbol;
-use dregg_cell::StateConstraint;
 use dregg_cell::program::{CellProgram, ProgramError, TransitionMeta};
 use dregg_cell::state::{CellState, FieldElement};
+use dregg_cell::StateConstraint;
 
 use dregg_storage_templates::{
     blinded_queue, cap_inbox, programmable_queue, pubsub_topic, relay_operator,
@@ -287,6 +287,43 @@ mod programmable_queue_tests {
             other => panic!("expected Immutable on sender_set_root, got {other:?}"),
         }
     }
+
+    #[test]
+    fn enqueue_must_change_ring_root() {
+        let p = strip_witness_constraints(programmable_queue_program());
+        let old = base_state();
+        let mut bad = old.clone();
+        bad.fields[HEAD_SEQ_SLOT as usize] = u64_field(1);
+
+        let err = p
+            .evaluate_with_meta(&bad, Some(&old), None, &method_meta("enqueue"))
+            .expect_err("enqueue without ring_root change must be rejected");
+        match err {
+            ProgramError::ConstraintViolated {
+                constraint: StateConstraint::Immutable { index },
+                ..
+            } => assert_eq!(index, RING_ROOT_SLOT),
+            other => panic!("expected negated Immutable on ring_root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn grant_sender_must_change_sender_root() {
+        let p = strip_witness_constraints(programmable_queue_program());
+        let old = base_state();
+        let new = old.clone();
+
+        let err = p
+            .evaluate_with_meta(&new, Some(&old), None, &method_meta("grant_sender"))
+            .expect_err("grant_sender without sender_set_root change must be rejected");
+        match err {
+            ProgramError::ConstraintViolated {
+                constraint: StateConstraint::Immutable { index },
+                ..
+            } => assert_eq!(index, SENDER_SET_ROOT_SLOT),
+            other => panic!("expected negated Immutable on sender_set_root, got {other:?}"),
+        }
+    }
 }
 
 // =============================================================================
@@ -376,6 +413,74 @@ mod pubsub_topic_tests {
             .evaluate_with_meta(&bad, Some(&old), None, &method_meta("publish"))
             .expect_err("event root rewind must be rejected");
         assert!(matches!(err, ProgramError::ConstraintViolated { .. }));
+    }
+
+    #[test]
+    fn publish_must_change_event_and_dedup_roots() {
+        let p = strip_witness_constraints(pubsub_topic_program());
+        let old = base_state();
+
+        let mut bad_event = publish_new(&old);
+        bad_event.fields[EVENT_ROOT_SLOT as usize] = old.fields[EVENT_ROOT_SLOT as usize];
+        let err = p
+            .evaluate_with_meta(&bad_event, Some(&old), None, &method_meta("publish"))
+            .expect_err("publish without event_root change must be rejected");
+        match err {
+            ProgramError::ConstraintViolated {
+                constraint: StateConstraint::Immutable { index },
+                ..
+            } => assert_eq!(index, EVENT_ROOT_SLOT),
+            other => panic!("expected negated Immutable on event_root, got {other:?}"),
+        }
+
+        let mut bad_dedup = publish_new(&old);
+        bad_dedup.fields[DEDUP_ROOT_SLOT as usize] = old.fields[DEDUP_ROOT_SLOT as usize];
+        let err = p
+            .evaluate_with_meta(&bad_dedup, Some(&old), None, &method_meta("publish"))
+            .expect_err("publish without dedup_root change must be rejected");
+        match err {
+            ProgramError::ConstraintViolated {
+                constraint: StateConstraint::Immutable { index },
+                ..
+            } => assert_eq!(index, DEDUP_ROOT_SLOT),
+            other => panic!("expected negated Immutable on dedup_root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subscribe_must_change_cursor_root() {
+        let p = strip_witness_constraints(pubsub_topic_program());
+        let old = base_state();
+        let new = old.clone();
+
+        let err = p
+            .evaluate_with_meta(&new, Some(&old), None, &method_meta("subscribe"))
+            .expect_err("subscribe without subscriber_cursors_root change must be rejected");
+        match err {
+            ProgramError::ConstraintViolated {
+                constraint: StateConstraint::Immutable { index },
+                ..
+            } => assert_eq!(index, SUBSCRIBER_CURSORS_ROOT_SLOT),
+            other => panic!("expected negated Immutable on subscriber_cursors_root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn grant_subscriber_must_change_subscriber_set_root() {
+        let p = strip_witness_constraints(pubsub_topic_program());
+        let old = base_state();
+        let new = old.clone();
+
+        let err = p
+            .evaluate_with_meta(&new, Some(&old), None, &method_meta("grant_subscriber"))
+            .expect_err("grant_subscriber without subscriber_set_root change must be rejected");
+        match err {
+            ProgramError::ConstraintViolated {
+                constraint: StateConstraint::Immutable { index },
+                ..
+            } => assert_eq!(index, SUBSCRIBER_SET_ROOT_SLOT),
+            other => panic!("expected negated Immutable on subscriber_set_root, got {other:?}"),
+        }
     }
 }
 
@@ -592,6 +697,24 @@ mod relay_operator_tests {
                 ..
             } => assert_eq!(index, ROUTE_TABLE_ROOT_SLOT),
             other => panic!("expected Immutable on route_table_root, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn register_inbox_must_change_hosted_inbox_root() {
+        let p = strip_witness_constraints(relay_operator_program());
+        let old = base_state();
+        let new = old.clone();
+
+        let err = p
+            .evaluate_with_meta(&new, Some(&old), None, &method_meta("register_inbox"))
+            .expect_err("register_inbox without hosted_inbox_root change must be rejected");
+        match err {
+            ProgramError::ConstraintViolated {
+                constraint: StateConstraint::Immutable { index },
+                ..
+            } => assert_eq!(index, HOSTED_INBOX_ROOT_SLOT),
+            other => panic!("expected negated Immutable on hosted_inbox_root, got {other:?}"),
         }
     }
 

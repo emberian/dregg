@@ -3427,6 +3427,7 @@ dependencies = [
  "dregg-token",
  "dregg-turn",
  "dregg-types",
+ "dregg-verifier",
  "getrandom 0.3.4",
  "postcard",
  "proptest",

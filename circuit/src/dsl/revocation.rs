@@ -40,8 +40,9 @@ pub const REVOCATION_TREE_DEPTH: usize = TREE_DEPTH;
 pub const ORDERING_BITS: usize = 30;
 
 /// Trace width for the non-revocation DSL circuit.
-/// 5 shared + 1 diff_left + 30 diff_left_bits + 1 diff_right + 30 diff_right_bits + 3 selectors = 70
-pub const TRACE_WIDTH: usize = 70;
+/// 5 shared + 1 diff_left + 30 diff_left_bits + 1 diff_right + 30 diff_right_bits + 3 selectors
+/// + 1 sentinel selector = 71
+pub const TRACE_WIDTH: usize = 71;
 
 /// (p-1)/2 for BabyBear, used in ordering range checks.
 pub const HALF_P_MINUS_1: u32 = 1006632959;
@@ -77,6 +78,7 @@ pub mod col {
     pub const IS_CONTROL: usize = DIFF_RIGHT_BITS_START + ORDERING_BITS; // 67
     pub const IS_MERKLE_LEFT: usize = IS_CONTROL + 1; // 68
     pub const IS_MERKLE_RIGHT: usize = IS_MERKLE_LEFT + 1; // 69
+    pub const RIGHT_IS_SENTINEL: usize = IS_MERKLE_RIGHT + 1; // 70
 
     #[inline]
     pub const fn diff_left_bit(i: usize) -> usize {
@@ -114,6 +116,9 @@ pub fn non_revocation_circuit_descriptor() -> CircuitDescriptor {
     });
     constraints.push(ConstraintExpr::Binary {
         col: col::IS_MERKLE_RIGHT,
+    });
+    constraints.push(ConstraintExpr::Binary {
+        col: col::RIGHT_IS_SENTINEL,
     });
 
     // C4: direction_bit (col 3) is binary on Merkle rows
@@ -169,29 +174,50 @@ pub fn non_revocation_circuit_descriptor() -> CircuitDescriptor {
         }),
     });
 
-    // C7: Ordering diff_right consistency (control row):
+    // C7: Ordering diff_right consistency (control row, unless the upper
+    // neighbor is the max sentinel):
     // diff_right == right_neighbor - ancestor_hash - 1
     // => col_DIFF_RIGHT - col2 + col0 + 1 == 0
+    constraints.push(ConstraintExpr::Gated {
+        selector_col: col::IS_CONTROL,
+        inner: Box::new(ConstraintExpr::InvertedGated {
+            selector_col: col::RIGHT_IS_SENTINEL,
+            inner: Box::new(ConstraintExpr::Polynomial {
+                terms: vec![
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![col::DIFF_RIGHT],
+                    },
+                    PolyTerm {
+                        coeff: -BabyBear::ONE,
+                        col_indices: vec![col::COL_2],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![col::COL_0],
+                    },
+                    PolyTerm {
+                        coeff: BabyBear::ONE,
+                        col_indices: vec![],
+                    }, // constant +1
+                ],
+            }),
+        }),
+    });
+
+    // C7b: A disabled right-gap check is allowed only for the canonical max sentinel.
     constraints.push(ConstraintExpr::Gated {
         selector_col: col::IS_CONTROL,
         inner: Box::new(ConstraintExpr::Polynomial {
             terms: vec![
                 PolyTerm {
                     coeff: BabyBear::ONE,
-                    col_indices: vec![col::DIFF_RIGHT],
+                    col_indices: vec![col::RIGHT_IS_SENTINEL, col::COL_2],
                 },
                 PolyTerm {
-                    coeff: -BabyBear::ONE,
-                    col_indices: vec![col::COL_2],
+                    coeff: -SENTINEL_MAX,
+                    col_indices: vec![col::RIGHT_IS_SENTINEL],
                 },
-                PolyTerm {
-                    coeff: BabyBear::ONE,
-                    col_indices: vec![col::COL_0],
-                },
-                PolyTerm {
-                    coeff: BabyBear::ONE,
-                    col_indices: vec![],
-                }, // constant +1
             ],
         }),
     });
@@ -266,7 +292,10 @@ pub fn non_revocation_circuit_descriptor() -> CircuitDescriptor {
         });
         constraints.push(ConstraintExpr::Gated {
             selector_col: col::IS_CONTROL,
-            inner: Box::new(ConstraintExpr::Polynomial { terms }),
+            inner: Box::new(ConstraintExpr::InvertedGated {
+                selector_col: col::RIGHT_IS_SENTINEL,
+                inner: Box::new(ConstraintExpr::Polynomial { terms }),
+            }),
         });
     }
 
@@ -356,6 +385,11 @@ pub fn non_revocation_circuit_descriptor() -> CircuitDescriptor {
         ColumnDef {
             name: "is_merkle_right".into(),
             index: col::IS_MERKLE_RIGHT,
+            kind: ColumnKind::Binary,
+        },
+        ColumnDef {
+            name: "right_is_sentinel".into(),
+            index: col::RIGHT_IS_SENTINEL,
             kind: ColumnKind::Binary,
         },
     ];
@@ -569,14 +603,21 @@ pub fn generate_non_revocation_trace(
         }
     }
 
-    // Ordering witness: diff_right = right_neighbor - ancestor_hash - 1
-    let diff_right = witness.right_neighbor - witness.ancestor_hash - BabyBear::ONE;
-    control[col::DIFF_RIGHT] = diff_right;
-    let diff_right_u32 = diff_right.as_u32();
-    if diff_right_u32 <= HALF_P_MINUS_1 {
-        let check_val = HALF_P_MINUS_1 - diff_right_u32;
-        for i in 0..ORDERING_BITS {
-            control[col::diff_right_bit(i)] = BabyBear::new((check_val >> i) & 1);
+    // Ordering witness: diff_right = right_neighbor - ancestor_hash - 1.
+    // The max sentinel is the one legal upper-tail case where the canonical
+    // integer gap may exceed the half-field range bound; the sentinel selector
+    // disables only the right-gap reconstruction/range check for that row.
+    if witness.right_neighbor == SENTINEL_MAX {
+        control[col::RIGHT_IS_SENTINEL] = BabyBear::ONE;
+    } else {
+        let diff_right = witness.right_neighbor - witness.ancestor_hash - BabyBear::ONE;
+        control[col::DIFF_RIGHT] = diff_right;
+        let diff_right_u32 = diff_right.as_u32();
+        if diff_right_u32 <= HALF_P_MINUS_1 {
+            let check_val = HALF_P_MINUS_1 - diff_right_u32;
+            for i in 0..ORDERING_BITS {
+                control[col::diff_right_bit(i)] = BabyBear::new((check_val >> i) & 1);
+            }
         }
     }
 

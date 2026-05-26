@@ -333,7 +333,9 @@ fn captp_delivered_loop_closes_executor_accepts_and_commits() {
 
     // Bob computes the canonical CapTP-delivery signing message and signs it.
     let effects = vec![effect.clone()];
-    let signing_msg = Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_msg = Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &target_cell,
         &target_cell,
@@ -498,13 +500,16 @@ fn captp_delivered_rejects_wrong_introducer_pk() {
     let effect = captp_routing::validate_handoff_effect(cert_hash, cert.recipient_pk, alice_pk.0);
 
     let effects = vec![effect.clone()];
-    let signing_msg = dregg_turn::action::Authorization::captp_delivered_signing_message(
-        &cert.nonce,
-        &target_cell,
-        &target_cell,
-        0,
-        &effects,
-    );
+    let federation_id = [0u8; 32];
+    let signing_msg =
+        dregg_turn::action::Authorization::captp_delivered_signing_message_for_federation(
+            &federation_id,
+            &cert.nonce,
+            &target_cell,
+            &target_cell,
+            0,
+            &effects,
+        );
     let sig = dregg_types::sign(&bob_sk, &signing_msg);
 
     // Wrong introducer_pk (some other random key).
@@ -595,7 +600,9 @@ fn captp_delivered_rejects_forged_effect_recipient_pk() {
     let forged_effect = captp_routing::validate_handoff_effect(cert_hash, evil_pk.0, alice_pk.0);
 
     let effects = vec![forged_effect.clone()];
-    let signing_msg = Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_msg = Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &target_cell,
         &target_cell,
@@ -680,7 +687,9 @@ fn captp_delivered_rejects_forged_effect_introducer_pk() {
         captp_routing::validate_handoff_effect(cert_hash, cert.recipient_pk, evil_pk.0);
 
     let effects = vec![forged_effect.clone()];
-    let signing_msg = Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_msg = Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &target_cell,
         &target_cell,

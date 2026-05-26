@@ -110,7 +110,9 @@ pub fn build_captp_turn_delivered(
     let effects = vec![effect];
     // The agent for the signing message is the same as the action target
     // (gateway-mirrors-cell). This matches what the executor recomputes.
-    let signing_msg = Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_msg = Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &handoff_cert.nonce,
         &target,
         &target,

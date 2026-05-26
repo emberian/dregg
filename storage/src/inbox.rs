@@ -28,7 +28,7 @@ use crate::{ComputronRefund, QuotaId};
 /// Bounded by the owner's storage quota. Senders pay deposits.
 #[deprecated(
     since = "0.1.0",
-    note = "Use `dregg_storage_templates::cap_inbox::cap_inbox_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.1. The cell-program template's `MonotonicSequence` / `SenderAuthorized` / `Monotonic` / `Immutable` constraints are enforced by the executor on every turn."
+    note = "Use `dregg_storage_templates::cap_inbox::cap_inbox_factory_descriptor()` per STORAGE-AS-CELL-PROGRAMS.md §3.1. The cell-program template's `MonotonicSequence` / `SenderAuthorized` / opaque-root changed+non-zero / `Immutable` constraints are enforced by the executor on every turn."
 )]
 #[derive(Debug, Clone)]
 pub struct CapInbox {

@@ -4154,6 +4154,11 @@ fn test_cell_unseal_happy_path() {
         BabyBear::new(0x005EA1ED),
         "CellUnseal must bind target in params[0]"
     );
+    assert_eq!(
+        trace[cu_row][AUX_BASE],
+        BabyBear::new(0x005EA1ED),
+        "CellUnseal must mirror target into aux[0]"
+    );
 
     // params[1] is zero (CellUnseal has only one param — this distinguishes
     // it from CellSeal which writes a non-zero reason_hash into params[1]).
@@ -4180,11 +4185,10 @@ fn test_cell_unseal_happy_path() {
 }
 
 #[test]
-#[ignore = "pre-existing soundness gap: CellUnseal target param is not constrained by AIR against effects_hash"]
 fn test_cell_unseal_forged_target_rejected() {
-    // Adversary: swap the target hash to an impostor value AFTER proving.
-    // The AIR binds target_hash through effects_hash (PI); swapping the
-    // param post-generation produces an inconsistent trace.
+    // Adversary: swap the target hash to an impostor value after trace generation.
+    // The AIR mirrors the target into aux[0], so swapping params[0] alone makes
+    // the row inconsistent.
     let state = make_initial_state(400);
     let effects = vec![Effect::CellUnseal {
         target: BabyBear::new(0x005EA1ED),

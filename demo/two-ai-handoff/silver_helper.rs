@@ -406,7 +406,9 @@ fn cmd_make_captp_delivered(
     }];
 
     // Build the canonical signing message (executor mirrors this).
-    let signing_message = Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_message = Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &alice_cell, // executor uses action.target for both agent + target slots
         &alice_cell,
@@ -528,7 +530,9 @@ fn cmd_verify_captp_delivered(state_dir: &PathBuf) -> bool {
     let intro_pk_obj = dregg_types::PublicKey(*intro_pk);
     let check_cert_sig = cert.verify_signature(&intro_pk_obj);
     // (4) sender signature on canonical message verifies
-    let signing_message = Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_message = Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &action.target,
         &action.target,
@@ -583,7 +587,9 @@ fn cmd_verify_captp_delivered_tampered(state_dir: &PathBuf) -> bool {
         _ => panic!("expected CapTpDelivered auth"),
     };
 
-    let signing_message = Authorization::captp_delivered_signing_message(
+    let federation_id = [0u8; 32];
+    let signing_message = Authorization::captp_delivered_signing_message_for_federation(
+        &federation_id,
         &cert.nonce,
         &action.target,
         &action.target,

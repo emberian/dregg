@@ -28,12 +28,13 @@
 use dregg_cell::predicate::WitnessedPredicate;
 use dregg_cell::program::{
     AuthorizedSet, CustomDescriptor, DeltaRelation, HashKind, ReadSet, SimpleStateConstraint,
-    TransitionCase, TransitionGuard,
+    TransitionCase, TransitionGuard, TransitionMeta,
 };
 use dregg_cell::{
-    CellProgram, CellState, EvalContext, FIELD_ZERO, FieldElement, InputRef, ProgramError,
-    StateConstraint, field_from_u64,
+    CellProgram, CellState, EFFECT_SET_FIELD, EvalContext, FIELD_ZERO, FieldElement, InputRef,
+    ProgramError, StateConstraint, field_from_u64,
 };
+use dregg_turn::action::symbol;
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -1245,15 +1246,49 @@ fn cases_always_guard_with_no_constraints_accepts_everything() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness operation-scoped cases: MethodIs guard wiring through TurnExecutor (CAVEAT-LAYER-COVERAGE.md §9)"]
 fn cases_method_is_send_advances_head_only() {
-    // Will be enabled when the executor builds a TransitionMeta from the
-    // turn's method symbol and dispatches through evaluate_with_meta.
-    panic!("blocked");
+    let p = CellProgram::Cases(vec![
+        TransitionCase {
+            guard: TransitionGuard::Always,
+            constraints: vec![StateConstraint::Immutable { index: 1 }],
+        },
+        TransitionCase {
+            guard: TransitionGuard::MethodIs {
+                method: symbol("send"),
+            },
+            constraints: vec![StateConstraint::MonotonicSequence { seq_index: 0 }],
+        },
+    ]);
+    let old = state_with(&[(0, 4), (1, 99)]);
+    let new = state_with(&[(0, 5), (1, 99)]);
+    let meta = TransitionMeta::new(symbol("send"), EFFECT_SET_FIELD);
+    let result = p.evaluate_with_meta(&new, Some(&old), None, &meta);
+    assert!(
+        result.is_ok(),
+        "send case should accept head +1 while preserving invariant slot, got: {result:?}"
+    );
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness operation-scoped cases: method-mismatch rejection"]
 fn cases_wrong_method_rejected() {
-    panic!("blocked");
+    let p = CellProgram::Cases(vec![
+        TransitionCase {
+            guard: TransitionGuard::Always,
+            constraints: vec![StateConstraint::Immutable { index: 1 }],
+        },
+        TransitionCase {
+            guard: TransitionGuard::MethodIs {
+                method: symbol("send"),
+            },
+            constraints: vec![StateConstraint::MonotonicSequence { seq_index: 0 }],
+        },
+    ]);
+    let old = state_with(&[(0, 4), (1, 99)]);
+    let new = state_with(&[(0, 5), (1, 99)]);
+    let meta = TransitionMeta::new(symbol("receive"), EFFECT_SET_FIELD);
+    let result = p.evaluate_with_meta(&new, Some(&old), None, &meta);
+    assert!(
+        matches!(result, Err(ProgramError::NoTransitionCaseMatched)),
+        "operation-binding Cases must reject unmatched methods, got: {result:?}"
+    );
 }

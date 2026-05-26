@@ -3,12 +3,12 @@
 //! must produce a non-NoOp projection into the Effect VM, and must have a
 //! verifiable AIR.
 //!
-//! Background (philosophy/02-testing.md, section 3): the audits found
-//! "31 of 41 variants collapsed to NoOp in projection" and "22 of 41
-//! unreachable through DSL". Per-function unit tests miss this category —
-//! you only see it by trying to round-trip every variant. This module
-//! enumerates the 41 runtime Effect variants exhaustively and walks each
-//! through three stages of the pipeline:
+//! Background (philosophy/02-testing.md, section 3): the audits previously
+//! found most variants collapsed to NoOp in projection and many were
+//! unreachable through DSL. Per-function unit tests miss this category — you
+//! only see it by trying to round-trip every variant. This module enumerates
+//! the 52 runtime Effect variants exhaustively and walks each through three
+//! stages of the pipeline:
 //!
 //!   1. Executor: build a minimal Turn, call `executor.execute(...)`.
 //!      Required to return a `TurnResult` (Committed or Rejected) — NOT
@@ -18,34 +18,31 @@
 //!   2. Projection: `AgentCipherclerk::convert_effects_to_vm(...)` (the public
 //!      surface mirroring the executor's private `convert_turn_effects_to_vm`).
 //!      Required to produce at least one non-NoOp VM effect. Variants that
-//!      collapse to `vec![VmEffect::NoOp]` surface as test failures (today,
-//!      ~25 of 41 — that's EXPECTED until Stages 3–6 of EFFECT-VM-SHAPE-A land).
+//!      collapse to `vec![VmEffect::NoOp]` surface as test failures.
 //!
 //!   3. AIR / proof: build the trace, run `stark::prove`, run `stark::verify`.
 //!      Required to round-trip. Variants with no AIR coverage surface here.
 //!
-//! Outcome expectations on land:
-//!   - test 1 (executable): most variants pass; panics document follow-up.
-//!   - test 2 (projection): ~25 variants fail (collapse to NoOp) — gated by
-//!     `#[ignore]` so the suite stays green until the fix lands.
-//!   - test 3 (provable):   ~23 variants fail (no per-effect AIR) — gated
-//!     by `#[ignore]` likewise.
+//! Outcome expectations:
+//!   - test 1 (executable): variants pass or reject cleanly; panics fail.
+//!   - test 2 (projection): all variants must produce non-NoOp VM effects.
+//!   - test 3 (provable): all variants must produce verifying AIR proofs.
 //!
 //! The summary report (run with `-- --nocapture`) prints how many variants
-//! pass each category, so progress is visible without unignoring the tests.
+//! pass each category.
 
 use std::collections::HashMap;
 
 use dregg_cell::note_bridge::{BridgeReceipt, PortableNoteProof};
 use dregg_cell::{
-    AuthRequired, CapabilityRef, Cell, CellId, CellMode, Ledger, NoteCommitment, Nullifier,
-    Permissions, Preconditions, SealedBox, ValueCommitmentBytes, factory::FactoryCreationParams,
+    factory::FactoryCreationParams, AuthRequired, CapabilityRef, Cell, CellId, CellMode, Ledger,
+    NoteCommitment, Nullifier, Permissions, Preconditions, SealedBox, ValueCommitmentBytes,
 };
-use dregg_circuit::effect_vm::{Effect as VmEffect, EffectVmContext, generate_effect_vm_trace_ext};
+use dregg_circuit::effect_vm::{generate_effect_vm_trace_ext, Effect as VmEffect, EffectVmContext};
 use dregg_circuit::poseidon2::hash_2_to_1;
-use dregg_circuit::{CellState as VmCellState, EffectVmAir, stark};
+use dregg_circuit::{stark, CellState as VmCellState, EffectVmAir};
 use dregg_sdk::AgentCipherclerk;
-use dregg_turn::action::{BearerCapProof, DelegationProofData, QueueTxOp, symbol};
+use dregg_turn::action::{symbol, BearerCapProof, DelegationProofData, QueueTxOp};
 use dregg_turn::conditional::ProofCondition;
 use dregg_turn::escrow::{EscrowClaimAuth, EscrowCondition};
 use dregg_turn::eventual::EventualRef;
@@ -74,7 +71,7 @@ struct Variant {
 /// panic. Stubs are deterministic (zero or seed-bytes) so test failures
 /// are reproducible.
 ///
-/// All 41 variants of `Effect` (excluding `PipelinedSend` only when its
+/// All 52 variants of `Effect` (excluding `PipelinedSend` only when its
 /// boxed inner action would create a cycle — see comment below) appear
 /// here exactly once. Adding a new variant to `Effect` without adding it
 /// here is a compile-time match-exhaustiveness failure in
@@ -846,16 +843,12 @@ fn print_exec_summary(report: &[(String, ExecOutcome)]) {
 // Test #2: every variant projects to a non-NoOp VM effect sequence
 // ---------------------------------------------------------------------------
 
-/// Projection roundtrip. Today this fails for the variants that
-/// `convert_effects_to_vm` maps to `VmEffect::NoOp`. The expected count
-/// is in the dozens (the audit observed 31 of 41). The `#[ignore]` lets
-/// the suite stay green until Stages 3-6 of EFFECT-VM-SHAPE-A land per-
-/// effect projections. To inspect progress, run:
+/// Projection roundtrip. Every runtime `Effect` variant must project to a
+/// non-NoOp Effect VM sequence.
 ///
 ///   cargo test -p dregg-tests every_effect_variant_round_trips_through_projection \
-///       -- --nocapture --include-ignored
+///       -- --nocapture
 #[test]
-#[ignore = "known pending until projection fix (EFFECT-VM-SHAPE-A Stages 3-6)"]
 fn every_effect_variant_round_trips_through_projection() {
     use dregg_circuit::effect_vm::Effect as VmEffect;
 
@@ -899,13 +892,8 @@ fn every_effect_variant_round_trips_through_projection() {
 /// AIR roundtrip. Generate the trace + prove + verify for the projected
 /// VM effect sequence. Fails when:
 ///   - the projection collapses to NoOp (no real constraint, test #2)
-///   - the variant requires AIR coverage that hasn't been added yet
-///     (EFFECT-VM-SHAPE-A Stages 3-6)
-///
-/// As with test #2, this is `#[ignore]` until the per-variant AIRs land;
-/// the report mode below prints which variants currently round-trip.
+///   - the variant requires AIR coverage that has not been added yet
 #[test]
-#[ignore = "known pending until per-variant AIRs land (EFFECT-VM-SHAPE-A Stages 3-6)"]
 fn every_effect_variant_has_provable_air() {
     let agent = cell_id(b"variant-cell-a");
     let initial_state = VmCellState::new(1_000_000, 0);
@@ -928,24 +916,24 @@ fn every_effect_variant_has_provable_air() {
 
     print_proof_summary(&report);
 
-    let failed: Vec<&String> = report
+    let not_verified: Vec<String> = report
         .iter()
-        .filter(|(_, o)| matches!(o, ProofOutcome::Failed(_) | ProofOutcome::Panicked))
-        .map(|(n, _)| n)
+        .filter(|(_, o)| !matches!(o, ProofOutcome::Verified))
+        .map(|(n, o)| format!("{n}: {o:?}"))
         .collect();
 
     assert!(
-        failed.is_empty(),
-        "{} variant(s) failed proof generation/verification: {:?}",
-        failed.len(),
-        failed
+        not_verified.is_empty(),
+        "{} variant(s) did not produce a verifying AIR proof: {:?}",
+        not_verified.len(),
+        not_verified
     );
 }
 
 /// Generate + verify a STARK proof for the given variant's effect. Returns
 /// `Ok(())` on round-trip success; `Err("KNOWN_PENDING: ...")` when the
-/// variant projects to NoOp (i.e., it is a "shim-only" variant the AIR
-/// can't yet meaningfully verify); `Err(other)` for genuine failures.
+/// variant projects to NoOp, which is now a test failure; `Err(other)` for
+/// genuine proof-generation or verification failures.
 fn prove_and_verify_variant(
     cell_id: &CellId,
     initial_state: &VmCellState,
@@ -1069,8 +1057,7 @@ fn print_proof_summary(report: &[(String, ProofOutcome)]) {
 // Combined summary (always-runs)
 // ---------------------------------------------------------------------------
 
-/// Always-runs report. Surfaces the totals without unignoring the
-/// progress-tracking tests above. Run with:
+/// Always-runs report. Surfaces the totals for all three stages. Run with:
 ///
 ///   cargo test -p dregg-tests every_variant_summary -- --nocapture
 #[test]

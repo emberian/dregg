@@ -23,6 +23,7 @@ dregg-turn = { path = "../turn" }
 dregg-cell = { path = "../cell" }
 dregg-sdk = { path = "../sdk" }
 dregg-types = { path = "../types" }
+dregg-verifier = { path = "../verifier" }
 dregg-bridge = { path = "../bridge", optional = true }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
 dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }

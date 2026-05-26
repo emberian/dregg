@@ -395,7 +395,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing: DSL revocation circuit trace violates constraints at row 0 (range check fails for large diff_right when right_neighbor is SENTINEL_MAX)"]
     fn test_after_settlement_old_accumulator_witnesses_fail() {
         let mut set = TieredRevocationSet::new(10);
         set.revoke(test_hash(10));
@@ -440,7 +439,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "pre-existing: DSL revocation circuit trace violates constraints at row 0 (range check fails for large diff_right when right_neighbor is SENTINEL_MAX)"]
     fn test_between_settlements_accumulator_witnesses_stable() {
         let mut set = TieredRevocationSet::new(10);
         // Put some entries in settled set first

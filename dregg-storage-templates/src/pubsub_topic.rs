@@ -10,22 +10,22 @@
 //! | Slot | Name | Caveat | Purpose |
 //! |---:|---|---|---|
 //! | 0 | `head_seq` | `MonotonicSequence` (publish-scoped) | Publisher's monotonic seq counter. |
-//! | 1 | `subscriber_cursors_root` | `Monotonic` (subscribe-scoped) | Merkle root over `(subscriber_pk, last_read_seq)` pairs. |
+//! | 1 | `subscriber_cursors_root` | changes + non-zero on subscribe | Merkle root over `(subscriber_pk, last_read_seq)` pairs. |
 //! | 2 | `publisher_pk_hash` | `Immutable` | Publisher identity. |
-//! | 3 | `subscriber_set_root` | `Monotonic` | Optional authorized-subscriber roll. |
+//! | 3 | `subscriber_set_root` | changes + non-zero on grant_subscriber | Optional authorized-subscriber roll. |
 //! | 4 | `topic_id_hash` | `Immutable` | Stable topic identity. |
-//! | 5 | `event_root` | `Monotonic` (publish-scoped) | Merkle root over published events. |
+//! | 5 | `event_root` | changes + non-zero on publish | Merkle root over published events. |
 //! | 6 | `topic_filter_root` | `Immutable` | DFA route table commitment (optional, bound at creation). |
-//! | 7 | `dedup_root` | `Monotonic` (publish-scoped) | Merkle root of content hashes for idempotent publish. |
+//! | 7 | `dedup_root` | changes + non-zero on publish | Merkle root of content hashes for idempotent publish. |
 //!
 //! ## Operations
 //!
-//! - `publish` — head + 1; event_root grows; dedup_root grows.
+//! - `publish` — head + 1; event_root changes; dedup_root changes.
 //!   Cursors/identities/sets frozen. Sender must be the publisher
 //!   (`SenderAuthorized` against slot 2's pubkey hash).
-//! - `subscribe` — subscriber_cursors_root advances; everything else
+//! - `subscribe` — subscriber_cursors_root changes; everything else
 //!   frozen. When `subscriber_set_root` is set, sender must be in it.
-//! - `grant_subscriber` — subscriber_set_root advances; everything
+//! - `grant_subscriber` — subscriber_set_root changes; everything
 //!   else frozen.
 //!
 //! ## What this replaces
@@ -46,13 +46,15 @@
 //! - **out-of-band**: the rest.
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellId, CellMode,
-    ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint, FieldElement,
-    InspectorDescriptor, StarbridgeAppContext, StateConstraint, canonical_program_vk, symbol,
+    canonical_program_vk, symbol, Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate,
+    CellId, CellMode, ChildVkStrategy, Effect, Event, FactoryDescriptor, FieldConstraint,
+    FieldElement, InspectorDescriptor, StarbridgeAppContext, StateConstraint,
 };
-use dregg_cell::program::{AuthorizedSet, CellProgram, TransitionCase, TransitionGuard};
+use dregg_cell::program::{
+    AuthorizedSet, CellProgram, SimpleStateConstraint, TransitionCase, TransitionGuard,
+};
 
-use crate::hex_encode;
+use crate::{hex_encode, u64_field};
 
 // =============================================================================
 // Slot layout
@@ -92,6 +94,14 @@ pub fn grant_subscriber_method_symbol() -> [u8; 32] {
     symbol("grant_subscriber")
 }
 
+fn slot_changed(index: u8) -> StateConstraint {
+    StateConstraint::AnyOf {
+        variants: vec![SimpleStateConstraint::Not(Box::new(
+            SimpleStateConstraint::Immutable { index },
+        ))],
+    }
+}
+
 // =============================================================================
 // CellProgram
 // =============================================================================
@@ -114,7 +124,7 @@ pub fn pubsub_topic_program() -> CellProgram {
                 },
             ],
         },
-        // publish: head + 1; event_root + dedup_root grow; cursors,
+        // publish: head + 1; event_root + dedup_root change; cursors,
         // identities, sets frozen. Publisher-only.
         TransitionCase {
             guard: TransitionGuard::MethodIs {
@@ -124,11 +134,15 @@ pub fn pubsub_topic_program() -> CellProgram {
                 StateConstraint::MonotonicSequence {
                     seq_index: HEAD_SEQ_SLOT,
                 },
-                StateConstraint::Monotonic {
+                slot_changed(EVENT_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: EVENT_ROOT_SLOT,
+                    value: u64_field(1),
                 },
-                StateConstraint::Monotonic {
+                slot_changed(DEDUP_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: DEDUP_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::Immutable {
                     index: SUBSCRIBER_CURSORS_ROOT_SLOT,
@@ -149,7 +163,7 @@ pub fn pubsub_topic_program() -> CellProgram {
                 },
             ],
         },
-        // subscribe: subscriber_cursors_root advances; everything else
+        // subscribe: subscriber_cursors_root changes; everything else
         // frozen. When subscriber_set_root is non-zero, sender must
         // be in it (caller layers SenderAuthorized via the gated
         // subscribe variant; the unrestricted variant accepts all).
@@ -158,8 +172,10 @@ pub fn pubsub_topic_program() -> CellProgram {
                 method: symbol("subscribe"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                slot_changed(SUBSCRIBER_CURSORS_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: SUBSCRIBER_CURSORS_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::Immutable {
                     index: HEAD_SEQ_SLOT,
@@ -175,15 +191,17 @@ pub fn pubsub_topic_program() -> CellProgram {
                 },
             ],
         },
-        // grant_subscriber: subscriber_set_root grows; everything
+        // grant_subscriber: subscriber_set_root changes; everything
         // else frozen. Publisher-only (owns the topic's roll).
         TransitionCase {
             guard: TransitionGuard::MethodIs {
                 method: symbol("grant_subscriber"),
             },
             constraints: vec![
-                StateConstraint::Monotonic {
+                slot_changed(SUBSCRIBER_SET_ROOT_SLOT),
+                StateConstraint::FieldGte {
                     index: SUBSCRIBER_SET_ROOT_SLOT,
+                    value: u64_field(1),
                 },
                 StateConstraint::Immutable {
                     index: HEAD_SEQ_SLOT,
@@ -260,18 +278,8 @@ pub fn pubsub_topic_factory_descriptor() -> FactoryDescriptor {
             StateConstraint::Monotonic {
                 index: HEAD_SEQ_SLOT,
             },
-            StateConstraint::Monotonic {
-                index: SUBSCRIBER_CURSORS_ROOT_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: SUBSCRIBER_SET_ROOT_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: EVENT_ROOT_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: DEDUP_ROOT_SLOT,
-            },
+            // Hash roots are opaque commitments, not ordered integers.
+            // Operation cases constrain when they may change.
         ],
         default_mode: CellMode::Hosted,
         creation_budget: Some(DEFAULT_CREATION_BUDGET),

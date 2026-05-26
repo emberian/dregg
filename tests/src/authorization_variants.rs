@@ -17,7 +17,7 @@ use dregg_cell::CellId;
 use dregg_turn::action::{
     Action, Authorization, BearerCapProof, DelegationMode, DelegationProofData,
 };
-use dregg_turn::{CallForest, Effect, Turn};
+use dregg_turn::{CallForest, Effect, Turn, TurnExecutor};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -220,9 +220,40 @@ fn captp_delivered_signing_message_includes_domain_separator() {
 }
 
 #[test]
-#[ignore = "blocked on T6 / federation_id binding audit (EXECUTOR-HONESTY-AUDIT.md T6, T13): canonical signing message must include federation_id"]
 fn captp_delivered_message_includes_federation_id_for_cross_federation_replay_protection() {
-    panic!("blocked");
+    let cert_nonce = [0xA5u8; 32];
+    let agent = CellId([1u8; 32]);
+    let target = CellId([2u8; 32]);
+    let fed_a = [0x11u8; 32];
+    let fed_b = [0x22u8; 32];
+    let effects = vec![dregg_turn::action::Effect::SetField {
+        cell: target,
+        index: 0,
+        value: [9u8; 32],
+    }];
+
+    let signed_for_a = Authorization::captp_delivered_signing_message_for_federation(
+        &fed_a,
+        &cert_nonce,
+        &agent,
+        &target,
+        7,
+        &effects,
+    );
+    let replayed_at_b = Authorization::captp_delivered_signing_message_for_federation(
+        &fed_b,
+        &cert_nonce,
+        &agent,
+        &target,
+        7,
+        &effects,
+    );
+
+    assert!(signed_for_a.starts_with(b"dregg-captp-delivered-v2"));
+    assert_ne!(
+        signed_for_a, replayed_at_b,
+        "CapTP delivery signatures must be federation-bound"
+    );
 }
 
 // ===========================================================================
@@ -283,25 +314,82 @@ fn auth_custom_vk_hash_mismatch_rejects() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on federation_id binding audit (T6, EXECUTOR-HONESTY-AUDIT.md): action signed for F1 attempted against F2 must reject"]
 fn signature_signed_for_federation_a_rejects_on_federation_b() {
-    // Build identical Turn data, sign it with federation_id=F1, then
-    // attempt to execute it on a federation whose id is F2. Per T6 the
-    // canonical signing message must include federation_id; the verifier
-    // must recompute and reject.
-    panic!("blocked");
+    let target = CellId([7u8; 32]);
+    let mut action = dummy_action(target, Authorization::Signature([1u8; 32], [2u8; 32]));
+    action.effects.push(Effect::SetField {
+        cell: target,
+        index: 0,
+        value: [3u8; 32],
+    });
+
+    let fed_a = [0xA1u8; 32];
+    let fed_b = [0xB2u8; 32];
+    let signed_for_a = TurnExecutor::compute_signing_message(&action, &fed_a);
+    let verifier_at_b = TurnExecutor::compute_signing_message(&action, &fed_b);
+
+    assert_ne!(
+        signed_for_a, verifier_at_b,
+        "Signature auth verifier recomputes a different message in another federation"
+    );
 }
 
 #[test]
-#[ignore = "blocked on federation_id binding audit (T6): bearer-cap delegation includes federation_id in the delegation message"]
 fn bearer_signed_for_federation_a_rejects_on_federation_b() {
-    panic!("blocked");
+    let target = CellId([8u8; 32]);
+    let permissions = dregg_cell::AuthRequired::Signature;
+    let bearer_pk = [0x44u8; 32];
+    let expires_at = 100;
+    let fed_a = [0xA1u8; 32];
+    let fed_b = [0xB2u8; 32];
+
+    let signed_for_a = TurnExecutor::compute_bearer_delegation_message(
+        &target,
+        &permissions,
+        &bearer_pk,
+        expires_at,
+        &fed_a,
+    );
+    let verifier_at_b = TurnExecutor::compute_bearer_delegation_message(
+        &target,
+        &permissions,
+        &bearer_pk,
+        expires_at,
+        &fed_b,
+    );
+
+    assert_ne!(
+        signed_for_a, verifier_at_b,
+        "Bearer delegation signatures must be federation-bound"
+    );
 }
 
 #[test]
-#[ignore = "blocked on AUTHORIZATION-CUSTOM-DESIGN §11.5: SigningMessage input is federation-bound (federation_id is in compute_partial_signing_message)"]
 fn auth_custom_signed_for_federation_a_rejects_on_federation_b() {
-    panic!("blocked");
+    use dregg_cell::InputRef;
+    use dregg_cell::predicate::WitnessedPredicate;
+
+    let target = CellId([12u8; 32]);
+    let predicate =
+        WitnessedPredicate::custom([0x55u8; 32], [0x66u8; 32], InputRef::SigningMessage, 0);
+    let action = dummy_action(
+        target,
+        Authorization::Custom {
+            predicate: predicate.clone(),
+        },
+    );
+    let fed_a = [0xA1u8; 32];
+    let fed_b = [0xB2u8; 32];
+
+    let signed_for_a =
+        TurnExecutor::compute_custom_signing_message(&action, &predicate, 0, &fed_a, 9);
+    let verifier_at_b =
+        TurnExecutor::compute_custom_signing_message(&action, &predicate, 0, &fed_b, 9);
+
+    assert_ne!(
+        signed_for_a, verifier_at_b,
+        "Custom SigningMessage input must be federation-bound"
+    );
 }
 
 // ===========================================================================
