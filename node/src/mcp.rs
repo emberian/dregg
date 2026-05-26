@@ -27,6 +27,21 @@ use pyana_sdk::{Attenuation, CellId};
 use pyana_turn::{CallForest, Turn};
 use pyana_types::PublicKey;
 
+use pyana_app_framework::AppCipherclerk;
+use pyana_sdk::AgentCipherclerk;
+use starbridge_governed_namespace::build_register_service_action as sb_build_register_service_action;
+use starbridge_identity::{
+    Credential as SbCredential, CredentialAttributes as SbCredentialAttributes,
+    CredentialSchema as SbCredentialSchema, IssuerKeys as SbIssuerKeys,
+    build_issue_credential_action as sb_build_issue_credential_action,
+    employment_schema as sb_employment_schema, gov_id_schema as sb_gov_id_schema, issue as sb_issue,
+    kyc_schema as sb_kyc_schema,
+};
+use starbridge_nameservice::build_register_with_credential_action as sb_build_register_with_credential_action;
+use starbridge_subscription::{
+    BountyState as SbBountyState, build_bounty_state_publish_action as sb_build_bounty_publish,
+};
+
 use crate::state::NodeState;
 
 // Re-import x25519 and chacha for seal/unseal operations.
@@ -951,6 +966,79 @@ fn tool_definitions() -> Vec<McpToolDef> {
                 "required": ["mode","from","to"]
             }),
         },
+        // ─── Starbridge-app builders (cross-app-e2e closure) ───────────────────────
+        // These four tools wrap the canonical `build_*_action` helpers from
+        // the four anchor starbridge-apps so the cross-app-e2e demo can drive
+        // a real running node over MCP and have each receipt carry a STARK
+        // proof (via `generate_effect_vm_proof`). See `apply.rs` parallel:
+        // the executor turns the action's `SetField`s into ledger writes,
+        // and we project those same `SetField`s into VM Effects to anchor
+        // the proof.
+        McpToolDef {
+            name: "pyana_register_name",
+            description: "Register a name in a starbridge-nameservice registry cell via the canonical credential-attested builder. Wraps `starbridge_nameservice::build_register_with_credential_action` (the attested-tier variant). Receipt carries STARK proof binding the three SetField updates (name_hash, owner_hash, expiry).",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Human-readable name being registered (e.g. 'bob.dev')." },
+                    "registry_cell": { "type": "string", "description": "Hex-encoded 32-byte registry cell ID. Defaults to the node's agent cell." },
+                    "owner": { "type": "string", "description": "Hex-encoded 32-byte owner public key. Defaults to the node's cipherclerk public key." },
+                    "expiry_height": { "type": "integer", "description": "Block height at which the name registration expires." },
+                    "issuer_cell": { "type": "string", "description": "Hex-encoded 32-byte issuer cell whose credential set the registration attests to. Defaults to the node's agent cell (self-attestation for demos)." },
+                    "credential_schema_id": { "type": "string", "description": "Hex-encoded 32-byte schema commitment from the identity app. Defaults to BLAKE3('kyc-v1') for demos." },
+                    "credential_presentation_proof_hex": { "type": "string", "description": "Hex-encoded credential presentation proof bytes (non-empty witness blob carried into action.witness_blobs)." }
+                },
+                "required": ["name", "expiry_height"]
+            }),
+        },
+        McpToolDef {
+            name: "pyana_publish_subscription",
+            description: "Publish a bounty-state notification to a starbridge-subscription cell via the canonical bounty-lifecycle builder. Wraps `starbridge_subscription::build_bounty_state_publish_action`. Receipt carries STARK proof binding the three SetField updates (seq_head, message_root, latest_payload).",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "subscription_cell": { "type": "string", "description": "Hex-encoded 32-byte subscription cell ID. Defaults to the node's agent cell." },
+                    "new_head": { "type": "integer", "description": "New value of slot 0 (seq_head); the caller computes from prior state." },
+                    "new_message_root": { "type": "string", "description": "Hex-encoded 32-byte new message_root after folding the payload hash." },
+                    "bounty_id": { "type": "string", "description": "Hex-encoded 32-byte bounty identifier." },
+                    "prior_state": { "type": "string", "enum": ["posted","claimed","fulfilled","settled","canceled"], "description": "Prior bounty state." },
+                    "new_state": { "type": "string", "enum": ["posted","claimed","fulfilled","settled","canceled"], "description": "New bounty state." },
+                    "actor_pk_hash": { "type": "string", "description": "Hex-encoded 32-byte BLAKE3 hash of the actor's pubkey (the party causing the state change)." }
+                },
+                "required": ["new_head", "new_message_root", "bounty_id", "prior_state", "new_state", "actor_pk_hash"]
+            }),
+        },
+        McpToolDef {
+            name: "pyana_issue_credential",
+            description: "Issue a credential and anchor the issuance on a starbridge-identity issuer cell via the canonical builder. Wraps `pyana_credentials::issue` + `starbridge_identity::build_issue_credential_action`. Receipt carries STARK proof binding the two SetField updates (issuance_counter, revocation_root) and the credential id is returned for downstream binding.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "issuer_cell": { "type": "string", "description": "Hex-encoded 32-byte issuer cell ID. Defaults to the node's agent cell." },
+                    "schema": { "type": "string", "enum": ["kyc","gov_id","employment"], "description": "Which built-in schema to use. Defaults to 'kyc'." },
+                    "holder_id": { "type": "string", "description": "Hex-encoded 32-byte holder id (typically BLAKE3(holder_pk)). Defaults to the node's own pubkey-derived holder id." },
+                    "attributes": { "type": "object", "description": "Attribute map { name: string|integer }. Only attributes in the schema are accepted." },
+                    "new_counter": { "type": "integer", "description": "New ISSUANCE_COUNTER_SLOT value (MonotonicSequence enforced; typically old+1). Defaults to 1." },
+                    "revocation_root": { "type": "string", "description": "Hex-encoded 32-byte new REVOCATION_ROOT_SLOT value. Defaults to zero (no revocations yet)." },
+                    "issued_at": { "type": "integer", "description": "Unix-seconds issuance timestamp. Defaults to 1_700_000_000 for determinism." },
+                    "not_after": { "type": "integer", "description": "Optional Unix-seconds expiry. Omit for no expiry." }
+                },
+                "required": []
+            }),
+        },
+        McpToolDef {
+            name: "pyana_register_service",
+            description: "Register a service entry at a named path on a starbridge-governed-namespace cell via the canonical builder. Wraps `starbridge_governed_namespace::build_register_service_action`. The underlying action is event-only (EmitEvent('service-registered', [path_hash, target])); to anchor an Effect-VM proof, we project the path_hash into a synthetic SetField at slot 0 — see ARC notes in tool body. Receipt carries STARK proof binding the synthesised row.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "namespace_cell": { "type": "string", "description": "Hex-encoded 32-byte governed-namespace cell ID. Defaults to the node's agent cell." },
+                    "path": { "type": "string", "description": "Path being registered (e.g. '/bob.dev')." },
+                    "target_cell": { "type": "string", "description": "Hex-encoded 32-byte cell ID the path resolves to. Defaults to the node's agent cell." }
+                },
+                "required": ["path"]
+            }),
+        },
         // ─── Factory creation via canonical Effect::CreateCellFromFactory ──────────
         McpToolDef {
             name: "pyana_create_cell_from_factory_effect",
@@ -1044,6 +1132,11 @@ async fn dispatch_tool(name: &str, params: Value, state: &NodeState) -> McpToolR
         "pyana_create_cell_from_factory_effect" => {
             tool_create_cell_from_factory_effect(&params, state).await
         }
+        // Starbridge-app builders (cross-app-e2e closure)
+        "pyana_register_name" => tool_register_name(&params, state).await,
+        "pyana_publish_subscription" => tool_publish_subscription(&params, state).await,
+        "pyana_issue_credential" => tool_issue_credential(&params, state).await,
+        "pyana_register_service" => tool_register_service(&params, state).await,
         _ => McpToolResult::error(format!("unknown tool: {name}")),
     }
 }
@@ -4886,6 +4979,800 @@ async fn tool_create_cell_from_factory_effect(params: &Value, state: &NodeState)
             McpToolResult::error("factory creation turn did not commit")
         }
     }
+}
+
+// =============================================================================
+// Starbridge-app tool helpers
+// =============================================================================
+//
+// These four tools wrap the canonical `build_*_action` helpers from the
+// four anchor starbridge-apps so the cross-app-e2e demo can drive a
+// real running node over MCP. Each tool:
+//
+//   1. Parses the action-specific parameters from JSON.
+//   2. Builds a temporary `AppCipherclerk` from a fresh `AgentCipherclerk`
+//      (matching seed irrelevant — we discard its signature).
+//   3. Calls the starbridge-app's `build_*_action(&temp_cclerk, ...)` to
+//      construct the canonical Action with the right effects + witness blobs.
+//   4. Re-signs the action with the *node's* cipherclerk via
+//      `AgentCipherclerk::sign_action` (federation_id [0u8; 32], matching
+//      the executor default).  This binds the action's authorization to
+//      the node's identity.
+//   5. Ensures the target cell exists in the local ledger (insert as a
+//      hosted cell owned by the node's pubkey if missing) — required for
+//      the executor to find a cell to act on.
+//   6. Wraps the signed action in a Turn, executes through TurnExecutor.
+//   7. Projects the action's `SetField` effects into `effect_vm::Effect`
+//      domain and produces a STARK proof via `generate_effect_vm_proof`.
+//   8. Returns receipt JSON matching the shape of `grant.proof.json`
+//      (effect_vm_proof_hex, effect_vm_public_inputs, effect_vm_trace_rows,
+//      effect_vm_witness_hash_hex).
+//
+// **Effect-VM coverage gap**: the underlying `EffectVmAir` understands
+// `Transfer`, `SetField`, `GrantCapability`, and `NoOp`. The starbridge
+// apps emit `SetField` (which we map directly) and `EmitEvent` (which has
+// no AIR row — we either skip it or, for purely-event actions like
+// `register_service`, synthesise one `SetField` row carrying the event's
+// path_hash so the proof remains non-trivial).
+
+/// Translate a turn-domain `Effect` into a single Effect-VM `Effect`.
+/// Returns `None` for variants without an AIR-side analog (EmitEvent,
+/// IncrementNonce when projected from an event, etc.).
+fn project_setfield_to_vm(effect: &pyana_turn::Effect) -> Option<pyana_circuit::effect_vm::Effect> {
+    match effect {
+        pyana_turn::Effect::SetField { index, value, .. } => {
+            let mut le4 = [0u8; 4];
+            le4.copy_from_slice(&value[..4]);
+            Some(pyana_circuit::effect_vm::Effect::SetField {
+                field_idx: *index as u32,
+                value: pyana_circuit::BabyBear::new(u32::from_le_bytes(le4)),
+            })
+        }
+        pyana_turn::Effect::Transfer { amount, .. } => {
+            Some(pyana_circuit::effect_vm::Effect::Transfer {
+                amount: *amount,
+                direction: 1,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Ensure `cell_id` exists in the ledger. If missing, insert a default
+/// hosted cell owned by the node's pubkey with zero balance. This lets
+/// the executor find a cell to act on without forcing callers to
+/// pre-register through a separate flow — the demo orchestrator can
+/// just call the starbridge-app tools and the cells materialize on
+/// first use.
+///
+/// Returns the (balance, nonce) pair the cell holds after the call
+/// (used as the EffectVM `initial_balance`/`initial_nonce`).
+fn ensure_cell_in_ledger(
+    cell_id: CellId,
+    pk_bytes: [u8; 32],
+    ledger: &mut pyana_cell::Ledger,
+) -> (u64, u64) {
+    if ledger.get(&cell_id).is_none() {
+        // `Cell::with_balance` derives the cell id from
+        // `(public_key, token_id)`, which only matches the agent's own
+        // cell. For arbitrary caller-supplied cell ids (registry cells,
+        // issuer cells, subscription cells, etc.) we use the
+        // `remote_stub_with_id_pk_balance` constructor that records the
+        // cell at the *specified* id while still attaching the node's
+        // pubkey so signature-mode auth resolves correctly.
+        let cell = pyana_cell::Cell::remote_stub_with_id_pk_balance(cell_id, pk_bytes, 0);
+        // Best-effort: if insert fails we surface a zero state; the
+        // executor will reject the turn downstream and the tool returns
+        // the Rejected receipt.
+        let _ = ledger.insert_cell(cell);
+    }
+    match ledger.get(&cell_id) {
+        Some(c) => (c.state.balance(), c.state.nonce()),
+        None => (0, 0),
+    }
+}
+
+/// Build a `Turn` that wraps a single starbridge-app action and submit
+/// it through the executor.  Generates an Effect-VM STARK proof over
+/// the action's `SetField` effects (plus optional synthetic rows the
+/// caller pre-populates in `extra_vm_effects`).  Returns the
+/// canonical (receipt-bearing) JSON response shape used by all four
+/// starbridge tools.
+async fn run_starbridge_action(
+    state: &NodeState,
+    action: pyana_turn::Action,
+    memo: String,
+    extra_vm_effects: Vec<pyana_circuit::effect_vm::Effect>,
+    extra_links: serde_json::Map<String, Value>,
+) -> McpToolResult {
+    let mut s = state.write().await;
+    if !s.unlocked {
+        return McpToolResult::error("cipherclerk is locked; unlock first");
+    }
+
+    // Node identity + agent cell.
+    let pk_bytes = s.cclerk.public_key().0;
+    let agent_cell_id = pyana_cell::CellId::derive_raw(&pk_bytes, &[0u8; 32]);
+    let federation_id = [0u8; 32];
+
+    // Re-sign the action with the node's cipherclerk (overwrites the temp
+    // signature placed by the starbridge-apps builder).
+    let signed_action = s.cclerk.sign_action(action, &federation_id);
+
+    // Make sure the action's target cell exists in the ledger.
+    let target = signed_action.target;
+    let (target_balance, target_nonce) = ensure_cell_in_ledger(target, pk_bytes, &mut s.ledger);
+    // Also ensure the agent cell exists — turn-level checks reference it.
+    let _ = ensure_cell_in_ledger(agent_cell_id, pk_bytes, &mut s.ledger);
+
+    // Project SetField (and any other supported) effects into VM domain.
+    let mut vm_effects: Vec<pyana_circuit::effect_vm::Effect> = signed_action
+        .effects
+        .iter()
+        .filter_map(project_setfield_to_vm)
+        .collect();
+    vm_effects.extend(extra_vm_effects);
+
+    // Build the Turn.
+    let mut forest = CallForest::new();
+    forest.add_root(signed_action);
+
+    let nonce = s.cclerk.receipt_chain_length() as u64;
+    let turn = Turn {
+        agent: agent_cell_id,
+        nonce,
+        fee: 10_000,
+        memo: Some(memo),
+        valid_until: None,
+        call_forest: forest,
+        depends_on: vec![],
+        previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    };
+
+    let signed = s.cclerk.sign_turn(&turn);
+    let turn_hash = hex_encode(&turn.hash());
+
+    // Execute locally.
+    let executor = pyana_turn::TurnExecutor::new(pyana_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
+
+    match exec_result {
+        pyana_turn::TurnResult::Committed { receipt, .. } => {
+            let receipt_hash_hex = hex_encode(&receipt.receipt_hash());
+            let receipt_bytes = postcard::to_allocvec(&receipt)
+                .expect("TurnReceipt serializes via postcard");
+            let receipt_bytes_hex = hex_encode(&receipt_bytes);
+            let pre_state_hash_hex = hex_encode(&receipt.pre_state_hash);
+            let post_state_hash_hex = hex_encode(&receipt.post_state_hash);
+            let effects_hash_hex = hex_encode(&receipt.effects_hash);
+
+            s.cclerk
+                .append_receipt(receipt)
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
+
+            let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
+            drop(s);
+
+            state.emit(crate::state::NodeEvent::Receipt {
+                hash: turn_hash.clone(),
+            });
+
+            if let Some(gossip) = state.gossip().await {
+                let h = signed.turn.hash();
+                tokio::spawn(async move {
+                    gossip.gossip_turn(h, turn_data).await;
+                });
+            }
+
+            // Generate Effect-VM proof.
+            let (proof_hex, public_inputs, trace_rows, witness_hash_hex) =
+                generate_effect_vm_proof(target_balance, target_nonce, &vm_effects);
+
+            let proof_field = if proof_hex.is_empty() {
+                Value::Null
+            } else {
+                Value::String(proof_hex)
+            };
+            let trace_field = if trace_rows.is_empty() {
+                Value::Null
+            } else {
+                serde_json::to_value(&trace_rows).unwrap_or(Value::Null)
+            };
+            let witness_hash_field = if witness_hash_hex.is_empty() {
+                Value::Null
+            } else {
+                Value::String(witness_hash_hex)
+            };
+
+            let mut out = serde_json::Map::new();
+            out.insert("committed".into(), Value::Bool(true));
+            out.insert("turn_hash".into(), Value::String(turn_hash));
+            out.insert("receipt_hash".into(), Value::String(receipt_hash_hex));
+            out.insert("receipt_bytes_hex".into(), Value::String(receipt_bytes_hex));
+            out.insert("pre_state_hash".into(), Value::String(pre_state_hash_hex));
+            out.insert("post_state_hash".into(), Value::String(post_state_hash_hex));
+            out.insert("effects_hash".into(), Value::String(effects_hash_hex));
+            out.insert("effect_vm_proof_hex".into(), proof_field);
+            out.insert(
+                "effect_vm_public_inputs".into(),
+                serde_json::to_value(&public_inputs).unwrap_or(Value::Null),
+            );
+            out.insert("effect_vm_trace_rows".into(), trace_field);
+            out.insert("effect_vm_witness_hash_hex".into(), witness_hash_field);
+            for (k, v) in extra_links {
+                out.insert(k, v);
+            }
+            McpToolResult::json(&Value::Object(out))
+        }
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            drop(s);
+            McpToolResult::json(&serde_json::json!({
+                "committed": false,
+                "turn_hash": turn_hash,
+                "error": format!("turn rejected: {reason}"),
+            }))
+        }
+        _ => {
+            drop(s);
+            McpToolResult::error("starbridge action turn did not commit")
+        }
+    }
+}
+
+/// Build a fresh `AppCipherclerk` for use as a builder argument. The
+/// signature it places on the action is overwritten by the node
+/// cipherclerk's `sign_action` before submission, so the temp cipherclerk
+/// only contributes the action's `target`/`method`/`effects`/witness
+/// shape — none of its key material lands in the receipt chain.
+fn temp_app_cclerk() -> AppCipherclerk {
+    AppCipherclerk::new(AgentCipherclerk::new(), [0u8; 32])
+}
+
+/// Common helper: read the agent's own cell id from state. The caller
+/// holds the lock; we just compute the derivation.
+fn agent_cell_of(cclerk: &AgentCipherclerk) -> CellId {
+    pyana_cell::CellId::derive_raw(&cclerk.public_key().0, &[0u8; 32])
+}
+
+/// Default registry/issuer/etc. cell when the caller omits it: the
+/// node's own agent cell. Returns Err if the caller-supplied hex is
+/// invalid (so the tool can surface a clean error).
+fn parse_or_default_cell(value: Option<&str>, default: CellId) -> Result<CellId, String> {
+    match value {
+        None => Ok(default),
+        Some(h) => match hex_decode(h) {
+            Ok(b) => Ok(pyana_cell::CellId(b)),
+            Err(_) => Err(format!(
+                "invalid hex for cell id '{h}' (expected 64 hex chars)"
+            )),
+        },
+    }
+}
+
+// =============================================================================
+// Tool: pyana_register_name
+// =============================================================================
+
+async fn tool_register_name(params: &Value, state: &NodeState) -> McpToolResult {
+    let name = match params.get("name").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return McpToolResult::error("missing required parameter: name"),
+    };
+    let expiry_height = match params.get("expiry_height").and_then(|v| v.as_u64()) {
+        Some(e) => e,
+        None => return McpToolResult::error("missing required parameter: expiry_height"),
+    };
+
+    // Resolve cell ids & defaults.
+    let (agent_cell, node_pk) = {
+        let s = state.read().await;
+        if !s.unlocked {
+            return McpToolResult::error("cipherclerk is locked; unlock first");
+        }
+        (agent_cell_of(&s.cclerk), s.cclerk.public_key().0)
+    };
+
+    let registry_cell = match parse_or_default_cell(
+        params.get("registry_cell").and_then(|v| v.as_str()),
+        agent_cell,
+    ) {
+        Ok(c) => c,
+        Err(e) => return McpToolResult::error(e),
+    };
+    let issuer_cell = match parse_or_default_cell(
+        params.get("issuer_cell").and_then(|v| v.as_str()),
+        agent_cell,
+    ) {
+        Ok(c) => c,
+        Err(e) => return McpToolResult::error(e),
+    };
+
+    let owner = match params.get("owner").and_then(|v| v.as_str()) {
+        None => node_pk,
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => return McpToolResult::error("invalid hex for owner (expected 64 hex chars)"),
+        },
+    };
+
+    // Schema id defaults to the kyc-v1 schema commitment.
+    let schema_id = match params
+        .get("credential_schema_id")
+        .and_then(|v| v.as_str())
+    {
+        None => starbridge_identity::schema_commitment(&sb_kyc_schema()),
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => {
+                return McpToolResult::error(
+                    "invalid hex for credential_schema_id (expected 64 hex chars)",
+                );
+            }
+        },
+    };
+
+    // Credential proof blob defaults to a small non-empty stub (the
+    // attested-tier verifier only requires a non-empty witness blob
+    // until the BlindedSet verifier registry lands; cross_app_helper
+    // documents this with `attested_tier_accepted_by_executor`).
+    let proof_bytes = match params
+        .get("credential_presentation_proof_hex")
+        .and_then(|v| v.as_str())
+    {
+        None => b"pyana-mcp-credential-stub-v1".to_vec(),
+        Some(h) => match hex_decode_var(h) {
+            Ok(b) => b,
+            Err(_) => {
+                return McpToolResult::error(
+                    "invalid hex for credential_presentation_proof_hex",
+                );
+            }
+        },
+    };
+
+    let temp = temp_app_cclerk();
+    let action = sb_build_register_with_credential_action(
+        &temp,
+        registry_cell,
+        &name,
+        owner,
+        expiry_height,
+        issuer_cell,
+        schema_id,
+        proof_bytes.clone(),
+    );
+
+    let mut links = serde_json::Map::new();
+    links.insert("registered_name".into(), Value::String(name.clone()));
+    links.insert(
+        "registry_cell".into(),
+        Value::String(hex_encode(&registry_cell.0)),
+    );
+    links.insert(
+        "issuer_cell".into(),
+        Value::String(hex_encode(&issuer_cell.0)),
+    );
+    links.insert("owner".into(), Value::String(hex_encode(&owner)));
+    links.insert(
+        "schema_commitment".into(),
+        Value::String(hex_encode(&schema_id)),
+    );
+    links.insert(
+        "expiry_height".into(),
+        Value::Number(serde_json::Number::from(expiry_height)),
+    );
+    links.insert(
+        "presentation_proof_blob_hash".into(),
+        Value::String(hex_encode(blake3::hash(&proof_bytes).as_bytes())),
+    );
+
+    run_starbridge_action(
+        state,
+        action,
+        format!("register_name: {name}"),
+        Vec::new(),
+        links,
+    )
+    .await
+}
+
+// =============================================================================
+// Tool: pyana_publish_subscription
+// =============================================================================
+
+fn parse_bounty_state(s: &str) -> Option<SbBountyState> {
+    match s.to_ascii_lowercase().as_str() {
+        "posted" => Some(SbBountyState::Posted),
+        "claimed" => Some(SbBountyState::Claimed),
+        "fulfilled" => Some(SbBountyState::Fulfilled),
+        "settled" => Some(SbBountyState::Settled),
+        "canceled" => Some(SbBountyState::Canceled),
+        _ => None,
+    }
+}
+
+async fn tool_publish_subscription(params: &Value, state: &NodeState) -> McpToolResult {
+    let new_head = match params.get("new_head").and_then(|v| v.as_u64()) {
+        Some(n) => n,
+        None => return McpToolResult::error("missing required parameter: new_head"),
+    };
+    let new_msg_root_hex = match params.get("new_message_root").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return McpToolResult::error("missing required parameter: new_message_root"),
+    };
+    let new_message_root = match hex_decode(new_msg_root_hex) {
+        Ok(b) => b,
+        Err(_) => {
+            return McpToolResult::error(
+                "invalid hex for new_message_root (expected 64 hex chars)",
+            );
+        }
+    };
+    let bounty_id_hex = match params.get("bounty_id").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return McpToolResult::error("missing required parameter: bounty_id"),
+    };
+    let bounty_id = match hex_decode(bounty_id_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for bounty_id"),
+    };
+    let prior_state_str = match params.get("prior_state").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return McpToolResult::error("missing required parameter: prior_state"),
+    };
+    let new_state_str = match params.get("new_state").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return McpToolResult::error("missing required parameter: new_state"),
+    };
+    let prior_state = match parse_bounty_state(prior_state_str) {
+        Some(b) => b,
+        None => return McpToolResult::error(format!("invalid prior_state: {prior_state_str}")),
+    };
+    let new_state = match parse_bounty_state(new_state_str) {
+        Some(b) => b,
+        None => return McpToolResult::error(format!("invalid new_state: {new_state_str}")),
+    };
+    let actor_pk_hash_hex = match params.get("actor_pk_hash").and_then(|v| v.as_str()) {
+        Some(h) => h,
+        None => return McpToolResult::error("missing required parameter: actor_pk_hash"),
+    };
+    let actor_pk_hash = match hex_decode(actor_pk_hash_hex) {
+        Ok(b) => b,
+        Err(_) => return McpToolResult::error("invalid hex for actor_pk_hash"),
+    };
+
+    let agent_cell = {
+        let s = state.read().await;
+        if !s.unlocked {
+            return McpToolResult::error("cipherclerk is locked; unlock first");
+        }
+        agent_cell_of(&s.cclerk)
+    };
+    let subscription_cell = match parse_or_default_cell(
+        params.get("subscription_cell").and_then(|v| v.as_str()),
+        agent_cell,
+    ) {
+        Ok(c) => c,
+        Err(e) => return McpToolResult::error(e),
+    };
+
+    // u64 → 32-byte big-endian field (matches u64_field in
+    // starbridge-nameservice / governed-namespace / cross_app_helper).
+    let mut new_head_field = [0u8; 32];
+    new_head_field[24..32].copy_from_slice(&new_head.to_be_bytes());
+
+    let temp = temp_app_cclerk();
+    let action = sb_build_bounty_publish(
+        &temp,
+        subscription_cell,
+        new_head_field,
+        new_message_root,
+        &bounty_id,
+        prior_state,
+        new_state,
+        &actor_pk_hash,
+    );
+
+    let payload_hash =
+        starbridge_subscription::bounty_state_payload_hash(&bounty_id, prior_state, new_state, &actor_pk_hash);
+
+    let mut links = serde_json::Map::new();
+    links.insert(
+        "subscription_cell".into(),
+        Value::String(hex_encode(&subscription_cell.0)),
+    );
+    links.insert(
+        "bounty_id".into(),
+        Value::String(hex_encode(&bounty_id)),
+    );
+    links.insert(
+        "actor_pk_hash".into(),
+        Value::String(hex_encode(&actor_pk_hash)),
+    );
+    links.insert(
+        "payload_hash".into(),
+        Value::String(hex_encode(&payload_hash)),
+    );
+    links.insert("prior_state".into(), Value::String(prior_state_str.into()));
+    links.insert("new_state".into(), Value::String(new_state_str.into()));
+    links.insert(
+        "new_head".into(),
+        Value::Number(serde_json::Number::from(new_head)),
+    );
+
+    run_starbridge_action(
+        state,
+        action,
+        format!("publish_subscription: {prior_state_str}->{new_state_str}"),
+        Vec::new(),
+        links,
+    )
+    .await
+}
+
+// =============================================================================
+// Tool: pyana_issue_credential
+// =============================================================================
+
+fn parse_schema_name(name: &str) -> Option<SbCredentialSchema> {
+    match name.to_ascii_lowercase().as_str() {
+        "kyc" | "kyc-v1" => Some(sb_kyc_schema()),
+        "gov_id" | "gov-id" | "gov-id-v1" => Some(sb_gov_id_schema()),
+        "employment" | "employment-v1" => Some(sb_employment_schema()),
+        _ => None,
+    }
+}
+
+fn parse_attributes_into(
+    schema: &SbCredentialSchema,
+    obj: &serde_json::Map<String, Value>,
+) -> Result<SbCredentialAttributes, String> {
+    use starbridge_identity::AttrValue;
+    let mut attrs = SbCredentialAttributes::new();
+    for (k, v) in obj {
+        if !schema.has_attribute(k) {
+            return Err(format!(
+                "attribute '{k}' not in schema '{}'",
+                schema.name
+            ));
+        }
+        let attr_value = if let Some(i) = v.as_i64() {
+            AttrValue::Integer(i)
+        } else if let Some(s) = v.as_str() {
+            AttrValue::Text(s.into())
+        } else {
+            return Err(format!(
+                "attribute '{k}' value must be string or integer"
+            ));
+        };
+        attrs = attrs.with(k.as_str(), attr_value);
+    }
+    Ok(attrs)
+}
+
+async fn tool_issue_credential(params: &Value, state: &NodeState) -> McpToolResult {
+    let (agent_cell, node_pk) = {
+        let s = state.read().await;
+        if !s.unlocked {
+            return McpToolResult::error("cipherclerk is locked; unlock first");
+        }
+        (agent_cell_of(&s.cclerk), s.cclerk.public_key().0)
+    };
+
+    let issuer_cell = match parse_or_default_cell(
+        params.get("issuer_cell").and_then(|v| v.as_str()),
+        agent_cell,
+    ) {
+        Ok(c) => c,
+        Err(e) => return McpToolResult::error(e),
+    };
+
+    let schema_name = params
+        .get("schema")
+        .and_then(|v| v.as_str())
+        .unwrap_or("kyc");
+    let schema = match parse_schema_name(schema_name) {
+        Some(s) => s,
+        None => return McpToolResult::error(format!("unknown schema: {schema_name}")),
+    };
+
+    let holder_id = match params.get("holder_id").and_then(|v| v.as_str()) {
+        None => *blake3::hash(&node_pk).as_bytes(),
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => return McpToolResult::error("invalid hex for holder_id"),
+        },
+    };
+
+    let attributes = match params.get("attributes").and_then(|v| v.as_object()) {
+        None => SbCredentialAttributes::new(),
+        Some(obj) => match parse_attributes_into(&schema, obj) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::error(e),
+        },
+    };
+
+    let new_counter = params
+        .get("new_counter")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1);
+    let revocation_root = match params.get("revocation_root").and_then(|v| v.as_str()) {
+        None => [0u8; 32],
+        Some(h) => match hex_decode(h) {
+            Ok(b) => b,
+            Err(_) => return McpToolResult::error("invalid hex for revocation_root"),
+        },
+    };
+    let issued_at = params
+        .get("issued_at")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1_700_000_000);
+    let not_after = params.get("not_after").and_then(|v| v.as_i64());
+
+    // Mint the credential.  Use a deterministic IssuerKeys derived from
+    // the node's pubkey so the issuance is reproducible across replays.
+    let issuer_keys = SbIssuerKeys::new(
+        *blake3::derive_key("pyana-mcp-issuer-root-v1", &node_pk).as_bytes(),
+        *blake3::derive_key("pyana-mcp-issuer-federation-v1", &node_pk).as_bytes(),
+        node_pk.to_vec(),
+        "pyana-node-mcp",
+    );
+
+    let credential: SbCredential =
+        match sb_issue(&issuer_keys, &schema, holder_id, attributes, issued_at, not_after) {
+            Ok(c) => c,
+            Err(e) => return McpToolResult::error(format!("credential issuance failed: {e}")),
+        };
+    let credential_id = credential.id();
+
+    let temp = temp_app_cclerk();
+    let action = sb_build_issue_credential_action(
+        &temp,
+        issuer_cell,
+        &credential,
+        new_counter,
+        revocation_root,
+    );
+
+    let mut links = serde_json::Map::new();
+    links.insert(
+        "issuer_cell".into(),
+        Value::String(hex_encode(&issuer_cell.0)),
+    );
+    links.insert("schema".into(), Value::String(schema_name.into()));
+    links.insert(
+        "schema_commitment".into(),
+        Value::String(hex_encode(&starbridge_identity::schema_commitment(&schema))),
+    );
+    links.insert(
+        "credential_id".into(),
+        Value::String(hex_encode(&credential_id)),
+    );
+    links.insert("holder_id".into(), Value::String(hex_encode(&holder_id)));
+    links.insert(
+        "new_counter".into(),
+        Value::Number(serde_json::Number::from(new_counter)),
+    );
+    links.insert(
+        "revocation_root".into(),
+        Value::String(hex_encode(&revocation_root)),
+    );
+    links.insert(
+        "credential_encoded".into(),
+        Value::String(credential.encoded.clone()),
+    );
+
+    run_starbridge_action(
+        state,
+        action,
+        format!("issue_credential: {schema_name}"),
+        Vec::new(),
+        links,
+    )
+    .await
+}
+
+// =============================================================================
+// Tool: pyana_register_service
+// =============================================================================
+
+async fn tool_register_service(params: &Value, state: &NodeState) -> McpToolResult {
+    let path = match params.get("path").and_then(|v| v.as_str()) {
+        Some(p) => p.to_string(),
+        None => return McpToolResult::error("missing required parameter: path"),
+    };
+
+    let agent_cell = {
+        let s = state.read().await;
+        if !s.unlocked {
+            return McpToolResult::error("cipherclerk is locked; unlock first");
+        }
+        agent_cell_of(&s.cclerk)
+    };
+
+    let namespace_cell = match parse_or_default_cell(
+        params.get("namespace_cell").and_then(|v| v.as_str()),
+        agent_cell,
+    ) {
+        Ok(c) => c,
+        Err(e) => return McpToolResult::error(e),
+    };
+    let target_cell = match parse_or_default_cell(
+        params.get("target_cell").and_then(|v| v.as_str()),
+        agent_cell,
+    ) {
+        Ok(c) => c,
+        Err(e) => return McpToolResult::error(e),
+    };
+
+    let temp = temp_app_cclerk();
+    let action = sb_build_register_service_action(&temp, namespace_cell, &path, target_cell);
+
+    // The underlying action emits one `EmitEvent("service-registered",
+    // [path_hash, target_field])` and NO `SetField`. The EffectVmAir has
+    // no `EmitEvent` row variant, so directly projecting the action's
+    // effects yields an empty vm_effects list (no proof). To anchor a
+    // STARK proof to this turn we synthesise a single `SetField` carrying
+    // the path_hash's first 4 bytes as the value — this binds the
+    // registered path into the proof's public inputs even though the
+    // executor did not actually mutate any slot.
+    //
+    // **This is a documented coverage gap**: a real
+    // `EffectVmAir::EmitEvent` row would let us prove the event was
+    // emitted with the canonical (path_hash, target) data. Until that
+    // AIR row lands, the synthetic `SetField` is a structural
+    // placeholder — `replay-chain` still verifies the STARK against
+    // the AIR contract, but the proof's link to the event is via the
+    // synthesised value, not via a true on-cell mutation.
+    let path_hash = *blake3::hash(path.as_bytes()).as_bytes();
+    let mut le4 = [0u8; 4];
+    le4.copy_from_slice(&path_hash[..4]);
+    let extra_vm = vec![pyana_circuit::effect_vm::Effect::SetField {
+        field_idx: 0,
+        value: pyana_circuit::BabyBear::new(u32::from_le_bytes(le4)),
+    }];
+
+    let mut links = serde_json::Map::new();
+    links.insert(
+        "namespace_cell".into(),
+        Value::String(hex_encode(&namespace_cell.0)),
+    );
+    links.insert("path".into(), Value::String(path.clone()));
+    links.insert(
+        "path_hash".into(),
+        Value::String(hex_encode(&path_hash)),
+    );
+    links.insert(
+        "target_cell".into(),
+        Value::String(hex_encode(&target_cell.0)),
+    );
+    links.insert(
+        "synthesized_vm_setfield_note".into(),
+        Value::String(
+            "register_service action emits only EmitEvent; a synthetic Effect-VM SetField row \
+            (slot 0, value=u32(path_hash[0..4]) LE) is added so the proof remains non-empty. \
+            See ARC notes in tool body for the documented coverage gap."
+                .into(),
+        ),
+    );
+
+    run_starbridge_action(
+        state,
+        action,
+        format!("register_service: {path}"),
+        extra_vm,
+        links,
+    )
+    .await
 }
 
 // =============================================================================

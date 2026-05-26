@@ -25,6 +25,12 @@ pyana-net = { path = "../net" }
 pyana-blocklace = { path = "../blocklace" }
 pyana-storage = { path = "../storage" }
 pyana-captp = { path = "../captp" }
+pyana-app-framework = { path = "../app-framework" }
+pyana-credentials = { path = "../credentials" }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice" }
+starbridge-identity = { path = "../starbridge-apps/identity" }
+starbridge-subscription = { path = "../starbridge-apps/subscription" }
+starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace" }
 pyana-macaroon = { workspace = true, features = ["crypto"] }
 ark-serialize = { workspace = true }
 ark-std = "0.5.0"
