@@ -68,12 +68,14 @@ Each Rust crate exports two things:
   `Authorization::Unchecked`. No `[0u8; 64]` placeholder signatures.
   No reaching past the framework into `dregg_turn::builder::*`.
 
-A future `dregg-app-framework::StarbridgeAppContext` (see plan §5.3)
-will let a host (`dregg-node`, a back-end aggregator binary, or the
-wasm runtime in browser-only mode) call `app::register(&mut ctx)` to
-plug a starbridge-app crate into a running federation. Today that
-trait is not yet defined; apps export their descriptors directly and
-hosts wire them by hand.
+`dregg-app-framework::StarbridgeAppContext` (see plan §5.3) is the
+host-side mount point. A host (`dregg-node`, a back-end aggregator
+binary, or the wasm runtime in browser-only mode) calls
+`app::register(&ctx)` to plug a starbridge-app crate into a running
+federation. The app registers its factory descriptors, inspector
+metadata, and turn-builder surface through that context; descriptor
+constructors remain exported so tests and offline tooling can hash the
+same source of truth directly.
 
 ## Workspace shape (Option A — single root workspace)
 

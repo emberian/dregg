@@ -106,6 +106,63 @@ fn assert_descriptor_contract(
     );
 }
 
+fn assert_flat_descriptor_does_not_order_roots(
+    descriptor: &dregg_app_framework::FactoryDescriptor,
+    template_name: &str,
+    root_slots: &[u8],
+) {
+    for constraint in &descriptor.state_constraints {
+        match constraint {
+            StateConstraint::Monotonic { index } | StateConstraint::StrictMonotonic { index }
+                if root_slots.contains(index) =>
+            {
+                panic!(
+                    "{template_name}: root slot {index} must be treated as an opaque commitment, not an ordered counter"
+                );
+            }
+            StateConstraint::MonotonicSequence { seq_index } if root_slots.contains(seq_index) => {
+                panic!("{template_name}: root slot {seq_index} must not use MonotonicSequence");
+            }
+            _ => {}
+        }
+    }
+}
+
+fn assert_flat_descriptor_has_no_method_scoped_sequence(
+    descriptor: &dregg_app_framework::FactoryDescriptor,
+    template_name: &str,
+) {
+    assert!(
+        descriptor
+            .state_constraints
+            .iter()
+            .all(|c| !matches!(c, StateConstraint::MonotonicSequence { .. })),
+        "{template_name}: exact +1 sequence checks belong in CellProgram::Cases, not flat descriptor constraints"
+    );
+}
+
+fn assert_method_case_has_sequence(
+    program: &CellProgram,
+    template_name: &str,
+    method_name: &str,
+    slot: u8,
+) {
+    let CellProgram::Cases(cases) = program else {
+        panic!("{template_name}: expected CellProgram::Cases");
+    };
+    let method = dregg_app_framework::symbol(method_name);
+    let case = cases
+        .iter()
+        .find(|case| matches!(&case.guard, TransitionGuard::MethodIs { method: m } if *m == method))
+        .unwrap_or_else(|| panic!("{template_name}: missing method case {method_name}"));
+    assert!(
+        case.constraints.iter().any(
+            |c| matches!(c, StateConstraint::MonotonicSequence { seq_index } if *seq_index == slot)
+        ),
+        "{template_name}: {method_name} must enforce MonotonicSequence on slot {slot}"
+    );
+}
+
 // ── per-template contract application ────────────────────────────────────────
 
 #[test]
@@ -218,6 +275,127 @@ fn every_template_has_immutable_identity_slot() {
             "{name}: program must declare at least one Immutable constraint"
         );
     }
+}
+
+#[test]
+fn flat_descriptor_constraints_do_not_order_opaque_roots() {
+    let cases = vec![
+        (
+            "CapInbox",
+            cap_inbox::cap_inbox_factory_descriptor(),
+            vec![
+                cap_inbox::SENDER_SET_ROOT_SLOT,
+                cap_inbox::MESSAGE_ROOT_SLOT,
+            ],
+        ),
+        (
+            "ProgrammableQueue",
+            programmable_queue::programmable_queue_factory_descriptor(),
+            vec![
+                programmable_queue::SENDER_SET_ROOT_SLOT,
+                programmable_queue::CONTENT_PATTERN_ROOT_SLOT,
+                programmable_queue::RING_ROOT_SLOT,
+            ],
+        ),
+        (
+            "PubSubTopic",
+            pubsub_topic::pubsub_topic_factory_descriptor(),
+            vec![
+                pubsub_topic::SUBSCRIBER_CURSORS_ROOT_SLOT,
+                pubsub_topic::SUBSCRIBER_SET_ROOT_SLOT,
+                pubsub_topic::EVENT_ROOT_SLOT,
+                pubsub_topic::TOPIC_FILTER_ROOT_SLOT,
+                pubsub_topic::DEDUP_ROOT_SLOT,
+            ],
+        ),
+        (
+            "BlindedQueue",
+            blinded_queue::blinded_queue_factory_descriptor(),
+            vec![
+                blinded_queue::COMMITMENTS_ROOT_SLOT,
+                blinded_queue::NULLIFIER_ROOT_SLOT,
+            ],
+        ),
+        (
+            "RelayOperator",
+            relay_operator::relay_operator_factory_descriptor(),
+            vec![
+                relay_operator::HOSTED_INBOX_ROOT_SLOT,
+                relay_operator::ROUTE_TABLE_ROOT_SLOT,
+            ],
+        ),
+    ];
+
+    for (name, descriptor, root_slots) in cases {
+        assert_flat_descriptor_does_not_order_roots(&descriptor, name, &root_slots);
+    }
+}
+
+#[test]
+fn exact_sequence_checks_are_operation_scoped_cases() {
+    let cap_inbox_descriptor = cap_inbox::cap_inbox_factory_descriptor();
+    assert_flat_descriptor_has_no_method_scoped_sequence(&cap_inbox_descriptor, "CapInbox");
+    let cap_inbox_program = cap_inbox::cap_inbox_program();
+    assert_method_case_has_sequence(
+        &cap_inbox_program,
+        "CapInbox",
+        "send",
+        cap_inbox::HEAD_SEQ_SLOT,
+    );
+    assert_method_case_has_sequence(
+        &cap_inbox_program,
+        "CapInbox",
+        "dequeue",
+        cap_inbox::TAIL_SEQ_SLOT,
+    );
+
+    let programmable_queue_descriptor = programmable_queue::programmable_queue_factory_descriptor();
+    assert_flat_descriptor_has_no_method_scoped_sequence(
+        &programmable_queue_descriptor,
+        "ProgrammableQueue",
+    );
+    let programmable_queue_program = programmable_queue::programmable_queue_program();
+    assert_method_case_has_sequence(
+        &programmable_queue_program,
+        "ProgrammableQueue",
+        "enqueue",
+        programmable_queue::HEAD_SEQ_SLOT,
+    );
+    assert_method_case_has_sequence(
+        &programmable_queue_program,
+        "ProgrammableQueue",
+        "dequeue",
+        programmable_queue::TAIL_SEQ_SLOT,
+    );
+
+    let pubsub_descriptor = pubsub_topic::pubsub_topic_factory_descriptor();
+    assert_flat_descriptor_has_no_method_scoped_sequence(&pubsub_descriptor, "PubSubTopic");
+    let pubsub_program = pubsub_topic::pubsub_topic_program();
+    assert_method_case_has_sequence(
+        &pubsub_program,
+        "PubSubTopic",
+        "publish",
+        pubsub_topic::HEAD_SEQ_SLOT,
+    );
+
+    let blinded_descriptor = blinded_queue::blinded_queue_factory_descriptor();
+    assert_flat_descriptor_has_no_method_scoped_sequence(&blinded_descriptor, "BlindedQueue");
+    let blinded_program = blinded_queue::blinded_queue_program();
+    assert_method_case_has_sequence(
+        &blinded_program,
+        "BlindedQueue",
+        "add",
+        blinded_queue::COMMITMENT_COUNT_SLOT,
+    );
+    assert_method_case_has_sequence(
+        &blinded_program,
+        "BlindedQueue",
+        "consume",
+        blinded_queue::NULLIFIER_COUNT_SLOT,
+    );
+
+    let relay_descriptor = relay_operator::relay_operator_factory_descriptor();
+    assert_flat_descriptor_has_no_method_scoped_sequence(&relay_descriptor, "RelayOperator");
 }
 
 #[test]
