@@ -7,7 +7,10 @@
 use dregg_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
 use dregg_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
 use dregg_circuit::poseidon2::hash_fact;
-use dregg_circuit::{BabyBear, prove_authorization_stark, verify_authorization_stark};
+use dregg_circuit::{
+    BabyBear, BodyFactMerkleProof, prove_authorization_with_membership,
+    verify_authorization_with_membership,
+};
 use dregg_commit::poseidon2_tree::Poseidon2MerkleTree;
 
 use crate::report::{CheckResult, run_check};
@@ -22,13 +25,18 @@ pub fn run() -> Vec<CheckResult> {
 }
 
 /// Build a standard test witness for backend comparison.
-fn build_test_witness() -> (dregg_circuit::multi_step_air::MultiStepWitness, BabyBear) {
+fn build_test_witness() -> (
+    dregg_circuit::multi_step_air::MultiStepWitness,
+    BabyBear,
+    Poseidon2MerkleTree,
+    usize,
+) {
     let mut tree = Poseidon2MerkleTree::with_depth(4);
     let pred = BabyBear::new(500);
     let alice = BabyBear::new(1000);
     let app = BabyBear::new(2000);
     let fact = hash_fact(pred, &[alice, app, BabyBear::ZERO, BabyBear::ZERO]);
-    tree.append(fact);
+    let fact_pos = tree.append(fact);
     for i in 1..8u32 {
         tree.append(BabyBear::new(i * 3333));
     }
@@ -73,64 +81,82 @@ fn build_test_witness() -> (dregg_circuit::multi_step_air::MultiStepWitness, Bab
 
     let request_hash = BabyBear::new(888);
     let witness = build_multi_step_witness(state_root, request_hash, vec![step]);
-    (witness, state_root)
+    (witness, state_root, tree, fact_pos)
+}
+
+fn make_membership_proof(tree: &Poseidon2MerkleTree, position: usize) -> BodyFactMerkleProof {
+    let mp = tree
+        .prove_membership(position)
+        .expect("fact must be in tree");
+    BodyFactMerkleProof {
+        fact_hash: mp.leaf,
+        siblings: mp.siblings,
+        positions: mp.positions,
+    }
+}
+
+fn body_fact_hashes_from_witness(
+    witness: &dregg_circuit::multi_step_air::MultiStepWitness,
+) -> Vec<BabyBear> {
+    let mut hashes = Vec::new();
+    for step in &witness.steps {
+        for &h in &step.body_fact_hashes {
+            if !hashes.contains(&h) {
+                hashes.push(h);
+            }
+        }
+    }
+    hashes
 }
 
 fn check_custom_stark() -> Result<(), String> {
-    let (witness, _) = build_test_witness();
+    let (witness, _, tree, fact_pos) = build_test_witness();
+    let body_proofs = vec![make_membership_proof(&tree, fact_pos)];
 
-    let proof = prove_authorization_stark(&witness);
-    if proof.trace_len == 0 {
+    let proof = prove_authorization_with_membership(&witness, &body_proofs);
+    if proof.derivation_proof.trace_len == 0 {
         return Err("custom STARK proof should have non-zero trace".into());
     }
 
     let conclusion = witness.conclusion();
     let acc_hash = witness.final_accumulated_hash();
-    verify_authorization_stark(conclusion, acc_hash, &proof)
+    let expected_hashes = body_fact_hashes_from_witness(&witness);
+    verify_authorization_with_membership(&proof, conclusion, acc_hash, &expected_hashes)
         .map_err(|e| format!("custom STARK verification failed: {e}"))?;
 
     Ok(())
 }
 
 fn check_plonky3_backend() -> Result<(), String> {
-    // Plonky3 backend is available when the `plonky3` feature is enabled (default).
-    // We use the plonky3_prover path if available.
     #[cfg(feature = "plonky3")]
     {
-        // The Plonky3 prover is exercised via dregg_circuit::plonky3_prover
-        // which provides prove/verify for the same AIR. For the preflight,
-        // we verify the feature compiles and the STARK path (which uses
-        // Plonky3-compatible field arithmetic) works.
-        let (witness, _) = build_test_witness();
-        let proof = prove_authorization_stark(&witness);
+        let (witness, _, tree, fact_pos) = build_test_witness();
+        let body_proofs = vec![make_membership_proof(&tree, fact_pos)];
+        let proof = prove_authorization_with_membership(&witness, &body_proofs);
         let conclusion = witness.conclusion();
         let acc_hash = witness.final_accumulated_hash();
-        verify_authorization_stark(conclusion, acc_hash, &proof)
+        let expected_hashes = body_fact_hashes_from_witness(&witness);
+        verify_authorization_with_membership(&proof, conclusion, acc_hash, &expected_hashes)
             .map_err(|e| format!("plonky3-compatible STARK failed: {e}"))?;
         return Ok(());
     }
 
     #[cfg(not(feature = "plonky3"))]
     {
-        // Feature not enabled; this is acceptable for minimal builds.
-        // The check passes as "not applicable" rather than failing.
         Ok(())
     }
 }
 
 fn check_kimchi_backend() -> Result<(), String> {
-    // Kimchi (Mina) backend requires the `mina` feature on dregg-circuit.
-    // When available, we exercise the Kimchi prover for the same logical circuit.
     #[cfg(feature = "mina")]
     {
-        // The Kimchi backend is exercised via dregg_circuit::backends::mina
-        // For the preflight, we verify our custom STARK produces valid proofs
-        // that would have the same semantic content as a Kimchi proof.
-        let (witness, _) = build_test_witness();
-        let proof = prove_authorization_stark(&witness);
+        let (witness, _, tree, fact_pos) = build_test_witness();
+        let body_proofs = vec![make_membership_proof(&tree, fact_pos)];
+        let proof = prove_authorization_with_membership(&witness, &body_proofs);
         let conclusion = witness.conclusion();
         let acc_hash = witness.final_accumulated_hash();
-        verify_authorization_stark(conclusion, acc_hash, &proof)
+        let expected_hashes = body_fact_hashes_from_witness(&witness);
+        verify_authorization_with_membership(&proof, conclusion, acc_hash, &expected_hashes)
             .map_err(|e| format!("kimchi-equivalent STARK failed: {e}"))?;
         return Ok(());
     }
@@ -142,9 +168,6 @@ fn check_kimchi_backend() -> Result<(), String> {
 }
 
 fn check_pickles_recursive() -> Result<(), String> {
-    // Recursive STARK verification (Pickles-style wrapping) is available
-    // via the recursion feature. For the preflight, we verify IVC which
-    // is the recursive proof composition mechanism.
     use dregg_circuit::fold_air::{FoldWitness, compute_test_checks_commitment};
     use dregg_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
 

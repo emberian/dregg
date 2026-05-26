@@ -38,7 +38,7 @@ fn check_mina_state_advance() -> Result<(), String> {
     };
 
     // Submit the state advance.
-    submit_state_advance(&mut state, advance.clone());
+    let _ = submit_state_advance(&mut state, advance.clone());
 
     // Verify it's pending.
     if state.pending_advances.is_empty() {

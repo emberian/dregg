@@ -838,7 +838,8 @@ impl AccumulatorBackend for Plonky3Backend {
     type AccumulatorProof = Plonky3Proof;
 
     fn prove_non_membership(input: &AccumulatorInput) -> Result<Self::AccumulatorProof, String> {
-        use crate::accumulator_air::{ExtElem, prove_accumulator_non_revocation};
+        use crate::accumulator_types::ExtElem;
+        use crate::dsl::accumulator::prove_accumulator_non_revocation;
 
         let ancestor_hashes: Vec<BabyBear> = input
             .ancestor_hashes
@@ -905,7 +906,8 @@ impl AccumulatorBackend for Plonky3Backend {
 
         let stark_proof = deserialize_stark_proof(&proof.proof_bytes)?;
 
-        use crate::accumulator_air::{ExtElem, verify_accumulator_non_revocation};
+        use crate::accumulator_types::ExtElem;
+        use crate::dsl::accumulator::verify_accumulator_non_revocation;
 
         let acc = ExtElem([
             BabyBear::new(accumulator[0] as u32),

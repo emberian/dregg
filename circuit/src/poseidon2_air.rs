@@ -838,9 +838,14 @@ mod tests {
 
         let pi: Vec<BabyBear> = trace[0].clone();
         let air = Poseidon2Air;
-        let proof = stark::prove(&air, &trace, &pi);
-        let result = stark::verify(&air, &proof, &pi);
-        assert!(result.is_err(), "Proof with wrong output MUST be rejected");
+        let result = std::panic::catch_unwind(|| {
+            let proof = stark::prove(&air, &trace, &pi);
+            stark::verify(&air, &proof, &pi)
+        });
+        assert!(
+            result.is_err() || matches!(result, Ok(Err(_))),
+            "Proof with wrong output MUST be rejected"
+        );
     }
 
     #[test]

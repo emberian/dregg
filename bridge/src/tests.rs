@@ -14,7 +14,7 @@ use dregg_trace::Conclusion;
 use crate::authorize::{self, AuthError};
 use crate::convert::macaroon_to_factset;
 use crate::delta::{compute_fold_delta, further_attenuation_delta, initial_attenuation_delta};
-use crate::present::{BridgePresentationBuilder, verify_presentation_bb};
+use crate::present::{BridgePresentationBuilder, UnsafeLocalOnlyMarker, verify_presentation_bb};
 
 // ============================================================================
 // Test helpers
@@ -217,7 +217,10 @@ fn test_end_to_end_denial() {
         ..Default::default()
     };
 
-    let result = builder.prove_fast(&request);
+    let result = builder.prove_local_constraint_check_only(
+        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+        &request,
+    );
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), AuthError::Denied);
 }
@@ -410,7 +413,10 @@ fn test_service_scoped_full_pipeline() {
         ..Default::default()
     };
 
-    let proof = builder.prove_fast(&request);
+    let proof = builder.prove_local_constraint_check_only(
+        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+        &request,
+    );
     assert!(
         proof.is_ok(),
         "Service-scoped proof should succeed: {:?}",
@@ -446,7 +452,10 @@ fn test_unrestricted_token_proof() {
         ..Default::default()
     };
 
-    let proof = builder.prove_fast(&request);
+    let proof = builder.prove_local_constraint_check_only(
+        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+        &request,
+    );
     assert!(
         proof.is_ok(),
         "Unrestricted proof should succeed: {:?}",
@@ -538,7 +547,12 @@ fn test_presentation_air_full_verification() {
         ..Default::default()
     };
 
-    let proof = builder.prove_fast(&request).unwrap();
+    let proof = builder
+        .prove_local_constraint_check_only(
+            &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+            &request,
+        )
+        .unwrap();
 
     // Verify individual sub-proofs.
     assert!(!proof.circuit_proof.fold_proofs.is_empty());
@@ -580,7 +594,12 @@ fn test_proof_metadata() {
         ..Default::default()
     };
 
-    let proof = builder.prove_fast(&request).unwrap();
+    let proof = builder
+        .prove_local_constraint_check_only(
+            &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+            &request,
+        )
+        .unwrap();
 
     assert_eq!(proof.chain_length, 3); // root + 2 attenuations
     assert_ne!(proof.final_state_root, [0u8; 32]);
@@ -617,7 +636,12 @@ fn test_deterministic_verification() {
             ..Default::default()
         };
 
-        builder.prove_fast(&request).unwrap()
+        builder
+            .prove_local_constraint_check_only(
+                &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+                &request,
+            )
+            .unwrap()
     };
 
     let proof1 = build_and_prove();

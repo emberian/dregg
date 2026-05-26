@@ -12,7 +12,7 @@
 //! that the presenter is authorized by *some* member of a known federation.
 
 use dregg_bridge::BridgePresentationBuilder;
-use dregg_bridge::present::{bytes_to_babybear, hash_index, verify_presentation};
+use dregg_bridge::present::{bytes_to_babybear, hash_index, verify_presentation_bb};
 use dregg_circuit::BabyBear;
 use dregg_circuit::poseidon2;
 use dregg_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
@@ -231,7 +231,10 @@ fn main() {
     // Verify the presentation proof.
     // SECURITY: Org B uses its own copy of Org A's federation root (shared out-of-band),
     // NOT the proof's embedded root. Using proof.federation_root would be circular.
-    let is_valid = verify_presentation(&presentation, &org_a_federation_root_bytes);
+    let is_valid = verify_presentation_bb(
+        &presentation,
+        bytes_to_babybear(&org_a_federation_root_bytes),
+    );
     println!(
         "  Presentation valid: {} [{}]",
         is_valid,

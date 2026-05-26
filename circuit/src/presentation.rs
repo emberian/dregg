@@ -26,8 +26,7 @@ use crate::ivc::{FoldDelta, IvcPresentationProof, prove_ivc};
 use crate::merkle_air::{MerkleAir, MerkleLevelWitness, MerkleWitness};
 use crate::multi_step_air;
 use crate::poseidon2::hash_fact;
-#[allow(deprecated)]
-use crate::stark::{self, MerkleStarkAir, StarkProof};
+use crate::stark::{self, StarkProof};
 use crate::temporal_predicate_dsl::{TemporalPredicateProof, verify_temporal_predicate};
 
 /// The complete presentation witness (all private data).
@@ -601,85 +600,9 @@ impl PresentationAir {
         })
     }
 
-    /// Generate a real STARK-backed presentation proof using linear algebraic binding.
-    ///
-    /// **DEPRECATED**: This uses the unsound `MerkleStarkAir` (linear sum binding,
-    /// trivially forgeable). Retained only for tests / `prove_linear` bench paths.
-    /// All production callers MUST use [`prove_stark_poseidon2`](Self::prove_stark_poseidon2)
-    /// which binds the Merkle path with collision-resistant Poseidon2.
-    #[deprecated(
-        note = "Uses linear-binding MerkleStarkAir which is provably unsound. Call prove_stark_poseidon2 instead."
-    )]
-    #[allow(deprecated)]
-    pub fn prove_stark(&self) -> Option<RealPresentationProof> {
-        let w = &self.witness;
-
-        // 1. Prove each fold step (constraint-checked — fold traces are small)
-        let mut fold_proofs = Vec::new();
-        for fold_witness in &w.fold_chain {
-            let fold_air = FoldAir::new(fold_witness.clone());
-            let result = ConstraintProver::verify(&fold_air);
-            if !result.is_valid() {
-                return None;
-            }
-            let proof = ConstraintProof::generate(&fold_air)?;
-            fold_proofs.push(proof);
-        }
-
-        // 2. Prove the derivation (constraint-checked — derivation traces are 1-2 rows)
-        let derivation_air = DerivationAir::new(w.derivation.clone());
-        let deriv_result = ConstraintProver::verify(&derivation_air);
-        if !deriv_result.is_valid() {
-            return None;
-        }
-        let derivation_proof = ConstraintProof::generate(&derivation_air)?;
-
-        // 3. Prove issuer membership with REAL STARK proof.
-        // The STARK uses MerkleStarkAir (algebraic binding constraint) rather
-        // than MerkleAir (Poseidon2). The witness must be built with algebraic
-        // binding (use `create_stark_compatible_witness()`).
-        // No mock prover check here — the STARK prover validates constraints
-        // directly via the polynomial commitment scheme.
-        let merkle_stark_proof = generate_merkle_stark_proof(&w.issuer_membership)?;
-
-        // Compute public inputs — roots stay private, tag is public.
-        let final_root = if let Some(last_fold) = w.fold_chain.last() {
-            last_fold.new_root
-        } else {
-            w.derivation.state_root
-        };
-
-        let presentation_tag = crate::binding::compute_presentation_tag_narrow(
-            final_root,
-            w.presentation_randomness,
-            w.verifier_nonce,
-        );
-
-        let public_inputs = PresentationPublicInputs {
-            federation_root: w.federation_root,
-            request_predicate: w.request_predicate,
-            timestamp: w.timestamp,
-            presentation_tag,
-            revealed_facts_commitment: w.revealed_facts_commitment,
-            composition_commitment: w.composition_commitment,
-            verifier_nonce: w.verifier_nonce,
-            verifier_block_height: w.verifier_block_height,
-        };
-
-        Some(RealPresentationProof {
-            public_inputs,
-            fold_proofs,
-            derivation_proof,
-            issuer_membership_stark_proof: merkle_stark_proof,
-            fold_stark_proofs: vec![],
-            derivation_stark_proof: None,
-            temporal_proofs: Vec::new(),
-        })
-    }
-
     /// Generate a real STARK-backed presentation proof using Poseidon2 hashing.
     ///
-    /// Unlike `prove_stark()` which uses linear algebraic binding,
+    /// Unlike the deprecated linear-binding path which used algebraic sum binding,
     /// this method uses actual Poseidon2 hash constraints for the issuer membership
     /// proof, providing collision-resistant Merkle membership in the federation.
     ///
@@ -1364,99 +1287,6 @@ impl RealPresentationProof {
     }
 }
 
-/// Generate a real STARK proof for a Merkle membership witness.
-///
-/// **DEPRECATED**: Uses the unsound `MerkleStarkAir` (linear sum binding,
-/// trivially forgeable). Retained only for test paths that exercise the legacy
-/// linear AIR. New code MUST use `generate_merkle_poseidon2_stark_proof` instead,
-/// which binds via collision-resistant Poseidon2 hashing (the DSL
-/// `merkle_poseidon2_circuit`).
-///
-/// Converts the MerkleWitness into the format expected by the legacy STARK prover
-/// (MerkleStarkAir trace layout: [current, sib0, sib1, sib2, position, parent]).
-///
-/// The MerkleStarkAir uses an algebraic binding constraint:
-///   parent = current + sib0 + sib1 + sib2 + position
-/// The witness's `expected_root` must be computed using this algebraic binding
-/// (not Poseidon2). Use `create_stark_compatible_witness()` to build such a witness.
-#[deprecated(
-    note = "Uses linear-binding MerkleStarkAir which is provably unsound. Call generate_merkle_poseidon2_stark_proof instead."
-)]
-#[allow(deprecated)]
-fn generate_merkle_stark_proof(witness: &MerkleWitness) -> Option<StarkProof> {
-    let depth = witness.levels.len();
-    if depth < 2 {
-        return None;
-    }
-
-    let mut siblings_u32: Vec<[u32; 3]> = Vec::with_capacity(depth);
-    let mut positions_u32: Vec<u32> = Vec::with_capacity(depth);
-
-    // Collect the witness data for generate_merkle_trace
-    for level in &witness.levels {
-        siblings_u32.push([
-            level.siblings[0].0,
-            level.siblings[1].0,
-            level.siblings[2].0,
-        ]);
-        positions_u32.push(level.position as u32);
-    }
-
-    // Use stark::generate_merkle_trace which builds the algebraic binding trace
-    let (trace, public_inputs) =
-        stark::generate_merkle_trace(witness.leaf_hash.0, &siblings_u32, &positions_u32);
-
-    // The trace's computed root (public_inputs[1]) must match the witness's expected_root
-    if public_inputs.len() < 2 || public_inputs[1] != witness.expected_root {
-        return None;
-    }
-
-    if trace.len() < 2 {
-        return None;
-    }
-
-    // Generate the STARK proof
-    let air = MerkleStarkAir;
-    let proof = stark::prove(&air, &trace, &public_inputs);
-
-    // Sanity check: verify our own proof
-    match stark::verify(&air, &proof, &public_inputs) {
-        Ok(()) => Some(proof),
-        Err(_) => None,
-    }
-}
-
-/// Create a Merkle witness that is compatible with the STARK prover.
-///
-/// This builds the witness using the algebraic binding constraint:
-///   parent = current + sib0 + sib1 + sib2 + position
-/// which matches `MerkleStarkAir`. Use this instead of `create_test_witness`
-/// when building proofs for `prove_stark()`.
-pub fn create_stark_compatible_witness(leaf_hash: BabyBear, depth: usize) -> MerkleWitness {
-    let mut current = leaf_hash;
-    let mut levels = Vec::with_capacity(depth);
-
-    for i in 0..depth {
-        let position = (i % 4) as u8;
-        let siblings = [
-            BabyBear::new((i * 3 + 1) as u32),
-            BabyBear::new((i * 3 + 2) as u32),
-            BabyBear::new((i * 3 + 3) as u32),
-        ];
-        // Use algebraic binding: parent = current + sib0 + sib1 + sib2 + position
-        let parent =
-            current + siblings[0] + siblings[1] + siblings[2] + BabyBear::new(position as u32);
-        levels.push(MerkleLevelWitness { position, siblings });
-        current = parent;
-    }
-
-    MerkleWitness {
-        leaf_hash,
-        levels,
-        expected_root: current,
-    }
-}
-
 /// Generate a real STARK proof for Merkle membership using Poseidon2 hashing.
 ///
 /// This uses the DSL `merkle_poseidon2_circuit()` with hash_fact-based constraints,
@@ -1667,7 +1497,7 @@ pub fn generate_blinded_merkle_poseidon2_stark_proof(
 ///
 /// This builds the witness using `hash_fact(current, [sib0, sib1, sib2, position])` at each level,
 /// making it compatible with the DSL `merkle_poseidon2_circuit()`.
-/// Use this instead of `create_stark_compatible_witness` for production proofs.
+/// Build a Merkle witness compatible with the Poseidon2 STARK prover.
 pub fn create_poseidon2_compatible_witness(leaf_hash: BabyBear, depth: usize) -> MerkleWitness {
     use crate::poseidon2::hash_4_to_1;
 
@@ -1996,18 +1826,17 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn presentation_real_stark_tampered_federation_root_fails() {
+    fn presentation_poseidon2_stark_tampered_federation_root_fails() {
         let mut witness = create_test_presentation();
-        let stark_issuer = create_stark_compatible_witness(BabyBear::new(42424242), 8);
-        witness.issuer_membership = stark_issuer;
+        let poseidon2_issuer = create_poseidon2_compatible_witness(BabyBear::new(42424242), 8);
+        witness.issuer_membership = poseidon2_issuer;
         witness.federation_root = witness.issuer_membership.expected_root;
         // Non-zero composition commitment required for verification
         witness.composition_commitment =
             crate::binding::WideHash::from_poseidon2("test-composition", &[BabyBear::new(777777)]);
 
         let air = PresentationAir::new(witness);
-        let mut proof = air.prove_stark().unwrap();
+        let mut proof = air.prove_stark_poseidon2().unwrap();
 
         // Tamper: change federation root in public inputs
         proof.public_inputs.federation_root = BabyBear::new(999999);
@@ -2021,15 +1850,14 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn presentation_real_stark_has_real_proof_bytes() {
+    fn presentation_poseidon2_stark_has_real_proof_bytes() {
         let mut witness = create_test_presentation();
-        let stark_issuer = create_stark_compatible_witness(BabyBear::new(42424242), 8);
-        witness.issuer_membership = stark_issuer;
+        let poseidon2_issuer = create_poseidon2_compatible_witness(BabyBear::new(42424242), 8);
+        witness.issuer_membership = poseidon2_issuer;
         witness.federation_root = witness.issuer_membership.expected_root;
 
         let air = PresentationAir::new(witness);
-        let proof = air.prove_stark().unwrap();
+        let proof = air.prove_stark_poseidon2().unwrap();
 
         // The STARK proof should be real bytes (not simulated)
         let stark_bytes = crate::stark::proof_to_bytes(&proof.issuer_membership_stark_proof);
@@ -2039,14 +1867,15 @@ mod tests {
             stark_bytes.len()
         );
 
-        // Verify it can roundtrip
+        // Verify it can roundtrip against the DSL circuit
         let deserialized = crate::stark::proof_from_bytes(&stark_bytes).unwrap();
         let pi: Vec<BabyBear> = deserialized
             .public_inputs
             .iter()
             .map(|&v| BabyBear::new_canonical(v))
             .collect();
-        let result = crate::stark::verify(&crate::stark::MerkleStarkAir, &deserialized, &pi);
+        let circuit = crate::dsl::descriptors::merkle_poseidon2_circuit();
+        let result = crate::stark::verify(&circuit, &deserialized, &pi);
         assert!(result.is_ok(), "Deserialized STARK should verify");
     }
 
@@ -2178,19 +2007,18 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn presentation_zero_composition_commitment_rejected() {
         // A proof with composition_commitment == ZERO must be rejected by verifiers.
         // This prevents sub-proof mix-and-match attacks.
         let mut witness = create_test_presentation();
-        let stark_issuer = create_stark_compatible_witness(BabyBear::new(42424242), 8);
-        witness.issuer_membership = stark_issuer;
+        let poseidon2_issuer = create_poseidon2_compatible_witness(BabyBear::new(42424242), 8);
+        witness.issuer_membership = poseidon2_issuer;
         witness.federation_root = witness.issuer_membership.expected_root;
         // Explicitly leave composition_commitment at ZERO (the default)
         witness.composition_commitment = crate::binding::WideHash::ZERO;
 
         let air = PresentationAir::new(witness);
-        let proof = air.prove_stark().unwrap();
+        let proof = air.prove_stark_poseidon2().unwrap();
 
         // Verification must reject: zero composition commitment is not allowed
         let verification = proof.verify();

@@ -13,7 +13,7 @@ use dregg_cell::note::Note;
 use dregg_cell::nullifier_set::NullifierSet;
 use dregg_circuit::{
     BabyBear,
-    note_spending_air::{
+    dsl::note_spending::{
         create_test_witness, key_to_field_elements, prove_note_spend, verify_note_spend,
     },
     stark,

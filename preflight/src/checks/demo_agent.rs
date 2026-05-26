@@ -127,8 +127,8 @@ fn run_example(name: &str) -> Result<(), String> {
 
     std::thread::spawn(move || {
         // Collect stdout/stderr while waiting (prevents pipe-full deadlock).
-        let mut stdout_buf = Vec::new();
-        let mut stderr_buf = Vec::new();
+        let stdout_buf;
+        let stderr_buf;
 
         // Read both pipes concurrently using two nested threads.
         let (so_tx, so_rx) = mpsc::channel::<Vec<u8>>();

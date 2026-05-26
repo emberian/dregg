@@ -379,10 +379,6 @@ pub struct FulfillIntentRequest {
     pub payer_cell: String,
     /// Hex-encoded 32-byte recipient cell ID (fulfiller's cell).
     pub recipient_cell: String,
-    /// The base fulfillment (serialized).
-    pub fulfillment: serde_json::Value,
-    /// Predicate proofs as (index, proof_bytes_hex) pairs.
-    pub predicate_proofs: Vec<(usize, String)>,
     /// State root (BabyBear field element as u32).
     pub state_root: u32,
     /// Block height at which state root was attested.
@@ -428,8 +424,6 @@ pub struct FastPathCertificateRequest {
     pub turn_hash: String,
     /// Collected validator signatures.
     pub signatures: Vec<FastPathSignatureEntry>,
-    /// Optional STARK proof (hex-encoded).
-    pub proof_bytes: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -548,8 +542,6 @@ pub struct UpdateCommitmentRequest {
     pub old_commitment: String,
     /// Hex-encoded 32-byte new commitment.
     pub new_commitment: String,
-    /// Optional hex-encoded STARK proof of the transition (future use).
-    pub transition_proof: Option<String>,
     /// Hex-encoded 64-byte Ed25519 signature proving ownership.
     /// Signs `cell_id || old_commitment || new_commitment`.
     pub signature: String,
@@ -1368,10 +1360,19 @@ async fn post_submit_turn(
             });
 
             // Gossip the turn to federation peers (only if gossip is active).
+            let turn_data_for_gossip = turn_data.clone();
             if let Some(gossip) = state.gossip().await {
                 let hash = turn_hash_bytes;
                 tokio::spawn(async move {
-                    gossip.gossip_turn(hash, turn_data).await;
+                    gossip.gossip_turn(hash, turn_data_for_gossip).await;
+                });
+            }
+
+            // Submit the turn to the blocklace for consensus ordering.
+            if let Some(blocklace) = state.blocklace().await {
+                let state_for_blocklace = state.clone();
+                tokio::spawn(async move {
+                    blocklace.submit_turn(&state_for_blocklace, turn_data).await;
                 });
             }
 
@@ -1600,7 +1601,6 @@ async fn get_cell_detail(
                 dregg_cell::CellProgram::Predicate { .. } => "Predicate".to_string(),
                 dregg_cell::CellProgram::Cases { .. } => "Cases".to_string(),
                 dregg_cell::CellProgram::Circuit { .. } => "Circuit".to_string(),
-                _ => "Other".to_string(),
             },
         })),
         None => Ok(Json(CellDetailResponse {
@@ -3673,7 +3673,6 @@ async fn post_discharge(
 struct CreateFromFactoryRequest {
     factory_vk: String,
     owner_pubkey: String,
-    initial_balance: Option<u64>,
     token_id: Option<String>,
     /// Hex-encoded 8-byte nonce, included in the signed message (F-P1-2).
     nonce: String,
@@ -3879,8 +3878,6 @@ struct BearerAuthRequest {
     bearer_proof: serde_json::Value,
     /// Hex-encoded 32-byte target cell ID.
     target_cell: String,
-    /// Action being authorized (for logging/audit; actual permissions come from proof).
-    action: String,
 }
 
 #[derive(Serialize)]
@@ -3947,7 +3944,6 @@ struct PeerExchangeRequest {
     sender_cell: String,
     receiver_cell: String,
     amount: u64,
-    proof_commitment: Option<String>,
 }
 
 #[derive(Serialize)]

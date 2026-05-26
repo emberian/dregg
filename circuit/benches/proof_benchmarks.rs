@@ -6,13 +6,13 @@
 //! Run with: `cargo bench -p dregg-circuit --bench proof_benchmarks`
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use dregg_circuit::dsl::verify_authorization_dsl;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::ivc::{
     FoldDelta, create_test_chain, prove_ivc, prove_ivc_stark, verify_ivc, verify_ivc_stark,
 };
 use dregg_circuit::multi_step_air::{
     MultiStepStarkAir, MultiStepWitness, build_multi_step_witness, prove_authorization_stark,
-    verify_authorization_stark,
 };
 use dregg_circuit::note_spending_air::{
     NoteSpendingAir, NoteSpendingWitness, create_test_witness as create_note_witness,
@@ -316,7 +316,7 @@ fn bench_multi_step_derivation(c: &mut Criterion) {
             BenchmarkId::new("verify", format!("{steps}_steps")),
             &(proof.clone(), conclusion, acc_hash),
             |b, (p, conc, ah)| {
-                b.iter(|| black_box(verify_authorization_stark(*conc, *ah, p).unwrap()));
+                b.iter(|| black_box(verify_authorization_dsl(*conc, *ah, p).unwrap()));
             },
         );
 
@@ -661,7 +661,7 @@ fn bench_full_authorization_pipeline(c: &mut Criterion) {
             // Deserialize
             let proof2 = stark::proof_from_bytes(&bytes).unwrap();
             // Verify
-            let result = verify_authorization_stark(conclusion, acc_hash, &proof2);
+            let result = verify_authorization_dsl(conclusion, acc_hash, &proof2);
             black_box(result.unwrap());
         });
     });
@@ -683,7 +683,7 @@ fn bench_full_authorization_pipeline(c: &mut Criterion) {
     });
 
     group.bench_function("verify_8step", |b| {
-        b.iter(|| black_box(verify_authorization_stark(conclusion, acc_hash, &proof).unwrap()));
+        b.iter(|| black_box(verify_authorization_dsl(conclusion, acc_hash, &proof).unwrap()));
     });
 
     eprintln!(

@@ -3,12 +3,6 @@ name: Deploy Dregg site to GitHub Pages
 on:
   push:
     branches: [main]
-    paths:
-      - "site/**"
-      - "wasm/**"
-      - "paper/**"
-      - "extension/**"
-      - ".github/workflows/pages.yml"
   workflow_run:
     # Re-deploy whenever demos.yml finishes so the site picks up fresh
     # site/demos/results.json. demos.yml itself does not deploy.

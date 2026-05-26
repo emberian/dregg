@@ -12,11 +12,6 @@ use std::net::SocketAddr;
 use dregg_cell::CellId;
 use dregg_turn::RoutingDirective;
 
-/// Maximum number of route entries per cell (Issue 4: prevent memory exhaustion).
-const MAX_ROUTES_PER_CELL: usize = 32;
-/// Maximum total route entries across all cells (Issue 4: prevent memory exhaustion).
-const MAX_TOTAL_ROUTES: usize = 100_000;
-
 /// A single route entry describing how to reach a cell.
 #[derive(Clone, Debug)]
 pub struct RouteEntry {
@@ -36,10 +31,6 @@ pub struct RouteEntry {
 /// Error returned when a routing directive is rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoutingError {
-    /// The table has reached its total capacity.
-    TableFull,
-    /// This cell already has the maximum number of routes.
-    CellFull,
     /// The directive's authorizing turn is a null hash (all zeros).
     NullAuthorizingTurn,
 }
@@ -79,19 +70,6 @@ impl RoutingTable {
         // Issue 5: Reject directives with null authorizing_turn hash.
         if directive.authorizing_turn == [0u8; 32] {
             return Err(RoutingError::NullAuthorizingTurn);
-        }
-
-        // Issue 4: Reject when total routes exceed the global limit.
-        if self.total_entries >= MAX_TOTAL_ROUTES {
-            return Err(RoutingError::TableFull);
-        }
-
-        // Issue 4: Reject when per-cell limit is reached.
-        let cell_entries = self.routes.get(&directive.target);
-        if let Some(entries) = cell_entries {
-            if entries.len() >= MAX_ROUTES_PER_CELL {
-                return Err(RoutingError::CellFull);
-            }
         }
 
         let now = std::time::SystemTime::now()
@@ -317,35 +295,6 @@ mod tests {
         let result = table.apply_directive(&directive, peer);
         assert_eq!(result, Err(RoutingError::NullAuthorizingTurn));
         assert_eq!(table.len(), 0);
-    }
-
-    #[test]
-    fn test_per_cell_limit() {
-        let mut table = RoutingTable::new();
-
-        for i in 0..MAX_ROUTES_PER_CELL {
-            let peer: SocketAddr = format!("192.168.1.{}:9000", i % 255 + 1).parse().unwrap();
-            let directive = RoutingDirective {
-                sender: make_cell_id(i as u8),
-                target: make_cell_id(99), // same target
-                authorizing_turn: [0xAA; 32],
-                expires: None,
-            };
-            table.apply_directive(&directive, peer).unwrap();
-        }
-
-        // Next one for the same cell should fail.
-        let peer: SocketAddr = "10.0.0.1:9000".parse().unwrap();
-        let directive = RoutingDirective {
-            sender: make_cell_id(200),
-            target: make_cell_id(99),
-            authorizing_turn: [0xBB; 32],
-            expires: None,
-        };
-        assert_eq!(
-            table.apply_directive(&directive, peer),
-            Err(RoutingError::CellFull)
-        );
     }
 
     #[test]

@@ -12,11 +12,11 @@ use dregg_bridge::present::{
     BridgePresentationBuilder, bytes_to_babybear, hash_index, verify_presentation_bb,
     verify_presentation_complete,
 };
+use dregg_circuit::dsl::verify_authorization_dsl;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::ivc::{create_test_chain, prove_ivc_stark, verify_ivc_stark};
 use dregg_circuit::multi_step_air::{
     ALLOW_PREDICATE, MultiStepWitness, build_multi_step_witness, prove_authorization_stark,
-    verify_authorization_stark,
 };
 use dregg_circuit::poseidon2;
 use dregg_circuit::stark::{proof_from_bytes, proof_to_bytes};
@@ -309,7 +309,7 @@ fn bench_proof_verification(c: &mut Criterion) {
 
         group.bench_function("verify_derivation_stark_4step", |b| {
             b.iter(|| {
-                black_box(verify_authorization_stark(conclusion, acc_hash, &stark_proof).unwrap());
+                black_box(verify_authorization_dsl(conclusion, acc_hash, &stark_proof).unwrap());
             });
         });
 

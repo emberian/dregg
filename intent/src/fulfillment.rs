@@ -24,9 +24,8 @@ use dregg_cell::CellId;
 use dregg_cell::Ledger;
 use dregg_circuit::BabyBear;
 use dregg_circuit::compute_action_binding_narrow;
-use dregg_circuit::multi_step_air::{
-    MultiStepWitness, pi, prove_authorization_stark, verify_authorization_stark,
-};
+use dregg_circuit::dsl::verify_authorization_dsl;
+use dregg_circuit::multi_step_air::{MultiStepWitness, pi, prove_authorization_stark};
 use dregg_circuit::stark;
 use dregg_circuit::{PredicateProof, PredicateType, verify_predicate};
 use dregg_token::{Attenuation, AuthToken, MacaroonToken};
@@ -308,7 +307,7 @@ pub fn verify_fulfillment_with_key(
                 ));
             }
 
-            verify_authorization_stark(conclusion, accumulated_hash, &proof)
+            verify_authorization_dsl(conclusion, accumulated_hash, &proof)
                 .map_err(|e| FulfillmentError::ProofVerificationFailed(e))?;
 
             // SECURITY: Verify the proof is bound to THIS intent's requirements.
@@ -1500,7 +1499,7 @@ mod tests {
             BabyBear::ONE,
             "proof conclusion should be ALLOW"
         );
-        assert!(verify_authorization_stark(conclusion, acc_hash, &proof).is_ok());
+        assert!(verify_authorization_dsl(conclusion, acc_hash, &proof).is_ok());
     }
 
     #[test]
@@ -1946,7 +1945,7 @@ mod tests {
         let proof = stark::proof_from_bytes(&proof_bytes).unwrap();
 
         // Verify with known-good public inputs
-        let result = verify_authorization_stark(conclusion, acc_hash, &proof);
+        let result = verify_authorization_dsl(conclusion, acc_hash, &proof);
         assert!(
             result.is_ok(),
             "deserialized proof should verify: {:?}",

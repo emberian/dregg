@@ -243,6 +243,8 @@ pub struct NodeStateInner {
     /// longer a separate runtime mode enum — the presence of this state
     /// (and the inner `is_solo` flag) is the operational signal.
     pub solo_consensus: Option<dregg_federation::solo::SoloConsensusState>,
+    /// Blocklace consensus handle (set after federation sync starts).
+    pub blocklace_handle: Option<crate::blocklace_sync::BlocklaceHandle>,
 }
 
 /// Maximum number of events retained in the ring buffer for REST polling.
@@ -278,15 +280,6 @@ pub struct ActiveProposal {
 
 /// Default proposal expiry: coordinators older than this are garbage-collected.
 pub const PROPOSAL_EXPIRY_SECS: u64 = 120;
-
-/// Summary of the node's sync state for the status endpoint.
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct SyncStatus {
-    pub peer_count: usize,
-    pub latest_height: u64,
-    pub revocation_count: u64,
-    pub note_count: u64,
-}
 
 /// Summary of the cipherclerk state for the cipherclerk endpoint.
 #[derive(Clone, Debug, serde::Serialize)]
@@ -481,6 +474,7 @@ impl NodeState {
                 ),
                 event_log: VecDeque::new(),
                 solo_consensus: None,
+                blocklace_handle: None,
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -563,6 +557,7 @@ impl NodeState {
                 ),
                 event_log: VecDeque::new(),
                 solo_consensus: None,
+                blocklace_handle: None,
             })),
             events_tx,
             gossip: Arc::new(RwLock::new(None)),
@@ -577,27 +572,6 @@ impl NodeState {
     /// Acquire a write lock on the inner state.
     pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, NodeStateInner> {
         self.inner.write().await
-    }
-
-    /// Get the current sync status.
-    pub async fn sync_status(&self) -> SyncStatus {
-        let state = self.inner.read().await;
-        let latest_height = state
-            .store
-            .latest_attested_root()
-            .ok()
-            .flatten()
-            .map(|r| r.height)
-            .unwrap_or(0);
-        let revocation_count = state.store.revocation_count().unwrap_or(0);
-        let note_count = state.store.note_count().unwrap_or(0);
-
-        SyncStatus {
-            peer_count: state.peers.len(),
-            latest_height,
-            revocation_count,
-            note_count,
-        }
     }
 
     /// Get the current cipherclerk status.
@@ -632,6 +606,18 @@ impl NodeState {
     pub async fn gossip(&self) -> Option<GossipHandle> {
         let g = self.gossip.read().await;
         g.clone()
+    }
+
+    /// Set the blocklace consensus handle.
+    pub async fn set_blocklace(&self, handle: crate::blocklace_sync::BlocklaceHandle) {
+        let mut s = self.inner.write().await;
+        s.blocklace_handle = Some(handle);
+    }
+
+    /// Get a clone of the blocklace handle, if available.
+    pub async fn blocklace(&self) -> Option<crate::blocklace_sync::BlocklaceHandle> {
+        let s = self.inner.read().await;
+        s.blocklace_handle.clone()
     }
 
     /// Persist critical state before shutdown.

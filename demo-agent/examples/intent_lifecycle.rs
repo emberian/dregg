@@ -377,10 +377,7 @@ fn main() {
             Ok(proof) => {
                 let conclusion = BabyBear(proof.public_inputs[2]);
                 let acc_hash = BabyBear(proof.public_inputs[4]);
-                dregg_circuit::multi_step_air::verify_authorization_stark(
-                    conclusion, acc_hash, &proof,
-                )
-                .is_ok()
+                dregg_circuit::dsl::verify_authorization_dsl(conclusion, acc_hash, &proof).is_ok()
             }
             Err(_) => false,
         }

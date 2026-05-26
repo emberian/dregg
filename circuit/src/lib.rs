@@ -98,10 +98,11 @@ pub mod dsl;
 pub mod field;
 pub mod ivc;
 
+// Shared accumulator types used by both DSL and non-membership modules.
+pub mod accumulator_types;
+
 // Backward-compatible shim modules (type definitions + re-exports from DSL).
 // These contain deprecated StarkAir impls superseded by DSL descriptors.
-#[allow(deprecated)]
-pub mod accumulator_air;
 pub mod arithmetic_predicate_air;
 pub mod block_transition_air;
 pub mod bridge_action_air;
@@ -282,7 +283,6 @@ pub use relational_predicate_air::{
 // Re-export multi-step authorization proving functions.
 pub use multi_step_air::{
     MAX_DELEGATION_DEPTH, prove_authorization_stark, try_prove_authorization_stark,
-    verify_authorization_stark,
 };
 
 /// Backward-compatible module alias for predicate types.

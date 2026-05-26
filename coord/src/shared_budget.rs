@@ -6,9 +6,9 @@
 //! multi-sig account, shared cell) without coordination, as long as the aggregate
 //! spending stays within bounds.
 //!
-//! ## Analogy to BudgetCoordinator
+//! ## Analogy to StingrayCounter
 //!
-//! | BudgetCoordinator (existing) | SharedResourceBudget (this module) |
+//! | StingrayCounter (existing) | SharedResourceBudget (this module) |
 //! |------------------------------|-------------------------------------|
 //! | One agent's budget           | One shared resource's balance       |
 //! | Distributed across silos     | Distributed across agents           |
@@ -213,7 +213,7 @@ impl AgentAllowance {
 
 /// Manages allowance distribution for a single shared resource across multiple agents.
 ///
-/// This is the Tier 2 equivalent of `BudgetCoordinator`: it distributes spending
+/// This is the Tier 2 equivalent of `StingrayCounter`: it distributes spending
 /// rights for a shared resource (AMM pool, multi-sig, etc.) to participating agents.
 /// Each agent can debit locally up to their allowance without coordination.
 ///
@@ -264,7 +264,7 @@ impl SharedResourceBudget {
     /// # Errors
     /// Returns `Err` if `participants.len() < 2 * byzantine_tolerance + 1`.
     ///
-    /// NOTE: The BFT threshold here is 2f+1 (not 3f+1 as in BudgetCoordinator).
+    /// NOTE: The BFT threshold here is 2f+1 (not 3f+1 as in StingrayCounter).
     /// This is because in the shared-resource model, participants ARE the agents
     /// (not replicated nodes). We need a quorum of honest participants to attest
     /// to their spending. With n >= 2f+1, at least f+1 are honest, which suffices
@@ -303,7 +303,7 @@ impl SharedResourceBudget {
     ///
     /// Formula: ceiling = balance * (f+1) / (2f+1)
     ///
-    /// Same formula as BudgetCoordinator. The sum of all ceilings exceeds the true
+    /// Same formula as StingrayCounter. The sum of all ceilings exceeds the true
     /// balance (intentionally) -- this is what allows concurrent local spending.
     /// Safety: with at most f Byzantine agents, the maximum overspend is f * ceiling.
     pub fn compute_allowance_ceiling(&self) -> ResourceAmount {

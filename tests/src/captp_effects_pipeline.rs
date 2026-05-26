@@ -402,8 +402,9 @@ fn test_multi_effect_captp_turn() {
 
     let (trace, public_inputs) = generate_effect_vm_trace(&initial_state, &effects);
 
-    // Trace should have 4 rows (3 effects padded to next power of 2).
-    assert_eq!(trace.len(), 4, "3 effects should pad to 4 rows");
+    // Trace should have at least MIN_TRACE_HEIGHT rows (64, closing FRI
+    // single-row-gap soundness issue task #90).
+    assert_eq!(trace.len(), 64, "3 effects should pad to MIN_TRACE_HEIGHT");
 
     // Verify state threading: after all effects...
     // - Balance: 50000 - 1000 = 49000
@@ -460,7 +461,7 @@ fn test_multi_effect_captp_turn() {
         !proof.query_proofs.is_empty(),
         "proof should have query proofs"
     );
-    assert_eq!(proof.trace_len, 4);
+    assert_eq!(proof.trace_len, 64);
 
     // Verify the single proof covers all three effects.
     let result = stark::verify(&air, &proof, &public_inputs);

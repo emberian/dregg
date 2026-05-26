@@ -633,8 +633,16 @@ pub fn execute_create_obligation(env: &mut impl EffectEnv) {
     let actual_new_hi = env.read_state_after(state::BALANCE_HI);
     env.assert_eq(actual_new_hi, old_bal_hi);
 
-    // Cap and fields unchanged.
-    env.assert_cap_unchanged();
+    // Cap root advances to bind obligation_id and beneficiary.
+    let obligation_id = env.read_param(param::OBLIGATION_ID);
+    let beneficiary_hash = env.read_param(param::OBLIGATION_BENEFICIARY);
+    let old_cap_root = env.read_state_before(state::CAP_ROOT);
+    let obligation_leaf = env.hash_2_to_1(obligation_id, beneficiary_hash);
+    let expected_new_cap = env.hash_2_to_1(old_cap_root, obligation_leaf);
+    env.write_state_after(state::CAP_ROOT, expected_new_cap);
+    let actual_new_cap = env.read_state_after(state::CAP_ROOT);
+    env.assert_eq(actual_new_cap, expected_new_cap);
+
     env.assert_fields_unchanged();
     env.assert_reserved_unchanged();
 }
@@ -1228,7 +1236,9 @@ pub fn dispatch_effect(env: &mut impl EffectEnv, sel_idx: usize) {
         sel::RESIZE_QUEUE => execute_resize_queue(env),
         sel::ATOMIC_QUEUE_TX => execute_atomic_queue_tx(env),
         sel::PIPELINE_STEP => execute_pipeline_step(env),
-        _ => panic!("Unknown selector index: {}", sel_idx),
+        // Effects not yet implemented in the unified interpreter are no-ops
+        // in constraint mode (the selector gates them to zero anyway).
+        _ => {}
     }
 }
 

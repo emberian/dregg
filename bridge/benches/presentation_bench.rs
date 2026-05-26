@@ -1,6 +1,8 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use dregg_bridge::present::{bytes_to_babybear, hash_index};
-use dregg_bridge::{BridgePresentationBuilder, authorize_with_trace, macaroon_to_factset};
+use dregg_bridge::{
+    BridgePresentationBuilder, UnsafeLocalOnlyMarker, authorize_with_trace, macaroon_to_factset,
+};
 use dregg_circuit::BabyBear;
 use dregg_circuit::poseidon2;
 use dregg_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
@@ -80,7 +82,14 @@ fn bench_prove_fast(c: &mut Criterion) {
     c.bench_function("bridge_prove_fast", |b| {
         b.iter(|| {
             let (mut builder, request) = make_builder_and_request();
-            black_box(builder.prove_fast(&request).unwrap());
+            black_box(
+                builder
+                    .prove_local_constraint_check_only(
+                        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+                        &request,
+                    )
+                    .unwrap(),
+            );
         });
     });
 }
@@ -170,7 +179,12 @@ fn bench_end_to_end_cycle(c: &mut Criterion) {
                 action: Some("r".into()),
                 ..Default::default()
             };
-            let proof = builder.prove_fast(&request).unwrap();
+            let proof = builder
+                .prove_local_constraint_check_only(
+                    &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+                    &request,
+                )
+                .unwrap();
 
             // Verify (constraint-checked only, no cryptographic proof)
             black_box(proof.is_constraint_checked());
@@ -180,7 +194,12 @@ fn bench_end_to_end_cycle(c: &mut Criterion) {
 
 fn bench_verify_presentation(c: &mut Criterion) {
     let (mut builder, request) = make_builder_and_request();
-    let proof = builder.prove_fast(&request).unwrap();
+    let proof = builder
+        .prove_local_constraint_check_only(
+            &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+            &request,
+        )
+        .unwrap();
 
     c.bench_function("bridge_verify_presentation", |b| {
         b.iter(|| {

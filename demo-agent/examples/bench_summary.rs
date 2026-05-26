@@ -302,7 +302,7 @@ fn main() {
     // ─── 4. Note spending proof (depth 4, 8) ────────────────────────────────
 
     {
-        use dregg_circuit::note_spending_air::{
+        use dregg_circuit::dsl::note_spending::{
             create_test_witness, prove_note_spend, test_spending_key, verify_note_spend,
         };
 
@@ -351,9 +351,8 @@ fn main() {
     // ─── 5. Multi-step derivation (1, 8, 32 steps) ─────────────────────────
 
     {
-        use dregg_circuit::multi_step_air::{
-            prove_authorization_stark, verify_authorization_stark,
-        };
+        use dregg_circuit::dsl::verify_authorization_dsl;
+        use dregg_circuit::multi_step_air::prove_authorization_stark;
 
         for &steps in &[1usize, 8, 32] {
             let witness = build_witness(steps);
@@ -366,7 +365,7 @@ fn main() {
             let proof = prove_authorization_stark(&witness);
             let d_verify = time_op_avg(
                 || {
-                    let _ = verify_authorization_stark(conclusion, acc_hash, &proof);
+                    let _ = verify_authorization_dsl(conclusion, acc_hash, &proof);
                 },
                 10,
             );
@@ -589,9 +588,8 @@ fn main() {
     // ─── 10. Full pipeline end-to-end ───────────────────────────────────────
 
     {
-        use dregg_circuit::multi_step_air::{
-            prove_authorization_stark, verify_authorization_stark,
-        };
+        use dregg_circuit::dsl::verify_authorization_dsl;
+        use dregg_circuit::multi_step_air::prove_authorization_stark;
 
         let witness = build_witness(8);
         let conclusion = witness.conclusion();
@@ -601,7 +599,7 @@ fn main() {
             let proof = prove_authorization_stark(&witness);
             let bytes = proof_to_bytes(&proof);
             let proof2 = stark::proof_from_bytes(&bytes).unwrap();
-            let _ = verify_authorization_stark(conclusion, acc_hash, &proof2);
+            let _ = verify_authorization_dsl(conclusion, acc_hash, &proof2);
         });
 
         let proof = prove_authorization_stark(&witness);

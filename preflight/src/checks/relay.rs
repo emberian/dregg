@@ -1,4 +1,5 @@
 //! Relay operator checks: bond, host inbox, receive, drain, GC, fees.
+#![allow(deprecated)]
 
 use dregg_storage::QuotaId;
 use dregg_storage::quota::SpaceBank;

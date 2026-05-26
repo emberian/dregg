@@ -7,7 +7,10 @@ use dregg_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
 use dregg_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
 use dregg_circuit::poseidon2::hash_fact;
 use dregg_circuit::stark::proof_from_bytes;
-use dregg_circuit::{BabyBear, prove_authorization_stark, verify_authorization_stark};
+use dregg_circuit::{
+    BabyBear, BodyFactMerkleProof, prove_authorization_with_membership,
+    verify_authorization_with_membership,
+};
 use dregg_commit::poseidon2_tree::Poseidon2MerkleTree;
 use dregg_token::{Attenuation, AuthRequest, MacaroonToken};
 
@@ -134,7 +137,7 @@ fn check_derivation_proof() -> Result<(), String> {
     let app1 = BabyBear::new(2000);
     let read_perm = BabyBear::new(3000);
     let body_fact_hash = hash_fact(has_cap_pred, &[alice, app1, read_perm, BabyBear::ZERO]);
-    tree.append(body_fact_hash);
+    let fact_pos = tree.append(body_fact_hash);
 
     // Add filler leaves
     for i in 1..8u32 {
@@ -187,16 +190,36 @@ fn check_derivation_proof() -> Result<(), String> {
         return Err("witness should conclude ALLOW".into());
     }
 
+    // Generate membership proof for the body fact
+    let mp = tree
+        .prove_membership(fact_pos)
+        .expect("fact must be in tree");
+    let body_proof = BodyFactMerkleProof {
+        fact_hash: mp.leaf,
+        siblings: mp.siblings,
+        positions: mp.positions,
+    };
+
     // Generate the STARK proof for the derivation
-    let stark_proof = prove_authorization_stark(&witness);
-    if stark_proof.trace_len == 0 {
+    let stark_proof = prove_authorization_with_membership(&witness, &[body_proof]);
+    if stark_proof.derivation_proof.trace_len == 0 {
         return Err("derivation proof trace should be non-empty".into());
     }
 
     // Verify
     let conclusion = witness.conclusion();
     let accumulated_hash = witness.final_accumulated_hash();
-    let verify_result = verify_authorization_stark(conclusion, accumulated_hash, &stark_proof);
+    let body_hashes: Vec<BabyBear> = witness
+        .steps
+        .iter()
+        .flat_map(|s| s.body_fact_hashes.clone())
+        .collect();
+    let verify_result = verify_authorization_with_membership(
+        &stark_proof,
+        conclusion,
+        accumulated_hash,
+        &body_hashes,
+    );
     verify_result.map_err(|e| format!("derivation proof verification failed: {e}"))?;
 
     Ok(())

@@ -28,7 +28,7 @@ use dregg_circuit::stark::{self, proof_from_bytes, proof_to_bytes};
 use dregg_circuit::{
     BabyBear, BodyMembershipProof, MultiStepWitness, NoteSpendingAir, NoteSpendingWitness,
     collect_body_fact_hashes, prove_authorization_stark, prove_authorization_with_membership,
-    verify_authorization_stark, verify_authorization_with_membership,
+    verify_authorization_with_membership,
 };
 use dregg_commit::poseidon2_tree::{Poseidon2MerkleTree, commitment_to_field};
 use dregg_dsl_runtime::note_spending::{prove_note_spend, verify_note_spend};

@@ -367,10 +367,31 @@ impl crate::constraint_prover::Air for DerivationAir {
         crate::dsl::derivation::EXTENDED_TRACE_WIDTH
     }
     fn num_public_inputs(&self) -> usize {
-        4
+        5
     }
     fn constraints(&self) -> Vec<crate::constraint_prover::Constraint> {
-        vec![] // Constraints evaluated by DSL runtime
+        let descriptor = crate::dsl::derivation::derivation_circuit_descriptor();
+        let tables = descriptor.lookup_tables.clone();
+        descriptor
+            .constraints
+            .into_iter()
+            .enumerate()
+            .map(|(idx, cexpr)| {
+                let name = if idx == 17 {
+                    // C4: derived_hash_correct — DERIVED_HASH == hash_fact(HEAD_PRED, HEAD_TERM[0..3])
+                    "derived_hash_correct".to_string()
+                } else {
+                    format!("dsl_constraint_{idx}")
+                };
+                let tables = tables.clone();
+                crate::constraint_prover::Constraint {
+                    name,
+                    eval: Box::new(move |local, next, pi| {
+                        cexpr.evaluate_with_tables(local, next.unwrap_or(local), pi, &tables)
+                    }),
+                }
+            })
+            .collect()
     }
     fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
         crate::dsl::derivation::generate_derivation_trace_dsl(&self.witness)

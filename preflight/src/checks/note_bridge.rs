@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Preflight: bridge phase-log + portable-note sanity checks.
 //!
 //! Layer: lightweight. These checks exist so that if any of the

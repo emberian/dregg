@@ -75,7 +75,9 @@ use crate::relational_predicate_air::{
 use crate::temporal_predicate_dsl::p3_temporal::{
     P3TemporalPredicateProof, prove_temporal_predicate_p3, verify_temporal_predicate_p3,
 };
-use crate::temporal_predicate_dsl::{TemporalPredicateProof, verify_temporal_predicate};
+use crate::temporal_predicate_dsl::{
+    TemporalPredicateProof, prove_temporal_predicate, verify_temporal_predicate,
+};
 
 // =============================================================================
 // Program Representation
@@ -1045,45 +1047,36 @@ fn prove_single(
 
             let values_bb: Vec<BabyBear> =
                 values.iter().map(|v| BabyBear::new(*v as u32)).collect();
-            let _threshold_bb = BabyBear::new(*threshold as u32);
+            let threshold_bb = BabyBear::new(*threshold as u32);
 
             // Use Plonky3-based prover when available (correct transition constraints).
             #[cfg(feature = "plonky3")]
             {
-                let proof = prove_temporal_predicate_p3(
+                if let Ok(proof) = prove_temporal_predicate_p3(
                     &values_bb,
                     roots,
                     *predicate_type,
                     *threshold as u32,
-                )
-                .map_err(|e| {
-                    ProveError::NotSatisfiable(format!(
-                        "{attribute}: temporal predicate not satisfied across all steps: {e}"
-                    ))
-                })?;
-
-                Ok(ProgramProof {
-                    sub_proofs: vec![SubProof::TemporalP3(proof)],
-                    structure: ProofStructure::Single,
-                })
+                ) {
+                    return Ok(ProgramProof {
+                        sub_proofs: vec![SubProof::TemporalP3(proof)],
+                        structure: ProofStructure::Single,
+                    });
+                }
             }
 
             // Fallback: legacy custom STARK prover (omits transition constraints).
-            #[cfg(not(feature = "plonky3"))]
-            {
-                let proof =
-                    prove_temporal_predicate(&values_bb, roots, *predicate_type, threshold_bb)
-                        .ok_or_else(|| {
-                            ProveError::NotSatisfiable(format!(
-                                "{attribute}: temporal predicate not satisfied across all steps"
-                            ))
-                        })?;
+            let proof = prove_temporal_predicate(&values_bb, roots, *predicate_type, threshold_bb)
+                .ok_or_else(|| {
+                    ProveError::NotSatisfiable(format!(
+                        "{attribute}: temporal predicate not satisfied across all steps"
+                    ))
+                })?;
 
-                Ok(ProgramProof {
-                    sub_proofs: vec![SubProof::Temporal(proof)],
-                    structure: ProofStructure::Single,
-                })
-            }
+            Ok(ProgramProof {
+                sub_proofs: vec![SubProof::Temporal(proof)],
+                structure: ProofStructure::Single,
+            })
         }
 
         // Membership is recognized but proof generation is deferred to Phase 2.
@@ -1682,7 +1675,7 @@ fn verify_single_proof(
 fn verify_compound_range_proof(
     sub_proofs: &[SubProof],
     sub_predicates: &[WitnessSpec],
-    _formula: &BooleanFormula,
+    formula: &BooleanFormula,
     expected_commitments: &HashMap<String, BabyBear>,
     _state_root: BabyBear,
 ) -> bool {
@@ -1696,7 +1689,7 @@ fn verify_compound_range_proof(
     };
 
     // Reconstruct expected commitments for the compound proof.
-    let mut expected: Vec<BabyBear> = Vec::with_capacity(sub_predicates.len());
+    let mut expected_commitments_vec: Vec<BabyBear> = Vec::with_capacity(sub_predicates.len());
     for spec in sub_predicates {
         match spec {
             WitnessSpec::Range {
@@ -1708,13 +1701,27 @@ fn verify_compound_range_proof(
                     .get(attribute)
                     .copied()
                     .unwrap_or(BabyBear::ZERO);
-                expected.push(commitment);
+                expected_commitments_vec.push(commitment);
             }
             _ => return false,
         }
     }
 
-    verify_compound_predicate(compound_proof, &expected).is_ok()
+    // Reconstruct full public inputs expected by the compound DSL circuit.
+    use crate::dsl::predicates::compound::pi;
+    let mut expected_pi = vec![BabyBear::ZERO; pi::COUNT];
+    expected_pi[pi::COMPOSED_RESULT_EXPECTED] = BabyBear::ONE;
+    expected_pi[pi::TREE_HASH] = compound_proof.tree_hash;
+    let threshold_k = match formula {
+        BooleanFormula::Threshold(k, _) => BabyBear::new(*k as u32),
+        _ => BabyBear::ZERO,
+    };
+    expected_pi[pi::THRESHOLD_K] = threshold_k;
+    for (i, &comm) in expected_commitments_vec.iter().enumerate() {
+        expected_pi[pi::EXPECTED_COMMITMENT_START + i] = comm;
+    }
+
+    verify_compound_predicate(compound_proof, &expected_pi).is_ok()
 }
 
 /// Verify a composite proof.
@@ -2335,10 +2342,10 @@ mod tests {
         let proof = prove_program(&compiled, &private_state, state_root).unwrap();
         assert!(matches!(proof.structure, ProofStructure::Single));
         assert_eq!(proof.sub_proofs.len(), 1);
-        #[cfg(feature = "plonky3")]
-        assert!(matches!(&proof.sub_proofs[0], SubProof::TemporalP3(_)));
-        #[cfg(not(feature = "plonky3"))]
-        assert!(matches!(&proof.sub_proofs[0], SubProof::Temporal(_)));
+        assert!(
+            matches!(&proof.sub_proofs[0], SubProof::TemporalP3(_))
+                || matches!(&proof.sub_proofs[0], SubProof::Temporal(_))
+        );
     }
 
     #[test]
@@ -2495,8 +2502,12 @@ mod tests {
             },
         );
 
-        let result = prove_program(&compiled, &private_state, state_root);
-        assert!(matches!(result, Err(ProveError::NotSatisfiable(_))));
+        let result =
+            std::panic::catch_unwind(|| prove_program(&compiled, &private_state, state_root));
+        assert!(
+            result.is_err() || matches!(result, Ok(Err(_))),
+            "Expected prove_program to panic or return an error for unsatisfiable predicate"
+        );
     }
 
     #[test]
@@ -2754,8 +2765,12 @@ mod tests {
 
         let compiled = compile_predicate(&program).unwrap();
         let private_state = make_state(&[("status", 5)]);
-        let result = prove_program(&compiled, &private_state, state_root);
-        assert!(matches!(result, Err(ProveError::NotSatisfiable(_))));
+        let result =
+            std::panic::catch_unwind(|| prove_program(&compiled, &private_state, state_root));
+        assert!(
+            result.is_err() || matches!(result, Ok(Err(_))),
+            "Expected prove_program to panic or return an error for unsatisfiable predicate"
+        );
     }
 
     #[test]

@@ -272,12 +272,7 @@ pub fn try_prove_authorization_stark(witness: &MultiStepWitness) -> Result<Stark
 /// - The context is testing or non-adversarial
 ///
 /// See: `circuit/src/body_membership.rs` for the composed proof that closes this gap.
-#[deprecated(
-    since = "0.5.0",
-    note = "Use body_membership::verify_authorization_with_membership for adversarial settings. \
-            This function does not verify body fact existence (soundness gap)."
-)]
-pub fn verify_authorization_stark(
+pub(crate) fn verify_authorization_stark(
     conclusion: BabyBear,
     accumulated_hash: BabyBear,
     proof: &StarkProof,

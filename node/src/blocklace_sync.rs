@@ -43,23 +43,9 @@ use crate::state::{NodeEvent, NodeState};
 /// Gossip topic for blocklace dissemination messages.
 pub const TOPIC_BLOCKLACE: &str = "dregg/blocklace";
 
-/// Default for blocklace checkpoint production interval (finalized blocks).
-/// Overridable via --blocklace-checkpoint-interval for devnet vs. production tuning.
-/// Checkpoints enable new nodes to fast-sync from a recent known-good state
-/// instead of replaying the full block history.
-pub const DEFAULT_BLOCKLACE_CHECKPOINT_INTERVAL: u64 = 100;
-
 /// Maximum number of blocklace checkpoints to retain. Older checkpoints are pruned
 /// to bound storage growth.
 const MAX_RETAINED_CHECKPOINTS: usize = 5;
-
-/// Default COD budget for optimistic execution (number of outstanding turns).
-/// Overridable via --blocklace-cod-budget CLI flag (tune for devnet speed vs prod stability).
-const DEFAULT_COD_BUDGET: usize = 8;
-
-/// Default timeout for constitutional waves (milliseconds).
-/// Overridable via --blocklace-wave-timeout-ms .
-const DEFAULT_CONSTITUTION_TIMEOUT_MS: u64 = 10_000;
 
 // ─── Gossip Message Types ───────────────────────────────────────────────────
 
@@ -96,8 +82,6 @@ pub enum BlocklaceGossipMessage {
 pub struct BlocklaceHandle {
     /// The local blocklace (with signing key, equivocation detection, finality).
     pub lace: Arc<RwLock<Blocklace>>,
-    /// The bridge for classifying turns and producing receipts.
-    pub bridge: Arc<Mutex<DreggBlocklaceBridge>>,
     /// Constitution manager tracking participants and membership amendments.
     pub constitution: Arc<RwLock<ConstitutionManager>>,
     /// The gossip network for broadcasting messages.
@@ -114,15 +98,10 @@ pub struct BlocklaceHandle {
     /// If true, automatically vote to approve all join proposals (devnet mode).
     /// In production, nodes should require governance or stake proofs before approving.
     pub auto_approve_joins: bool,
-    /// Node state handle for persisting blocks to the store on mutations.
-    pub node_state: NodeState,
-
-    // Blocklace configurability fields (populated from CLI or safe defaults).
-    // Allows operators to tune for devnet (low latency, small budgets) vs production
-    // (larger windows, conservative timeouts) without "wrong way" source hacks.
+    /// Blocklace configurability field (populated from CLI or safe defaults).
+    /// Allows operators to tune for devnet (low latency, small budgets) vs production
+    /// (larger windows, conservative timeouts) without "wrong way" source hacks.
     pub checkpoint_interval: u64,
-    pub cod_budget: usize,
-    pub constitution_timeout_ms: u64,
 }
 
 /// A finalized block's payload, ready for execution by the finality executor.
@@ -154,7 +133,11 @@ impl BlocklaceHandle {
     /// and pushes it to all known peers.
     ///
     /// Returns the block ID (used as a receipt handle) and the initial finality level.
-    pub async fn submit_turn(&self, turn_data: Vec<u8>) -> (BlockId, FinalityLevel) {
+    pub async fn submit_turn(
+        &self,
+        state: &NodeState,
+        turn_data: Vec<u8>,
+    ) -> (BlockId, FinalityLevel) {
         // Create the block in our local blocklace.
         let block = {
             let mut lace = self.lace.write().await;
@@ -163,7 +146,7 @@ impl BlocklaceHandle {
         let block_id = block.id();
 
         // Persist the newly created block to the store.
-        self.persist_block_to_store(&block).await;
+        Self::persist_block_to_store(state, &block).await;
 
         // Determine initial finality based on participant count.
         let constitution = self.constitution.read().await;
@@ -187,8 +170,8 @@ impl BlocklaceHandle {
 
     /// Persist a block to the store. Logs a warning on failure but does not
     /// propagate the error (persistence failure should not block consensus progress).
-    async fn persist_block_to_store(&self, block: &Block) {
-        let s = self.node_state.read().await;
+    async fn persist_block_to_store(state: &NodeState, block: &Block) {
+        let s = state.read().await;
         if let Err(e) = s.store.persist_block(block) {
             warn!(error = %e, "failed to persist block to store");
         }
@@ -329,7 +312,7 @@ impl BlocklaceHandle {
     /// `MembershipVote` block proposing its own Join and disseminates it.
     /// Existing participants will vote on the proposal according to their policy
     /// (auto-approve in devnet mode, governance-gated in production).
-    pub async fn propose_join_if_needed(&self) {
+    pub async fn propose_join_if_needed(&self, state: &NodeState) {
         let constitution = self.constitution.read().await;
         if constitution.current.is_participant(&self.self_key) {
             return; // Already a member
@@ -346,7 +329,7 @@ impl BlocklaceHandle {
         };
 
         // Persist the membership vote block.
-        self.persist_block_to_store(&block).await;
+        Self::persist_block_to_store(state, &block).await;
 
         info!(
             block_id = %block.id(),
@@ -361,7 +344,7 @@ impl BlocklaceHandle {
     ///
     /// Creates a `MembershipVote` block with an `Approve` action referencing
     /// the proposal block, and disseminates it to peers.
-    async fn cast_approval_vote(&self, proposal_block: BlockId) {
+    async fn cast_approval_vote(&self, state: &NodeState, proposal_block: BlockId) {
         let block = {
             let mut lace = self.lace.write().await;
             lace.add_block(Payload::MembershipVote {
@@ -370,7 +353,7 @@ impl BlocklaceHandle {
         };
 
         // Persist the approval vote block.
-        self.persist_block_to_store(&block).await;
+        Self::persist_block_to_store(state, &block).await;
 
         debug!(
             block_id = %block.id(),
@@ -449,7 +432,6 @@ pub async fn run_blocklace_sync(
     gossip_port: u16,
     auto_approve_joins: bool,
     blocklace_checkpoint_interval: u64,
-    cod_budget: usize,
     constitution_timeout_ms: u64,
 ) -> Option<BlocklaceHandle> {
     // Blocklace tuning params (from CLI --blocklace-* or safe defaults in main).
@@ -531,8 +513,6 @@ pub async fn run_blocklace_sync(
             }
         }
     };
-    let bridge = DreggBlocklaceBridge::new(cod_budget);
-
     // Create the PeerNode (QUIC endpoint) for gossip.
     let bind_addr_str = format!("0.0.0.0:{gossip_port}");
     let peer_node = match PeerNode::new(PeerNodeConfig {
@@ -663,14 +643,12 @@ pub async fn run_blocklace_sync(
 
     // Build the shared handle.
     let lace = Arc::new(RwLock::new(blocklace));
-    let bridge_handle = Arc::new(Mutex::new(bridge));
     let constitution_handle = Arc::new(RwLock::new(constitution_manager));
     let executed_up_to = Arc::new(RwLock::new(restored_executed_up_to));
     let finality_notify = Arc::new(Notify::new());
 
     let handle = BlocklaceHandle {
         lace: lace.clone(),
-        bridge: bridge_handle,
         constitution: constitution_handle.clone(),
         gossip: gossip.clone(),
         topic: topic.clone(),
@@ -678,11 +656,7 @@ pub async fn run_blocklace_sync(
         executed_up_to,
         finality_notify: finality_notify.clone(),
         auto_approve_joins, // F-CRIT-2: gated by main.rs on --auto-approve-joins CLI flag OR .devnet marker
-        node_state: state.clone(),
-        // Blocklace tunables — enables env-specific config (devnet fast vs prod safe) without source edits.
         checkpoint_interval: blocklace_checkpoint_interval,
-        cod_budget,
-        constitution_timeout_ms,
     };
 
     info!("blocklace gossip layer initialized, processing messages");
@@ -733,10 +707,11 @@ pub async fn run_blocklace_sync(
     // This enables new nodes to join at runtime via the constitutional amendment
     // protocol. Existing participants will vote (auto-approve in devnet mode).
     let join_handle = handle.clone();
+    let join_state = state.clone();
     tokio::spawn(async move {
         // Brief delay to allow gossip connections to establish.
         tokio::time::sleep(Duration::from_secs(2)).await;
-        join_handle.propose_join_if_needed().await;
+        join_handle.propose_join_if_needed(&join_state).await;
     });
 
     Some(handle)
@@ -1149,7 +1124,7 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
             // ── Wave Advancement & Timeout Detection ───────────────────────
             // Advance the constitution's wave counter. Any participants that
             // have been silent for too long are proposed for auto-leave.
-            advance_constitution_wave(&handle).await;
+            advance_constitution_wave(&state, &handle).await;
 
             // ── Periodic Checkpoint Production ──────────────────────────────
             // After executing finalized turns, check if we've crossed a
@@ -1368,6 +1343,22 @@ async fn execute_finalized_turn(
             };
             if let Err(e) = s.store.store_attested_root(&stored) {
                 warn!(error = %e, height = new_height, "failed to persist attested root");
+            }
+
+            // Emit root event to WebSocket subscribers.
+            state.emit(NodeEvent::Root {
+                height: new_height,
+                merkle_root: dregg_types::hex_encode(&stored.merkle_root),
+                timestamp: stored.timestamp,
+            });
+
+            // Emit revocation events for any RevokeCapability effects.
+            for effect in signed_turn.turn.call_forest.total_effects() {
+                if let dregg_turn::Effect::RevokeCapability { cell, .. } = effect {
+                    state.emit(NodeEvent::Revocation {
+                        token_id: dregg_types::hex_encode(&cell.0),
+                    });
+                }
             }
 
             drop(s);
@@ -1841,7 +1832,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// In devnet mode (`auto_approve_joins`), existing nodes automatically cast
 /// approval votes for incoming Join proposals.
 async fn execute_finalized_membership(
-    _state: &NodeState,
+    state: &NodeState,
     handle: &BlocklaceHandle,
     block_id: BlockId,
     creator: [u8; 32],
@@ -1881,7 +1872,7 @@ async fn execute_finalized_membership(
                 drop(constitution);
 
                 if we_are_participant {
-                    handle.cast_approval_vote(block_id).await;
+                    handle.cast_approval_vote(state, block_id).await;
                     info!(
                         proposal = %block_id,
                         "auto-approved join proposal (devnet mode)"
@@ -1999,7 +1990,7 @@ async fn apply_passed_proposal(handle: &BlocklaceHandle, proposal_block: &BlockI
 /// Timeout-based leave ensures the federation can continue making progress
 /// even if participants go offline permanently. The timed-out participant can
 /// rejoin later by submitting a new Join proposal.
-async fn advance_constitution_wave(handle: &BlocklaceHandle) {
+async fn advance_constitution_wave(state: &NodeState, handle: &BlocklaceHandle) {
     let mut constitution = handle.constitution.write().await;
     let current_wave = constitution.current_wave + 1;
     let timeout_proposals = constitution.advance_wave(current_wave);
@@ -2037,7 +2028,7 @@ async fn advance_constitution_wave(handle: &BlocklaceHandle) {
             };
 
             // Persist the leave proposal block.
-            handle.persist_block_to_store(&block).await;
+            BlocklaceHandle::persist_block_to_store(state, &block).await;
 
             // Register the proposal in the constitution manager.
             let mut constitution = handle.constitution.write().await;

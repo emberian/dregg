@@ -28,16 +28,16 @@
 //! The underlying AIR, trace layout, and constraints are identical -- the generalization
 //! is purely at the API level (configurable set identity, generic public inputs).
 
-use crate::accumulator_air::{
-    AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir, AccumulatorNonRevocationWitness,
-    ExtElem, compute_accumulator,
+use crate::accumulator_types::{ExtElem, MAX_ANCESTORS, compute_accumulator};
+use crate::dsl::accumulator::{
+    prove_accumulator_non_revocation_dsl, verify_accumulator_non_revocation_dsl,
 };
 use crate::field::BabyBear;
 use crate::poseidon2::hash_many;
-use crate::stark::{self, StarkProof};
+use crate::stark::StarkProof;
 
-// Re-export key types from accumulator_air for convenience.
-pub use crate::accumulator_air::{ExtElem as NonMembershipExtElem, MAX_ANCESTORS};
+// Re-export key types from accumulator_types for convenience.
+pub use crate::accumulator_types::ExtElem as NonMembershipExtElem;
 
 /// Identifier for a property set (e.g., "suspended", "blacklisted", "revoked").
 ///
@@ -248,76 +248,27 @@ pub fn verify_non_membership_proof(proof: &NonMembershipProof) -> Result<(), Str
 
 /// Verify a non-membership proof given explicit accumulator parameters.
 ///
-/// This is the lowest-level verification function.
+/// This is the lowest-level verification function. Delegates to the DSL-native verifier.
 pub fn verify_accumulator_non_membership(
     accumulator: ExtElem,
     alpha: ExtElem,
     num_elements: usize,
     proof: &StarkProof,
 ) -> Result<(), String> {
-    let air = AccumulatorNonRevocationAir;
-
-    let mut public_inputs = Vec::with_capacity(9);
-    public_inputs.extend_from_slice(&accumulator.0);
-    public_inputs.extend_from_slice(&alpha.0);
-    public_inputs.push(BabyBear::new(num_elements as u32));
-
-    stark::verify(&air, proof, &public_inputs)
+    verify_accumulator_non_revocation_dsl(accumulator, alpha, num_elements, proof)
 }
 
 /// Generate a STARK proof of non-membership for multiple elements.
 ///
-/// This is the core proving function -- it generates witnesses and produces
-/// the STARK proof. Returns `None` if any element is actually in the set.
+/// This is the core proving function. Returns `None` if any element is actually in the set.
+/// Delegates to the DSL-native prover.
 pub fn prove_accumulator_non_membership(
     elements: &[BabyBear],
     accumulator: ExtElem,
     alpha: ExtElem,
     set_elements: &[BabyBear],
 ) -> Option<StarkProof> {
-    if elements.len() > MAX_ANCESTORS {
-        return None;
-    }
-
-    // Generate witnesses for each element.
-    let mut ancestors = Vec::with_capacity(elements.len());
-    for &h in elements {
-        // Check if h is in the set.
-        if set_elements.contains(&h) {
-            return None; // Element is in the set -- cannot prove non-membership.
-        }
-
-        // Compute remainder: v = product(h - s_j) for all s_j in set_elements.
-        let mut remainder_base = BabyBear::ONE;
-        for &s in set_elements {
-            remainder_base = remainder_base * (h - s);
-        }
-
-        if remainder_base == BabyBear::ZERO {
-            return None; // Hash collision or element is in set.
-        }
-
-        let remainder = ExtElem::from_base(remainder_base);
-
-        // Compute quotient: w = (Acc - v) / (alpha - h)
-        let h_ext = ExtElem::from_base(h);
-        let diff = alpha.sub(h_ext);
-        let numerator = accumulator.sub(remainder);
-        let quotient = numerator.mul(diff.inverse()?);
-
-        ancestors.push(AccumulatorNonMembershipWitness {
-            ancestor_hash: h,
-            quotient,
-            remainder,
-        });
-    }
-
-    let witness = AccumulatorNonRevocationWitness { ancestors };
-    let air = AccumulatorNonRevocationAir;
-    let (trace, public_inputs) =
-        AccumulatorNonRevocationAir::generate_trace(&witness, accumulator, alpha);
-
-    Some(stark::prove(&air, &trace, &public_inputs))
+    prove_accumulator_non_revocation_dsl(elements, accumulator, alpha, set_elements)
 }
 
 /// Derive the alpha challenge for a specific set, incorporating the set identifier.
@@ -354,7 +305,7 @@ pub fn derive_alpha_for_set(set_elements: &[BabyBear], set_id: &SetIdentifier) -
     ExtElem([h0, h1, h2, h3])
 }
 
-/// Compute the accumulator value for a set (delegates to accumulator_air).
+/// Compute the accumulator value for a set (delegates to accumulator_types).
 pub fn compute_set_accumulator(set_elements: &[BabyBear], alpha: ExtElem) -> ExtElem {
     compute_accumulator(set_elements, alpha)
 }

@@ -21,9 +21,9 @@
 //! - [4..7]: alpha (public challenge in BabyBear^4)
 //! - [8]: num_ancestors (number of active rows)
 
-use crate::accumulator_air::{
-    ACCUMULATOR_WIDTH, AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir,
-    AccumulatorNonRevocationWitness, ExtElem, MAX_ANCESTORS, col, pi,
+use crate::accumulator_types::{
+    ACCUMULATOR_WIDTH, AccumulatorNonMembershipWitness, AccumulatorNonRevocationWitness, ExtElem,
+    MAX_ANCESTORS, col, pi,
 };
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::stark::{self, StarkProof};
@@ -37,7 +37,7 @@ use crate::dsl::circuit::{
 // Re-exports
 // ============================================================================
 
-pub use crate::accumulator_air::{
+pub use crate::accumulator_types::{
     AccumulatorNonMembershipWitness as NonMembershipWitness,
     AccumulatorNonRevocationWitness as NonRevocationWitness, ExtElem as AccExtElem,
     MAX_ANCESTORS as ACC_MAX_ANCESTORS, compute_accumulator, derive_alpha,
@@ -436,6 +436,97 @@ pub fn accumulator_dsl_circuit() -> DslCircuit {
 // Trace generation
 // ============================================================================
 
+/// Generate the base execution trace (32 columns, no auxiliary columns) from a witness.
+///
+/// Returns (trace, public_inputs) where:
+/// - trace: rows of width ACCUMULATOR_WIDTH, padded to power of 2
+/// - public_inputs: [Acc(4), alpha(4), num_ancestors(1)] = 9 elements
+pub fn generate_base_accumulator_trace(
+    witness: &AccumulatorNonRevocationWitness,
+    accumulator: ExtElem,
+    alpha: ExtElem,
+) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+    let num_ancestors = witness.ancestors.len();
+    assert!(
+        num_ancestors <= MAX_ANCESTORS,
+        "Too many ancestors: {} > {}",
+        num_ancestors,
+        MAX_ANCESTORS
+    );
+
+    let total_rows = num_ancestors.next_power_of_two().max(8);
+    let mut trace = Vec::with_capacity(total_rows);
+
+    for anc in &witness.ancestors {
+        let mut row = vec![BabyBear::ZERO; ACCUMULATOR_WIDTH];
+
+        // h_i: ancestor hash embedded in extension field
+        let h = ExtElem::from_base(anc.ancestor_hash);
+        h.write_to(&mut row, col::HASH);
+
+        // w_i: quotient witness
+        anc.quotient.write_to(&mut row, col::QUOTIENT);
+
+        // v_i: remainder witness
+        anc.remainder.write_to(&mut row, col::REMAINDER);
+
+        // diff_i = alpha - h_i
+        let diff = alpha.sub(h);
+        diff.write_to(&mut row, col::DIFF);
+
+        // prod_i = w_i * diff_i
+        let prod = anc.quotient.mul(diff);
+        prod.write_to(&mut row, col::PRODUCT);
+
+        // sum_i = prod_i + v_i
+        let sum = prod.add(anc.remainder);
+        sum.write_to(&mut row, col::SUM);
+
+        // v_inv_i: inverse of v_i (proves nonzero)
+        let v_inv = anc
+            .remainder
+            .inverse()
+            .expect("Remainder must be nonzero for non-membership witness");
+        v_inv.write_to(&mut row, col::V_INV);
+
+        // check_i = v_i * v_inv_i (should be ONE)
+        let check = anc.remainder.mul(v_inv);
+        check.write_to(&mut row, col::CHECK);
+
+        trace.push(row);
+    }
+
+    // Pad with "dummy" rows that satisfy constraints trivially.
+    while trace.len() < total_rows {
+        if num_ancestors > 0 {
+            // Duplicate last valid row.
+            trace.push(trace[num_ancestors - 1].clone());
+        } else {
+            // No ancestors: create a trivial row.
+            let mut row = vec![BabyBear::ZERO; ACCUMULATOR_WIDTH];
+            let h = ExtElem::ZERO;
+            h.write_to(&mut row, col::HASH);
+            ExtElem::ZERO.write_to(&mut row, col::QUOTIENT);
+            // For empty accumulator (Acc=ONE): v=ONE works since 0 + ONE = ONE = Acc.
+            ExtElem::ONE.write_to(&mut row, col::REMAINDER);
+            alpha.write_to(&mut row, col::DIFF); // alpha - 0 = alpha
+            ExtElem::ZERO.write_to(&mut row, col::PRODUCT); // 0 * alpha = 0
+            ExtElem::ONE.write_to(&mut row, col::SUM); // 0 + ONE = ONE = Acc
+            ExtElem::ONE.write_to(&mut row, col::V_INV); // inv(ONE) = ONE
+            ExtElem::ONE.write_to(&mut row, col::CHECK); // ONE * ONE = ONE
+            trace.push(row);
+        }
+    }
+
+    // Public inputs: [Acc(4), alpha(4), num_ancestors(1)]
+    let mut public_inputs = Vec::with_capacity(9);
+    public_inputs.extend_from_slice(&accumulator.0);
+    public_inputs.extend_from_slice(&alpha.0);
+    public_inputs.push(BabyBear::new(num_ancestors as u32));
+
+    (trace, public_inputs)
+}
+
 /// Generate a DSL-native execution trace from an accumulator witness.
 ///
 /// Extends each row with auxiliary columns (alpha_aux, acc_aux) needed by the
@@ -445,9 +536,8 @@ pub fn generate_accumulator_trace(
     accumulator: ExtElem,
     alpha: ExtElem,
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    // Generate the base trace using the existing AIR's trace generator.
-    let (base_trace, public_inputs) =
-        AccumulatorNonRevocationAir::generate_trace(witness, accumulator, alpha);
+    // Generate the base trace using the standalone trace generator.
+    let (base_trace, public_inputs) = generate_base_accumulator_trace(witness, accumulator, alpha);
 
     // Extend each row with auxiliary columns.
     let mut trace: Vec<Vec<BabyBear>> = Vec::with_capacity(base_trace.len());
@@ -571,4 +661,250 @@ pub fn verify_accumulator_non_revocation(
     proof: &StarkProof,
 ) -> Result<(), String> {
     verify_accumulator_non_revocation_dsl(accumulator, alpha, num_ancestors, proof)
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::poseidon2::hash_many;
+
+    fn make_hash(seed: u32) -> BabyBear {
+        hash_many(&[BabyBear::new(seed), BabyBear::new(0xCAFE)])
+    }
+
+    #[test]
+    fn trace_generation_valid_constraints() {
+        let revocation_set: Vec<BabyBear> = (1..=10).map(|i| make_hash(i * 100)).collect();
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+
+        // Ancestor hashes NOT in the revocation set.
+        let ancestors: Vec<BabyBear> = (1..=3).map(|i| make_hash(i * 1000 + 1)).collect();
+        for h in &ancestors {
+            assert!(!revocation_set.contains(h));
+        }
+
+        // Generate witnesses.
+        let mut witness_ancestors = Vec::new();
+        for &h in &ancestors {
+            let mut remainder_base = BabyBear::ONE;
+            for &rev_h in &revocation_set {
+                remainder_base = remainder_base * (h - rev_h);
+            }
+            assert_ne!(remainder_base, BabyBear::ZERO);
+
+            let remainder = ExtElem::from_base(remainder_base);
+            let h_ext = ExtElem::from_base(h);
+            let diff = alpha.sub(h_ext);
+            let numerator = acc.sub(remainder);
+            let quotient = numerator.mul(diff.inverse().unwrap());
+
+            witness_ancestors.push(AccumulatorNonMembershipWitness {
+                ancestor_hash: h,
+                quotient,
+                remainder,
+            });
+        }
+
+        let witness = AccumulatorNonRevocationWitness {
+            ancestors: witness_ancestors,
+        };
+        let (trace, public_inputs) = generate_base_accumulator_trace(&witness, acc, alpha);
+
+        // Verify dimensions.
+        assert!(trace.len().is_power_of_two());
+        assert!(trace.len() >= 8);
+        for row in &trace {
+            assert_eq!(row.len(), ACCUMULATOR_WIDTH);
+        }
+        assert_eq!(public_inputs.len(), 9);
+    }
+
+    #[test]
+    fn prove_and_verify_non_revocation() {
+        let revocation_set: Vec<BabyBear> = (1..=5).map(|i| make_hash(i * 50)).collect();
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+
+        let ancestors: Vec<BabyBear> = (1..=3).map(|i| make_hash(i * 7777)).collect();
+        for h in &ancestors {
+            assert!(!revocation_set.contains(h));
+        }
+
+        let proof = prove_accumulator_non_revocation_dsl(&ancestors, acc, alpha, &revocation_set)
+            .expect("Should generate proof");
+
+        let result = verify_accumulator_non_revocation_dsl(acc, alpha, ancestors.len(), &proof);
+        assert!(result.is_ok(), "Proof should verify: {:?}", result.err());
+    }
+
+    #[test]
+    fn prove_fails_for_revoked_ancestor() {
+        let revocation_set: Vec<BabyBear> = (1..=5).map(|i| make_hash(i * 50)).collect();
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+
+        // Include a revoked hash in ancestors.
+        let ancestors = vec![
+            make_hash(7777),   // not revoked
+            revocation_set[2], // REVOKED
+            make_hash(8888),   // not revoked
+        ];
+
+        let result = prove_accumulator_non_revocation_dsl(&ancestors, acc, alpha, &revocation_set);
+        assert!(result.is_none(), "Should fail for revoked ancestor");
+    }
+
+    #[test]
+    fn max_ancestors() {
+        let revocation_set: Vec<BabyBear> = (1..=20).map(|i| make_hash(i)).collect();
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+
+        let ancestors: Vec<BabyBear> = (1..=MAX_ANCESTORS as u32)
+            .map(|i| make_hash(10000 + i))
+            .collect();
+
+        for h in &ancestors {
+            assert!(!revocation_set.contains(h));
+        }
+
+        let proof = prove_accumulator_non_revocation_dsl(&ancestors, acc, alpha, &revocation_set)
+            .expect("Should handle MAX_ANCESTORS");
+
+        let result = verify_accumulator_non_revocation_dsl(acc, alpha, ancestors.len(), &proof);
+        assert!(
+            result.is_ok(),
+            "MAX_ANCESTORS proof should verify: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn wrong_accumulator_rejected() {
+        let revocation_set: Vec<BabyBear> = (1..=5).map(|i| make_hash(i * 50)).collect();
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+
+        let ancestors = vec![make_hash(9999)];
+        let proof =
+            prove_accumulator_non_revocation_dsl(&ancestors, acc, alpha, &revocation_set).unwrap();
+
+        // Verify with wrong accumulator.
+        let wrong_acc = ExtElem([
+            BabyBear::new(1),
+            BabyBear::new(2),
+            BabyBear::new(3),
+            BabyBear::new(4),
+        ]);
+        let result =
+            verify_accumulator_non_revocation_dsl(wrong_acc, alpha, ancestors.len(), &proof);
+        assert!(result.is_err(), "Wrong accumulator should be rejected");
+    }
+
+    #[test]
+    fn empty_ancestor_list() {
+        // Empty revocation set => Acc = ONE, so padding rows match.
+        let revocation_set: Vec<BabyBear> = vec![];
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+        assert_eq!(acc, ExtElem::ONE);
+
+        let ancestors: Vec<BabyBear> = vec![];
+        let proof = prove_accumulator_non_revocation_dsl(&ancestors, acc, alpha, &revocation_set)
+            .expect("Empty ancestors should produce proof");
+
+        let result = verify_accumulator_non_revocation_dsl(acc, alpha, 0, &proof);
+        assert!(
+            result.is_ok(),
+            "Empty ancestor proof should verify: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn large_revocation_set() {
+        // 100 elements in the revocation set.
+        let revocation_set: Vec<BabyBear> = (1..=100).map(|i| make_hash(i)).collect();
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+
+        // Prove non-membership of element NOT in set.
+        let absent = make_hash(101);
+        assert!(!revocation_set.contains(&absent));
+
+        let proof = prove_accumulator_non_revocation_dsl(&[absent], acc, alpha, &revocation_set)
+            .expect("Should prove for large set");
+
+        let result = verify_accumulator_non_revocation_dsl(acc, alpha, 1, &proof);
+        assert!(
+            result.is_ok(),
+            "Large set proof should verify: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn non_membership_of_element_50_in_set_fails() {
+        // Insert 100 elements (hashes of 1..=100).
+        let revocation_set: Vec<BabyBear> = (1..=100).map(|i| make_hash(i)).collect();
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+
+        // Element 50 IS in the set.
+        let present = make_hash(50);
+        assert!(revocation_set.contains(&present));
+
+        // Attempting to prove non-membership should fail.
+        let result = prove_accumulator_non_revocation_dsl(&[present], acc, alpha, &revocation_set);
+        assert!(
+            result.is_none(),
+            "Should not prove non-membership of a member"
+        );
+    }
+
+    #[test]
+    fn proof_is_o1_regardless_of_set_size() {
+        // Verify that proof size doesn't grow with set size (it's always 8-row trace).
+        let small_set: Vec<BabyBear> = (1..=5).map(|i| make_hash(i)).collect();
+        let large_set: Vec<BabyBear> = (1..=100).map(|i| make_hash(i)).collect();
+
+        let alpha_s = derive_alpha(&small_set);
+        let acc_s = compute_accumulator(&small_set, alpha_s);
+        let alpha_l = derive_alpha(&large_set);
+        let acc_l = compute_accumulator(&large_set, alpha_l);
+
+        let absent_s = make_hash(999);
+        let absent_l = make_hash(999);
+
+        let proof_s =
+            prove_accumulator_non_revocation_dsl(&[absent_s], acc_s, alpha_s, &small_set).unwrap();
+        let proof_l =
+            prove_accumulator_non_revocation_dsl(&[absent_l], acc_l, alpha_l, &large_set).unwrap();
+
+        // Both proofs should have the same trace dimensions.
+        assert_eq!(proof_s.trace_len, proof_l.trace_len);
+        assert_eq!(proof_s.num_cols, proof_l.num_cols);
+    }
+
+    #[test]
+    fn tampered_proof_rejected() {
+        let revocation_set: Vec<BabyBear> = (1..=5).map(|i| make_hash(i * 50)).collect();
+        let alpha = derive_alpha(&revocation_set);
+        let acc = compute_accumulator(&revocation_set, alpha);
+
+        let ancestors = vec![make_hash(9999)];
+        let mut proof =
+            prove_accumulator_non_revocation_dsl(&ancestors, acc, alpha, &revocation_set).unwrap();
+
+        // Tamper.
+        proof.trace_commitment[0] ^= 0xFF;
+
+        let result = verify_accumulator_non_revocation_dsl(acc, alpha, ancestors.len(), &proof);
+        assert!(result.is_err(), "Tampered proof should be rejected");
+    }
 }

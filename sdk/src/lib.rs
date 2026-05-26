@@ -153,8 +153,7 @@ pub use dregg_turn::{
 pub use dregg_types::{PublicKey, Signature};
 
 // Re-export verifier types from the bridge layer for standalone proof verification.
-#[allow(deprecated)]
-pub use dregg_bridge::present::{BridgePresentationProof, verify_presentation};
+pub use dregg_bridge::present::BridgePresentationProof;
 pub use dregg_bridge::verifier::StarkProofVerifier;
 pub use dregg_circuit::PresentationVerification;
 

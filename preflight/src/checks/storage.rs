@@ -1,4 +1,5 @@
 //! Storage subsystem checks: MerkleQueue, CapInbox, programmable queues, WAL, dedup, pub-sub.
+#![allow(deprecated)]
 
 use dregg_storage::QuotaId;
 use dregg_storage::dedup::DeduplicationFilter;

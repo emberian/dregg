@@ -80,8 +80,7 @@ pub use atomic::{
     Participant, ProposeMessage, Vote,
 };
 pub use budget::{
-    BudgetCoordinator, BudgetError, BudgetSlice, FastUnlockManager, StingrayCounter,
-    UnlockCertificate, UnlockRequest,
+    BudgetError, BudgetSlice, FastUnlockManager, StingrayCounter, UnlockCertificate, UnlockRequest,
 };
 pub use causal::CausalDag;
 pub use error::CoordError;

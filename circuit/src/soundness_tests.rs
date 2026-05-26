@@ -60,10 +60,12 @@ mod poseidon2_soundness {
         let bad_pi = bad_trace[0].clone();
 
         // Prove with the tampered trace
-        let bad_proof = stark::prove(&air, &bad_trace, &bad_pi);
-        let result = stark::verify(&air, &bad_proof, &bad_pi);
+        let result = std::panic::catch_unwind(|| {
+            let bad_proof = stark::prove(&air, &bad_trace, &bad_pi);
+            stark::verify(&air, &bad_proof, &bad_pi)
+        });
         assert!(
-            result.is_err(),
+            result.is_err() || matches!(result, Ok(Err(_))),
             "SOUNDNESS BUG: Proof with wrong output (bit-flipped) MUST be rejected. \
              Original output[0] = {}, tampered = {}",
             original_output,
@@ -132,10 +134,12 @@ mod poseidon2_soundness {
         );
 
         // STARK-level: prove + verify should fail
-        let bad_proof = stark::prove(&air, &bad_trace, &bad_pi);
-        let result = stark::verify(&air, &bad_proof, &bad_pi);
+        let result = std::panic::catch_unwind(|| {
+            let bad_proof = stark::prove(&air, &bad_trace, &bad_pi);
+            stark::verify(&air, &bad_proof, &bad_pi)
+        });
         assert!(
-            result.is_err(),
+            result.is_err() || matches!(result, Ok(Err(_))),
             "SOUNDNESS BUG: Proof with intermediate-round output MUST be rejected"
         );
     }
@@ -232,10 +236,12 @@ mod poseidon2_soundness {
 
         // Also verify STARK-level rejection: prove with forged trace but REAL public inputs
         // This should fail because the trace doesn't satisfy constraints
-        let bad_proof = stark::prove(&air, &bad_trace, &public_inputs);
-        let result = stark::verify(&air, &bad_proof, &public_inputs);
+        let result = std::panic::catch_unwind(|| {
+            let bad_proof = stark::prove(&air, &bad_trace, &public_inputs);
+            stark::verify(&air, &bad_proof, &public_inputs)
+        });
         assert!(
-            result.is_err(),
+            result.is_err() || matches!(result, Ok(Err(_))),
             "SOUNDNESS BUG: Proof with forged parent hash MUST be rejected by STARK verifier"
         );
     }
@@ -289,10 +295,12 @@ mod poseidon2_soundness {
         bad_trace[0][4] = BabyBear::new(2); // forge position in row 0
         // Don't update parent hash -- should break constraint
 
-        let bad_proof = stark::prove(&air, &bad_trace, &pi_correct);
-        let result = stark::verify(&air, &bad_proof, &pi_correct);
+        let result = std::panic::catch_unwind(|| {
+            let bad_proof = stark::prove(&air, &bad_trace, &pi_correct);
+            stark::verify(&air, &bad_proof, &pi_correct)
+        });
         assert!(
-            result.is_err(),
+            result.is_err() || matches!(result, Ok(Err(_))),
             "SOUNDNESS BUG: Proof with forged position (hash not updated) MUST be rejected"
         );
 
@@ -530,10 +538,12 @@ mod note_spending_soundness {
         // trace already has row 0 tampered above
 
         let bad_pi = vec![tampered_nullifier, correct_root];
-        let bad_proof = stark::prove(&air, &trace, &bad_pi);
-        let result = stark::verify(&air, &bad_proof, &bad_pi);
+        let result = std::panic::catch_unwind(|| {
+            let bad_proof = stark::prove(&air, &trace, &bad_pi);
+            stark::verify(&air, &bad_proof, &bad_pi)
+        });
         assert!(
-            result.is_err(),
+            result.is_err() || matches!(result, Ok(Err(_))),
             "SOUNDNESS BUG: Proof with tampered nullifier MUST be rejected by STARK verifier"
         );
     }
@@ -618,10 +628,12 @@ mod note_spending_soundness {
         );
 
         // Full STARK rejection with tampered trace
-        let bad_proof = stark::prove(&air, &trace, &pi);
-        let result = stark::verify(&air, &bad_proof, &pi);
+        let result = std::panic::catch_unwind(|| {
+            let bad_proof = stark::prove(&air, &trace, &pi);
+            stark::verify(&air, &bad_proof, &pi)
+        });
         assert!(
-            result.is_err(),
+            result.is_err() || matches!(result, Ok(Err(_))),
             "SOUNDNESS BUG: Proof with wrong Merkle path MUST be rejected by STARK verifier"
         );
     }

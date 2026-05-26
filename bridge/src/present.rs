@@ -747,18 +747,6 @@ impl BridgePresentationBuilder {
         })
     }
 
-    /// Deprecated: use [`prove_local_constraint_check_only`](Self::prove_local_constraint_check_only).
-    #[deprecated(
-        note = "Use prove_local_constraint_check_only() with an explicit UnsafeLocalOnlyMarker"
-    )]
-    pub fn prove_fast(
-        &mut self,
-        request: &AuthRequest,
-    ) -> Result<BridgePresentationProof, AuthError> {
-        let marker = UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound();
-        self.prove_local_constraint_check_only(&marker, request)
-    }
-
     /// Generate a STARK-backed presentation proof using Poseidon2 hashing.
     ///
     /// This is the internal implementation of [`prove`](Self::prove). It calls

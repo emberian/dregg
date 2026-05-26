@@ -6285,7 +6285,12 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
     let result = McpToolsListResult {
         tools: tool_definitions(),
     };
-    JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
+    match serde_json::to_value(result) {
+        Ok(v) => JsonRpcResponse::success(id, v),
+        Err(e) => {
+            JsonRpcResponse::internal_error(id, format!("failed to serialize tools list: {e}"))
+        }
+    }
 }
 
 async fn handle_tools_call(id: Value, params: Value, state: &NodeState) -> JsonRpcResponse {
@@ -6301,7 +6306,12 @@ async fn handle_tools_call(id: Value, params: Value, state: &NodeState) -> JsonR
 
     let result = dispatch_tool(&tool_name, arguments, state).await;
 
-    JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
+    match serde_json::to_value(result) {
+        Ok(v) => JsonRpcResponse::success(id, v),
+        Err(e) => {
+            JsonRpcResponse::internal_error(id, format!("failed to serialize tool result: {e}"))
+        }
+    }
 }
 
 async fn write_response(

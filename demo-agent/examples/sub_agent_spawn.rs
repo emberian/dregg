@@ -11,7 +11,7 @@
 //! workers, each with the minimum authority needed for their job.
 
 use dregg_bridge::BridgePresentationBuilder;
-use dregg_bridge::present::{bytes_to_babybear, hash_index, verify_presentation};
+use dregg_bridge::present::{bytes_to_babybear, hash_index, verify_presentation_bb};
 use dregg_cell::cell::Cell;
 use dregg_cell::{AuthRequired, CellId, Ledger, Permissions};
 use dregg_circuit::BabyBear;
@@ -490,7 +490,10 @@ fn main() {
             Ok(presentation) => {
                 // SECURITY: Verify against the externally-derived federation root,
                 // NOT the proof's own embedded root (which would be circular).
-                let valid = verify_presentation(&presentation, &federation_root_bytes);
+                let valid = verify_presentation_bb(
+                    &presentation,
+                    bytes_to_babybear(&federation_root_bytes),
+                );
                 let stark_ok = presentation
                     .verify_issuer_stark()
                     .map(|r| r.is_ok())

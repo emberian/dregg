@@ -10,10 +10,10 @@
 //! 7. Prove one of the decisions in a STARK (using prove_authorization_stark)
 
 use dregg_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
+use dregg_circuit::dsl::verify_authorization_dsl;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::multi_step_air::{
     ALLOW_PREDICATE, build_multi_step_witness, prove_authorization_stark,
-    verify_authorization_stark,
 };
 use dregg_circuit::poseidon2::hash_fact;
 use dregg_circuit::stark::proof_to_bytes;
@@ -587,7 +587,7 @@ fn main() {
     );
 
     // Verify the proof
-    let verify_result = verify_authorization_stark(conclusion, acc_hash, &proof);
+    let verify_result = verify_authorization_dsl(conclusion, acc_hash, &proof);
     match &verify_result {
         Ok(()) => println!("  Verification: PASS"),
         Err(e) => println!("  Verification: FAIL ({})", e),
@@ -599,7 +599,7 @@ fn main() {
     println!("  Tampering test: flip one bit in proof...");
     let mut tampered_proof = proof.clone();
     tampered_proof.trace_commitment[0] ^= 0xFF;
-    let tamper_result = verify_authorization_stark(conclusion, acc_hash, &tampered_proof);
+    let tamper_result = verify_authorization_dsl(conclusion, acc_hash, &tampered_proof);
     assert!(tamper_result.is_err());
     println!("  Tampered proof rejected: {}", tamper_result.unwrap_err());
     println!();

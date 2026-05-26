@@ -26,7 +26,7 @@
 //!
 //! Boundary constraints enforce sum == Acc and check == ONE on active rows.
 
-use dregg_circuit::accumulator_air::{ACCUMULATOR_WIDTH, ExtElem, MAX_ANCESTORS, col, pi};
+use dregg_circuit::accumulator_types::{ACCUMULATOR_WIDTH, ExtElem, MAX_ANCESTORS, col, pi};
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
 use dregg_dsl_runtime::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
@@ -440,10 +440,11 @@ pub const ACCUMULATOR_DSL_WIDTH: usize = ACCUMULATOR_WIDTH + 8; // 40
 /// Creates a 3-ancestor non-revocation proof against a 5-element revocation set.
 /// Returns (trace, public_inputs) with auxiliary columns filled.
 pub fn generate_valid_accumulator_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    use dregg_circuit::accumulator_air::{
-        AccumulatorNonMembershipWitness, AccumulatorNonRevocationAir,
-        AccumulatorNonRevocationWitness, compute_accumulator, derive_alpha,
+    use dregg_circuit::accumulator_types::{
+        AccumulatorNonMembershipWitness, AccumulatorNonRevocationWitness, compute_accumulator,
+        derive_alpha,
     };
+    use dregg_circuit::dsl::accumulator::generate_base_accumulator_trace;
     use dregg_circuit::poseidon2::hash_many;
 
     // Create a revocation set of 5 elements.
@@ -484,8 +485,7 @@ pub fn generate_valid_accumulator_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>)
     };
 
     // Generate base trace
-    let (base_trace, public_inputs) =
-        AccumulatorNonRevocationAir::generate_trace(&witness, acc, alpha);
+    let (base_trace, public_inputs) = generate_base_accumulator_trace(&witness, acc, alpha);
 
     // Extend each row with auxiliary columns (alpha_aux, acc_aux)
     let mut trace: Vec<Vec<BabyBear>> = Vec::with_capacity(base_trace.len());

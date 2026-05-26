@@ -10,7 +10,7 @@
 
 use std::time::Instant;
 
-use dregg_bridge::present::{bytes_to_babybear, hash_index};
+use dregg_bridge::present::{UnsafeLocalOnlyMarker, bytes_to_babybear, hash_index};
 use dregg_bridge::{BridgePresentationBuilder, BridgePresentationProof};
 use dregg_circuit::BabyBear;
 
@@ -185,7 +185,12 @@ fn main() {
     builder.set_root_token(fresh_token);
     builder.add_attenuation(&user_attenuation);
 
-    let proof: BridgePresentationProof = builder.prove_fast(&page_request).unwrap();
+    let proof: BridgePresentationProof = builder
+        .prove_local_constraint_check_only(
+            &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+            &page_request,
+        )
+        .unwrap();
 
     let step3_time = step3_start.elapsed();
 

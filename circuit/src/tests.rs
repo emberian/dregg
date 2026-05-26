@@ -571,7 +571,7 @@ fn derivation_rejects_wrong_head() {
     struct BadDerivAir;
     impl Air for BadDerivAir {
         fn trace_width(&self) -> usize {
-            crate::derivation_air::DERIVATION_AIR_WIDTH
+            crate::dsl::derivation::EXTENDED_TRACE_WIDTH
         }
         fn num_public_inputs(&self) -> usize {
             2

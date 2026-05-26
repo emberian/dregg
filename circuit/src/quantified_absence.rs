@@ -39,7 +39,7 @@
 //! let valid = verify_quantified_absence_accumulator(&proof, acc_all, alpha);
 //! ```
 
-use crate::accumulator_air::{ExtElem, compute_accumulator};
+use crate::accumulator_types::{ExtElem, compute_accumulator};
 use crate::field::BabyBear;
 use crate::poseidon2::hash_many;
 use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};

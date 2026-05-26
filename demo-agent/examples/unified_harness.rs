@@ -12,7 +12,7 @@ use std::error::Error;
 use std::time::Instant;
 
 use dregg_bridge::BridgePresentationBuilder;
-use dregg_bridge::present::{bytes_to_babybear, hash_index, verify_presentation};
+use dregg_bridge::present::{bytes_to_babybear, hash_index, verify_presentation_bb};
 use dregg_cell::note::Note;
 use dregg_cell::nullifier_set::NullifierSet;
 use dregg_cell::program::{CellProgram, StateConstraint, field_from_u64};
@@ -23,7 +23,7 @@ use dregg_circuit::BabyBear;
 use dregg_circuit::poseidon2;
 use dregg_circuit::stark::{MerkleStarkAir, generate_merkle_trace, proof_to_bytes, prove, verify};
 use dregg_federation::types::{AttestedRoot, PublicKey};
-use dregg_federation::{Federation, SigningKey, generate_keypair, sign};
+use dregg_federation::{SigningKey, generate_keypair, sign};
 use dregg_token::{Attenuation, AuthRequest, AuthToken, BudgetSpec, MacaroonToken};
 use dregg_trace::{
     AuthorizationRequest, Conclusion, Evaluator, Fact, Rule, Term, standard_policy,
@@ -31,8 +31,7 @@ use dregg_trace::{
 };
 use dregg_turn::builder::ActionBuilder;
 use dregg_turn::{
-    ComputronCosts, DelegationMode, Effect, Pipeline, TurnBuilder, TurnExecutor, TurnResult,
-    execute_pipeline,
+    ComputronCosts, DelegationMode, Effect, Pipeline, TurnBuilder, TurnExecutor, execute_pipeline,
 };
 use dregg_types::causal::CausalDag;
 
@@ -461,7 +460,10 @@ fn run_multi_org_delegation(_issuer_key: &[u8; 32]) -> Result<(), Box<dyn Error>
         Ok(presentation) => {
             // SECURITY: Verify against the externally-derived federation root, NOT the
             // proof's own embedded root (which would be circular and provide no security).
-            assert!(verify_presentation(&presentation, &federation_root_bytes));
+            assert!(verify_presentation_bb(
+                &presentation,
+                bytes_to_babybear(&federation_root_bytes)
+            ));
             assert!(presentation.verify_issuer_stark().unwrap().is_ok());
         }
         Err(_) => {

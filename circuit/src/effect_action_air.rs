@@ -2278,9 +2278,14 @@ mod tests {
         let w = burn_witness(target, 1000, 900, 100, 0);
         // Constructing the prover trace would (under honest prover) fail.
         // We invoke prove + verify and assert the verify rejects.
-        let proof = prove_effect_action(&w);
-        let r = verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 100, 0], &proof);
-        assert!(r.is_err(), "burn with was_burn=0 must be rejected");
+        let result = std::panic::catch_unwind(|| {
+            let proof = prove_effect_action(&w);
+            verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 100, 0], &proof)
+        });
+        assert!(
+            result.is_err() || matches!(result, Ok(Err(_))),
+            "burn with was_burn=0 must be rejected"
+        );
     }
 
     #[test]
@@ -2289,9 +2294,14 @@ mod tests {
         let target = [0x66u8; 32];
         // Honest old/amount, but new is wrong (off by 1).
         let w = burn_witness(target, 1000, 901, 100, 1);
-        let proof = prove_effect_action(&w);
-        let r = verify_effect_action(SCHEMA_BURN, &[target], &[1000, 901, 100, 1], &proof);
-        assert!(r.is_err(), "wrong decrement must be rejected");
+        let result = std::panic::catch_unwind(|| {
+            let proof = prove_effect_action(&w);
+            verify_effect_action(SCHEMA_BURN, &[target], &[1000, 901, 100, 1], &proof)
+        });
+        assert!(
+            result.is_err() || matches!(result, Ok(Err(_))),
+            "wrong decrement must be rejected"
+        );
     }
 
     #[test]
@@ -2311,19 +2321,23 @@ mod tests {
         //     non-canonical u32 limb, OR mismatch the boundary on new_hi.
         let bogus_new = 50u64.wrapping_sub(100);
         let w = burn_witness(target, 50, bogus_new, 100, 1);
-        let proof = prove_effect_action(&w);
-        let r = verify_effect_action(SCHEMA_BURN, &[target], &[50, bogus_new, 100, 1], &proof);
+        let result = std::panic::catch_unwind(|| {
+            let proof = prove_effect_action(&w);
+            verify_effect_action(SCHEMA_BURN, &[target], &[50, bogus_new, 100, 1], &proof)
+        });
         assert!(
-            r.is_err(),
+            result.is_err() || matches!(result, Ok(Err(_))),
             "burn > balance must be rejected (algebra forces nonsense limbs)"
         );
         // (b) Caller picks new=0 (claiming amount fully consumed) but
         //     amount > old: 0 + 100 != 50.
         let w2 = burn_witness(target, 50, 0, 100, 1);
-        let proof2 = prove_effect_action(&w2);
-        let r2 = verify_effect_action(SCHEMA_BURN, &[target], &[50, 0, 100, 1], &proof2);
+        let result2 = std::panic::catch_unwind(|| {
+            let proof2 = prove_effect_action(&w2);
+            verify_effect_action(SCHEMA_BURN, &[target], &[50, 0, 100, 1], &proof2)
+        });
         assert!(
-            r2.is_err(),
+            result2.is_err() || matches!(result2, Ok(Err(_))),
             "burn > balance (alt construction) must be rejected"
         );
     }

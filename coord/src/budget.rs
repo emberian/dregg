@@ -70,13 +70,6 @@ pub type ResourceAmount = u64;
 /// Convenience alias: a StingrayCounter for computron metering.
 pub type ComputronBudget = StingrayCounter;
 
-/// Backward-compat alias — new code should use `StingrayCounter`.
-#[deprecated(
-    since = "0.1.0",
-    note = "renamed to StingrayCounter (arXiv:2501.06531)"
-)]
-pub type BudgetCoordinator = StingrayCounter;
-
 // ─── BudgetSlice ──────────────────────────────────────────────────────────────
 
 /// Per-silo state for a bounded counter slice.
@@ -975,7 +968,7 @@ mod tests {
     }
 
     /// Register Ed25519 pubkeys for every silo in the coordinator.
-    fn register_all_silo_pubkeys(coord: &mut BudgetCoordinator) {
+    fn register_all_silo_pubkeys(coord: &mut StingrayCounter) {
         let silos = coord.silos.clone();
         for silo in &silos {
             let sk = test_signing_key(silo);
@@ -1002,7 +995,7 @@ mod tests {
         ];
         for (balance, silo_count, f, expected) in cases {
             let silos = test_silos(silo_count);
-            let coord = BudgetCoordinator::new(test_agent(), balance, silos, f).unwrap();
+            let coord = StingrayCounter::new(test_agent(), balance, silos, f).unwrap();
             assert_eq!(
                 coord.compute_slice_ceiling(),
                 expected,
@@ -1014,7 +1007,7 @@ mod tests {
     #[test]
     fn test_insufficient_silos() {
         let silos = test_silos(3); // Need 3*1+1 = 4 silos for f=1
-        let result = BudgetCoordinator::new(test_agent(), 1000, silos, 1);
+        let result = StingrayCounter::new(test_agent(), 1000, silos, 1);
         assert!(matches!(
             result,
             Err(BudgetError::InsufficientSilos { have: 3, need: 4 })
@@ -1028,7 +1021,7 @@ mod tests {
         let silo_b = silos[1];
         let silo_c = silos[2];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1200, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1200, silos, 1).unwrap();
         // ceiling = 1200 * 2/3 = 800
 
         // Each silo can spend up to 800 independently.
@@ -1050,7 +1043,7 @@ mod tests {
         let silos = test_silos(4);
         let silo = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 300, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 300, silos, 1).unwrap();
         // ceiling = 300 * 2/3 = 200
 
         // Spend up to ceiling.
@@ -1077,7 +1070,7 @@ mod tests {
         let silo_c = silos[2];
         let silo_d = silos[3];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos.clone(), 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos.clone(), 1).unwrap();
         register_all_silo_pubkeys(&mut coord);
 
         // Spend from two silos.
@@ -1113,7 +1106,7 @@ mod tests {
         let silos = test_silos(4);
         let silo_a = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos, 1).unwrap();
         coord.try_debit(silo_a, 50, test_digest(1)).unwrap();
 
         let key_a = test_signing_key(&silo_a);
@@ -1135,7 +1128,7 @@ mod tests {
         let silos = test_silos(4);
         let silo_a = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos, 1).unwrap();
         register_all_silo_pubkeys(&mut coord);
         coord.try_debit(silo_a, 50, test_digest(1)).unwrap();
 
@@ -1153,7 +1146,7 @@ mod tests {
         let silos = test_silos(4);
         let silo = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos, 1).unwrap();
         register_all_silo_pubkeys(&mut coord);
         coord.try_debit(silo, 50, test_digest(1)).unwrap();
 
@@ -1176,7 +1169,7 @@ mod tests {
         let silos = test_silos(4);
         let silo = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos, 1).unwrap();
         register_all_silo_pubkeys(&mut coord);
 
         // Forge a certificate claiming more than ceiling.
@@ -1211,7 +1204,7 @@ mod tests {
         let silos = test_silos(4);
         let silo = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos, 1).unwrap();
         register_all_silo_pubkeys(&mut coord);
 
         // Forge a certificate within the ceiling (so ceiling check passes)
@@ -1240,7 +1233,7 @@ mod tests {
         let silo_a = silos[0];
         let silo_b = silos[1];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos, 1).unwrap();
         register_all_silo_pubkeys(&mut coord);
 
         // Silo B signs a certificate, but it claims silo == silo_a.
@@ -1261,7 +1254,7 @@ mod tests {
         let silos = test_silos(4);
         let silo = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos, 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos, 1).unwrap();
         // Note: NO register_all_silo_pubkeys call.
 
         let key = test_signing_key(&silo);
@@ -1531,7 +1524,7 @@ mod tests {
         let silos = test_silos(4);
         let silo = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos.clone(), 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos.clone(), 1).unwrap();
         register_all_silo_pubkeys(&mut coord);
         let mut unlock_mgr = FastUnlockManager::new(1, 4);
         register_all_unlock_pubkeys(&mut unlock_mgr, &silos);
@@ -1587,7 +1580,7 @@ mod tests {
         let silos = test_silos(4);
         let byzantine = silos[0];
 
-        let mut coord = BudgetCoordinator::new(test_agent(), 1000, silos.clone(), 1).unwrap();
+        let mut coord = StingrayCounter::new(test_agent(), 1000, silos.clone(), 1).unwrap();
         let ceiling = coord.compute_slice_ceiling();
         assert_eq!(ceiling, 666);
 

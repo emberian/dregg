@@ -428,8 +428,75 @@ impl StarkAir for TemporalPredicateAir {
         public_inputs: &[BabyBear],
         alpha: BabyBear,
     ) -> BabyBear {
-        // Delegate to the DSL-generated implementation.
-        TemporalPredicateDsl.eval_constraints(local, next, public_inputs, alpha)
+        // Predicate-type-aware constraint evaluation.
+        // The DSL-generated TemporalPredicateDsl only hardcodes diff = value - threshold
+        // (Gte semantics). TemporalPredicateAir must adapt C1 for Lte/Gt/Lt.
+        let mut cs = Vec::new();
+
+        // C1: diff computation (depends on predicate type)
+        match self.witness.predicate_type {
+            PredicateType::Gte | PredicateType::InRangeLow | PredicateType::Neq => {
+                cs.push(local[col::DIFF] - (local[col::VALUE] - local[col::THRESHOLD]));
+            }
+            PredicateType::Lte | PredicateType::InRangeHigh => {
+                cs.push(local[col::DIFF] - (local[col::THRESHOLD] - local[col::VALUE]));
+            }
+            PredicateType::Gt => {
+                cs.push(
+                    local[col::DIFF] - (local[col::VALUE] - local[col::THRESHOLD] - BabyBear::ONE),
+                );
+            }
+            PredicateType::Lt => {
+                cs.push(
+                    local[col::DIFF] - (local[col::THRESHOLD] - local[col::VALUE] - BabyBear::ONE),
+                );
+            }
+        }
+
+        // C2: Each diff_bit is binary
+        for i in 0..col::NUM_DIFF_BITS {
+            let bit = local[col::DIFF_BITS_START + i];
+            cs.push(bit * (bit - BabyBear::ONE));
+        }
+
+        // C3: Bit reconstruction: sum(diff_bits[i] * 2^i) == diff
+        {
+            let mut reconstructed = BabyBear::ZERO;
+            let mut power_of_two = BabyBear::ONE;
+            let two = BabyBear::new(2);
+            for i in 0..col::NUM_DIFF_BITS {
+                reconstructed = reconstructed + local[col::DIFF_BITS_START + i] * power_of_two;
+                power_of_two = power_of_two * two;
+            }
+            cs.push(reconstructed - local[col::DIFF]);
+        }
+
+        // C4: High bit is zero (range proof: diff < 2^30 => non-negative)
+        cs.push(local[col::DIFF_BITS_START + col::NUM_DIFF_BITS - 1]);
+
+        // C5: acc_plus_one = accumulator + 1
+        cs.push(local[col::ACC_PLUS_ONE] - local[col::ACCUMULATOR] - BabyBear::ONE);
+
+        // C6: step_plus_one = step_index + 1
+        cs.push(local[col::STEP_PLUS_ONE] - local[col::STEP_INDEX] - BabyBear::ONE);
+
+        // Transition constraints
+        let transitions = vec![
+            next[col::ACCUMULATOR] - local[col::ACC_PLUS_ONE],
+            next[col::STEP_INDEX] - local[col::STEP_PLUS_ONE],
+            next[col::THRESHOLD] - local[col::THRESHOLD],
+        ];
+
+        let _ = public_inputs;
+
+        // Compose all constraints with alpha powers
+        let mut result = BabyBear::ZERO;
+        let mut alpha_power = BabyBear::ONE;
+        for c in cs.iter().chain(transitions.iter()) {
+            result = result + alpha_power * *c;
+            alpha_power = alpha_power * alpha;
+        }
+        result
     }
 
     fn boundary_constraints(

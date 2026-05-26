@@ -765,7 +765,14 @@ pub fn generate_fold_trace(witness: &FoldWitness) -> (Vec<Vec<BabyBear>>, Vec<Ba
         row[col::FACT_TERM_START + 2] = fact.terms[2];
         row[col::HASH_VALID] = BabyBear::ONE;
         // Auxiliary: next row's expected removal_count
-        row[col::REMOVAL_COUNT_PLUS_ONE] = BabyBear::new((i + 2) as u32);
+        // For the last removal row, the next row is the summary row,
+        // so REMOVAL_COUNT_PLUS_ONE should equal total_removals (not i+2).
+        let is_last_removal = i + 1 == w.removed_facts.len();
+        row[col::REMOVAL_COUNT_PLUS_ONE] = if is_last_removal {
+            BabyBear::new(w.removed_facts.len() as u32)
+        } else {
+            BabyBear::new((i + 2) as u32)
+        };
         trace.push(row);
     }
 

@@ -11,7 +11,7 @@
 //! Note: tests use `prove_fast()` (constraint-checked, no real STARK) so
 //! this file is NO-CARGO-compatible — no STARK proving happens.
 
-use dregg_bridge::present::BridgePresentationBuilder;
+use dregg_bridge::present::{BridgePresentationBuilder, UnsafeLocalOnlyMarker};
 use dregg_token::{Attenuation, AuthRequest, MacaroonToken};
 
 // ============================================================================
@@ -96,7 +96,10 @@ fn valid_credential_accepted() {
         ..Default::default()
     };
 
-    let result = builder.prove_fast(&req);
+    let result = builder.prove_local_constraint_check_only(
+        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+        &req,
+    );
     assert!(
         result.is_ok(),
         "valid credential presentation must be accepted: {:?}",
@@ -139,7 +142,10 @@ fn wrong_issuer_key_rejected_by_membership_check() {
     // prove_fast uses the local constraint check path.  The issuer membership
     // check runs via `build_issuer_membership` before the auth trace is even
     // evaluated — a builder constructed with an unregistered key must fail.
-    let result = builder.prove_fast(&req);
+    let result = builder.prove_local_constraint_check_only(
+        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+        &req,
+    );
     assert!(
         result.is_err(),
         "forged (unregistered) issuer key must be rejected by issuer membership check"
@@ -173,7 +179,10 @@ fn expired_credential_denied() {
         ..Default::default()
     };
 
-    let result = builder.prove_fast(&req);
+    let result = builder.prove_local_constraint_check_only(
+        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+        &req,
+    );
     assert!(
         result.is_err(),
         "credential with past expiry must be denied"
@@ -207,7 +216,10 @@ fn credential_wrong_app_denied() {
         ..Default::default()
     };
 
-    let result = builder.prove_fast(&req);
+    let result = builder.prove_local_constraint_check_only(
+        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+        &req,
+    );
     assert!(
         result.is_err(),
         "credential restricted to 'dashboard' must be denied for 'admin-panel'"
@@ -239,7 +251,12 @@ fn wire_proof_strips_private_trace() {
         ..Default::default()
     };
 
-    let proof = builder.prove_fast(&req).unwrap();
+    let proof = builder
+        .prove_local_constraint_check_only(
+            &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+            &req,
+        )
+        .unwrap();
 
     // The full proof carries a trace (for local debugging).
     // Converting to wire format must not panic and must produce a proof
@@ -288,7 +305,10 @@ fn credential_wrong_user_denied() {
         ..Default::default()
     };
 
-    let result = builder.prove_fast(&req);
+    let result = builder.prove_local_constraint_check_only(
+        &UnsafeLocalOnlyMarker::i_know_this_is_not_cryptographically_sound(),
+        &req,
+    );
     assert!(
         result.is_err(),
         "credential confined to 'alice' must be denied for user 'bob'"

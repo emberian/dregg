@@ -90,10 +90,6 @@ enum Command {
         #[arg(long, default_value = "100")]
         blocklace_checkpoint_interval: u64,
 
-        /// Blocklace COD budget (max optimistic outstanding turns; default 8).
-        #[arg(long, default_value = "8")]
-        blocklace_cod_budget: usize,
-
         /// Blocklace constitution wave timeout in milliseconds (default 10000).
         #[arg(long, default_value = "10000")]
         blocklace_wave_timeout_ms: u64,
@@ -294,7 +290,6 @@ async fn main() {
             enable_pruning,
             checkpoint_interval,
             blocklace_checkpoint_interval,
-            blocklace_cod_budget,
             blocklace_wave_timeout_ms,
             enable_faucet,
             federation_mode,
@@ -314,7 +309,6 @@ async fn main() {
                 enable_pruning,
                 checkpoint_interval,
                 blocklace_checkpoint_interval,
-                blocklace_cod_budget,
                 blocklace_wave_timeout_ms,
                 enable_faucet,
                 &federation_mode,
@@ -387,7 +381,6 @@ async fn run_node(
     enable_pruning: bool,
     checkpoint_interval: u64,
     blocklace_checkpoint_interval: u64,
-    blocklace_cod_budget: usize,
     blocklace_wave_timeout_ms: u64,
     enable_faucet: bool,
     federation_mode_str: &str,
@@ -565,7 +558,6 @@ async fn run_node(
         pruning = enable_pruning,
         checkpoint_interval = checkpoint_interval,
         blocklace_checkpoint_interval,
-        blocklace_cod_budget,
         blocklace_wave_timeout_ms,
         faucet = enable_faucet,
         federation_mode = if is_solo_mode { "solo" } else { "full" },
@@ -595,17 +587,17 @@ async fn run_node(
                 );
                 let sync_state = node_state.clone();
                 let gossip_port_copy = gossip_port;
-                tokio::spawn(async move {
-                    blocklace_sync::run_blocklace_sync(
-                        sync_state,
-                        gossip_port_copy,
-                        auto_approve_joins,
-                        blocklace_checkpoint_interval,
-                        blocklace_cod_budget,
-                        blocklace_wave_timeout_ms,
-                    )
-                    .await;
-                });
+                let blocklace_handle = blocklace_sync::run_blocklace_sync(
+                    sync_state,
+                    gossip_port_copy,
+                    auto_approve_joins,
+                    blocklace_checkpoint_interval,
+                    blocklace_wave_timeout_ms,
+                )
+                .await;
+                if let Some(handle) = blocklace_handle {
+                    node_state.set_blocklace(handle).await;
+                }
             } else {
                 info!("solo mode with no peers configured — blocklace sync skipped");
             }
