@@ -35,13 +35,19 @@ pub struct EventsResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CellDetails {
+    #[serde(alias = "id")]
     pub cell_id: String,
+    #[serde(default = "default_hosted_mode")]
     pub mode: String,
     pub balance: u64,
     pub nonce: u64,
+    #[serde(alias = "capability_count")]
     pub capabilities_count: u32,
+    #[serde(default)]
     pub program_vk: Option<String>,
+    #[serde(default)]
     pub provenance: Option<String>,
+    #[serde(default)]
     pub created_by_factory: Option<String>,
 }
 
@@ -113,6 +119,63 @@ pub struct ExplorerStats {
     pub active_auctions: u64,
     pub federation_nodes_up: u32,
     pub federation_nodes_total: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CommittedEventWire {
+    height: u64,
+    turn_hash: String,
+    cell_id: String,
+    #[serde(default)]
+    effects: Vec<String>,
+    timestamp: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FaucetResponse {
+    success: bool,
+    amount: u64,
+    error: Option<String>,
+}
+
+fn default_hosted_mode() -> String {
+    "hosted".to_string()
+}
+
+fn events_response_from_committed(
+    committed: Vec<CommittedEventWire>,
+    fallback_height: u64,
+) -> EventsResponse {
+    let block_height = committed
+        .iter()
+        .map(|event| event.height)
+        .max()
+        .unwrap_or(fallback_height);
+    EventsResponse {
+        block_height,
+        events: committed_events_to_recent(committed),
+    }
+}
+
+fn committed_events_to_recent(committed: Vec<CommittedEventWire>) -> Vec<RecentEvent> {
+    committed
+        .into_iter()
+        .map(|event| RecentEvent {
+            event_type: "turn".to_string(),
+            summary: if event.effects.is_empty() {
+                format!("Committed turn {}", short_hash(&event.turn_hash))
+            } else {
+                event.effects.join(", ")
+            },
+            timestamp: event.timestamp.to_string(),
+            cell_id: Some(event.cell_id),
+            tx_hash: Some(event.turn_hash),
+        })
+        .collect()
+}
+
+fn short_hash(hash: &str) -> String {
+    format!("{}...", &hash[..12.min(hash.len())])
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -324,17 +387,23 @@ impl DevnetClient {
 
     /// Get events since a given block height (for the activity feed poller).
     pub async fn get_events_since(&self, since_height: u64) -> Result<EventsResponse, DevnetError> {
-        let url = format!("{}/api/events?since={}", self.base_url, since_height);
-        let resp = self.client.get(&url).send().await?;
+        let url = format!("{}/api/events", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("since_height", since_height.to_string())])
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(DevnetError::Api(format!("status {}", resp.status())));
         }
-        Ok(resp.json().await?)
+        let events: Vec<CommittedEventWire> = resp.json().await?;
+        Ok(events_response_from_committed(events, since_height))
     }
 
     /// Get cell details by ID.
     pub async fn get_cell_details(&self, cell_id: &str) -> Result<CellDetails, DevnetError> {
-        let url = format!("{}/api/node/cells/{cell_id}", self.base_url);
+        let url = format!("{}/api/cell/{cell_id}", self.base_url);
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
             return Err(DevnetError::Api(format!("status {}", resp.status())));
@@ -418,16 +487,30 @@ impl DevnetClient {
         count: u32,
         cell_id: Option<&str>,
     ) -> Result<Vec<RecentEvent>, DevnetError> {
-        let url = format!("{}/api/node/events/recent", self.base_url);
-        let mut req = self.client.get(&url).query(&[("count", count.to_string())]);
-        if let Some(cid) = cell_id {
-            req = req.query(&[("cell_id", cid.to_string())]);
-        }
-        let resp = req.send().await?;
+        let url = format!("{}/api/events", self.base_url);
+        let count = count.clamp(1, 200) as usize;
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[
+                ("since_height", "0".to_string()),
+                ("limit", "200".to_string()),
+            ])
+            .send()
+            .await?;
         if !resp.status().is_success() {
             return Err(DevnetError::Api(format!("status {}", resp.status())));
         }
-        Ok(resp.json().await?)
+        let committed: Vec<CommittedEventWire> = resp.json().await?;
+        let mut events = committed_events_to_recent(committed);
+        if let Some(cid) = cell_id {
+            events.retain(|event| event.cell_id.as_deref() == Some(cid));
+        }
+        if events.len() > count {
+            events = events.split_off(events.len() - count);
+        }
+        events.reverse();
+        Ok(events)
     }
 
     /// Get the explorer base URL for building links.
@@ -439,23 +522,31 @@ impl DevnetClient {
 
     /// Register a cell on devnet.
     pub async fn register_cell(&self, cell_id: &str, public_key: &str) -> Result<(), DevnetError> {
-        let url = format!("{}/api/cells/register", self.base_url);
+        let url = format!("{}/api/faucet", self.base_url);
         let body = serde_json::json!({
-            "cell_id": cell_id,
+            "recipient": cell_id,
             "public_key": public_key,
-            "mode": "hosted",
+            "amount": 0,
         });
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
             let msg = resp.text().await.unwrap_or_default();
             return Err(DevnetError::Api(msg));
         }
+        let result: FaucetResponse = resp.json().await?;
+        if !result.success {
+            return Err(DevnetError::Api(
+                result
+                    .error
+                    .unwrap_or_else(|| "cell materialization failed".to_string()),
+            ));
+        }
         Ok(())
     }
 
     /// Get the balance of a cell.
     pub async fn get_balance(&self, cell_id: &str) -> Result<u64, DevnetError> {
-        let url = format!("{}/api/node/cells/{cell_id}", self.base_url);
+        let url = format!("{}/api/cell/{cell_id}", self.base_url);
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
             return Err(DevnetError::Api(format!("status {}", resp.status())));
@@ -492,14 +583,24 @@ impl DevnetClient {
     /// Request tokens from the devnet faucet.
     pub async fn faucet_request(&self, cell_id: &str) -> Result<u64, DevnetError> {
         let url = format!("{}/api/faucet", self.base_url);
-        let body = serde_json::json!({ "cell_id": cell_id });
+        let body = serde_json::json!({
+            "recipient": cell_id,
+            "amount": 1000,
+        });
         let resp = self.client.post(&url).json(&body).send().await?;
         if !resp.status().is_success() {
             let msg = resp.text().await.unwrap_or_default();
             return Err(DevnetError::Api(msg));
         }
-        let result: serde_json::Value = resp.json().await?;
-        Ok(result["amount"].as_u64().unwrap_or(1000))
+        let result: FaucetResponse = resp.json().await?;
+        if !result.success {
+            return Err(DevnetError::Api(
+                result
+                    .error
+                    .unwrap_or_else(|| "faucet request failed".to_string()),
+            ));
+        }
+        Ok(result.amount)
     }
 
     // ─── Gallery / auction endpoints ───────────────────────────────────────────
@@ -661,5 +762,70 @@ impl DevnetClient {
             return Err(DevnetError::Api(format!("status {}", resp.status())));
         }
         Ok(resp.json().await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn cell_details_accepts_node_explorer_shape() {
+        let details: CellDetails = serde_json::from_value(json!({
+            "id": "abc123",
+            "balance": 42,
+            "nonce": 7,
+            "capability_count": 3
+        }))
+        .expect("node /api/cell response should deserialize");
+
+        assert_eq!(details.cell_id, "abc123");
+        assert_eq!(details.mode, "hosted");
+        assert_eq!(details.balance, 42);
+        assert_eq!(details.nonce, 7);
+        assert_eq!(details.capabilities_count, 3);
+        assert!(details.program_vk.is_none());
+    }
+
+    #[test]
+    fn committed_events_convert_to_recent_activity() {
+        let response = events_response_from_committed(
+            vec![
+                CommittedEventWire {
+                    height: 4,
+                    turn_hash: "0123456789abcdef".to_string(),
+                    cell_id: "cell-a".to_string(),
+                    effects: Vec::new(),
+                    timestamp: 100,
+                },
+                CommittedEventWire {
+                    height: 7,
+                    turn_hash: "feedfacecafebeef".to_string(),
+                    cell_id: "cell-b".to_string(),
+                    effects: vec!["signed_turn:2".to_string()],
+                    timestamp: 101,
+                },
+            ],
+            3,
+        );
+
+        assert_eq!(response.block_height, 7);
+        assert_eq!(response.events.len(), 2);
+        assert_eq!(response.events[0].summary, "Committed turn 0123456789ab...");
+        assert_eq!(response.events[0].cell_id.as_deref(), Some("cell-a"));
+        assert_eq!(response.events[1].summary, "signed_turn:2");
+        assert_eq!(
+            response.events[1].tx_hash.as_deref(),
+            Some("feedfacecafebeef")
+        );
+    }
+
+    #[test]
+    fn empty_event_response_preserves_poll_cursor() {
+        let response = events_response_from_committed(Vec::new(), 11);
+
+        assert_eq!(response.block_height, 11);
+        assert!(response.events.is_empty());
     }
 }

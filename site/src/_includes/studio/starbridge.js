@@ -11,6 +11,95 @@
 
 import { parseRef, isRef } from './uri.js';
 
+const STARBRIDGE_APP_IDS = [
+  'nameservice',
+  'identity',
+  'governed-namespace',
+  'subscription',
+  'bounty-board',
+  'gallery',
+  'privacy-voting',
+  'compute-exchange',
+];
+const FALLBACK_APPS = {
+  nameservice: {
+    id: 'nameservice',
+    name: 'Nameservice',
+    description: 'Federation name directory built from dregg-native primitives.',
+    version: '0.1.0',
+    page: '/starbridge-apps/nameservice/pages/index.html',
+    inspectors: ['dregg-name', 'dregg-name-registry', 'dregg-name-register-form'],
+    turn_builders: ['register_name', 'renew_name', 'transfer_name', 'revoke_name', 'set_target_name'],
+    required_apis: ['signTurn', 'blake3', 'cell.readField', 'builders.nameservice'],
+  },
+  identity: {
+    id: 'identity',
+    name: 'Identity',
+    description: 'Credential issuance and selective disclosure.',
+    version: '0.1.0',
+    page: '/starbridge-apps/identity/pages/index.html',
+    inspectors: ['dregg-credential', 'dregg-credential-issue-form', 'dregg-credential-present-form', 'dregg-credential-verifier'],
+    turn_builders: ['issue_credential', 'present_credential', 'verify_presentation'],
+    required_apis: ['signTurn'],
+  },
+  'governed-namespace': {
+    id: 'governed-namespace',
+    name: 'Governed Namespace',
+    description: 'Governance tables and proposals.',
+    version: '0.1.0',
+    page: '/starbridge-apps/governed-namespace/pages/index.html',
+    inspectors: ['dregg-namespace', 'dregg-namespace-route-table', 'dregg-namespace-proposal', 'dregg-namespace-dispatch'],
+    turn_builders: ['propose_route_table', 'vote_route_table', 'commit_route_table'],
+    required_apis: ['signTurn'],
+  },
+  subscription: {
+    id: 'subscription',
+    name: 'Subscription',
+    description: 'Pub/sub topic and capability subscription app.',
+    version: '0.1.0',
+    page: '/starbridge-apps/subscription/pages/index.html',
+    inspectors: ['dregg-subscription', 'dregg-subscription-publish-form', 'dregg-subscription-feed'],
+    turn_builders: ['publish', 'consume', 'grant_publisher', 'grant_consumer'],
+    required_apis: ['signTurn'],
+  },
+  'bounty-board': {
+    id: 'bounty-board',
+    name: 'Bounty Board',
+    description: 'Legacy bounty workflow app retained for porting.',
+    version: '0.0.0',
+    status: 'unported',
+    legacy_path: 'apps/bounty-board',
+    page: null,
+  },
+  gallery: {
+    id: 'gallery',
+    name: 'Gallery',
+    description: 'Legacy private auction/gallery app retained for porting.',
+    version: '0.0.0',
+    status: 'unported',
+    legacy_path: 'apps/gallery',
+    page: null,
+  },
+  'privacy-voting': {
+    id: 'privacy-voting',
+    name: 'Privacy Voting',
+    description: 'Legacy privacy voting app retained for porting.',
+    version: '0.0.0',
+    status: 'unported',
+    legacy_path: 'apps/privacy-voting',
+    page: null,
+  },
+  'compute-exchange': {
+    id: 'compute-exchange',
+    name: 'Compute Exchange',
+    description: 'Legacy compute marketplace app retained for porting.',
+    version: '0.0.0',
+    status: 'unported',
+    legacy_path: 'apps/compute-exchange',
+    page: null,
+  },
+};
+
 // ----------------------------------------------------------------------------
 // Bootstrap: wait for window.dreggUi (Preact + signals + htm) to load.
 // ----------------------------------------------------------------------------
@@ -72,6 +161,9 @@ function writeUrlState({ at, runtime }) {
   const navForwardBtn = document.getElementById('sb-nav-forward');
   const toggleMapBtn = document.getElementById('sb-toggle-map');
   const toggleWorkbenchBtn = document.getElementById('sb-toggle-workbench');
+  const surfaceWorkbenchBtn = document.getElementById('sb-surface-workbench');
+  const surfaceAppsBtn = document.getElementById('sb-surface-apps');
+  const surfaceActivityBtn = document.getElementById('sb-surface-activity');
   const snapBtn    = document.getElementById('sb-snapshot');
   const paletteOpenBtn = document.getElementById('sb-palette-open');
   const paletteEl = document.getElementById('sb-palette');
@@ -88,6 +180,7 @@ function writeUrlState({ at, runtime }) {
   const cellCount  = document.getElementById('sb-cell-count');
   const receiptListEl = document.getElementById('sb-receipt-list');
   const receiptCount = document.getElementById('sb-receipt-count');
+  const appCount = document.getElementById('sb-app-count');
   const intentListEl = document.getElementById('sb-intent-list');
   const intentCount = document.getElementById('sb-intent-count');
   const capListEl = document.getElementById('sb-capability-list');
@@ -105,6 +198,7 @@ function writeUrlState({ at, runtime }) {
   const currentKindEl = document.getElementById('sb-current-kind');
   const copyUriBtn = document.getElementById('sb-copy-uri');
   const pinUriBtn = document.getElementById('sb-pin-uri');
+  const openExplorerLink = document.getElementById('sb-open-explorer');
   const rawEl      = document.getElementById('sb-raw');
   const rawFilter = document.getElementById('sb-raw-filter');
   const rawCopyBtn = document.getElementById('sb-raw-copy');
@@ -246,17 +340,104 @@ function writeUrlState({ at, runtime }) {
   }
 
   function appMetaFor(id) {
-    return appCatalog.get(id) || {
-      id,
-      name: id.replace(/-/g, ' '),
-      page: `/starbridge-apps/${id}/pages/index.html`,
-    };
+    return appCatalog.get(id) || fallbackAppMeta(id);
   }
 
   function openAppWorkspace(appMeta) {
     if (!appMeta?.id) return;
+    if (appMeta.status === 'unported') {
+      consoleLog(`${appMeta.name || appMeta.id} is still a legacy app at ${appMeta.legacy_path || 'apps/'}`, 'err');
+      return;
+    }
     appCatalog.set(appMeta.id, appMeta);
     setCurrentUri(`dregg://app/${appMeta.id}`);
+  }
+
+  function setSurfaceCurrent(surface) {
+    const entries = [
+      [surfaceWorkbenchBtn, 'workbench'],
+      [surfaceAppsBtn, 'apps'],
+      [surfaceActivityBtn, 'activity'],
+    ];
+    for (const [btn, id] of entries) {
+      if (!btn) continue;
+      if (id === surface) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    }
+  }
+
+  function fallbackAppMeta(id) {
+    return {
+      ...(FALLBACK_APPS[id] || {}),
+      id,
+      name: FALLBACK_APPS[id]?.name || id.replace(/-/g, ' '),
+      description: FALLBACK_APPS[id]?.description || 'starbridge-app userspace surface',
+      page: FALLBACK_APPS[id]?.page || `/starbridge-apps/${id}/pages/index.html`,
+    };
+  }
+
+  function normalizeAppMeta(meta, id) {
+    const fallback = fallbackAppMeta(id || meta?.id);
+    return {
+      ...fallback,
+      ...(meta || {}),
+      id: meta?.id || fallback.id,
+      name: meta?.name || fallback.name,
+      description: meta?.description || fallback.description,
+      page: meta?.page || fallback.page,
+      inspectors: Array.isArray(meta?.inspectors) ? meta.inspectors : (fallback.inspectors || []),
+      turn_builders: Array.isArray(meta?.turn_builders) ? meta.turn_builders : (fallback.turn_builders || []),
+      required_apis: Array.isArray(meta?.required_apis) ? meta.required_apis : (fallback.required_apis || []),
+      factory_vks: Array.isArray(meta?.factory_vks) ? meta.factory_vks : (fallback.factory_vks || []),
+      status: meta?.status || fallback.status || 'ported',
+      legacy_path: meta?.legacy_path || fallback.legacy_path || null,
+      manifest_path: `/starbridge-apps/${meta?.id || fallback.id}/manifest.json`,
+    };
+  }
+
+  async function loadAppCatalog() {
+    const loaded = await Promise.all(STARBRIDGE_APP_IDS.map(async (id) => {
+      try {
+        const resp = await fetch(`/starbridge-apps/${id}/manifest.json`, { headers: { Accept: 'application/json' } });
+        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+        return normalizeAppMeta(await resp.json(), id);
+      } catch (e) {
+        console.warn(`[starbridge] app manifest unavailable for ${id}; using fallback`, e);
+        return normalizeAppMeta(null, id);
+      }
+    }));
+    appCatalog.clear();
+    loaded.filter(Boolean).forEach((meta) => appCatalog.set(meta.id, meta));
+    if (appCount) appCount.textContent = String(appCatalog.size);
+    return loaded;
+  }
+
+  function appCatalogList() {
+    return STARBRIDGE_APP_IDS.map((id) => appMetaFor(id));
+  }
+
+  function appInitials(appMeta) {
+    const name = appMeta?.name || appMeta?.id || 'app';
+    const words = name.replace(/[^a-z0-9 -]/gi, '').split(/\s+|-/).filter(Boolean);
+    const letters = words.length > 1 ? words.slice(0, 2).map((w) => w[0]).join('') : name.slice(0, 3);
+    return letters.toUpperCase();
+  }
+
+  function appPageHref(appMeta, { embedded = false } = {}) {
+    const pageUrl = new URL(appMeta.page || `/starbridge-apps/${appMeta.id}/pages/index.html`, window.location.origin);
+    if (embedded && pageUrl.pathname.endsWith('/index.html')) {
+      pageUrl.pathname = pageUrl.pathname.slice(0, -'index.html'.length);
+    }
+    if (embedded) {
+      pageUrl.searchParams.set('embedded', '1');
+      pageUrl.searchParams.set('runtime', currentRuntimeId || 'in-memory');
+    }
+    return pageUrl.pathname + pageUrl.search + pageUrl.hash;
+  }
+
+  function compactList(values, empty = 'none') {
+    const list = Array.isArray(values) ? values.filter(Boolean) : [];
+    return list.length ? list.join(', ') : empty;
   }
 
   function setRawText(text) {
@@ -307,6 +488,7 @@ function writeUrlState({ at, runtime }) {
       if (currentUriEl) currentUriEl.textContent = 'no object selected';
       if (currentKindEl) currentKindEl.textContent = 'Dashboard';
       if (copyUriBtn) copyUriBtn.disabled = true;
+      if (openExplorerLink) openExplorerLink.href = '/explorer/';
       if (pinUriBtn) {
         pinUriBtn.disabled = true;
         pinUriBtn.textContent = 'Pin';
@@ -322,6 +504,7 @@ function writeUrlState({ at, runtime }) {
     if (currentUriEl) currentUriEl.textContent = uri;
     if (currentKindEl) currentKindEl.textContent = label;
     if (copyUriBtn) copyUriBtn.disabled = false;
+    if (openExplorerLink) openExplorerLink.href = `/explorer/?at=${encodeURIComponent(uri)}`;
     if (pinUriBtn) {
       const pinned = isPinned(uri);
       pinUriBtn.disabled = false;
@@ -513,13 +696,12 @@ function writeUrlState({ at, runtime }) {
       });
     }
 
-    for (const id of ['nameservice', 'identity', 'governed-namespace', 'subscription']) {
-      const appMeta = appMetaFor(id);
+    for (const appMeta of appCatalogList()) {
       items.push({
         group: 'Programs',
-        label: appMeta.name || id,
-        detail: `Open ${id}`,
-        run: () => openAppWorkspace(appMetaFor(id)),
+        label: appMeta.name || appMeta.id,
+        detail: `${appMeta.id} · ${compactList(appMeta.required_apis, 'no API requirements')}`,
+        run: () => openAppWorkspace(appMetaFor(appMeta.id)),
       });
     }
     for (const id of Object.keys(kinds || {})) {
@@ -652,14 +834,16 @@ function writeUrlState({ at, runtime }) {
 
     const shell = document.createElement('div');
     shell.className = 'sb__app-host';
-    const pageUrl = new URL(appMeta.page || `/starbridge-apps/${appMeta.id}/pages/index.html`, window.location.origin);
-    if (pageUrl.pathname.endsWith('/index.html')) {
-      pageUrl.pathname = pageUrl.pathname.slice(0, -'index.html'.length);
-    }
-    pageUrl.searchParams.set('embedded', '1');
-    pageUrl.searchParams.set('runtime', currentRuntimeId || 'in-memory');
-    const page = pageUrl.pathname + pageUrl.search + pageUrl.hash;
+    const page = appPageHref(appMeta, { embedded: true });
+    const standalonePage = appPageHref(appMeta);
     const registryUri = appMeta.registry_uri || appMeta.registryUri || '';
+    const details = [
+      ['Version', appMeta.version || 'unknown'],
+      ['Required APIs', compactList(appMeta.required_apis)],
+      ['Inspectors', compactList(appMeta.inspectors)],
+      ['Turn builders', compactList(appMeta.turn_builders)],
+      ['Factory VKs', compactList(appMeta.factory_vks)],
+    ];
     shell.innerHTML = `
       <div class="sb__app-hostbar">
         <div>
@@ -669,11 +853,20 @@ function writeUrlState({ at, runtime }) {
             <code>${escapeHtml(currentRuntimeId || 'runtime')}</code>
             <code>dregg://app/${escapeHtml(appMeta.id)}</code>
           </div>
+          <dl class="sb__app-manifest">
+            ${details.map(([term, value]) => `
+              <div>
+                <dt>${escapeHtml(term)}</dt>
+                <dd>${escapeHtml(value)}</dd>
+              </div>
+            `).join('')}
+          </dl>
         </div>
         <div class="sb__app-actions">
           ${registryUri ? `<button type="button" class="sb__btn sb__btn--small" data-uri="${escapeHtml(registryUri)}">Inspect registry</button>` : ''}
+          <button type="button" class="sb__btn sb__btn--small sb__btn--ghost" data-manifest>Manifest</button>
           <button type="button" class="sb__btn sb__btn--small sb__btn--ghost" data-reload-app>Reload</button>
-          <a class="sb__btn sb__btn--small sb__btn--ghost" href="${escapeHtml(page)}" target="_blank">Pop out</a>
+          <a class="sb__btn sb__btn--small sb__btn--ghost" href="${escapeHtml(standalonePage)}" target="_blank">Pop out</a>
         </div>
       </div>
       <iframe
@@ -684,6 +877,10 @@ function writeUrlState({ at, runtime }) {
     `;
     shell.querySelector('[data-uri]')?.addEventListener('click', (e) => {
       setCurrentUri(e.currentTarget.dataset.uri);
+    });
+    shell.querySelector('[data-manifest]')?.addEventListener('click', () => {
+      setRawText(JSON.stringify(appMeta, null, 2));
+      selectWorkbenchTool('raw');
     });
     shell.querySelector('[data-reload-app]')?.addEventListener('click', () => {
       const frame = shell.querySelector('.sb__app-frame');
@@ -698,6 +895,7 @@ function writeUrlState({ at, runtime }) {
     inspector.replaceChildren();
     if (workspaceTitle) workspaceTitle.textContent = uri ? 'Inspector' : 'Workspace';
     if (!uri) {
+      setSurfaceCurrent('workbench');
       inspector.appendChild(renderDashboard());
       return;
     }
@@ -711,9 +909,11 @@ function writeUrlState({ at, runtime }) {
       return;
     }
     if (parsed.kind === 'app') {
+      setSurfaceCurrent('apps');
       renderAppWorkspace(appMetaFor(parsed.id));
       return;
     }
+    setSurfaceCurrent(parsed.kind === 'activity' ? 'activity' : 'workbench');
     const tagName = `dregg-${parsed.kind}`;
     if (!customElements.get(tagName)) {
       const err = document.createElement('div');
@@ -797,6 +997,35 @@ function writeUrlState({ at, runtime }) {
           </div>
         `).join('')
       : '<div class="sb__workbench-empty">No saved snapshots</div>';
+    const appsHtml = appCatalogList().map((appMeta) => {
+      const requiredApis = appMeta.required_apis || [];
+      const inspectors = appMeta.inspectors || [];
+      const turnBuilders = appMeta.turn_builders || [];
+      const factoryVks = appMeta.factory_vks || [];
+      return `
+        <article class="sb__program-card">
+          <button type="button" class="sb__program-launch" data-open-app="${escapeHtml(appMeta.id)}">
+            <span>${escapeHtml(appInitials(appMeta))}</span>
+            <strong>${escapeHtml(appMeta.name || appMeta.id)}</strong>
+          </button>
+          <p>${escapeHtml(appMeta.description || 'starbridge-app userspace surface')}</p>
+          <div class="sb__program-stats" aria-label="${escapeHtml(appMeta.name || appMeta.id)} manifest summary">
+            <span>${requiredApis.length} APIs</span>
+            <span>${inspectors.length} inspectors</span>
+            <span>${turnBuilders.length} builders</span>
+            <span>${factoryVks.length} factories</span>
+          </div>
+          <div class="sb__program-tags">
+            ${(requiredApis.length ? requiredApis : ['no API requirements']).slice(0, 4).map((apiName) => `<code>${escapeHtml(apiName)}</code>`).join('')}
+          </div>
+          <div class="sb__program-actions">
+            <button type="button" class="sb__icon-btn" data-open-app="${escapeHtml(appMeta.id)}">Embed</button>
+            <button type="button" class="sb__icon-btn" data-preview-app="${escapeHtml(appMeta.id)}">Manifest</button>
+            <a class="sb__icon-btn" href="${escapeHtml(appPageHref(appMeta))}" target="_blank">Standalone</a>
+          </div>
+        </article>
+      `;
+    }).join('');
     const panel = document.createElement('div');
     panel.className = 'sb__dashboard';
     panel.innerHTML = `
@@ -813,14 +1042,9 @@ function writeUrlState({ at, runtime }) {
       </section>
       <section class="sb__workbench-grid">
         <div class="sb__workbench-panel sb__workbench-panel--programs">
-          <h3>System Programs</h3>
+          <h3>Apps Dashboard</h3>
           <div class="sb__program-grid">
-            <button type="button" class="sb__program" data-open-app="nameservice"><span>NS</span><strong>Nameservice</strong></button>
-            <button type="button" class="sb__program" data-open-app="identity"><span>ID</span><strong>Identity</strong></button>
-            <button type="button" class="sb__program" data-open-app="governed-namespace"><span>GN</span><strong>Namespace</strong></button>
-            <button type="button" class="sb__program" data-open-app="subscription"><span>SUB</span><strong>Subscription</strong></button>
-            <button type="button" class="sb__program" data-open-activity><span>ACT</span><strong>Activity</strong></button>
-            <button type="button" class="sb__program" data-open-console><span>&gt;</span><strong>Console</strong></button>
+            ${appsHtml}
           </div>
         </div>
         <div class="sb__workbench-panel">
@@ -866,6 +1090,12 @@ function writeUrlState({ at, runtime }) {
     });
     for (const btn of panel.querySelectorAll('[data-open-app]')) {
       btn.addEventListener('click', () => openAppWorkspace(appMetaFor(btn.dataset.openApp)));
+    }
+    for (const btn of panel.querySelectorAll('[data-preview-app]')) {
+      btn.addEventListener('click', () => {
+        setRawText(JSON.stringify(appMetaFor(btn.dataset.previewApp), null, 2));
+        selectWorkbenchTool('raw');
+      });
     }
     panel.querySelector('[data-open-palette]')?.addEventListener('click', () => openPalette());
     for (const btn of panel.querySelectorAll('[data-uri]')) {
@@ -1443,6 +1673,7 @@ function writeUrlState({ at, runtime }) {
     setStatus('loading inspectors…', 'boot');
     await import('/_includes/studio/inspectors.js');
     applyShellLayout();
+    await loadAppCatalog();
 
     kinds = await loadRuntimeKinds();
     if (remoteUrlInput) {
@@ -1559,6 +1790,18 @@ function writeUrlState({ at, runtime }) {
     consoleLog('console ready. type help for commands.', 'ok');
 
     paletteOpenBtn?.addEventListener('click', () => openPalette());
+    surfaceWorkbenchBtn?.addEventListener('click', () => {
+      setCurrentUri(null);
+      selectWorkbenchTool('raw');
+    });
+    surfaceAppsBtn?.addEventListener('click', () => {
+      setSurfaceCurrent('apps');
+      openPalette('app');
+    });
+    surfaceActivityBtn?.addEventListener('click', () => {
+      setCurrentUri('dregg://activity/feed');
+      selectWorkbenchTool('activity');
+    });
     paletteCloseBtn?.addEventListener('click', closePalette);
     paletteEl?.addEventListener('click', (e) => {
       if (e.target === paletteEl) closePalette();

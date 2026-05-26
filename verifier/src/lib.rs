@@ -205,11 +205,29 @@ pub fn verify_effect_vm_proof(
     }
 
     // Step 5: build the Effect VM AIR and convert public inputs.
+    if public_inputs_u32.len() < dregg_circuit::effect_vm::pi::BASE_COUNT {
+        return (
+            VerifierOutput::reject(format!(
+                "Effect VM PI too short: have {} elements, need at least {}",
+                public_inputs_u32.len(),
+                dregg_circuit::effect_vm::pi::BASE_COUNT
+            )),
+            exit_code::REJECTED,
+        );
+    }
+
     let air = EffectVmAir::new(trace_len);
     let pi: Vec<BabyBear> = public_inputs_u32
         .iter()
         .map(|&v| BabyBear::new_canonical(v))
         .collect();
+
+    if let Err(e) = dregg_circuit::effect_vm::verify_balance_limb_pis(&pi) {
+        return (
+            VerifierOutput::reject(format!("Effect VM PI malformed: {e}")),
+            exit_code::REJECTED,
+        );
+    }
 
     // Step 6: run the STARK verifier.
     match stark::verify(&air, &proof, &pi) {
@@ -465,6 +483,9 @@ pub fn replay_chain(entries: &[ReplayEntry]) -> ReplayChainOutput {
 /// - When `prev_receipt_hash` is `Some`, the receipt's own
 ///   `previous_receipt_hash` field must equal it. This is the chain-walk
 ///   invariant: receipt[N].previous_receipt_hash == receipt[N-1].receipt_hash().
+/// - When `prev_receipt_hash` is `None`, the receipt is being checked as the
+///   chain head and must not claim its own previous receipt. Verifying a suffix
+///   requires the caller to supply the expected prior hash.
 /// - PI[IS_AGENT_CELL] must be 1 for the single-proof-per-WR replay shape
 ///   (γ.2 multi-cell bundles use a different code path).
 ///
@@ -497,16 +518,25 @@ pub fn check_receipt_pi_binding(
                 hex::encode(expected)
             ));
         }
+        (None, Some(claimed)) => {
+            return Some(format!(
+                "chain-walk break: chain head has receipt.previous_receipt_hash {}, expected None",
+                hex::encode(claimed)
+            ));
+        }
         _ => {}
     }
 
-    // PI length sanity: must carry at least the γ.0a turn-identity slots.
+    // PI length sanity: must carry the full Effect VM base layout. Earlier
+    // versions only required TURN_HASH, which let truncated PI vectors skip
+    // PREVIOUS_RECEIPT_HASH / IS_AGENT_CELL binding when this helper was used
+    // directly.
     let pi_len = wr.public_inputs.len();
-    if pi_len < pi::TURN_HASH_BASE + pi::TURN_HASH_LEN {
+    if pi_len < pi::BASE_COUNT {
         return Some(format!(
             "PI too short for receipt binding: have {} elements, need at least {}",
             pi_len,
-            pi::TURN_HASH_BASE + pi::TURN_HASH_LEN
+            pi::BASE_COUNT
         ));
     }
 
@@ -524,32 +554,28 @@ pub fn check_receipt_pi_binding(
     }
 
     // PREVIOUS_RECEIPT_HASH binding (T8 algebraic side).
-    if pi_len >= pi::PREVIOUS_RECEIPT_HASH_BASE + pi::PREVIOUS_RECEIPT_HASH_LEN {
-        let prev_bytes = wr.receipt.previous_receipt_hash.unwrap_or([0u8; 32]);
-        let expected_prev = canonical_32_to_felts_4(&prev_bytes);
-        for i in 0..pi::PREVIOUS_RECEIPT_HASH_LEN {
-            let claimed = wr.public_inputs[pi::PREVIOUS_RECEIPT_HASH_BASE + i];
-            let expected = expected_prev[i].as_u32();
-            if claimed != expected {
-                return Some(format!(
-                    "PI[PREVIOUS_RECEIPT_HASH_BASE+{}] = {} but canonical_32_to_felts_4(receipt.previous_receipt_hash)[{}] = {}",
-                    i, claimed, i, expected
-                ));
-            }
+    let prev_bytes = wr.receipt.previous_receipt_hash.unwrap_or([0u8; 32]);
+    let expected_prev = canonical_32_to_felts_4(&prev_bytes);
+    for i in 0..pi::PREVIOUS_RECEIPT_HASH_LEN {
+        let claimed = wr.public_inputs[pi::PREVIOUS_RECEIPT_HASH_BASE + i];
+        let expected = expected_prev[i].as_u32();
+        if claimed != expected {
+            return Some(format!(
+                "PI[PREVIOUS_RECEIPT_HASH_BASE+{}] = {} but canonical_32_to_felts_4(receipt.previous_receipt_hash)[{}] = {}",
+                i, claimed, i, expected
+            ));
         }
     }
 
     // IS_AGENT_CELL binding (γ.2): for the v1 single-proof-per-WR shape,
     // the one proof in the entry MUST be the agent's cell proof, so
     // PI[IS_AGENT_CELL] must be 1.
-    if pi_len > pi::IS_AGENT_CELL {
-        let claimed = wr.public_inputs[pi::IS_AGENT_CELL];
-        if claimed != 1 {
-            return Some(format!(
-                "PI[IS_AGENT_CELL] = {} but single-proof replay requires 1 (agent-cell proof)",
-                claimed
-            ));
-        }
+    let claimed = wr.public_inputs[pi::IS_AGENT_CELL];
+    if claimed != 1 {
+        return Some(format!(
+            "PI[IS_AGENT_CELL] = {} but single-proof replay requires 1 (agent-cell proof)",
+            claimed
+        ));
     }
 
     None
@@ -1121,15 +1147,30 @@ mod tests {
         use dregg_circuit::effect_vm::pi;
         let mut r = sample_receipt();
         r.turn_hash = [0x42u8; 32];
-        r.previous_receipt_hash = Some([0x33u8; 32]);
+        let previous = [0x33u8; 32];
+        r.previous_receipt_hash = Some(previous);
         let mut entry = entry_with_pi_from_receipt(r);
         // Tamper with PI[PREVIOUS_RECEIPT_HASH_BASE]. Closes T8.
         entry.public_inputs[pi::PREVIOUS_RECEIPT_HASH_BASE] ^= 0xCAFE;
-        let reason = check_receipt_pi_binding(&entry, None)
+        let reason = check_receipt_pi_binding(&entry, Some(previous))
             .expect("tampered PI[PREVIOUS_RECEIPT_HASH_BASE] must be rejected");
         assert!(
             reason.contains("PREVIOUS_RECEIPT_HASH_BASE"),
             "rejection should name PREVIOUS_RECEIPT_HASH_BASE; got: {reason}"
+        );
+    }
+
+    #[test]
+    fn pi_binding_rejects_non_genesis_chain_head() {
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        r.previous_receipt_hash = Some([0x33u8; 32]);
+        let entry = entry_with_pi_from_receipt(r);
+        let reason = check_receipt_pi_binding(&entry, None)
+            .expect("chain head with a previous_receipt_hash must be rejected");
+        assert!(
+            reason.contains("chain head"),
+            "rejection should name chain head; got: {reason}"
         );
     }
 
@@ -1199,6 +1240,68 @@ mod tests {
         assert!(
             reason.contains("too short"),
             "rejection should name 'too short'; got: {reason}"
+        );
+    }
+
+    #[test]
+    fn pi_binding_rejects_truncated_base_pi_even_after_turn_hash() {
+        use dregg_circuit::effect_vm::pi;
+
+        let mut r = sample_receipt();
+        r.turn_hash = [0x42u8; 32];
+        let mut entry = entry_with_pi_from_receipt(r);
+        entry.public_inputs.truncate(pi::PREVIOUS_RECEIPT_HASH_BASE);
+
+        let reason = check_receipt_pi_binding(&entry, None)
+            .expect("truncated PI must not skip previous_receipt_hash/agent binding");
+        assert!(
+            reason.contains("too short"),
+            "rejection should name 'too short'; got: {reason}"
+        );
+    }
+
+    fn sample_effect_vm_proof_and_pi() -> (Vec<u8>, Vec<u32>) {
+        let initial_state = dregg_circuit::CellState::new(1_000, 7);
+        let effects = vec![dregg_circuit::effect_vm::Effect::Transfer {
+            amount: 1,
+            direction: 1,
+        }];
+        let (trace, public_inputs) =
+            dregg_circuit::effect_vm::generate_effect_vm_trace(&initial_state, &effects);
+        let air = dregg_circuit::EffectVmAir::new(trace.len());
+        let proof = dregg_circuit::stark::prove(&air, &trace, &public_inputs);
+        let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
+        let pi_u32 = public_inputs.iter().map(|x| x.as_u32()).collect();
+        (proof_bytes, pi_u32)
+    }
+
+    #[test]
+    fn effect_vm_verifier_rejects_short_base_pi() {
+        let (proof_bytes, mut pi_u32) = sample_effect_vm_proof_and_pi();
+        pi_u32.truncate(dregg_circuit::effect_vm::pi::BASE_COUNT - 1);
+
+        let (out, code) = verify_effect_vm_proof(&proof_bytes, &pi_u32, EFFECT_VM_VK_HASH_HEX);
+        assert!(!out.verified);
+        assert_eq!(code, exit_code::REJECTED);
+        assert!(
+            out.reason.contains("PI too short"),
+            "expected short-PI rejection, got: {}",
+            out.reason
+        );
+    }
+
+    #[test]
+    fn effect_vm_verifier_rejects_out_of_range_balance_limb_pi() {
+        let (proof_bytes, mut pi_u32) = sample_effect_vm_proof_and_pi();
+        pi_u32[dregg_circuit::effect_vm::pi::INIT_BAL_LO] = 1u32 << 30;
+
+        let (out, code) = verify_effect_vm_proof(&proof_bytes, &pi_u32, EFFECT_VM_VK_HASH_HEX);
+        assert!(!out.verified);
+        assert_eq!(code, exit_code::REJECTED);
+        assert!(
+            out.reason.contains("INIT_BAL_LO out of range"),
+            "expected balance-limb rejection, got: {}",
+            out.reason
         );
     }
 

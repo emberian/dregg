@@ -1,151 +1,68 @@
 #!/bin/bash
-# Generate devnet genesis state
-# Run once to create initial state, or re-run to reset devnet.
-#
-# Prerequisites:
-#   - Rust toolchain (for dregg-node binary)
-#   - openssl (fallback key generation)
+# Generate devnet genesis state using the canonical dregg-node genesis command.
 #
 # Usage:
 #   cd deploy/genesis
 #   ./generate.sh
 #
-# To regenerate from scratch (wipes existing keys):
+# To regenerate from scratch (removes previously generated devnet files):
 #   ./generate.sh --force
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 FORCE=0
 if [[ "${1:-}" == "--force" ]]; then
   FORCE=1
+elif [[ $# -gt 0 ]]; then
+  echo "usage: $0 [--force]" >&2
+  exit 2
 fi
 
-# Check for existing keys
-if [[ -d keys && $FORCE -eq 0 ]]; then
-  echo "ERROR: keys/ directory already exists."
-  echo "  Use --force to regenerate (this will invalidate all existing state)."
+cd "$SCRIPT_DIR"
+
+generated_glob=(node-*.key node-*.env)
+existing_generated=()
+for path in genesis.json .devnet "${generated_glob[@]}"; do
+  if [[ -e "$path" ]]; then
+    existing_generated+=("$path")
+  fi
+done
+
+if [[ ${#existing_generated[@]} -gt 0 && $FORCE -eq 0 ]]; then
+  echo "ERROR: generated genesis files already exist:"
+  printf '  %s\n' "${existing_generated[@]}"
+  echo "Use --force to regenerate (this will invalidate existing devnet state)."
   exit 1
 fi
 
-echo "=== Generating devnet genesis state ==="
-
-mkdir -p keys secrets
-
-# --- Validator keys ---
-echo ""
-echo "--- Validator keys ---"
-VALIDATORS=3
-for i in $(seq 0 $((VALIDATORS - 1))); do
-  KEY_FILE="keys/node-${i}.key"
-  PUB_FILE="keys/node-${i}.pub"
-
-  if command -v dregg-node &>/dev/null; then
-    echo "  [dregg-node] Generating validator key node-${i}..."
-    dregg-node keygen --output "$KEY_FILE"
-  else
-    echo "  [openssl] Generating validator key node-${i}..."
-    openssl genpkey -algorithm ed25519 -outform DER 2>/dev/null | tail -c 32 > "$KEY_FILE"
-  fi
-
-  chmod 600 "$KEY_FILE"
-
-  # Extract public key (first 32 bytes of Ed25519 public from private)
-  if command -v dregg-node &>/dev/null; then
-    dregg-node pubkey --key "$KEY_FILE" > "$PUB_FILE"
-  else
-    # openssl extraction of Ed25519 public from DER private
-    openssl pkey -outform DER -pubout 2>/dev/null < <(
-      printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x70\x04\x22\x04\x20'
-      cat "$KEY_FILE"
-    ) | tail -c 32 | xxd -p -c 64 > "$PUB_FILE"
-  fi
-
-  echo "    Private: $KEY_FILE"
-  echo "    Public:  $(cat "$PUB_FILE" 2>/dev/null || echo '[generation pending]')"
-done
-
-# --- Account keys ---
-echo ""
-echo "--- Account keys ---"
-ACCOUNTS=(alice bob carol dave eve faucet treasury relay nameservice bridge-operator)
-for name in "${ACCOUNTS[@]}"; do
-  KEY_FILE="keys/${name}.key"
-  PUB_FILE="keys/${name}.pub"
-
-  if command -v dregg-node &>/dev/null; then
-    echo "  [dregg-node] Generating account key: ${name}..."
-    dregg-node keygen --output "$KEY_FILE"
-  else
-    echo "  [openssl] Generating account key: ${name}..."
-    openssl genpkey -algorithm ed25519 -outform DER 2>/dev/null | tail -c 32 > "$KEY_FILE"
-  fi
-
-  chmod 600 "$KEY_FILE"
-
-  if command -v dregg-node &>/dev/null; then
-    dregg-node pubkey --key "$KEY_FILE" > "$PUB_FILE"
-  else
-    openssl pkey -outform DER -pubout 2>/dev/null < <(
-      printf '\x30\x2e\x02\x01\x00\x30\x05\x06\x03\x2b\x65\x70\x04\x22\x04\x20'
-      cat "$KEY_FILE"
-    ) | tail -c 32 | xxd -p -c 64 > "$PUB_FILE"
-  fi
-
-  echo "    ${name}: $KEY_FILE"
-done
-
-# --- Generate federation ID ---
-echo ""
-echo "--- Federation ID ---"
-FED_ID="devnet-$(openssl rand -hex 16)"
-echo "  Federation: $FED_ID"
-echo "$FED_ID" > secrets/federation_id
-
-# --- Compute routes commitment ---
-echo ""
-echo "--- Routes commitment ---"
-ROUTES_HASH=$(sha256sum routes.json 2>/dev/null | cut -d' ' -f1 || shasum -a 256 routes.json | cut -d' ' -f1)
-echo "  Commitment: $ROUTES_HASH"
-
-# --- Assemble final genesis.json with real keys ---
-echo ""
-echo "--- Assembling genesis.json ---"
-
-# If dregg-node is available, use its genesis subcommand for a proper build
-if command -v dregg-node &>/dev/null; then
-  echo "  Using dregg-node genesis command..."
-  dregg-node genesis \
-    --validators "$VALIDATORS" \
-    --epoch-length 100 \
-    --checkpoint-interval 10 \
-    --output .
-  echo "  genesis.json written by dregg-node."
-else
-  echo "  dregg-node not found; using template genesis.json with placeholder keys."
-  echo "  NOTE: Run 'cargo build --release -p dregg-node' then re-run to get real keys."
+if [[ $FORCE -eq 1 ]]; then
+  rm -f genesis.json .devnet node-*.key node-*.env
+  rm -rf keys secrets
 fi
 
-# --- Write .devnet marker ---
-echo "# Devnet genesis directory" > .devnet
-echo "# Generated: $(date -Iseconds)" >> .devnet
-echo "# Federation: $FED_ID" >> .devnet
+echo "=== Generating devnet genesis state ==="
+echo "Using cargo run --release -p dregg-node -- genesis"
 
-# --- Summary ---
+cd "$REPO_DIR"
+cargo run --release -p dregg-node -- genesis \
+  --validators 3 \
+  --epoch-length 100 \
+  --checkpoint-interval 10 \
+  --output "$SCRIPT_DIR"
+
 echo ""
 echo "=== Genesis state generated ==="
 echo ""
 echo "Files:"
-echo "  genesis.json     — federation genesis state"
-echo "  accounts.json    — account manifest"
-echo "  apps.json        — deployed application manifest"
-echo "  routes.json      — DFA route table"
-echo "  keys/            — Ed25519 keypairs (DO NOT COMMIT)"
-echo "  secrets/         — federation secrets (DO NOT COMMIT)"
+echo "  deploy/genesis/genesis.json  federation genesis state"
+echo "  deploy/genesis/.devnet       devnet marker"
+echo "  deploy/genesis/node-*.key    validator private keys (DO NOT COMMIT)"
+echo "  deploy/genesis/node-*.env    validator environment files"
 echo ""
 echo "Deploy with:"
-echo "  scp genesis.json devnet.dregg.fg-goose.online:/opt/dregg-data/"
+echo "  scp deploy/genesis/genesis.json devnet.dregg.fg-goose.online:/opt/dregg-data/"
 echo "  ssh devnet.dregg.fg-goose.online sudo systemctl restart dregg-gateway"
 echo ""
 echo "Or use the deploy script:"

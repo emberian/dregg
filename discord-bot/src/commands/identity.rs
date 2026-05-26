@@ -7,7 +7,8 @@ use serenity::all::{
 };
 
 use crate::BotState;
-use crate::cipherclerk::{UserCipherclerk, sign_legacy};
+use crate::credential_issue;
+use crate::db::IdentityMode;
 use crate::embeds;
 
 /// Register the /credential command.
@@ -100,8 +101,18 @@ async fn handle_issue(ctx: &Context, command: &CommandInteraction, state: &BotSt
 
     defer_ephemeral(ctx, command).await;
 
-    let cell_id = match state.db.get_cell_id(&discord_id).await {
-        Ok(Some(id)) => id,
+    let cell_id = match state.db.get_user_identity(&discord_id).await {
+        Ok(Some(identity)) if identity.mode == IdentityMode::Hosted => identity.cell_id,
+        Ok(Some(_)) => {
+            let embed = embeds::warning_embed(
+                "Hosted Identity Required",
+                "Credential issuance signs a canonical Starbridge turn, so it currently requires a hosted `/cipherclerk create` identity.",
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
         Ok(None) => {
             let embed = embeds::warning_embed(
                 "No Cipherclerk",
@@ -121,19 +132,22 @@ async fn handle_issue(ctx: &Context, command: &CommandInteraction, state: &BotSt
         }
     };
 
-    let cclerk =
-        UserCipherclerk::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
-    let signature = sign_credential_action(&cclerk, &format!("issue:{schema}:{attributes}"));
-
-    match state
-        .devnet
-        .issue_credential(&cell_id, &schema, &attributes, &signature)
+    match credential_issue::issue_from_discord_input(state, user_id, &cell_id, &schema, &attributes)
         .await
     {
-        Ok(credential_id) => {
+        Ok(result) => {
             let embed = embeds::success_embed("Credential Issued")
-                .field("Schema", &schema, true)
-                .field("Credential ID", format!("`{credential_id}`"), true)
+                .field("Schema", &result.schema, true)
+                .field("Credential ID", format!("`{}`", result.credential_id), true)
+                .field(
+                    "Turn",
+                    result
+                        .turn
+                        .turn_hash
+                        .map(|hash| format!("`{hash}`"))
+                        .unwrap_or_else(|| "`unknown`".to_string()),
+                    false,
+                )
                 .field("Attributes", format!("```json\n{attributes}\n```"), false);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -326,13 +340,6 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotSta
                 .await;
         }
     }
-}
-
-/// Sign a credential-issue action via the legacy BLAKE3-MAC wire
-/// scheme the devnet `/api/identity/credentials/issue` endpoint
-/// expects. See `cclerk::sign_legacy` for the transition gap.
-fn sign_credential_action(cclerk: &UserCipherclerk, action: &str) -> String {
-    sign_legacy(cclerk, action.as_bytes())
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

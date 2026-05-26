@@ -3,9 +3,41 @@
   "name": "Governed Namespace",
   "description": "Governance and table-driven namespace starbridge-app.",
   "version": "0.1.0",
-  "factory_vks": [],
+  "factory_vks": [
+    "737461726272696467652d676f7665726e65642d6e616d6573706163652d6661"
+  ],
   "page": "/starbridge-apps/governed-namespace/pages/index.html",
-  "inspectors": [],
-  "turn_builders": [],
-  "required_apis": ["signTurn"]
+  "inspectors": [
+    "namespace",
+    "namespace-route-table",
+    "namespace-proposal",
+    "namespace-dispatch"
+  ],
+  "turn_builders": [
+    "propose_table_update",
+    "vote_on_proposal",
+    "commit_table_update",
+    "register_service"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.governedNamespace"
+  ],
+  "slot_layout": {
+    "ROUTE_TABLE_ROOT_SLOT": 2,
+    "VERSION_SLOT": 3,
+    "GOVERNANCE_COMMITTEE_ROOT_SLOT": 4,
+    "THRESHOLD_SLOT": 5,
+    "DISPUTE_WINDOW_HEIGHT_SLOT": 6,
+    "PENDING_PROPOSAL_ROOT_SLOT": 7
+  },
+  "state_constraints": [
+    "Immutable(GOVERNANCE_COMMITTEE_ROOT_SLOT)",
+    "Immutable(THRESHOLD_SLOT)",
+    "Monotonic(VERSION_SLOT)",
+    "Monotonic(DISPUTE_WINDOW_HEIGHT_SLOT)",
+    "MethodIs(commit_table_update) => MonotonicSequence(VERSION_SLOT)"
+  ]
 }

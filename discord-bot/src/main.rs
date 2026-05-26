@@ -18,6 +18,7 @@ pub mod captp_client;
 mod cipherclerk;
 mod commands;
 mod config;
+mod credential_issue;
 mod db;
 mod devnet;
 pub mod discord_caps;
@@ -36,7 +37,7 @@ use serenity::all::{
 };
 use serenity::async_trait;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use captp_client::CapTPClient;
 use config::Config;
@@ -347,11 +348,18 @@ async fn main() {
     // The bot's own cclerk is the user_id == 0 derivation. We use the
     // canonical AppCipherclerk so the bot's identity (cell id, public key)
     // is computed the same way as any other dregg agent.
-    let bot_cell_id = {
+    let (bot_cell_id, bot_public_key) = {
         let cclerk =
             cipherclerk::UserCipherclerk::derive(&config.bot_secret, 0, federation_id_bytes);
-        cclerk.cell_id_hex().to_string()
+        (
+            cclerk.cell_id_hex().to_string(),
+            cclerk.public_key_hex().to_string(),
+        )
     };
+    match devnet.register_cell(&bot_cell_id, &bot_public_key).await {
+        Ok(()) => info!("Bot dregg cell materialized on devnet"),
+        Err(err) => warn!("Failed to materialize bot dregg cell: {err}"),
+    }
     let federation_id = dregg_captp::FederationId(federation_id_bytes);
     let captp = CapTPClient::new(
         federation_id,

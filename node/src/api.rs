@@ -105,11 +105,20 @@ pub struct TokenInfo {
 
 #[derive(Serialize)]
 pub struct ReceiptInfo {
+    pub receipt_hash: String,
     pub turn_hash: String,
+    pub agent: String,
     pub pre_state: String,
     pub post_state: String,
     pub timestamp: i64,
     pub computrons_used: u64,
+    pub action_count: usize,
+    pub previous_receipt_hash: Option<String>,
+    pub finality: String,
+    pub was_encrypted: bool,
+    pub was_burn: bool,
+    pub has_proof: bool,
+    pub executor_signed: bool,
 }
 
 #[derive(Deserialize)]
@@ -337,7 +346,8 @@ pub struct SseSearchResponse {
 /// Query parameters for GET /api/events.
 #[derive(Deserialize)]
 pub struct EventsQuery {
-    /// Return events committed at or after this block height.
+    /// Return events committed after this block height. A cursor of 0 returns
+    /// the current retained log for first-time pollers.
     pub since_height: Option<u64>,
     /// Maximum number of events to return (default 50, max 200).
     pub limit: Option<usize>,
@@ -945,6 +955,8 @@ pub fn router(
         .route("/api/blocks", get(get_federation_roots))
         .route("/api/cells", get(get_all_cells))
         .route("/api/cell/{id}", get(get_cell_detail))
+        .route("/api/node/cells/{id}", get(get_cell_detail))
+        .route("/api/receipts", get(get_receipts))
         .route("/api/intents", get(get_intents))
         .route("/api/conditionals", get(get_pending_conditionals))
         .route("/api/discharge", post(post_discharge))
@@ -1266,14 +1278,65 @@ async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> 
         .rev()
         .take(50)
         .map(|r| ReceiptInfo {
+            receipt_hash: hex_encode(&r.receipt_hash()),
             turn_hash: hex_encode(&r.turn_hash),
+            agent: hex_encode(&r.agent.0),
             pre_state: hex_encode(&r.pre_state_hash),
             post_state: hex_encode(&r.post_state_hash),
             timestamp: r.timestamp,
             computrons_used: r.computrons_used,
+            action_count: r.action_count,
+            previous_receipt_hash: r.previous_receipt_hash.map(|h| hex_encode(&h)),
+            finality: format!("{:?}", r.finality).to_lowercase(),
+            was_encrypted: r.was_encrypted,
+            was_burn: r.was_burn,
+            has_proof: r.executor_signature.is_some(),
+            executor_signed: r.executor_signature.is_some(),
         })
         .collect();
     Json(receipts)
+}
+
+fn push_committed_event(
+    s: &mut crate::state::NodeStateInner,
+    turn_hash: String,
+    cell_id: String,
+    effects: Vec<String>,
+) {
+    let store_height = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| r.height)
+        .unwrap_or(0);
+    let solo_height = s
+        .solo_consensus
+        .as_ref()
+        .map(|solo| solo.height)
+        .unwrap_or(0);
+    let next_log_height = s
+        .event_log
+        .back()
+        .map(|e| e.height.saturating_add(1))
+        .unwrap_or(1);
+    let receipt_height = s.cclerk.receipt_chain_length() as u64;
+    let height = store_height
+        .max(solo_height)
+        .max(receipt_height)
+        .max(next_log_height);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    s.push_event(CommittedEvent {
+        height,
+        turn_hash,
+        cell_id,
+        effects,
+        timestamp,
+    });
 }
 
 #[tracing::instrument(skip_all, fields(agent = %req.agent))]
@@ -1303,7 +1366,9 @@ async fn post_submit_turn(
     // Mirror the MCP path: derive the agent cell from the cipherclerk's pubkey and
     // ignore the body's value (we still parse it for error reporting).
     let _body_agent = hex_decode(&req.agent).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let agent_bytes = dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]).0;
+    let default_token_id = *blake3::hash(b"default").as_bytes();
+    let agent_bytes = dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &default_token_id).0;
+    let agent = hex_encode(&agent_bytes);
     let turn = Turn {
         agent: CellId(agent_bytes),
         nonce: req.nonce,
@@ -1358,25 +1423,12 @@ async fn post_submit_turn(
                 .append_receipt(receipt)
                 .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
-            // Push committed event into the ring buffer for REST polling.
-            let current_height = s
-                .store
-                .latest_attested_root()
-                .ok()
-                .flatten()
-                .map(|r| r.height)
-                .unwrap_or(0);
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            s.push_event(CommittedEvent {
-                height: current_height,
-                turn_hash: turn_hash.clone(),
-                cell_id: req.agent.clone(),
-                effects: vec!["turn_committed".to_string()],
-                timestamp,
-            });
+            push_committed_event(
+                &mut s,
+                turn_hash.clone(),
+                agent,
+                vec!["turn_committed".to_string()],
+            );
 
             // Serialize the full SignedTurn for gossip (postcard format).
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
@@ -1533,24 +1585,12 @@ async fn post_submit_signed_turn(
                 }));
             }
 
-            let current_height = s
-                .store
-                .latest_attested_root()
-                .ok()
-                .flatten()
-                .map(|r| r.height)
-                .unwrap_or(0);
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            s.push_event(CommittedEvent {
-                height: current_height,
-                turn_hash: turn_hash.clone(),
-                cell_id: agent,
-                effects: vec![format!("signed_turn:{action_count}")],
-                timestamp,
-            });
+            push_committed_event(
+                &mut s,
+                turn_hash.clone(),
+                agent,
+                vec![format!("signed_turn:{action_count}")],
+            );
 
             let turn_data = postcard::to_stdvec(&signed_for_gossip)
                 .expect("SignedTurn serialization after successful decode");
@@ -1707,10 +1747,18 @@ async fn post_submit_encrypted_turn(
             }
 
             let turn_hash = hex_encode(&turn_hash_bytes);
+            let agent = hex_encode(&receipt.agent.0);
             let was_encrypted = receipt.was_encrypted;
             s.cclerk
                 .append_receipt(receipt)
                 .expect("local executor and cclerk chains must agree; divergence is a serious bug");
+
+            push_committed_event(
+                &mut s,
+                turn_hash.clone(),
+                agent,
+                vec!["encrypted_turn_committed".to_string()],
+            );
 
             drop(s);
 
@@ -2033,7 +2081,7 @@ async fn post_intent(
     }))
 }
 
-/// GET /api/events — return committed events since a given block height.
+/// GET /api/events — return committed events after a given block height.
 ///
 /// Used by the Discord bot and other polling clients to catch up on state changes
 /// without maintaining a persistent WebSocket connection.
@@ -2041,14 +2089,19 @@ async fn get_events(
     Query(params): Query<EventsQuery>,
     State(state): State<NodeState>,
 ) -> Json<Vec<CommittedEvent>> {
-    let since_height = params.since_height.unwrap_or(0);
+    let since_height = params.since_height;
     let limit = params.limit.unwrap_or(50).min(200);
 
     let s = state.read().await;
     let events: Vec<CommittedEvent> = s
         .event_log
         .iter()
-        .filter(|e| e.height >= since_height)
+        .filter(|e| match since_height {
+            // Keep the initial cursor useful for callers that start from zero,
+            // then treat non-zero cursors as exclusive to avoid repeat posts.
+            Some(0) | None => true,
+            Some(height) => e.height > height,
+        })
         .take(limit)
         .cloned()
         .collect();
@@ -3641,7 +3694,7 @@ pub struct FaucetRequest {
     /// materialize a hosted devnet cell without claiming faucet funds.
     pub amount: u64,
     /// Optional hex-encoded Ed25519 public key for the recipient. When set,
-    /// the node verifies `recipient == CellId::derive_raw(public_key, [0;32])`
+    /// the node verifies `recipient == CellId::derive_raw(public_key, default_token_id)`
     /// and inserts a canonical hosted cell instead of a remote stub.
     #[serde(default)]
     pub public_key: Option<String>,
@@ -3731,7 +3784,8 @@ async fn post_faucet(
                     }));
                 }
             };
-            let expected = dregg_cell::CellId::derive_raw(&pk, &FAUCET_TOKEN_ID);
+            let default_token_id = *blake3::hash(b"default").as_bytes();
+            let expected = dregg_cell::CellId::derive_raw(&pk, &default_token_id);
             if expected != recipient_cell_id {
                 return Ok(Json(FaucetResponse {
                     success: false,
@@ -3769,7 +3823,10 @@ async fn post_faucet(
     // canonical hosted cell; otherwise preserve the pre-derived id as a stub.
     if s.ledger.get(&recipient_cell_id).is_none() {
         let recipient_cell = match recipient_public_key {
-            Some(pk) => dregg_cell::Cell::with_balance(pk, FAUCET_TOKEN_ID, 0),
+            Some(pk) => {
+                let default_token_id = *blake3::hash(b"default").as_bytes();
+                dregg_cell::Cell::with_balance(pk, default_token_id, 0)
+            }
             None => dregg_cell::Cell::remote_stub_with_id_and_balance(recipient_cell_id, 0),
         };
         let _ = s.ledger.insert_cell(recipient_cell);

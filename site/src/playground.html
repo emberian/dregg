@@ -266,6 +266,81 @@
     margin-top: var(--s3);
   }
 
+  .pg-bridge {
+    margin-top: var(--s4);
+    padding-top: var(--s4);
+    border-top: 1px solid var(--line);
+  }
+
+  .pg-bridge__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--s3);
+    margin-bottom: var(--s3);
+  }
+
+  .pg-bridge__title {
+    color: var(--fg);
+    font: 700 0.78rem var(--font-mono);
+  }
+
+  .pg-bridge__uri {
+    color: var(--fg-muted);
+    font: 0.68rem var(--font-mono);
+  }
+
+  .pg-bridge__links {
+    display: grid;
+    gap: var(--s2);
+  }
+
+  .pg-bridge__link {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--s2);
+    align-items: center;
+    min-height: 42px;
+    border: 1px solid var(--line);
+    border-radius: var(--r2);
+    background: var(--bg-raised);
+    color: var(--fg);
+    padding: 8px 10px;
+    text-decoration: none;
+  }
+
+  .pg-bridge__link:hover {
+    border-color: var(--accent);
+    color: var(--chalk);
+  }
+
+  .pg-bridge__link strong,
+  .pg-bridge__link span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pg-bridge__link-text {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+
+  .pg-bridge__link strong {
+    font: 700 0.78rem var(--font-mono);
+  }
+
+  .pg-bridge__link span {
+    color: var(--fg-muted);
+    font: 0.68rem var(--font-mono);
+  }
+
+  .pg-bridge__arrow {
+    color: var(--accent-bright);
+    font: 700 0.86rem var(--font-mono);
+  }
+
   .pg-btn {
     border: 1px solid var(--line-strong);
     border-radius: var(--r2);
@@ -484,6 +559,10 @@
         { label: 'Submit turn', event: 'turn submitted, policy satisfied', kind: 'ok' },
         { label: 'Attenuate cap', event: 'capability narrowed to dns/read for alice.cell', kind: 'warn' },
       ],
+      starbridge: [
+        { label: 'Open activity feed', uri: 'dregg://activity/feed', detail: 'Inspect runtime trace events' },
+        { label: 'Inspect federation #0', uri: 'dregg://federation/0', detail: 'Use Starbridge scripts to seed or finalize blocks' },
+      ],
       steps: [
         ['Select cell', 'agent key signs action envelope', 'ed25519'],
         ['Check caveats', 'datalog grants dns/read and cell/write', 'policy'],
@@ -509,6 +588,10 @@
       buttons: [
         { label: 'Create note', event: 'stealth note committed and queued for scan', kind: 'ok' },
         { label: 'Scan inbox', event: 'recipient detected one spendable note', kind: 'ok' },
+      ],
+      starbridge: [
+        { label: 'Open stealth inspector', uri: 'dregg://stealth-address/demo', detail: 'Review one-time-address fields' },
+        { label: 'Inspect demo note', uri: 'dregg://note/4d9a6b3c1e7f2048a5c2d0e9f113b76a8c4d22e9b51a6f3380de9b75a492cc10', detail: 'Follow commitment and nullifier state' },
       ],
       steps: [
         ['Derive address', 'ephemeral key creates one-time destination', 'x25519'],
@@ -536,6 +619,10 @@
         { label: 'Commit order', event: 'order hidden behind salted commitment', kind: 'ok' },
         { label: 'Try replay', event: 'consume rejected: nullifier already published', kind: 'warn' },
       ],
+      starbridge: [
+        { label: 'Open blinded queue', uri: 'dregg://blinded-queue/demo-queue', detail: 'Inspect queue cell program surface' },
+        { label: 'Open batch intent', uri: 'dregg://intent/batch-auction', detail: 'Use Starbridge console to post real intents' },
+      ],
       steps: [
         ['Commit payload', 'salted hash enters the queue', 'blake3'],
         ['Reveal opening', 'payload becomes eligible for matching', 'opening'],
@@ -562,6 +649,10 @@
         { label: 'Register name', event: 'alice.dregg registered with admin capability', kind: 'ok' },
         { label: 'Resolve name', event: 'alice.dregg resolved to svc_71e9', kind: 'ok' },
       ],
+      starbridge: [
+        { label: 'Open nameservice app', uri: 'dregg://app/nameservice', detail: 'Run the program inside the workbench' },
+        { label: 'Inspect name capability', uri: 'dregg://capability/0/name-write', detail: 'Check scoped authority in the runtime' },
+      ],
       steps: [
         ['Present admin cap', 'root authority attenuates name/write', 'macaroon'],
         ['Check squatting rule', 'datalog rejects occupied names', 'policy'],
@@ -587,6 +678,10 @@
       buttons: [
         { label: 'Create handoff', event: 'handoff certificate signed for bob.device', kind: 'ok' },
         { label: 'Verify offline', event: 'recipient verified issuer chain and caveats', kind: 'ok' },
+      ],
+      starbridge: [
+        { label: 'Inspect handoff certificate', uri: 'dregg://handoff-certificate/9f7b3d12c0ffee42', detail: 'Open paste-safe handoff structure' },
+        { label: 'Open recipient inbox', uri: 'dregg://cap-inbox/bob-device', detail: 'Review delegated-cap inbox invariants' },
       ],
       steps: [
         ['Select authority', 'source cap is narrowed before export', 'attenuation'],
@@ -628,6 +723,10 @@
     state.receipts += kind === 'ok' ? 1 : 0;
     state.events = [{ text, kind }, ...state.events].slice(0, 6);
     renderSide(activeScenario());
+  }
+
+  function starbridgeHref(uri) {
+    return `/starbridge/?at=${encodeURIComponent(uri)}&runtime=in-memory`;
   }
 
   function renderTabs() {
@@ -685,6 +784,23 @@
               </button>
             `).join('')}
           </div>
+          <section class="pg-bridge" aria-label="Starbridge workbench actions">
+            <div class="pg-bridge__head">
+              <div class="pg-bridge__title">Starbridge</div>
+              <code class="pg-bridge__uri">dregg://</code>
+            </div>
+            <div class="pg-bridge__links">
+              ${scenario.starbridge.map(action => `
+                <a class="pg-bridge__link" href="${esc(starbridgeHref(action.uri))}" aria-label="${esc(action.label)} in Starbridge">
+                  <span class="pg-bridge__link-text">
+                    <strong>${esc(action.label)}</strong>
+                    <span>${esc(action.detail)}</span>
+                  </span>
+                  <span class="pg-bridge__arrow" aria-hidden="true">-&gt;</span>
+                </a>
+              `).join('')}
+            </div>
+          </section>
         </form>
       </div>
     `;

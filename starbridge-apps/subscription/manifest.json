@@ -3,9 +3,42 @@
   "name": "Subscription",
   "description": "Pub/sub topic and capability subscription starbridge-app.",
   "version": "0.1.0",
-  "factory_vks": [],
+  "factory_vks": [
+    "737461726272696467652d737562736372697074696f6e2d666163746f727921"
+  ],
   "page": "/starbridge-apps/subscription/pages/index.html",
-  "inspectors": [],
-  "turn_builders": [],
-  "required_apis": ["signTurn"]
+  "inspectors": [
+    "subscription",
+    "subscription-publish-form",
+    "subscription-feed"
+  ],
+  "turn_builders": [
+    "publish",
+    "consume",
+    "grant_publisher",
+    "grant_consumer"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.subscription"
+  ],
+  "slot_layout": {
+    "SEQ_HEAD_SLOT": 2,
+    "SEQ_TAIL_SLOT": 3,
+    "CAPACITY_SLOT": 4,
+    "PUBLISHERS_ROOT_SLOT": 5,
+    "CONSUMERS_ROOT_SLOT": 6,
+    "MESSAGE_ROOT_SLOT": 7,
+    "LATEST_PAYLOAD_SLOT": 8,
+    "OWNER_PK_HASH_SLOT": 9
+  },
+  "state_constraints": [
+    "Immutable(CAPACITY_SLOT)",
+    "Immutable(OWNER_PK_HASH_SLOT)",
+    "FieldLteField(SEQ_TAIL_SLOT, SEQ_HEAD_SLOT)",
+    "MethodIs(publish) => MonotonicSequence(SEQ_HEAD_SLOT)",
+    "MethodIs(consume) => MonotonicSequence(SEQ_TAIL_SLOT)"
+  ]
 }

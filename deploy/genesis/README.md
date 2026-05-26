@@ -10,7 +10,7 @@ This directory contains the genesis state for the dregg devnet federation. It de
 | `accounts.json` | Pre-funded account manifest with roles and balances |
 | `apps.json` | Deployed applications and their cell programs |
 | `routes.json` | DFA route table (namespace access control) |
-| `generate.sh` | Key generation and genesis assembly script |
+| `generate.sh` | Wrapper around `cargo run --release -p dregg-node -- genesis` |
 
 ## Generating Fresh Genesis State
 
@@ -21,22 +21,19 @@ cd deploy/genesis
 ```
 
 The script will:
-1. Generate Ed25519 keypairs for 3 validators (`keys/node-{0,1,2}.key`)
-2. Generate Ed25519 keypairs for 10 accounts (`keys/{alice,bob,...}.key`)
-3. Compute a federation ID and routes commitment
-4. If `dregg-node` is on PATH, invoke its genesis subcommand for canonical output
-5. Otherwise, leave the template `genesis.json` with placeholder keys
+1. Run `cargo run --release -p dregg-node -- genesis`
+2. Generate Ed25519 validator keys (`node-{0,1,2}.key`)
+3. Write validator env files (`node-{0,1,2}.env`)
+4. Write canonical `genesis.json` and `.devnet`
+5. Refuse to overwrite generated files unless `--force` is passed
 
 ### Prerequisites
 
 - Rust toolchain (to build `dregg-node`)
-- `openssl` (fallback key generation)
 
-### Building dregg-node
+### Generation Command
 
 ```bash
-cargo build --release -p dregg-node
-export PATH="$PWD/target/release:$PATH"
 ./deploy/genesis/generate.sh --force
 ```
 
@@ -116,7 +113,7 @@ Or use the automated deploy:
 
 ## Security Notes
 
-- `keys/` and `secrets/` directories are gitignored and must never be committed
-- All keys in the checked-in `genesis.json` are **placeholders** (not real keys)
-- Run `generate.sh` to produce real Ed25519 keys for an actual devnet deployment
+- `node-*.key` files are gitignored and must never be committed
+- The checked-in `genesis.json` is a devnet artifact. Regenerate it before a fresh devnet deployment.
+- Run `generate.sh` to produce canonical Ed25519 validator keys and genesis state
 - These keys are for **devnet only** -- never reuse for production

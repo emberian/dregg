@@ -22,6 +22,8 @@ struct GenesisValidator {
 #[derive(Serialize)]
 struct GenesisCell {
     id: String,
+    public_key: String,
+    token_id: String,
     balance: u64,
 }
 
@@ -139,6 +141,7 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     let federation_id = hex_encode(&federation_id_bytes);
 
     // Build genesis config.
+    let default_token_id = [0u8; 32];
     let genesis = GenesisConfig {
         federation_id,
         committee_epoch,
@@ -149,10 +152,14 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
         initial_cells: vec![
             GenesisCell {
                 id: "treasury".to_string(),
+                public_key: hex_encode(&[0x02; 32]),
+                token_id: hex_encode(&default_token_id),
                 balance: 1_000_000,
             },
             GenesisCell {
                 id: "faucet".to_string(),
+                public_key: hex_encode(&[0x01; 32]),
+                token_id: hex_encode(&default_token_id),
                 balance: 100_000,
             },
         ],

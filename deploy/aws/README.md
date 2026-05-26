@@ -50,6 +50,11 @@ ssh ubuntu@devnet.dregg.fg-goose.online
 bash /opt/dregg/deploy/aws/update.sh
 ```
 
+The update script refuses to deploy over local or untracked changes. It fetches
+`origin/main`, fast-forwards the checkout, builds both `dregg-node` and
+`dregg-discord-bot`, restarts both systemd services, updates Caddy when needed,
+and runs `deploy/aws/preflight-discord-bot.sh`.
+
 ## Monitoring
 
 ```bash

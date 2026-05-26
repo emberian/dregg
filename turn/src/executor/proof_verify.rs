@@ -151,7 +151,7 @@ impl TurnExecutor {
         // (call_forest, ACTOR_NONCE) and rejects any per-cell PI that
         // disagrees. See `STAGE-7-GAMMA-2-PI-DESIGN.md` §3-4.
         {
-            use crate::bilateral_schedule::{project_into_pi, ExpectedBilateral};
+            use crate::bilateral_schedule::{ExpectedBilateral, project_into_pi};
             let schedule = ExpectedBilateral::from_turn(turn);
             let counts = schedule.counts_for(cell_id);
             let roots = schedule.roots_for(cell_id, actor_nonce);

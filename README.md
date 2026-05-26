@@ -8,16 +8,16 @@ Dragon's Egg is my experiment in the metatheory of constructive knowledge, and a
 
 `dregg` is a **unified fabric**: a shared blocklace (DAG) where groups form emergently through mutual acknowledgment. There are no fixed federations to join or leave. Nodes participate in strands; reference groups crystallize from repeated interaction. Your phone is a node. A cloud cluster is a node. The sovereignty spectrum is continuous.
 
-Cells are isolated objects. Turns are atomic state transitions. The Effect VM proves each turn in a single STARK. CapTP sessions carry capability references across the fabric. Intents broadcast needs; ring trades solve them trustlessly.
+Cells are isolated objects. Turns are atomic state transitions. The Effect VM proves the per-turn execution surface, with several cross-cell and recursive verifier lanes still tracked in `SILVER-DEBT.md`. CapTP sessions carry capability references across the fabric. Intents broadcast needs; ring trades solve them trustlessly.
 
 ## Key Capabilities
 
 - **CapTP** -- Capability transport protocol. Sessions, sturdy refs, distributed GC, three-party handoff, store-and-forward.
-- **Programmable Queues** -- Merkle queues with attached DSL programs. Every enqueue/dequeue is proven in-circuit.
+- **Programmable Queues** -- Merkle queues with attached DSL programs. Queue semantics are enforced by the executor and Effect VM projection; remaining algebraic gaps are tracked in `SILVER-DEBT.md`.
 - **DFA Routing** -- Governance-controlled route tables compiled to prefix-trie state machines. Constitutional amendments via threshold voting.
 - **Nameservice** -- Hierarchical names with rent-based anti-squatting, sub-delegation, cross-federation resolution.
 - **Intent Solving** -- Privacy-preserving marketplace. Commit-reveal frontrunning protection. Ring trades without a coordinator.
-- **Effect VM** -- Abstract instruction set proven per-turn in one STARK. Transfer, seal, factory, CapTP ops, queue ops, all in circuit.
+- **Effect VM** -- Abstract instruction set proven per-turn in one STARK. Transfer, seal, factory, CapTP, and queue variants are being hardened toward full in-circuit coverage; do not treat this README as the debt ledger.
 
 ## Quick Start
 
@@ -72,7 +72,8 @@ cd docker && docker compose up
 | `dregg-dsl` | Constraint DSL: `#[dregg_caveat]`, `#[dregg_effect]`, multi-backend |
 | `verification` | Typed composition checker for proof soundness |
 | `app-framework` | Shared patterns for building apps on the runtime |
-| `apps/*` | Stablecoin, AMM, orderbook, lending, identity, gallery, compute exchange, bounty board, nameservice, governed-namespace |
+| `starbridge-apps/*` | Current userspace app surface: nameservice, identity, subscription, governed namespace, plus unported legacy manifests |
+| `apps/*` | Legacy app crates retained for porting: gallery, compute exchange, bounty board, privacy voting |
 
 ## Privacy Model
 

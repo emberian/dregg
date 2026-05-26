@@ -1,0 +1,13 @@
+{
+  "id": "bounty-board",
+  "name": "Bounty Board",
+  "description": "Legacy bounty workflow app retained for porting; not yet a Starbridge userspace app.",
+  "version": "0.0.0",
+  "status": "unported",
+  "legacy_path": "apps/bounty-board",
+  "factory_vks": [],
+  "page": null,
+  "inspectors": [],
+  "turn_builders": [],
+  "required_apis": []
+}

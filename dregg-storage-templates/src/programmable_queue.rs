@@ -40,10 +40,10 @@
 //! ## Parameterization
 //!
 //! [`ProgrammableQueueConfig`] holds the per-instance constraint
-//! menu. The factory hashes the menu into `child_vk_strategy: Derived
-//! { param_hash }` so each constraint configuration produces a unique
-//! child VK — observers can extract the `param_hash` from the cell's
-//! `Provenance` and reproduce the exact constraint set.
+//! menu. The factory hashes the resulting [`CellProgram`] into the
+//! descriptor's fixed `child_program_vk`, so each constraint
+//! configuration produces a unique child VK and the descriptor's
+//! validator agrees with the program VK it advertises.
 //!
 //! ## What this replaces
 //!
@@ -338,9 +338,9 @@ pub fn programmable_queue_factory_descriptor() -> FactoryDescriptor {
 }
 
 /// Build a [`FactoryDescriptor`] for the parameterized configuration.
-/// Uses `ChildVkStrategy::Derived { base_vk }` so the per-cell child
-/// VK is reproducible from the descriptor + the per-cell `param_hash`
-/// recorded in `Provenance`.
+/// The program is already known when the descriptor is built, so the
+/// child strategy is fixed to the canonical child VK for that exact
+/// configuration.
 pub fn programmable_queue_factory_descriptor_with(
     cfg: &ProgrammableQueueConfig,
 ) -> FactoryDescriptor {
@@ -348,9 +348,7 @@ pub fn programmable_queue_factory_descriptor_with(
     FactoryDescriptor {
         factory_vk: PROGRAMMABLE_QUEUE_FACTORY_VK,
         child_program_vk: Some(child_vk),
-        child_vk_strategy: Some(ChildVkStrategy::Derived {
-            base_vk: PROGRAMMABLE_QUEUE_FACTORY_VK,
-        }),
+        child_vk_strategy: Some(ChildVkStrategy::Fixed(Some(child_vk))),
         allowed_cap_templates: vec![
             CapTemplate {
                 target: CapTarget::SelfCell,
@@ -662,14 +660,35 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_uses_derived_strategy() {
+    fn descriptor_strategy_matches_advertised_child_vk() {
         let d = programmable_queue_factory_descriptor();
         match d.child_vk_strategy {
-            Some(ChildVkStrategy::Derived { base_vk }) => {
-                assert_eq!(base_vk, PROGRAMMABLE_QUEUE_FACTORY_VK);
+            Some(ChildVkStrategy::Fixed(vk)) => {
+                assert_eq!(vk, d.child_program_vk);
             }
-            other => panic!("expected Derived, got {other:?}"),
+            other => panic!("expected Fixed strategy, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn descriptor_accepts_its_advertised_child_program_vk() {
+        let d = programmable_queue_factory_descriptor();
+        let params = dregg_cell::FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: d.child_program_vk,
+            initial_fields: vec![
+                (HEAD_SEQ_SLOT as u32, 0),
+                (TAIL_SEQ_SLOT as u32, 0),
+                (CAPACITY_SLOT as u32, 100),
+                (PROGRAM_VK_SLOT as u32, 1),
+                (OWNER_PK_HASH_SLOT as u32, 1),
+            ],
+            initial_caps: vec![],
+            owner_pubkey: [9u8; 32],
+        };
+
+        d.validate_creation(&params)
+            .expect("descriptor strategy must accept the advertised child_program_vk");
     }
 
     #[test]

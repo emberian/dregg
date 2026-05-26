@@ -34,7 +34,6 @@ preserved for archaeology, not as current truth.
 
 | File | Class | One-line description |
 |---|---|---|
-| `DREGG_DESIGN.md` | canonical | Older architectural overview (Fabric / Cells / Turns). Pre-dates `NEW-WORLD.md`; still accurate at the headline level. |
 | `BOUNDARIES.md` | canonical | What's inside, what's outside, what enforces the boundary. Companion audit set: `audits/AUDIT-privacy.md`, etc. |
 | `PREDICATE-INVENTORY.md` | canonical | Every predicate in dregg + the `WitnessedPredicate` unification. |
 | `EFFECT-VM-SHAPE-A.md` | canonical | Origin master plan for codebase remediation. Stage 3 complete; Stage 7+ has its own docs. |
@@ -48,7 +47,6 @@ preserved for archaeology, not as current truth.
 |---|---|---|
 | `STARBRIDGE-APPS-PLAN.md` | design-active | Plan for `starbridge-apps/` as the post-`apps/` userspace. |
 | `STUDIO-REFACTOR-PICKUP.md` | design-active | Hand-off doc to the studio agent on returning. |
-| `SILVER-VISION-E2E-VERIFICATION.md` | design-active | Cross-federation end-to-end verification design (bearer cap demo lineage). |
 | `VK-AS-RE-EXECUTION-RECIPE.md` | design-active | Pre-recursion VKs commit canonical bytes — canonical encoders implemented; starbridge-apps migrated. |
 | `STORAGE-AS-CELL-PROGRAMS.md` | design-active | Every storage primitive expressed as a cell-program pattern. |
 | `SLOT-CAVEATS-DESIGN.md` | design-active | Lift `QueueConstraint` into `StateConstraint` so slots can host transition-aware caveats. |
@@ -61,7 +59,6 @@ preserved for archaeology, not as current truth.
 | `DESIGN-dsl.md` | design-active | `dregg` user-facing DSL surface. |
 | `DESIGN-receipts.md` | design-active | Sovereign / federation / bridge receipt formats; BLS ThresholdQC; IBC-style bridge phases. |
 | `DESIGN-commitment-framework.md` | design-active | Typed `Commitment<T>` framework, dual BLAKE3+Poseidon2. |
-| `DESIGN-captp-integration.md` | design-active | Wire `captp/` into the AIR variants (`ExportSturdyRef` / `EnlivenRef` / `DropRef` / `ValidateHandoff`). |
 | `DESIGN-pipelined-send.md` | design-active | `Effect::PipelinedSend` semantics, runtime, and AIR. |
 | `DESIGN-max-custom-effects.md` | design-active | `MAX_CUSTOM_EFFECTS` constraints, costs, per-cell-program design. |
 | `PROOF-TO-ACTION-BINDING-SWEEP.md` | design-active | Sweep of proof-to-action binding gaps across executor boundary. Added 2026-05-25. |
@@ -89,10 +86,7 @@ preserved for archaeology, not as current truth.
 | `HOUYHNHNM-COMPARISON.md` | design-study | Side-by-side comparison of dregg vs. Houyhnhnm system principles. |
 | `HOUYHNHNM-DEEP-CRITIQUE.md` | design-study | Deep critique of dregg from the Houyhnhnm perspective (source `1a8299eb`). |
 | `PROTOCOL-CATEGORICAL-ANALYSIS.md` | design-study | Categorical treatment of dregg protocol primitives (Tier 1/2/3 punch list). |
-| `KIMI-DAMAGE-AUDIT.md` | canonical | Audit of prior Kimi-authored code for soundness regressions. |
 | `TEST-REALITY-AUDIT.md` | canonical | Test suite honesty audit — fake assertions, scaffold `must_pass` labeling. |
-| `MULTI-NODE-DEVNET-RUN.md` | canonical | First end-to-end multi-node devnet run report. |
-| `PREV-SESSION-AUDIT.md` | canonical | Cross-session state reconciliation and carryover items. |
 | `DEMO-INTERACTION-MATRIX.md` | design-study | Demo scenario matrix for the two-AI handoff and related demos. |
 | `STORAGE-SECONDARIES-TRIAGE.md` | design-active | Triage of storage secondary index and secondary-cell design gaps. |
 | `CELL-TURN-TEST-AUDIT.md` | canonical | Per-crate test audit for cell + turn layers; new integration test inventory. |
@@ -100,7 +94,6 @@ preserved for archaeology, not as current truth.
 | `INTENT-BRIDGE-TEST-AUDIT.md` | canonical | Test audit for intent + bridge layers (40 tests). |
 | `FEDERATION-CAPTP-TEST-AUDIT.md` | canonical | Test audit for federation + CapTP layers. |
 | `SDK-NODE-WIRE-TEST-AUDIT.md` | canonical | Test audit for SDK, node, and wire layers. |
-| `STARBRIDGE-APPS-TEST-AUDIT.md` | canonical | Test audit for starbridge-apps. |
 | `META-TEST-AUDIT.md` | canonical | Meta-level test audit: scaffold labels, fake assertions, must_pass demotion. |
 | `SUBSTRATE-TEST-AUDIT.md` | canonical | Test audit for storage-templates, credentials, app-framework substrate. |
 | `AUDIT-dregg-turn-verifier-test-quality.md` | canonical | Turn + verifier test quality audit (standalone). |

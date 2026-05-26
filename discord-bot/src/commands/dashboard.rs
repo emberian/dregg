@@ -12,7 +12,8 @@ use dregg_app_framework::{CellId, field_from_bytes};
 use starbridge_nameservice::{build_register_action, build_set_target_action};
 
 use crate::BotState;
-use crate::cipherclerk::{UserCipherclerk, sign_legacy};
+use crate::cipherclerk::UserCipherclerk;
+use crate::credential_issue;
 use crate::db::IdentityMode;
 use crate::embeds;
 
@@ -582,18 +583,22 @@ async fn submit_credential_issue(modal: &ModalInteraction, state: &BotState) -> 
         Ok(cell) => cell,
         Err(embed) => return embed,
     };
-    let cclerk =
-        UserCipherclerk::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
-    let signature = sign_legacy(&cclerk, format!("issue:{schema}:{attributes}").as_bytes());
 
-    match state
-        .devnet
-        .issue_credential(&cell, &schema, &attributes, &signature)
+    match credential_issue::issue_from_discord_input(state, user_id, &cell, &schema, &attributes)
         .await
     {
-        Ok(credential_id) => embeds::success_embed("Credential Issued")
-            .field("Schema", schema, true)
-            .field("Credential ID", format!("`{credential_id}`"), true),
+        Ok(result) => embeds::success_embed("Credential Issued")
+            .field("Schema", result.schema, true)
+            .field("Credential ID", format!("`{}`", result.credential_id), true)
+            .field(
+                "Turn",
+                result
+                    .turn
+                    .turn_hash
+                    .map(|hash| format!("`{hash}`"))
+                    .unwrap_or_else(|| "`unknown`".to_string()),
+                false,
+            ),
         Err(e) => embeds::error_embed("Issue Failed", &e.to_string()),
     }
 }
@@ -706,32 +711,78 @@ async fn submit_subscription_create(modal: &ModalInteraction, state: &BotState) 
         return embeds::warning_embed("Guild Required", "Queues must be created in a server.");
     };
     let name = modal_value(modal, "name");
-    let rate_limit = modal_value(modal, "rate_limit").parse::<i64>().ok();
-    let deposit = modal_value(modal, "deposit").parse::<i64>().ok();
+    let rate_limit = match parse_optional_i64(&modal_value(modal, "rate_limit"), "Rate Limit") {
+        Ok(value) => value,
+        Err(embed) => return embed,
+    };
+    let deposit = match parse_optional_i64(&modal_value(modal, "deposit"), "Minimum Deposit") {
+        Ok(value) => value,
+        Err(embed) => return embed,
+    };
     let namespace_path = format!("/discord/{guild_id}/{name}");
-    let mut body = serde_json::json!({
-        "name": name,
-        "namespace_path": namespace_path,
-        "guild_id": guild_id,
-        "creator": state.captp.bot_cell_id,
+    let capacity = rate_limit.unwrap_or(1024).max(1) as u64;
+    let body = serde_json::json!({
+        "capacity": capacity,
+        "program_vk": serde_json::Value::Null,
     });
-    if let Some(value) = rate_limit {
-        body["rate_limit"] = serde_json::json!(value);
-    }
-    if let Some(value) = deposit {
-        body["min_deposit"] = serde_json::json!(value);
-    }
 
-    match post_json(state, "/queues/create", body).await {
-        Ok(value) => embeds::success_embed("Queue Created")
-            .field("Name", name, true)
-            .field("Path", format!("`{namespace_path}`"), false)
-            .field(
-                "Receipt",
-                code_field(value.get("turn_hash").or_else(|| value.get("id"))),
-                true,
-            ),
-        Err(embed) => embed,
+    let url = format!("{}/queues/allocate", state.config.devnet_url);
+    match state.devnet.client().post(&url).json(&body).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let allocated: QueueAllocateResponse = match resp.json().await {
+                Ok(value) => value,
+                Err(e) => return embeds::error_embed("Parse Error", &e.to_string()),
+            };
+            let actor = modal.user.id.get().to_string();
+            if let Err(e) = state
+                .db
+                .upsert_starbridge_queue(
+                    &namespace_path,
+                    &guild_id.to_string(),
+                    &name,
+                    &allocated.queue_id,
+                    &actor,
+                    None,
+                    rate_limit,
+                    deposit,
+                )
+                .await
+            {
+                return embeds::error_embed("Queue State Error", &e.to_string());
+            }
+            let _ = state
+                .db
+                .record_starbridge_activity(
+                    "subscription",
+                    "queue.allocate",
+                    &actor,
+                    Some(&guild_id.to_string()),
+                    Some(&namespace_path),
+                    "accepted",
+                    serde_json::json!({
+                        "queue_id": allocated.queue_id,
+                        "capacity": capacity,
+                    }),
+                )
+                .await;
+
+            embeds::success_embed("Queue Created")
+                .field("Name", name, true)
+                .field("Path", format!("`{namespace_path}`"), true)
+                .field("Queue ID", short_queue(&allocated.queue_id), true)
+                .field(
+                    "Rate Limit",
+                    rate_limit.map_or("none".to_string(), |r| format!("{r}/min")),
+                    true,
+                )
+                .field(
+                    "Min Deposit",
+                    deposit.map_or("none".to_string(), |d| format!("{d} computrons")),
+                    true,
+                )
+        }
+        Ok(resp) => embeds::error_embed("Queue Creation Failed", &response_text(resp).await),
+        Err(e) => embeds::error_embed("Node Unreachable", &e.to_string()),
     }
 }
 
@@ -745,18 +796,57 @@ async fn submit_subscription_publish(modal: &ModalInteraction, state: &BotState)
     let name = modal_value(modal, "name");
     let message = modal_value(modal, "message");
     let namespace_path = format!("/discord/{guild_id}/{name}");
+    let queue = match state.db.get_starbridge_queue(&namespace_path).await {
+        Ok(Some(queue)) => queue,
+        Ok(None) => {
+            return embeds::warning_embed(
+                "Queue Not Found",
+                &format!("No queue is mounted at `{namespace_path}`. Create it first."),
+            );
+        }
+        Err(e) => return embeds::error_embed("Queue State Error", &e.to_string()),
+    };
+    let message_hash = message_hash_hex(&message);
     let body = serde_json::json!({
-        "namespace_path": namespace_path,
-        "message": message,
-        "publisher": state.captp.bot_cell_id,
-        "sender_discord_id": modal.user.id.get(),
+        "message_hash": message_hash,
+        "deposit": 0,
     });
 
-    match post_json(state, "/queues/publish", body).await {
-        Ok(_) => embeds::success_embed("Published")
-            .field("Queue", name, true)
-            .field("Message", format!("`{}`", truncate(&message, 180)), false),
-        Err(embed) => embed,
+    let url = format!(
+        "{}/queues/{}/enqueue",
+        state.config.devnet_url, queue.queue_id
+    );
+    match state.devnet.client().post(&url).json(&body).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let result: QueueEnqueueResponse = resp
+                .json()
+                .await
+                .unwrap_or(QueueEnqueueResponse { position: 0 });
+            let actor = modal.user.id.get().to_string();
+            let _ = state
+                .db
+                .record_starbridge_activity(
+                    "subscription",
+                    "queue.enqueue",
+                    &actor,
+                    Some(&guild_id.to_string()),
+                    Some(&namespace_path),
+                    "accepted",
+                    serde_json::json!({
+                        "queue_id": queue.queue_id,
+                        "position": result.position,
+                        "message_hash": message_hash,
+                    }),
+                )
+                .await;
+
+            embeds::success_embed("Published")
+                .field("Queue", name, true)
+                .field("Position", result.position.to_string(), true)
+                .field("Message", format!("`{}`", truncate(&message, 100)), false)
+        }
+        Ok(resp) => embeds::error_embed("Publish Failed", &response_text(resp).await),
+        Err(e) => embeds::error_embed("Node Unreachable", &e.to_string()),
     }
 }
 
@@ -769,16 +859,48 @@ async fn submit_subscription_subscribe(modal: &ModalInteraction, state: &BotStat
     };
     let name = modal_value(modal, "name");
     let namespace_path = format!("/discord/{guild_id}/{name}");
-    let body = serde_json::json!({
-        "namespace_path": namespace_path,
-        "subscriber_discord_id": modal.user.id.get(),
-    });
+    match state.db.get_starbridge_queue(&namespace_path).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            return embeds::warning_embed(
+                "Queue Not Found",
+                &format!("No queue is mounted at `{namespace_path}`. Create it first."),
+            );
+        }
+        Err(e) => return embeds::error_embed("Queue State Error", &e.to_string()),
+    }
 
-    match post_json(state, "/queues/subscribe", body).await {
-        Ok(_) => embeds::success_embed("Subscribed")
+    let discord_id = modal.user.id.get().to_string();
+    match state
+        .db
+        .subscribe_starbridge_queue(&namespace_path, &discord_id)
+        .await
+    {
+        Ok(inserted) => {
+            let _ = state
+                .db
+                .record_starbridge_activity(
+                    "subscription",
+                    "queue.subscribe",
+                    &discord_id,
+                    Some(&guild_id.to_string()),
+                    Some(&namespace_path),
+                    if inserted { "accepted" } else { "unchanged" },
+                    serde_json::json!({}),
+                )
+                .await;
+            embeds::success_embed(if inserted {
+                "Subscribed"
+            } else {
+                "Already Subscribed"
+            })
+            .description(format!(
+                "You will receive DMs when new messages arrive in **{name}**."
+            ))
             .field("Queue", name, true)
-            .field("Delivery", "DM on new messages", true),
-        Err(embed) => embed,
+            .field("Path", format!("`{namespace_path}`"), true)
+        }
+        Err(e) => embeds::error_embed("Subscribe Failed", &e.to_string()),
     }
 }
 
@@ -814,20 +936,15 @@ async fn hosted_user_cell(user_id: u64, state: &BotState) -> Result<String, Crea
     }
 }
 
-async fn post_json(
-    state: &BotState,
-    path: &str,
-    body: serde_json::Value,
-) -> Result<serde_json::Value, CreateEmbed> {
-    let url = format!("{}{}", state.config.devnet_url, path);
-    match state.devnet.client().post(url).json(&body).send().await {
-        Ok(resp) if resp.status().is_success() => Ok(resp.json().await.unwrap_or_default()),
-        Ok(resp) => Err(embeds::error_embed(
-            "Request Failed",
-            &response_text(resp).await,
-        )),
-        Err(e) => Err(embeds::error_embed("Node Unreachable", &e.to_string())),
-    }
+#[derive(serde::Deserialize)]
+struct QueueAllocateResponse {
+    #[serde(rename = "queueId")]
+    queue_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct QueueEnqueueResponse {
+    position: u64,
 }
 
 async fn response_text(resp: reqwest::Response) -> String {
@@ -837,6 +954,19 @@ async fn response_text(resp: reqwest::Response) -> String {
         status.to_string()
     } else {
         truncate(&body, 900)
+    }
+}
+
+fn parse_optional_i64(value: &str, label: &str) -> Result<Option<i64>, CreateEmbed> {
+    if value.trim().is_empty() {
+        Ok(None)
+    } else {
+        value.trim().parse::<i64>().map(Some).map_err(|_| {
+            embeds::warning_embed(
+                &format!("Invalid {label}"),
+                &format!("{label} must be an integer."),
+            )
+        })
     }
 }
 
@@ -897,6 +1027,14 @@ fn parse_cell_bytes(value: &str) -> Result<[u8; 32], CreateEmbed> {
 
 fn short_cell(cell: &str) -> String {
     format!("`{}...`", &cell[..16.min(cell.len())])
+}
+
+fn short_queue(queue_id: &str) -> String {
+    format!("`{}...`", &queue_id[..16.min(queue_id.len())])
+}
+
+fn message_hash_hex(message: &str) -> String {
+    hex::encode(blake3::hash(message.as_bytes()).as_bytes())
 }
 
 fn truncate(value: &str, max: usize) -> String {

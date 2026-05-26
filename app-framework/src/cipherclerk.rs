@@ -222,7 +222,9 @@ impl AppCipherclerk {
     /// * `owner_pubkey` — the ed25519 public key of the new cell's owner.
     /// * `token_id` — the token-domain identifier for the new cell.
     /// * `params` — additional creation parameters (program VK, initial
-    ///   fields/caps, mode).
+    ///   fields/caps, mode). `params.owner_pubkey` is canonicalized to
+    ///   `owner_pubkey` before signing so the effect-level owner and
+    ///   descriptor-validation owner cannot diverge.
     ///
     /// The issuing cell is this cipherclerk's `cell_id()`; the federation_id
     /// is the cipherclerk's bound `federation_id`.
@@ -237,8 +239,9 @@ impl AppCipherclerk {
         factory_vk: [u8; 32],
         owner_pubkey: [u8; 32],
         token_id: [u8; 32],
-        params: dregg_cell::FactoryCreationParams,
+        mut params: dregg_cell::FactoryCreationParams,
     ) -> Turn {
+        params.owner_pubkey = owner_pubkey;
         let issuer = self.cell_id();
         self.read().create_from_factory(
             issuer,
@@ -592,11 +595,12 @@ mod tests {
                 factory_vk: fv,
                 owner_pubkey: op,
                 token_id: tid,
-                ..
+                params,
             } => {
                 assert_eq!(*fv, factory_vk);
                 assert_eq!(*op, owner);
                 assert_eq!(*tid, token);
+                assert_eq!(params.owner_pubkey, owner);
             }
             other => panic!("expected CreateCellFromFactory effect, got {other:?}"),
         }
@@ -606,6 +610,32 @@ mod tests {
                 assert!(*a != [0u8; 32] || *b != [0u8; 32]);
             }
             other => panic!("expected Signature variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn create_from_factory_canonicalizes_params_owner_to_effect_owner() {
+        use dregg_cell::{CellMode, FactoryCreationParams};
+        use dregg_turn::action::Effect;
+
+        let sdk_cclerk = AgentCipherclerk::new();
+        let cclerk = AppCipherclerk::new(sdk_cclerk, [33u8; 32]);
+        let owner = [55u8; 32];
+        let params = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![],
+            initial_caps: vec![],
+            owner_pubkey: [0xAA; 32],
+        };
+
+        let turn = cclerk.create_from_factory([44u8; 32], owner, [66u8; 32], params);
+        let root = &turn.call_forest.roots[0];
+        match &root.action.effects[0] {
+            Effect::CreateCellFromFactory { params, .. } => {
+                assert_eq!(params.owner_pubkey, owner);
+            }
+            other => panic!("expected CreateCellFromFactory effect, got {other:?}"),
         }
     }
 

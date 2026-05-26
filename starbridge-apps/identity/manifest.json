@@ -3,9 +3,38 @@
   "name": "Identity",
   "description": "Credential issuance and selective disclosure starbridge-app (dregg-native).",
   "version": "0.1.0",
-  "factory_vks": [],
+  "factory_vks": [
+    "737461726272696467652d6964656e746974792d6973737565722d6661637421"
+  ],
   "page": "/starbridge-apps/identity/pages/index.html",
-  "inspectors": [],
-  "turn_builders": [],
-  "required_apis": ["signTurn"]
+  "inspectors": [
+    "credential",
+    "credential-issue-form",
+    "credential-present-form",
+    "credential-verifier"
+  ],
+  "turn_builders": [
+    "issue_credential",
+    "revoke_credential",
+    "present_credential",
+    "verify_presentation"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.identity"
+  ],
+  "slot_layout": {
+    "SCHEMA_COMMITMENT_SLOT": 2,
+    "ISSUANCE_COUNTER_SLOT": 3,
+    "REVOCATION_ROOT_SLOT": 4,
+    "ISSUER_AUTH_ROOT_SLOT": 5
+  },
+  "state_constraints": [
+    "Immutable(SCHEMA_COMMITMENT_SLOT)",
+    "MonotonicSequence(ISSUANCE_COUNTER_SLOT)",
+    "Monotonic(REVOCATION_ROOT_SLOT)",
+    "SenderAuthorized(PublicRoot(ISSUER_AUTH_ROOT_SLOT))"
+  ]
 }

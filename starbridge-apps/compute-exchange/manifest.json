@@ -1,0 +1,13 @@
+{
+  "id": "compute-exchange",
+  "name": "Compute Exchange",
+  "description": "Legacy compute marketplace app retained for porting; not yet a Starbridge userspace app.",
+  "version": "0.0.0",
+  "status": "unported",
+  "legacy_path": "apps/compute-exchange",
+  "factory_vks": [],
+  "page": null,
+  "inspectors": [],
+  "turn_builders": [],
+  "required_apis": []
+}

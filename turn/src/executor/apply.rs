@@ -1156,10 +1156,10 @@ impl TurnExecutor {
                             asset_type: u64,
                             proof_bytes: &[u8]|
          -> Result<(), String> {
+            use dregg_circuit::BabyBear;
             use dregg_circuit::dsl::note_spending::verify_note_spend_dsl_with_destination;
             use dregg_circuit::poseidon2;
             use dregg_circuit::stark::proof_from_bytes;
-            use dregg_circuit::BabyBear;
 
             // Compress a 32-byte value to a single BabyBear via Poseidon2 of 8 limbs.
             // Matches `bridge::present::bytes_to_babybear` so prover and verifier agree.

@@ -883,24 +883,25 @@ fn cross_cutting_canonical_signing_message_fields() {
 #[test]
 fn cross_cutting_verifier_checks_all_pi() {
     let agent = CellId([0xC1u8; 32]);
-    let base = sample_receipt(agent, [0xC2u8; 32], Some([0xC3u8; 32]));
+    let previous = [0xC3u8; 32];
+    let base = sample_receipt(agent, [0xC2u8; 32], Some(previous));
 
     let mut turn_hash_tamper = replay_entry_with_receipt_pi(base.clone());
     turn_hash_tamper.public_inputs[dregg_circuit::effect_vm::pi::TURN_HASH_BASE] ^= 0x01;
-    let reason = dregg_verifier::check_receipt_pi_binding(&turn_hash_tamper, None)
+    let reason = dregg_verifier::check_receipt_pi_binding(&turn_hash_tamper, Some(previous))
         .expect("TURN_HASH PI mismatch must reject");
     assert!(reason.contains("TURN_HASH_BASE"));
 
     let mut previous_hash_tamper = replay_entry_with_receipt_pi(base.clone());
     previous_hash_tamper.public_inputs[dregg_circuit::effect_vm::pi::PREVIOUS_RECEIPT_HASH_BASE] ^=
         0x01;
-    let reason = dregg_verifier::check_receipt_pi_binding(&previous_hash_tamper, None)
+    let reason = dregg_verifier::check_receipt_pi_binding(&previous_hash_tamper, Some(previous))
         .expect("PREVIOUS_RECEIPT_HASH PI mismatch must reject");
     assert!(reason.contains("PREVIOUS_RECEIPT_HASH_BASE"));
 
     let mut agent_cell_tamper = replay_entry_with_receipt_pi(base);
     agent_cell_tamper.public_inputs[dregg_circuit::effect_vm::pi::IS_AGENT_CELL] = 0;
-    let reason = dregg_verifier::check_receipt_pi_binding(&agent_cell_tamper, None)
+    let reason = dregg_verifier::check_receipt_pi_binding(&agent_cell_tamper, Some(previous))
         .expect("IS_AGENT_CELL PI mismatch must reject");
     assert!(reason.contains("IS_AGENT_CELL"));
 }

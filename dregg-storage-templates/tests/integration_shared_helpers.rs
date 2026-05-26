@@ -424,15 +424,24 @@ fn programmable_queue_param_hash_changes_with_config() {
 }
 
 #[test]
-fn blinded_queue_sovereign_vs_hosted_only_mode_differs() {
+fn blinded_queue_sovereign_vs_hosted_registry_keys_differ() {
     let hosted = blinded_queue::blinded_queue_factory_descriptor();
     let sovereign = blinded_queue::blinded_queue_factory_descriptor_sovereign();
 
-    // Only `default_mode` should differ.
+    // Hosted/sovereign descriptors must be separately addressable in
+    // factory registries keyed by factory_vk; their child program and
+    // invariants remain identical.
     assert_ne!(hosted.default_mode, sovereign.default_mode);
-    assert_eq!(hosted.factory_vk, sovereign.factory_vk);
+    assert_ne!(hosted.factory_vk, sovereign.factory_vk);
     assert_eq!(hosted.child_program_vk, sovereign.child_program_vk);
     assert_eq!(hosted.state_constraints, sovereign.state_constraints);
     assert_eq!(hosted.field_constraints, sovereign.field_constraints);
     assert_eq!(hosted.creation_budget, sovereign.creation_budget);
+
+    let registry = dregg_app_framework::FactoryRegistry::new();
+    let hosted_vk = registry.register(hosted);
+    let sovereign_vk = registry.register(sovereign);
+    assert_eq!(registry.len(), 2);
+    assert!(registry.get(&hosted_vk).is_some());
+    assert!(registry.get(&sovereign_vk).is_some());
 }

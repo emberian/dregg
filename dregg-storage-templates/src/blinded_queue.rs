@@ -117,6 +117,12 @@ pub const DEFAULT_CREATION_BUDGET: u64 = 500;
 /// Stable placeholder VK for the BlindedQueue factory.
 pub const BLINDED_QUEUE_FACTORY_VK: [u8; 32] = *b"dregg-storage-tpl-blindq-factory";
 
+/// Stable VK for the sovereign BlindedQueue factory variant. Hosted
+/// and sovereign descriptors differ in `default_mode`, so they need
+/// distinct registry keys; otherwise a `FactoryRegistry` keyed by
+/// `factory_vk` cannot hold both constructor contracts.
+pub const BLINDED_QUEUE_SOVEREIGN_FACTORY_VK: [u8; 32] = *b"dregg-storage-tpl-blindq-sovere!";
+
 /// Stable placeholder VK for the BlindedQueue spend AIR. Per §3.4
 /// (Open Q §7.1) the workspace owns this VK and the constitution
 /// publishes the official `vk_hash`. The actual verifier registration
@@ -346,6 +352,7 @@ pub fn blinded_queue_factory_descriptor() -> FactoryDescriptor {
 /// exposed as a sibling factory so apps opting in have a single API.
 pub fn blinded_queue_factory_descriptor_sovereign() -> FactoryDescriptor {
     let mut d = blinded_queue_factory_descriptor();
+    d.factory_vk = BLINDED_QUEUE_SOVEREIGN_FACTORY_VK;
     d.default_mode = CellMode::Sovereign;
     d
 }
@@ -602,13 +609,15 @@ mod tests {
     }
 
     #[test]
-    fn sovereign_variant_differs_only_in_mode() {
+    fn sovereign_variant_has_distinct_factory_vk() {
         let h = blinded_queue_factory_descriptor();
         let s = blinded_queue_factory_descriptor_sovereign();
         assert_eq!(h.default_mode, CellMode::Hosted);
         assert_eq!(s.default_mode, CellMode::Sovereign);
-        // Same VKs, same constraints, same caps — only mode differs.
-        assert_eq!(h.factory_vk, s.factory_vk);
+        // Different factory VKs, same child program and constraints.
+        assert_ne!(h.factory_vk, s.factory_vk);
+        assert_eq!(s.factory_vk, BLINDED_QUEUE_SOVEREIGN_FACTORY_VK);
+        assert_eq!(h.child_program_vk, s.child_program_vk);
         assert_eq!(h.state_constraints, s.state_constraints);
     }
 

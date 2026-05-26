@@ -154,8 +154,10 @@ impl ChildVkStrategy {
             }
             ChildVkStrategy::FromSet { approved_vks } => {
                 hasher.update(&[3u8]);
-                hasher.update(&(approved_vks.len() as u64).to_le_bytes());
-                for vk in approved_vks {
+                let mut sorted_vks = approved_vks.clone();
+                sorted_vks.sort_unstable();
+                hasher.update(&(sorted_vks.len() as u64).to_le_bytes());
+                for vk in &sorted_vks {
                     hasher.update(vk);
                 }
             }
@@ -176,7 +178,7 @@ impl ChildVkStrategy {
 
     /// Compute the param_hash for a set of creation parameters.
     ///
-    /// `param_hash = BLAKE3("dregg-factory-params" || mode || fields || caps_hash)`.
+    /// `param_hash = BLAKE3("dregg-factory-params" || mode || fields || caps_hash || owner_pubkey)`.
     pub fn compute_param_hash(params: &FactoryCreationParams) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new_derive_key("dregg-factory-params-v1");
         let mode_byte = match params.mode {
@@ -197,6 +199,9 @@ impl ChildVkStrategy {
                 CapTarget::Any => 2u8,
             };
             hasher.update(&[target_byte]);
+            if let CapTarget::Specific(id) = &cap.target {
+                hasher.update(id.as_bytes());
+            }
             let perm_byte = match &cap.max_permissions {
                 AuthRequired::None => 0u8,
                 AuthRequired::Signature => 1u8,
@@ -213,6 +218,7 @@ impl ChildVkStrategy {
                 hasher.update(vk_hash);
             }
         }
+        hasher.update(&params.owner_pubkey);
         *hasher.finalize().as_bytes()
     }
 
@@ -1257,6 +1263,58 @@ mod tests {
     }
 
     #[test]
+    fn test_param_hash_binds_specific_cap_target() {
+        let target_a = CellId::derive_raw(&[0xA1; 32], &[0u8; 32]);
+        let target_b = CellId::derive_raw(&[0xB2; 32], &[0u8; 32]);
+        let params_a = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![],
+            initial_caps: vec![CapGrant {
+                target: CapTarget::Specific(target_a),
+                max_permissions: AuthRequired::Signature,
+                attenuatable: false,
+            }],
+            owner_pubkey: [5u8; 32],
+        };
+        let params_b = FactoryCreationParams {
+            initial_caps: vec![CapGrant {
+                target: CapTarget::Specific(target_b),
+                max_permissions: AuthRequired::Signature,
+                attenuatable: false,
+            }],
+            ..params_a.clone()
+        };
+
+        assert_ne!(
+            ChildVkStrategy::compute_param_hash(&params_a),
+            ChildVkStrategy::compute_param_hash(&params_b),
+            "derived child VK params must bind the concrete Specific capability target"
+        );
+    }
+
+    #[test]
+    fn test_param_hash_binds_owner_pubkey() {
+        let params_a = FactoryCreationParams {
+            mode: CellMode::Hosted,
+            program_vk: None,
+            initial_fields: vec![(0, 1)],
+            initial_caps: vec![],
+            owner_pubkey: [5u8; 32],
+        };
+        let params_b = FactoryCreationParams {
+            owner_pubkey: [6u8; 32],
+            ..params_a.clone()
+        };
+
+        assert_ne!(
+            ChildVkStrategy::compute_param_hash(&params_a),
+            ChildVkStrategy::compute_param_hash(&params_b),
+            "derived child VK params must bind the child owner key"
+        );
+    }
+
+    #[test]
     fn test_from_set_strategy_allows_approved_vk() {
         let factory_vk = test_factory_vk();
         let vk_admin = *blake3::hash(b"admin-program").as_bytes();
@@ -1322,6 +1380,26 @@ mod tests {
         };
         let err = desc.validate_creation(&params).unwrap_err();
         assert!(matches!(err, FactoryError::VkNotInApprovedSet { .. }));
+    }
+
+    #[test]
+    fn test_from_set_strategy_hash_is_order_independent() {
+        let vk_admin = *blake3::hash(b"admin-program").as_bytes();
+        let vk_reader = *blake3::hash(b"reader-program").as_bytes();
+        let vk_writer = *blake3::hash(b"writer-program").as_bytes();
+
+        let forward = ChildVkStrategy::FromSet {
+            approved_vks: vec![vk_admin, vk_reader, vk_writer],
+        };
+        let reverse = ChildVkStrategy::FromSet {
+            approved_vks: vec![vk_writer, vk_reader, vk_admin],
+        };
+
+        assert_eq!(
+            forward.hash(),
+            reverse.hash(),
+            "FromSet hash must commit to set membership, not insertion order"
+        );
     }
 
     #[test]

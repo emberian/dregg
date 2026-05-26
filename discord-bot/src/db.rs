@@ -68,6 +68,14 @@ pub struct StarbridgeQueue {
     pub created_at: i64,
 }
 
+/// Discord user subscription to a Starbridge queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StarbridgeQueueSubscription {
+    pub namespace_path: String,
+    pub discord_id: String,
+    pub subscribed_at: i64,
+}
+
 /// Database handle wrapping a SQLite connection pool.
 #[derive(Clone)]
 pub struct Database {
@@ -603,6 +611,18 @@ impl Database {
         Ok(row.map(queue_from_row))
     }
 
+    pub async fn list_starbridge_queues(&self) -> Result<Vec<StarbridgeQueue>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT namespace_path, guild_id, name, queue_id, created_by, acl_role, rate_limit, min_deposit, created_at
+             FROM starbridge_queues
+             ORDER BY guild_id, name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(queue_from_row).collect())
+    }
+
     pub async fn subscribe_starbridge_queue(
         &self,
         namespace_path: &str,
@@ -619,6 +639,27 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn list_starbridge_queue_subscriptions(
+        &self,
+    ) -> Result<Vec<StarbridgeQueueSubscription>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT namespace_path, discord_id, subscribed_at
+             FROM starbridge_queue_subscriptions
+             ORDER BY namespace_path, subscribed_at DESC, discord_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| StarbridgeQueueSubscription {
+                namespace_path: row.get("namespace_path"),
+                discord_id: row.get("discord_id"),
+                subscribed_at: row.get("subscribed_at"),
+            })
+            .collect())
     }
 
     pub async fn count_starbridge_queue_subscribers(

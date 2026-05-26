@@ -8,6 +8,7 @@ echo "=== dregg gateway node setup ==="
 # Install Rust
 if ! command -v rustup &>/dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  # shellcheck source=/dev/null
   source "$HOME/.cargo/env"
 fi
 rustup toolchain install nightly
@@ -17,10 +18,10 @@ rustup default nightly
 if command -v apt-get &>/dev/null; then
   sudo apt-get update && sudo apt-get install -y \
     build-essential pkg-config libssl-dev \
-    debian-keyring debian-archive-keyring apt-transport-https curl
+    debian-keyring debian-archive-keyring apt-transport-https curl jq
 elif command -v dnf &>/dev/null; then
   sudo dnf groupinstall -y "Development Tools"
-  sudo dnf install -y openssl-devel pkg-config
+  sudo dnf install -y openssl-devel pkg-config jq
 fi
 
 # Install Caddy (HTTPS reverse proxy with automatic Let's Encrypt)
@@ -45,7 +46,7 @@ fi
 
 cd /opt/dregg
 git pull origin main
-cargo build --release -p dregg-node
+cargo build --release -p dregg-node -p dregg-discord-bot
 
 # Create dregg user (runs the node process)
 if ! id dregg &>/dev/null; then

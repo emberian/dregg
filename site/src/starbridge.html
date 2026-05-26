@@ -49,6 +49,19 @@
         height <span id="sb-cursor-val">0</span> of <span id="sb-cursor-max">0</span>
       </span>
     </div>
+    <nav class="sb__surface-strip" aria-label="Starbridge surfaces">
+      <button id="sb-surface-workbench" class="sb__surface-pill" type="button" aria-current="page">
+        Workbench
+      </button>
+      <button id="sb-surface-apps" class="sb__surface-pill" type="button">
+        Apps
+      </button>
+      <button id="sb-surface-activity" class="sb__surface-pill" type="button">
+        Activity
+      </button>
+      <a class="sb__surface-pill" href="/playground/">Playground</a>
+      <a class="sb__surface-pill" href="/explorer/">Explorer</a>
+    </nav>
   </header>
 
   <dregg-app id="sb-app">
@@ -57,7 +70,7 @@
         <h2 class="sb__pane-title">System Map</h2>
         <section class="sb__section">
           <h3 class="sb__section-title">
-            System Programs <span id="sb-app-count" class="sb__count">0</span>
+            Apps <span id="sb-app-count" class="sb__count">0</span>
           </h3>
           <dregg-app-list id="sb-app-list"></dregg-app-list>
         </section>
@@ -127,6 +140,7 @@
             <span id="sb-current-kind" class="sb__context-pill">Dashboard</span>
             <button id="sb-pin-uri" class="sb__icon-btn" type="button" disabled>Pin</button>
             <button id="sb-copy-uri" class="sb__icon-btn" type="button" disabled>Copy URI</button>
+            <a id="sb-open-explorer" class="sb__icon-link" href="/explorer/">Explorer</a>
           </div>
         </div>
         <div id="sb-inspector" class="sb__inspector"></div>

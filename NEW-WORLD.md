@@ -4,7 +4,7 @@ What dregg is, in its current shape (2026-05-24), after a season of substrate wo
 
 ## Tagline
 
-**dregg is a proof-carrying capability mesh.**
+**dregg is becoming a proof-carrying capability mesh.**
 
 It composes:
 - **Distributed object substrate** (OCapN lineage — sturdy refs, attenuable caps, three-party handoff, swiss-table fast routing, distributed GC).
@@ -19,7 +19,7 @@ The kernel is OCapN-like capability transport + STARK-attested state transitions
 
 ## Two visions
 
-**Silver Vision** is the *pre-algebraic* form — every component integrates, every loop closes, every receipt is signed and replayable. Trust-based by construction (executors are presumed honest), but the *substrate* required for the next step is in place. This is what we're building.
+**Silver Vision** is the *pre-algebraic* form — every component integrates, every loop closes, every receipt is signed and replayable. Trust-based by construction (executors are presumed honest), but the *substrate* required for the next step is in place. This is still in motion; `SILVER-DEBT.md` is the active ledger for places where the implementation falls short of that statement.
 
 **Golden Vision** is the *folded mesh* form — recursive aggregation collapses the entire DAG of cells' interactions into one STARK statement: "the mesh up to here is internally consistent and re-derivable from witness data." Plonky3 recursion (Golden-Edge Block 1) is the substrate; γ.2 Phase 2 (joint aggregation AIR) is the first concrete step.
 
@@ -250,7 +250,7 @@ The slop-list (`amm`, `lending`, `orderbook`, `stablecoin`, `dao-treasury`, `pre
 - `FEDERATION-UNIFICATION-DESIGN.md` — the Federation collapse
 - `STAGE-7-GAMMA-2-PI-DESIGN.md` — bilateral binding PI layout
 - `SOVEREIGN-WITNESS-AIR-DESIGN.md` — AIR teeth phases
-- `SILVER-VISION-E2E-VERIFICATION.md` — the end-to-end demo design
+- `old-docs/2026-05-26/SILVER-VISION-E2E-VERIFICATION.md` — archived end-to-end demo design; stale as an active status source
 - `DFA-RATIONALIZATION-DESIGN.md` — DFA as caveat
 - `KIMCHI-SURVEY.md` — recursion landscape
 - `EXECUTOR-HONESTY-AUDIT.md` — the T1-T15 threat ledger
@@ -265,12 +265,13 @@ The slop-list (`amm`, `lending`, `orderbook`, `stablecoin`, `dao-treasury`, `pre
 - `RECEIPT-ARCHITECTURE-STUDY.md` — receipt chain / audit trail deep dive
 - `HOUYHNHNM-COMPARISON.md` + `HOUYHNHNM-DEEP-CRITIQUE.md` — Houyhnhnm system comparison + deep critique
 - `PROTOCOL-CATEGORICAL-ANALYSIS.md` — categorical treatment of dregg's protocol primitives
-- `KIMI-DAMAGE-AUDIT.md` — audit of prior Kimi-authored code for soundness regressions
+- `old-docs/2026-05-26/KIMI-DAMAGE-AUDIT.md` — archived audit of prior Kimi-authored code for soundness regressions
 - `TEST-REALITY-AUDIT.md` — test suite honesty audit (fake assertions, scaffold must_pass)
-- `MULTI-NODE-DEVNET-RUN.md` — first end-to-end multi-node devnet run report
-- `PREV-SESSION-AUDIT.md` — cross-session state reconciliation
+- `old-docs/2026-05-26/MULTI-NODE-DEVNET-RUN.md` — archived multi-node devnet run report; not current proof of Silver E2E
+- `old-docs/2026-05-26/PREV-SESSION-AUDIT.md` — archived cross-session state reconciliation
 - `DEMO-INTERACTION-MATRIX.md` — demo scenario matrix for the two-AI handoff
-- `STORAGE-SECONDARIES-TRIAGE.md`, `CELL-TURN-TEST-AUDIT.md`, `CIRCUIT-VERIFIER-TEST-AUDIT.md`, `INTENT-BRIDGE-TEST-AUDIT.md`, `FEDERATION-CAPTP-TEST-AUDIT.md`, `SDK-NODE-WIRE-TEST-AUDIT.md`, `STARBRIDGE-APPS-TEST-AUDIT.md`, `META-TEST-AUDIT.md`, `SUBSTRATE-TEST-AUDIT.md` — per-layer test audit suite
+- `STORAGE-SECONDARIES-TRIAGE.md`, `CELL-TURN-TEST-AUDIT.md`, `CIRCUIT-VERIFIER-TEST-AUDIT.md`, `INTENT-BRIDGE-TEST-AUDIT.md`, `FEDERATION-CAPTP-TEST-AUDIT.md`, `SDK-NODE-WIRE-TEST-AUDIT.md`, `META-TEST-AUDIT.md`, `SUBSTRATE-TEST-AUDIT.md` — active per-layer test audit suite
+- `old-docs/2026-05-26/STARBRIDGE-APPS-TEST-AUDIT.md` — archived starbridge-apps audit snapshot
 - `BLOCK1-BIND-CLOSURE-NOTES.md` — closure notes for the block1-bind debt wave
 
 ## What's not done (honest)

@@ -166,7 +166,16 @@ class DreggAppList extends HTMLElement {
   connectedCallback() { this.loadAndRender(); }
   async loadAndRender() {
     this._loading = true;
-    const ids = ['nameservice', 'identity', 'governed-namespace', 'subscription'];
+    const ids = [
+      'nameservice',
+      'identity',
+      'governed-namespace',
+      'subscription',
+      'bounty-board',
+      'gallery',
+      'privacy-voting',
+      'compute-exchange',
+    ];
     const fallback = {
       nameservice: {
         id: 'nameservice',
@@ -191,6 +200,38 @@ class DreggAppList extends HTMLElement {
         name: 'Subscription',
         description: 'Pub/sub topic and capability subscription app.',
         page: '/starbridge-apps/subscription/pages/index.html',
+      },
+      'bounty-board': {
+        id: 'bounty-board',
+        name: 'Bounty Board',
+        description: 'Legacy bounty workflow app retained for porting.',
+        status: 'unported',
+        legacy_path: 'apps/bounty-board',
+        page: null,
+      },
+      gallery: {
+        id: 'gallery',
+        name: 'Gallery',
+        description: 'Legacy private auction/gallery app retained for porting.',
+        status: 'unported',
+        legacy_path: 'apps/gallery',
+        page: null,
+      },
+      'privacy-voting': {
+        id: 'privacy-voting',
+        name: 'Privacy Voting',
+        description: 'Legacy privacy voting app retained for porting.',
+        status: 'unported',
+        legacy_path: 'apps/privacy-voting',
+        page: null,
+      },
+      'compute-exchange': {
+        id: 'compute-exchange',
+        name: 'Compute Exchange',
+        description: 'Legacy compute marketplace app retained for porting.',
+        status: 'unported',
+        legacy_path: 'apps/compute-exchange',
+        page: null,
       },
     };
     const loaded = await Promise.all(ids.map(async (id) => {
@@ -220,18 +261,24 @@ class DreggAppList extends HTMLElement {
       return;
     }
     this._apps.forEach(app => {
+      const unported = app.status === 'unported';
       const card = document.createElement('div');
-      card.className = 'dregg-app-list__card';
+      card.className = `dregg-app-list__card${unported ? ' is-unported' : ''}`;
+      const status = unported ? '<span class="dregg-app-list__status">unported</span>' : '';
+      const standalone = app.page
+        ? `<a href="${escapeHtml(app.page)}" target="_blank">Standalone</a>`
+        : `<span class="dregg-app-list__legacy">${escapeHtml(app.legacy_path || 'legacy app')}</span>`;
       card.innerHTML = `
-        <div class="dregg-app-list__name">${escapeHtml(app.name)}</div>
+        <div class="dregg-app-list__name">${escapeHtml(app.name)}${status}</div>
         <div class="dregg-app-list__desc">${escapeHtml(app.description)}</div>
         <div class="dregg-app-list__actions">
-          <button data-act="open" type="button">Open in workspace</button>
-          <a href="${app.page}" target="_blank">Standalone</a>
+          <button data-act="open" type="button"${unported ? ' disabled' : ''}>Open in workspace</button>
+          ${standalone}
         </div>
       `;
       const btn = card.querySelector('[data-act=open]');
       btn?.addEventListener('click', () => {
+        if (unported) return;
         this.dispatchEvent(new CustomEvent('app-open', {
           bubbles: true,
           detail: { app }

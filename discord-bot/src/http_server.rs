@@ -45,7 +45,7 @@ use tower_http::{cors::CorsLayer, limit::RequestBodyLimitLayer, trace::TraceLaye
 use tracing::{info, warn};
 
 use crate::BotState;
-use crate::db::StarbridgeActivity;
+use crate::db::{StarbridgeActivity, StarbridgeQueue, StarbridgeQueueSubscription};
 use crate::devnet::DevnetError;
 
 /// Bot's view of a cell, shaped to be compatible with the wasm CellStateView
@@ -96,6 +96,30 @@ pub struct StarbridgeAppView {
     pub required_apis: &'static [&'static str],
 }
 
+/// Discord-mounted programmable queue exposed to RemoteRuntime clients.
+#[derive(Serialize, Clone, Debug)]
+pub struct StarbridgeQueueView {
+    pub namespace_path: String,
+    pub guild_id: String,
+    pub name: String,
+    pub queue_id: String,
+    pub queue_uri: String,
+    pub created_by: String,
+    pub acl_role: Option<String>,
+    pub rate_limit: Option<i64>,
+    pub min_deposit: Option<i64>,
+    pub created_at: i64,
+    pub subscriber_count: usize,
+    pub subscriptions: Vec<StarbridgeQueueSubscriptionView>,
+}
+
+/// Subscriber link for a Discord-mounted Starbridge queue.
+#[derive(Serialize, Clone, Debug)]
+pub struct StarbridgeQueueSubscriptionView {
+    pub discord_id: String,
+    pub subscribed_at: i64,
+}
+
 /// Recent app activity shape.
 #[derive(Serialize, Clone, Debug)]
 pub struct StarbridgeActivityView {
@@ -107,7 +131,17 @@ pub struct StarbridgeActivityView {
     pub subject: Option<String>,
     pub status: String,
     pub details: serde_json::Value,
+    pub queue: Option<StarbridgeActivityQueueLink>,
     pub timestamp: i64,
+}
+
+/// Queue link embedded in recent activity entries when the activity came from
+/// queue commands.
+#[derive(Serialize, Clone, Debug)]
+pub struct StarbridgeActivityQueueLink {
+    pub namespace_path: String,
+    pub queue_id: Option<String>,
+    pub queue_uri: Option<String>,
 }
 
 const STARBRIDGE_APPS: &[StarbridgeAppView] = &[
@@ -214,9 +248,12 @@ fn build_router(state: Arc<BotState>) -> Router {
         .route("/api/receipts/recent", get(recent_receipts))
         .route("/api/federations", get(list_federations))
         .route("/api/apps", get(list_apps))
+        .route("/api/apps/activity", get(recent_activity))
+        .route("/api/apps/activity/recent", get(recent_activity))
         .route("/api/apps/{id}", get(get_app))
         .route("/api/activity/recent", get(recent_activity))
         .route("/api/intents/recent", get(recent_intents))
+        .route("/api/queues", get(list_queues))
         .route("/observability/stream", get(observability_stream))
         // Production middleware (order matters: trace outermost for full req)
         .layer(TraceLayer::new_for_http())
@@ -361,10 +398,35 @@ async fn get_app(Path(id): Path<String>) -> Result<Json<StarbridgeAppView>, Http
         })
 }
 
+async fn list_queues(
+    State(state): State<Arc<BotState>>,
+) -> Result<Json<Vec<StarbridgeQueueView>>, HttpError> {
+    let queues = state.db.list_starbridge_queues().await.map_err(|e| {
+        warn!(error = %e, "failed to load starbridge queues");
+        HttpError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "local queue store unavailable".to_string(),
+        }
+    })?;
+    let subscriptions = state
+        .db
+        .list_starbridge_queue_subscriptions()
+        .await
+        .map_err(|e| {
+            warn!(error = %e, "failed to load starbridge queue subscriptions");
+            HttpError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "local queue subscription store unavailable".to_string(),
+            }
+        })?;
+
+    Ok(Json(queue_views(queues, subscriptions)))
+}
+
 async fn recent_activity(
     State(state): State<Arc<BotState>>,
 ) -> Result<Json<Vec<StarbridgeActivityView>>, HttpError> {
-    let activity = state
+    let mut activity = state
         .db
         .get_recent_starbridge_activity(50)
         .await
@@ -375,6 +437,11 @@ async fn recent_activity(
                 message: "local activity store unavailable".to_string(),
             }
         })?;
+
+    if activity.is_empty() {
+        activity = queue_activity_fallback(&state).await?;
+    }
+
     Ok(Json(activity.into_iter().map(activity_view).collect()))
 }
 
@@ -441,6 +508,7 @@ async fn observability_stream(
 
 fn activity_view(activity: StarbridgeActivity) -> StarbridgeActivityView {
     let details = serde_json::from_str(&activity.details_json).unwrap_or(serde_json::Value::Null);
+    let queue = queue_link_from_activity(&activity, &details);
     StarbridgeActivityView {
         id: activity.id,
         app: activity.app,
@@ -450,8 +518,109 @@ fn activity_view(activity: StarbridgeActivity) -> StarbridgeActivityView {
         subject: activity.subject,
         status: activity.status,
         details,
+        queue,
         timestamp: activity.timestamp,
     }
+}
+
+fn queue_views(
+    queues: Vec<StarbridgeQueue>,
+    subscriptions: Vec<StarbridgeQueueSubscription>,
+) -> Vec<StarbridgeQueueView> {
+    queues
+        .into_iter()
+        .map(|queue| {
+            let subscriptions = subscriptions
+                .iter()
+                .filter(|subscription| subscription.namespace_path == queue.namespace_path)
+                .map(|subscription| StarbridgeQueueSubscriptionView {
+                    discord_id: subscription.discord_id.clone(),
+                    subscribed_at: subscription.subscribed_at,
+                })
+                .collect::<Vec<_>>();
+
+            StarbridgeQueueView {
+                queue_uri: queue_uri(&queue.queue_id),
+                subscriber_count: subscriptions.len(),
+                subscriptions,
+                namespace_path: queue.namespace_path,
+                guild_id: queue.guild_id,
+                name: queue.name,
+                queue_id: queue.queue_id,
+                created_by: queue.created_by,
+                acl_role: queue.acl_role,
+                rate_limit: queue.rate_limit,
+                min_deposit: queue.min_deposit,
+                created_at: queue.created_at,
+            }
+        })
+        .collect()
+}
+
+async fn queue_activity_fallback(state: &BotState) -> Result<Vec<StarbridgeActivity>, HttpError> {
+    let mut queues = state.db.list_starbridge_queues().await.map_err(|e| {
+        warn!(error = %e, "failed to synthesize recent queue activity from queue store");
+        HttpError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "local queue store unavailable".to_string(),
+        }
+    })?;
+    queues.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.namespace_path.cmp(&right.namespace_path))
+    });
+
+    Ok(queues
+        .into_iter()
+        .take(50)
+        .enumerate()
+        .map(|(idx, queue)| StarbridgeActivity {
+            id: -((idx as i64) + 1),
+            app: "subscription".to_string(),
+            action: "queue.mounted".to_string(),
+            actor_discord_id: queue.created_by,
+            guild_id: Some(queue.guild_id),
+            subject: Some(queue.namespace_path),
+            status: "materialized".to_string(),
+            details_json: serde_json::json!({
+                "queue_id": queue.queue_id,
+                "name": queue.name,
+                "acl_role": queue.acl_role,
+                "rate_limit": queue.rate_limit,
+                "min_deposit": queue.min_deposit,
+            })
+            .to_string(),
+            timestamp: queue.created_at,
+        })
+        .collect())
+}
+
+fn queue_link_from_activity(
+    activity: &StarbridgeActivity,
+    details: &serde_json::Value,
+) -> Option<StarbridgeActivityQueueLink> {
+    if !activity.action.starts_with("queue.") {
+        return None;
+    }
+
+    let namespace_path = activity.subject.clone()?;
+    let queue_id = details
+        .get("queue_id")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let queue_uri = queue_id.as_deref().map(queue_uri);
+
+    Some(StarbridgeActivityQueueLink {
+        namespace_path,
+        queue_id,
+        queue_uri,
+    })
+}
+
+fn queue_uri(queue_id: &str) -> String {
+    format!("dregg://queue/{queue_id}")
 }
 
 async fn cell_view_from_devnet(state: &BotState, id: &str) -> BotCellView {

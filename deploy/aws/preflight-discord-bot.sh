@@ -32,6 +32,20 @@ if ! jq -e '.healthy == true' >/dev/null <<<"$status"; then
   exit 1
 fi
 
+echo "checking node explorer receipts surface..."
+receipts="$(curl -fsS "$NODE_URL/api/receipts")"
+if ! jq -e 'type == "array"' >/dev/null <<<"$receipts"; then
+  echo "node /api/receipts did not return a JSON array: $receipts" >&2
+  exit 1
+fi
+
+echo "checking node activity event surface..."
+events="$(curl -fsS "$NODE_URL/api/events?since_height=0&limit=1")"
+if ! jq -e 'type == "array"' >/dev/null <<<"$events"; then
+  echo "node /api/events did not return a JSON array: $events" >&2
+  exit 1
+fi
+
 echo "checking node auth/unlock..."
 if [[ -n "$DEVNET_API_TOKEN" ]]; then
   cipherclerk="$(curl -fsS -H "Authorization: Bearer $DEVNET_API_TOKEN" "$NODE_URL/cipherclerk")"
