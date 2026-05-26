@@ -19,9 +19,9 @@ use dregg_cell::predicate::{
     WitnessedPredicateVerifier,
 };
 use dregg_cell::{
-    AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint, field_from_u64,
+    field_from_u64, AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint,
 };
-use dregg_turn::action::{WitnessBlob, symbol};
+use dregg_turn::action::{symbol, WitnessBlob};
 use dregg_turn::{
     Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor,
     TurnResult,
@@ -572,8 +572,8 @@ fn executor_rejects_cell_declaring_temporal_predicate_variant_today() {
 
 #[test]
 fn executor_rejects_cell_declaring_witnessed_variant_today() {
-    use dregg_cell::InputRef;
     use dregg_cell::predicate::WitnessedPredicate;
+    use dregg_cell::InputRef;
     let program = CellProgram::Predicate(vec![StateConstraint::Witnessed {
         wp: WitnessedPredicate::dfa([1u8; 32], InputRef::Sender, 0),
     }]);
@@ -590,9 +590,9 @@ fn executor_rejects_cell_declaring_witnessed_variant_today() {
 
 #[test]
 fn executor_witnessed_dfa_with_stub_registry_accepts() {
+    use dregg_cell::predicate::WitnessedPredicate;
     use dregg_cell::InputRef;
     use dregg_cell::WitnessedPredicateRegistry;
-    use dregg_cell::predicate::WitnessedPredicate;
 
     let program = CellProgram::Predicate(vec![StateConstraint::Witnessed {
         wp: WitnessedPredicate::dfa([1u8; 32], InputRef::Sender, 0),
@@ -859,6 +859,7 @@ fn executor_bilateral_transfer_with_bound_delta_accepts() {
     let b_id = b.id();
     a.state.fields[0] = field_from_u64(100);
     b.state.fields[0] = field_from_u64(20);
+    a.capabilities.grant(b_id, AuthRequired::None).unwrap();
     a.program = CellProgram::Predicate(vec![StateConstraint::BoundDelta {
         local_slot: 0,
         peer_cell: b_id,
