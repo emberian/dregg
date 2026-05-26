@@ -3642,3 +3642,151 @@ fn test_vk_hash_pi_dispatch_key_full_32_bytes() {
         "pre-v2 zero-pad would collide — this is exactly the gap #70 closes"
     );
 }
+
+// ====================================================================
+// EmitEvent (closes #110)
+// ====================================================================
+
+/// Honest prover: the trace's params[0..4] / params[4..8] exactly match the
+/// declared PI[EMIT_EVENT_TOPIC_HASH][0..4] / PI[EMIT_EVENT_PAYLOAD_HASH][0..4],
+/// and the proof verifies.
+#[test]
+fn test_emit_event_honest_topic_payload_verify() {
+    let topic = [
+        BabyBear::new(0xAAAA_0001),
+        BabyBear::new(0xAAAA_0002),
+        BabyBear::new(0xAAAA_0003),
+        BabyBear::new(0xAAAA_0004),
+        BabyBear::new(0xAAAA_0005),
+        BabyBear::new(0xAAAA_0006),
+        BabyBear::new(0xAAAA_0007),
+        BabyBear::new(0xAAAA_0008),
+    ];
+    let payload = [
+        BabyBear::new(0xBBBB_0001),
+        BabyBear::new(0xBBBB_0002),
+        BabyBear::new(0xBBBB_0003),
+        BabyBear::new(0xBBBB_0004),
+        BabyBear::new(0xBBBB_0005),
+        BabyBear::new(0xBBBB_0006),
+        BabyBear::new(0xBBBB_0007),
+        BabyBear::new(0xBBBB_0008),
+    ];
+    let state = make_initial_state(1000);
+    let effects = vec![Effect::EmitEvent {
+        topic_hash: topic,
+        payload_hash: payload,
+    }];
+    let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+
+    // PI surface sanity: count == 1, full 8 felts populated.
+    assert_eq!(public_inputs[pi::EMIT_EVENT_COUNT], BabyBear::new(1));
+    for i in 0..pi::EMIT_EVENT_TOPIC_HASH_LEN {
+        assert_eq!(
+            public_inputs[pi::EMIT_EVENT_TOPIC_HASH_BASE + i],
+            topic[i],
+            "topic_hash[{i}] must round-trip into PI"
+        );
+        assert_eq!(
+            public_inputs[pi::EMIT_EVENT_PAYLOAD_HASH_BASE + i],
+            payload[i],
+            "payload_hash[{i}] must round-trip into PI"
+        );
+    }
+
+    let air = EffectVmAir::new(trace.len());
+    let proof = prove(&air, &trace, &public_inputs);
+    let result = verify(&air, &proof, &public_inputs);
+    assert!(
+        result.is_ok(),
+        "honest EmitEvent proof must verify: {:?}",
+        result.err()
+    );
+}
+
+/// Adversarial: a malicious prover swaps the low-half topic felts inside the
+/// trace row's params[0..4] while leaving PI[EMIT_EVENT_TOPIC_HASH] unchanged
+/// (the verifier supplies PI from the runtime Event, so the prover cannot
+/// rewrite it without breaking the off-AIR PI-match loop). The AIR's per-row
+/// PI-equality constraint MUST reject — without it, the proof's binding to
+/// the canonical event would be vacuous.
+#[test]
+fn test_emit_event_forged_trace_topic_rejected() {
+    let topic = [
+        BabyBear::new(0xAAAA_0001),
+        BabyBear::new(0xAAAA_0002),
+        BabyBear::new(0xAAAA_0003),
+        BabyBear::new(0xAAAA_0004),
+        BabyBear::new(0xAAAA_0005),
+        BabyBear::new(0xAAAA_0006),
+        BabyBear::new(0xAAAA_0007),
+        BabyBear::new(0xAAAA_0008),
+    ];
+    let payload = [BabyBear::new(0x11); 8];
+    let state = make_initial_state(1000);
+    let effects = vec![Effect::EmitEvent {
+        topic_hash: topic,
+        payload_hash: payload,
+    }];
+    let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+
+    // Forgery: tamper with the row's params[0] (topic_hash[0]) inside the
+    // trace. PI[EMIT_EVENT_TOPIC_HASH][0] stays at the honest value because
+    // the off-AIR verifier derives PI from the runtime Event, not from the
+    // prover-supplied trace.
+    let emit_row = trace
+        .iter()
+        .position(|row| row[sel::EMIT_EVENT] == BabyBear::ONE)
+        .expect("at least one row must carry sel::EMIT_EVENT");
+    trace[emit_row][PARAM_BASE + 0] = BabyBear::new(0xDEAD_BEEF);
+
+    let air = EffectVmAir::new(trace.len());
+    let proof = prove(&air, &trace, &public_inputs);
+    let result = verify(&air, &proof, &public_inputs);
+    assert!(
+        result.is_err(),
+        "forged topic_hash[0] inside trace must be rejected by the per-row \
+         PI-equality constraint (closes #110); got Ok, which means the AIR \
+         tooth is vacuous"
+    );
+}
+
+/// Adversarial: same forgery shape but on the payload side (params[4]).
+/// The payload tooth is independent of the topic tooth — both must reject.
+#[test]
+fn test_emit_event_forged_trace_payload_rejected() {
+    let topic = [BabyBear::new(0x77); 8];
+    let payload = [
+        BabyBear::new(0xCCCC_0001),
+        BabyBear::new(0xCCCC_0002),
+        BabyBear::new(0xCCCC_0003),
+        BabyBear::new(0xCCCC_0004),
+        BabyBear::new(0xCCCC_0005),
+        BabyBear::new(0xCCCC_0006),
+        BabyBear::new(0xCCCC_0007),
+        BabyBear::new(0xCCCC_0008),
+    ];
+    let state = make_initial_state(1000);
+    let effects = vec![Effect::EmitEvent {
+        topic_hash: topic,
+        payload_hash: payload,
+    }];
+    let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
+
+    let emit_row = trace
+        .iter()
+        .position(|row| row[sel::EMIT_EVENT] == BabyBear::ONE)
+        .expect("at least one row must carry sel::EMIT_EVENT");
+    // Forge params[4] = payload_hash[0].
+    trace[emit_row][PARAM_BASE + 4] = BabyBear::new(0xBAAD_F00D);
+
+    let air = EffectVmAir::new(trace.len());
+    let proof = prove(&air, &trace, &public_inputs);
+    let result = verify(&air, &proof, &public_inputs);
+    assert!(
+        result.is_err(),
+        "forged payload_hash[0] inside trace must be rejected"
+    );
+}
+
+
