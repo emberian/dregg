@@ -586,6 +586,10 @@ fn constraint_dissect(
         SC::FieldEquals { index, .. } => ("field_equals", Some(*index), vec![]),
         SC::FieldGte { index, .. } => ("field_gte", Some(*index), vec![]),
         SC::FieldLte { index, .. } => ("field_lte", Some(*index), vec![]),
+        SC::FieldLteField {
+            left_index,
+            right_index,
+        } => ("field_lte_field", Some(*left_index), vec![*right_index]),
         SC::SumEquals { indices, .. } => {
             let mut extra = indices.clone();
             let primary = extra.first().copied();
