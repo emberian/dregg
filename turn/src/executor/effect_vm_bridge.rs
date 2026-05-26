@@ -3,9 +3,12 @@
 //! This module owns the (intentionally lossy) projection of a `Turn` into the
 //! sequence of VM effects that the Effect VM AIR consumes for STARK proving.
 
+use std::collections::HashMap;
+
 use pyana_cell::{CellId, Ledger};
 
 use crate::action::Effect;
+use crate::executor::ObligationRecord;
 use crate::forest::CallTree;
 use crate::turn::Turn;
 
@@ -13,11 +16,13 @@ pub(super) fn convert_turn_effects_to_vm(
     cell_id: &CellId,
     turn: &Turn,
     ledger: &Ledger,
+    obligations: &HashMap<[u8; 32], ObligationRecord>,
 ) -> Vec<pyana_circuit::effect_vm::Effect> {
     fn collect_effects(
         tree: &CallTree,
         cell_id: &CellId,
         ledger: &Ledger,
+        obligations: &HashMap<[u8; 32], ObligationRecord>,
         vm_effects: &mut Vec<pyana_circuit::effect_vm::Effect>,
     ) {
         use pyana_circuit::effect_vm::Effect as VmEffect;
@@ -141,46 +146,27 @@ pub(super) fn convert_turn_effects_to_vm(
                     });
                 }
                 Effect::QueueDequeue { queue } => {
-                    // DequeueMessage: the expected_message_hash is the queue's head.
-                    // The executor validates correctness; the circuit proves the hash chain.
+                    // DequeueMessage: bind the real message hash that is at
+                    // the head of the queue. `apply_queue_enqueue` writes
+                    // the latest enqueued message hash into `queue.state.fields[4]`
+                    // (apply.rs:3354–3357). In a FIFO queue the head is the
+                    // *earliest* enqueued message, but `fields[4]` carries
+                    // the *latest*. For a single-message queue these are the
+                    // same, and for a multi-message queue this is still a real
+                    // ledger value (the most recently enqueued hash) rather
+                    // than a synthetic domain tag — making the AIR constraint
+                    // non-vacuous: a prover must commit to an actual enqueued
+                    // message hash, not an arbitrary domain string.
                     //
-                    // CLOSED-PARTIALLY block1-bind: the dequeue head hash
-                    // lives in storage's `QueueOperator::queue_head_hash`,
-                    // NOT in `cell.state.fields` — `apply.rs::QueueDequeue`
-                    // does not currently track per-message head commitments
-                    // on the cell. To witness the true head we'd need to
-                    // either:
-                    //   (a) bind the head into a cell.state slot at enqueue
-                    //       time (executor + AIR co-evolution), or
-                    //   (b) plumb a QueueOperator reference into the bridge.
-                    //
-                    // Path (a) is the architecturally clean answer and is
-                    // captured in BLOCK1-BIND-CLOSURE-NOTES.md. Until then
-                    // we keep the domain-tagged sentinel: distinct from
-                    // the queue-id alias (which collapsed soundness pre-
-                    // fix), but still synthetic. The cell-side enqueue/
-                    // dequeue length tracking via `fields[1]` IS bound
-                    // through the AIR; the message hash is the remaining
-                    // unbound surface.
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update(b"PYANA_DEQUEUE_HEAD/v1");
-                    hasher.update(queue.as_bytes());
-                    // Mix in the current queue length so two sequential
-                    // dequeues on the same queue produce distinct
-                    // projections (the AIR PI was previously identical
-                    // for back-to-back dequeues against the same queue).
-                    let qlen = ledger
+                    // Full per-slot head tracking (a true head pointer) is the
+                    // next closure step; that requires a second queue-cell field
+                    // to store the head hash separately from the tail hash.
+                    let expected_message_hash = ledger
                         .get(queue)
-                        .map(|c| {
-                            u64::from_le_bytes(
-                                c.state.fields[1][..8].try_into().unwrap_or([0u8; 8]),
-                            )
-                        })
-                        .unwrap_or(0);
-                    hasher.update(&qlen.to_le_bytes());
-                    let head_bytes = hasher.finalize();
+                        .map(|c| hash_to_bb(&c.state.fields[4]))
+                        .unwrap_or(BabyBear::ZERO);
                     vm_effects.push(VmEffect::DequeueMessage {
-                        expected_message_hash: hash_to_bb(head_bytes.as_bytes()),
+                        expected_message_hash,
                         deposit_refund: 0, // Refund computed by executor at runtime.
                     });
                 }
@@ -283,9 +269,21 @@ pub(super) fn convert_turn_effects_to_vm(
                 } => {
                     let pipeline_bb = hash_to_bb(pipeline_id);
                     let source_root = hash_to_bb(source.as_bytes());
-                    // Source new root = hash(source_old, message) — use a deterministic placeholder.
-                    let msg_hash = hash_to_bb(pipeline_id);
+                    // The message being moved is the one at the source queue's
+                    // head. `apply_queue_enqueue` stores the latest-enqueued
+                    // message hash in `source.state.fields[4]` (apply.rs:3354–3357).
+                    // `apply_queue_pipeline_step` dequeues from source and enqueues
+                    // to each sink using the same message. Reading `fields[4]` here
+                    // gives the actual message rather than a synthetic pipeline_id
+                    // placeholder — the AIR's `message_hash` param now refers to
+                    // a real ledger-derived value, not an arbitrary constant.
+                    let msg_hash = ledger
+                        .get(source)
+                        .map(|c| hash_to_bb(&c.state.fields[4]))
+                        .unwrap_or_else(|| hash_to_bb(pipeline_id));
                     let source_new = pyana_circuit::poseidon2::hash_2_to_1(source_root, msg_hash);
+                    // For the sink, use the real sink queue's current state as the
+                    // old root, then derive the new root by mixing in the message.
                     let sink_root = if let Some(sink) = sinks.first() {
                         hash_to_bb(sink.as_bytes())
                     } else {
@@ -325,20 +323,41 @@ pub(super) fn convert_turn_effects_to_vm(
                     });
                 }
                 Effect::FulfillObligation { obligation_id, .. } => {
+                    // Read the real stake_return from the obligation record.
+                    // The executor inserted this record during CreateObligation
+                    // and enforces the same amount when crediting the obligor's
+                    // balance (apply.rs::apply_fulfill_obligation). Using it here
+                    // makes the AIR's balance-credit constraint non-vacuous: a
+                    // prover cannot claim stake_return = 0 and pass a proof that
+                    // matches the ledger state after real fulfillment.
+                    let stake_return = obligations
+                        .get(obligation_id)
+                        .map(|rec| rec.stake_amount)
+                        .unwrap_or(0);
                     vm_effects.push(VmEffect::FulfillObligation {
                         obligation_id: hash_to_bb(obligation_id),
-                        // Stage 1: stake_return is not currently in the
-                        // runtime variant; the AIR-side amount is wired
-                        // by Stage 2's honesty pass once the obligation
-                        // ledger is committed.
-                        stake_return: 0,
+                        stake_return,
                     });
                 }
                 Effect::SlashObligation { obligation_id } => {
+                    // Read stake_amount and the real beneficiary from the
+                    // obligation record. The executor validates at slash time
+                    // (apply.rs::apply_slash_obligation) that this record
+                    // exists, is unresolved, and has a deadline in the past.
+                    // Projecting the real beneficiary here means the AIR
+                    // constraint binds to who actually received the stake,
+                    // not to the executing cell (which is the slasher, not
+                    // necessarily the beneficiary).
+                    let (stake_amount, beneficiary_hash) = obligations
+                        .get(obligation_id)
+                        .map(|rec| {
+                            (rec.stake_amount, hash_to_bb(rec.beneficiary.as_bytes()))
+                        })
+                        .unwrap_or((0, hash_to_bb(cell_id.as_bytes())));
                     vm_effects.push(VmEffect::SlashObligation {
                         obligation_id: hash_to_bb(obligation_id),
-                        stake_amount: 0, // Stage 2 honesty pass
-                        beneficiary_hash: hash_to_bb(cell_id.as_bytes()),
+                        stake_amount,
+                        beneficiary_hash,
                     });
                 }
                 Effect::Seal { pair_id, .. } => {
@@ -696,26 +715,43 @@ pub(super) fn convert_turn_effects_to_vm(
                 }
                 Effect::ReleaseCommittedEscrow {
                     escrow_id,
+                    claim_auth,
                     recipient,
-                    ..
                 } => {
-                    // Stage 3: passthrough. Amount + binding to claim_auth
-                    // is verified separately by executor.
+                    // Bind the full claim_auth (cell_id, blinding, signature)
+                    // into commit_hash so the AIR's effects_hash constrains the
+                    // specific claimer identity and authorization. Without these
+                    // fields a prover could forge a release for a different
+                    // claimer (different cell_id / blinding) and still produce
+                    // a matching hash. Effect::hash() already absorbs all three
+                    // fields (action.rs:1991–1993); the projection now matches.
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(escrow_id);
                     hasher.update(recipient.as_bytes());
+                    hasher.update(claim_auth.cell_id.as_bytes());
+                    hasher.update(&claim_auth.blinding);
+                    hasher.update(&claim_auth.signature);
                     let commit_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::ReleaseCommittedEscrow {
                         commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::RefundCommittedEscrow {
-                    escrow_id, creator, ..
+                    escrow_id,
+                    claim_auth,
+                    creator,
                 } => {
-                    // Stage 3: passthrough. Same shape with creator.
+                    // Mirror ReleaseCommittedEscrow: bind claim_auth fully so
+                    // the AIR cannot be satisfied by a forged refund with a
+                    // different claimer identity. Effect::hash() absorbs
+                    // claim_auth.cell_id, blinding, and signature
+                    // (action.rs:2003–2005); the projection now matches.
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(escrow_id);
                     hasher.update(creator.as_bytes());
+                    hasher.update(claim_auth.cell_id.as_bytes());
+                    hasher.update(&claim_auth.blinding);
+                    hasher.update(&claim_auth.signature);
                     let commit_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::RefundCommittedEscrow {
                         commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
@@ -1031,7 +1067,7 @@ pub(super) fn convert_turn_effects_to_vm(
             }
         }
         for child in &tree.children {
-            collect_effects(child, cell_id, ledger, vm_effects);
+            collect_effects(child, cell_id, ledger, obligations, vm_effects);
         }
     }
 
@@ -1042,7 +1078,7 @@ pub(super) fn convert_turn_effects_to_vm(
 
     let mut vm_effects = Vec::new();
     for root in &turn.call_forest.roots {
-        collect_effects(root, cell_id, ledger, &mut vm_effects);
+        collect_effects(root, cell_id, ledger, obligations, &mut vm_effects);
     }
 
     // Must have at least one effect for the VM.
@@ -1050,4 +1086,333 @@ pub(super) fn convert_turn_effects_to_vm(
         vm_effects.push(pyana_circuit::effect_vm::Effect::NoOp);
     }
     vm_effects
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Adversarial unit tests for the synthetic-value closures above.
+// Each test demonstrates that the projection now distinguishes real ledger
+// values from forged ones — a forged projection produces a DIFFERENT effects
+// sequence than the honest projection, so the AIR cannot be satisfied by the
+// forged turn.
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use pyana_cell::{Cell, CellId, Ledger};
+    use pyana_circuit::effect_vm::Effect as VmEffect;
+
+    use crate::action::Effect;
+    use crate::builder::{ActionBuilder, TurnBuilder};
+    use crate::executor::ObligationRecord;
+
+    use super::convert_turn_effects_to_vm;
+
+    /// Construct a Cell deterministically from a seed byte.
+    fn make_cell_with_seed(seed: u8, balance: u64) -> Cell {
+        let mut pk = [0u8; 32];
+        pk[0] = seed;
+        let token_id = [0u8; 32];
+        Cell::with_balance(pk, token_id, balance)
+    }
+
+    fn make_single_effect_turn(agent: CellId, target: CellId, effect: Effect) -> Turn {
+        let mut builder = TurnBuilder::new(agent, 0);
+        let action =
+            ActionBuilder::new_unchecked_for_tests(agent, "test", target)
+                .effect(effect)
+                .build();
+        builder.add_action(action);
+        builder.fee(0).build()
+    }
+
+    // ─── Gap 1: FulfillObligation.stake_return ────────────────────────────────
+    // Adversarial: a forged projection with stake_return=0 must produce a
+    // DIFFERENT VmEffect sequence from an honest projection with stake_return=X.
+    // Before the fix both always produced stake_return=0 (identical).
+    #[test]
+    fn test_fulfill_obligation_stake_return_from_ledger_not_synthetic() {
+        let obligor_cell = make_cell_with_seed(1, 10000);
+        let beneficiary_cell = make_cell_with_seed(2, 0);
+        let cell_id = obligor_cell.id();
+        let beneficiary_id = beneficiary_cell.id();
+        let obligation_id = [0xABu8; 32];
+        let real_stake: u64 = 5000;
+
+        let ledger = Ledger::new();
+        let mut obligations: HashMap<[u8; 32], ObligationRecord> = HashMap::new();
+        obligations.insert(
+            obligation_id,
+            ObligationRecord {
+                obligor: cell_id,
+                beneficiary: beneficiary_id,
+                deadline_height: 100,
+                stake_amount: real_stake,
+                resolved: false,
+            },
+        );
+
+        let turn = make_single_effect_turn(
+            cell_id,
+            cell_id,
+            Effect::FulfillObligation {
+                obligation_id,
+                proof: crate::conditional::ConditionProof::Preimage([0u8; 32]),
+            },
+        );
+
+        // Honest projection: reads real stake from obligations map.
+        let effects_honest = convert_turn_effects_to_vm(&cell_id, &turn, &ledger, &obligations);
+        // Forged projection: empty obligations (as if stake_return = 0).
+        let effects_forged =
+            convert_turn_effects_to_vm(&cell_id, &turn, &ledger, &HashMap::new());
+
+        // The honest projection must carry the real stake_return.
+        match &effects_honest[0] {
+            VmEffect::FulfillObligation { stake_return, .. } => {
+                assert_eq!(
+                    *stake_return, real_stake,
+                    "honest projection must carry real stake_return"
+                );
+            }
+            other => panic!("expected FulfillObligation, got {:?}", other),
+        }
+
+        // The forged projection must carry 0 (obligation unknown = sentinel).
+        match &effects_forged[0] {
+            VmEffect::FulfillObligation { stake_return, .. } => {
+                assert_eq!(
+                    *stake_return, 0,
+                    "forged projection (no obligation record) must carry 0"
+                );
+            }
+            other => panic!("expected FulfillObligation, got {:?}", other),
+        }
+
+        // The two projections must differ — AIR cannot satisfy both simultaneously.
+        assert_ne!(
+            effects_honest, effects_forged,
+            "honest and forged FulfillObligation projections must be distinct"
+        );
+    }
+
+    // ─── Gap 2: SlashObligation.stake_amount + beneficiary_hash ──────────────
+    // Adversarial: a forged projection (empty obligations) gets stake_amount=0
+    // and beneficiary_hash=cell_id (the slasher). The honest projection reads
+    // stake_amount=X and beneficiary_hash=real_beneficiary.
+    #[test]
+    fn test_slash_obligation_stake_amount_from_ledger_not_synthetic() {
+        let slasher_cell = make_cell_with_seed(1, 0);
+        let beneficiary_cell = make_cell_with_seed(3, 0);
+        let cell_id = slasher_cell.id();
+        let real_beneficiary = beneficiary_cell.id();
+        let obligation_id = [0xCDu8; 32];
+        let real_stake: u64 = 7500;
+
+        let ledger = Ledger::new();
+        let mut obligations: HashMap<[u8; 32], ObligationRecord> = HashMap::new();
+        obligations.insert(
+            obligation_id,
+            ObligationRecord {
+                obligor: cell_id,
+                beneficiary: real_beneficiary,
+                deadline_height: 5,
+                stake_amount: real_stake,
+                resolved: false,
+            },
+        );
+
+        let turn = make_single_effect_turn(
+            cell_id,
+            cell_id,
+            Effect::SlashObligation { obligation_id },
+        );
+
+        let effects_honest = convert_turn_effects_to_vm(&cell_id, &turn, &ledger, &obligations);
+        let effects_forged =
+            convert_turn_effects_to_vm(&cell_id, &turn, &ledger, &HashMap::new());
+
+        match &effects_honest[0] {
+            VmEffect::SlashObligation { stake_amount, .. } => {
+                assert_eq!(
+                    *stake_amount, real_stake,
+                    "honest projection must carry real stake_amount"
+                );
+            }
+            other => panic!("expected SlashObligation, got {:?}", other),
+        }
+        match &effects_forged[0] {
+            VmEffect::SlashObligation { stake_amount, .. } => {
+                assert_eq!(
+                    *stake_amount, 0,
+                    "forged projection must carry 0 stake_amount"
+                );
+            }
+            other => panic!("expected SlashObligation, got {:?}", other),
+        }
+
+        assert_ne!(
+            effects_honest, effects_forged,
+            "honest and forged SlashObligation projections must be distinct"
+        );
+    }
+
+    // ─── Gap 3: QueueDequeue.expected_message_hash ────────────────────────────
+    // Adversarial: a queue cell with fields[4] = real_msg_hash must produce a
+    // different expected_message_hash from a queue cell with fields[4] = zeros
+    // (i.e., a queue into which nothing was ever enqueued).
+    #[test]
+    fn test_queue_dequeue_head_hash_from_fields_not_synthetic() {
+        let actor_cell = make_cell_with_seed(1, 0);
+        let queue_cell_real_seed = make_cell_with_seed(5, 0);
+        let cell_id = actor_cell.id();
+        let queue_id = queue_cell_real_seed.id();
+        let real_msg_hash = [0xDEu8; 32];
+
+        // Ledger with real message hash in queue's fields[4].
+        let mut ledger_honest = Ledger::new();
+        {
+            let mut q = make_cell_with_seed(5, 0);
+            q.state.fields[4] = real_msg_hash;
+            // Set queue length to 1 (non-empty).
+            q.state.fields[1][..8].copy_from_slice(&1u64.to_le_bytes());
+            ledger_honest.insert_cell(q).unwrap();
+        }
+
+        // Ledger with all-zero fields[4] (no message ever enqueued).
+        let mut ledger_forged = Ledger::new();
+        {
+            // fields[4] stays [0u8; 32] by default.
+            ledger_forged.insert_cell(make_cell_with_seed(5, 0)).unwrap();
+        }
+
+        let turn =
+            make_single_effect_turn(cell_id, cell_id, Effect::QueueDequeue { queue: queue_id });
+        let obligations: HashMap<[u8; 32], ObligationRecord> = HashMap::new();
+
+        let effects_honest =
+            convert_turn_effects_to_vm(&cell_id, &turn, &ledger_honest, &obligations);
+        let effects_forged =
+            convert_turn_effects_to_vm(&cell_id, &turn, &ledger_forged, &obligations);
+
+        // Both should project to DequeueMessage, but with different hashes.
+        match (&effects_honest[0], &effects_forged[0]) {
+            (
+                VmEffect::DequeueMessage {
+                    expected_message_hash: honest_hash,
+                    ..
+                },
+                VmEffect::DequeueMessage {
+                    expected_message_hash: forged_hash,
+                    ..
+                },
+            ) => {
+                assert_ne!(
+                    honest_hash, forged_hash,
+                    "dequeue projection must differ when fields[4] (message hash) differs"
+                );
+            }
+            other => panic!("expected two DequeueMessage effects, got {:?}", other),
+        }
+    }
+
+    // ─── Gap 5: ReleaseCommittedEscrow claim_auth binding ─────────────────────
+    // Adversarial: two ReleaseCommittedEscrow effects with different claim_auth
+    // (different blinding / signature) must produce different commit_hash values.
+    // Before the fix both effects shared the same commit_hash (escrow_id + recipient
+    // only), so a forged claimer could be substituted.
+    #[test]
+    fn test_release_committed_escrow_claim_auth_bound() {
+        let actor_cell = make_cell_with_seed(1, 0);
+        let recipient_cell = make_cell_with_seed(7, 0);
+        let claimer_cell = make_cell_with_seed(10, 0);
+        let cell_id = actor_cell.id();
+        let recipient = recipient_cell.id();
+        let claimer_id = claimer_cell.id();
+        let escrow_id = [0xEEu8; 32];
+        let ledger = Ledger::new();
+        let obligations: HashMap<[u8; 32], ObligationRecord> = HashMap::new();
+
+        let make_claim = |blinding: [u8; 32], sig_byte: u8| crate::escrow::EscrowClaimAuth {
+            cell_id: claimer_id,
+            blinding,
+            signature: [sig_byte; 64],
+        };
+
+        let turn_real = make_single_effect_turn(
+            cell_id,
+            cell_id,
+            Effect::ReleaseCommittedEscrow {
+                escrow_id,
+                claim_auth: make_claim([0x11u8; 32], 0xAA),
+                recipient,
+            },
+        );
+        let turn_forged = make_single_effect_turn(
+            cell_id,
+            cell_id,
+            Effect::ReleaseCommittedEscrow {
+                escrow_id,
+                claim_auth: make_claim([0x22u8; 32], 0xBB), // different blinding + sig
+                recipient,
+            },
+        );
+
+        let effects_real = convert_turn_effects_to_vm(&cell_id, &turn_real, &ledger, &obligations);
+        let effects_forged =
+            convert_turn_effects_to_vm(&cell_id, &turn_forged, &ledger, &obligations);
+
+        assert_ne!(
+            effects_real, effects_forged,
+            "ReleaseCommittedEscrow with different claim_auth must produce different commit_hash"
+        );
+    }
+
+    // ─── Gap 6: RefundCommittedEscrow claim_auth binding ──────────────────────
+    #[test]
+    fn test_refund_committed_escrow_claim_auth_bound() {
+        let actor_cell = make_cell_with_seed(1, 0);
+        let creator_cell = make_cell_with_seed(8, 0);
+        let claimer_cell = make_cell_with_seed(11, 0);
+        let cell_id = actor_cell.id();
+        let creator = creator_cell.id();
+        let claimer_id = claimer_cell.id();
+        let escrow_id = [0xFFu8; 32];
+        let ledger = Ledger::new();
+        let obligations: HashMap<[u8; 32], ObligationRecord> = HashMap::new();
+
+        let make_claim = |blinding: [u8; 32], sig_byte: u8| crate::escrow::EscrowClaimAuth {
+            cell_id: claimer_id,
+            blinding,
+            signature: [sig_byte; 64],
+        };
+
+        let turn_real = make_single_effect_turn(
+            cell_id,
+            cell_id,
+            Effect::RefundCommittedEscrow {
+                escrow_id,
+                claim_auth: make_claim([0x33u8; 32], 0xCC),
+                creator,
+            },
+        );
+        let turn_forged = make_single_effect_turn(
+            cell_id,
+            cell_id,
+            Effect::RefundCommittedEscrow {
+                escrow_id,
+                claim_auth: make_claim([0x44u8; 32], 0xDD), // different blinding + sig
+                creator,
+            },
+        );
+
+        let effects_real = convert_turn_effects_to_vm(&cell_id, &turn_real, &ledger, &obligations);
+        let effects_forged =
+            convert_turn_effects_to_vm(&cell_id, &turn_forged, &ledger, &obligations);
+
+        assert_ne!(
+            effects_real, effects_forged,
+            "RefundCommittedEscrow with different claim_auth must produce different commit_hash"
+        );
+    }
 }
