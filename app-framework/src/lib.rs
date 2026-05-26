@@ -176,8 +176,8 @@ pub use pyana_cell::{
 };
 // Re-export the types needed to build non-trivial CellProgram::Cases — previously
 // every app had to add pyana-cell to its own Cargo.toml just to get these.
-pub use pyana_cell::program::{AuthorizedSet, TransitionCase, TransitionGuard};
 pub use pyana_cell::predicate::{InputRef, WitnessedPredicate, WitnessedPredicateKind};
+pub use pyana_cell::program::{AuthorizedSet, TransitionCase, TransitionGuard};
 
 // Re-export the canonical field-element encoding helpers so apps can use them
 // without duplicating these in every crate.

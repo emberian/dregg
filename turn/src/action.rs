@@ -2155,11 +2155,21 @@ impl Effect {
                 // effects hash so a forged tier diverges from the real
                 // swiss-table entry's commitment.
                 match permissions {
-                    AuthRequired::None => { hasher.update(&[0u8]); }
-                    AuthRequired::Signature => { hasher.update(&[1u8]); }
-                    AuthRequired::Proof => { hasher.update(&[2u8]); }
-                    AuthRequired::Either => { hasher.update(&[3u8]); }
-                    AuthRequired::Impossible => { hasher.update(&[4u8]); }
+                    AuthRequired::None => {
+                        hasher.update(&[0u8]);
+                    }
+                    AuthRequired::Signature => {
+                        hasher.update(&[1u8]);
+                    }
+                    AuthRequired::Proof => {
+                        hasher.update(&[2u8]);
+                    }
+                    AuthRequired::Either => {
+                        hasher.update(&[3u8]);
+                    }
+                    AuthRequired::Impossible => {
+                        hasher.update(&[4u8]);
+                    }
                     AuthRequired::Custom { vk_hash } => {
                         hasher.update(&[5u8]);
                         hasher.update(vk_hash);
@@ -2444,7 +2454,7 @@ impl Effect {
             // CapTP runtime effects: small fixed-size blobs.
             Effect::ExportSturdyRef { .. } => 32 + 32 + 33, // swiss + target + perms (1 byte + opt 32-byte vk_hash for Custom)
             Effect::EnlivenRef { .. } => 32 + 32 + 32 + 33, // swiss + bearer + expected_cell_id + perms
-            Effect::DropRef { .. } => 32,              // ref_id
+            Effect::DropRef { .. } => 32,                   // ref_id
             Effect::ValidateHandoff { .. } => 32 + 32 + 32, // cert_hash + recipient_pk + introducer_pk
             // Refusal: cell + commitment + reason-discriminant (+ opt 32-byte
             // custom reason hash) + u32 witness index.

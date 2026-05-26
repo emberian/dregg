@@ -425,14 +425,18 @@ fn cases_with_compound_transition_guards() {
     let new = state_with(&[(0, 10)]);
     let meta_a = TransitionMeta::new(m_a, 0);
     assert!(
-        program.evaluate_with_meta(&new, Some(&old), None, &meta_a).is_ok(),
+        program
+            .evaluate_with_meta(&new, Some(&old), None, &meta_a)
+            .is_ok(),
         "m_a + slot 0 changed + monotonic satisfied => must accept"
     );
 
     // Case 2: method=m_b, slot 0 increased => AllOf matches, Monotonic satisfied => Ok
     let meta_b = TransitionMeta::new(m_b, 0);
     assert!(
-        program.evaluate_with_meta(&new, Some(&old), None, &meta_b).is_ok(),
+        program
+            .evaluate_with_meta(&new, Some(&old), None, &meta_b)
+            .is_ok(),
         "m_b + slot 0 changed + monotonic satisfied => must accept"
     );
 
@@ -440,7 +444,9 @@ fn cases_with_compound_transition_guards() {
     //         AllOf fails => no case matched => must reject
     let unchanged = state_with(&[(0, 5)]);
     assert!(
-        program.evaluate_with_meta(&unchanged, Some(&old), None, &meta_a).is_err(),
+        program
+            .evaluate_with_meta(&unchanged, Some(&old), None, &meta_a)
+            .is_err(),
         "m_a + slot 0 unchanged => SlotChanged false => no case matched => must reject"
     );
 
@@ -448,7 +454,9 @@ fn cases_with_compound_transition_guards() {
     //         AnyOf fails => AllOf fails => no case matched => must reject
     let unrelated_meta = TransitionMeta::new(symbol("unrelated"), 0);
     assert!(
-        program.evaluate_with_meta(&new, Some(&old), None, &unrelated_meta).is_err(),
+        program
+            .evaluate_with_meta(&new, Some(&old), None, &unrelated_meta)
+            .is_err(),
         "unrelated method + slot changed => AnyOf fails => no case matched => must reject"
     );
 }

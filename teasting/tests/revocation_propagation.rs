@@ -121,8 +121,14 @@ fn test_revocation_after_recovery() {
 
     // Node 3 should now know about both revocations.
     let fed = harness.federation(0);
-    assert!(fed.is_revoked(3, "revoked-while-down"), "node 3 must know about revocation missed while offline");
-    assert!(fed.is_revoked(3, "trigger-sync"), "node 3 must know about post-recovery revocation");
+    assert!(
+        fed.is_revoked(3, "revoked-while-down"),
+        "node 3 must know about revocation missed while offline"
+    );
+    assert!(
+        fed.is_revoked(3, "trigger-sync"),
+        "node 3 must know about post-recovery revocation"
+    );
 }
 
 /// Double-revocation: revoking an already-revoked token is idempotent.

@@ -310,7 +310,9 @@ impl TurnExecutor {
                 h.update(&[1u8]);
                 h.update(&v);
             }
-            None => h.update(&[0u8]),
+            None => {
+                h.update(&[0u8]);
+            }
         }
         h.update(&balance_delta.to_le_bytes());
         *h.finalize().as_bytes()

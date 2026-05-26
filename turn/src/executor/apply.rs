@@ -42,9 +42,16 @@ impl TurnExecutor {
                 *index,
                 value,
             ),
-            Effect::Transfer { from, to, amount } => {
-                self.apply_transfer(ledger, path, action_target, actor, journal, from, to, *amount)
-            }
+            Effect::Transfer { from, to, amount } => self.apply_transfer(
+                ledger,
+                path,
+                action_target,
+                actor,
+                journal,
+                from,
+                to,
+                *amount,
+            ),
             Effect::GrantCapability { from, to, cap } => self.apply_grant_capability(
                 ledger,
                 path,
@@ -140,7 +147,7 @@ impl TurnExecutor {
             Effect::BridgeCancel { nullifier } => self.apply_bridge_cancel(path, nullifier),
             Effect::CreateObligation {
                 beneficiary,
-                condition: _,
+                condition,
                 deadline_height,
                 stake,
                 stake_amount,
@@ -150,6 +157,7 @@ impl TurnExecutor {
                 action_target,
                 journal,
                 beneficiary,
+                condition,
                 *deadline_height,
                 stake,
                 *stake_amount,
@@ -221,24 +229,14 @@ impl TurnExecutor {
                 claim_auth,
                 recipient,
             } => self.apply_release_committed_escrow(
-                ledger,
-                path,
-                journal,
-                escrow_id,
-                claim_auth,
-                recipient,
+                ledger, path, journal, escrow_id, claim_auth, recipient,
             ),
             Effect::RefundCommittedEscrow {
                 escrow_id,
                 claim_auth,
                 creator,
             } => self.apply_refund_committed_escrow(
-                ledger,
-                path,
-                journal,
-                escrow_id,
-                claim_auth,
-                creator,
+                ledger, path, journal, escrow_id, claim_auth, creator,
             ),
             Effect::ExerciseViaCapability {
                 cap_slot,
@@ -361,14 +359,9 @@ impl TurnExecutor {
                 pipeline_id: _,
                 source,
                 sinks,
-            } => self.apply_queue_pipeline_step(
-                ledger,
-                path,
-                action_target,
-                journal,
-                source,
-                sinks,
-            ),
+            } => {
+                self.apply_queue_pipeline_step(ledger, path, action_target, journal, source, sinks)
+            }
             Effect::ExportSturdyRef {
                 swiss_number,
                 target,
@@ -1214,6 +1207,7 @@ impl TurnExecutor {
         action_target: &CellId,
         journal: &mut LedgerJournal,
         beneficiary: &CellId,
+        condition: &crate::conditional::ProofCondition,
         deadline_height: u64,
         stake: &NoteCommitment,
         stake_amount: u64,
@@ -1311,12 +1305,7 @@ impl TurnExecutor {
         journal.record_obligation_inserted(obligation_id);
 
         // The actor (action_target) is the obligor.
-        journal.record_obligation_created(
-            *action_target,
-            *beneficiary,
-            deadline_height,
-            *stake,
-        );
+        journal.record_obligation_created(*action_target, *beneficiary, deadline_height, *stake);
         Ok(())
     }
 
@@ -1684,12 +1673,7 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                if !verifier.verify(
-                    proof_bytes,
-                    "escrow-release",
-                    "escrow",
-                    verification_key,
-                ) {
+                if !verifier.verify(proof_bytes, "escrow-release", "escrow", verification_key) {
                     return Err((
                         TurnError::InvalidEffect {
                             reason: "escrow release proof verification failed".into(),
@@ -2727,9 +2711,9 @@ impl TurnExecutor {
 
         match pair.unseal(sealed_box) {
             Ok(cap) => {
-                let recipient_cell = ledger.get_mut(recipient).ok_or_else(|| {
-                    (TurnError::CellNotFound { id: *recipient }, path.to_vec())
-                })?;
+                let recipient_cell = ledger
+                    .get_mut(recipient)
+                    .ok_or_else(|| (TurnError::CellNotFound { id: *recipient }, path.to_vec()))?;
                 let granted_slot = recipient_cell
                     .capabilities
                     .grant_with_breadstuff(cap.target, cap.permissions.clone(), cap.breadstuff)
@@ -3330,9 +3314,9 @@ impl TurnExecutor {
                     message_hash,
                     deposit,
                 } => {
-                    let queue_cell = ledger.get(queue).ok_or_else(|| {
-                        (TurnError::CellNotFound { id: *queue }, path.to_vec())
-                    })?;
+                    let queue_cell = ledger
+                        .get(queue)
+                        .ok_or_else(|| (TurnError::CellNotFound { id: *queue }, path.to_vec()))?;
                     let capacity =
                         u64::from_le_bytes(queue_cell.state.fields[0][..8].try_into().unwrap());
                     let current_len =
@@ -3385,9 +3369,9 @@ impl TurnExecutor {
                     ledger.get_mut(queue).unwrap().state.fields[4] = *message_hash;
                 }
                 crate::action::QueueTxOp::Dequeue { queue } => {
-                    let queue_cell = ledger.get(queue).ok_or_else(|| {
-                        (TurnError::CellNotFound { id: *queue }, path.to_vec())
-                    })?;
+                    let queue_cell = ledger
+                        .get(queue)
+                        .ok_or_else(|| (TurnError::CellNotFound { id: *queue }, path.to_vec()))?;
                     let owner_bytes = queue_cell.state.fields[2];
                     if owner_bytes != *action_target.as_bytes() {
                         return Err((
@@ -3465,8 +3449,7 @@ impl TurnExecutor {
                 path.to_vec(),
             ));
         }
-        let source_len =
-            u64::from_le_bytes(source_cell.state.fields[1][..8].try_into().unwrap());
+        let source_len = u64::from_le_bytes(source_cell.state.fields[1][..8].try_into().unwrap());
         if source_len == 0 {
             return Err((
                 TurnError::InvalidEffect {
@@ -3483,8 +3466,7 @@ impl TurnExecutor {
                 .ok_or_else(|| (TurnError::CellNotFound { id: *sink }, path.to_vec()))?;
             let sink_capacity =
                 u64::from_le_bytes(sink_cell.state.fields[0][..8].try_into().unwrap());
-            let sink_len =
-                u64::from_le_bytes(sink_cell.state.fields[1][..8].try_into().unwrap());
+            let sink_len = u64::from_le_bytes(sink_cell.state.fields[1][..8].try_into().unwrap());
             if sink_len >= sink_capacity {
                 return Err((
                     TurnError::InvalidEffect {
@@ -3562,9 +3544,9 @@ impl TurnExecutor {
         // tier other than itself / Impossible / None per
         // `AuthRequired::is_narrower_or_equal`.
         {
-            let cell_for_check = ledger.get(target).ok_or_else(|| {
-                (TurnError::CellNotFound { id: *target }, path.to_vec())
-            })?;
+            let cell_for_check = ledger
+                .get(target)
+                .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
             let cell_tier = &cell_for_check.permissions.access;
             if !permissions.is_narrower_or_equal(cell_tier) {
                 return Err((
@@ -3640,9 +3622,9 @@ impl TurnExecutor {
         // (expected_cell_id, expected_permissions) pair into
         // the swiss_table_root chain.
         {
-            let bearer_cell = ledger.get(bearer).ok_or_else(|| {
-                (TurnError::CellNotFound { id: *bearer }, path.to_vec())
-            })?;
+            let bearer_cell = ledger
+                .get(bearer)
+                .ok_or_else(|| (TurnError::CellNotFound { id: *bearer }, path.to_vec()))?;
             let cap_match = bearer_cell
                 .capabilities
                 .capabilities_for(expected_cell_id)

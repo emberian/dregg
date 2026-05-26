@@ -24,17 +24,21 @@ pub fn run() -> Vec<CheckResult> {
     // Gallery check retired: apps/gallery is no longer a workspace member
     // (deleted in apps/ → starbridge-apps/ sweep).
     checks.push(run_check("gallery", || {
-        Err("RETIRED: apps/gallery deleted in starbridge-apps migration; \
+        Err(
+            "RETIRED: apps/gallery deleted in starbridge-apps migration; \
              add starbridge-apps integration check when ready"
-            .into())
+                .into(),
+        )
     }));
 
     // Identity check retired: apps/identity deleted; starbridge-identity has
     // a different public API (pyana-credentials-backed, no pyana_identity::*).
     checks.push(run_check("identity", || {
-        Err("RETIRED: apps/identity deleted in starbridge-apps migration; \
+        Err(
+            "RETIRED: apps/identity deleted in starbridge-apps migration; \
              add starbridge-identity integration check when ready"
-            .into())
+                .into(),
+        )
     }));
 
     checks

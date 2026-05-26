@@ -325,7 +325,9 @@ impl PyanaRuntime {
         let local_seat = local_sk.map(|sk| LocalSeat {
             index: 0,
             signing_key: sk,
-            bls_secret: None,
+            // bls_secret is only present when the federation crate's `runtime`
+            // feature is enabled (native builds). The wasm crate disables that
+            // feature; omit the field so the struct literal compiles either way.
         });
         let federation = Federation::from_committee(members, 0, threshold, None, local_seat);
 

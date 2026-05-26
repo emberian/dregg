@@ -4863,7 +4863,9 @@ impl AgentCipherclerk {
                         value: field_element_to_bb(value),
                     });
                 }
-                Effect::GrantCapability { from, to, cap, .. } if to == cell_id || from == cell_id => {
+                Effect::GrantCapability { from, to, cap, .. }
+                    if to == cell_id || from == cell_id =>
+                {
                     // Project from both granter and grantee perspectives.
                     // The cap_entry is the capability identity being granted/received.
                     // For the granter (from==cell_id), this records that a cap was sent.
@@ -4952,7 +4954,10 @@ impl AgentCipherclerk {
                 // ================================================================
 
                 // -- Permissions / VK / caps ------------------------------------
-                Effect::SetPermissions { cell, new_permissions } if cell == cell_id => {
+                Effect::SetPermissions {
+                    cell,
+                    new_permissions,
+                } if cell == cell_id => {
                     let perm_bytes = postcard::to_allocvec(new_permissions).unwrap_or_default();
                     let perm_hash_bytes = blake3::hash(&perm_bytes);
                     vm_effects.push(VmEffect::SetPermissions {
@@ -4977,13 +4982,19 @@ impl AgentCipherclerk {
                         slot_hash: hash_to_bb(slot_hash_bytes.as_bytes()),
                     });
                 }
-                Effect::AttenuateCapability { cell, slot, narrower_permissions, .. } if cell == cell_id => {
+                Effect::AttenuateCapability {
+                    cell,
+                    slot,
+                    narrower_permissions,
+                    ..
+                } if cell == cell_id => {
                     // Bind slot + narrowed-permissions hash into effects_hash.
                     // The AIR enforces monotonic narrowing via the executor;
                     // the proof carries the identity of which slot was attenuated.
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(&slot.to_le_bytes());
-                    let perm_bytes = postcard::to_allocvec(narrower_permissions).unwrap_or_default();
+                    let perm_bytes =
+                        postcard::to_allocvec(narrower_permissions).unwrap_or_default();
                     hasher.update(&perm_bytes);
                     let attn_hash = hasher.finalize();
                     vm_effects.push(VmEffect::RevokeCapability {
@@ -4997,7 +5008,11 @@ impl AgentCipherclerk {
                 }
 
                 // -- CreateCell / lifecycle -------------------------------------
-                Effect::CreateCell { public_key, token_id, balance } => {
+                Effect::CreateCell {
+                    public_key,
+                    token_id,
+                    balance,
+                } => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(public_key);
                     hasher.update(token_id);
@@ -5035,7 +5050,10 @@ impl AgentCipherclerk {
                         permissions_hash: hash_to_bb(unseal_hash.as_bytes()),
                     });
                 }
-                Effect::CellDestroy { target, certificate } if target == cell_id => {
+                Effect::CellDestroy {
+                    target,
+                    certificate,
+                } if target == cell_id => {
                     // CellDestroy is terminal and irreversible — it is
                     // CRITICAL that the proof binds the death certificate
                     // hash so a verifier can attribute the destruction to
@@ -5055,7 +5073,10 @@ impl AgentCipherclerk {
                         permissions_hash: hash_to_bb(destroy_hash.as_bytes()),
                     });
                 }
-                Effect::ReceiptArchive { prefix_end_height, checkpoint } => {
+                Effect::ReceiptArchive {
+                    prefix_end_height,
+                    checkpoint,
+                } => {
                     // ReceiptArchive binds the archival attestation hash +
                     // prefix_end_height. Neutral (no balance change); the
                     // proof records that the actor committed to archiving
@@ -5104,7 +5125,10 @@ impl AgentCipherclerk {
                 }
 
                 // -- Sealing / sovereign / factory (already handled above except CreateSealPair)
-                Effect::CreateSealPair { sealer_holder, unsealer_holder } => {
+                Effect::CreateSealPair {
+                    sealer_holder,
+                    unsealer_holder,
+                } => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(sealer_holder.as_bytes());
                     hasher.update(unsealer_holder.as_bytes());
@@ -5115,7 +5139,11 @@ impl AgentCipherclerk {
                 }
 
                 // -- Delegation -------------------------------------------------
-                Effect::SpawnWithDelegation { child_public_key, child_token_id, max_staleness } => {
+                Effect::SpawnWithDelegation {
+                    child_public_key,
+                    child_token_id,
+                    max_staleness,
+                } => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(child_public_key);
                     hasher.update(child_token_id);
@@ -5144,16 +5172,21 @@ impl AgentCipherclerk {
                     hasher.update(&portable_proof.destination_federation);
                     hasher.update(&portable_proof.asset_type.to_le_bytes());
                     let mint_hash_bytes = hasher.finalize();
-                    let value_lo = BabyBear::new(
-                        (portable_proof.value & ((1u64 << 30) - 1)) as u32,
-                    );
+                    let value_lo =
+                        BabyBear::new((portable_proof.value & ((1u64 << 30) - 1)) as u32);
                     vm_effects.push(VmEffect::BridgeMint {
                         value_lo,
                         mint_hash: hash_to_bb(mint_hash_bytes.as_bytes()),
                         value_full: portable_proof.value,
                     });
                 }
-                Effect::BridgeLock { nullifier, destination, value, asset_type, .. } => {
+                Effect::BridgeLock {
+                    nullifier,
+                    destination,
+                    value,
+                    asset_type,
+                    ..
+                } => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(nullifier);
                     hasher.update(destination);
@@ -5183,7 +5216,12 @@ impl AgentCipherclerk {
                 }
 
                 // -- Introduce / pipelined send ---------------------------------
-                Effect::Introduce { introducer, recipient, target, permissions } => {
+                Effect::Introduce {
+                    introducer,
+                    recipient,
+                    target,
+                    permissions,
+                } => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(introducer.as_bytes());
                     hasher.update(recipient.as_bytes());
@@ -5217,7 +5255,13 @@ impl AgentCipherclerk {
                 }
 
                 // -- Escrow (CRITICAL: locked value) ----------------------------
-                Effect::CreateEscrow { cell, recipient, amount, condition, .. } if cell == cell_id => {
+                Effect::CreateEscrow {
+                    cell,
+                    recipient,
+                    amount,
+                    condition,
+                    ..
+                } if cell == cell_id => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(recipient.as_bytes());
                     let cond_bytes = postcard::to_allocvec(condition).unwrap_or_default();
@@ -5257,7 +5301,11 @@ impl AgentCipherclerk {
                         commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
                     });
                 }
-                Effect::ReleaseCommittedEscrow { escrow_id, recipient, .. } => {
+                Effect::ReleaseCommittedEscrow {
+                    escrow_id,
+                    recipient,
+                    ..
+                } => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(escrow_id);
                     hasher.update(recipient.as_bytes());
@@ -5266,7 +5314,9 @@ impl AgentCipherclerk {
                         commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
                     });
                 }
-                Effect::RefundCommittedEscrow { escrow_id, creator, .. } => {
+                Effect::RefundCommittedEscrow {
+                    escrow_id, creator, ..
+                } => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(escrow_id);
                     hasher.update(creator.as_bytes());
@@ -5277,7 +5327,10 @@ impl AgentCipherclerk {
                 }
 
                 // -- ExerciseViaCapability -------------------------------------
-                Effect::ExerciseViaCapability { cap_slot, inner_effects } => {
+                Effect::ExerciseViaCapability {
+                    cap_slot,
+                    inner_effects,
+                } => {
                     let mut hasher = blake3::Hasher::new();
                     hasher.update(&cap_slot.to_le_bytes());
                     for inner in inner_effects {
@@ -5297,7 +5350,11 @@ impl AgentCipherclerk {
                         cost_per_slot: 1,
                     });
                 }
-                Effect::QueueEnqueue { queue, message_hash, deposit } => {
+                Effect::QueueEnqueue {
+                    queue,
+                    message_hash,
+                    deposit,
+                } => {
                     // Ledger not available in SDK function; use zero sentinel for
                     // queue_len and program_vk. The bridge's ledger-sourced values
                     // are the authoritative ones used at prove time by the executor.
@@ -5324,7 +5381,10 @@ impl AgentCipherclerk {
                         deposit_refund: 0,
                     });
                 }
-                Effect::QueueResize { queue, new_capacity } => {
+                Effect::QueueResize {
+                    queue,
+                    new_capacity,
+                } => {
                     // old_capacity unknown without ledger; use 0.
                     vm_effects.push(VmEffect::ResizeQueue {
                         new_capacity: *new_capacity as u32,
@@ -5350,9 +5410,7 @@ impl AgentCipherclerk {
                             pyana_turn::QueueTxOp::Enqueue { message_hash, .. } => {
                                 message_hash.to_vec()
                             }
-                            pyana_turn::QueueTxOp::Dequeue { queue } => {
-                                queue.as_bytes().to_vec()
-                            }
+                            pyana_turn::QueueTxOp::Dequeue { queue } => queue.as_bytes().to_vec(),
                         })
                         .collect();
                     let tx_hash_bytes = blake3::hash(&tx_hash_input);
@@ -5369,7 +5427,11 @@ impl AgentCipherclerk {
                         net_deposit: net_deposit as u32,
                     });
                 }
-                Effect::QueuePipelineStep { pipeline_id, source, sinks } => {
+                Effect::QueuePipelineStep {
+                    pipeline_id,
+                    source,
+                    sinks,
+                } => {
                     let pipeline_bb = hash_to_bb(pipeline_id);
                     let source_root = hash_to_bb(source.as_bytes());
                     let msg_hash = hash_to_bb(pipeline_id);
@@ -5390,7 +5452,11 @@ impl AgentCipherclerk {
                 }
 
                 // -- CapTP runtime effects (CRITICAL: cap authority) -----------
-                Effect::ExportSturdyRef { swiss_number, target, permissions } => {
+                Effect::ExportSturdyRef {
+                    swiss_number,
+                    target,
+                    permissions,
+                } => {
                     // Without Ledger we cannot read the export_counter from
                     // target.state.fields[7]. Use sentinel 0 (same as the
                     // bridge when the cell is missing from the ledger).
@@ -5416,7 +5482,12 @@ impl AgentCipherclerk {
                         export_counter: 0, // Sentinel; live value sourced from Ledger at executor prove time.
                     });
                 }
-                Effect::EnlivenRef { swiss_number, bearer, expected_cell_id, expected_permissions } => {
+                Effect::EnlivenRef {
+                    swiss_number,
+                    bearer,
+                    expected_cell_id,
+                    expected_permissions,
+                } => {
                     let swiss_bb = hash_to_bb(swiss_number);
                     let presenter_bb = hash_to_bb(bearer.as_bytes());
                     let expected_cell_id_bb = hash_to_bb(expected_cell_id.as_bytes());
@@ -5450,7 +5521,11 @@ impl AgentCipherclerk {
                         current_refcount: 0,
                     });
                 }
-                Effect::ValidateHandoff { cert_hash, recipient_pk, introducer_pk } => {
+                Effect::ValidateHandoff {
+                    cert_hash,
+                    recipient_pk,
+                    introducer_pk,
+                } => {
                     let cert_bb = hash_to_bb(cert_hash);
                     let recipient_pk_bb = hash_to_bb(recipient_pk);
                     let introducer_pk_bb = hash_to_bb(introducer_pk);
@@ -5463,7 +5538,11 @@ impl AgentCipherclerk {
                 }
 
                 // -- Refusal (evidence-of-absence) ----------------------------
-                Effect::Refusal { cell, offered_action_commitment, .. } if cell == cell_id => {
+                Effect::Refusal {
+                    cell,
+                    offered_action_commitment,
+                    ..
+                } if cell == cell_id => {
                     // Bind the offered_action_commitment so the proof
                     // records which action was refused. RefusalReason is
                     // not separately encoded here — the non-action witness

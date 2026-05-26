@@ -6669,12 +6669,14 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "postcard",
+ "pyana-app-framework",
  "pyana-blocklace",
  "pyana-captp",
  "pyana-cell",
  "pyana-circuit",
  "pyana-commit",
  "pyana-coord",
+ "pyana-credentials",
  "pyana-dsl-runtime",
  "pyana-federation",
  "pyana-intent",
@@ -6689,6 +6691,10 @@ dependencies = [
  "rustls 0.23.40",
  "serde",
  "serde_json",
+ "starbridge-governed-namespace",
+ "starbridge-identity",
+ "starbridge-nameservice",
+ "starbridge-subscription",
  "subtle",
  "tempfile",
  "tokio",
@@ -6736,6 +6742,34 @@ dependencies = [
  "serde",
  "subtle",
  "tempfile",
+]
+
+[[package]]
+name = "pyana-preflight"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "postcard",
+ "pyana-blocklace",
+ "pyana-bridge",
+ "pyana-captp",
+ "pyana-cell",
+ "pyana-circuit",
+ "pyana-commit",
+ "pyana-federation",
+ "pyana-intent",
+ "pyana-sdk",
+ "pyana-storage",
+ "pyana-token",
+ "pyana-turn",
+ "pyana-types",
+ "pyana-wire",
+ "serde_json",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

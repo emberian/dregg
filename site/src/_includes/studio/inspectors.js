@@ -154,3 +154,4 @@ import './inspectors/capability-list.js';
 import './inspectors/intent.js';
 import './inspectors/federation.js';
 import './inspectors/block.js';
+import './inspectors/delegation-graph.js';

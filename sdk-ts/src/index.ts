@@ -107,6 +107,26 @@ export type {
   TreeViz,
   HeightResult,
   AuthRequired,
+  // Enriched receipt / action / proof types (Refactors 3 & 7)
+  ActionView,
+  ActionAuthorization,
+  ProofView,
+  // Cell program view (Refactor 6)
+  CellProgramView,
+  SlotView,
+  // Peer exchange
+  PeerTransitionView,
+  PeerCellView,
+  // Turn trace
+  TurnTraceStep,
+  // Factory / cell creation
+  FactoryDeployResult,
+  CellCreateResult,
+  DefaultFactoryVkResult,
+  CellStateCommitmentResult,
+  // Federation blocks
+  FederationBlock,
+  FederationBlockHeader,
 } from "./types";
 
 import { AgentCipherclerk } from "./cipherclerk";

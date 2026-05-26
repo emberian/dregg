@@ -329,8 +329,7 @@ fn captp_delivered_loop_closes_executor_accepts_and_commits() {
     // The cert_hash is BLAKE3 over the presentation bytes (the wire handler
     // uses this exact convention; see server.rs PresentHandoff handler).
     let cert_hash: [u8; 32] = blake3::hash(&presentation_bytes).into();
-    let effect =
-        captp_routing::validate_handoff_effect(cert_hash, cert.recipient_pk, alice_pk.0);
+    let effect = captp_routing::validate_handoff_effect(cert_hash, cert.recipient_pk, alice_pk.0);
 
     // Bob computes the canonical CapTP-delivery signing message and signs it.
     let effects = vec![effect.clone()];
@@ -421,8 +420,7 @@ fn captp_delivered_rejects_wrong_sender_signature() {
     let presentation = HandoffPresentation::create(cert.clone(), &bob_sk);
     let presentation_bytes = postcard::to_allocvec(&presentation).unwrap();
     let cert_hash: [u8; 32] = blake3::hash(&presentation_bytes).into();
-    let effect =
-        captp_routing::validate_handoff_effect(cert_hash, cert.recipient_pk, alice_pk.0);
+    let effect = captp_routing::validate_handoff_effect(cert_hash, cert.recipient_pk, alice_pk.0);
 
     // Bad signature: 64 zero bytes (not a valid sig for any sender_pk).
     let bad_sig = [0u8; 64];
@@ -497,8 +495,7 @@ fn captp_delivered_rejects_wrong_introducer_pk() {
     let presentation = HandoffPresentation::create(cert.clone(), &bob_sk);
     let presentation_bytes = postcard::to_allocvec(&presentation).unwrap();
     let cert_hash: [u8; 32] = blake3::hash(&presentation_bytes).into();
-    let effect =
-        captp_routing::validate_handoff_effect(cert_hash, cert.recipient_pk, alice_pk.0);
+    let effect = captp_routing::validate_handoff_effect(cert_hash, cert.recipient_pk, alice_pk.0);
 
     let effects = vec![effect.clone()];
     let signing_msg = pyana_turn::action::Authorization::captp_delivered_signing_message(
@@ -595,8 +592,7 @@ fn captp_delivered_rejects_forged_effect_recipient_pk() {
 
     // Forge: the effect declares a recipient_pk that is NOT cert.recipient_pk.
     let (_evil_sk, evil_pk) = generate_keypair();
-    let forged_effect =
-        captp_routing::validate_handoff_effect(cert_hash, evil_pk.0, alice_pk.0);
+    let forged_effect = captp_routing::validate_handoff_effect(cert_hash, evil_pk.0, alice_pk.0);
 
     let effects = vec![forged_effect.clone()];
     let signing_msg = Authorization::captp_delivered_signing_message(
@@ -639,14 +635,11 @@ fn captp_delivered_rejects_forged_effect_recipient_pk() {
         pyana_turn::TurnResult::Rejected { reason, .. } => {
             let s = format!("{reason:?}");
             assert!(
-                s.contains("ValidateHandoff.recipient_pk")
-                    || s.contains("InvalidAuthorization"),
+                s.contains("ValidateHandoff.recipient_pk") || s.contains("InvalidAuthorization"),
                 "expected effect.recipient_pk mismatch failure, got: {s}"
             );
         }
-        other => panic!(
-            "expected Rejected for forged effect.recipient_pk, got {other:?}"
-        ),
+        other => panic!("expected Rejected for forged effect.recipient_pk, got {other:?}"),
     }
 }
 
@@ -727,14 +720,11 @@ fn captp_delivered_rejects_forged_effect_introducer_pk() {
         pyana_turn::TurnResult::Rejected { reason, .. } => {
             let s = format!("{reason:?}");
             assert!(
-                s.contains("ValidateHandoff.introducer_pk")
-                    || s.contains("InvalidAuthorization"),
+                s.contains("ValidateHandoff.introducer_pk") || s.contains("InvalidAuthorization"),
                 "expected effect.introducer_pk mismatch failure, got: {s}"
             );
         }
-        other => panic!(
-            "expected Rejected for forged effect.introducer_pk, got {other:?}"
-        ),
+        other => panic!("expected Rejected for forged effect.introducer_pk, got {other:?}"),
     }
 }
 

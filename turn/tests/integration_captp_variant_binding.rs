@@ -259,10 +259,7 @@ fn enliven_ref_honest_path_accepted() {
     let executor = TurnExecutor::new(ComputronCosts::zero());
     match executor.execute(&turn, &mut ledger) {
         pyana_turn::TurnResult::Committed { .. } => { /* expected */ }
-        other => panic!(
-            "honest EnlivenRef must commit, got {:?}",
-            short(&other)
-        ),
+        other => panic!("honest EnlivenRef must commit, got {:?}", short(&other)),
     }
 }
 

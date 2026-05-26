@@ -2002,7 +2002,7 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], String> {
 /// ```json
 /// {
 ///   "sender_privkey": [32 bytes as number[]],
-///   "match_spec": { /* canonical MatchSpec JSON */ },
+///   "match_spec": { ... canonical MatchSpec JSON ... },
 ///   "kind": "Need" | "Offer" | "Query",
 ///   "expiry": null | <unix-seconds>
 /// }

@@ -319,11 +319,7 @@ mod tests {
     fn effect_builders_produce_expected_variants() {
         let cell = CellId::from_bytes([7u8; 32]);
         assert!(matches!(
-            export_sturdy_ref_effect(
-                [0u8; 32],
-                cell,
-                pyana_cell::permissions::AuthRequired::None
-            ),
+            export_sturdy_ref_effect([0u8; 32], cell, pyana_cell::permissions::AuthRequired::None),
             Effect::ExportSturdyRef { .. }
         ));
         assert!(matches!(

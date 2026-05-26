@@ -34,8 +34,8 @@ use starbridge_identity::{
     Credential as SbCredential, CredentialAttributes as SbCredentialAttributes,
     CredentialSchema as SbCredentialSchema, IssuerKeys as SbIssuerKeys,
     build_issue_credential_action as sb_build_issue_credential_action,
-    employment_schema as sb_employment_schema, gov_id_schema as sb_gov_id_schema, issue as sb_issue,
-    kyc_schema as sb_kyc_schema,
+    employment_schema as sb_employment_schema, gov_id_schema as sb_gov_id_schema,
+    issue as sb_issue, kyc_schema as sb_kyc_schema,
 };
 use starbridge_nameservice::build_register_with_credential_action as sb_build_register_with_credential_action;
 use starbridge_subscription::{
@@ -5148,8 +5148,8 @@ async fn run_starbridge_action(
     match exec_result {
         pyana_turn::TurnResult::Committed { receipt, .. } => {
             let receipt_hash_hex = hex_encode(&receipt.receipt_hash());
-            let receipt_bytes = postcard::to_allocvec(&receipt)
-                .expect("TurnReceipt serializes via postcard");
+            let receipt_bytes =
+                postcard::to_allocvec(&receipt).expect("TurnReceipt serializes via postcard");
             let receipt_bytes_hex = hex_encode(&receipt_bytes);
             let pre_state_hash_hex = hex_encode(&receipt.pre_state_hash);
             let post_state_hash_hex = hex_encode(&receipt.post_state_hash);
@@ -5305,10 +5305,7 @@ async fn tool_register_name(params: &Value, state: &NodeState) -> McpToolResult 
     };
 
     // Schema id defaults to the kyc-v1 schema commitment.
-    let schema_id = match params
-        .get("credential_schema_id")
-        .and_then(|v| v.as_str())
-    {
+    let schema_id = match params.get("credential_schema_id").and_then(|v| v.as_str()) {
         None => starbridge_identity::schema_commitment(&sb_kyc_schema()),
         Some(h) => match hex_decode(h) {
             Ok(b) => b,
@@ -5332,9 +5329,7 @@ async fn tool_register_name(params: &Value, state: &NodeState) -> McpToolResult 
         Some(h) => match hex_decode_var(h) {
             Ok(b) => b,
             Err(_) => {
-                return McpToolResult::error(
-                    "invalid hex for credential_presentation_proof_hex",
-                );
+                return McpToolResult::error("invalid hex for credential_presentation_proof_hex");
             }
         },
     };
@@ -5482,18 +5477,19 @@ async fn tool_publish_subscription(params: &Value, state: &NodeState) -> McpTool
         &actor_pk_hash,
     );
 
-    let payload_hash =
-        starbridge_subscription::bounty_state_payload_hash(&bounty_id, prior_state, new_state, &actor_pk_hash);
+    let payload_hash = starbridge_subscription::bounty_state_payload_hash(
+        &bounty_id,
+        prior_state,
+        new_state,
+        &actor_pk_hash,
+    );
 
     let mut links = serde_json::Map::new();
     links.insert(
         "subscription_cell".into(),
         Value::String(hex_encode(&subscription_cell.0)),
     );
-    links.insert(
-        "bounty_id".into(),
-        Value::String(hex_encode(&bounty_id)),
-    );
+    links.insert("bounty_id".into(), Value::String(hex_encode(&bounty_id)));
     links.insert(
         "actor_pk_hash".into(),
         Value::String(hex_encode(&actor_pk_hash)),
@@ -5540,19 +5536,14 @@ fn parse_attributes_into(
     let mut attrs = SbCredentialAttributes::new();
     for (k, v) in obj {
         if !schema.has_attribute(k) {
-            return Err(format!(
-                "attribute '{k}' not in schema '{}'",
-                schema.name
-            ));
+            return Err(format!("attribute '{k}' not in schema '{}'", schema.name));
         }
         let attr_value = if let Some(i) = v.as_i64() {
             AttrValue::Integer(i)
         } else if let Some(s) = v.as_str() {
             AttrValue::Text(s.into())
         } else {
-            return Err(format!(
-                "attribute '{k}' value must be string or integer"
-            ));
+            return Err(format!("attribute '{k}' value must be string or integer"));
         };
         attrs = attrs.with(k.as_str(), attr_value);
     }
@@ -5627,11 +5618,17 @@ async fn tool_issue_credential(params: &Value, state: &NodeState) -> McpToolResu
         "pyana-node-mcp",
     );
 
-    let credential: SbCredential =
-        match sb_issue(&issuer_keys, &schema, holder_id, attributes, issued_at, not_after) {
-            Ok(c) => c,
-            Err(e) => return McpToolResult::error(format!("credential issuance failed: {e}")),
-        };
+    let credential: SbCredential = match sb_issue(
+        &issuer_keys,
+        &schema,
+        holder_id,
+        attributes,
+        issued_at,
+        not_after,
+    ) {
+        Ok(c) => c,
+        Err(e) => return McpToolResult::error(format!("credential issuance failed: {e}")),
+    };
     let credential_id = credential.id();
 
     let temp = temp_app_cclerk();
@@ -5747,10 +5744,7 @@ async fn tool_register_service(params: &Value, state: &NodeState) -> McpToolResu
         Value::String(hex_encode(&namespace_cell.0)),
     );
     links.insert("path".into(), Value::String(path.clone()));
-    links.insert(
-        "path_hash".into(),
-        Value::String(hex_encode(&path_hash)),
-    );
+    links.insert("path_hash".into(), Value::String(hex_encode(&path_hash)));
     links.insert(
         "target_cell".into(),
         Value::String(hex_encode(&target_cell.0)),
@@ -6026,8 +6020,8 @@ mod tests {
         // Deterministic seed so the test is reproducible.
         let mut seed = [0u8; 32];
         seed[0] = 0xA1;
-        let state = NodeState::with_cclerk(tmp.path(), vec![], seed)
-            .expect("NodeState::with_cclerk");
+        let state =
+            NodeState::with_cclerk(tmp.path(), vec![], seed).expect("NodeState::with_cclerk");
         // Flip the unlocked flag — `with_cclerk` defaults to locked,
         // but the test bypasses passphrase entry.
         {
@@ -6041,7 +6035,11 @@ mod tests {
         assert!(
             !result.is_error.unwrap_or(false),
             "tool returned error: {}",
-            result.content.first().map(|c| c.text.as_str()).unwrap_or("(no content)")
+            result
+                .content
+                .first()
+                .map(|c| c.text.as_str())
+                .unwrap_or("(no content)")
         );
         let text = result
             .content
@@ -6068,16 +6066,25 @@ mod tests {
             "[{label}] effect_vm_proof_hex must be substantial (>64 bytes); got {} chars",
             proof_hex.len()
         );
-        let pi = j.get("effect_vm_public_inputs").cloned().unwrap_or(Value::Null);
+        let pi = j
+            .get("effect_vm_public_inputs")
+            .cloned()
+            .unwrap_or(Value::Null);
         assert!(pi.is_array(), "[{label}] public_inputs must be array");
         assert!(
             pi.as_array().map(|a| !a.is_empty()).unwrap_or(false),
             "[{label}] public_inputs must be non-empty"
         );
-        let trace = j.get("effect_vm_trace_rows").cloned().unwrap_or(Value::Null);
+        let trace = j
+            .get("effect_vm_trace_rows")
+            .cloned()
+            .unwrap_or(Value::Null);
         assert!(trace.is_array(), "[{label}] trace_rows must be array");
         assert!(
-            j.get("effect_vm_witness_hash_hex").and_then(|v| v.as_str()).map(|s| s.len() == 64).unwrap_or(false),
+            j.get("effect_vm_witness_hash_hex")
+                .and_then(|v| v.as_str())
+                .map(|s| s.len() == 64)
+                .unwrap_or(false),
             "[{label}] witness_hash_hex must be a 64-char hex string"
         );
     }
@@ -6097,7 +6104,11 @@ mod tests {
             j.get("registered_name").and_then(|v| v.as_str()),
             Some("alice.dev")
         );
-        assert!(j.get("schema_commitment").and_then(|v| v.as_str()).is_some());
+        assert!(
+            j.get("schema_commitment")
+                .and_then(|v| v.as_str())
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -6117,7 +6128,10 @@ mod tests {
         let result = dispatch_tool("pyana_publish_subscription", params, &state).await;
         let j = extract_json(&result);
         assert_proof_populated("publish_subscription", &j);
-        assert_eq!(j.get("prior_state").and_then(|v| v.as_str()), Some("posted"));
+        assert_eq!(
+            j.get("prior_state").and_then(|v| v.as_str()),
+            Some("posted")
+        );
         assert_eq!(j.get("new_state").and_then(|v| v.as_str()), Some("claimed"));
         assert!(j.get("payload_hash").and_then(|v| v.as_str()).is_some());
     }
@@ -6137,7 +6151,11 @@ mod tests {
         assert_proof_populated("issue_credential", &j);
         assert!(j.get("credential_id").and_then(|v| v.as_str()).is_some());
         assert_eq!(j.get("schema").and_then(|v| v.as_str()), Some("kyc"));
-        assert!(j.get("credential_encoded").and_then(|v| v.as_str()).is_some());
+        assert!(
+            j.get("credential_encoded")
+                .and_then(|v| v.as_str())
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -6153,7 +6171,9 @@ mod tests {
         // The synthesized-row note must be present so reviewers see the
         // documented coverage gap.
         assert!(
-            j.get("synthesized_vm_setfield_note").and_then(|v| v.as_str()).is_some(),
+            j.get("synthesized_vm_setfield_note")
+                .and_then(|v| v.as_str())
+                .is_some(),
             "register_service must surface the documented coverage-gap note"
         );
     }

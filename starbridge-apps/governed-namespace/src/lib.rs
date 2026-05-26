@@ -160,7 +160,7 @@
 //!    factory + inspector descriptors into a shared host context.
 
 use pyana_app_framework::{
-    Action, AppCipherclerk, AuthRequired, AuthorizedSet, Authorization, CapTarget, CapTemplate,
+    Action, AppCipherclerk, AuthRequired, Authorization, AuthorizedSet, CapTarget, CapTemplate,
     CellId, CellMode, CellProgram, ChildVkStrategy, Effect, Event, FactoryDescriptor,
     FieldConstraint, FieldElement, InputRef, InspectorDescriptor, StarbridgeAppContext,
     StateConstraint, TransitionCase, TransitionGuard, WitnessedPredicate, WitnessedPredicateKind,

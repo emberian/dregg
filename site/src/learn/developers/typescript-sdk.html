@@ -22,6 +22,15 @@
       the Rust codebase) into idiomatic async APIs.
     </p>
 
+    <div class="callout callout--note">
+      <p>
+        <strong>Canonical source:</strong> <code>sdk-ts/</code> in the breadstuffs repo.
+        A prior package at <code>ts-sdk/</code> shared the same <code>@pyana/sdk</code> name
+        but had no WASM coupling and has been archived as <code>ts-sdk.archived/</code>
+        (2026-05-25). Do not reference <code>ts-sdk/</code> in new code.
+      </p>
+    </div>
+
     <div class="callout callout--warning">
       <p>
         The TypeScript SDK is not yet published to npm. The API described here reflects
@@ -227,7 +236,98 @@ runtime.destroy();</code></pre>
         </tr>
         <tr>
           <td><code>PyanaRuntime</code></td>
-          <td>Full distributed system simulation</td>
+          <td>Full distributed system simulation: agents, cells, turns, federations, intents, peer exchange, block history</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="new-runtime-surface">New in PyanaRuntime (Refactors 3-7)</h3>
+
+    <p>The following methods were added to <code>PyanaRuntime</code> to match current WASM exports:</p>
+
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th>Method</th>
+          <th>WASM export</th>
+          <th>Purpose</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>getTurnTrace(turnHashHex)</code></td>
+          <td><code>get_turn_trace</code></td>
+          <td>Step-by-step execution trace for a committed turn</td>
+        </tr>
+        <tr>
+          <td><code>registerPeer(…)</code></td>
+          <td><code>register_peer</code></td>
+          <td>Anchor a peer cell to an initial commitment</td>
+        </tr>
+        <tr>
+          <td><code>getPeerPubkey(agentIdx)</code></td>
+          <td><code>get_peer_pubkey</code></td>
+          <td>Retrieve the agent's PeerExchange verifying key</td>
+        </tr>
+        <tr>
+          <td><code>getPeerView(agentIdx, peerCellId)</code></td>
+          <td><code>get_peer_view</code></td>
+          <td>Current commitment/sequence for a registered peer</td>
+        </tr>
+        <tr>
+          <td><code>listPeers(agentIdx)</code></td>
+          <td><code>list_peers</code></td>
+          <td>List all registered peer cell IDs</td>
+        </tr>
+        <tr>
+          <td><code>createPeerTransition(…)</code></td>
+          <td><code>create_peer_transition</code></td>
+          <td>Sign a state-transition (returns postcard bytes)</td>
+        </tr>
+        <tr>
+          <td><code>decodePeerTransition(bytes)</code></td>
+          <td><code>decode_peer_transition</code></td>
+          <td>Decode transition bytes to <code>PeerTransitionView</code></td>
+        </tr>
+        <tr>
+          <td><code>verifyPeerTransition(…)</code></td>
+          <td><code>verify_peer_transition</code></td>
+          <td>Verify and apply a peer transition</td>
+        </tr>
+        <tr>
+          <td><code>getFederationBlock(fedIndex, height)</code></td>
+          <td><code>get_federation_block</code></td>
+          <td>Full block by 1-indexed height</td>
+        </tr>
+        <tr>
+          <td><code>listFederationBlocks(fedIndex)</code></td>
+          <td><code>list_federation_blocks</code></td>
+          <td>All finalized block headers</td>
+        </tr>
+        <tr>
+          <td><code>createCell(ownerPkHex, balance)</code></td>
+          <td><code>create_cell</code></td>
+          <td>Create a cell via genesis agent</td>
+        </tr>
+        <tr>
+          <td><code>createAgentWithFactory(…)</code></td>
+          <td><code>create_agent_with_factory</code></td>
+          <td>Mint an agent from a specific factory VK</td>
+        </tr>
+        <tr>
+          <td><code>deployFactoryDescriptor(json)</code></td>
+          <td><code>deploy_factory_descriptor</code></td>
+          <td>Deploy a factory descriptor; returns factory VK</td>
+        </tr>
+        <tr>
+          <td><code>defaultFactoryVk()</code></td>
+          <td><code>default_factory_vk</code></td>
+          <td>VK of the runtime's default test-cipherclerk factory</td>
+        </tr>
+        <tr>
+          <td><code>getCellStateCommitment(cellId)</code></td>
+          <td><code>get_cell_state_commitment</code></td>
+          <td>Current canonical state-commitment for a cell</td>
         </tr>
       </tbody>
     </table>

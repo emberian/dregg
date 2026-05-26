@@ -34,6 +34,15 @@ import type {
   TreeViz,
   HeightResult,
   AuthRequired,
+  PeerTransitionView,
+  PeerCellView,
+  TurnTraceStep,
+  FactoryDeployResult,
+  CellCreateResult,
+  DefaultFactoryVkResult,
+  CellStateCommitmentResult,
+  FederationBlock,
+  FederationBlockHeader,
 } from "./types";
 
 /**
@@ -738,6 +747,370 @@ export class PyanaRuntime {
       ) as DelegationGraph;
     } catch (e) {
       throw new Error(`Failed to get delegation graph: ${extractError(e)}`);
+    }
+  }
+
+  // ==========================================================================
+  // Cell creation (non-agent paths)
+  // ==========================================================================
+
+  /**
+   * Create a cell in the runtime via a real `Effect::CreateCell` turn issued
+   * by the genesis agent (agent 0).
+   *
+   * @param ownerPkHex - 32-byte owner public key as a hex string.
+   * @param initialBalance - Starting balance.
+   * @returns The new cell ID.
+   */
+  async createCell(
+    ownerPkHex: string,
+    initialBalance: number
+  ): Promise<CellCreateResult> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).create_cell(
+        this.handle,
+        ownerPkHex,
+        BigInt(initialBalance)
+      ) as CellCreateResult;
+    } catch (e) {
+      throw new Error(`Failed to create cell: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Create an agent whose cell is minted from a specific factory VK.
+   *
+   * The factory must have been deployed via `deployFactoryDescriptor`.
+   *
+   * @param name - Display name for the agent.
+   * @param initialBalance - Starting balance.
+   * @param factoryVkHex - Hex-encoded factory VK.
+   * @returns Agent info.
+   */
+  async createAgentWithFactory(
+    name: string,
+    initialBalance: number,
+    factoryVkHex: string
+  ): Promise<AgentInfo> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).create_agent_with_factory(
+        this.handle,
+        name,
+        BigInt(initialBalance),
+        factoryVkHex
+      ) as AgentInfo;
+    } catch (e) {
+      throw new Error(`Failed to create agent with factory: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Deploy a factory descriptor into the runtime, returning the factory VK.
+   *
+   * @param descriptorJson - Serde-serialized `FactoryDescriptor` JSON.
+   * @returns The factory VK that addresses the deployed descriptor.
+   */
+  async deployFactoryDescriptor(
+    descriptorJson: string
+  ): Promise<FactoryDeployResult> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).deploy_factory_descriptor(
+        this.handle,
+        descriptorJson
+      ) as FactoryDeployResult;
+    } catch (e) {
+      throw new Error(`Failed to deploy factory descriptor: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Get the VK of the runtime's default test-cipherclerk factory.
+   *
+   * Useful for pre-registering the wasm-runtime factory set with
+   * `verify_provenance` or displaying the constructor-transparency anchor.
+   *
+   * @returns The default factory VK.
+   */
+  async defaultFactoryVk(): Promise<DefaultFactoryVkResult> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).default_factory_vk(
+        this.handle
+      ) as DefaultFactoryVkResult;
+    } catch (e) {
+      throw new Error(`Failed to get default factory VK: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Read the current canonical state-commitment of a cell.
+   *
+   * Returns `null` in the `commitment` field if the cell isn't in the ledger.
+   *
+   * @param cellIdHex - Hex-encoded cell ID.
+   * @returns The current state commitment.
+   */
+  async getCellStateCommitment(
+    cellIdHex: string
+  ): Promise<CellStateCommitmentResult> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).get_cell_state_commitment(
+        this.handle,
+        cellIdHex
+      ) as CellStateCommitmentResult;
+    } catch (e) {
+      throw new Error(`Failed to get cell state commitment: ${extractError(e)}`);
+    }
+  }
+
+  // ==========================================================================
+  // Turn trace
+  // ==========================================================================
+
+  /**
+   * Return execution trace steps for a committed turn.
+   *
+   * @param turnHashHex - Hex-encoded turn hash (from a `TurnResultView`).
+   * @returns Array of trace steps, or `null` if the turn is not in the receipt chain.
+   */
+  async getTurnTrace(
+    turnHashHex: string
+  ): Promise<TurnTraceStep[] | null> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).get_turn_trace(
+        this.handle,
+        turnHashHex
+      ) as TurnTraceStep[] | null;
+    } catch (e) {
+      throw new Error(`Failed to get turn trace: ${extractError(e)}`);
+    }
+  }
+
+  // ==========================================================================
+  // Peer exchange
+  // ==========================================================================
+
+  /**
+   * Register a peer cell on the named agent's exchange session.
+   *
+   * Must be called before `verifyPeerTransition` will accept transitions
+   * from that peer.
+   *
+   * @param agentIdx - Agent whose session to register the peer on.
+   * @param peerCellIdHex - Hex-encoded peer cell ID.
+   * @param peerPubkeyHex - Hex-encoded peer Ed25519 verifying key.
+   * @param initialCommitmentHex - Hex-encoded initial commitment agreed out-of-band.
+   * @returns The registered peer cell view.
+   */
+  async registerPeer(
+    agentIdx: number,
+    peerCellIdHex: string,
+    peerPubkeyHex: string,
+    initialCommitmentHex: string
+  ): Promise<PeerCellView> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).register_peer(
+        this.handle,
+        agentIdx,
+        peerCellIdHex,
+        peerPubkeyHex,
+        initialCommitmentHex
+      ) as PeerCellView;
+    } catch (e) {
+      throw new Error(`Failed to register peer: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Get the agent's PeerExchange public key.
+   *
+   * @param agentIdx - Agent index.
+   * @returns The agent's peer pubkey as a hex string.
+   */
+  async getPeerPubkey(agentIdx: number): Promise<{ pubkey_hex: string }> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).get_peer_pubkey(
+        this.handle,
+        agentIdx
+      ) as { pubkey_hex: string };
+    } catch (e) {
+      throw new Error(`Failed to get peer pubkey: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Read the agent's current view of a registered peer cell.
+   *
+   * @param agentIdx - Agent index.
+   * @param peerCellIdHex - Hex-encoded peer cell ID.
+   * @returns The peer cell view, or `null` if not registered.
+   */
+  async getPeerView(
+    agentIdx: number,
+    peerCellIdHex: string
+  ): Promise<PeerCellView | null> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).get_peer_view(
+        this.handle,
+        agentIdx,
+        peerCellIdHex
+      ) as PeerCellView | null;
+    } catch (e) {
+      throw new Error(`Failed to get peer view: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * List all peer cell IDs the agent has registered.
+   *
+   * @param agentIdx - Agent index.
+   * @returns Array of hex-encoded peer cell IDs.
+   */
+  async listPeers(agentIdx: number): Promise<string[]> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).list_peers(
+        this.handle,
+        agentIdx
+      ) as string[];
+    } catch (e) {
+      throw new Error(`Failed to list peers: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Sign a state-transition for the named agent's exchange session.
+   *
+   * Returns raw postcard-encoded `PeerStateTransition` bytes — not JSON —
+   * because the whole point is a compact signed blob for paste UX.
+   *
+   * @param agentIdx - Agent index.
+   * @param oldCommitHex - Hex-encoded old commitment.
+   * @param newCommitHex - Hex-encoded new commitment.
+   * @param effectsHashHex - Hex-encoded effects bundle hash.
+   * @returns Postcard-encoded transition bytes.
+   */
+  async createPeerTransition(
+    agentIdx: number,
+    oldCommitHex: string,
+    newCommitHex: string,
+    effectsHashHex: string
+  ): Promise<Uint8Array> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).create_peer_transition(
+        this.handle,
+        agentIdx,
+        oldCommitHex,
+        newCommitHex,
+        effectsHashHex
+      ) as Uint8Array;
+    } catch (e) {
+      throw new Error(`Failed to create peer transition: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Decode a `PeerStateTransition` blob into structured fields.
+   *
+   * @param bytes - Postcard-encoded transition bytes (from `createPeerTransition`).
+   * @returns Decoded transition fields.
+   */
+  async decodePeerTransition(bytes: Uint8Array): Promise<PeerTransitionView> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).decode_peer_transition(
+        bytes
+      ) as PeerTransitionView;
+    } catch (e) {
+      throw new Error(`Failed to decode peer transition: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * Verify a peer transition against the agent's registered session.
+   *
+   * On success returns the updated `PeerCellView`. On failure throws with
+   * the typed variant name (e.g. `"InvalidSignature: invalid Ed25519 signature"`)
+   * so callers can switch on the error code.
+   *
+   * @param agentIdx - Agent index whose session is checked.
+   * @param transitionBytes - Postcard-encoded transition bytes.
+   * @param peerPubkeyHex - Hex-encoded peer verifying key.
+   * @returns Updated peer cell view.
+   */
+  async verifyPeerTransition(
+    agentIdx: number,
+    transitionBytes: Uint8Array,
+    peerPubkeyHex: string
+  ): Promise<PeerCellView> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).verify_peer_transition(
+        this.handle,
+        agentIdx,
+        transitionBytes,
+        peerPubkeyHex
+      ) as PeerCellView;
+    } catch (e) {
+      throw new Error(`Failed to verify peer transition: ${extractError(e)}`);
+    }
+  }
+
+  // ==========================================================================
+  // Federation block history
+  // ==========================================================================
+
+  /**
+   * Get a finalized block by height (1-indexed).
+   *
+   * @param fedIndex - Federation index.
+   * @param height - Block height (1 = first finalized block).
+   * @returns The full block view, or `null` if not yet finalized.
+   */
+  async getFederationBlock(
+    fedIndex: number,
+    height: number
+  ): Promise<FederationBlock | null> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).get_federation_block(
+        this.handle,
+        fedIndex,
+        BigInt(height)
+      ) as FederationBlock | null;
+    } catch (e) {
+      throw new Error(`Failed to get federation block: ${extractError(e)}`);
+    }
+  }
+
+  /**
+   * List all finalized block headers for a federation.
+   *
+   * Call `getFederationBlock(fedIndex, height)` for full block contents.
+   *
+   * @param fedIndex - Federation index.
+   * @returns Array of compact block headers (empty if nothing finalized yet).
+   */
+  async listFederationBlocks(
+    fedIndex: number
+  ): Promise<FederationBlockHeader[]> {
+    this.assertAlive();
+    try {
+      return (this.wasm as any).list_federation_blocks(
+        this.handle,
+        fedIndex
+      ) as FederationBlockHeader[];
+    } catch (e) {
+      throw new Error(`Failed to list federation blocks: ${extractError(e)}`);
     }
   }
 }

@@ -509,6 +509,44 @@ impl TurnExecutor {
         }
 
         // =====================================================================
+        // BINDING-SWEEP GATE: Verify any sidecar effect-binding proofs,
+        // cross-effect chain pins, and witness-index map entries BEFORE the
+        // call-forest executes.  This is a turn-level gate: if ANY binding
+        // proof fails the PI-matching or STARK check the entire turn is
+        // rejected without touching ledger state.
+        //
+        // We use the snapshot-aware path (`_with_ledger`) so that Burn
+        // binding proofs can reconstruct (old_balance, new_balance) from the
+        // current ledger state (AIR-SOUNDNESS-AUDIT.md #75).  Sovereign
+        // witnesses have already been injected above, so the ledger is
+        // complete at this point.
+        //
+        // Turns that carry NONE of the three binding-extension fields skip
+        // the verifier entirely (backwards-compat fast path; the `if` guard
+        // mirrors the one already inside `verify_effect_binding_proofs`).
+        if !turn.effect_binding_proofs.is_empty()
+            || !turn.cross_effect_dependencies.is_empty()
+            || !turn.effect_witness_index_map.is_empty()
+        {
+            if let Err(e) = Self::verify_effect_binding_proofs_with_ledger(turn, Some(ledger)) {
+                // No journal yet — only need to undo sovereign witness injection
+                // and refund the budget gate before returning.
+                for cell_id in &sovereign_cell_ids {
+                    ledger.remove(cell_id);
+                }
+                if let (Some(gate_cell), Some((digest, fee))) =
+                    (&self.budget_gate, &budget_debit_digest)
+                {
+                    gate_cell.lock().unwrap().fast_unlock(*fee, digest);
+                }
+                return TurnResult::Rejected {
+                    reason: e,
+                    at_action: vec![],
+                };
+            }
+        }
+
+        // =====================================================================
         // PHASE 2: Execute call forest (rolled back on failure).
         // The journal only records forest effects — fee/nonce are already final.
         // =====================================================================

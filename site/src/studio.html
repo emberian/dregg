@@ -84,10 +84,12 @@
           <label>my latest transition</label>
           <button id="btn-px-copy" disabled>Copy my latest transition (Alice → bytes)</button>
           <textarea id="px-mine" rows="3" readonly style="font-family:var(--mono,monospace);font-size:0.75rem;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px;word-break:break-all;"></textarea>
+          <pyana-peer-transition id="px-mine-inspector" style="display:block;margin-top:4px;"></pyana-peer-transition>
 
           <hr>
           <label>paste peer transition</label>
           <textarea id="px-paste" rows="3" placeholder="paste base64 here" style="font-family:var(--mono,monospace);font-size:0.75rem;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:6px;word-break:break-all;"></textarea>
+          <pyana-peer-transition id="px-paste-inspector" style="display:block;margin-top:4px;"></pyana-peer-transition>
           <button id="btn-px-paste" disabled>Bob: register Alice + verify pasted transition</button>
 
           <hr>
@@ -139,6 +141,8 @@
 
       // Inspector custom elements register on import.
       await import('/_includes/studio/inspectors.js');
+      // Peer-transition inspector (not yet in barrel — load standalone).
+      await import('/_includes/studio/inspectors/peer-transition.js');
 
       // Attach to context provider.
       const app = document.getElementById('app');
@@ -217,6 +221,12 @@
       const pxMine = document.getElementById('px-mine');
       const pxPaste = document.getElementById('px-paste');
       const pxView = document.getElementById('px-view');
+      const pxMineInspector = document.getElementById('px-mine-inspector');
+      const pxPasteInspector = document.getElementById('px-paste-inspector');
+
+      // Hand the runtime to the inspector elements so they can reach _wasm.
+      // The elements walk up the DOM for a .runtime property — set it on app.
+      // (app.runtime is already set above; these refs are just for clarity.)
 
       function b64encode(bytes) {
         let s = '';
@@ -274,10 +284,21 @@
           aliceLastCommit = newCommit;
           const b64 = b64encode(bytes);
           pxMine.value = b64;
+          pxMineInspector.setAttribute('bytes', b64);
           api.toast(`signed transition (${bytes.length} B → ${b64.length} chars b64)`);
         } catch (e) {
           api.toast('createPeerTransition failed: ' + (e?.message || e), 'err');
           console.error(e);
+        }
+      });
+
+      // Live decode as user types/pastes into the paste textarea.
+      pxPaste.addEventListener('input', () => {
+        const b64 = pxPaste.value.trim();
+        if (b64) {
+          pxPasteInspector.setAttribute('bytes', b64);
+        } else {
+          pxPasteInspector.removeAttribute('bytes');
         }
       });
 

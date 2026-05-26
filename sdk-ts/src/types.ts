@@ -312,18 +312,7 @@ export interface AgentInfo {
   public_key: string;
 }
 
-/** Cell state view. */
-export interface CellState {
-  cell_id: string;
-  public_key: string;
-  balance: number;
-  nonce: number;
-  fields: string[];
-  num_capabilities: number;
-  permissions: CellPermissions;
-  proved_state: boolean;
-  delegation_epoch: number;
-}
+// CellState is defined below with the enriched program field (Refactor 6).
 
 /** Permission levels for a cell. */
 export interface CellPermissions {
@@ -487,15 +476,7 @@ export interface DelegationGraph {
   edges: Array<{ from: string; to: string; slot: number; permissions: string }>;
 }
 
-/** Receipt chain entry. */
-export interface ReceiptEntry {
-  turn_hash: string;
-  pre_state_hash: string;
-  post_state_hash: string;
-  timestamp: number;
-  computrons_used: number;
-  action_count: number;
-}
+// ReceiptEntry is defined below with enriched actions/proof_view fields (Refactors 3 & 7).
 
 /** Merkle tree visualization data. */
 export interface TreeViz {
@@ -512,3 +493,226 @@ export interface HeightResult {
 
 /** Permission level for capability grants. */
 export type AuthRequired = "None" | "Signature" | "Proof" | "Either" | "Impossible";
+
+// ============================================================================
+// Enriched receipt / action / proof view types (Refactors 3 & 7)
+// ============================================================================
+
+/**
+ * Authorization proof attached to a single action inside a receipt.
+ * Tagged union that covers all six variants the runtime can emit.
+ */
+export type ActionAuthorization =
+  | { kind: "None" }
+  | { kind: "Ed25519"; pubkey_hex: string; signature_hex: string }
+  | { kind: "BearerToken"; token_hex: string }
+  | { kind: "CapabilitySlot"; slot: number }
+  | { kind: "Delegation"; delegator_hex: string; slot: number }
+  | { kind: "FederationQuorum"; fed_index: number; block_hash: string };
+
+/** View of a single action inside a receipt (Refactor 3). */
+export interface ActionView {
+  /** Path through nested sub-actions (empty = top-level). */
+  action_path: number[];
+  /** Hex-encoded target cell. */
+  target_cell: string;
+  /** Named method / effect type. */
+  method: string;
+  /** Human-readable effect descriptions. */
+  effects: string[];
+  /** Authorization proof attached to this action. */
+  authorization: ActionAuthorization;
+}
+
+/**
+ * Proof view attached to a receipt for bilateral PI rendering (Refactor 7).
+ * `null` when the turn carried no ZK proof.
+ */
+export interface ProofView {
+  /** Proof backend identifier ("stark" | "plonky3" | "kimchi" | "mock"). */
+  backend: string;
+  /** Serialized proof JSON (may be large). */
+  proof_json: string;
+  /** Public inputs as hex-encoded field elements. */
+  public_inputs: string[];
+  /** Proof size in bytes. */
+  proof_size_bytes: number;
+  /** Whether the proof was already verified at receipt time. */
+  verified: boolean;
+}
+
+/** Receipt chain entry with enriched action list and optional proof view. */
+export interface ReceiptEntry {
+  turn_hash: string;
+  pre_state_hash: string;
+  post_state_hash: string;
+  timestamp: number;
+  computrons_used: number;
+  action_count: number;
+  /** Per-action details (Refactor 3). */
+  actions: ActionView[];
+  /** Attached ZK proof, if any (Refactor 7). */
+  proof_view: ProofView | null;
+}
+
+// ============================================================================
+// Cell program view (Refactor 6)
+// ============================================================================
+
+/** A single slot in the cell's slot-caveat tree. */
+export interface SlotView {
+  /** Slot index. */
+  index: number;
+  /** Caveat predicate name. */
+  predicate: string;
+  /** Caveat terms (serialized). */
+  terms: string[];
+}
+
+/**
+ * Full program semantics view for a cell (Refactor 6).
+ * Surfaced so JS inspectors can render the complete slot-caveat tree.
+ */
+export interface CellProgramView {
+  /** Verification key hash (hex). */
+  vk_hash: string;
+  /** Ordered list of active slots. */
+  slots: SlotView[];
+  /** Whether the cell has a sovereign program attached. */
+  has_sovereign_program: boolean;
+  /** Factory VK that minted this cell, if any. */
+  factory_vk: string | null;
+}
+
+/** Cell state view with enriched program field (Refactor 6). */
+export interface CellState {
+  cell_id: string;
+  public_key: string;
+  balance: number;
+  nonce: number;
+  fields: string[];
+  num_capabilities: number;
+  permissions: CellPermissions;
+  proved_state: boolean;
+  delegation_epoch: number;
+  /** Full slot-caveat program semantics (Refactor 6). */
+  program: CellProgramView;
+}
+
+// ============================================================================
+// Peer exchange types
+// ============================================================================
+
+/** Decoded fields of a PeerStateTransition. */
+export interface PeerTransitionView {
+  /** Hex-encoded cell ID of the transition author. */
+  cell_id: string;
+  /** Hex-encoded old commitment. */
+  old_commitment: string;
+  /** Hex-encoded new commitment. */
+  new_commitment: string;
+  /** Hex-encoded hash of the effects bundle. */
+  effects_hash: string;
+  /** Unix timestamp (seconds). */
+  timestamp: number;
+  /** Monotonic sequence number. */
+  sequence: number;
+  /** Hex-encoded Ed25519 signature. */
+  signature: string;
+  /** Whether a full transition proof blob is attached. */
+  has_transition_proof: boolean;
+}
+
+/** Current view of a registered peer cell. */
+export interface PeerCellView {
+  /** Hex-encoded cell ID. */
+  cell_id: string;
+  /** Hex-encoded current commitment. */
+  commitment: string;
+  /** Last accepted sequence number. */
+  sequence: number;
+  /** Unix timestamp of last update. */
+  last_updated: number;
+}
+
+// ============================================================================
+// Turn trace (get_turn_trace)
+// ============================================================================
+
+/** A single step in a turn's execution trace. */
+export interface TurnTraceStep {
+  /** Path through nested sub-actions. */
+  action_path: number[];
+  /** Hex-encoded target cell. */
+  target_cell: string;
+  /** Method name. */
+  method: string;
+  /** Effect descriptions applied at this step. */
+  effects: string[];
+  /** Computrons consumed at this step. */
+  computrons_used: number;
+  /** Step result: "ok" or an error message. */
+  result: string;
+}
+
+// ============================================================================
+// Factory / cell creation
+// ============================================================================
+
+/** Result of deploying a factory descriptor. */
+export interface FactoryDeployResult {
+  /** Hex-encoded factory verification key. */
+  factory_vk: string;
+}
+
+/** Result of creating a cell (not via an agent). */
+export interface CellCreateResult {
+  /** Hex-encoded cell ID. */
+  cell_id: string;
+}
+
+/** Result of getting the default factory VK. */
+export interface DefaultFactoryVkResult {
+  /** Hex-encoded factory VK. */
+  factory_vk: string;
+}
+
+/** Result of getting the cell state commitment. */
+export interface CellStateCommitmentResult {
+  /** Hex-encoded current commitment, or null if not in ledger. */
+  commitment: string | null;
+}
+
+// ============================================================================
+// Federation block types
+// ============================================================================
+
+/** Compact header for a finalized federation block. */
+export interface FederationBlockHeader {
+  /** Block height (1-indexed). */
+  height: number;
+  /** Hex-encoded block hash. */
+  block_hash: string;
+  /** Number of events in the block. */
+  event_count: number;
+  /** Hex-encoded attested state root. */
+  state_root: string;
+  /** Unix timestamp. */
+  timestamp: number;
+}
+
+/** Full finalized block view. */
+export interface FederationBlock {
+  /** Block height (1-indexed). */
+  height: number;
+  /** Hex-encoded block hash. */
+  block_hash: string;
+  /** Revocation event token IDs. */
+  events: string[];
+  /** Hex-encoded attested state root. */
+  state_root: string;
+  /** Unix timestamp. */
+  timestamp: number;
+  /** Number of votes that finalized this block. */
+  vote_count: number;
+}

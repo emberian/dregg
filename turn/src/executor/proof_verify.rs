@@ -1612,9 +1612,7 @@ impl TurnExecutor {
     /// This is the canonical format read back by [`commitment_to_4bb`].
     /// Use this instead of [`babybear_to_commitment`] when the proof's PI carries
     /// a widened 4-felt commitment (`CellState::compute_commitment_4` output).
-    pub fn commitment_4bb_to_bytes(
-        felts: [pyana_circuit::field::BabyBear; 4],
-    ) -> [u8; 32] {
+    pub fn commitment_4bb_to_bytes(felts: [pyana_circuit::field::BabyBear; 4]) -> [u8; 32] {
         let mut result = [0u8; 32];
         result[0..4].copy_from_slice(&felts[0].0.to_le_bytes());
         result[4..8].copy_from_slice(&felts[1].0.to_le_bytes());
