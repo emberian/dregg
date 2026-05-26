@@ -181,11 +181,24 @@ fn sovereign_fixture(seed: u8) -> (Ledger, CellId, CellId, Cell, SigningKey, [u8
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on SOVEREIGN-WITNESS-AIR-DESIGN.md Phase 1: AIR algebraically constrains sovereign witness (currently only decorates the receipt per AUDIT-sovereign-witness-teeth.md)"]
 fn sovereign_witness_with_legal_key_accepts() {
-    // Build a sovereign cell, sign a witness payload with its key, attach
-    // to a turn, execute. Expect Committed + proof verifies.
-    panic!("blocked");
+    let (mut ledger, agent_id, sovereign_id, sovereign, signing_key, old_commitment) =
+        sovereign_fixture(2);
+    let witness = signed_sovereign_witness(&sovereign, &signing_key, old_commitment, [0u8; 32], 1);
+    let mut witnesses = HashMap::new();
+    witnesses.insert(sovereign_id, witness);
+    let turn = set_field_turn(agent_id, sovereign_id, witnesses);
+
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut ledger);
+    assert!(
+        matches!(&result, TurnResult::Committed { .. }),
+        "legal sovereign witness must commit, got: {result:?}"
+    );
+    assert_eq!(
+        ledger.last_sovereign_witness_sequence(&sovereign_id),
+        1,
+        "committed sovereign witness must advance the replay sequence"
+    );
 }
 
 #[test]
@@ -212,11 +225,27 @@ fn sovereign_witness_with_tampered_key_rejects() {
 }
 
 #[test]
-#[ignore = "blocked on sovereign-witness AIR teeth: witness sequence regression must reject"]
 fn sovereign_witness_sequence_regression_rejects() {
-    // Two turns with sovereign witnesses; the second turn's witness sequence
-    // must be > the first's.
-    panic!("blocked");
+    let (mut ledger, agent_id, sovereign_id, sovereign, signing_key, old_commitment) =
+        sovereign_fixture(3);
+    ledger.bump_sovereign_witness_sequence(&sovereign_id, 2);
+
+    let witness = signed_sovereign_witness(&sovereign, &signing_key, old_commitment, [0u8; 32], 1);
+    let mut witnesses = HashMap::new();
+    witnesses.insert(sovereign_id, witness);
+    let turn = set_field_turn(agent_id, sovereign_id, witnesses);
+
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut ledger);
+    assert!(
+        matches!(
+            &result,
+            TurnResult::Rejected {
+                reason: TurnError::InvalidEffect { reason },
+                ..
+            } if reason.contains("sequence")
+        ),
+        "regressed sovereign witness sequence must reject, got: {result:?}"
+    );
 }
 
 // ===========================================================================
@@ -349,13 +378,37 @@ fn sovereign_witness_plus_bilateral_transfer_plus_slot_caveats() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on sovereign-witness AIR teeth + verifier-replay: a sovereign witness signed for cell A presented on a turn that mutates cell B (cross-cell reuse) must reject"]
 fn sovereign_witness_cross_cell_reuse_rejects() {
-    // The cell_id is part of what the witness signs; presenting Alice's
-    // signed witness on a turn that targets Bob's cell must fail because
-    // the witness payload says "for cell A" but the executor is
-    // applying it to cell B.
-    panic!("blocked");
+    let (mut ledger, agent_id, alice_id, alice, alice_key, alice_old_commitment) =
+        sovereign_fixture(4);
+    let (bob, _bob_key) = signing_cell(5, 500);
+    let bob_id = bob.id();
+    ledger
+        .register_sovereign_cell(bob_id, bob.state_commitment())
+        .unwrap();
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(bob_id, AuthRequired::None);
+
+    let alice_witness =
+        signed_sovereign_witness(&alice, &alice_key, alice_old_commitment, [0u8; 32], 1);
+    let mut witnesses = HashMap::new();
+    witnesses.insert(bob_id, alice_witness);
+    let turn = set_field_turn(agent_id, bob_id, witnesses);
+
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut ledger);
+    assert!(
+        matches!(
+            &result,
+            TurnResult::Rejected {
+                reason: TurnError::InvalidEffect { reason },
+                ..
+            } if reason.contains("payload cell_id")
+        ),
+        "witness for {alice_id} reused under {bob_id} must reject, got: {result:?}"
+    );
 }
 
 #[test]
@@ -395,9 +448,27 @@ fn sovereign_witness_equal_sequence_rejects() {
 }
 
 #[test]
-#[ignore = "blocked on sovereign-witness AIR teeth: tampered witness payload (modify the effect bytes, leave signature valid for old payload) must reject — signature recomputation must require the cell key"]
 fn sovereign_witness_payload_tamper_with_intact_signature_rejects() {
-    panic!("blocked");
+    let (mut ledger, agent_id, sovereign_id, sovereign, signing_key, old_commitment) =
+        sovereign_fixture(6);
+    let mut witness =
+        signed_sovereign_witness(&sovereign, &signing_key, old_commitment, [0u8; 32], 1);
+    witness.effects_hash = [0xEF; 32];
+    let mut witnesses = HashMap::new();
+    witnesses.insert(sovereign_id, witness);
+    let turn = set_field_turn(agent_id, sovereign_id, witnesses);
+
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut ledger);
+    assert!(
+        matches!(
+            &result,
+            TurnResult::Rejected {
+                reason: TurnError::InvalidEffect { reason },
+                ..
+            } if reason.contains("signature")
+        ),
+        "payload tamper after signing must reject, got: {result:?}"
+    );
 }
 
 #[test]

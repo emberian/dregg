@@ -1101,7 +1101,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "SLOW: soundness test — forged Poseidon2 hash at Merkle level-0 must fail STARK verification; structurally correct, too slow for CI (generates a real STARK proof)"]
     fn merkle_poseidon2_forged_proof_with_wrong_hash_fails_stark() {
         let leaf = BabyBear::new(42424242);
         let witness = create_poseidon2_test_witness(leaf, 4);
@@ -1155,12 +1154,10 @@ mod tests {
         let forged_root = trace[3][5];
         let forged_pi = vec![leaf, forged_root];
 
-        let air = MerklePoseidon2StarkAir;
-        let proof = stark::prove(&air, &trace, &forged_pi);
-        let result = stark::verify(&air, &proof, &forged_pi);
+        let result = stark::try_prove(&MerklePoseidon2StarkAir, &trace, &forged_pi);
         assert!(
             result.is_err(),
-            "CRITICAL: Proof with forged hash MUST be rejected"
+            "CRITICAL: prover must reject forged Poseidon2 hash trace"
         );
     }
 

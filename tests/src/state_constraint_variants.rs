@@ -127,14 +127,102 @@ fn exact_dfa_registry(
     expected_sender: [u8; 32],
     expected_proof: &'static [u8],
 ) -> WitnessedPredicateRegistry {
+    exact_sender_registry(
+        WitnessedPredicateKind::Dfa,
+        "exact-dfa-state-constraint-test-verifier",
+        expected_commitment,
+        expected_sender,
+        expected_proof,
+    )
+}
+
+fn exact_sender_registry(
+    kind: WitnessedPredicateKind,
+    name: &'static str,
+    expected_commitment: [u8; 32],
+    expected_sender: [u8; 32],
+    expected_proof: &'static [u8],
+) -> WitnessedPredicateRegistry {
     let mut registry = WitnessedPredicateRegistry::empty();
     registry.register_builtin(Arc::new(ExactSenderVerifier {
-        kind: WitnessedPredicateKind::Dfa,
-        name: "exact-dfa-state-constraint-test-verifier",
+        kind,
+        name,
         expected_commitment,
         expected_sender,
         expected_proof,
     }));
+    registry
+}
+
+struct ExactSlotVerifier {
+    vk_hash: [u8; 32],
+    expected_slot: [u8; 32],
+    expected_proof: &'static [u8],
+}
+
+impl WitnessedPredicateVerifier for ExactSlotVerifier {
+    fn name(&self) -> &'static str {
+        "exact-custom-slot-state-constraint-test-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Custom {
+            vk_hash: self.vk_hash,
+        }
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        if commitment != &self.vk_hash {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "commitment mismatch".into(),
+            });
+        }
+        match input {
+            PredicateInput::Slot(slot) if *slot == &self.expected_slot => {}
+            PredicateInput::Slot(_) => {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: self.name(),
+                    reason: "slot mismatch".into(),
+                });
+            }
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "Slot",
+                    actual: "non-Slot",
+                });
+            }
+        }
+        if proof_bytes != self.expected_proof {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "proof mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn exact_custom_slot_registry(
+    vk_hash: [u8; 32],
+    expected_slot: [u8; 32],
+    expected_proof: &'static [u8],
+) -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_custom(
+        vk_hash,
+        Arc::new(ExactSlotVerifier {
+            vk_hash,
+            expected_slot,
+            expected_proof,
+        }),
+    );
     registry
 }
 
@@ -644,11 +732,18 @@ fn sender_authorized_requires_context_sender() {
 #[test]
 fn sender_authorized_blinded_set_with_valid_witness_accepts() {
     let commitment = [0xABu8; 32];
+    let sender = [0x05u8; 32];
     let p = single_predicate(StateConstraint::SenderAuthorized {
         set: AuthorizedSet::BlindedSet { commitment },
     });
-    let registry = WitnessedPredicateRegistry::with_stubs();
-    let proof = b"stub-blinded-set-proof";
+    let registry = exact_sender_registry(
+        WitnessedPredicateKind::BlindedSet,
+        "exact-blinded-set-state-constraint-test-verifier",
+        commitment,
+        sender,
+        b"valid-blinded-set-proof",
+    );
+    let proof = b"valid-blinded-set-proof";
     let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
         kind: WitnessKindTag::ProofBytes,
         bytes: proof,
@@ -658,7 +753,7 @@ fn sender_authorized_blinded_set_with_valid_witness_accepts() {
         registry: Some(&registry),
     };
     let ctx = EvalContext {
-        sender: Some([0x05u8; 32]),
+        sender: Some(sender),
         ..Default::default()
     };
 
@@ -678,20 +773,27 @@ fn sender_authorized_blinded_set_with_valid_witness_accepts() {
 #[test]
 fn sender_authorized_blinded_set_with_tampered_witness_rejects() {
     let commitment = [0xABu8; 32];
+    let sender = [0x05u8; 32];
     let p = single_predicate(StateConstraint::SenderAuthorized {
         set: AuthorizedSet::BlindedSet { commitment },
     });
-    let registry = WitnessedPredicateRegistry::with_stubs();
+    let registry = exact_sender_registry(
+        WitnessedPredicateKind::BlindedSet,
+        "exact-blinded-set-state-constraint-test-verifier",
+        commitment,
+        sender,
+        b"valid-blinded-set-proof",
+    );
     let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
         kind: WitnessKindTag::ProofBytes,
-        bytes: b"",
+        bytes: b"tampered-blinded-set-proof",
     }];
     let witnesses = WitnessBundle {
         blobs: &blobs,
         registry: Some(&registry),
     };
     let ctx = EvalContext {
-        sender: Some([0x05u8; 32]),
+        sender: Some(sender),
         ..Default::default()
     };
 
@@ -1095,15 +1197,84 @@ fn temporal_predicate_returns_sentinel_today() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: registry dispatch of TemporalPredicate via circuit::temporal_predicate_dsl (CAVEAT-LAYER-COVERAGE.md §6.1, #1)"]
 fn temporal_predicate_accepts_with_valid_witness() {
-    panic!("blocked");
+    let p = single_predicate(StateConstraint::TemporalPredicate {
+        witness_index: 0,
+        dsl_hash: [0x44u8; 32],
+    });
+    let registry = WitnessedPredicateRegistry::with_stubs();
+    let input = b"temporal-input";
+    let proof = b"stub-temporal-proof";
+    let blobs: [WitnessBlobView<'_>; 2] = [
+        WitnessBlobView {
+            kind: WitnessKindTag::Cleartext,
+            bytes: input,
+        },
+        WitnessBlobView {
+            kind: WitnessKindTag::ProofBytes,
+            bytes: proof,
+        },
+    ];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+
+    let result = p.evaluate_full(
+        &CellState::default(),
+        None,
+        Some(&EvalContext::default()),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    );
+    assert!(
+        result.is_ok(),
+        "TemporalPredicate should dispatch through explicit stub registry, got: {result:?}"
+    );
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: TemporalPredicate witness tampering rejection"]
 fn temporal_predicate_rejects_with_tampered_witness() {
-    panic!("blocked");
+    let p = single_predicate(StateConstraint::TemporalPredicate {
+        witness_index: 0,
+        dsl_hash: [0x44u8; 32],
+    });
+    let registry = WitnessedPredicateRegistry::with_stubs();
+    let input = b"temporal-input";
+    let blobs: [WitnessBlobView<'_>; 2] = [
+        WitnessBlobView {
+            kind: WitnessKindTag::Cleartext,
+            bytes: input,
+        },
+        WitnessBlobView {
+            kind: WitnessKindTag::ProofBytes,
+            bytes: b"",
+        },
+    ];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+
+    let err = p
+        .evaluate_full(
+            &CellState::default(),
+            None,
+            Some(&EvalContext::default()),
+            &TransitionMeta::wildcard(),
+            &witnesses,
+        )
+        .expect_err("empty TemporalPredicate proof must reject");
+    assert!(
+        matches!(
+            err,
+            ProgramError::WitnessedPredicateRejected {
+                kind_name: "Temporal",
+                ..
+            }
+        ),
+        "expected WitnessedPredicateRejected(Temporal), got: {err:?}"
+    );
 }
 
 // ===========================================================================
@@ -1355,9 +1526,36 @@ fn custom_returns_sentinel_today() {
 }
 
 #[test]
-#[ignore = "blocked on DSL-IR runtime dispatch — separate workstream (CAVEAT-LAYER-COVERAGE.md §1 row 27)"]
-fn custom_accepts_when_dsl_runtime_resolves() {
-    panic!("blocked");
+fn custom_accepts_when_registered_verifier_resolves() {
+    let ir_hash = [0xC5u8; 32];
+    let expected_slot = field_from_u64(9);
+    let p = single_predicate(StateConstraint::Custom {
+        ir_hash,
+        descriptor: CustomDescriptor::default(),
+        reads: ReadSet::default(),
+    });
+    let registry = exact_custom_slot_registry(ir_hash, expected_slot, b"valid-custom-proof");
+    let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+        kind: WitnessKindTag::ProofBytes,
+        bytes: b"valid-custom-proof",
+    }];
+    let witnesses = WitnessBundle {
+        blobs: &blobs,
+        registry: Some(&registry),
+    };
+    let new = state_raw_with(&[(0, expected_slot)]);
+
+    let result = p.evaluate_full(
+        &new,
+        None,
+        Some(&EvalContext::default()),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    );
+    assert!(
+        result.is_ok(),
+        "Custom constraint should dispatch through registered verifier, got: {result:?}"
+    );
 }
 
 // ===========================================================================

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_turn::action::{Action, Authorization, BearerCapProof, DelegationProofData, symbol};
 use dregg_turn::{
-    CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor, TurnReceipt,
+    CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnError, TurnExecutor, TurnReceipt,
     TurnResult, VerifyError, sign_receipt, verify_receipt_chain_with_keys,
 };
 
@@ -150,6 +150,31 @@ fn replay_entry_with_receipt_pi(receipt: TurnReceipt) -> dregg_verifier::ReplayE
         witness_hash: [0u8; 32],
         aggregate_membership: None,
     }
+}
+
+fn effect_vm_air_rejects_tampered_trace(
+    trace: &[Vec<dregg_circuit::field::BabyBear>],
+    public_inputs: &[dregg_circuit::field::BabyBear],
+    row: usize,
+    label: &str,
+) {
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit::stark::StarkAir;
+
+    let air = dregg_circuit::EffectVmAir::new(trace.len());
+    let next = (row + 1) % trace.len();
+    let rejects_for_some_challenge = [7u32, 13, 101, 2017, 31337].into_iter().any(|alpha| {
+        air.eval_constraints(
+            &trace[row],
+            &trace[next],
+            public_inputs,
+            BabyBear::new(alpha),
+        ) != BabyBear::ZERO
+    });
+    assert!(
+        rejects_for_some_challenge,
+        "{label}: AIR accepted the tampered trace for all sampled alphas"
+    );
 }
 
 // ===========================================================================
@@ -431,9 +456,71 @@ fn t8_verifier_rejects_fake_previous_receipt_hash() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on sovereign-witness AIR teeth (AUDIT-sovereign-witness-teeth.md, Stage 9 polish)"]
 fn t9_sovereign_witness_skip_rejected_by_air() {
-    panic!("blocked");
+    let mut ledger = Ledger::new();
+    let agent = permissive_cell(0x91, 1_000);
+    let agent_id = agent.id();
+    ledger.insert_cell(agent).unwrap();
+
+    let sovereign = permissive_cell(0x92, 500);
+    let sovereign_id = sovereign.id();
+    ledger
+        .register_sovereign_cell(sovereign_id, sovereign.state_commitment())
+        .unwrap();
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
+
+    let mut forest = CallForest::new();
+    forest.add_root(Action {
+        target: sovereign_id,
+        method: symbol("set_field"),
+        args: vec![],
+        authorization: Authorization::Unchecked,
+        preconditions: Default::default(),
+        effects: vec![Effect::SetField {
+            cell: sovereign_id,
+            index: 0,
+            value: [0x99u8; 32],
+        }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: Default::default(),
+        balance_change: None,
+        witness_blobs: vec![],
+    });
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: forest,
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    };
+
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut ledger);
+    assert!(
+        matches!(
+            result,
+            TurnResult::Rejected {
+                reason: TurnError::SovereignWitnessRequired { cell },
+                ..
+            } if cell == sovereign_id
+        ),
+        "sovereign mutation without a witness must reject, got: {result:?}"
+    );
 }
 
 // ===========================================================================
@@ -476,9 +563,81 @@ fn t10_executor_rejects_transfer_without_required_capability() {
 }
 
 #[test]
-#[ignore = "blocked on stage7-cont P1.C: 4 CapTP variants (ExportSturdyRef, EnlivenRef, DropRef, ValidateHandoff) verify Merkle membership and are not tautological"]
 fn t10_captp_variants_use_real_merkle_membership() {
-    panic!("blocked");
+    use dregg_circuit::effect_vm as vm;
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit::poseidon2::hash_2_to_1;
+
+    let mut export_state = dregg_circuit::CellState::new(1_000, 0);
+    export_state.fields[7] = BabyBear::new(5);
+    export_state.refresh_commitment();
+    let export_effect = vm::Effect::ExportSturdyRef {
+        cell_id: BabyBear::new(0xCE11),
+        permissions: BabyBear::new(0x07),
+        random_seed: BabyBear::new(0x5EED),
+        export_counter: 5,
+    };
+    let (mut export_trace, export_pi) =
+        vm::generate_effect_vm_trace(&export_state, &[export_effect]);
+    export_trace[0][vm::AUX_BASE] = export_trace[0][vm::AUX_BASE] + BabyBear::ONE;
+    effect_vm_air_rejects_tampered_trace(&export_trace, &export_pi, 0, "ExportSturdyRef swiss");
+
+    let mut enliven_state = dregg_circuit::CellState::new(1_000, 0);
+    enliven_state.fields[6] = BabyBear::new(2);
+    enliven_state.fields[4] = BabyBear::new(0x4444);
+    enliven_state.refresh_commitment();
+    let enliven_effect = vm::Effect::EnlivenRef {
+        swiss_number: BabyBear::new(0x5155),
+        presenter_id: BabyBear::new(0x9E5),
+        expected_cell_id: BabyBear::new(0xCE11),
+        expected_permissions: BabyBear::new(0x07),
+    };
+    let (mut enliven_trace, enliven_pi) =
+        vm::generate_effect_vm_trace(&enliven_state, &[enliven_effect]);
+    enliven_trace[0][vm::AUX_BASE + 6] = enliven_trace[0][vm::AUX_BASE + 6] + BabyBear::ONE;
+    effect_vm_air_rejects_tampered_trace(
+        &enliven_trace,
+        &enliven_pi,
+        0,
+        "EnlivenRef membership sibling",
+    );
+
+    let mut drop_state = dregg_circuit::CellState::new(1_000, 0);
+    drop_state.fields[5] = BabyBear::new(3);
+    drop_state.fields[3] = BabyBear::new(0x3333);
+    drop_state.refresh_commitment();
+    let drop_effect = vm::Effect::DropRef {
+        cell_id: BabyBear::new(0xCE11),
+        holder_federation: BabyBear::new(0xFED1),
+        current_refcount: 3,
+    };
+    let (mut drop_trace, drop_pi) = vm::generate_effect_vm_trace(&drop_state, &[drop_effect]);
+    drop_trace[0][vm::AUX_BASE + 6] = drop_trace[0][vm::AUX_BASE + 6] + BabyBear::ONE;
+    effect_vm_air_rejects_tampered_trace(&drop_trace, &drop_pi, 0, "DropRef membership sibling");
+
+    let handoff_state = dregg_circuit::CellState::new(1_000, 0);
+    let cert_hash = BabyBear::new(0xCE87);
+    let recipient_pk = BabyBear::new(0x8EC1);
+    let introducer_pk = BabyBear::new(0x1117);
+    let leaf = hash_2_to_1(cert_hash, hash_2_to_1(recipient_pk, introducer_pk));
+    let approved_root = hash_2_to_1(leaf, BabyBear::ZERO);
+    let handoff_effect = vm::Effect::ValidateHandoff {
+        certificate_hash: cert_hash,
+        recipient_pk,
+        introducer_pk,
+        approved_set_root: approved_root,
+    };
+    let mut context = vm::EffectVmContext::default();
+    context.approved_handoffs_root[0] = approved_root;
+    let (mut handoff_trace, handoff_pi) =
+        vm::generate_effect_vm_trace_ext(&handoff_state, &[handoff_effect], context);
+    handoff_trace[0][vm::AUX_BASE] = handoff_trace[0][vm::AUX_BASE] + BabyBear::ONE;
+    effect_vm_air_rejects_tampered_trace(
+        &handoff_trace,
+        &handoff_pi,
+        0,
+        "ValidateHandoff membership leaf",
+    );
 }
 
 // ===========================================================================
@@ -505,9 +664,12 @@ fn t11_stale_proof_replay_rejected_by_verifier() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on EXECUTOR-HONESTY-AUDIT.md T12 confirmation: Stage 8 P2.D conservation derivation in the builder; gallery file consistent"]
 fn t12_balance_delta_must_match_transfer_amounts() {
-    panic!("blocked");
+    effect_vm_rejects_tampered_pi(dregg_circuit::effect_vm::pi::NET_DELTA_MAG, "NET_DELTA_MAG");
+    effect_vm_rejects_tampered_pi(
+        dregg_circuit::effect_vm::pi::NET_DELTA_SIGN,
+        "NET_DELTA_SIGN",
+    );
 }
 
 // ===========================================================================
@@ -567,9 +729,13 @@ fn t14_malformed_proof_bytes_rejected() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on stage7-cont trace-side binding: in-trace effects must derive the PI-exposed effects_hash (EFFECTS_HASH_GLOBAL termination)"]
 fn t15_trace_effects_must_match_pi_effects_hash() {
-    panic!("blocked");
+    for i in 0..dregg_circuit::effect_vm::pi::EFFECTS_HASH_LEN {
+        effect_vm_rejects_tampered_pi(
+            dregg_circuit::effect_vm::pi::EFFECTS_HASH_BASE + i,
+            "EFFECTS_HASH_BASE",
+        );
+    }
 }
 
 // ===========================================================================

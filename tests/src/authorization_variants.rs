@@ -13,11 +13,18 @@
 //! marked `#[ignore]` until the surface helpers exist in
 //! `tests/src/main.rs`'s helper module.
 
-use dregg_cell::CellId;
-use dregg_turn::action::{
-    Action, Authorization, BearerCapProof, DelegationMode, DelegationProofData,
+use std::sync::Arc;
+
+use dregg_cell::predicate::{
+    InputRef as PredInputRef, PredicateInput, WitnessedPredicate, WitnessedPredicateError,
+    WitnessedPredicateKind, WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
-use dregg_turn::{CallForest, Effect, Turn, TurnExecutor};
+use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
+use dregg_turn::action::{
+    Action, Authorization, BearerCapProof, CommitmentMode, DelegationMode, DelegationProofData,
+    WitnessBlob, symbol,
+};
+use dregg_turn::{CallForest, ComputronCosts, Effect, Turn, TurnBuilder, TurnError, TurnExecutor};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,6 +43,115 @@ fn dummy_action(target: CellId, auth: Authorization) -> Action {
         balance_change: None,
         witness_blobs: vec![],
     }
+}
+
+fn make_open_cell(seed: u8, balance: u64) -> Cell {
+    let mut public_key = [0u8; 32];
+    public_key[0] = seed;
+    let token_id = [0u8; 32];
+    let mut cell = Cell::with_balance(public_key, token_id, balance);
+    cell.permissions = Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    cell
+}
+
+fn setup_two_open_cells(agent_balance: u64, target_balance: u64) -> (Ledger, CellId, CellId) {
+    let mut ledger = Ledger::new();
+    let mut agent = make_open_cell(1, agent_balance);
+    let target = make_open_cell(2, target_balance);
+    let agent_id = agent.id();
+    let target_id = target.id();
+    agent.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent).unwrap();
+    ledger.insert_cell(target).unwrap();
+    (ledger, agent_id, target_id)
+}
+
+struct ExpectedCustomAuthVerifier {
+    vk_hash: [u8; 32],
+    expected_message: Vec<u8>,
+    expected_proof: Vec<u8>,
+}
+
+impl WitnessedPredicateVerifier for ExpectedCustomAuthVerifier {
+    fn name(&self) -> &'static str {
+        "expected-custom-auth-test-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Custom {
+            vk_hash: self.vk_hash,
+        }
+    }
+
+    fn verify(
+        &self,
+        _commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        match input {
+            PredicateInput::SigningMessage(bytes) if *bytes == self.expected_message.as_slice() => {
+            }
+            PredicateInput::SigningMessage(_) => {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: self.name(),
+                    reason: "signing message mismatch".into(),
+                });
+            }
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "SigningMessage",
+                    actual: "non-SigningMessage",
+                });
+            }
+        }
+        if proof_bytes != self.expected_proof {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "proof mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn make_custom_action(
+    target: CellId,
+    predicate: WitnessedPredicate,
+    proof_bytes: Vec<u8>,
+) -> Action {
+    Action {
+        target,
+        method: symbol("custom_authd_op"),
+        args: vec![],
+        authorization: Authorization::Custom { predicate },
+        preconditions: Default::default(),
+        effects: vec![Effect::SetField {
+            cell: target,
+            index: 0,
+            value: [42u8; 32],
+        }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
+        witness_blobs: vec![WitnessBlob::proof(proof_bytes)],
+    }
+}
+
+fn wrap_in_turn(agent: CellId, action: Action) -> Turn {
+    let mut builder = TurnBuilder::new(agent, 0);
+    builder.add_action(action);
+    builder.fee(0).build()
 }
 
 // ===========================================================================
@@ -292,21 +408,129 @@ fn action_hash_custom_predicate_tamper_changes_hash() {
 }
 
 #[test]
-#[ignore = "blocked on AUTHORIZATION-CUSTOM-DESIGN: end-to-end positive — valid Auth::Custom predicate accepts (executor dispatches through WitnessedPredicateRegistry, binds InputRef::SigningMessage)"]
 fn auth_custom_with_valid_predicate_accepts() {
-    panic!("blocked");
+    let (mut ledger, agent_id, target_id) = setup_two_open_cells(1000, 0);
+    let federation_id = [0xF1u8; 32];
+    let vk_hash = [0x42u8; 32];
+    let proof = b"valid-custom-auth-proof".to_vec();
+
+    let predicate = WitnessedPredicate::custom(vk_hash, [0u8; 32], PredInputRef::SigningMessage, 0);
+    let action = make_custom_action(target_id, predicate.clone(), proof.clone());
+    let expected_message =
+        TurnExecutor::compute_custom_signing_message(&action, &predicate, 0, &federation_id, 0);
+
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_custom(
+        vk_hash,
+        Arc::new(ExpectedCustomAuthVerifier {
+            vk_hash,
+            expected_message,
+            expected_proof: proof,
+        }),
+    );
+
+    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    executor.set_local_federation_id(federation_id);
+    executor.set_witnessed_registry(registry);
+
+    let result = executor.execute(&wrap_in_turn(agent_id, action), &mut ledger);
+    assert!(
+        result.is_committed(),
+        "valid Authorization::Custom turn should commit, got {result:?}"
+    );
+    assert_eq!(ledger.get(&target_id).unwrap().state.fields[0], [42u8; 32]);
 }
 
 #[test]
-#[ignore = "blocked on AUTHORIZATION-CUSTOM-DESIGN: Auth::Custom predicate with tampered proof rejects"]
 fn auth_custom_with_tampered_predicate_proof_rejects() {
-    panic!("blocked");
+    let (mut ledger, agent_id, target_id) = setup_two_open_cells(1000, 0);
+    let federation_id = [0xF2u8; 32];
+    let vk_hash = [0x55u8; 32];
+
+    let predicate = WitnessedPredicate::custom(vk_hash, [0u8; 32], PredInputRef::SigningMessage, 0);
+    let action = make_custom_action(target_id, predicate.clone(), b"tampered-proof".to_vec());
+    let expected_message =
+        TurnExecutor::compute_custom_signing_message(&action, &predicate, 0, &federation_id, 0);
+
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_custom(
+        vk_hash,
+        Arc::new(ExpectedCustomAuthVerifier {
+            vk_hash,
+            expected_message,
+            expected_proof: b"valid-proof".to_vec(),
+        }),
+    );
+
+    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    executor.set_local_federation_id(federation_id);
+    executor.set_witnessed_registry(registry);
+
+    let result = executor.execute(&wrap_in_turn(agent_id, action), &mut ledger);
+    assert!(result.is_rejected(), "tampered Custom proof must reject");
+    match result.unwrap_rejected().0 {
+        TurnError::InvalidAuthorization { reason } => {
+            assert!(
+                reason.contains("Custom auth predicate rejected")
+                    && reason.contains("proof mismatch"),
+                "expected proof-mismatch Custom rejection, got: {reason}"
+            );
+        }
+        other => panic!("expected InvalidAuthorization, got {other:?}"),
+    }
 }
 
 #[test]
-#[ignore = "blocked on AUTHORIZATION-CUSTOM-DESIGN: vk_hash mismatch between AuthRequired::Custom and Authorization::Custom must reject (design §10.4)"]
 fn auth_custom_vk_hash_mismatch_rejects() {
-    panic!("blocked");
+    let mut ledger = Ledger::new();
+    let mut agent = make_open_cell(1, 1000);
+    let mut target = make_open_cell(2, 0);
+    let agent_id = agent.id();
+    let target_id = target.id();
+    let required_vk = [0xAAu8; 32];
+    let action_vk = [0xBBu8; 32];
+    target.permissions.set_state = AuthRequired::Custom {
+        vk_hash: required_vk,
+    };
+    agent.capabilities.grant(target_id, AuthRequired::None);
+    ledger.insert_cell(agent).unwrap();
+    ledger.insert_cell(target).unwrap();
+
+    let proof = b"valid-proof".to_vec();
+    let predicate =
+        WitnessedPredicate::custom(action_vk, [0u8; 32], PredInputRef::SigningMessage, 0);
+    let action = make_custom_action(target_id, predicate.clone(), proof.clone());
+    let expected_message =
+        TurnExecutor::compute_custom_signing_message(&action, &predicate, 0, &[0u8; 32], 0);
+
+    let mut registry = WitnessedPredicateRegistry::empty();
+    for vk_hash in [required_vk, action_vk] {
+        registry.register_custom(
+            vk_hash,
+            Arc::new(ExpectedCustomAuthVerifier {
+                vk_hash,
+                expected_message: expected_message.clone(),
+                expected_proof: proof.clone(),
+            }),
+        );
+    }
+
+    let mut executor = TurnExecutor::new(ComputronCosts::zero());
+    executor.set_witnessed_registry(registry);
+
+    let result = executor.execute(&wrap_in_turn(agent_id, action), &mut ledger);
+    assert!(result.is_rejected(), "Custom vk_hash mismatch must reject");
+    match result.unwrap_rejected().0 {
+        TurnError::PermissionDenied { required, .. } => {
+            assert_eq!(
+                required,
+                AuthRequired::Custom {
+                    vk_hash: required_vk
+                }
+            );
+        }
+        other => panic!("expected PermissionDenied, got {other:?}"),
+    }
 }
 
 // ===========================================================================

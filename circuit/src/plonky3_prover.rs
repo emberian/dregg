@@ -734,7 +734,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "SLOW+RELEASE-ONLY: soundness test — forged parent hash must be rejected by inline Poseidon2 constraints; requires --release (debug prover panics before producing proof), too slow for CI"]
     #[cfg(not(debug_assertions))]
     fn plonky3_forged_parent_rejected() {
         // Key soundness test: a malicious prover forges a hash step.

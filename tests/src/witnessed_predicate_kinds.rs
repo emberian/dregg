@@ -16,8 +16,8 @@
 use std::sync::Arc;
 
 use dregg_cell::predicate::{
-    PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
-    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
+    NonMembershipNeighborProof, PredicateInput, WitnessedPredicate, WitnessedPredicateError,
+    WitnessedPredicateKind, WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
 use dregg_cell::program::{TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag};
 use dregg_cell::{
@@ -227,6 +227,348 @@ fn two_leaf_nullifier_membership_fixture() -> ([u8; 32], Nullifier, Vec<u8>) {
     (root, member, proof_bytes)
 }
 
+fn keyed_hash(domain: &'static str, parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(domain);
+    for part in parts {
+        hasher.update(part);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn push_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn read_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
+    let end = *offset + 8;
+    let chunk = bytes.get(*offset..end)?;
+    let mut raw = [0u8; 8];
+    raw.copy_from_slice(chunk);
+    *offset = end;
+    Some(u64::from_le_bytes(raw))
+}
+
+fn encode_u64_window(values: &[u64]) -> Vec<u8> {
+    assert!(values.len() <= u8::MAX as usize);
+    let mut out = vec![values.len() as u8];
+    for value in values {
+        push_u64(&mut out, *value);
+    }
+    out
+}
+
+fn decode_u64_window(bytes: &[u8]) -> Option<Vec<u64>> {
+    let count = *bytes.first()? as usize;
+    if bytes.len() != 1 + count * 8 {
+        return None;
+    }
+    let mut offset = 1;
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        values.push(read_u64(bytes, &mut offset)?);
+    }
+    Some(values)
+}
+
+fn temporal_policy_commitment(threshold: u64) -> [u8; 32] {
+    keyed_hash("dregg-test-temporal-policy-v1", &[&threshold.to_le_bytes()])
+}
+
+fn temporal_proof_bytes(commitment: &[u8; 32], window_bytes: &[u8], threshold: u64) -> Vec<u8> {
+    let threshold_bytes = threshold.to_le_bytes();
+    let tag = keyed_hash(
+        "dregg-test-temporal-proof-v1",
+        &[commitment, window_bytes, &threshold_bytes],
+    );
+    let mut proof = Vec::with_capacity(40);
+    proof.extend_from_slice(&threshold_bytes);
+    proof.extend_from_slice(&tag);
+    proof
+}
+
+struct TemporalThresholdVerifier;
+
+impl WitnessedPredicateVerifier for TemporalThresholdVerifier {
+    fn name(&self) -> &'static str {
+        "temporal-threshold-test-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Temporal
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        let window_bytes = match input {
+            PredicateInput::Bytes(bytes) => *bytes,
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "Bytes(window)",
+                    actual: "non-Bytes",
+                });
+            }
+        };
+        if proof_bytes.len() != 40 {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "temporal proof must be threshold_u64 || tag32".into(),
+            });
+        }
+        let mut offset = 0;
+        let threshold = read_u64(proof_bytes, &mut offset).expect("len checked");
+        if temporal_policy_commitment(threshold) != *commitment {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "policy commitment does not match threshold".into(),
+            });
+        }
+        let expected = temporal_proof_bytes(commitment, window_bytes, threshold);
+        if proof_bytes != expected.as_slice() {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "temporal proof tag does not bind policy and window".into(),
+            });
+        }
+        let values =
+            decode_u64_window(window_bytes).ok_or_else(|| WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "temporal window input is not count-prefixed u64 bytes".into(),
+            })?;
+        if values.iter().any(|value| *value < threshold) {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "temporal window contains value below threshold".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn temporal_registry() -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(TemporalThresholdVerifier));
+    registry
+}
+
+struct BlindedSetNonRevocationVerifier;
+
+impl WitnessedPredicateVerifier for BlindedSetNonRevocationVerifier {
+    fn name(&self) -> &'static str {
+        "blinded-set-non-revocation-test-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::BlindedSet
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        let candidate = match input {
+            PredicateInput::Sender(sender) => **sender,
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "Sender",
+                    actual: "non-Sender",
+                });
+            }
+        };
+        let proof = NonMembershipNeighborProof::from_bytes(proof_bytes).ok_or_else(|| {
+            WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "non-revocation proof must be lower || upper || adjacency_tag".into(),
+            }
+        })?;
+        let expected =
+            NonMembershipNeighborProof::adjacency_tag(commitment, &proof.lower, &proof.upper);
+        if proof.adjacency_tag != expected {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "adjacency tag does not bind to blinded-set commitment".into(),
+            });
+        }
+        if proof.lower >= candidate || candidate >= proof.upper {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "candidate is not strictly between non-revocation neighbors".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn blinded_set_registry() -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(BlindedSetNonRevocationVerifier));
+    registry
+}
+
+fn bridge_gte_tag(commitment: &[u8; 32], threshold: u64, private_value: u64) -> [u8; 32] {
+    keyed_hash(
+        "dregg-test-bridge-gte-proof-v1",
+        &[
+            commitment,
+            &threshold.to_le_bytes(),
+            &private_value.to_le_bytes(),
+        ],
+    )
+}
+
+fn bridge_gte_proof_bytes(commitment: &[u8; 32], threshold: u64, private_value: u64) -> Vec<u8> {
+    let mut proof = Vec::with_capacity(40);
+    push_u64(&mut proof, private_value);
+    proof.extend_from_slice(&bridge_gte_tag(commitment, threshold, private_value));
+    proof
+}
+
+struct BridgeGteVerifier;
+
+impl WitnessedPredicateVerifier for BridgeGteVerifier {
+    fn name(&self) -> &'static str {
+        "bridge-gte-test-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::BridgePredicate
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        let threshold = match input {
+            PredicateInput::PublicInput(values) if !values.is_empty() => values[0],
+            PredicateInput::PublicInput(_) => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "PublicInput[threshold]",
+                    actual: "empty PublicInput",
+                });
+            }
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "PublicInput[threshold]",
+                    actual: "non-PublicInput",
+                });
+            }
+        };
+        if proof_bytes.len() != 40 {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "bridge GTE proof must be value_u64 || tag32".into(),
+            });
+        }
+        let mut offset = 0;
+        let private_value = read_u64(proof_bytes, &mut offset).expect("len checked");
+        let expected = bridge_gte_proof_bytes(commitment, threshold, private_value);
+        if proof_bytes != expected.as_slice() {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "bridge GTE proof tag does not bind commitment, threshold, and value"
+                    .into(),
+            });
+        }
+        if private_value < threshold {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "private value is below public threshold".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn bridge_gte_registry() -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(BridgeGteVerifier));
+    registry
+}
+
+fn pedersen_test_commitment(value: u64, blinding: u64) -> [u8; 32] {
+    keyed_hash(
+        "dregg-test-pedersen-commitment-v1",
+        &[&value.to_le_bytes(), &blinding.to_le_bytes()],
+    )
+}
+
+fn pedersen_equality_statement(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    keyed_hash("dregg-test-pedersen-equality-v1", &[left, right])
+}
+
+fn pedersen_equality_proof(
+    value: u64,
+    left_blinding: u64,
+    right_blinding: u64,
+) -> ([u8; 32], Vec<u8>) {
+    let left = pedersen_test_commitment(value, left_blinding);
+    let right = pedersen_test_commitment(value, right_blinding);
+    let statement = pedersen_equality_statement(&left, &right);
+    let mut proof = Vec::with_capacity(24);
+    push_u64(&mut proof, value);
+    push_u64(&mut proof, left_blinding);
+    push_u64(&mut proof, right_blinding);
+    (statement, proof)
+}
+
+struct PedersenEqualityVerifier;
+
+impl WitnessedPredicateVerifier for PedersenEqualityVerifier {
+    fn name(&self) -> &'static str {
+        "hash-pedersen-equality-test-verifier"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::PedersenEquality
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        _input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        if proof_bytes.len() != 24 {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "pedersen equality proof must be value || left_blinding || right_blinding"
+                    .into(),
+            });
+        }
+        let mut offset = 0;
+        let value = read_u64(proof_bytes, &mut offset).expect("len checked");
+        let left_blinding = read_u64(proof_bytes, &mut offset).expect("len checked");
+        let right_blinding = read_u64(proof_bytes, &mut offset).expect("len checked");
+        let left = pedersen_test_commitment(value, left_blinding);
+        let right = pedersen_test_commitment(value, right_blinding);
+        let expected = pedersen_equality_statement(&left, &right);
+        if expected != *commitment {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "opened commitments do not match equality statement".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn pedersen_equality_registry() -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(PedersenEqualityVerifier));
+    registry
+}
+
 // ===========================================================================
 // Dfa
 // ===========================================================================
@@ -324,15 +666,32 @@ fn temporal_predicate_constructor() {
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: Temporal verifier wiring through circuit::temporal_predicate_dsl"]
 fn temporal_predicate_with_valid_proof_accepts() {
-    panic!("blocked");
+    let threshold = 10;
+    let commitment = temporal_policy_commitment(threshold);
+    let window = encode_u64_window(&[10, 12, 15]);
+    let proof = temporal_proof_bytes(&commitment, &window, threshold);
+    let registry = temporal_registry();
+    let predicate = WitnessedPredicate::temporal(commitment, 0, 0);
+
+    registry
+        .verify(&predicate, &PredicateInput::Bytes(&window), &proof)
+        .expect("temporal threshold window accepts");
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: Temporal tampering rejection"]
 fn temporal_predicate_with_tampered_proof_rejects() {
-    panic!("blocked");
+    let threshold = 10;
+    let commitment = temporal_policy_commitment(threshold);
+    let window = encode_u64_window(&[10, 9, 15]);
+    let proof = temporal_proof_bytes(&commitment, &window, threshold);
+    let registry = temporal_registry();
+    let predicate = WitnessedPredicate::temporal(commitment, 0, 0);
+    let err = registry
+        .verify(&predicate, &PredicateInput::Bytes(&window), &proof)
+        .expect_err("temporal threshold window with a low value must reject");
+
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 // ===========================================================================
@@ -371,9 +730,20 @@ fn merkle_membership_with_wrong_root_rejects() {
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: Merkle non-membership for inverse"]
 fn merkle_membership_inverse_query_rejects() {
-    panic!("blocked");
+    let (root, _member, proof_bytes) = two_leaf_nullifier_membership_fixture();
+    let registry = merkle_membership_registry();
+    let inverse_query = [0x12u8; 32];
+    let predicate = WitnessedPredicate::merkle_membership(root, InputRef::Sender, 0);
+    let err = registry
+        .verify(
+            &predicate,
+            &PredicateInput::Sender(&inverse_query),
+            &proof_bytes,
+        )
+        .expect_err("membership proof must reject a different queried sender");
+
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 // ===========================================================================
@@ -387,15 +757,38 @@ fn blinded_set_predicate_constructor() {
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: AccumulatorNonMembershipAir wiring"]
 fn blinded_set_with_non_revocation_proof_accepts() {
-    panic!("blocked");
+    let commitment = [0x44u8; 32];
+    let sender = [0x55u8; 32];
+    let proof = NonMembershipNeighborProof::new(&commitment, [0x44u8; 32], [0x66u8; 32]);
+    let registry = blinded_set_registry();
+    let predicate = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+
+    registry
+        .verify(
+            &predicate,
+            &PredicateInput::Sender(&sender),
+            &proof.to_bytes(),
+        )
+        .expect("sender strictly between neighbors is non-revoked");
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: BlindedSet stale proof rejects"]
 fn blinded_set_revoked_member_rejects() {
-    panic!("blocked");
+    let commitment = [0x44u8; 32];
+    let sender = [0x55u8; 32];
+    let proof = NonMembershipNeighborProof::new(&commitment, sender, [0x66u8; 32]);
+    let registry = blinded_set_registry();
+    let predicate = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+    let err = registry
+        .verify(
+            &predicate,
+            &PredicateInput::Sender(&sender),
+            &proof.to_bytes(),
+        )
+        .expect_err("candidate equal to lower neighbor is revoked/in-set");
+
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 // ===========================================================================
@@ -410,15 +803,38 @@ fn bridge_predicate_constructor() {
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: PredicateAir / relational_predicate_air wiring"]
 fn bridge_predicate_gte_accepts_value_above_threshold() {
-    panic!("blocked");
+    let fact_commitment = [0x77u8; 32];
+    let threshold = [50u64];
+    let proof = bridge_gte_proof_bytes(&fact_commitment, threshold[0], 73);
+    let registry = bridge_gte_registry();
+    let predicate = WitnessedPredicate::bridge_predicate(
+        fact_commitment,
+        InputRef::PublicInput { pi_index: 0 },
+        0,
+    );
+
+    registry
+        .verify(&predicate, &PredicateInput::PublicInput(&threshold), &proof)
+        .expect("private value above threshold satisfies bridge GTE");
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: BridgePredicate threshold rejection"]
 fn bridge_predicate_gte_rejects_value_below_threshold() {
-    panic!("blocked");
+    let fact_commitment = [0x77u8; 32];
+    let threshold = [50u64];
+    let proof = bridge_gte_proof_bytes(&fact_commitment, threshold[0], 49);
+    let registry = bridge_gte_registry();
+    let predicate = WitnessedPredicate::bridge_predicate(
+        fact_commitment,
+        InputRef::PublicInput { pi_index: 0 },
+        0,
+    );
+    let err = registry
+        .verify(&predicate, &PredicateInput::PublicInput(&threshold), &proof)
+        .expect_err("private value below threshold must reject bridge GTE");
+
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 // ===========================================================================
@@ -432,15 +848,29 @@ fn pedersen_equality_constructor() {
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: committed_threshold + Bulletproof verifier wiring"]
 fn pedersen_equality_with_valid_proof_accepts() {
-    panic!("blocked");
+    let (statement, proof) = pedersen_equality_proof(42, 7, 11);
+    let registry = pedersen_equality_registry();
+    let predicate = WitnessedPredicate::pedersen_equality(statement, InputRef::Sender, 0);
+    let sender = [0x5Eu8; 32];
+
+    registry
+        .verify(&predicate, &PredicateInput::Sender(&sender), &proof)
+        .expect("two commitments opening to the same value satisfy equality");
 }
 
 #[test]
-#[ignore = "blocked on registry dispatch: Pedersen tampering rejection"]
 fn pedersen_equality_with_tampered_commitment_rejects() {
-    panic!("blocked");
+    let (mut statement, proof) = pedersen_equality_proof(42, 7, 11);
+    statement[0] ^= 0xFF;
+    let registry = pedersen_equality_registry();
+    let predicate = WitnessedPredicate::pedersen_equality(statement, InputRef::Sender, 0);
+    let sender = [0x5Eu8; 32];
+    let err = registry
+        .verify(&predicate, &PredicateInput::Sender(&sender), &proof)
+        .expect_err("tampered equality statement must reject");
+
+    assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
 }
 
 // ===========================================================================

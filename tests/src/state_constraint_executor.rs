@@ -12,8 +12,12 @@
 //! Tests are marked `#[ignore]` with the unblock-by-lane label when they
 //! depend on the caveat-correctness lane wiring the missing context.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
+use dregg_cell::predicate::{
+    PredicateInput, WitnessedPredicateError, WitnessedPredicateKind, WitnessedPredicateRegistry,
+    WitnessedPredicateVerifier,
+};
 use dregg_cell::{
     AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint, field_from_u64,
 };
@@ -142,6 +146,79 @@ fn build_transfer_turn(agent: CellId, peer: CellId, amount: u64, nonce: u64) -> 
         cross_effect_dependencies: Vec::new(),
         effect_witness_index_map: Vec::new(),
     }
+}
+
+struct ExactSenderVerifier {
+    kind: WitnessedPredicateKind,
+    name: &'static str,
+    expected_commitment: [u8; 32],
+    expected_sender: [u8; 32],
+    expected_proof: &'static [u8],
+}
+
+impl WitnessedPredicateVerifier for ExactSenderVerifier {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        self.kind
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        if commitment != &self.expected_commitment {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "commitment mismatch".into(),
+            });
+        }
+        match input {
+            PredicateInput::Sender(sender) if *sender == &self.expected_sender => {}
+            PredicateInput::Sender(_) => {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: self.name(),
+                    reason: "sender mismatch".into(),
+                });
+            }
+            _ => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: self.name(),
+                    expected: "Sender",
+                    actual: "non-Sender",
+                });
+            }
+        }
+        if proof_bytes != self.expected_proof {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: self.name(),
+                reason: "proof mismatch".into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn exact_sender_registry(
+    kind: WitnessedPredicateKind,
+    name: &'static str,
+    expected_commitment: [u8; 32],
+    expected_sender: [u8; 32],
+    expected_proof: &'static [u8],
+) -> WitnessedPredicateRegistry {
+    let mut registry = WitnessedPredicateRegistry::empty();
+    registry.register_builtin(Arc::new(ExactSenderVerifier {
+        kind,
+        name,
+        expected_commitment,
+        expected_sender,
+        expected_proof,
+    }));
+    registry
 }
 
 // ===========================================================================
@@ -323,6 +400,48 @@ fn executor_rate_limit_count_witness_at_cap_rejects() {
     assert!(
         matches!(result, TurnResult::Rejected { .. }),
         "expected executor to reject at-cap RateLimitCount witness, got: {result:?}"
+    );
+}
+
+#[test]
+fn executor_rate_limit_by_sum_delta_under_cap_accepts() {
+    let program = CellProgram::Predicate(vec![StateConstraint::RateLimitBySum {
+        slot_index: 0,
+        max_sum_per_epoch: 100,
+        epoch_duration: 1024,
+    }]);
+    let agent_cell = make_cell_with_program(21, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let turn = build_set_field_turn(agent, 0, 0, field_from_u64(60));
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Committed { .. }),
+        "expected executor to accept per-turn sum delta under cap, got: {result:?}"
+    );
+}
+
+#[test]
+fn executor_rate_limit_by_sum_delta_over_cap_rejects() {
+    let program = CellProgram::Predicate(vec![StateConstraint::RateLimitBySum {
+        slot_index: 0,
+        max_sum_per_epoch: 100,
+        epoch_duration: 1024,
+    }]);
+    let agent_cell = make_cell_with_program(22, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let turn = build_set_field_turn(agent, 0, 0, field_from_u64(101));
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Rejected { .. }),
+        "expected executor to reject per-turn sum delta over cap, got: {result:?}"
     );
 }
 
@@ -519,7 +638,6 @@ fn executor_rejects_cell_declaring_bound_delta_variant_today() {
 
 #[test]
 fn executor_sender_authorized_with_membership_witness_accepts() {
-    use dregg_cell::WitnessedPredicateRegistry;
     use dregg_cell::program::AuthorizedSet;
 
     let set_root = [0x31u8; 32];
@@ -528,19 +646,24 @@ fn executor_sender_authorized_with_membership_witness_accepts() {
     }]);
     let agent_cell = make_cell_with_program(20, 1000, program);
     let agent = agent_cell.id();
+    let expected_sender = *agent_cell.public_key();
     let mut ledger = Ledger::new();
     ledger.insert_cell(agent_cell).unwrap();
 
-    let executor = TurnExecutor::new(ComputronCosts::zero())
-        .with_witnessed_registry(WitnessedPredicateRegistry::with_stubs());
+    let executor =
+        TurnExecutor::new(ComputronCosts::zero()).with_witnessed_registry(exact_sender_registry(
+            WitnessedPredicateKind::MerkleMembership,
+            "exact-merkle-membership-executor-test-verifier",
+            set_root,
+            expected_sender,
+            b"valid-membership-proof",
+        ));
     let turn = build_set_field_turn_with_witnesses(
         agent,
         0,
         0,
         set_root,
-        vec![WitnessBlob::merkle_path(
-            b"stub-merkle-membership-proof".to_vec(),
-        )],
+        vec![WitnessBlob::merkle_path(b"valid-membership-proof".to_vec())],
     );
     let result = executor.execute(&turn, &mut ledger);
     assert!(
@@ -550,9 +673,38 @@ fn executor_sender_authorized_with_membership_witness_accepts() {
 }
 
 #[test]
-#[ignore = "blocked on caveat-correctness lane: SenderAuthorized rejects when sender not in set"]
 fn executor_sender_authorized_rejects_non_member() {
-    panic!("blocked");
+    use dregg_cell::program::AuthorizedSet;
+
+    let set_root = [0x32u8; 32];
+    let program = CellProgram::Predicate(vec![StateConstraint::SenderAuthorized {
+        set: AuthorizedSet::PublicRoot { set_root_index: 0 },
+    }]);
+    let agent_cell = make_cell_with_program(23, 1000, program);
+    let agent = agent_cell.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(agent_cell).unwrap();
+
+    let executor =
+        TurnExecutor::new(ComputronCosts::zero()).with_witnessed_registry(exact_sender_registry(
+            WitnessedPredicateKind::MerkleMembership,
+            "exact-merkle-membership-executor-test-verifier",
+            set_root,
+            [0xEEu8; 32],
+            b"valid-membership-proof",
+        ));
+    let turn = build_set_field_turn_with_witnesses(
+        agent,
+        0,
+        0,
+        set_root,
+        vec![WitnessBlob::merkle_path(b"valid-membership-proof".to_vec())],
+    );
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Rejected { .. }),
+        "expected executor to reject SenderAuthorized when registry rejects sender, got: {result:?}"
+    );
 }
 
 // ===========================================================================

@@ -118,6 +118,19 @@ fn make_transfer_ring_turn(a: CellId, b: CellId, c: CellId, nonce: u64) -> Turn 
     builder.fee(0).build()
 }
 
+fn make_transfer_five_ring_turn(cells: [CellId; 5], nonce: u64) -> Turn {
+    let mut builder = TurnBuilder::new(cells[0], nonce);
+    let action = ActionBuilder::new_unchecked_for_tests(cells[0], "five_ring", cells[0])
+        .effect_transfer(cells[0], cells[1], 10)
+        .effect_transfer(cells[1], cells[2], 20)
+        .effect_transfer(cells[2], cells[3], 30)
+        .effect_transfer(cells[3], cells[4], 40)
+        .effect_transfer(cells[4], cells[0], 50)
+        .build();
+    builder.add_action(action);
+    builder.fee(0).build()
+}
+
 fn make_grant_turn(alice: CellId, bob: CellId, target: CellId, nonce: u64) -> Turn {
     let mut builder = TurnBuilder::new(alice, nonce);
     let action = ActionBuilder::new_unchecked_for_tests(alice, "grant", alice)
@@ -481,9 +494,32 @@ fn trilateral_introduce_three_federations_each_sovereign() {
 }
 
 #[test]
-#[ignore = "blocked on γ.2 Phase 2 AIR aggregation: ring of 5 cells, each Transfer pair must agree on its transfer_id; one tampered pair must reject the whole ring"]
 fn five_cell_ring_all_pairs_bound() {
-    panic!("blocked");
+    use dregg_circuit::effect_vm::pi;
+
+    let cells = [
+        CellId([0xA1; 32]),
+        CellId([0xB2; 32]),
+        CellId([0xC3; 32]),
+        CellId([0xD4; 32]),
+        CellId([0xE5; 32]),
+    ];
+    let turn = make_transfer_five_ring_turn(cells, 7);
+    let bundle = fabricated_bundle(&turn, &cells);
+
+    let verdict = verify_bilateral_bundle(&bundle);
+    assert!(verdict.verified, "honest five-cell ring: {verdict:?}");
+    assert_eq!(verdict.transfer_count, 5);
+    assert_eq!(verdict.entry_count, 5);
+
+    let mut tampered = fabricated_bundle(&turn, &cells);
+    tampered.entries[3].witnessed_receipt.public_inputs[pi::INCOMING_TRANSFER_ROOT_BASE] ^= 1;
+
+    let verdict = verify_bilateral_bundle(&tampered);
+    assert!(
+        !verdict.verified,
+        "tampered five-cell ring pair must reject"
+    );
 }
 
 #[test]
