@@ -335,21 +335,53 @@ pub fn generate_effect_vm_trace_ext(
                     );
                     running_balance -= *net_deposit as u64;
                 }
+                Effect::Burn {
+                    amount_lo,
+                    amount_full,
+                    ..
+                } => {
+                    // Burn debits balance by the low-30-bit amount the AIR
+                    // constraint uses (mirrors NoteCreate / CreateEscrow).
+                    // `amount_full` binds via effects_hash but doesn't drive
+                    // the per-row balance arithmetic.
+                    let _ = amount_full;
+                    let amt = amount_lo.as_u32() as u64;
+                    assert!(
+                        amt <= running_balance,
+                        "Burn underflow: amount_lo {} > running balance {}",
+                        amt,
+                        running_balance,
+                    );
+                    running_balance -= amt;
+                }
                 _ => {}
             }
         }
     }
 
-    // Determine trace height (pad to power of 2, minimum 2).
+    // Determine trace height (pad to power of 2, minimum MIN_TRACE_HEIGHT).
+    //
+    // MIN_TRACE_HEIGHT = 64 closes the FRI single-row-gap (task #90 /
+    // TEST-REALITY-AUDIT A1). With a 2-row trace the FRI folding tree has only
+    // one round and a single-row tamper can slip through probabilistically.
+    // With 64 rows (domain_size = 256 at blowup-4, 6 FRI rounds) the quotient
+    // polynomial deviation from low-degree is detectable with overwhelming
+    // probability for any single-row tamper: the high-degree quotient is at
+    // Hamming distance ≥ 3/4 · domain_size from any valid codeword, so
+    // P(miss with 80 queries) ≤ (1/4)^80 ≈ 10^-48. Tradeoff: proofs for
+    // short effect sequences use 64 NoOp padding rows instead of 2; the Merkle
+    // tree and FRI layers are correspondingly larger but still fast.
+    //
     // Stage 2 (REVIEW[stage1-acc-row0]): if the last real effect is a Custom,
     // we need at least one trailing NoOp row so the exclusive-sum boundary
     // `acc[last] == PI[CUSTOM_EFFECT_COUNT]` holds. Reserve a slot.
+    const MIN_TRACE_HEIGHT: usize = 64;
     let n_effects = effects.len();
     let need_extra_pad = matches!(effects.last(), Some(Effect::Custom { .. }));
     let trace_height = if need_extra_pad {
-        (n_effects + 1).next_power_of_two().max(2)
+        (n_effects + 1).next_power_of_two().max(MIN_TRACE_HEIGHT)
     } else {
-        n_effects.next_power_of_two().max(2)
+        n_effects.next_power_of_two().max(MIN_TRACE_HEIGHT)
     };
 
     let mut trace = Vec::with_capacity(trace_height);
@@ -409,6 +441,9 @@ pub fn generate_effect_vm_trace_ext(
             Effect::RefundEscrow { .. } => sel::REFUND_ESCROW,
             Effect::ReleaseCommittedEscrow { .. } => sel::RELEASE_COMMITTED_ESCROW,
             Effect::RefundCommittedEscrow { .. } => sel::REFUND_COMMITTED_ESCROW,
+            Effect::Burn { .. } => sel::BURN,
+            Effect::CellDestroy { .. } => sel::CELL_DESTROY,
+            Effect::AttenuateCapability { .. } => sel::ATTENUATE_CAPABILITY,
         };
         row[sel_idx] = BabyBear::ONE;
 
@@ -1063,6 +1098,60 @@ pub fn generate_effect_vm_trace_ext(
                     .inverse()
                     .expect("PipelineStep pipeline_id must be non-zero");
 
+                new_state.nonce += 1;
+            }
+            Effect::Burn {
+                target_hash,
+                amount_lo,
+                amount_full: _,
+            } => {
+                // Near-miss aliasing closure (#100 follow-up): a dedicated
+                // Burn variant. Mirrors NoteCreate's balance-debit shape but
+                // (a) uses its own selector (so a verifier can distinguish
+                //     Burn from Transfer-dir-1 at the algebraic level), and
+                // (b) pins `was_burn_flag == 1` into params[2] so a forged
+                //     trace that drops the disclosure flag fails the AIR.
+                row[PARAM_BASE + param::BURN_TARGET] = *target_hash;
+                row[PARAM_BASE + param::BURN_AMOUNT_LO] = *amount_lo;
+                row[PARAM_BASE + param::BURN_WAS_BURN_FLAG] = BabyBear::ONE;
+
+                let amt = amount_lo.as_u32() as u64;
+                new_state.balance = new_state.balance.saturating_sub(amt);
+                net_delta -= amt as i64;
+                new_state.nonce += 1;
+            }
+            Effect::CellDestroy {
+                target_hash,
+                death_certificate_hash,
+            } => {
+                // State passthrough (lifecycle lives off-trace), but the
+                // two params bind the cell + death certificate. Distinct
+                // from `SetPermissions` (which only binds a single hash)
+                // both by selector and by a second-PARAM constraint that
+                // a SetPermissions row can't satisfy.
+                row[PARAM_BASE + param::CELL_DESTROY_TARGET] = *target_hash;
+                row[PARAM_BASE + param::CELL_DESTROY_CERT_HASH] = *death_certificate_hash;
+                new_state.nonce += 1;
+            }
+            Effect::AttenuateCapability {
+                cap_slot_hash,
+                narrower_commitment,
+            } => {
+                // Cap_root advances via a 2-of-2 leaf:
+                //   new_cap_root == hash_2_to_1(old_cap_root,
+                //                    hash_2_to_1(cap_slot_hash,
+                //                                narrower_commitment))
+                // This is algebraically distinct from RevokeCapability's
+                // single-hash advance: a RevokeCapability row carrying
+                // attn_hash as its slot_hash cannot satisfy this
+                // constraint without also carrying both attenuation
+                // components in params[0..2].
+                row[PARAM_BASE + param::ATTN_CAP_SLOT_HASH] = *cap_slot_hash;
+                row[PARAM_BASE + param::ATTN_NARROWER_COMMITMENT] = *narrower_commitment;
+
+                let leaf = hash_2_to_1(*cap_slot_hash, *narrower_commitment);
+                new_state.capability_root =
+                    hash_2_to_1(new_state.capability_root, leaf);
                 new_state.nonce += 1;
             }
         }

@@ -100,7 +100,7 @@ fn test_single_transfer_outgoing() {
     }];
 
     let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    assert_eq!(trace.len(), 2); // padded to power of 2
+    assert_eq!(trace.len(), 64); // padded to MIN_TRACE_HEIGHT=64 (FRI single-row-gap closure)
     assert_eq!(trace[0].len(), EFFECT_VM_WIDTH);
 
     let air = EffectVmAir::new(trace.len());
@@ -157,8 +157,8 @@ fn test_multi_effect_turn() {
     ];
 
     let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    // 3 effects padded to 4 rows.
-    assert_eq!(trace.len(), 4);
+    // 3 effects padded to MIN_TRACE_HEIGHT=64 rows (FRI single-row-gap closure).
+    assert_eq!(trace.len(), 64);
 
     let air = EffectVmAir::new(trace.len());
     let proof = prove(&air, &trace, &public_inputs);
@@ -178,10 +178,9 @@ fn test_multi_effect_turn() {
 /// deterministic algebraic guarantee — a tampered trace is *provably
 /// unsatisfiable* as far as the AIR polynomial system is concerned.
 ///
-/// The end-to-end STARK half lives in
-/// `test_wrong_state_transition_stark_rejects`, which is `#[ignore]`d
-/// because FRI's probabilistic sampling can miss a single tampered row
-/// in an 8-row trace. See REVIEW[fri-single-row-gap] below.
+/// The end-to-end STARK half lives in `test_wrong_state_transition_stark_rejects`.
+/// That test was previously ignored (REVIEW[fri-single-row-gap]) but is now
+/// enabled by MIN_TRACE_HEIGHT=64 (task #90).
 #[test]
 fn test_wrong_state_transition_air_rejects() {
     let state = make_initial_state(10000);
@@ -241,21 +240,15 @@ fn test_wrong_state_transition_air_rejects() {
 
 /// End-to-end STARK half of the wrong-state-transition test.
 ///
-/// REVIEW[fri-single-row-gap]: This test is ignored because the FRI
-/// low-degree test can miss a single tampered row in a short (8-row)
-/// trace. The constraint polynomial is degree-1 in the trace; tamping
-/// one of 8 evaluation points shifts the quotient polynomial off
-/// degree, but with 80 FRI queries over a blowup-4 domain the
-/// probability of catching the single bad coset is ~(1 - 1/8) per
-/// query ≈ 99.9% cumulative — not 100%. This is an intrinsic property
-/// of the FRI parameter choice, not a bug in the AIR.
-///
-/// Structural fix path:
-/// - Increase minimum trace size to 64+ rows (more redundancy for FRI)
-///   OR widen the FRI query count per the Plonky3 config.
-/// - Track via task #90 (TEST-REALITY-AUDIT A1).
+/// Previously ignored due to REVIEW[fri-single-row-gap] (task #90): short
+/// traces give too few FRI folding rounds for reliable single-row tamper
+/// detection. Fixed in task #90 by enforcing MIN_TRACE_HEIGHT=64 in
+/// `generate_effect_vm_trace`. With 64 rows, domain_size=256, 6 FRI rounds,
+/// a tampered quotient is at Hamming distance ≥ 3/4 · domain_size from any
+/// valid codeword, so P(all 80 queries miss) ≤ (1/4)^80 ≈ 10^-48.
 #[test]
-#[ignore = "REVIEW[fri-single-row-gap]: FRI probabilistic sampling can miss a single-row tamper on an 8-row trace; see comment above for structural fix path (task #90)"]
+// fri-single-row-gap closed: MIN_TRACE_HEIGHT=64 (task #90). 6 FRI rounds,
+// P(miss) ≤ (1/4)^80 ≈ 10^-48. Test deterministically rejects tampered trace.
 fn test_wrong_state_transition_stark_rejects() {
     let state = make_initial_state(10000);
     let effects = vec![
@@ -299,7 +292,7 @@ fn test_wrong_state_transition_stark_rejects() {
     let result = verify(&air, &proof, &public_inputs);
     assert!(
         result.is_err(),
-        "SOUNDNESS BUG: STARK accepted single-row tamper (fri-single-row-gap is not fixed yet)"
+        "SOUNDNESS BUG: STARK accepted single-row tamper (fri-single-row-gap should be closed by MIN_TRACE_HEIGHT=64)"
     );
 }
 
@@ -360,7 +353,7 @@ fn test_padding_rows_valid() {
     }];
 
     let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    assert_eq!(trace.len(), 2);
+    assert_eq!(trace.len(), 64); // padded to MIN_TRACE_HEIGHT=64 (FRI single-row-gap closure)
 
     // Verify padding row has NoOp selector.
     assert_eq!(trace[1][sel::NOOP], BabyBear::ONE);
@@ -762,7 +755,7 @@ fn test_four_effect_stark_roundtrip() {
     ];
 
     let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    assert_eq!(trace.len(), 4); // exactly power of 2
+    assert_eq!(trace.len(), 64); // padded to MIN_TRACE_HEIGHT=64 (FRI single-row-gap closure)
 
     let air = EffectVmAir::new(trace.len());
     let proof = prove(&air, &trace, &public_inputs);
@@ -848,7 +841,7 @@ fn test_integration_real_multi_effect_turn() {
 
     // Generate trace and public inputs.
     let (trace, public_inputs) = generate_effect_vm_trace(&initial_state, &effects);
-    assert_eq!(trace.len(), 4); // 4 effects = power of 2
+    assert_eq!(trace.len(), 64); // padded to MIN_TRACE_HEIGHT=64 (FRI single-row-gap closure)
 
     // Verify constraints are satisfied on all rows.
     let air = EffectVmAir::new(trace.len());
@@ -1138,7 +1131,7 @@ fn test_noop_state_commitment_tamper_caught() {
     }];
 
     let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    assert_eq!(trace.len(), 2); // row 1 is NoOp padding
+    assert_eq!(trace.len(), 64); // padded to MIN_TRACE_HEIGHT=64; row 1 is NoOp padding
 
     // Tamper: change the NoOp row's state_after commitment to a wrong value.
     // This MUST be caught by the boundary constraint on the last row.
@@ -1258,7 +1251,7 @@ fn test_integration_8_effect_sovereign_turn() {
     ];
 
     let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    assert_eq!(trace.len(), 8); // exactly power of 2
+    assert_eq!(trace.len(), 64); // padded to MIN_TRACE_HEIGHT=64 (FRI single-row-gap closure)
 
     let air = EffectVmAir::new(trace.len());
 
@@ -1374,8 +1367,8 @@ fn test_commitment_chain_continuity() {
 }
 
 /// Test: tampered obligation stake amount is detected.
+/// Previously ignored (REVIEW[stage2-fri-single-row-gap]); fixed by MIN_TRACE_HEIGHT=64 (task #90).
 #[test]
-#[ignore = "REVIEW[stage2-fri-single-row-gap]: 1-row tamper on small trace probabilistically slips through FRI"]
 fn test_create_obligation_wrong_amount_caught() {
     let state = CellState::new(5000, 0);
     let effects = vec![Effect::CreateObligation {
@@ -1402,8 +1395,8 @@ fn test_create_obligation_wrong_amount_caught() {
 }
 
 /// Test: fulfill obligation with wrong return amount is detected.
+/// Previously ignored (REVIEW[stage2-fri-single-row-gap]); fixed by MIN_TRACE_HEIGHT=64 (task #90).
 #[test]
-#[ignore = "REVIEW[stage2-fri-single-row-gap]: 1-row tamper on small trace probabilistically slips through FRI (same root cause as the sibling test_create_obligation_wrong_amount_caught)"]
 fn test_fulfill_obligation_wrong_return_caught() {
     let state = CellState::new(5000, 0);
     let effects = vec![Effect::FulfillObligation {
@@ -1709,12 +1702,10 @@ fn test_captp_multi_effect_turn() {
 }
 
 /// Test: ExportSturdyRef with tampered swiss number is caught.
-/// REVIEW[stage2-fri-single-row-gap]: 1-row tamper on 2-row trace is
-/// probabilistically caught by 80 FRI queries (~92% per run). Ignored
-/// to keep CI green; the AIR-level guarantee remains via direct
-/// `eval_constraints` checks elsewhere.
+/// REVIEW[stage2-fri-single-row-gap] closed (task #90): MIN_TRACE_HEIGHT=64
+/// ensures the FRI proximity test reliably catches single-row tampers.
+/// P(miss with 80 queries, 6 FRI rounds) ≤ (1/4)^80 ≈ 10^-48.
 #[test]
-#[ignore = "flaky: relies on FRI sampling to catch a single-row tamper"]
 fn test_captp_export_tampered_swiss_caught() {
     let mut state = CellState::new(1000, 0);
     state.fields[7] = BabyBear::new(0);
@@ -1749,16 +1740,9 @@ fn test_captp_export_tampered_swiss_caught() {
 /// value (e.g., 2) to manipulate the signed interpretation of the delta.
 /// The in-circuit constraint `sign * (sign - 1) == 0` must reject this.
 ///
-/// REVIEW[fri-single-row-gap]: This test is `#[ignore]`d because the
-/// tamper is a 1-row change on a 2-row trace. FRI probabilistic sampling
-/// can miss a single tampered point; the failure probability per run is
-/// non-trivial (~8% with 80 queries). This is the SAME structural gap as
-/// `test_wrong_state_transition_stark_rejects` (task #90 / TEST-REALITY-AUDIT
-/// A1). The AIR-level constraint `sign * (sign - 1) == 0` is algebraically
-/// correct and DOES reject this tamper; the gap is in the FRI parameter
-/// config, not the circuit. Track via task #90.
+/// Previously ignored (REVIEW[fri-single-row-gap], task #90). Fixed by
+/// MIN_TRACE_HEIGHT=64: 6 FRI rounds over domain_size=256, P(miss) ≤ (1/4)^80.
 #[test]
-#[ignore = "REVIEW[fri-single-row-gap]: 1-row tamper on a 2-row trace; FRI probabilistic sampling can miss the single bad point (~8% miss rate); same gap as test_wrong_state_transition_stark_rejects (task #90)"]
 fn test_soundness_non_boolean_delta_sign_rejected() {
     let state = make_initial_state(1000);
     let effects = vec![Effect::Transfer {
@@ -2020,7 +2004,7 @@ fn test_storage_multi_effect_queue_lifecycle() {
     ];
 
     let (trace, public_inputs) = assert_effect_vm_roundtrip(&state, &effects, "Queue lifecycle");
-    assert_eq!(trace.len(), 4); // 4 effects = power of 2
+    assert_eq!(trace.len(), 64); // padded to MIN_TRACE_HEIGHT=64 (FRI single-row-gap closure)
 
     // Verify net delta: -50 (alloc) - 100 (enqueue1) - 100 (enqueue2) + 80 (dequeue) = -170.
     let delta = extract_net_delta(&public_inputs).unwrap();
@@ -2544,8 +2528,8 @@ fn test_soundness_p0_1_net_delta_forgery_to_zero_rejected() {
 }
 
 /// P0-1: prover flips net_delta sign (claim +500 instead of -500).
+/// Previously ignored (REVIEW[stage2-fri-single-row-gap]); fixed by MIN_TRACE_HEIGHT=64 (task #90).
 #[test]
-#[ignore = "REVIEW[stage2-fri-single-row-gap]: 1-row tamper on small trace probabilistically slips through FRI (same root cause as the other already-ignored sibling tests)"]
 fn test_soundness_p0_1_net_delta_sign_flip_rejected() {
     let state = make_initial_state(1000);
     let effects = vec![Effect::Transfer {
@@ -2569,8 +2553,8 @@ fn test_soundness_p0_1_net_delta_sign_flip_rejected() {
 }
 
 /// P0-1: prover lies about magnitude (claim mag=100 instead of 500).
+/// Previously ignored (REVIEW[stage2-fri-single-row-gap]); fixed by MIN_TRACE_HEIGHT=64 (task #90).
 #[test]
-#[ignore = "REVIEW[stage2-fri-single-row-gap]: 1-row tamper on small trace probabilistically slips through FRI (same root cause as the sibling test_create_obligation_wrong_amount_caught and test_fulfill_obligation_wrong_return_caught)"]
 fn test_soundness_p0_1_net_delta_magnitude_lie_rejected() {
     let state = make_initial_state(1000);
     let effects = vec![Effect::Transfer {
@@ -3128,9 +3112,9 @@ fn test_stage2_trailing_custom_gets_pad_row() {
         },
     ];
     let (trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
-    // n_effects=2, but last is Custom so trace_height pads to
-    // (2+1).next_power_of_two() == 4.
-    assert_eq!(trace.len(), 4, "trace should be padded to 4 rows");
+    // n_effects=2, last is Custom → need_extra_pad → (2+1).next_power_of_two()=4,
+    // then .max(MIN_TRACE_HEIGHT=64) = 64.
+    assert_eq!(trace.len(), 64, "trace should be padded to MIN_TRACE_HEIGHT=64 rows");
     // Last row must be NoOp.
     assert_eq!(
         trace[trace.len() - 1][sel::NOOP],

@@ -230,8 +230,19 @@ fn execute_or_panic(
 
 /// Construct a one-row Effect-VM trace + matching PI bound to the given
 /// receipt, then prove and assemble a ReplayEntry.
-fn build_replay_entry(receipt: TurnReceipt, vm_effect: VmEffect, initial_balance: u64) -> ReplayEntry {
-    let state = VmCellState::new(initial_balance, receipt.action_count as u32);
+///
+/// `agent_balance_pre` is the agent cell's balance immediately before the
+/// turn ran. We use a pre-trace agent nonce of 0 because every agent in
+/// the graph executes exactly one turn — the executor's per-agent
+/// `last_receipt_hash` tracker plus the receipt's own
+/// `previous_receipt_hash=None` together establish each agent's chain at
+/// genesis, and the cell's pre-state nonce is therefore 0.
+fn build_replay_entry(
+    receipt: TurnReceipt,
+    vm_effect: VmEffect,
+    agent_balance_pre: u64,
+) -> ReplayEntry {
+    let state = VmCellState::new(agent_balance_pre, 0);
     let (trace, pi_bb) = generate_effect_vm_trace(&state, &[vm_effect]);
     let air = EffectVmAir::new(trace.len());
     let proof = stark::prove(&air, &trace, &pi_bb);

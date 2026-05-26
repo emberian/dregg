@@ -279,7 +279,14 @@ pub struct EffectVmAir {
 
 impl EffectVmAir {
     pub fn new(max_effects: usize) -> Self {
-        assert!(max_effects >= 2, "Need at least 2 rows for STARK");
+        // MIN 64 rows: closes the FRI single-row-gap (task #90). A short trace
+        // has too few FRI folding rounds for the probabilistic query set to
+        // reliably detect single-row tampering. With 64 rows (domain_size 256
+        // at blowup-4, 6 FRI rounds) the miss probability is negligible.
+        assert!(
+            max_effects >= 64,
+            "Need at least 64 rows for STARK (FRI single-row-gap closure; task #90)"
+        );
         assert!(
             max_effects.is_power_of_two(),
             "max_effects must be a power of 2"
@@ -2027,6 +2034,158 @@ impl StarkAir for EffectVmAir {
                 combined = combined + alpha_pow * c;
                 alpha_pow = alpha_pow * alpha;
             }
+        }
+
+        // ====================================================================
+        // -- Burn: explicit non-conservation balance reduction --
+        //
+        // Near-miss aliasing closure (#100 follow-up). Pre-this-change, the
+        // turn-side `Effect::Burn` was either dropped from the projection or
+        // routed through `VmEffect::Transfer { direction: 1 }`. A verifier
+        // replaying the trace could not distinguish a Burn from a
+        // Transfer-direction-1 algebraically: both rows produce the same
+        // balance-debit shape. Silver Vision honesty: dedicated selector +
+        // dedicated `was_burn_flag == 1` constraint so the proof attests
+        // "this Burn happened" rather than "some balance-debit happened".
+        //
+        // Params:
+        //   params[BURN_TARGET]         = target_hash (folded into effects_hash)
+        //   params[BURN_AMOUNT_LO]      = amount_lo (low 30 bits)
+        //   params[BURN_WAS_BURN_FLAG]  = 1 (constant — the AIR pins this)
+        //
+        // Constraints:
+        //   1. new_bal_lo + amount_lo == old_bal_lo     (balance debit)
+        //   2. new_bal_hi == old_bal_hi                 (single-limb amount)
+        //   3. was_burn_flag == 1                        (disclosure pinning)
+        //   4. cap_root, fields, reserved all passthrough.
+        let s_burn = local[sel::BURN];
+        {
+            let burn_amount = local[PARAM_BASE + param::BURN_AMOUNT_LO];
+            let burn_flag = local[PARAM_BASE + param::BURN_WAS_BURN_FLAG];
+
+            // Balance debit (mirrors NoteCreate's `new = old - amount`).
+            let c_burn_bal_lo = s_burn * (new_bal_lo - old_bal_lo + burn_amount);
+            combined = combined + alpha_pow * c_burn_bal_lo;
+            alpha_pow = alpha_pow * alpha;
+            let c_burn_bal_hi = s_burn * (new_bal_hi - old_bal_hi);
+            combined = combined + alpha_pow * c_burn_bal_hi;
+            alpha_pow = alpha_pow * alpha;
+
+            // Was-burn disclosure flag: MUST be 1 on a Burn row. A trace
+            // that drops the disclosure (sets it to 0) fails the AIR.
+            let c_burn_flag = s_burn * (burn_flag - BabyBear::ONE);
+            combined = combined + alpha_pow * c_burn_flag;
+            alpha_pow = alpha_pow * alpha;
+
+            // cap_root unchanged.
+            let c_burn_cap = s_burn * (new_cap_root - old_cap_root);
+            combined = combined + alpha_pow * c_burn_cap;
+            alpha_pow = alpha_pow * alpha;
+            // fields unchanged.
+            for i in 0..8 {
+                let c = s_burn
+                    * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                        - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
+                combined = combined + alpha_pow * c;
+                alpha_pow = alpha_pow * alpha;
+            }
+            // reserved unchanged (Burn does not seal / unseal / sovereign).
+            let c_burn_reserved = s_burn
+                * (local[STATE_AFTER_BASE + state::RESERVED]
+                    - local[STATE_BEFORE_BASE + state::RESERVED]);
+            combined = combined + alpha_pow * c_burn_reserved;
+            alpha_pow = alpha_pow * alpha;
+        }
+
+        // -- CellDestroy: state-passthrough with dedicated 2-param binding --
+        //
+        // Near-miss aliasing closure (#100 follow-up). Pre-this-change a
+        // `CellDestroy` projected as `SetPermissions { permissions_hash =
+        // death_certificate_hash }` — the proof bound the right bytes but
+        // through the SetPermissions selector. A verifier could not tell a
+        // genuine SetPermissions update from a CellDestroy without trusting
+        // the executor to project honestly.
+        //
+        // The dedicated CellDestroy variant binds BOTH `target_hash`
+        // (params[0]) and `death_certificate_hash` (params[1]) — a
+        // SetPermissions row carrying only one hash in params[0] cannot
+        // satisfy the CellDestroy constraint set (which gates params[1] too).
+        let s_cell_destroy = local[sel::CELL_DESTROY];
+        {
+            // State passthrough: balance, fields, cap_root, reserved all
+            // unchanged. Lifecycle lives off-trace; the binding is via
+            // params -> effects_hash.
+            let c_cd_bal_lo = s_cell_destroy * (new_bal_lo - old_bal_lo);
+            combined = combined + alpha_pow * c_cd_bal_lo;
+            alpha_pow = alpha_pow * alpha;
+            let c_cd_bal_hi = s_cell_destroy * (new_bal_hi - old_bal_hi);
+            combined = combined + alpha_pow * c_cd_bal_hi;
+            alpha_pow = alpha_pow * alpha;
+            let c_cd_cap = s_cell_destroy * (new_cap_root - old_cap_root);
+            combined = combined + alpha_pow * c_cd_cap;
+            alpha_pow = alpha_pow * alpha;
+            for i in 0..8 {
+                let c = s_cell_destroy
+                    * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                        - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
+                combined = combined + alpha_pow * c;
+                alpha_pow = alpha_pow * alpha;
+            }
+            let c_cd_reserved = s_cell_destroy
+                * (local[STATE_AFTER_BASE + state::RESERVED]
+                    - local[STATE_BEFORE_BASE + state::RESERVED]);
+            combined = combined + alpha_pow * c_cd_reserved;
+            alpha_pow = alpha_pow * alpha;
+        }
+
+        // -- AttenuateCapability: cap_root advances via a 2-of-2 leaf --
+        //
+        // Near-miss aliasing closure (#100 follow-up). Pre-this-change
+        // an `AttenuateCapability` projected as
+        // `RevokeCapability { slot_hash = attn_hash }`. Both advance
+        // cap_root via `hash_2_to_1(old_cap_root, X)`; a verifier could
+        // not tell a "narrow this slot" from a "revoke this slot"
+        // attestation algebraically.
+        //
+        // Dedicated AttenuateCapability constraint:
+        //   new_cap_root == hash_2_to_1(old_cap_root,
+        //                     hash_2_to_1(cap_slot_hash,
+        //                                 narrower_commitment))
+        //
+        // A RevokeCapability proof (single-hash advance) cannot satisfy
+        // the nested hash without simultaneously fixing both params to a
+        // pair that hashes to the revoke's `slot_hash` AND switching the
+        // selector — i.e. it would have to be an entirely different proof.
+        let s_attn_cap = local[sel::ATTENUATE_CAPABILITY];
+        {
+            let attn_slot = local[PARAM_BASE + param::ATTN_CAP_SLOT_HASH];
+            let attn_narrower = local[PARAM_BASE + param::ATTN_NARROWER_COMMITMENT];
+
+            let attn_leaf = hash_2_to_1(attn_slot, attn_narrower);
+            let expected_attn_cap = hash_2_to_1(old_cap_root, attn_leaf);
+            let c_attn_cap = s_attn_cap * (new_cap_root - expected_attn_cap);
+            combined = combined + alpha_pow * c_attn_cap;
+            alpha_pow = alpha_pow * alpha;
+
+            // Balance and fields unchanged.
+            let c_attn_bal_lo = s_attn_cap * (new_bal_lo - old_bal_lo);
+            combined = combined + alpha_pow * c_attn_bal_lo;
+            alpha_pow = alpha_pow * alpha;
+            let c_attn_bal_hi = s_attn_cap * (new_bal_hi - old_bal_hi);
+            combined = combined + alpha_pow * c_attn_bal_hi;
+            alpha_pow = alpha_pow * alpha;
+            for i in 0..8 {
+                let c = s_attn_cap
+                    * (local[STATE_AFTER_BASE + state::FIELD_BASE + i]
+                        - local[STATE_BEFORE_BASE + state::FIELD_BASE + i]);
+                combined = combined + alpha_pow * c;
+                alpha_pow = alpha_pow * alpha;
+            }
+            let c_attn_reserved = s_attn_cap
+                * (local[STATE_AFTER_BASE + state::RESERVED]
+                    - local[STATE_BEFORE_BASE + state::RESERVED]);
+            combined = combined + alpha_pow * c_attn_reserved;
+            alpha_pow = alpha_pow * alpha;
         }
 
         // ====================================================================
