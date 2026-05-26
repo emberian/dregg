@@ -4863,8 +4863,12 @@ impl AgentCipherclerk {
                         value: field_element_to_bb(value),
                     });
                 }
-                Effect::GrantCapability { to, cap, .. } if to == cell_id => {
-                    // Hash the capability reference to get a single BabyBear entry.
+                Effect::GrantCapability { from, to, cap, .. } if to == cell_id || from == cell_id => {
+                    // Project from both granter and grantee perspectives.
+                    // The cap_entry is the capability identity being granted/received.
+                    // For the granter (from==cell_id), this records that a cap was sent.
+                    // For the grantee (to==cell_id), this records the cap was received.
+                    // Both perspectives witness a cap_root mutation.
                     let cap_hash = blake3::hash(&cap.slot.to_le_bytes());
                     vm_effects.push(VmEffect::GrantCapability {
                         cap_entry: hash_to_bb(cap_hash.as_bytes()),
