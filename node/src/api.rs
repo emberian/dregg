@@ -255,6 +255,8 @@ pub struct UnlockRequest {
 pub struct UnlockResponse {
     pub success: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub bearer_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -1876,6 +1878,7 @@ async fn post_cclerk_unlock(
     if req.passphrase.is_empty() {
         return Ok(Json(UnlockResponse {
             success: false,
+            bearer_token: None,
             error: Some("passphrase must not be empty".to_string()),
         }));
     }
@@ -1893,12 +1896,15 @@ async fn post_cclerk_unlock(
             {
                 return Ok(Json(UnlockResponse {
                     success: false,
+                    bearer_token: None,
                     error: Some("invalid passphrase".to_string()),
                 }));
             }
             s.unlocked = true;
+            let bearer_token = s.bearer_seed.map(api_bearer_token);
             Ok(Json(UnlockResponse {
                 success: true,
+                bearer_token,
                 error: None,
             }))
         }
@@ -1912,10 +1918,15 @@ async fn post_cclerk_unlock(
             s.unlocked = true;
             Ok(Json(UnlockResponse {
                 success: true,
+                bearer_token: Some(api_bearer_token(bearer_seed)),
                 error: None,
             }))
         }
     }
+}
+
+fn api_bearer_token(bearer_seed: [u8; 32]) -> String {
+    hex_encode(&blake3::derive_key("dregg-api-bearer-v1", &bearer_seed))
 }
 
 /// P1 Fix 4: Rate-limited set-passphrase endpoint.
@@ -3626,14 +3637,21 @@ const FAUCET_TOKEN_ID: [u8; 32] = [0x00; 32];
 pub struct FaucetRequest {
     /// Hex-encoded 32-byte recipient cell ID.
     pub recipient: String,
-    /// Amount of computrons to transfer (max 10000 per request).
+    /// Amount of computrons to transfer (max 10000 per request). Use 0 to
+    /// materialize a hosted devnet cell without claiming faucet funds.
     pub amount: u64,
+    /// Optional hex-encoded Ed25519 public key for the recipient. When set,
+    /// the node verifies `recipient == CellId::derive_raw(public_key, [0;32])`
+    /// and inserts a canonical hosted cell instead of a remote stub.
+    #[serde(default)]
+    pub public_key: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct FaucetResponse {
     pub success: bool,
     pub tx_hash: Option<String>,
+    pub amount: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -3675,12 +3693,14 @@ async fn post_faucet(
     Json(req): Json<FaucetRequest>,
     limiter: FaucetRateLimiter,
 ) -> Result<Json<FaucetResponse>, StatusCode> {
-    // Validate amount.
-    if req.amount == 0 || req.amount > 10_000 {
+    // Validate amount. A zero amount is allowed as a devnet materialization
+    // path for hosted cells; it does not consume faucet rate limit.
+    if req.amount > 10_000 {
         return Ok(Json(FaucetResponse {
             success: false,
             tx_hash: None,
-            error: Some("amount must be between 1 and 10000".to_string()),
+            amount: 0,
+            error: Some("amount must be between 0 and 10000".to_string()),
         }));
     }
 
@@ -3691,16 +3711,46 @@ async fn post_faucet(
             return Ok(Json(FaucetResponse {
                 success: false,
                 tx_hash: None,
+                amount: 0,
                 error: Some("invalid recipient: must be 64 hex characters".to_string()),
             }));
         }
     };
+    let recipient_cell_id = dregg_cell::CellId(recipient_bytes);
+
+    let recipient_public_key = match &req.public_key {
+        Some(pk_hex) => {
+            let pk: [u8; 32] = match hex_decode(pk_hex) {
+                Ok(pk) => pk,
+                Err(_) => {
+                    return Ok(Json(FaucetResponse {
+                        success: false,
+                        tx_hash: None,
+                        amount: 0,
+                        error: Some("invalid public_key: must be 64 hex characters".to_string()),
+                    }));
+                }
+            };
+            let expected = dregg_cell::CellId::derive_raw(&pk, &FAUCET_TOKEN_ID);
+            if expected != recipient_cell_id {
+                return Ok(Json(FaucetResponse {
+                    success: false,
+                    tx_hash: None,
+                    amount: 0,
+                    error: Some("public_key does not derive the recipient cell".to_string()),
+                }));
+            }
+            Some(pk)
+        }
+        None => None,
+    };
 
     // Rate limit check.
-    if !limiter.check(&req.recipient).await {
+    if req.amount > 0 && !limiter.check(&req.recipient).await {
         return Ok(Json(FaucetResponse {
             success: false,
             tx_hash: None,
+            amount: 0,
             error: Some("rate limited: 1 request per cell per minute".to_string()),
         }));
     }
@@ -3715,13 +3765,23 @@ async fn post_faucet(
         let _ = s.ledger.insert_cell(faucet_cell);
     }
 
-    // Ensure the recipient cell exists (create with zero balance if not).
-    let recipient_cell_id = dregg_cell::CellId(recipient_bytes);
+    // Ensure the recipient cell exists. With a public key, create the
+    // canonical hosted cell; otherwise preserve the pre-derived id as a stub.
     if s.ledger.get(&recipient_cell_id).is_none() {
-        // Create a minimal recipient cell. Use the recipient_bytes as both the
-        // public key and derive the ID from it. For devnet this is fine.
-        let recipient_cell = dregg_cell::Cell::with_balance(recipient_bytes, FAUCET_TOKEN_ID, 0);
+        let recipient_cell = match recipient_public_key {
+            Some(pk) => dregg_cell::Cell::with_balance(pk, FAUCET_TOKEN_ID, 0),
+            None => dregg_cell::Cell::remote_stub_with_id_and_balance(recipient_cell_id, 0),
+        };
         let _ = s.ledger.insert_cell(recipient_cell);
+    }
+
+    if req.amount == 0 {
+        return Ok(Json(FaucetResponse {
+            success: true,
+            tx_hash: None,
+            amount: 0,
+            error: None,
+        }));
     }
 
     // Apply the transfer.
@@ -3748,12 +3808,14 @@ async fn post_faucet(
             Ok(Json(FaucetResponse {
                 success: true,
                 tx_hash: Some(tx_hash),
+                amount: req.amount,
                 error: None,
             }))
         }
         Err(e) => Ok(Json(FaucetResponse {
             success: false,
             tx_hash: None,
+            amount: 0,
             error: Some(format!("transfer failed: {e}")),
         })),
     }

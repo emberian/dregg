@@ -54,6 +54,20 @@ pub struct StarbridgeActivity {
     pub timestamp: i64,
 }
 
+/// Discord namespace path backed by a devnet programmable queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StarbridgeQueue {
+    pub namespace_path: String,
+    pub guild_id: String,
+    pub name: String,
+    pub queue_id: String,
+    pub created_by: String,
+    pub acl_role: Option<String>,
+    pub rate_limit: Option<i64>,
+    pub min_deposit: Option<i64>,
+    pub created_at: i64,
+}
+
 /// Database handle wrapping a SQLite connection pool.
 #[derive(Clone)]
 pub struct Database {
@@ -154,6 +168,40 @@ impl Database {
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_starbridge_activity_app_recent
              ON starbridge_activity (app, timestamp DESC, id DESC)",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS starbridge_queues (
+                namespace_path TEXT PRIMARY KEY,
+                guild_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                queue_id TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                acl_role TEXT,
+                rate_limit INTEGER,
+                min_deposit INTEGER,
+                created_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_starbridge_queues_guild
+             ON starbridge_queues (guild_id, name)",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS starbridge_queue_subscriptions (
+                namespace_path TEXT NOT NULL,
+                discord_id TEXT NOT NULL,
+                subscribed_at INTEGER NOT NULL,
+                PRIMARY KEY (namespace_path, discord_id)
+            )",
         )
         .execute(&pool)
         .await?;
@@ -507,6 +555,85 @@ impl Database {
         Ok(rows.into_iter().map(activity_from_row).collect())
     }
 
+    // ─── Starbridge programmable queue host state ─────────────────────────
+
+    pub async fn upsert_starbridge_queue(
+        &self,
+        namespace_path: &str,
+        guild_id: &str,
+        name: &str,
+        queue_id: &str,
+        created_by: &str,
+        acl_role: Option<&str>,
+        rate_limit: Option<i64>,
+        min_deposit: Option<i64>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO starbridge_queues
+             (namespace_path, guild_id, name, queue_id, created_by, acl_role, rate_limit, min_deposit, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(namespace_path)
+        .bind(guild_id)
+        .bind(name)
+        .bind(queue_id)
+        .bind(created_by)
+        .bind(acl_role)
+        .bind(rate_limit)
+        .bind(min_deposit)
+        .bind(chrono_now())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_starbridge_queue(
+        &self,
+        namespace_path: &str,
+    ) -> Result<Option<StarbridgeQueue>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT namespace_path, guild_id, name, queue_id, created_by, acl_role, rate_limit, min_deposit, created_at
+             FROM starbridge_queues
+             WHERE namespace_path = ?",
+        )
+        .bind(namespace_path)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(queue_from_row))
+    }
+
+    pub async fn subscribe_starbridge_queue(
+        &self,
+        namespace_path: &str,
+        discord_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO starbridge_queue_subscriptions
+             (namespace_path, discord_id, subscribed_at)
+             VALUES (?, ?, ?)",
+        )
+        .bind(namespace_path)
+        .bind(discord_id)
+        .bind(chrono_now())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn count_starbridge_queue_subscribers(
+        &self,
+        namespace_path: &str,
+    ) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM starbridge_queue_subscriptions WHERE namespace_path = ?",
+        )
+        .bind(namespace_path)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     /// Ensure extra tables exist (called from connect).
     pub async fn ensure_extra_tables(&self) -> Result<(), sqlx::Error> {
         sqlx::query(
@@ -522,6 +649,20 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+fn queue_from_row(row: sqlx::sqlite::SqliteRow) -> StarbridgeQueue {
+    StarbridgeQueue {
+        namespace_path: row.get("namespace_path"),
+        guild_id: row.get("guild_id"),
+        name: row.get("name"),
+        queue_id: row.get("queue_id"),
+        created_by: row.get("created_by"),
+        acl_role: row.get("acl_role"),
+        rate_limit: row.get("rate_limit"),
+        min_deposit: row.get("min_deposit"),
+        created_at: row.get("created_at"),
     }
 }
 

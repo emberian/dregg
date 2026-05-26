@@ -127,31 +127,68 @@ pub async fn handle_create(ctx: &Context, command: &CommandInteraction, state: &
 
     let namespace_path = format!("/discord/{guild_id}/{name}");
 
-    let url = format!("{}/queues/create", state.config.devnet_url);
-    let mut body = serde_json::json!({
-        "name": name,
-        "namespace_path": namespace_path,
-        "guild_id": guild_id,
-        "creator": state.captp.bot_cell_id,
+    let url = format!("{}/queues/allocate", state.config.devnet_url);
+    let capacity = rate_limit.unwrap_or(1024).max(1) as u64;
+    let body = serde_json::json!({
+        "capacity": capacity,
+        "program_vk": serde_json::Value::Null,
     });
-
-    if let Some(role) = acl_role {
-        body["acl_role"] = serde_json::json!(role);
-    }
-    if let Some(rl) = rate_limit {
-        body["rate_limit"] = serde_json::json!(rl);
-    }
-    if let Some(dep) = deposit {
-        body["min_deposit"] = serde_json::json!(dep);
-    }
 
     let resp = state.devnet.client().post(&url).json(&body).send().await;
 
     match resp {
         Ok(r) if r.status().is_success() => {
+            let allocated: QueueAllocateResponse = match r.json().await {
+                Ok(value) => value,
+                Err(e) => {
+                    let embed = embeds::error_embed("Parse Error", &e.to_string());
+                    let _ = command
+                        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                        .await;
+                    return;
+                }
+            };
+            let acl_role_str = acl_role.map(|role| role.to_string());
+            let actor = command.user.id.get().to_string();
+            if let Err(e) = state
+                .db
+                .upsert_starbridge_queue(
+                    &namespace_path,
+                    &guild_id.to_string(),
+                    &name,
+                    &allocated.queue_id,
+                    &actor,
+                    acl_role_str.as_deref(),
+                    rate_limit,
+                    deposit,
+                )
+                .await
+            {
+                let embed = embeds::error_embed("Queue State Error", &e.to_string());
+                let _ = command
+                    .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                    .await;
+                return;
+            }
+            let _ = state
+                .db
+                .record_starbridge_activity(
+                    "subscription",
+                    "queue.allocate",
+                    &actor,
+                    Some(&guild_id.to_string()),
+                    Some(&namespace_path),
+                    "accepted",
+                    serde_json::json!({
+                        "queue_id": allocated.queue_id,
+                        "capacity": capacity,
+                    }),
+                )
+                .await;
             let embed = embeds::success_embed("Queue Created")
                 .field("Name", &name, true)
                 .field("Path", format!("`{namespace_path}`"), true)
+                .field("Queue ID", short_queue(&allocated.queue_id), true)
                 .field(
                     "Rate Limit",
                     rate_limit.map_or("none".to_string(), |r| format!("{r}/min")),
@@ -204,20 +241,63 @@ pub async fn handle_publish(ctx: &Context, command: &CommandInteraction, state: 
     defer_ephemeral(ctx, command).await;
 
     let namespace_path = format!("/discord/{guild_id}/{name}");
-    let url = format!("{}/queues/publish", state.config.devnet_url);
+    let queue = match state.db.get_starbridge_queue(&namespace_path).await {
+        Ok(Some(queue)) => queue,
+        Ok(None) => {
+            let embed = embeds::warning_embed(
+                "Queue Not Found",
+                &format!("No queue is mounted at `{namespace_path}`. Run `/queue-create` first."),
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Queue State Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+    let url = format!(
+        "{}/queues/{}/enqueue",
+        state.config.devnet_url, queue.queue_id
+    );
     let body = serde_json::json!({
-        "namespace_path": namespace_path,
-        "message": message,
-        "publisher": state.captp.bot_cell_id,
-        "sender_discord_id": command.user.id.get(),
+        "message_hash": message_hash_hex(&message),
+        "deposit": 0,
     });
 
     let resp = state.devnet.client().post(&url).json(&body).send().await;
 
     match resp {
         Ok(r) if r.status().is_success() => {
+            let result: QueueEnqueueResponse = r
+                .json()
+                .await
+                .unwrap_or(QueueEnqueueResponse { position: 0 });
+            let actor = command.user.id.get().to_string();
+            let _ = state
+                .db
+                .record_starbridge_activity(
+                    "subscription",
+                    "queue.enqueue",
+                    &actor,
+                    Some(&guild_id.to_string()),
+                    Some(&namespace_path),
+                    "accepted",
+                    serde_json::json!({
+                        "queue_id": queue.queue_id,
+                        "position": result.position,
+                        "message_hash": message_hash_hex(&message),
+                    }),
+                )
+                .await;
             let embed = embeds::success_embed("Published")
                 .field("Queue", &name, true)
+                .field("Position", result.position.to_string(), true)
                 .field("Message", format!("`{}`", truncate(&message, 100)), false);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -260,37 +340,62 @@ pub async fn handle_subscribe(ctx: &Context, command: &CommandInteraction, state
     defer_ephemeral(ctx, command).await;
 
     let namespace_path = format!("/discord/{guild_id}/{name}");
-    let discord_id = command.user.id.get().to_string();
-    let url = format!("{}/queues/subscribe", state.config.devnet_url);
-    let body = serde_json::json!({
-        "namespace_path": namespace_path,
-        "subscriber_discord_id": discord_id,
-        "subscriber_cell": state.captp.bot_cell_id,
-    });
-
-    let resp = state.devnet.client().post(&url).json(&body).send().await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let embed = embeds::success_embed("Subscribed")
-                .description(format!(
-                    "You will receive DMs when new messages arrive in **{name}**."
-                ))
-                .field("Queue", &name, true)
-                .field("Path", format!("`{namespace_path}`"), true);
+    match state.db.get_starbridge_queue(&namespace_path).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            let embed = embeds::warning_embed(
+                "Queue Not Found",
+                &format!("No queue is mounted at `{namespace_path}`. Run `/queue-create` first."),
+            );
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
+            return;
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            let embed = embeds::error_embed("Subscribe Failed", &body);
+        Err(e) => {
+            let embed = embeds::error_embed("Queue State Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    }
+
+    let discord_id = command.user.id.get().to_string();
+    match state
+        .db
+        .subscribe_starbridge_queue(&namespace_path, &discord_id)
+        .await
+    {
+        Ok(inserted) => {
+            let _ = state
+                .db
+                .record_starbridge_activity(
+                    "subscription",
+                    "queue.subscribe",
+                    &discord_id,
+                    Some(&guild_id.to_string()),
+                    Some(&namespace_path),
+                    if inserted { "accepted" } else { "unchanged" },
+                    serde_json::json!({}),
+                )
+                .await;
+            let embed = embeds::success_embed(if inserted {
+                "Subscribed"
+            } else {
+                "Already Subscribed"
+            })
+            .description(format!(
+                "You will receive DMs when new messages arrive in **{name}**."
+            ))
+            .field("Queue", &name, true)
+            .field("Path", format!("`{namespace_path}`"), true);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
         }
         Err(e) => {
-            let embed = embeds::error_embed("Node Unreachable", &e.to_string());
+            let embed = embeds::error_embed("Subscribe Failed", &e.to_string());
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
@@ -319,16 +424,36 @@ pub async fn handle_status(ctx: &Context, command: &CommandInteraction, state: &
     defer_ephemeral(ctx, command).await;
 
     let namespace_path = format!("/discord/{guild_id}/{name}");
+    let queue = match state.db.get_starbridge_queue(&namespace_path).await {
+        Ok(Some(queue)) => queue,
+        Ok(None) => {
+            let embed = embeds::warning_embed(
+                "Queue Not Found",
+                &format!("No queue is mounted at `{namespace_path}`."),
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Queue State Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
     let url = format!(
-        "{}/queues/status?path={}",
-        state.config.devnet_url, namespace_path
+        "{}/queues/{}/status",
+        state.config.devnet_url, queue.queue_id
     );
 
     let resp = state.devnet.client().get(&url).send().await;
 
     match resp {
         Ok(r) if r.status().is_success() => {
-            let status: QueueStatusResponse = match r.json().await {
+            let status: QueueNodeStatusResponse = match r.json().await {
                 Ok(s) => s,
                 Err(e) => {
                     let embed = embeds::error_embed("Parse Error", &e.to_string());
@@ -338,16 +463,25 @@ pub async fn handle_status(ctx: &Context, command: &CommandInteraction, state: &
                     return;
                 }
             };
+            let subscribers = state
+                .db
+                .count_starbridge_queue_subscribers(&namespace_path)
+                .await
+                .unwrap_or(0);
 
             let embed = embeds::dregg_embed("Queue Status")
                 .field("Name", &name, true)
-                .field("Depth", status.depth.to_string(), true)
-                .field("Subscribers", status.subscribers.to_string(), true)
+                .field("Occupancy", status.occupancy.to_string(), true)
+                .field("Capacity", status.capacity.to_string(), true)
+                .field("Subscribers", subscribers.to_string(), true)
                 .field(
-                    "Total Deposits",
-                    format!("{} computrons", status.total_deposits),
+                    "Rate Limit",
+                    queue
+                        .rate_limit
+                        .map_or("none".to_string(), |r| format!("{r}/min")),
                     true,
                 )
+                .field("Queue ID", short_queue(&status.queue_id), true)
                 .field("Path", format!("`{namespace_path}`"), false);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -391,36 +525,60 @@ pub async fn handle_mount(ctx: &Context, command: &CommandInteraction, state: &B
     defer_ephemeral(ctx, command).await;
 
     let namespace_path = format!("/discord/{guild_id}/{name}");
-    let url = format!("{}/queues/mount", state.config.devnet_url);
-    let body = serde_json::json!({
-        "namespace_path": namespace_path,
-        "external_uri": uri,
-        "mounter": state.captp.bot_cell_id,
-        "guild_id": guild_id,
-    });
+    let Some(queue_id) = queue_id_from_uri(&uri) else {
+        let embed = embeds::error_embed(
+            "Invalid Queue URI",
+            "Mount expects a URI ending in a 64-character hex queue id.",
+        );
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    };
+    let actor = command.user.id.get().to_string();
 
-    let resp = state.devnet.client().post(&url).json(&body).send().await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
+    match state
+        .db
+        .upsert_starbridge_queue(
+            &namespace_path,
+            &guild_id.to_string(),
+            &name,
+            &queue_id,
+            &actor,
+            None,
+            None,
+            None,
+        )
+        .await
+    {
+        Ok(()) => {
+            let _ = state
+                .db
+                .record_starbridge_activity(
+                    "subscription",
+                    "queue.mount",
+                    &actor,
+                    Some(&guild_id.to_string()),
+                    Some(&namespace_path),
+                    "accepted",
+                    serde_json::json!({
+                        "queue_id": queue_id,
+                        "uri": uri,
+                    }),
+                )
+                .await;
             let embed = embeds::success_embed("Queue Mounted")
                 .description("External dregg queue is now accessible in this guild.")
                 .field("Local Name", &name, true)
                 .field("Path", format!("`{namespace_path}`"), true)
+                .field("Queue ID", short_queue(&queue_id), true)
                 .field("External URI", format!("`{}`", truncate(&uri, 60)), false);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
         }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            let embed = embeds::error_embed("Mount Failed", &body);
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
         Err(e) => {
-            let embed = embeds::error_embed("Node Unreachable", &e.to_string());
+            let embed = embeds::error_embed("Mount Failed", &e.to_string());
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
@@ -431,10 +589,22 @@ pub async fn handle_mount(ctx: &Context, command: &CommandInteraction, state: &B
 // ─── Wire types ─────────────────────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
-struct QueueStatusResponse {
-    depth: u64,
-    subscribers: u64,
-    total_deposits: u64,
+struct QueueAllocateResponse {
+    #[serde(rename = "queueId")]
+    queue_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct QueueEnqueueResponse {
+    position: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct QueueNodeStatusResponse {
+    #[serde(rename = "queueId")]
+    queue_id: String,
+    occupancy: u64,
+    capacity: u64,
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -464,6 +634,27 @@ fn truncate(s: &str, max: usize) -> String {
         format!("{}...", &s[..max])
     } else {
         s.to_string()
+    }
+}
+
+fn message_hash_hex(message: &str) -> String {
+    hex::encode(blake3::hash(message.as_bytes()).as_bytes())
+}
+
+fn short_queue(queue_id: &str) -> String {
+    format!("`{}...`", &queue_id[..16.min(queue_id.len())])
+}
+
+fn queue_id_from_uri(uri: &str) -> Option<String> {
+    let candidate = uri
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or_default();
+    if candidate.len() == 64 && candidate.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        Some(candidate.to_ascii_lowercase())
+    } else {
+        None
     }
 }
 

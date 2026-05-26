@@ -210,11 +210,11 @@ impl From<DevnetError> for HttpError {
 fn build_router(state: Arc<BotState>) -> Router {
     Router::new()
         .route("/api/cells", get(list_cells))
-        .route("/api/cell/:id", get(get_cell))
+        .route("/api/cell/{id}", get(get_cell))
         .route("/api/receipts/recent", get(recent_receipts))
         .route("/api/federations", get(list_federations))
         .route("/api/apps", get(list_apps))
-        .route("/api/apps/:id", get(get_app))
+        .route("/api/apps/{id}", get(get_app))
         .route("/api/activity/recent", get(recent_activity))
         .route("/api/intents/recent", get(recent_intents))
         .route("/observability/stream", get(observability_stream))

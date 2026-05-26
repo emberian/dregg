@@ -3,7 +3,9 @@
 use crate::cipherclerk::UserCipherclerk;
 use dregg_sdk::SignedTurn;
 use dregg_turn::Action;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
+use std::env;
 
 /// Client for communicating with the dregg devnet.
 #[derive(Clone)]
@@ -223,9 +225,20 @@ impl std::fmt::Display for DevnetError {
 impl DevnetClient {
     /// Create a new devnet client.
     pub fn new(base_url: &str) -> Self {
+        let mut headers = HeaderMap::new();
+        if let Ok(token) = env::var("DEVNET_API_TOKEN") {
+            if !token.trim().is_empty() {
+                let value = format!("Bearer {}", token.trim());
+                if let Ok(value) = HeaderValue::from_str(&value) {
+                    headers.insert(AUTHORIZATION, value);
+                }
+            }
+        }
+
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             client: reqwest::Client::builder()
+                .default_headers(headers)
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("failed to build HTTP client"),

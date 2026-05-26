@@ -20,14 +20,14 @@
 use std::collections::HashMap;
 
 use dregg_cell::{
-    field_from_u64, AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint,
+    AuthRequired, Cell, CellId, CellProgram, Ledger, Permissions, StateConstraint, field_from_u64,
 };
-use dregg_turn::action::{symbol, WitnessBlob};
+use dregg_turn::action::{WitnessBlob, symbol};
 use dregg_turn::{
     Action, ActionBuilder, Authorization, CallForest, ComputronCosts, DelegationMode, Effect,
     SovereignCellWitness, Turn, TurnBuilder, TurnError, TurnExecutor, TurnResult,
 };
-use dregg_types::{sign, SigningKey};
+use dregg_types::{SigningKey, sign};
 
 fn permissive_cell(seed: u8, balance: u64) -> Cell {
     let mut pk = [0u8; 32];

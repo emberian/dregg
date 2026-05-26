@@ -19,6 +19,11 @@ devnet.dregg.fg-goose.online, dregg.fg-goose.online {
         reverse_proxy localhost:8420
     }
 
+    # Programmable queue endpoints
+    handle /queues/* {
+        reverse_proxy localhost:8420
+    }
+
     # Checkpoint endpoints
     handle /checkpoint/* {
         reverse_proxy localhost:8420

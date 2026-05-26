@@ -1336,7 +1336,7 @@ mod tests {
         {
             let mut q = make_cell_with_seed(5, 0);
             q.state.fields[6] = head_msg_hash; // head pointer
-            // Set queue length to 1 (non-empty).
+                                               // Set queue length to 1 (non-empty).
             q.state.fields[1][..8].copy_from_slice(&1u64.to_le_bytes());
             ledger_honest.insert_cell(q).unwrap();
         }

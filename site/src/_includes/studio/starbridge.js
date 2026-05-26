@@ -104,6 +104,7 @@ function writeUrlState({ at, runtime }) {
   const currentUriEl = document.getElementById('sb-current-uri');
   const currentKindEl = document.getElementById('sb-current-kind');
   const copyUriBtn = document.getElementById('sb-copy-uri');
+  const pinUriBtn = document.getElementById('sb-pin-uri');
   const rawEl      = document.getElementById('sb-raw');
   const rawFilter = document.getElementById('sb-raw-filter');
   const rawCopyBtn = document.getElementById('sb-raw-copy');
@@ -306,6 +307,11 @@ function writeUrlState({ at, runtime }) {
       if (currentUriEl) currentUriEl.textContent = 'no object selected';
       if (currentKindEl) currentKindEl.textContent = 'Dashboard';
       if (copyUriBtn) copyUriBtn.disabled = true;
+      if (pinUriBtn) {
+        pinUriBtn.disabled = true;
+        pinUriBtn.textContent = 'Pin';
+        pinUriBtn.setAttribute('aria-pressed', 'false');
+      }
       return;
     }
     let label = 'Object';
@@ -316,6 +322,111 @@ function writeUrlState({ at, runtime }) {
     if (currentUriEl) currentUriEl.textContent = uri;
     if (currentKindEl) currentKindEl.textContent = label;
     if (copyUriBtn) copyUriBtn.disabled = false;
+    if (pinUriBtn) {
+      const pinned = isPinned(uri);
+      pinUriBtn.disabled = false;
+      pinUriBtn.textContent = pinned ? 'Pinned' : 'Pin';
+      pinUriBtn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+    }
+  }
+
+  function parseKind(uri) {
+    try { return parseRef(uri).kind || 'object'; }
+    catch { return 'object'; }
+  }
+
+  function readPins() {
+    try {
+      const pins = JSON.parse(localStorage.getItem('starbridge.pins') || '[]');
+      return Array.isArray(pins) ? pins.filter((pin) => pin && pin.uri) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function writePins(pins) {
+    try { localStorage.setItem('starbridge.pins', JSON.stringify(pins.slice(0, 80))); } catch {}
+  }
+
+  function isPinned(uri) {
+    return readPins().some((pin) => pin.uri === uri);
+  }
+
+  function pinLabel(uri) {
+    const kind = parseKind(uri);
+    const id = uri.split('/').pop() || uri;
+    return `${kind} ${id.length > 18 ? id.slice(0, 18) + '…' : id}`;
+  }
+
+  function togglePin(uri = currentUri) {
+    if (!uri) return;
+    const pins = readPins();
+    const existing = pins.findIndex((pin) => pin.uri === uri);
+    if (existing >= 0) {
+      const [removed] = pins.splice(existing, 1);
+      writePins(pins);
+      setStatus('unpinned ' + removed.label, 'ready');
+      logActivity('pin', `unpinned ${removed.label}`, { uri });
+    } else {
+      const pin = {
+        uri,
+        label: pinLabel(uri),
+        kind: parseKind(uri),
+        runtime: currentRuntimeId,
+        created_at: new Date().toISOString(),
+      };
+      pins.unshift(pin);
+      writePins(pins);
+      setStatus('pinned ' + pin.label, 'ready');
+      logActivity('pin', `pinned ${pin.label}`, { uri });
+    }
+    updateCurrentContext(currentUri);
+    if (!currentUri) renderInspectorPane(null);
+  }
+
+  function readSnapshots() {
+    try {
+      const snapshots = JSON.parse(localStorage.getItem('starbridge.snapshots') || '[]');
+      return Array.isArray(snapshots) ? snapshots.filter((s) => s && s.id && s.snapshot) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function writeSnapshots(snapshots) {
+    try { localStorage.setItem('starbridge.snapshots', JSON.stringify(snapshots.slice(0, 12))); } catch {}
+  }
+
+  function snapshotLabel(snapshot) {
+    const counts = [
+      `${Array.isArray(snapshot.cells) ? snapshot.cells.length : 0} cells`,
+      `${Array.isArray(snapshot.receipts) ? snapshot.receipts.length : 0} receipts`,
+      `${Array.isArray(snapshot.blocks) ? snapshot.blocks.length : 0} blocks`,
+    ];
+    return `${snapshot.runtime || 'runtime'} · ${counts.join(' · ')}`;
+  }
+
+  function saveSnapshotRecord(snapshot) {
+    const record = {
+      id: `snap-${Date.now().toString(36)}`,
+      label: snapshotLabel(snapshot),
+      created_at: snapshot.generated_at,
+      selected_uri: snapshot.selected_uri,
+      snapshot,
+    };
+    const snapshots = readSnapshots();
+    snapshots.unshift(record);
+    writeSnapshots(snapshots);
+    return record;
+  }
+
+  function openSnapshotRecord(id) {
+    const record = readSnapshots().find((snap) => snap.id === id);
+    if (!record) return;
+    setRawText(JSON.stringify(record.snapshot, null, 2));
+    selectWorkbenchTool('raw');
+    setStatus('snapshot opened', 'ready');
+    logActivity('snapshot', `opened ${record.label}`, { id });
   }
 
   function jumpNavigation(delta) {
@@ -381,6 +492,26 @@ function writeUrlState({ at, runtime }) {
       { group: 'Workbench', label: 'Export snapshot', detail: 'Download runtime JSON snapshot', run: exportSnapshot },
       { group: 'Workbench', label: 'Inspect activity feed', detail: 'Open activity inspector URI', run: () => setCurrentUri('dregg://activity/feed') },
     ];
+
+    for (const snap of readSnapshots()) {
+      items.push({
+        group: 'Snapshots',
+        label: snap.label || 'Snapshot',
+        detail: snap.created_at || snap.id,
+        priority: 4,
+        run: () => openSnapshotRecord(snap.id),
+      });
+    }
+
+    for (const pin of readPins()) {
+      items.push({
+        group: 'Pinned',
+        label: pin.label || pinLabel(pin.uri),
+        detail: pin.uri,
+        priority: 6,
+        run: () => setCurrentUri(pin.uri),
+      });
+    }
 
     for (const id of ['nameservice', 'identity', 'governed-namespace', 'subscription']) {
       const appMeta = appMetaFor(id);
@@ -620,6 +751,8 @@ function writeUrlState({ at, runtime }) {
 
   function renderDashboard() {
     const counts = currentCounts();
+    const pins = readPins();
+    const snapshots = readSnapshots();
     const recent = [];
     for (const cell of readArraySignal(() => runtime?.listCells?.().value).slice(-4).reverse()) {
       const id = cell.cell_id || cell.id || (typeof cell === 'string' ? cell : '');
@@ -642,6 +775,28 @@ function writeUrlState({ at, runtime }) {
           </button>
         `).join('')
       : '<div class="sb__workbench-empty">No runtime objects yet</div>';
+    const pinsHtml = pins.length
+      ? pins.slice(0, 10).map((pin) => `
+          <div class="sb__pin-row">
+            <button type="button" class="sb__workbench-row" data-uri="${escapeHtml(pin.uri)}">
+              <span>${escapeHtml(pin.kind || parseKind(pin.uri))}</span>
+              <strong>${escapeHtml(pin.label || pinLabel(pin.uri))}</strong>
+            </button>
+            <button type="button" class="sb__pin-remove" data-unpin="${escapeHtml(pin.uri)}" title="Remove pin">×</button>
+          </div>
+        `).join('')
+      : '<div class="sb__workbench-empty">No pinned objects</div>';
+    const snapshotsHtml = snapshots.length
+      ? snapshots.slice(0, 6).map((snap) => `
+          <div class="sb__snapshot-row">
+            <button type="button" class="sb__workbench-row" data-snapshot="${escapeHtml(snap.id)}">
+              <span>Snapshot</span>
+              <strong>${escapeHtml(snap.label || 'runtime snapshot')}</strong>
+            </button>
+            <time>${escapeHtml(new Date(snap.created_at || Date.now()).toLocaleTimeString())}</time>
+          </div>
+        `).join('')
+      : '<div class="sb__workbench-empty">No saved snapshots</div>';
     const panel = document.createElement('div');
     panel.className = 'sb__dashboard';
     panel.innerHTML = `
@@ -682,6 +837,14 @@ function writeUrlState({ at, runtime }) {
           <div class="sb__recent-list">${recentHtml}</div>
         </div>
         <div class="sb__workbench-panel">
+          <h3>Pinned Objects</h3>
+          <div class="sb__pin-list">${pinsHtml}</div>
+        </div>
+        <div class="sb__workbench-panel">
+          <h3>Snapshots</h3>
+          <div class="sb__snapshot-list">${snapshotsHtml}</div>
+        </div>
+        <div class="sb__workbench-panel">
           <h3>Direct Inspect</h3>
           <form class="sb__inline-form" data-uri-form>
             <input class="sb__input" name="uri" placeholder="dregg://cell/..." autocomplete="off" spellcheck="false">
@@ -707,6 +870,16 @@ function writeUrlState({ at, runtime }) {
     panel.querySelector('[data-open-palette]')?.addEventListener('click', () => openPalette());
     for (const btn of panel.querySelectorAll('[data-uri]')) {
       btn.addEventListener('click', () => setCurrentUri(btn.dataset.uri));
+    }
+    for (const btn of panel.querySelectorAll('[data-unpin]')) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        togglePin(btn.dataset.unpin);
+        renderInspectorPane(null);
+      });
+    }
+    for (const btn of panel.querySelectorAll('[data-snapshot]')) {
+      btn.addEventListener('click', () => openSnapshotRecord(btn.dataset.snapshot));
     }
     panel.querySelector('[data-uri-form]')?.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -1324,6 +1497,7 @@ function writeUrlState({ at, runtime }) {
         setStatus('copy failed: ' + (err?.message || err), 'err');
       }
     });
+    pinUriBtn?.addEventListener('click', () => togglePin());
     connectBtn?.addEventListener('click', () => {
       if (remoteUrlInput && window.localStorage) {
         localStorage.setItem('dregg.remote.baseUrl', remoteUrlInput.value.trim());
@@ -1499,6 +1673,7 @@ function writeUrlState({ at, runtime }) {
 
   function exportSnapshot() {
     const snapshot = buildSnapshot();
+    const record = saveSnapshotRecord(snapshot);
     const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1509,6 +1684,7 @@ function writeUrlState({ at, runtime }) {
     a.remove();
     URL.revokeObjectURL(url);
     setStatus('snapshot exported', 'ready');
-    consoleLog('snapshot exported', 'ok');
+    consoleLog(`snapshot exported · ${record.label}`, 'ok');
+    logActivity('snapshot', `exported ${record.label}`, { id: record.id });
   }
 })();
