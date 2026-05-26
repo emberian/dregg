@@ -19,6 +19,7 @@ __wip_tests = ["dep:dregg-bridge"]
 
 [dependencies]
 dregg-circuit = { path = "../circuit" }
+dregg-commit = { path = "../commit" }
 dregg-turn = { path = "../turn" }
 dregg-cell = { path = "../cell" }
 dregg-sdk = { path = "../sdk" }

@@ -3422,6 +3422,7 @@ dependencies = [
  "dregg-bridge",
  "dregg-cell",
  "dregg-circuit",
+ "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-sdk",
  "dregg-token",
