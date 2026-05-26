@@ -709,6 +709,34 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--s2);
 }
+.sb__boundary-grid {
+  display: grid;
+  gap: var(--s1);
+}
+.sb__boundary-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: var(--s2);
+  align-items: start;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 0;
+}
+.sb__boundary-row:last-child {
+  border-bottom: 0;
+}
+.sb__boundary-row span {
+  color: var(--fg-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sb__boundary-row strong {
+  min-width: 0;
+  color: var(--fg);
+  font-size: 0.74rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
 .sb__recent-list {
   display: grid;
   gap: var(--s1);
@@ -966,7 +994,7 @@
   border-color: var(--line-strong);
 }
 .dregg-app-list__card.is-unported {
-  background: var(--bg-soft);
+  background: var(--bg-raised);
   opacity: 0.86;
 }
 .dregg-app-list__name {

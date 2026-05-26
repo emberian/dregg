@@ -50,6 +50,7 @@ pub struct StatusResponse {
     pub revocation_count: u64,
     pub note_count: u64,
     pub federation_mode: String,
+    pub public_key: String,
 }
 
 #[derive(Serialize)]
@@ -862,7 +863,7 @@ async fn cors_middleware(req: Request<axum::body::Body>, next: middleware::Next)
         );
         headers.insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,
-            HeaderValue::from_static("Content-Type, Authorization"),
+            HeaderValue::from_static("Content-Type, Authorization, X-Devnet-Key"),
         );
         headers.insert(
             header::ACCESS_CONTROL_MAX_AGE,
@@ -1159,6 +1160,7 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         revocation_count,
         note_count,
         federation_mode,
+        public_key: hex_encode(&s.cclerk.public_key().0),
     })
 }
 

@@ -466,6 +466,16 @@ async fn run_node(
                         if let Some(ci) = genesis["checkpoint_interval"].as_u64() {
                             s.checkpoint_interval = ci;
                         }
+                        let cell_load = materialize_genesis_cells(&genesis, &mut s.ledger);
+                        if cell_load.total() > 0 {
+                            info!(
+                                inserted = cell_load.inserted,
+                                existing = cell_load.existing,
+                                skipped = cell_load.skipped,
+                                invalid = cell_load.invalid,
+                                "processed genesis initial_cells"
+                            );
+                        }
                         info!(genesis = %genesis_path.display(), "genesis configuration loaded");
                     }
                     Err(e) => {
@@ -831,6 +841,113 @@ fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
         *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(bytes)
+}
+
+#[derive(Default)]
+struct GenesisCellLoadStats {
+    inserted: usize,
+    existing: usize,
+    skipped: usize,
+    invalid: usize,
+}
+
+impl GenesisCellLoadStats {
+    fn total(&self) -> usize {
+        self.inserted + self.existing + self.skipped + self.invalid
+    }
+}
+
+/// Materialize supported genesis `initial_cells` entries into the in-memory ledger.
+///
+/// The current cell model can create canonical hosted cells when genesis provides
+/// a public key, token id, and balance. Label-only entries are skipped because
+/// turning an arbitrary label into a signing public key would create cells that
+/// no holder can authorize.
+fn materialize_genesis_cells(
+    genesis: &serde_json::Value,
+    ledger: &mut dregg_cell::Ledger,
+) -> GenesisCellLoadStats {
+    let mut stats = GenesisCellLoadStats::default();
+    let Some(initial_cells) = genesis["initial_cells"].as_array() else {
+        return stats;
+    };
+
+    for cell in initial_cells {
+        let label = cell["id"]
+            .as_str()
+            .or_else(|| cell["name"].as_str())
+            .unwrap_or("<unnamed>");
+
+        let Some(balance) = cell["balance"].as_u64() else {
+            tracing::warn!(cell = %label, "skipping genesis cell without u64 balance");
+            stats.invalid += 1;
+            continue;
+        };
+
+        let Some(public_key_hex) = cell["public_key"].as_str() else {
+            tracing::warn!(
+                cell = %label,
+                "skipping genesis cell without public_key; current ledger needs a public key to materialize a canonical cell",
+            );
+            stats.skipped += 1;
+            continue;
+        };
+        let Some(public_key) = hex_decode_32(public_key_hex) else {
+            tracing::warn!(cell = %label, "skipping genesis cell with malformed public_key");
+            stats.invalid += 1;
+            continue;
+        };
+
+        let token_id = match cell["token_id"].as_str() {
+            Some(token_id_hex) => match hex_decode_32(token_id_hex) {
+                Some(token_id) => token_id,
+                None => {
+                    tracing::warn!(cell = %label, "skipping genesis cell with malformed token_id");
+                    stats.invalid += 1;
+                    continue;
+                }
+            },
+            None => [0u8; 32],
+        };
+
+        let ledger_cell = dregg_cell::Cell::with_balance(public_key, token_id, balance);
+        let cell_id = ledger_cell.id();
+        if let Some(declared_id_hex) = cell["id"].as_str().filter(|id| id.len() == 64) {
+            match hex_decode_32(declared_id_hex) {
+                Some(declared_id) if dregg_cell::CellId(declared_id) == cell_id => {}
+                Some(_) => {
+                    tracing::warn!(
+                        cell = %label,
+                        derived = %dregg_types::hex_encode(&cell_id.0),
+                        "skipping genesis cell whose declared id does not match public_key/token_id",
+                    );
+                    stats.invalid += 1;
+                    continue;
+                }
+                None => {
+                    tracing::warn!(cell = %label, "skipping genesis cell with malformed hex id");
+                    stats.invalid += 1;
+                    continue;
+                }
+            }
+        }
+
+        if ledger.get(&cell_id).is_some() {
+            stats.existing += 1;
+            continue;
+        }
+
+        match ledger.insert_cell(ledger_cell) {
+            Ok(_) => stats.inserted += 1,
+            Err(dregg_cell::LedgerError::CellAlreadyExists(_)) => stats.existing += 1,
+            Err(e) => {
+                tracing::warn!(cell = %label, error = %e, "failed to insert genesis cell");
+                stats.invalid += 1;
+            }
+        }
+    }
+
+    stats
 }
 
 /// Register a peer federation in this node's `known_federations/`

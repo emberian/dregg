@@ -8,8 +8,13 @@ use serenity::all::{
     ModalInteraction,
 };
 
-use dregg_app_framework::{CellId, field_from_bytes};
+use dregg_app_framework::{CellId, FieldElement, field_from_bytes, hex_encode_32};
+use dregg_dfa::{RouteTable, RouteTarget};
 use starbridge_nameservice::{build_register_action, build_set_target_action};
+use starbridge_governed_namespace::{
+    VoteKind, build_propose_table_update_action, build_route_table, build_vote_on_proposal_action,
+    route_table_commitment,
+};
 
 use crate::BotState;
 use crate::cipherclerk::UserCipherclerk;
@@ -404,10 +409,18 @@ fn credential_verify_modal() -> CreateModal {
 
 fn gov_propose_modal() -> CreateModal {
     CreateModal::new(ID_GOV_PROPOSE, "Create Governance Proposal").components(vec![
-        short_row(short_input("type", "Type", "route-amendment").max_length(80)),
+        short_row(short_input("namespace_cell", "Namespace cell id", "64 hex chars").max_length(64)),
+        CreateActionRow::InputText(
+            CreateInputText::new(InputTextStyle::Paragraph, "Routes JSON", "routes_json")
+                .placeholder(r#"[{"path":"/public/*","target":"public"}]"#)
+                .max_length(2000),
+        ),
+        short_row(
+            short_input("dispute_window_height", "Dispute window height", "1000").max_length(20),
+        ),
         CreateActionRow::InputText(
             CreateInputText::new(InputTextStyle::Paragraph, "Description", "description")
-                .placeholder("Describe the route, threshold, parameter, or membership change")
+                .placeholder("Describe the route-table update")
                 .max_length(2000),
         ),
     ])
@@ -415,7 +428,11 @@ fn gov_propose_modal() -> CreateModal {
 
 fn gov_vote_modal() -> CreateModal {
     CreateModal::new(ID_GOV_VOTE, "Vote on Proposal").components(vec![
-        short_row(short_input("proposal_id", "Proposal ID", "proposal-...").max_length(120)),
+        short_row(short_input("namespace_cell", "Namespace cell id", "64 hex chars").max_length(64)),
+        short_row(
+            short_input("prior_proposal_root", "Prior proposal root", "64 hex chars")
+                .max_length(64),
+        ),
         short_row(short_input("vote", "Vote", "yes or no").max_length(8)),
     ])
 }
@@ -632,36 +649,64 @@ async fn submit_gov_propose(modal: &ModalInteraction, state: &BotState) -> Creat
             "Governance proposals must be made in a server.",
         );
     };
-    let proposal_type = modal_value(modal, "type");
+    let namespace_cell_hex = modal_value(modal, "namespace_cell");
+    let routes_json = modal_value(modal, "routes_json");
+    let dispute_window_height = match modal_value(modal, "dispute_window_height").parse::<u64>() {
+        Ok(value) => value,
+        Err(_) => {
+            return embeds::warning_embed(
+                "Invalid Dispute Window",
+                "Dispute window height must be an unsigned integer.",
+            );
+        }
+    };
     let description = modal_value(modal, "description");
-    let proposer = match user_cell(modal.user.id.get(), state).await {
+    if let Err(embed) = hosted_user_cell(modal.user.id.get(), state).await {
+        return embed;
+    }
+    let namespace_cell = match parse_cell_id(&namespace_cell_hex) {
         Ok(cell) => cell,
         Err(embed) => return embed,
     };
-
-    let body = serde_json::json!({
-        "guild_id": guild_id,
-        "proposer": proposer,
-        "proposal_type": proposal_type,
-        "description": description,
-    });
-
+    let route_table = match parse_route_table(&routes_json) {
+        Ok(table) => table,
+        Err(embed) => return embed,
+    };
+    let cclerk = UserCipherclerk::derive(
+        &state.config.bot_secret,
+        modal.user.id.get(),
+        state.federation_id_bytes,
+    );
+    let proposed_root = route_table_commitment(&route_table);
+    let action = build_propose_table_update_action(
+        &cclerk.app,
+        namespace_cell,
+        &route_table,
+        dispute_window_height,
+        &description,
+    );
     match state
         .devnet
-        .client()
-        .post(format!("{}/governance/propose", state.config.devnet_url))
-        .json(&body)
-        .send()
+        .submit_app_action(
+            &cclerk,
+            action,
+            Some(format!("discord:governance:propose:guild:{guild_id}")),
+        )
         .await
     {
-        Ok(resp) if resp.status().is_success() => {
-            let value: serde_json::Value = resp.json().await.unwrap_or_default();
-            embeds::success_embed("Proposal Created")
-                .field("ID", code_field(value.get("proposal_id")), true)
-                .field("Type", proposal_type, true)
-                .field("Description", truncate(&description, 900), false)
-        }
-        Ok(resp) => embeds::error_embed("Proposal Failed", &response_text(resp).await),
+        Ok(result) if result.accepted => embeds::success_embed("Proposal Submitted")
+            .field("Namespace", short_cell(&namespace_cell_hex), true)
+            .field("Proposed Root", format!("`{}`", hex_encode_32(&proposed_root)), false)
+            .field("Dispute Window", dispute_window_height.to_string(), true)
+            .field("Description", truncate(&description, 900), false)
+            .field("Turn", turn_hash_field(result.turn_hash), false),
+        Ok(result) => embeds::error_embed(
+            "Proposal Rejected",
+            result
+                .error
+                .as_deref()
+                .unwrap_or("node rejected the signed governance action"),
+        ),
         Err(e) => embeds::error_embed("Node Unreachable", &e.to_string()),
     }
 }
@@ -673,35 +718,58 @@ async fn submit_gov_vote(modal: &ModalInteraction, state: &BotState) -> CreateEm
             "Governance votes must be cast in a server.",
         );
     };
-    let proposal_id = modal_value(modal, "proposal_id");
+    let namespace_cell_hex = modal_value(modal, "namespace_cell");
+    let prior_proposal_root_hex = modal_value(modal, "prior_proposal_root");
     let vote = modal_value(modal, "vote").to_ascii_lowercase();
-    if vote != "yes" && vote != "no" {
-        return embeds::error_embed("Invalid Vote", "Vote must be `yes` or `no`.");
+    if let Err(embed) = hosted_user_cell(modal.user.id.get(), state).await {
+        return embed;
     }
-    let voter = match user_cell(modal.user.id.get(), state).await {
+    let namespace_cell = match parse_cell_id(&namespace_cell_hex) {
         Ok(cell) => cell,
         Err(embed) => return embed,
     };
-
-    let body = serde_json::json!({
-        "guild_id": guild_id,
-        "proposal_id": proposal_id,
-        "voter": voter,
-        "vote": vote,
-    });
-
+    let prior_proposal_root = match parse_field_hex(&prior_proposal_root_hex) {
+        Ok(root) => root,
+        Err(embed) => return embed,
+    };
+    let vote_kind = match vote.as_str() {
+        "yes" => VoteKind::Approve,
+        "no" => VoteKind::Reject,
+        _ => return embeds::error_embed("Invalid Vote", "Vote must be `yes` or `no`."),
+    };
+    let cclerk = UserCipherclerk::derive(
+        &state.config.bot_secret,
+        modal.user.id.get(),
+        state.federation_id_bytes,
+    );
+    let action = build_vote_on_proposal_action(
+        &cclerk.app,
+        namespace_cell,
+        prior_proposal_root,
+        vote_kind,
+        1,
+    );
     match state
         .devnet
-        .client()
-        .post(format!("{}/governance/vote", state.config.devnet_url))
-        .json(&body)
-        .send()
+        .submit_app_action(
+            &cclerk,
+            action,
+            Some(format!("discord:governance:vote:{vote}:guild:{guild_id}")),
+        )
         .await
     {
-        Ok(resp) if resp.status().is_success() => embeds::success_embed("Vote Cast")
-            .field("Proposal", format!("`{proposal_id}`"), true)
-            .field("Vote", vote, true),
-        Ok(resp) => embeds::error_embed("Vote Failed", &response_text(resp).await),
+        Ok(result) if result.accepted => embeds::success_embed("Vote Submitted")
+            .field("Namespace", short_cell(&namespace_cell_hex), true)
+            .field("Vote", vote, true)
+            .field("Prior Proposal Root", short_cell(&prior_proposal_root_hex), false)
+            .field("Turn", turn_hash_field(result.turn_hash), false),
+        Ok(result) => embeds::error_embed(
+            "Vote Rejected",
+            result
+                .error
+                .as_deref()
+                .unwrap_or("node rejected the signed governance action"),
+        ),
         Err(e) => embeds::error_embed("Node Unreachable", &e.to_string()),
     }
 }
@@ -760,7 +828,7 @@ async fn submit_subscription_create(modal: &ModalInteraction, state: &BotState) 
                     Some(&namespace_path),
                     "accepted",
                     serde_json::json!({
-                        "queue_id": allocated.queue_id,
+                        "queue_id": &allocated.queue_id,
                         "capacity": capacity,
                     }),
                 )
@@ -808,7 +876,7 @@ async fn submit_subscription_publish(modal: &ModalInteraction, state: &BotState)
     };
     let message_hash = message_hash_hex(&message);
     let body = serde_json::json!({
-        "message_hash": message_hash,
+        "message_hash": &message_hash,
         "deposit": 0,
     });
 
@@ -833,9 +901,9 @@ async fn submit_subscription_publish(modal: &ModalInteraction, state: &BotState)
                     Some(&namespace_path),
                     "accepted",
                     serde_json::json!({
-                        "queue_id": queue.queue_id,
+                        "queue_id": &queue.queue_id,
                         "position": result.position,
-                        "message_hash": message_hash,
+                        "message_hash": &message_hash,
                     }),
                 )
                 .await;
@@ -1013,8 +1081,16 @@ fn parse_cell_id(value: &str) -> Result<CellId, CreateEmbed> {
     parse_cell_bytes(value).map(CellId)
 }
 
+fn parse_field_hex(value: &str) -> Result<FieldElement, CreateEmbed> {
+    parse_cell_bytes(value)
+}
+
 fn parse_cell_bytes(value: &str) -> Result<[u8; 32], CreateEmbed> {
-    let bytes = hex::decode(value).map_err(|_| {
+    let trimmed = value
+        .trim()
+        .strip_prefix("dregg://cell/")
+        .unwrap_or_else(|| value.trim());
+    let bytes = hex::decode(trimmed).map_err(|_| {
         embeds::warning_embed(
             "Invalid Cell",
             "Cell IDs must be 64 lowercase hex characters.",
@@ -1023,6 +1099,86 @@ fn parse_cell_bytes(value: &str) -> Result<[u8; 32], CreateEmbed> {
     bytes.try_into().map_err(|_| {
         embeds::warning_embed("Invalid Cell", "Cell IDs must decode to exactly 32 bytes.")
     })
+}
+
+#[derive(serde::Deserialize)]
+struct RouteSpec {
+    path: String,
+    target: serde_json::Value,
+}
+
+fn parse_route_table(value: &str) -> Result<RouteTable, CreateEmbed> {
+    let specs: Vec<RouteSpec> = serde_json::from_str(value).map_err(|e| {
+        embeds::warning_embed(
+            "Invalid Routes JSON",
+            &format!("Expected an array of routes: {e}"),
+        )
+    })?;
+    if specs.is_empty() {
+        return Err(embeds::warning_embed(
+            "Invalid Routes JSON",
+            "At least one route is required.",
+        ));
+    }
+
+    let mut owned = Vec::with_capacity(specs.len());
+    for spec in specs {
+        if spec.path.trim().is_empty() {
+            return Err(embeds::warning_embed(
+                "Invalid Routes JSON",
+                "Route paths cannot be empty.",
+            ));
+        }
+        owned.push((spec.path, parse_route_target(&spec.target)?));
+    }
+    let borrowed: Vec<(&str, RouteTarget)> = owned
+        .iter()
+        .map(|(path, target)| (path.as_str(), target.clone()))
+        .collect();
+    Ok(build_route_table(&borrowed))
+}
+
+fn parse_route_target(value: &serde_json::Value) -> Result<RouteTarget, CreateEmbed> {
+    if let Some(name) = value.as_str() {
+        return Ok(if name == "drop" {
+            RouteTarget::drop()
+        } else {
+            RouteTarget::handler(name)
+        });
+    }
+
+    let obj = value.as_object().ok_or_else(|| {
+        embeds::warning_embed(
+            "Invalid Routes JSON",
+            "Route target must be a string or object.",
+        )
+    })?;
+    if obj.get("drop").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(RouteTarget::drop());
+    }
+    if let Some(handler) = obj.get("handler").and_then(|v| v.as_str()) {
+        return Ok(RouteTarget::handler(handler));
+    }
+    if let Some(federation) = obj.get("federation").and_then(|v| v.as_str()) {
+        return parse_cell_bytes(federation).map(RouteTarget::federation);
+    }
+    match obj.get("type").and_then(|v| v.as_str()) {
+        Some("drop") => Ok(RouteTarget::drop()),
+        Some("handler") => obj
+            .get("value")
+            .and_then(|v| v.as_str())
+            .map(RouteTarget::handler)
+            .ok_or_else(|| embeds::warning_embed("Invalid Routes JSON", "Handler targets need a string `value`.")),
+        Some("federation") => obj
+            .get("value")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| embeds::warning_embed("Invalid Routes JSON", "Federation targets need a hex `value`."))
+            .and_then(|hex| parse_cell_bytes(hex).map(RouteTarget::federation)),
+        _ => Err(embeds::warning_embed(
+            "Invalid Routes JSON",
+            "Target object must contain `handler`, `federation`, `drop`, or a supported `type`.",
+        )),
+    }
 }
 
 fn short_cell(cell: &str) -> String {
@@ -1035,6 +1191,11 @@ fn short_queue(queue_id: &str) -> String {
 
 fn message_hash_hex(message: &str) -> String {
     hex::encode(blake3::hash(message.as_bytes()).as_bytes())
+}
+
+fn turn_hash_field(hash: Option<String>) -> String {
+    hash.map(|hash| format!("`{hash}`"))
+        .unwrap_or_else(|| "`unknown`".to_string())
 }
 
 fn truncate(value: &str, max: usize) -> String {

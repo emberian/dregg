@@ -12,7 +12,7 @@
 //! require pieces of the caveat-correctness lane to land carry an
 //! `#[ignore = "..."]` with unblock label.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use dregg_cell::predicate::{
     PredicateInput, WitnessedPredicate, WitnessedPredicateError, WitnessedPredicateKind,
@@ -28,7 +28,7 @@ use dregg_cell::{
 use dregg_turn::action::{
     Action, Authorization, CommitmentMode, DelegationMode, WitnessBlob, symbol,
 };
-use dregg_turn::{ComputronCosts, Effect, TurnBuilder, TurnExecutor};
+use dregg_turn::{CallForest, ComputronCosts, Effect, Turn, TurnBuilder, TurnExecutor, TurnResult};
 
 fn state_with(field_values: &[(usize, u64)]) -> CellState {
     let mut s = CellState::default();
@@ -160,6 +160,60 @@ fn make_custom_authorized_cell(seed: u8, vk_hash: [u8; 32], program: CellProgram
     };
     cell.program = program;
     cell
+}
+
+fn make_open_programmed_cell(seed: u8, balance: u64, program: CellProgram) -> Cell {
+    let mut public_key = [0u8; 32];
+    public_key[0] = seed;
+    public_key[31] = seed.wrapping_mul(7);
+    let mut cell = Cell::with_balance(public_key, [0u8; 32], balance);
+    cell.permissions = Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    };
+    cell.program = program;
+    cell
+}
+
+fn set_fields_turn(agent: CellId, nonce: u64, effects: Vec<Effect>) -> Turn {
+    let mut forest = CallForest::new();
+    forest.add_root(Action {
+        target: agent,
+        method: symbol("composition_set_fields"),
+        args: vec![],
+        authorization: Authorization::Unchecked,
+        preconditions: Default::default(),
+        effects,
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
+        witness_blobs: vec![],
+    });
+    Turn {
+        agent,
+        nonce,
+        call_forest: forest,
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    }
 }
 
 fn custom_set_field_action(
@@ -646,19 +700,120 @@ fn tampered_auth_custom_rejected_even_when_slot_caveats_pass() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on caveat-correctness multi-cell-eval + γ.2 Phase 1 (STAGE-7-GAMMA-2-PI-DESIGN.md)"]
 fn bilateral_transfer_with_slot_caveats_on_both_sides() {
-    // Both cells declare:
-    //   - BoundDelta { peer_cell = other, EqualAndOpposite } on bal_lo.
-    //   - Sender's cell: RateLimit (max 3/epoch).
-    //   - Receiver's cell: Monotonic on bal_lo.
-    // The γ.2 PI binding (transfer_id) joins the two per-cell proofs;
-    // the slot caveats fire independently on each side. The turn must
-    // be accepted iff:
-    //   - Both BoundDeltas pair correctly (γ.2).
-    //   - Sender's RateLimit is honored.
-    //   - Receiver's bal_lo increase is monotonic.
-    panic!("blocked");
+    use dregg_cell::program::DeltaRelation;
+
+    let mut sender = make_open_programmed_cell(0xA1, 1_000, CellProgram::None);
+    let mut receiver = make_open_programmed_cell(0xB2, 1_000, CellProgram::None);
+    let a_id = sender.id();
+    let b_id = receiver.id();
+
+    sender.program = CellProgram::Predicate(vec![
+        StateConstraint::BoundDelta {
+            local_slot: 0,
+            peer_cell: b_id,
+            peer_slot: 0,
+            delta_relation: DeltaRelation::EqualAndOpposite,
+        },
+        StateConstraint::RateLimit {
+            max_per_epoch: 3,
+            epoch_duration: 16,
+        },
+    ]);
+    receiver.program = CellProgram::Predicate(vec![
+        StateConstraint::BoundDelta {
+            local_slot: 0,
+            peer_cell: a_id,
+            peer_slot: 0,
+            delta_relation: DeltaRelation::EqualAndOpposite,
+        },
+        StateConstraint::Monotonic { index: 0 },
+    ]);
+
+    sender.state.fields[0] = field_from_u64(100);
+    receiver.state.fields[0] = field_from_u64(20);
+    sender.capabilities.grant(b_id, AuthRequired::None).unwrap();
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(sender).unwrap();
+    ledger.insert_cell(receiver).unwrap();
+
+    let turn = set_fields_turn(
+        a_id,
+        0,
+        vec![
+            Effect::SetField {
+                cell: a_id,
+                index: 0,
+                value: field_from_u64(90),
+            },
+            Effect::SetField {
+                cell: b_id,
+                index: 0,
+                value: field_from_u64(30),
+            },
+        ],
+    );
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, TurnResult::Committed { .. }),
+        "matching bilateral BoundDelta plus sender RateLimit and receiver Monotonic must commit, got: {result:?}"
+    );
+
+    let mut bad_sender = make_open_programmed_cell(0xA1, 1_000, CellProgram::None);
+    let mut bad_receiver = make_open_programmed_cell(0xB2, 1_000, CellProgram::None);
+    bad_sender.program = CellProgram::Predicate(vec![
+        StateConstraint::BoundDelta {
+            local_slot: 0,
+            peer_cell: b_id,
+            peer_slot: 0,
+            delta_relation: DeltaRelation::EqualAndOpposite,
+        },
+        StateConstraint::RateLimit {
+            max_per_epoch: 3,
+            epoch_duration: 16,
+        },
+    ]);
+    bad_receiver.program = CellProgram::Predicate(vec![
+        StateConstraint::BoundDelta {
+            local_slot: 0,
+            peer_cell: a_id,
+            peer_slot: 0,
+            delta_relation: DeltaRelation::EqualAndOpposite,
+        },
+        StateConstraint::Monotonic { index: 0 },
+    ]);
+    bad_sender.state.fields[0] = field_from_u64(100);
+    bad_receiver.state.fields[0] = field_from_u64(20);
+    bad_sender
+        .capabilities
+        .grant(b_id, AuthRequired::None)
+        .unwrap();
+
+    let mut bad_ledger = Ledger::new();
+    bad_ledger.insert_cell(bad_sender).unwrap();
+    bad_ledger.insert_cell(bad_receiver).unwrap();
+    let bad_turn = set_fields_turn(
+        a_id,
+        0,
+        vec![
+            Effect::SetField {
+                cell: a_id,
+                index: 0,
+                value: field_from_u64(110),
+            },
+            Effect::SetField {
+                cell: b_id,
+                index: 0,
+                value: field_from_u64(10),
+            },
+        ],
+    );
+    let bad_result = TurnExecutor::new(ComputronCosts::zero()).execute(&bad_turn, &mut bad_ledger);
+    assert!(
+        matches!(bad_result, TurnResult::Rejected { .. }),
+        "BoundDelta-valid transfer must still reject when receiver Monotonic fails, got: {bad_result:?}"
+    );
 }
 
 // ===========================================================================
@@ -666,12 +821,109 @@ fn bilateral_transfer_with_slot_caveats_on_both_sides() {
 // ===========================================================================
 
 #[test]
-#[ignore = "blocked on caveat-correctness multi-cell-eval: 3-cell BoundDelta ring"]
 fn three_cell_ring_trade_bound_delta() {
-    // A pays B, B pays C, C pays A — net delta on every cell = 0.
-    // Each cell declares BoundDelta pointing at its successor in the ring.
-    // The γ.2 match loop must verify the three pairings.
-    panic!("blocked");
+    use dregg_cell::program::DeltaRelation;
+
+    let program_for = |peer_cell| {
+        CellProgram::Predicate(vec![StateConstraint::BoundDelta {
+            local_slot: 0,
+            peer_cell,
+            peer_slot: 0,
+            delta_relation: DeltaRelation::Equal,
+        }])
+    };
+
+    let mut cell_a = make_open_programmed_cell(0xA1, 1_000, CellProgram::None);
+    let mut cell_b = make_open_programmed_cell(0xB2, 1_000, CellProgram::None);
+    let mut cell_c = make_open_programmed_cell(0xC3, 1_000, CellProgram::None);
+    let a = cell_a.id();
+    let b = cell_b.id();
+    let c = cell_c.id();
+    cell_a.program = program_for(b);
+    cell_b.program = program_for(c);
+    cell_c.program = program_for(a);
+    cell_a.state.fields[0] = field_from_u64(10);
+    cell_b.state.fields[0] = field_from_u64(20);
+    cell_c.state.fields[0] = field_from_u64(30);
+    cell_a.capabilities.grant(b, AuthRequired::None).unwrap();
+    cell_a.capabilities.grant(c, AuthRequired::None).unwrap();
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(cell_a).unwrap();
+    ledger.insert_cell(cell_b).unwrap();
+    ledger.insert_cell(cell_c).unwrap();
+    let result = TurnExecutor::new(ComputronCosts::zero()).execute(
+        &set_fields_turn(
+            a,
+            0,
+            vec![
+                Effect::SetField {
+                    cell: a,
+                    index: 0,
+                    value: field_from_u64(15),
+                },
+                Effect::SetField {
+                    cell: b,
+                    index: 0,
+                    value: field_from_u64(25),
+                },
+                Effect::SetField {
+                    cell: c,
+                    index: 0,
+                    value: field_from_u64(35),
+                },
+            ],
+        ),
+        &mut ledger,
+    );
+    assert!(
+        matches!(result, TurnResult::Committed { .. }),
+        "three-cell BoundDelta ring with all peer deltas paired must commit, got: {result:?}"
+    );
+
+    let mut bad_a = make_open_programmed_cell(0xA1, 1_000, CellProgram::None);
+    let mut bad_b = make_open_programmed_cell(0xB2, 1_000, CellProgram::None);
+    let mut bad_c = make_open_programmed_cell(0xC3, 1_000, CellProgram::None);
+    bad_a.program = program_for(b);
+    bad_b.program = program_for(c);
+    bad_c.program = program_for(a);
+    bad_a.state.fields[0] = field_from_u64(10);
+    bad_b.state.fields[0] = field_from_u64(20);
+    bad_c.state.fields[0] = field_from_u64(30);
+    bad_a.capabilities.grant(b, AuthRequired::None).unwrap();
+    bad_a.capabilities.grant(c, AuthRequired::None).unwrap();
+    let mut bad_ledger = Ledger::new();
+    bad_ledger.insert_cell(bad_a).unwrap();
+    bad_ledger.insert_cell(bad_b).unwrap();
+    bad_ledger.insert_cell(bad_c).unwrap();
+    let bad_result = TurnExecutor::new(ComputronCosts::zero()).execute(
+        &set_fields_turn(
+            a,
+            0,
+            vec![
+                Effect::SetField {
+                    cell: a,
+                    index: 0,
+                    value: field_from_u64(15),
+                },
+                Effect::SetField {
+                    cell: b,
+                    index: 0,
+                    value: field_from_u64(25),
+                },
+                Effect::SetField {
+                    cell: c,
+                    index: 0,
+                    value: field_from_u64(34),
+                },
+            ],
+        ),
+        &mut bad_ledger,
+    );
+    assert!(
+        matches!(bad_result, TurnResult::Rejected { .. }),
+        "three-cell BoundDelta ring with one unpaired delta must reject, got: {bad_result:?}"
+    );
 }
 
 // ===========================================================================

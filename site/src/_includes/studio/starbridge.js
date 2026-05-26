@@ -367,24 +367,27 @@ function writeUrlState({ at, runtime }) {
   }
 
   function fallbackAppMeta(id) {
+    const base = FALLBACK_APPS[id] || {};
+    const hasPage = Object.prototype.hasOwnProperty.call(base, 'page');
     return {
-      ...(FALLBACK_APPS[id] || {}),
+      ...base,
       id,
-      name: FALLBACK_APPS[id]?.name || id.replace(/-/g, ' '),
-      description: FALLBACK_APPS[id]?.description || 'starbridge-app userspace surface',
-      page: FALLBACK_APPS[id]?.page || `/starbridge-apps/${id}/pages/index.html`,
+      name: base.name || id.replace(/-/g, ' '),
+      description: base.description || 'starbridge-app userspace surface',
+      page: hasPage ? base.page : `/starbridge-apps/${id}/pages/index.html`,
     };
   }
 
   function normalizeAppMeta(meta, id) {
     const fallback = fallbackAppMeta(id || meta?.id);
+    const metaHasPage = Object.prototype.hasOwnProperty.call(meta || {}, 'page');
     return {
       ...fallback,
       ...(meta || {}),
       id: meta?.id || fallback.id,
       name: meta?.name || fallback.name,
       description: meta?.description || fallback.description,
-      page: meta?.page || fallback.page,
+      page: metaHasPage ? meta.page : fallback.page,
       inspectors: Array.isArray(meta?.inspectors) ? meta.inspectors : (fallback.inspectors || []),
       turn_builders: Array.isArray(meta?.turn_builders) ? meta.turn_builders : (fallback.turn_builders || []),
       required_apis: Array.isArray(meta?.required_apis) ? meta.required_apis : (fallback.required_apis || []),
@@ -949,10 +952,53 @@ function writeUrlState({ at, runtime }) {
     }
   }
 
+  function runtimeBoundaryRows() {
+    const caps = runtime?.caps || {};
+    const status = readSignal(() => runtime.getExtensionStatus(), null);
+    const balance = readSignal(() => runtime.getBalance(), null);
+    const rows = [
+      ['Runtime', runtimeLabel()],
+      ['Mutation', caps.mutate ? 'enabled in this browser runtime' : 'not exposed by this runtime'],
+      ['Cell hosting', currentRuntimeId === 'in-memory'
+        ? 'local wasm simulation only'
+        : currentRuntimeId === 'extension'
+          ? 'node ledger required; extension stores keys/tokens/receipts'
+          : 'remote node owns ledger state'],
+      ['Offline queue', currentRuntimeId === 'extension'
+        ? 'not a durable turn outbox yet'
+        : currentRuntimeId === 'in-memory'
+          ? 'local-only, not chain-synced'
+          : 'read-only'],
+      ['Node path', currentRuntimeId === 'extension'
+        ? 'window.dregg -> extension background -> configured node HTTP/WS'
+        : currentRuntimeId === 'remote'
+          ? 'browser fetch/EventSource to configured node'
+          : 'none'],
+      ['Trust boundary', currentRuntimeId === 'extension'
+        ? 'extension signs; node WS messages require /status public_key'
+        : currentRuntimeId === 'remote'
+          ? 'node data over HTTP/SSE; no signing controls'
+          : 'simulator receipts are placeholders unless proof data exists'],
+    ];
+    if (status) {
+      rows.push(['Node status', status.error ? `error: ${status.error}` : `${status.mode || 'unknown'} · height ${status.height ?? 0}`]);
+    }
+    if (balance) {
+      rows.push(['Balance', balance.error ? `error: ${balance.error}` : `${balance.balance ?? 'unknown'}`]);
+    }
+    return rows;
+  }
+
   function renderDashboard() {
     const counts = currentCounts();
     const pins = readPins();
     const snapshots = readSnapshots();
+    const boundaryHtml = runtimeBoundaryRows().map(([label, value]) => `
+      <div class="sb__boundary-row">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+      </div>
+    `).join('');
     const recent = [];
     for (const cell of readArraySignal(() => runtime?.listCells?.().value).slice(-4).reverse()) {
       const id = cell.cell_id || cell.id || (typeof cell === 'string' ? cell : '');
@@ -1055,6 +1101,10 @@ function writeUrlState({ at, runtime }) {
             <button type="button" class="sb__flow" data-flow="federation"><span>Consensus</span><strong>federation block</strong></button>
             <button type="button" class="sb__flow" data-flow="intent"><span>Intent</span><strong>storage need</strong></button>
           </div>
+        </div>
+        <div class="sb__workbench-panel">
+          <h3>Runtime Boundary</h3>
+          <div class="sb__boundary-grid">${boundaryHtml}</div>
         </div>
         <div class="sb__workbench-panel">
           <h3>Recent Objects</h3>
