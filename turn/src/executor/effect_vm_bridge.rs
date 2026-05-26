@@ -800,42 +800,49 @@ pub(super) fn convert_turn_effects_to_vm(
                 Effect::EnlivenRef {
                     swiss_number,
                     bearer,
+                    expected_cell_id,
+                    expected_permissions,
                 } if bearer == cell_id => {
                     // Project: AIR's EnlivenRef proves swiss-table
-                    // membership of the entry. The presenter is the
-                    // bearer cell. P1.C will tighten this to a real
-                    // Merkle membership proof against the target
-                    // cell's swiss_table_root.
+                    // membership of the entry via the 1-hop Merkle
+                    // chain
+                    //   new_root = hash(leaf, old_root)
+                    //   leaf     = hash(swiss, hash(cell_id, perms))
+                    // against the bearer's `swiss_table_root` slot in
+                    // `state.fields[4]`.
                     //
-                    // CLOSED-PARTIALLY block1-bind:
-                    // The bearer's swiss_table_root lives in
-                    // `bearer.state.fields[6]` (the swiss-table commit).
-                    // We now anchor `expected_cell_id` via a domain-tagged
-                    // hash of (swiss_number, bearer_swiss_root) so the
-                    // AIR's leaf-derivation is bound to actual ledger
-                    // state, not just the synthetic (swiss, bearer)
-                    // pair. A full closure binds `expected_permissions`
-                    // to the swiss-table entry; that requires walking
-                    // the table (off-AIR Merkle proof), tracked in
-                    // BLOCK1-BIND-CLOSURE-NOTES.md as
-                    // `EnlivenRef-permissions-merkle`.
+                    // CLOSED block1-bind
+                    // (`EnlivenRef-permissions-merkle`): both
+                    // `expected_cell_id` and `expected_permissions`
+                    // now project from the runtime variant directly.
+                    // The apply gate
+                    // (`apply.rs::EnlivenRef`) validates that the
+                    // bearer's c-list contains a capability for
+                    // `expected_cell_id` with a tier covering the
+                    // declared `expected_permissions`, so a forged
+                    // variant cannot bind into the swiss_table_root
+                    // chain without an underlying real capability.
                     let swiss_bb = hash_to_bb(swiss_number);
                     let presenter_bb = hash_to_bb(bearer.as_bytes());
-                    let swiss_root = ledger
-                        .get(bearer)
-                        .map(|c| c.state.fields[6])
-                        .unwrap_or([0u8; 32]);
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update(b"PYANA_SWISS_TABLE_LOOKUP/v2");
-                    hasher.update(swiss_number);
-                    hasher.update(bearer.as_bytes());
-                    hasher.update(&swiss_root);
-                    let expected_cell_id_bb = hash_to_bb(hasher.finalize().as_bytes());
+                    let expected_cell_id_bb = hash_to_bb(expected_cell_id.as_bytes());
+                    let permissions_bb = match expected_permissions {
+                        pyana_cell::permissions::AuthRequired::None => BabyBear::new(0),
+                        pyana_cell::permissions::AuthRequired::Signature => BabyBear::new(1),
+                        pyana_cell::permissions::AuthRequired::Proof => BabyBear::new(2),
+                        pyana_cell::permissions::AuthRequired::Either => BabyBear::new(3),
+                        pyana_cell::permissions::AuthRequired::Impossible => BabyBear::new(4),
+                        pyana_cell::permissions::AuthRequired::Custom { vk_hash } => {
+                            let mut h = blake3::Hasher::new();
+                            h.update(&[5u8]);
+                            h.update(vk_hash);
+                            hash_to_bb(h.finalize().as_bytes())
+                        }
+                    };
                     vm_effects.push(VmEffect::EnlivenRef {
                         swiss_number: swiss_bb,
                         presenter_id: presenter_bb,
                         expected_cell_id: expected_cell_id_bb,
-                        expected_permissions: BabyBear::ZERO,
+                        expected_permissions: permissions_bb,
                     });
                 }
                 Effect::DropRef { ref_id } => {

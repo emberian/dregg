@@ -244,10 +244,25 @@ pub fn export_sturdy_ref_effect(
 }
 
 /// Build the `Effect::EnlivenRef` for an `EnlivenSturdyRef` wire message.
-pub fn enliven_ref_effect(swiss_number: [u8; 32], bearer: CellId) -> Effect {
+///
+/// `expected_cell_id` and `expected_permissions` come from the swiss-
+/// table entry the wire layer's `SwissTable::enliven` returned for
+/// `swiss_number` (block1-bind closure
+/// `EnlivenRef-permissions-merkle`). The apply site cross-checks the
+/// bearer's c-list for a capability that covers the declared tier;
+/// passing forged values that don't match the bearer's authority
+/// produces an executor rejection.
+pub fn enliven_ref_effect(
+    swiss_number: [u8; 32],
+    bearer: CellId,
+    expected_cell_id: CellId,
+    expected_permissions: pyana_cell::permissions::AuthRequired,
+) -> Effect {
     Effect::EnlivenRef {
         swiss_number,
         bearer,
+        expected_cell_id,
+        expected_permissions,
     }
 }
 
@@ -312,7 +327,12 @@ mod tests {
             Effect::ExportSturdyRef { .. }
         ));
         assert!(matches!(
-            enliven_ref_effect([0u8; 32], cell),
+            enliven_ref_effect(
+                [0u8; 32],
+                cell,
+                CellId::from_bytes([8u8; 32]),
+                pyana_cell::permissions::AuthRequired::None
+            ),
             Effect::EnlivenRef { .. }
         ));
         assert!(matches!(drop_ref_effect([0u8; 32]), Effect::DropRef { .. }));

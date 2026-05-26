@@ -224,6 +224,185 @@ fn export_sturdy_ref_permissions_distinct_effects_hash() {
     );
 }
 
+// ============================================================================
+// SITE 1: EnlivenRef.expected_permissions — runtime-variant extension +
+// bearer-c-list cross-check.
+// ============================================================================
+
+/// Honest path: the bearer's c-list grants a capability for
+/// `expected_cell_id` with tier covering `expected_permissions`. Apply
+/// succeeds.
+#[test]
+fn enliven_ref_honest_path_accepted() {
+    let target = make_cell(2, 0, open_permissions());
+    let target_id = target.id();
+    // Bearer holds a c-list entry for `target_id` with tier=None.
+    let mut bearer = make_cell(3, 0, open_permissions());
+    bearer
+        .capabilities
+        .grant(target_id, AuthRequired::None)
+        .unwrap();
+    let bearer_id = bearer.id();
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(target).unwrap();
+    ledger.insert_cell(bearer).unwrap();
+
+    let effect = Effect::EnlivenRef {
+        swiss_number: [0x99u8; 32],
+        bearer: bearer_id,
+        expected_cell_id: target_id,
+        expected_permissions: AuthRequired::None,
+    };
+    let turn = single_effect_turn(bearer_id, bearer_id, 0, effect);
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    match executor.execute(&turn, &mut ledger) {
+        pyana_turn::TurnResult::Committed { .. } => { /* expected */ }
+        other => panic!(
+            "honest EnlivenRef must commit, got {:?}",
+            short(&other)
+        ),
+    }
+}
+
+/// Adversarial: the bearer holds no capability for `expected_cell_id`.
+/// The c-list lookup fails → apply gate rejects. Without this check,
+/// the AIR's `expected_cell_id` PARAM (and the leaf bound into the
+/// swiss_table_root chain) would attest a capability the bearer never
+/// held.
+#[test]
+fn enliven_ref_rejects_no_capability_for_expected_cell() {
+    let target = make_cell(2, 0, open_permissions());
+    let target_id = target.id();
+    let other_cell_id = CellId([0xEEu8; 32]); // bearer has NO cap for this
+    let bearer = make_cell(3, 0, open_permissions());
+    let bearer_id = bearer.id();
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(target).unwrap();
+    ledger.insert_cell(bearer).unwrap();
+
+    let effect = Effect::EnlivenRef {
+        swiss_number: [0x99u8; 32],
+        bearer: bearer_id,
+        expected_cell_id: other_cell_id, // forged: not in bearer's c-list
+        expected_permissions: AuthRequired::None,
+    };
+    let turn = single_effect_turn(bearer_id, bearer_id, 0, effect);
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    match executor.execute(&turn, &mut ledger) {
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            let s = format!("{reason:?}");
+            assert!(
+                s.contains("EnlivenRef") && s.contains("no"),
+                "expected no-capability rejection, got: {s}"
+            );
+        }
+        other => panic!(
+            "expected Rejected for forged expected_cell_id, got {:?}",
+            short(&other)
+        ),
+    }
+}
+
+/// Adversarial: bearer holds the c-list entry but only at tier
+/// `Signature`; the variant declares `expected_permissions: None`
+/// (wider than the held authority). The narrower-or-equal check
+/// fails — the bearer cannot enliven authority broader than it
+/// actually holds.
+#[test]
+fn enliven_ref_rejects_wider_than_held_capability() {
+    let target = make_cell(2, 0, open_permissions());
+    let target_id = target.id();
+    let mut bearer = make_cell(3, 0, open_permissions());
+    // Bearer's cap requires Signature → declaring None is widening.
+    bearer
+        .capabilities
+        .grant(target_id, AuthRequired::Signature)
+        .unwrap();
+    let bearer_id = bearer.id();
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(target).unwrap();
+    ledger.insert_cell(bearer).unwrap();
+
+    let effect = Effect::EnlivenRef {
+        swiss_number: [0x99u8; 32],
+        bearer: bearer_id,
+        expected_cell_id: target_id,
+        expected_permissions: AuthRequired::None, // widening
+    };
+    let turn = single_effect_turn(bearer_id, bearer_id, 0, effect);
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    match executor.execute(&turn, &mut ledger) {
+        pyana_turn::TurnResult::Rejected { reason, .. } => {
+            let s = format!("{reason:?}");
+            assert!(
+                s.contains("EnlivenRef") && s.contains("tier"),
+                "expected widening rejection, got: {s}"
+            );
+        }
+        other => panic!(
+            "expected Rejected for wider expected_permissions, got {:?}",
+            short(&other)
+        ),
+    }
+}
+
+/// Soundness: two EnlivenRef effects identical except for
+/// `expected_permissions` produce distinct effects_hashes — a forged
+/// permissions value cannot be substituted without invalidating the
+/// receipt commitment that the verifier checks.
+#[test]
+fn enliven_ref_permissions_distinct_effects_hash() {
+    let bearer = CellId([0x77u8; 32]);
+    let target = CellId([0x88u8; 32]);
+    let a = Effect::EnlivenRef {
+        swiss_number: [0xCDu8; 32],
+        bearer,
+        expected_cell_id: target,
+        expected_permissions: AuthRequired::Signature,
+    };
+    let b = Effect::EnlivenRef {
+        swiss_number: [0xCDu8; 32],
+        bearer,
+        expected_cell_id: target,
+        expected_permissions: AuthRequired::Proof,
+    };
+    assert_ne!(
+        a.hash(),
+        b.hash(),
+        "EnlivenRef effects_hash must distinguish expected_permissions tier"
+    );
+}
+
+/// Soundness complement: two EnlivenRef effects identical except for
+/// `expected_cell_id` produce distinct effects_hashes.
+#[test]
+fn enliven_ref_expected_cell_id_distinct_effects_hash() {
+    let bearer = CellId([0x77u8; 32]);
+    let a = Effect::EnlivenRef {
+        swiss_number: [0xCDu8; 32],
+        bearer,
+        expected_cell_id: CellId([0x11u8; 32]),
+        expected_permissions: AuthRequired::None,
+    };
+    let b = Effect::EnlivenRef {
+        swiss_number: [0xCDu8; 32],
+        bearer,
+        expected_cell_id: CellId([0x22u8; 32]),
+        expected_permissions: AuthRequired::None,
+    };
+    assert_ne!(
+        a.hash(),
+        b.hash(),
+        "EnlivenRef effects_hash must distinguish expected_cell_id"
+    );
+}
+
 fn short(r: &pyana_turn::TurnResult) -> String {
     match r {
         pyana_turn::TurnResult::Committed { .. } => "Committed".into(),

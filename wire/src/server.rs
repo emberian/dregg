@@ -2776,7 +2776,21 @@ impl SiloServer {
                         };
                         let bearer_cell = entry.cell_id;
                         // Stage 7 / P1.B: route the EnlivenRef as a Turn.
-                        let effect = captp_routing::enliven_ref_effect(uri.swiss, bearer_cell);
+                        //
+                        // Block1-bind closure
+                        // (`EnlivenRef-permissions-merkle`): the swiss-
+                        // table entry carries the canonical
+                        // (cell_id, permissions) pair the AIR's PI
+                        // will bind. We project both onto the runtime
+                        // variant so the apply gate can validate the
+                        // bearer's c-list authority covers the
+                        // declared tier.
+                        let effect = captp_routing::enliven_ref_effect(
+                            uri.swiss,
+                            bearer_cell,
+                            entry.cell_id,
+                            entry.permissions.clone(),
+                        );
                         let turn =
                             captp_routing::build_captp_turn(agent_cell, bearer_cell, effect, 0);
                         captp.pending_captp_turns.push(turn);

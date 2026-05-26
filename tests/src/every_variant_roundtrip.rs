@@ -479,6 +479,8 @@ fn all_effect_variants() -> Vec<Variant> {
             effect: Effect::EnlivenRef {
                 swiss_number: [0xCDu8; 32],
                 bearer: cell_b,
+                expected_cell_id: cell_b,
+                expected_permissions: pyana_cell::permissions::AuthRequired::None,
             },
         },
         Variant {

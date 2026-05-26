@@ -2931,13 +2931,63 @@ impl TurnExecutor {
             Effect::EnlivenRef {
                 swiss_number,
                 bearer,
+                expected_cell_id,
+                expected_permissions,
             } => {
                 // The bearer cell gains a routing entry; for the
                 // minimal P1.A shape we increment the target's
                 // use_count (field[6]) on the bearer cell since that's
-                // what the AIR projection records. P1.C tightens this
-                // to a real Merkle membership check against the
-                // exporter's swiss_table_root.
+                // what the AIR projection records.
+                //
+                // Block1-bind closure
+                // (`EnlivenRef-permissions-merkle`): the
+                // `expected_cell_id` and `expected_permissions`
+                // declared by the runtime variant must be consistent
+                // with the bearer's c-list — the entry granting the
+                // sturdy ref must already point to `expected_cell_id`
+                // with a tier narrower-or-equal to
+                // `expected_permissions`. Without this gate, a forged
+                // (cell_id, perms) pair would project into the AIR's
+                // PARAMs and end up bound into the new
+                // `swiss_table_root` via the algebraic leaf, attesting
+                // a privilege the bearer never actually held.
+                //
+                // The membership witness lives in the bearer's
+                // CapabilitySet (the c-list): if the bearer's c-list
+                // contains a CapabilityRef whose `target ==
+                // expected_cell_id` with a tier narrower-or-equal to
+                // `expected_permissions`, the enliven is honest. The
+                // post-enliven AIR row will then bind the same
+                // (expected_cell_id, expected_permissions) pair into
+                // the swiss_table_root chain.
+                {
+                    let bearer_cell = ledger.get(bearer).ok_or_else(|| {
+                        (TurnError::CellNotFound { id: *bearer }, path.to_vec())
+                    })?;
+                    let cap_match = bearer_cell
+                        .capabilities
+                        .capabilities_for(expected_cell_id)
+                        .into_iter()
+                        .any(|cap| {
+                            // Cap holds authority `cap.permissions` and we
+                            // claim `expected_permissions` — claim must be
+                            // narrower-or-equal to what the cap holds.
+                            expected_permissions.is_narrower_or_equal(&cap.permissions)
+                        });
+                    if !cap_match {
+                        return Err((
+                            TurnError::InvalidEffect {
+                                reason: format!(
+                                    "EnlivenRef: bearer {bearer} c-list contains no \
+                                     capability for {expected_cell_id} with a tier \
+                                     covering the declared expected_permissions \
+                                     {expected_permissions:?}"
+                                ),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
                 let c = ledger
                     .get_mut(bearer)
                     .ok_or_else(|| (TurnError::CellNotFound { id: *bearer }, path.to_vec()))?;
@@ -2948,6 +2998,8 @@ impl TurnExecutor {
                 use_count_bytes[..8].copy_from_slice(&new_use_count.to_le_bytes());
                 c.state.fields[6] = use_count_bytes;
                 let _ = swiss_number;
+                let _ = expected_cell_id;
+                let _ = expected_permissions;
                 Ok(())
             }
 

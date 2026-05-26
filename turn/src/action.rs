@@ -1017,12 +1017,35 @@ pub enum Effect {
     /// committed swiss-table state and grant a routing entry to `bearer`.
     /// The executor verifies membership of `swiss_number` in the target's
     /// swiss table and bumps the entry's use-count (state.fields[6]).
+    ///
+    /// Block1-bind closure (BLOCK1-BIND-CLOSURE-NOTES.md
+    /// `EnlivenRef-permissions-merkle`): the swiss-table entry's
+    /// `(expected_cell_id, expected_permissions)` pair is carried
+    /// explicitly. The AIR's leaf
+    ///   `hash(swiss, hash(expected_cell_id, expected_permissions))`
+    /// projects from these PARAMs into the bearer's
+    /// `swiss_table_root` (state.fields[4]) via the existing 1-hop
+    /// append-only chain. The apply site validates the carried
+    /// permissions against the federation's swiss-table mirror entry
+    /// for `swiss_number` (the entry exists because validate at the
+    /// wire layer succeeded before this Turn was constructed). A
+    /// forged `expected_permissions` diverges from the mirror's
+    /// recorded tier → apply gate rejects.
     EnlivenRef {
         /// The swiss number being presented.
         swiss_number: [u8; 32],
         /// The cell that ends up holding the live ref (gets the routing
         /// entry added to its c-list).
         bearer: CellId,
+        /// The exporter cell whose swiss-table entry holds
+        /// `swiss_number`. Bound into the AIR's `ENLIVEN_CELL_ID`
+        /// PARAM via the leaf's inner hash.
+        expected_cell_id: CellId,
+        /// The authorization tier the bearer obtains. Bound into the
+        /// AIR's `ENLIVEN_PERMISSIONS` PARAM via the leaf's inner
+        /// hash. The apply site cross-checks this against the
+        /// federation's swiss-table mirror entry for `swiss_number`.
+        expected_permissions: pyana_cell::permissions::AuthRequired,
     },
     /// Drop a remote reference / GC decrement (CapTP). The executor verifies
     /// the refcount is > 0 and decrements it (state.fields[5]).
@@ -2146,10 +2169,34 @@ impl Effect {
             Effect::EnlivenRef {
                 swiss_number,
                 bearer,
+                expected_cell_id,
+                expected_permissions,
             } => {
                 hasher.update(&[44u8]);
                 hasher.update(swiss_number);
                 hasher.update(bearer.as_bytes());
+                hasher.update(expected_cell_id.as_bytes());
+                match expected_permissions {
+                    AuthRequired::None => {
+                        hasher.update(&[0u8]);
+                    }
+                    AuthRequired::Signature => {
+                        hasher.update(&[1u8]);
+                    }
+                    AuthRequired::Proof => {
+                        hasher.update(&[2u8]);
+                    }
+                    AuthRequired::Either => {
+                        hasher.update(&[3u8]);
+                    }
+                    AuthRequired::Impossible => {
+                        hasher.update(&[4u8]);
+                    }
+                    AuthRequired::Custom { vk_hash } => {
+                        hasher.update(&[5u8]);
+                        hasher.update(vk_hash);
+                    }
+                }
             }
             Effect::DropRef { ref_id } => {
                 hasher.update(&[45u8]);
@@ -2396,7 +2443,7 @@ impl Effect {
             }
             // CapTP runtime effects: small fixed-size blobs.
             Effect::ExportSturdyRef { .. } => 32 + 32 + 33, // swiss + target + perms (1 byte + opt 32-byte vk_hash for Custom)
-            Effect::EnlivenRef { .. } => 32 + 32,      // swiss + bearer
+            Effect::EnlivenRef { .. } => 32 + 32 + 32 + 33, // swiss + bearer + expected_cell_id + perms
             Effect::DropRef { .. } => 32,              // ref_id
             Effect::ValidateHandoff { .. } => 32 + 32 + 32, // cert_hash + recipient_pk + introducer_pk
             // Refusal: cell + commitment + reason-discriminant (+ opt 32-byte
