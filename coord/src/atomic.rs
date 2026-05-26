@@ -9,9 +9,9 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use dregg_cell::{CellId, Ledger, Preconditions};
 use dregg_turn::{CallForest, ComputronCosts, Turn, TurnExecutor, TurnReceipt, TurnResult};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoordError;

@@ -12,11 +12,7 @@
 //! require pieces of the caveat-correctness lane to land carry an
 //! `#[ignore = "..."]` with unblock label.
 
-use dregg_cell::predicate::WitnessedPredicate;
-use dregg_cell::program::SimpleStateConstraint;
-use dregg_cell::{
-    CellProgram, CellState, EvalContext, InputRef, ProgramError, StateConstraint, field_from_u64,
-};
+use dregg_cell::{CellState, field_from_u64};
 
 fn state_with(field_values: &[(usize, u64)]) -> CellState {
     let mut s = CellState::default();

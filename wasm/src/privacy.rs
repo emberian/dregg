@@ -726,10 +726,10 @@ pub fn create_bearer_cap_proof(
     revocation_channel_hex: &str, // "" or 64-hex for Some
     allowed_effects_mask: u32,    // 0 for None, else Some(mask) per cell::facet::EffectMask
 ) -> Result<JsValue, JsError> {
-    use ed25519_dalek::{Signer, SigningKey};
     use dregg_cell::{AuthRequired, CellId};
     use dregg_turn::action::{BearerCapProof, DelegationProofData};
     use dregg_turn::executor::TurnExecutor;
+    use ed25519_dalek::{Signer, SigningKey};
 
     let signing_seed: Zeroizing<[u8; 32]> =
         Zeroizing::new(hex_decode_32(delegator_signing_key_hex)?);
@@ -793,11 +793,11 @@ pub fn verify_bearer_cap_proof_sig(
     current_time: u64,
     federation_id_hex: &str,
 ) -> Result<JsValue, JsError> {
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     use dregg_cell::AuthRequired;
     use dregg_cell::CellId;
     use dregg_turn::action::{BearerCapProof, DelegationProofData};
     use dregg_turn::executor::TurnExecutor;
+    use ed25519_dalek::{Signature, VerifyingKey};
 
     // Deserialize the real type (it derives Deserialize). For minimal
     // shim-compat we also accept a flat form, but prefer canonical.

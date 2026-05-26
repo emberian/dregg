@@ -3,7 +3,6 @@
 use dregg_cell::{Note, NullifierSet};
 use dregg_circuit::BabyBear;
 use dregg_commit::poseidon2_tree::Poseidon2MerkleTree;
-use dregg_sdk::{EngineConfig, DreggEngine};
 
 use crate::report::{CheckResult, run_check};
 

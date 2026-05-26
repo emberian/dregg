@@ -262,8 +262,8 @@ mod tests {
     use super::*;
     use crate::identity::derive_federation_id;
     use crate::threshold::generate_test_committee;
-    use hints::PartialSignature;
     use dregg_types::{generate_keypair, sign};
+    use hints::PartialSignature;
 
     fn sample_body(seed: u8) -> FederationReceiptBody {
         FederationReceiptBody {

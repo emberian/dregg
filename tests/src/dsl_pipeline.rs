@@ -13,15 +13,10 @@
 //!
 //! Also tests: wrong proof rejected, wrong VK rejected.
 
-use dregg_cell::{Cell, CellId, Ledger};
-use dregg_circuit::dsl::{CellProgram, DslCircuit, ProgramRegistry};
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::stark::{self, StarkAir};
 use dregg_dsl_runtime::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
-use dregg_turn::builder::ActionBuilder;
-use dregg_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 
 // ============================================================================
 // Temporal predicate descriptor (from dregg-dsl-tests/src/temporal_dsl.rs)

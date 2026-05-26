@@ -11,7 +11,7 @@
 
 use dregg_app_framework::authorizer::{AuthError, RejectingAuthorizer};
 use dregg_app_framework::escrow::{EscrowError, EscrowManager};
-use dregg_sdk::embed::{EngineConfig, DreggEngine};
+use dregg_sdk::embed::{DreggEngine, EngineConfig};
 use dregg_turn::escrow::EscrowCondition;
 use dregg_types::CellId;
 

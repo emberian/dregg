@@ -15,8 +15,6 @@
 //!
 //! All currently `#[ignore]`d on the sovereign-witness AIR teeth lane.
 
-use dregg_cell::CellId;
-
 // ===========================================================================
 // Phase 1: legal witness path
 // ===========================================================================

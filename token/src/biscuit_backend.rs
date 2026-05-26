@@ -8,9 +8,9 @@ use base64::Engine;
 use biscuit_auth::Biscuit;
 use biscuit_auth::builder::{AuthorizerBuilder, BlockBuilder};
 
+use crate::dregg;
 use crate::error::TokenError;
 use crate::format::TokenFormat;
-use crate::dregg;
 use crate::traits::{Attenuation, AuthRequest, AuthToken, TokenClearance};
 
 /// Extract a string value from a Biscuit Datalog term.

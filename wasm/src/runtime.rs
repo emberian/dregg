@@ -814,7 +814,7 @@ impl DreggRuntime {
         // All construction uses canonical dregg_observability types (substrate).
         {
             let (seq, ts) = self.emitter.next_envelope_seed();
-            let mut env = EventEnvelope::new(seq, ts)
+            let env = EventEnvelope::new(seq, ts)
                 .with_turn_hash(&turn.hash())
                 .with_actor(&cell_id);
             match &result {

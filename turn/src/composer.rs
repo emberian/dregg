@@ -18,8 +18,8 @@
 //! Matcher:     composes both + adds deposit actions → single atomic turn
 //! ```
 
-use ed25519_dalek::{Signature, Signer, VerifyingKey};
 use dregg_cell::CellId;
+use ed25519_dalek::{Signature, Signer, VerifyingKey};
 
 use crate::action::{Action, CommitmentMode};
 use crate::executor::TurnExecutor;

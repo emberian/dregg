@@ -5996,7 +5996,7 @@ fn parse_attributes_into(
         }
         let attr_value = if let Some(u) = v.as_u64() {
             AttrValue::Integer(u)
-        } else if let Some(i) = v.as_i64() {
+        } else if let Some(_i) = v.as_i64() {
             return Err(format!(
                 "attribute '{k}' integer value must be non-negative"
             ));

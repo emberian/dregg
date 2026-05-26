@@ -347,8 +347,7 @@ mod tests {
     use super::*;
     use dregg_circuit::field::BabyBear;
     use dregg_circuit::schnorr_air::{
-        SchnorrVerificationWitness, generate_schnorr_trace,
-        recompute_challenge,
+        SchnorrVerificationWitness, generate_schnorr_trace, recompute_challenge,
     };
     use dregg_circuit::schnorr_sig::{schnorr_keygen, schnorr_sign};
     use dregg_circuit::stark::{self, StarkAir};

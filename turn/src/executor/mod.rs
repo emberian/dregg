@@ -41,7 +41,6 @@ use std::sync::Mutex;
 #[allow(unused_imports)]
 use tracing::info;
 
-use ed25519_dalek::{Signature, VerifyingKey};
 use dregg_cell::{
     AuthRequired, BulletproofRangeProof, Cell, CellId, CellStateDelta, Ledger, LedgerDelta,
     RevocationChannelSet, ValueCommitment, ValueCommitmentBytes,
@@ -53,6 +52,7 @@ use dregg_cell::{
     state::STATE_SLOTS,
 };
 use dregg_types::AttestedRoot;
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::action::{Action, Authorization, DelegationMode, Effect, Event};

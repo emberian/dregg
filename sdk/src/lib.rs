@@ -173,7 +173,7 @@ pub use dregg_intent::sse::EncryptedIntent;
 
 // Re-export the no-IO embed layer for service integration.
 #[cfg(feature = "network")]
-pub use embed::{EmbedError, EngineConfig, DreggEngine, WireCodec};
+pub use embed::{DreggEngine, EmbedError, EngineConfig, WireCodec};
 
 // Re-export privacy API types at crate root for convenience.
 pub use privacy::{

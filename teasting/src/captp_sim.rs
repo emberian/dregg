@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use dregg_captp::{
-    CapSession, ExportGcManager, FederationId as GroupId, ImportGcManager, DreggUri, SwissTable,
+    CapSession, DreggUri, ExportGcManager, FederationId as GroupId, ImportGcManager, SwissTable,
 };
 use dregg_cell::AuthRequired;
 use dregg_types::CellId;

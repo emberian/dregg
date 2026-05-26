@@ -15,7 +15,7 @@
 
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::{hash_2_to_1, hash_4_to_1};
-use dregg_circuit::stark::{self, BoundaryConstraint, StarkAir};
+use dregg_circuit::stark::{BoundaryConstraint, StarkAir};
 
 // =============================================================================
 // DFA Definition

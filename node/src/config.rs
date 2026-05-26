@@ -9,7 +9,7 @@
 //! they retain locally. Houyhnhnm's persistence-is-policy framing makes
 //! the choice explicit. We adopt it here.
 //!
-//! Dregg's receipt chain is *the* canonical persistence stream
+//! Dragon's Egg's receipt chain is *the* canonical persistence stream
 //! (`turn/src/turn.rs` doc header). `RetentionPolicy` declares which
 //! suffix of the stream this operator commits to *serving*. Pruned
 //! receipts are not lost to the federation — they live in archival

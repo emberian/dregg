@@ -15,12 +15,12 @@
 //! - Proof verification (fail-closed without verifier)
 //! - Receive permission enforcement
 
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use dregg_cell::{
     AuthRequired, CapabilityRef, Cell, CellId, Ledger, Permissions, VerificationKey,
     preconditions::Preconditions as CellPreconditions,
     state::{FIELD_ZERO, STATE_SLOTS},
 };
+use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 
 use crate::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol};
 use crate::builder::{ActionBuilder, TurnBuilder};

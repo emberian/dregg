@@ -8,10 +8,10 @@
 //! `finality`, `effects_hash`, `derivation_records`,
 //! `previous_receipt_hash`, etc.
 
-use ed25519_dalek::{SigningKey, VerifyingKey};
 use dregg_turn::turn::{Finality, TurnReceipt};
 use dregg_turn::verify::{sign_receipt, verify_receipt_chain_with_keys};
 use dregg_types::CellId;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 
 fn make_signing_key() -> SigningKey {
     SigningKey::from_bytes(&[7u8; 32])

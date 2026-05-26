@@ -15,8 +15,8 @@
 //! from "current shape is stable" to "federation_id is bound".
 
 use crate::Invariant;
-use proptest::prelude::*;
 use dregg_cell::id::CellId;
+use proptest::prelude::*;
 
 pub struct Gamma2CrossFederationBinding;
 impl Invariant for Gamma2CrossFederationBinding {

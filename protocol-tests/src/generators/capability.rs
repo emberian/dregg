@@ -4,8 +4,8 @@
 //! invariants (currently stubbed) and indirectly by the open-ledger setup
 //! in [`super::cell`].
 
-use proptest::prelude::*;
 use dregg_cell::AuthRequired;
+use proptest::prelude::*;
 
 /// Strategy: any non-`Impossible` `AuthRequired` level.
 ///

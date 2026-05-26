@@ -29,7 +29,7 @@ use clap::{Parser, Subcommand};
 use tracing::{error, info};
 
 #[derive(Parser)]
-#[command(name = "dregg-node", about = "Dregg federation node daemon")]
+#[command(name = "dregg-node", about = "Dragon's Egg federation node daemon")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

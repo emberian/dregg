@@ -10,11 +10,11 @@
 //! - FederationAttestation: create + verify round-trip
 //! - FederationAttestation: wrong pubkey rejects
 
-use ed25519_dalek::SigningKey;
 use dregg_bridge::midnight::{
-    EpochKey, FederationAttestation, MidnightBridgeConfig, MidnightToDreggMessage,
-    DreggToMidnightMessage,
+    DreggToMidnightMessage, EpochKey, FederationAttestation, MidnightBridgeConfig,
+    MidnightToDreggMessage,
 };
+use ed25519_dalek::SigningKey;
 
 // ============================================================================
 // Helpers

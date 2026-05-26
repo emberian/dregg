@@ -99,7 +99,7 @@ pub use dregg_intent::commit_reveal_fulfillment::{
 };
 
 // Re-export the SDK engine for convenience.
-pub use dregg_sdk::embed::{EngineConfig, DreggEngine};
+pub use dregg_sdk::embed::{DreggEngine, EngineConfig};
 
 // Re-export CellId since nearly all app code uses it.
 pub use dregg_types::CellId;

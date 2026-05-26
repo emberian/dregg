@@ -25,14 +25,9 @@
 
 #![allow(clippy::field_reassign_with_default)]
 
-use dregg_cell::predicate::WitnessedPredicate;
-use dregg_cell::program::{
-    AuthorizedSet, CustomDescriptor, DeltaRelation, HashKind, ReadSet, SimpleStateConstraint,
-    TransitionCase, TransitionGuard,
-};
 use dregg_cell::{
-    CellProgram, CellState, EvalContext, FIELD_ZERO, FieldElement, InputRef, ProgramError,
-    StateConstraint, field_from_u64,
+    CellProgram, CellState, EvalContext, FieldElement, ProgramError, StateConstraint,
+    field_from_u64,
 };
 
 // ---------------------------------------------------------------------------

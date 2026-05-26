@@ -11,8 +11,8 @@
 //! - Agent consistency: all receipts in a chain belong to the same agent
 //! - Genesis validity: the first receipt has `previous_receipt_hash = None`
 
-use ed25519_dalek;
 use dregg_cell::CellId;
+use ed25519_dalek;
 
 use crate::turn::TurnReceipt;
 

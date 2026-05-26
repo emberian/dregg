@@ -32,8 +32,8 @@
 
 use std::collections::HashMap;
 
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use dregg_cell::{CellId, Ledger};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use crate::budget_gate::DebitDigest;
 use crate::conflict::extract_access_sets;

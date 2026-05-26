@@ -16,7 +16,7 @@ use commands::{
     turn,
 };
 
-/// Dregg -- sovereign cell-based compute substrate.
+/// Dragon's Egg -- sovereign cell-based compute substrate.
 ///
 /// Interact with cells, turns, capabilities, and federation nodes.
 ///
@@ -35,8 +35,8 @@ use commands::{
 #[command(
     name = "dregg",
     version,
-    about = "Dregg CLI -- manage cells, turns, capabilities, and federation nodes (full SDK client)",
-    long_about = "Dregg CLI (dregg-cli crate) -- hardened, expanded client with better errors, confirms for dangerous ops, blocklace support, doctor diagnostics, and parity targets from wasm bindings (federation, receipts, observability).\n\nSee subcommand --help for details. All POST shapes now match current node/api.rs handlers (no more 422 skews on cell/cipherclerk/cap).",
+    about = "Dragon's Egg CLI -- manage cells, turns, capabilities, and federation nodes (full SDK client)",
+    long_about = "Dragon's Egg CLI (dregg-cli crate) -- hardened, expanded client with better errors, confirms for dangerous ops, blocklace support, doctor diagnostics, and parity targets from wasm bindings (federation, receipts, observability).\n\nSee subcommand --help for details. All POST shapes now match current node/api.rs handlers (no more 422 skews on cell/cipherclerk/cap).",
     propagate_version = true,
     arg_required_else_help = true
 )]

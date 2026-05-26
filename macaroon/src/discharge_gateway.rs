@@ -661,7 +661,7 @@ impl Drop for DischargeGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Macaroon, CaveatSet};
+    use crate::{CaveatSet, Macaroon};
 
     /// Helper: create a macaroon with a 3P caveat targeting our gateway.
     fn setup_3p_macaroon(root_key: &[u8; 32], shared_key: &[u8; 32], location: &str) -> Macaroon {

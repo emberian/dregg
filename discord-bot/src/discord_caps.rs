@@ -214,7 +214,7 @@ impl std::fmt::Display for DiscordCapError {
 impl std::error::Error for DiscordCapError {}
 
 // =============================================================================
-// Discord events → Dregg turns (Discord → dregg direction)
+// Discord events → Dragon's Egg turns (Discord → dregg direction)
 // =============================================================================
 
 /// Queue link configuration: maps a Discord channel to a dregg programmable queue.

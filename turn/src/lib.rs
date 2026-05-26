@@ -146,11 +146,11 @@ pub use pending::{
 pub use aggregate_bilateral_prover::{
     AggregatedBundle, prove_aggregated_bundle, verify_aggregated_bundle,
 };
+pub use dregg_cell::{Precondition, Preconditions, PreconditionsBuilder};
 pub use presence_discharge::{
     PresenceCaveat as PresenceCapCaveat, PresenceClaimRequirement, PresenceDischarge,
     PresenceDischargeError, verify_presence_discharge,
 };
-pub use dregg_cell::{Precondition, Preconditions, PreconditionsBuilder};
 pub use queue_programs::{
     EnqueueValidationContext, QueueConstraint, QueueProgram, QueueProgramError,
     QueueProgramRegistry, ValidationResult, compute_validation_hash, validate_enqueue,

@@ -112,8 +112,8 @@ impl SignedAuthorizer {
 
 impl Authorizer for SignedAuthorizer {
     fn authorize(&self, ctx: AuthContext<'_>) -> Result<Authorization, AuthError> {
-        use ed25519_dalek::Signer;
         use dregg_turn::action::CommitmentMode;
+        use ed25519_dalek::Signer;
 
         let message = match ctx.action.commitment_mode {
             CommitmentMode::Full => {

@@ -18,9 +18,9 @@
 
 use std::collections::HashMap;
 
-use proptest::prelude::*;
 use dregg_cell::CellId;
 use dregg_turn::{Action, Authorization, CallForest, DelegationMode, Effect, turn::Turn};
+use proptest::prelude::*;
 
 /// A single transfer operation described abstractly, before being projected
 /// into a `Turn`.

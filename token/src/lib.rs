@@ -22,9 +22,9 @@
 //! Use [`TokenFormat::detect`] to auto-detect from an encoded string.
 
 pub mod action_set;
+pub mod dregg;
 pub mod error;
 pub mod format;
-pub mod dregg;
 #[cfg(feature = "rand-deps")]
 pub mod revocation;
 pub mod traits;

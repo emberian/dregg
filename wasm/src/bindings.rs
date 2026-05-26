@@ -1134,7 +1134,7 @@ pub fn list_deployed_factories(handle: usize) -> Result<JsValue, JsError> {
 /// DFA compile/eval stub. In full: delegates to dregg_dfa::compiler + air.
 /// For inspector <dregg-dfa> + relay/pubsub. Returns placeholder shape today.
 #[wasm_bindgen]
-pub fn compile_dfa(pattern_json: &str) -> Result<JsValue, JsError> {
+pub fn compile_dfa(_pattern_json: &str) -> Result<JsValue, JsError> {
     // Placeholder — real path wires dfa crate when DFA lane + wasm gate complete.
     #[derive(Serialize)]
     struct DfaStub {

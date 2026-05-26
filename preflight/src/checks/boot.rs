@@ -1,6 +1,6 @@
 //! Boot checks: verify the DreggEngine starts and is operational.
 
-use dregg_sdk::{EngineConfig, DreggEngine};
+use dregg_sdk::{DreggEngine, EngineConfig};
 
 use crate::report::{CheckResult, run_check};
 

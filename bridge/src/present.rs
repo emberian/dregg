@@ -3191,6 +3191,7 @@ pub fn verify_predicate_program(
 mod tests {
     use super::*;
     use dregg_circuit::ConstraintProver;
+    use dregg_circuit::merkle_types::MerkleAir;
 
     fn test_key() -> [u8; 32] {
         let mut key = [0u8; 32];

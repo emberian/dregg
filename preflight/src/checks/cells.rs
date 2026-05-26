@@ -1,9 +1,6 @@
 //! Cell lifecycle checks: hosted, sovereign, factory creation.
 
-use dregg_cell::{
-    Cell, CellId, CellMode, ChildVkStrategy, FactoryDescriptor, FactoryRegistry, FieldConstraint,
-    Ledger,
-};
+use dregg_cell::{Cell, CellId, CellMode, Ledger};
 
 use crate::report::{CheckResult, run_check};
 

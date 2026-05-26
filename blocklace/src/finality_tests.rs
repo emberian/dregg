@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 
+use crate::dregg_bridge::{CodManager, DreggBlocklaceBridge, ExecutionTier, classify_turn};
 use crate::finality::{Block, BlockError, Blocklace, FinalityLevel, FinalityTracker, Payload};
-use crate::dregg_bridge::{CodManager, ExecutionTier, DreggBlocklaceBridge, classify_turn};
 
 fn random_key() -> SigningKey {
     SigningKey::generate(&mut OsRng)

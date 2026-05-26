@@ -85,7 +85,7 @@ use serde::{Deserialize, Serialize};
 
 use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, CellId, EmbeddedExecutor};
 use dregg_cell::program::AuthorizedSet;
-use dregg_credentials::{AttrValue, CredentialAttributes, CredentialSchema, IssuerKeys, issue};
+use dregg_credentials::{AttrValue, CredentialAttributes, IssuerKeys, issue};
 use dregg_turn::TurnReceipt;
 use starbridge_governed_namespace::build_register_service_action;
 use starbridge_identity::{

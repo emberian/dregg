@@ -32,7 +32,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ed25519_dalek::SigningKey as Ed25519SigningKey;
 use dregg_blocklace::finality::{Blocklace, Payload};
 use dregg_captp::FederationId;
 use dregg_captp::handoff::{HandoffCertificate, HandoffPresentation, validate_handoff};
@@ -49,6 +48,7 @@ use dregg_turn::{
 use dregg_types::{PublicKey as FedPublicKey, SigningKey, generate_keypair};
 use dregg_wire::codec::{decode, encode};
 use dregg_wire::prelude::WireMessage;
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
 
 fn section(label: &str) {
     println!();

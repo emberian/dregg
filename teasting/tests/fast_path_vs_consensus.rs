@@ -9,7 +9,6 @@
 //! This test verifies that the routing logic correctly distinguishes these cases and
 //! that both paths produce consistent results.
 
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use dregg_cell::permissions::{AuthRequired, Permissions};
 use dregg_cell::{Cell, CellId, Ledger, Preconditions};
 use dregg_turn::action::{Action, Authorization, DelegationMode, Effect};
@@ -20,6 +19,7 @@ use dregg_turn::fast_path::{
 };
 use dregg_turn::forest::{CallForest, CallTree};
 use dregg_turn::{ExecutionPath, Turn, TurnResult, compute_execution_path};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 
 /// Derive a deterministic Ed25519 keypair from a u8 seed.
 fn keypair_from_seed(seed: u8) -> ([u8; 32], [u8; 32]) {

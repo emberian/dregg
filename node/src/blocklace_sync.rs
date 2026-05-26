@@ -24,11 +24,11 @@ use dregg_blocklace::constitution::{
     Constitution, ConstitutionManager, LeaveReason, MembershipProposal, MembershipVote,
 };
 use dregg_blocklace::dissemination::MAX_BLOCKS_PER_PUSH;
+use dregg_blocklace::dregg_bridge::DreggBlocklaceBridge;
 use dregg_blocklace::finality::{
     Block, BlockError, BlockId, Blocklace, FinalityLevel, MembershipAction, Payload,
 };
 use dregg_blocklace::ordering::tau;
-use dregg_blocklace::dregg_bridge::DreggBlocklaceBridge;
 use dregg_net::gossip::{GossipEvent, GossipNetwork, TopicHandle};
 use dregg_net::message::PeerMessage;
 use dregg_net::node::{NodeId, PeerNode, PeerNodeConfig};

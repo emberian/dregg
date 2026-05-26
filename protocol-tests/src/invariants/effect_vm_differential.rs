@@ -29,21 +29,16 @@
 
 use std::collections::HashMap;
 
-use proptest::prelude::*;
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger};
 use dregg_circuit::effect_vm::{
     CellState as VmCellState, Effect as VmEffect, extract_net_delta, generate_effect_vm_trace,
     state as vm_state,
 };
 use dregg_circuit::field::BabyBear;
-use dregg_turn::{
-    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect,
-    TurnExecutor, TurnResult,
-    turn::Turn,
-};
+use dregg_turn::{Action, Authorization, CallForest, DelegationMode, Effect, turn::Turn};
+use proptest::prelude::*;
 
 use crate::generators::cell::{LedgerSpec, build_open_ledger};
-use dregg_cell::Permissions;
 
 // =====================================================================
 // Shared helpers

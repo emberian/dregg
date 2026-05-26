@@ -5,9 +5,9 @@
 //! so that's all we expose. Future invariants (`facet_attenuation`,
 //! `permission_enforcement`) will widen this once they're implemented.
 
-use proptest::prelude::*;
 use dregg_cell::CellId;
 use dregg_turn::Effect;
+use proptest::prelude::*;
 
 /// Strategy: a `Transfer` effect between two cells in `ids`. Self-transfers
 /// are not produced — they're either no-ops or rejected depending on

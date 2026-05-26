@@ -18,9 +18,7 @@
 
 use crate::Invariant;
 
-use dregg_cell::{AuthRequired, Cell, EffectMask, is_facet_attenuation};
-use dregg_turn::{Action, Authorization, BearerCapProof, CallForest, ComputronCosts, DelegationMode, DelegationProofData, Effect, Turn, TurnExecutor, TurnResult};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use proptest::prelude::*;
 
 pub struct FacetAttenuation;

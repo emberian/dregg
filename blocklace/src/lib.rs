@@ -58,9 +58,9 @@ pub mod constitution;
 pub mod cross_reference;
 pub mod delegation;
 pub mod dissemination;
+pub mod dregg_bridge;
 pub mod finality;
 pub mod ordering;
-pub mod dregg_bridge;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 

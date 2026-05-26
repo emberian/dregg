@@ -31,7 +31,6 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
-use tokio::time::{self, Duration};
 
 use dregg_sdk::{Attenuation, AuthRequest, CellId};
 use dregg_turn::{CallForest, Turn};

@@ -20,10 +20,10 @@ use dregg_trace::{
     Fact as TraceFact, Rule, Term, symbol_from_str,
 };
 
+use crate::dregg_caveats;
 use crate::error::TokenError;
 use crate::factset::caveat_set_to_factset;
 use crate::format::TokenFormat;
-use crate::dregg_caveats;
 use crate::traits::{AuthRequest, Capability, TokenClearance};
 
 use dregg_macaroon::caveat::CaveatSet;

@@ -10,10 +10,10 @@
 //! Source: `turn/src/action.rs::Action::hash`.
 
 use crate::Invariant;
-use proptest::prelude::*;
 use dregg_cell::CellId;
-use dregg_turn::{BearerCapProof, DelegationMode, DelegationProofData};
+use dregg_turn::DelegationMode;
 use dregg_turn::action::{Action, Authorization};
+use proptest::prelude::*;
 
 pub struct AuthorizationHashDomainSeparation;
 impl Invariant for AuthorizationHashDomainSeparation {

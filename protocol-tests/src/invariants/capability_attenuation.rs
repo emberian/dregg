@@ -17,11 +17,8 @@
 //! self-grants from the strategy so every iteration exercises the real
 //! attenuation check.
 
-use crate::generators::{build_open_ledger, capability::arb_auth_required, LedgerSpec};
 use crate::Invariant;
 
-use dregg_cell::{AuthRequired, CapabilityRef, is_attenuation};
-use dregg_turn::{Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnExecutor, TurnResult};
 use proptest::prelude::*;
 
 pub struct CapabilityAttenuation;

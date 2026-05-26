@@ -8,7 +8,6 @@
 //! 5. Conservation verified: 100 A in = 100 A out, 50 B in = 50 B out
 //! 6. Neither party needs to trust the other or the matcher
 
-use ed25519_dalek::{Signer, SigningKey};
 use dregg_cell::note::Note;
 use dregg_cell::nullifier_set::NullifierSet;
 use dregg_cell::{CellId, Preconditions};
@@ -16,6 +15,7 @@ use dregg_turn::CallForest;
 use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol};
 use dregg_turn::composer::{SignedFragment, TurnComposer};
 use dregg_turn::executor::TurnExecutor;
+use ed25519_dalek::{Signer, SigningKey};
 
 /// Helper to create an Ed25519 signing key from seed bytes
 fn make_signing_key(seed: &[u8]) -> SigningKey {

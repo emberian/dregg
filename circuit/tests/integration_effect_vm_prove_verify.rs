@@ -14,7 +14,7 @@ use dregg_circuit::{
     BabyBear, CellState, Effect, EffectVmAir,
     effect_vm::{
         EffectVmContext,
-        columns::{AUX_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE, state},
+        columns::{STATE_AFTER_BASE, STATE_BEFORE_BASE, state},
         extract_net_delta, generate_effect_vm_trace, generate_effect_vm_trace_ext, pi,
     },
     poseidon2::hash_2_to_1,
@@ -32,8 +32,6 @@ use dregg_circuit::{
 /// breaks for a variant, this test catches it.
 #[test]
 fn all_schema_variants_prove_and_verify() {
-    use dregg_circuit::effect_vm::columns::sel;
-
     let balance = 100_000u64;
 
     let cases: &[(&str, Effect)] = &[

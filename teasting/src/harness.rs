@@ -15,9 +15,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use ed25519_dalek::SigningKey as DalekSigningKey;
 use dregg_blocklace::finality::{Blocklace, Payload};
-use dregg_captp::{FederationId as GroupId, DreggUri};
+use dregg_captp::{DreggUri, FederationId as GroupId};
 use dregg_cell::{AuthRequired, Ledger};
 use dregg_federation::{
     Federation, FederationReceipt, FederationReceiptBody, KnownFederations, LocalSeat,
@@ -25,6 +24,7 @@ use dregg_federation::{
 use dregg_turn::executor::{ComputronCosts, TurnExecutor};
 use dregg_turn::{Turn, TurnReceipt, TurnResult};
 use dregg_types::{AttestedRoot, CellId, PublicKey as FedPublicKey, SigningKey};
+use ed25519_dalek::SigningKey as DalekSigningKey;
 
 use crate::captp_sim::SimCapTpSession;
 

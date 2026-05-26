@@ -4,7 +4,6 @@ use dregg_captp::FederationId as GroupId;
 use dregg_captp::handoff::HandoffCertificate;
 use dregg_captp::pipeline::PipelineRegistry;
 use dregg_captp::session::CapSession;
-use dregg_captp::store_forward::{MessagePriority, QueuedMessage};
 use dregg_captp::sturdy::SwissTable;
 use dregg_cell::AuthRequired;
 use dregg_types::{CellId, generate_keypair};

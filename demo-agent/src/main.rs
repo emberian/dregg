@@ -20,7 +20,6 @@ use dregg_bridge::StarkProofVerifier;
 use dregg_bridge::present::{bytes_to_babybear, hash_index};
 use dregg_cell::{AuthRequired, CellId, Ledger, Permissions, VerificationKey, cell::Cell};
 use dregg_circuit::BabyBear;
-use dregg_circuit::merkle_air::MerkleAir;
 use dregg_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};
 use dregg_turn::builder::ActionBuilder;
 use dregg_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};

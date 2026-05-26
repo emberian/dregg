@@ -7184,7 +7184,7 @@ mod tests {
     /// `WirePresentationProof`. Both sides now use the same format.
     #[test]
     fn test_cclerk_authorize_engine_verify_roundtrip() {
-        use crate::embed::{EngineConfig, DreggEngine};
+        use crate::embed::{DreggEngine, EngineConfig};
 
         let mut cclerk = AgentCipherclerk::new();
         let root_key = [0xEE; 32];
@@ -8297,9 +8297,9 @@ mod tests {
     /// "Unchecked → Signature shape but uses [0;64] key" attack.
     #[test]
     fn queue_signature_verifies_against_cclerk_pubkey() {
-        use ed25519_dalek::{Signature, VerifyingKey};
         use dregg_turn::action::{Action, Authorization};
         use dregg_turn::executor::TurnExecutor;
+        use ed25519_dalek::{Signature, VerifyingKey};
 
         let cclerk = AgentCipherclerk::new();
         let fed = [13u8; 32];

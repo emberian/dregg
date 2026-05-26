@@ -16,7 +16,7 @@ mod report;
 
 use std::time::Instant;
 
-use report::{CheckResult, PreflightReport, SubsystemResult, run_subsystem};
+use report::{PreflightReport, SubsystemResult, run_subsystem};
 
 fn run_all_subsystems() -> Vec<SubsystemResult> {
     vec![

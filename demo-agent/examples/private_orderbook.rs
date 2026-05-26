@@ -11,7 +11,6 @@
 
 #![allow(dead_code)]
 
-use ed25519_dalek::{Signer, SigningKey};
 use dregg_cell::note::Note;
 use dregg_cell::nullifier_set::NullifierSet;
 use dregg_cell::{CellId, Preconditions};
@@ -19,6 +18,7 @@ use dregg_turn::CallForest;
 use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol};
 use dregg_turn::composer::{SignedFragment, TurnComposer};
 use dregg_turn::executor::TurnExecutor;
+use ed25519_dalek::{Signer, SigningKey};
 
 /// A sealed bid: the commitment is public, the details are private.
 #[derive(Clone, Debug)]

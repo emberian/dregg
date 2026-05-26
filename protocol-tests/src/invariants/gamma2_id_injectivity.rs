@@ -13,8 +13,8 @@
 //! assumption.)
 
 use crate::Invariant;
-use proptest::prelude::*;
 use dregg_cell::id::CellId;
+use proptest::prelude::*;
 
 pub struct Gamma2IdInjectivity;
 impl Invariant for Gamma2IdInjectivity {

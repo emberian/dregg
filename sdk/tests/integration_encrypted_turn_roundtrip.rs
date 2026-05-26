@@ -107,7 +107,11 @@ fn encrypted_turn_roundtrip_sets_was_encrypted_flag() {
     let token_id = *blake3::hash(b"default").as_bytes();
     let mut cell = Cell::with_balance(pk, token_id, 0);
     cell.permissions = open_permissions();
-    assert_eq!(cell.id(), agent, "fixture cell id must match cipherclerk agent");
+    assert_eq!(
+        cell.id(),
+        agent,
+        "fixture cell id must match cipherclerk agent"
+    );
     ledger.insert_cell(cell).unwrap();
 
     // Apply via the executor (zero costs so the no-op action commits).

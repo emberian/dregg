@@ -1030,9 +1030,9 @@ mod tests {
         let source_sizes: Vec<usize> = proof
             .source_derivations
             .iter()
-            .map(|s| stark::proof_to_bytes(&s.proof).len())
+            .map(|s| crate::stark::proof_to_bytes(&s.proof).len())
             .collect();
-        let final_size = stark::proof_to_bytes(&proof.final_derivation).len();
+        let final_size = crate::stark::proof_to_bytes(&proof.final_derivation).len();
         let total: usize = source_sizes.iter().sum::<usize>() + final_size;
 
         println!(

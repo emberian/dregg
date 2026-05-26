@@ -9,8 +9,7 @@
 //! All operations are proven via the Effect VM STARK. No mocks.
 
 use dregg_circuit::effect_vm::{
-    self, CellState, Effect, EffectVmAir, EffectVmContext, compute_effects_hash, extract_net_delta,
-    generate_effect_vm_trace, generate_effect_vm_trace_ext,
+    CellState, Effect, EffectVmAir, EffectVmContext, generate_effect_vm_trace_ext,
 };
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::{hash_2_to_1, hash_4_to_1, hash_many};

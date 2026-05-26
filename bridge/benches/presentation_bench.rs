@@ -159,7 +159,7 @@ fn bench_end_to_end_cycle(c: &mut Criterion) {
             let _attenuated = token.attenuate(&att).unwrap();
 
             // Build presentation (uses prove_fast() which needs linear root)
-            let (fed_root_bb, fed_root_bytes) = compute_matching_federation_root_linear(&key);
+            let (fed_root_bb, fed_root_bytes) = compute_matching_federation_root(&key);
             let mut builder =
                 BridgePresentationBuilder::new_with_root_bb(key, fed_root_bytes, fed_root_bb);
             builder.set_root_token(token);

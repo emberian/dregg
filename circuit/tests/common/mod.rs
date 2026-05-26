@@ -7,7 +7,7 @@
 use dregg_circuit::{
     BabyBear, CellState, Effect, EffectVmAir,
     effect_vm::{EffectVmContext, generate_effect_vm_trace, generate_effect_vm_trace_ext},
-    stark::{self, StarkAir, proof_from_bytes, proof_to_bytes},
+    stark::{self, proof_from_bytes, proof_to_bytes},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

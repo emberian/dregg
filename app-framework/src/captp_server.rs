@@ -56,7 +56,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use dregg_captp::{FederationId, DreggUri, SwissTable};
+use dregg_captp::{DreggUri, FederationId, SwissTable};
 use dregg_cell::{AuthRequired, CellId};
 
 /// CapTP server: wraps a `SwissTable` to export cells as sturdy refs.

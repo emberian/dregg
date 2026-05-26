@@ -33,10 +33,7 @@
 
 #![allow(clippy::field_reassign_with_default)]
 
-use dregg_cell::program::{SimpleStateConstraint, TransitionCase, TransitionGuard, TransitionMeta};
-use dregg_cell::{
-    CellProgram, CellState, EvalContext, FIELD_ZERO, StateConstraint, field_from_u64,
-};
+use dregg_cell::{CellState, EvalContext, field_from_u64};
 
 // ---------------------------------------------------------------------------
 // helpers

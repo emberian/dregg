@@ -95,12 +95,12 @@ pub use identity::{derive_federation_id, derive_federation_id_with_epoch};
 // (`federation::Federation`) is the canonical replacement at the type-system
 // layer. The re-exports below are kept only so the existing simulator
 // consumers compile.
+pub use dregg_types::FederationId;
 pub use node::{
     ConsensusConfig, ConsensusError, ConsensusOrchestrator, ConsensusState,
     Federation as MorpheusFederation, FederationNode, PendingStateRoots, ReconfigurationProposal,
     ReconfigurationVotes,
 };
-pub use dregg_types::FederationId;
 pub use receipt::{FederationReceipt, FederationReceiptBody, ReceiptQc};
 pub use revocation::{RevocationTree, RevocationVerification, RevocationVerifier};
 pub use solo::{

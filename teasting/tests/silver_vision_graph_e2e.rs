@@ -70,7 +70,6 @@
 
 use std::collections::HashMap;
 
-use ed25519_dalek::{Signer as _, SigningKey as DalekSigningKey};
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_circuit::{
     BabyBear, CellState as VmCellState, Effect as VmEffect, EffectVmAir,
@@ -87,6 +86,7 @@ use dregg_types::{AttestedRoot, PublicKey, Signature, merkle_root_of_receipt_has
 use dregg_verifier::{
     ReplayEntry, ReplayVerdict, ReplayWitnessAvailability, ReplayWitnessBundle, replay_chain,
 };
+use ed25519_dalek::{Signer as _, SigningKey as DalekSigningKey};
 
 // ---------------------------------------------------------------------------
 // Identity / cell construction helpers

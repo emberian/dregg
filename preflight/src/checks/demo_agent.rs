@@ -15,7 +15,7 @@
 //! does not block the whole preflight.
 
 use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
