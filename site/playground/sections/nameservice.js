@@ -13,7 +13,7 @@ export function initNameservice(_wasm) {
     // §4.9: retired; interactive kept for history but banner directs to real starbridge-app demo
     const retireBanner = html`<div style="background:#ffeeee;border:1px solid #c00;padding:0.25rem;font-size:0.75rem;margin:0.3rem 0;">
       <strong>§4.9 Retire:</strong> Replaced by starbridge-apps/nameservice (first e2e + additional demos in Apps tab). Use <code>&lt;dregg-name-registry&gt;</code> etc.
-      <a href="/starbridge.html?at=dregg://app/nameservice" target="_blank">Starbridge Apps tab demo →</a>
+      <a href="/starbridge/?at=dregg://app/nameservice" target="_blank">Starbridge Apps tab demo →</a>
     </div>`;
 
     const names = signal([]);   // { name, serviceId, owner }

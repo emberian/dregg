@@ -9,6 +9,10 @@ export const name = 'blocks';
 
 let container = null;
 
+function starbridgeHref(uri) {
+  return `../starbridge/?at=${encodeURIComponent(uri)}&runtime=remote`;
+}
+
 export function init(el) {
   container = el;
 
@@ -43,7 +47,7 @@ function renderBlocksTable(blocks) {
   const sorted = [...blocks].sort((a, b) => b.height - a.height);
   tableContainer.innerHTML = `
     <table class="ex-table">
-      <thead><tr><th>Height</th><th>Merkle Root</th><th>Signatures</th><th>Time</th></tr></thead>
+      <thead><tr><th>Height</th><th>Merkle Root</th><th>Signatures</th><th>Time</th><th>IDE</th></tr></thead>
       <tbody>
         ${sorted.map(b => `
           <tr data-height="${b.height}">
@@ -51,6 +55,7 @@ function renderBlocksTable(blocks) {
             <td class="cell-hash">${api.shortHash(api.blockRoot(b), 12, 6)}</td>
             <td>${b.signatures}</td>
             <td>${api.relativeTime(b.timestamp)}</td>
+            <td><a class="ex-starbridge-link" href="${starbridgeHref(`dregg://block/0/${b.height}`)}">Starbridge</a></td>
           </tr>
         `).join('')}
       </tbody>
@@ -67,6 +72,8 @@ function renderBlocksTable(blocks) {
 function renderBlockDetail(block) {
   const panel = document.getElementById('block-detail');
   const content = document.getElementById('block-detail-content');
+  const blockUri = `dregg://block/0/${block.height}`;
+  const dagUri = 'dregg://block-dag/0';
   panel.hidden = false;
   content.innerHTML = `
     <h4>Block #${block.height}</h4>
@@ -81,6 +88,8 @@ function renderBlockDetail(block) {
       <span class="detail-grid__value">${api.formatTime(block.timestamp)}</span>
     </div>
     <div class="block-detail__actions" style="margin-top: 16px;">
+      <a class="btn btn-sm btn-primary" href="${starbridgeHref(blockUri)}">Open block in Starbridge</a>
+      <a class="btn btn-sm btn-secondary" href="${starbridgeHref(dagUri)}">Open DAG</a>
       <button class="btn btn-sm btn-secondary" onclick="document.getElementById('block-detail').hidden=true">Close</button>
     </div>
   `;

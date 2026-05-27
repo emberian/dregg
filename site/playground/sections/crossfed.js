@@ -10,7 +10,7 @@ export function initCrossfed(wasm) {
       <!-- §4.9 outright retire (FOLLOWUP-05): pure animation/setTimeout per plan; replaced by federation + handoff inspectors -->
       <div style="background:#ffeeee;border:1px solid #c00;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
         <strong>§4.9 Retire:</strong> This demo (animation-only) retired. Use Starbridge federation + <code>&lt;dregg-handoff-certificate&gt;</code> + CapTP. 
-        <a href="/starbridge.html?at=dregg://federation/0" target="_blank">Open live federation in Starbridge →</a>
+        <a href="/starbridge/?at=dregg://federation/0" target="_blank">Open live federation in Starbridge →</a>
       </div>
       <p>
         Dragon's Egg federations are independent authorization domains. Cross-federation operations

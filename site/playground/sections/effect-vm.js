@@ -31,7 +31,7 @@ export function initEffectVm(wasm) {
   const migrationNote = `
     <div style="background:#fff8e6;border:1px solid #f0d080;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
       <strong>§4.9 Migration:</strong> Superseded by platform <code>&lt;dregg-turn-debugger&gt;</code> (AIR trace table, step-by-step). Educational content preserved (learn carve-out per plan).
-      <a href="/starbridge.html?at=dregg://turn/demo" target="_blank">Deep-link to Starbridge now →</a>
+      <a href="/starbridge/?at=dregg://turn/demo" target="_blank">Deep-link to Starbridge now →</a>
     </div>`;
   section.innerHTML = migrationNote + `
     <div class="pg-section__header">

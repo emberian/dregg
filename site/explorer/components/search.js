@@ -29,6 +29,11 @@ export function init() {
 async function handleSearch(query) {
   if (!query) return;
 
+  if (/^dregg:\/\//i.test(query)) {
+    window.location.href = `../starbridge/?at=${encodeURIComponent(query)}&runtime=remote`;
+    return;
+  }
+
   // Block height (pure number)
   if (/^\d+$/.test(query)) {
     navigateTo('blocks');

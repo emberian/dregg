@@ -19,6 +19,10 @@ export function update(appState) {
 
 export function destroy() {}
 
+function starbridgeHref(uri) {
+  return `../starbridge/?at=${encodeURIComponent(uri)}&runtime=remote`;
+}
+
 function renderReceiptChain(receipts) {
   const container = document.getElementById('receipts-chain');
   if (!receipts || !receipts.length) {
@@ -41,6 +45,10 @@ function renderReceiptChain(receipts) {
           <span class="receipt-item__state-label">Post-state</span>
           <span class="receipt-item__state-value">${api.shortHash(r.post_state, 10, 6)}</span>
         </div>
+      </div>
+      <div class="receipt-item__actions">
+        <a class="ex-starbridge-link" href="${starbridgeHref(`dregg://receipt/${r.turn_hash}`)}">Open receipt in Starbridge</a>
+        <a class="ex-starbridge-link" href="${starbridgeHref(`dregg://turn/${r.turn_hash}`)}">Debug turn</a>
       </div>
     </div>
   `).join('');

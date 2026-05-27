@@ -10,7 +10,7 @@ export function initDatalog(wasm) {
       <!-- §4.9 tiered migration (FOLLOWUP-05): Tier 2 deprecation to <dregg-predicate> -->
       <div style="background:#fff8e6;border:1px solid #f0d080;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
         <strong>§4.9 Migration:</strong> Superseded by platform <code>&lt;dregg-predicate&gt;</code> + <code>&lt;dregg-witnessed-predicate&gt;</code> (derivation trace, Datalog). Core preserved for learn. 
-        <a href="/starbridge.html?at=dregg://predicate/demo" target="_blank">Deep-link to Starbridge now →</a>
+        <a href="/starbridge/?at=dregg://predicate/demo" target="_blank">Deep-link to Starbridge now →</a>
       </div>
       <p>
         Authorization decisions are made by a Datalog evaluator. Facts describe the token's

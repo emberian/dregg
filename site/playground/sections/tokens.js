@@ -8,7 +8,7 @@ export function initTokens(wasm) {
     <div class="section-header">
       <h2>Tokens</h2>
       <!-- Tier 1 playground migration (§4.9 COMPLETE FOLLOWUP-05): deep-link to Starbridge (coexist during transition) -->
-      <a href="/starbridge.html?at=dregg://token/demo" target="_blank" style="font-size:0.8em;float:right;">Inspect tokens in Starbridge (dregg://token/... deep) →</a>
+      <a href="/starbridge/?at=dregg://token/demo" target="_blank" style="font-size:0.8em;float:right;">Inspect tokens in Starbridge (dregg://token/... deep) →</a>
       <p>
         Dragon's Egg tokens are macaroon-style bearer credentials. A root token is minted from a secret key,
         then attenuated by appending caveats that cryptographically restrict scope. Attenuation is

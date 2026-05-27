@@ -43,7 +43,7 @@ export function initGallery(wasm) {
     <div class="gallery-panel" id="gal-panel-amm">
       <div style="margin-bottom:16px;color:var(--text-dim);font-size:12px;line-height:1.6;background:#ffeeee;padding:0.2rem;">
         <strong>§4.9 Retire:</strong> AMM tab retired (slop-app ref). Real DeFi patterns now in starbridge-apps (e.g. compute-exchange future). 
-        <a href="/starbridge.html" target="_blank">Starbridge →</a>
+        <a href="/starbridge/" target="_blank">Starbridge →</a>
       </div>
       A constant-product AMM (x*y=k). Create a liquidity pool, execute a swap, and verify
       the invariant is maintained — all with conservation proofs hiding the actual reserves.

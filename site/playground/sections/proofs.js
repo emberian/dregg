@@ -8,7 +8,7 @@ export function initProofs(wasm) {
     <div class="section-header">
       <h2>STARK Proofs</h2>
       <!-- §4.9 tiered migration (FOLLOWUP-05): Tier 1 deep-link + Tier 2 deprecation banner (preserve tamper demo as educational) -->
-      <a href="/starbridge.html?at=dregg://proof/demo" target="_blank" style="font-size:0.8em;float:right;">Open in Starbridge &lt;dregg-proof&gt; (deep link) →</a>
+      <a href="/starbridge/?at=dregg://proof/demo" target="_blank" style="font-size:0.8em;float:right;">Open in Starbridge &lt;dregg-proof&gt; (deep link) →</a>
       <p>
         Generate real STARK proofs for Merkle membership claims over the BabyBear field
         (p = 2<sup>31</sup> - 2<sup>27</sup> + 1). These are transparent-setup,
@@ -17,7 +17,7 @@ export function initProofs(wasm) {
       </p>
       <div style="background:#fff8e6;border:1px solid #f0d080;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
         <strong>§4.9 Migration:</strong> Superseded by platform <code>&lt;dregg-proof&gt;</code> inspector (trust-tier, real views). Tamper demo preserved here (learn carve-out). 
-        <a href="/starbridge.html?at=dregg://proof/demo" target="_blank">Deep-link to Starbridge now →</a>
+        <a href="/starbridge/?at=dregg://proof/demo" target="_blank">Deep-link to Starbridge now →</a>
       </div>
       <span class="next-hint" data-next="merkle">Next: explore Merkle trees &#8594;</span>
     </div>
