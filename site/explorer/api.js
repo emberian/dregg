@@ -14,6 +14,16 @@ export function getNodeUrl() {
   return localStorage.getItem(STORAGE_KEY) || DEFAULT_URL;
 }
 
+/** Get the configured node WebSocket URL. */
+export function getNodeWsUrl() {
+  const url = new URL(getNodeUrl());
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.pathname = '/ws';
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
 /** Set the node URL (persists to localStorage). */
 export function setNodeUrl(url) {
   localStorage.setItem(STORAGE_KEY, url);
@@ -183,6 +193,11 @@ export async function getTokens() {
 /** Get the receipt chain. */
 export async function getReceipts() {
   return get('/api/receipts');
+}
+
+/** Get witnessed receipt artifacts for a receipt hash. */
+export async function getReceiptWitnesses(receiptHash) {
+  return get(`/api/receipts/${encodeURIComponent(receiptHash)}/witnesses`);
 }
 
 /** Get active intents in the pool. */

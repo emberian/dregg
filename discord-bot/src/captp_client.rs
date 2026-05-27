@@ -6,18 +6,16 @@
 //! `/captp/revoke`; this client must not pretend those HTTP endpoints exist.
 //!
 //! Handoffs are Discord-mediated local records: the bot stores a bearer token,
-//! recipient identity, sturdy ref, and local signature in a durable JSON file.
+//! recipient identity, sturdy ref, and local signature through the bot database.
 //! Redeeming the token enlivens the same sturdy ref for the intended recipient.
 
-use std::collections::HashMap;
 use std::io::Read;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::db::{CaptpExportRecord, CaptpHeldRecord, CaptpLocalHandoffRecord, Database};
 use dregg_captp::FederationId as GroupId;
 use dregg_captp::uri::DreggUri;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
 use tracing::info;
 
 /// A held capability reference with metadata.
@@ -70,6 +68,15 @@ impl HandoffStatus {
             Self::Revoked => "revoked",
         }
     }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "redeemed" => Some(Self::Redeemed),
+            "revoked" => Some(Self::Revoked),
+            _ => None,
+        }
+    }
 }
 
 /// A persistent local handoff record.
@@ -102,34 +109,20 @@ pub struct CapTPClient {
     pub bot_cell_id: String,
     /// The configured dregg node URL.
     pub node_url: String,
-    /// Held capabilities (keyed by cell ID).
-    held: RwLock<HashMap<String, HeldCapability>>,
-    /// Exported capabilities (keyed by cell ID).
-    exports: RwLock<HashMap<String, ExportedCapability>>,
-    /// Durable handoff records (keyed by token).
-    handoffs: RwLock<HashMap<String, HandoffRecord>>,
-    /// Path to the durable handoff store.
-    handoff_store_path: PathBuf,
 }
 
 impl CapTPClient {
     /// Create a new CapTP client for the bot.
     pub fn new(federation_id: GroupId, bot_cell_id: String, node_url: String) -> Self {
-        let handoff_store_path = handoff_store_path();
-        let handoffs = load_handoffs(&handoff_store_path).unwrap_or_default();
         Self {
             federation_id,
             bot_cell_id,
             node_url,
-            held: RwLock::new(HashMap::new()),
-            exports: RwLock::new(HashMap::new()),
-            handoffs: RwLock::new(handoffs),
-            handoff_store_path,
         }
     }
 
     /// Export a cell as a sturdy ref, returning the dregg URI.
-    pub async fn export_cap(&self, cell_id: &str) -> Result<DreggUri, CapTPError> {
+    pub async fn export_cap(&self, db: &Database, cell_id: &str) -> Result<DreggUri, CapTPError> {
         let cell_bytes = parse_cell_id(cell_id)?;
         let uri = DreggUri {
             federation_id: self.federation_id.0,
@@ -145,22 +138,30 @@ impl CapTPClient {
             exported_at: current_epoch(),
             revoked: false,
         };
-        self.exports
-            .write()
+        db.upsert_captp_export(&CaptpExportRecord::from(&export))
             .await
-            .insert(cell_id.to_string(), export);
+            .map_err(storage_error)?;
 
         info!(cell_id, "Exported capability as sturdy ref");
         Ok(uri)
     }
 
     /// Enliven a dregg URI — the bot accepts and holds the live reference.
-    pub async fn accept_cap(&self, uri_str: &str) -> Result<HeldCapability, CapTPError> {
+    pub async fn accept_cap(
+        &self,
+        db: &Database,
+        uri_str: &str,
+    ) -> Result<HeldCapability, CapTPError> {
         let uri = DreggUri::parse(uri_str).map_err(|e| CapTPError::InvalidUri(e.to_string()))?;
 
         let cell_id = hex::encode(uri.cell_id);
-        let exports = self.exports.read().await;
-        let Some(export) = exports.get(&cell_id) else {
+        let Some(export) = db
+            .get_captp_export(&cell_id)
+            .await
+            .map_err(storage_error)?
+            .map(export_from_record)
+            .transpose()?
+        else {
             return Err(CapTPError::Unsupported(format!(
                 "remote enliven is not implemented; URI `{cell_id}` was not exported by this bot instance"
             )));
@@ -175,7 +176,6 @@ impl CapTPClient {
                 "{cell_id} (swiss number does not match this bot's active export)"
             )));
         }
-        drop(exports);
 
         let cap = HeldCapability {
             uri,
@@ -185,7 +185,9 @@ impl CapTPClient {
             live: true,
         };
 
-        self.held.write().await.insert(cell_id.clone(), cap.clone());
+        db.upsert_captp_held_ref(&CaptpHeldRecord::from_cap(&cell_id, &cap))
+            .await
+            .map_err(storage_error)?;
         info!(cell_id, "Enlivened and holding capability");
         Ok(cap)
     }
@@ -193,26 +195,27 @@ impl CapTPClient {
     /// Create a handoff certificate delegating a capability to a recipient.
     pub async fn delegate_cap(
         &self,
+        db: &Database,
         cell_id: &str,
         recipient_key: &str,
     ) -> Result<HandoffRecord, CapTPError> {
         parse_cell_id(cell_id)?;
         parse_cell_id(recipient_key)?;
 
-        let uri = {
-            let exports = self.exports.read().await;
-            match exports.get(cell_id) {
-                Some(export) if !export.revoked => export.uri.clone(),
-                Some(_) => {
-                    return Err(CapTPError::NotFound(format!(
-                        "{cell_id} (local export is revoked)"
-                    )));
-                }
-                None => {
-                    drop(exports);
-                    self.export_cap(cell_id).await?
-                }
+        let uri = match db
+            .get_captp_export(cell_id)
+            .await
+            .map_err(storage_error)?
+            .map(export_from_record)
+            .transpose()?
+        {
+            Some(export) if !export.revoked => export.uri,
+            Some(_) => {
+                return Err(CapTPError::NotFound(format!(
+                    "{cell_id} (local export is revoked)"
+                )));
             }
+            None => self.export_cap(db, cell_id).await?,
         };
 
         let token = format!("dregg-handoff-{}", hex::encode(new_secret()));
@@ -236,29 +239,38 @@ impl CapTPClient {
             redeemed_at: None,
         };
 
-        let mut handoffs = self.handoffs.write().await;
-        handoffs.insert(token.clone(), record.clone());
-        persist_handoffs(&self.handoff_store_path, &handoffs)?;
+        db.upsert_captp_local_handoff(&CaptpLocalHandoffRecord::from(&record))
+            .await
+            .map_err(storage_error)?;
 
         info!(cell_id, recipient_key, token, "Created local CapTP handoff");
         Ok(record)
     }
 
     /// Return a handoff record by token.
-    pub async fn handoff_status(&self, token: &str) -> Option<HandoffRecord> {
-        self.handoffs.read().await.get(token).cloned()
+    pub async fn handoff_status(&self, db: &Database, token: &str) -> Option<HandoffRecord> {
+        db.get_captp_local_handoff(token)
+            .await
+            .ok()
+            .flatten()
+            .and_then(handoff_from_record)
     }
 
     /// Redeem a Discord-mediated local handoff token for the recipient identity.
     pub async fn redeem_handoff(
         &self,
+        db: &Database,
         token: &str,
         recipient_key: &str,
     ) -> Result<HandoffRecord, CapTPError> {
         parse_cell_id(recipient_key)?;
 
-        let mut handoffs = self.handoffs.write().await;
-        let Some(record) = handoffs.get_mut(token) else {
+        let Some(mut record) = db
+            .get_captp_local_handoff(token)
+            .await
+            .map_err(storage_error)?
+            .and_then(handoff_from_record)
+        else {
             return Err(CapTPError::NotFound(format!("{token} (handoff token)")));
         };
 
@@ -301,11 +313,12 @@ impl CapTPClient {
         record.status = HandoffStatus::Redeemed;
         record.redeemed_at = Some(current_epoch());
         let redeemed = record.clone();
-        self.held
-            .write()
+        db.upsert_captp_held_ref(&CaptpHeldRecord::from_cap(&redeemed.cell_id, &cap))
             .await
-            .insert(redeemed.cell_id.clone(), cap);
-        persist_handoffs(&self.handoff_store_path, &handoffs)?;
+            .map_err(storage_error)?;
+        db.upsert_captp_local_handoff(&CaptpLocalHandoffRecord::from(&redeemed))
+            .await
+            .map_err(storage_error)?;
 
         info!(
             token,
@@ -316,57 +329,69 @@ impl CapTPClient {
     }
 
     /// Revoke a previously exported capability.
-    pub async fn revoke_cap(&self, cell_id: &str) -> Result<(), CapTPError> {
+    pub async fn revoke_cap(&self, db: &Database, cell_id: &str) -> Result<(), CapTPError> {
         parse_cell_id(cell_id)?;
 
-        let mut exports = self.exports.write().await;
-        let Some(export) = exports.get_mut(cell_id) else {
+        if !db
+            .revoke_captp_export(cell_id)
+            .await
+            .map_err(storage_error)?
+        {
             return Err(CapTPError::NotFound(format!(
                 "{cell_id} (no local export to revoke)"
             )));
         };
-        export.revoked = true;
-        drop(exports);
 
-        let mut handoffs = self.handoffs.write().await;
-        for record in handoffs.values_mut() {
-            if record.cell_id == cell_id && record.status == HandoffStatus::Pending {
-                record.status = HandoffStatus::Revoked;
-            }
-        }
-        persist_handoffs(&self.handoff_store_path, &handoffs)?;
-        drop(handoffs);
-
-        // Remove from held if we hold it.
-        self.held.write().await.remove(cell_id);
+        db.revoke_pending_captp_local_handoffs_for_cell(cell_id, current_epoch() as i64)
+            .await
+            .map_err(storage_error)?;
+        db.delete_captp_held_ref(cell_id)
+            .await
+            .map_err(storage_error)?;
 
         info!(cell_id, "Revoked capability");
         Ok(())
     }
 
     /// List all held capabilities.
-    pub async fn list_held(&self) -> Vec<(String, HeldCapability)> {
-        self.held
-            .read()
+    pub async fn list_held(
+        &self,
+        db: &Database,
+    ) -> Result<Vec<(String, HeldCapability)>, CapTPError> {
+        db.list_captp_held_refs()
             .await
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map_err(storage_error)?
+            .into_iter()
+            .map(held_from_record)
             .collect()
     }
 
     /// List all exports.
-    pub async fn list_exports(&self) -> Vec<(String, ExportedCapability)> {
-        self.exports
-            .read()
+    pub async fn list_exports(
+        &self,
+        db: &Database,
+    ) -> Result<Vec<(String, ExportedCapability)>, CapTPError> {
+        Ok(db
+            .list_captp_exports()
             .await
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+            .map_err(storage_error)?
+            .into_iter()
+            .map(export_from_record)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|export| (export.cell_id.clone(), export))
+            .collect())
     }
 
     /// List all local handoff records.
-    pub async fn list_handoffs(&self) -> Vec<HandoffRecord> {
-        self.handoffs.read().await.values().cloned().collect()
+    pub async fn list_handoffs(&self, db: &Database) -> Result<Vec<HandoffRecord>, CapTPError> {
+        Ok(db
+            .list_captp_local_handoffs()
+            .await
+            .map_err(storage_error)?
+            .into_iter()
+            .filter_map(handoff_from_record)
+            .collect())
     }
 }
 
@@ -472,48 +497,91 @@ fn sign_handoff(
     )
 }
 
-fn handoff_store_path() -> PathBuf {
-    if let Ok(path) = std::env::var("CAPTP_HANDOFF_STORE") {
-        return PathBuf::from(path);
-    }
+fn storage_error(error: sqlx::Error) -> CapTPError {
+    CapTPError::Storage(error.to_string())
+}
 
-    if let Ok(database_url) = std::env::var("DATABASE_URL") {
-        if let Some(path) = database_url.strip_prefix("sqlite:") {
-            return PathBuf::from(format!("{path}.captp-handoffs.json"));
+impl From<&ExportedCapability> for CaptpExportRecord {
+    fn from(export: &ExportedCapability) -> Self {
+        Self {
+            cell_id: export.cell_id.clone(),
+            sturdy_uri: export.uri.to_string(),
+            shared_with: export.shared_with.map(|id| id.to_string()),
+            exported_at: export.exported_at as i64,
+            revoked: export.revoked,
         }
     }
-
-    PathBuf::from("bot.captp-handoffs.json")
 }
 
-fn load_handoffs(path: &PathBuf) -> Result<HashMap<String, HandoffRecord>, CapTPError> {
-    if !path.exists() {
-        return Ok(HashMap::new());
+impl CaptpHeldRecord {
+    fn from_cap(cell_id: &str, cap: &HeldCapability) -> Self {
+        Self {
+            cell_id: cell_id.to_string(),
+            sturdy_uri: cap.uri.to_string(),
+            label: cap.label.clone(),
+            shared_by: cap.shared_by.map(|id| id.to_string()),
+            acquired_at: cap.acquired_at as i64,
+            live: cap.live,
+        }
     }
-
-    let bytes = std::fs::read(path).map_err(|e| CapTPError::Storage(e.to_string()))?;
-    let records: Vec<HandoffRecord> =
-        serde_json::from_slice(&bytes).map_err(|e| CapTPError::Storage(e.to_string()))?;
-    Ok(records
-        .into_iter()
-        .map(|record| (record.token.clone(), record))
-        .collect())
 }
 
-fn persist_handoffs(
-    path: &PathBuf,
-    handoffs: &HashMap<String, HandoffRecord>,
-) -> Result<(), CapTPError> {
-    let mut records: Vec<_> = handoffs.values().cloned().collect();
-    records.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.token.cmp(&b.token)));
-    let json =
-        serde_json::to_vec_pretty(&records).map_err(|e| CapTPError::Storage(e.to_string()))?;
-
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        std::fs::create_dir_all(parent).map_err(|e| CapTPError::Storage(e.to_string()))?;
+impl From<&HandoffRecord> for CaptpLocalHandoffRecord {
+    fn from(record: &HandoffRecord) -> Self {
+        Self {
+            token_id: record.token.clone(),
+            cell_id: record.cell_id.clone(),
+            sturdy_uri: record.uri.clone(),
+            recipient_cell_id: record.recipient_key.clone(),
+            local_signature: record.local_signature.clone(),
+            status: record.status.as_str().to_string(),
+            created_at: record.created_at as i64,
+            redeemed_at: record.redeemed_at.map(|value| value as i64),
+        }
     }
-    std::fs::write(path, json).map_err(|e| CapTPError::Storage(e.to_string()))
+}
+
+fn export_from_record(record: CaptpExportRecord) -> Result<ExportedCapability, CapTPError> {
+    Ok(ExportedCapability {
+        cell_id: record.cell_id,
+        uri: DreggUri::parse(&record.sturdy_uri)
+            .map_err(|e| CapTPError::InvalidUri(e.to_string()))?,
+        shared_with: record
+            .shared_with
+            .as_deref()
+            .and_then(|value| value.parse().ok()),
+        exported_at: record.exported_at as u64,
+        revoked: record.revoked,
+    })
+}
+
+fn held_from_record(record: CaptpHeldRecord) -> Result<(String, HeldCapability), CapTPError> {
+    let uri =
+        DreggUri::parse(&record.sturdy_uri).map_err(|e| CapTPError::InvalidUri(e.to_string()))?;
+    Ok((
+        record.cell_id,
+        HeldCapability {
+            uri,
+            label: record.label,
+            shared_by: record
+                .shared_by
+                .as_deref()
+                .and_then(|value| value.parse().ok()),
+            acquired_at: record.acquired_at as u64,
+            live: record.live,
+        },
+    ))
+}
+
+fn handoff_from_record(record: CaptpLocalHandoffRecord) -> Option<HandoffRecord> {
+    Some(HandoffRecord {
+        token: record.token_id,
+        cell_id: record.cell_id,
+        uri: record.sturdy_uri,
+        recipient_key: record.recipient_cell_id,
+        local_signature: record.local_signature,
+        status: HandoffStatus::from_str(&record.status)?,
+        created_at: record.created_at as u64,
+        redeemed_at: record.redeemed_at.map(|value| value as u64),
+    })
 }

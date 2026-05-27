@@ -14,6 +14,9 @@ use crate::devnet::SubmitSignedTurnResult;
 pub struct CredentialIssueResult {
     pub credential_id: String,
     pub schema: String,
+    pub issued_at: i64,
+    pub encoded_credential: String,
+    pub attributes_json: String,
     pub turn: SubmitSignedTurnResult,
 }
 
@@ -48,6 +51,10 @@ pub async fn issue_from_discord_input(
     )
     .map_err(|e| format!("credential issuance failed: {e}"))?;
     let credential_id = hex::encode(credential.id());
+    let encoded_credential = serde_json::to_string(&credential)
+        .map_err(|e| format!("credential serialization failed: {e}"))?;
+    let attributes_json = serde_json::to_string(&credential.attributes)
+        .map_err(|e| format!("credential attributes serialization failed: {e}"))?;
     let action = build_issue_credential_action(&cclerk.app, issuer_cell, &credential, 1, [0u8; 32]);
     let turn = state
         .devnet
@@ -69,6 +76,9 @@ pub async fn issue_from_discord_input(
     Ok(CredentialIssueResult {
         credential_id,
         schema: schema.name,
+        issued_at,
+        encoded_credential,
+        attributes_json,
         turn,
     })
 }

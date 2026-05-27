@@ -6,6 +6,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MANIFEST="$ROOT/site/dist/artifacts-manifest.json"
+
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
 
 echo "=== Building wasm/pkg ==="
 wasm-pack build "$ROOT/wasm" --target web --out-dir pkg --release
@@ -25,7 +34,34 @@ cp "$ROOT/extension/dist/dregg-cipherclerk-firefox.xpi" "$ROOT/site/extension/dr
 echo "=== Building site/dist ==="
 (cd "$ROOT/site" && npm run build)
 
+echo "=== Writing artifact manifest ==="
+cat >"$MANIFEST" <<JSON
+{
+  "schema": "dregg-web-artifacts-v1",
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "artifacts": {
+    "pkg/dregg_wasm.js": {
+      "bytes": $(wc -c <"$ROOT/site/dist/pkg/dregg_wasm.js" | tr -d ' '),
+      "sha256": "$(sha256_file "$ROOT/site/dist/pkg/dregg_wasm.js")"
+    },
+    "pkg/dregg_wasm_bg.wasm": {
+      "bytes": $(wc -c <"$ROOT/site/dist/pkg/dregg_wasm_bg.wasm" | tr -d ' '),
+      "sha256": "$(sha256_file "$ROOT/site/dist/pkg/dregg_wasm_bg.wasm")"
+    },
+    "extension/dregg-cipherclerk.zip": {
+      "bytes": $(wc -c <"$ROOT/site/dist/extension/dregg-cipherclerk.zip" | tr -d ' '),
+      "sha256": "$(sha256_file "$ROOT/site/dist/extension/dregg-cipherclerk.zip")"
+    },
+    "extension/dregg-cipherclerk-firefox.xpi": {
+      "bytes": $(wc -c <"$ROOT/site/dist/extension/dregg-cipherclerk-firefox.xpi" | tr -d ' '),
+      "sha256": "$(sha256_file "$ROOT/site/dist/extension/dregg-cipherclerk-firefox.xpi")"
+    }
+  }
+}
+JSON
+
 echo "=== Web artifacts ready ==="
 echo "Site:      $ROOT/site/dist"
 echo "WASM:      $ROOT/site/dist/pkg/dregg_wasm.js"
 echo "Extension: $ROOT/site/dist/extension/dregg-cipherclerk.zip"
+echo "Manifest:  $MANIFEST"

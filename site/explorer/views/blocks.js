@@ -8,6 +8,7 @@ import * as api from '../api.js';
 export const name = 'blocks';
 
 let container = null;
+let focusedBlockHeight = null;
 
 function starbridgeHref(uri) {
   return `../starbridge/?at=${encodeURIComponent(uri)}&runtime=remote`;
@@ -71,9 +72,11 @@ function renderBlocksTable(blocks) {
       if (block) renderBlockDetail(block);
     });
   });
+  if (focusedBlockHeight !== null) setTimeout(() => focusBlockHeight(focusedBlockHeight), 0);
 }
 
 function focusBlockHeight(height) {
+  focusedBlockHeight = String(height);
   const row = container?.querySelector(`tr[data-height="${height}"]`);
   if (!row) return;
   row.classList.add('highlighted');

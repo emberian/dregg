@@ -55,6 +55,25 @@ The update script refuses to deploy over local or untracked changes. It fetches
 `dregg-discord-bot`, restarts both systemd services, updates Caddy when needed,
 and runs `deploy/aws/preflight-discord-bot.sh`.
 
+## Static Site Artifacts
+
+The public site is served from `site/dist`, not raw `site/` sources. Build the
+browser artifacts in dependency order before copying to the server:
+
+```bash
+./scripts/build-web-artifacts.sh
+rsync -az --delete site/dist/ ubuntu@devnet.dregg.fg-goose.online:/opt/dregg/site/dist/
+ssh ubuntu@devnet.dregg.fg-goose.online /opt/dregg/deploy/aws/deploy-site.sh
+```
+
+That script rebuilds `wasm/pkg`, refreshes `site/pkg`, packages the Cipherclerk
+extension downloads, rebuilds `site/dist`, and writes
+`site/dist/artifacts-manifest.json` with SHA-256 checksums for the WASM and
+extension packages. The server deploy refuses to proceed if those artifacts or
+the manifest are missing. If the server has the full web toolchain, set
+`BUILD_WEB_ARTIFACTS=1` before running `deploy-site.sh`; otherwise the server
+uses the prebuilt `site/dist` uploaded by rsync.
+
 ## Monitoring
 
 ```bash

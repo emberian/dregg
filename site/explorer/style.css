@@ -1641,6 +1641,11 @@ button { font-family: inherit; cursor: pointer; }
   border-color: var(--accent);
 }
 
+.receipt-item.highlighted {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 /* ============================================================
    RESPONSIVE
    ============================================================ */

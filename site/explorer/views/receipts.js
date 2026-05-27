@@ -7,6 +7,8 @@ import * as api from '../api.js';
 
 export const name = 'receipts';
 
+let focusedReceiptHash = null;
+
 export function init(el) {
   bus.on('receipts:updated', (receipts) => {
     if (state.currentPage === 'receipts') renderReceiptChain(receipts);
@@ -55,9 +57,11 @@ function renderReceiptChain(receipts) {
       </div>
     </div>
   `).join('');
+  if (focusedReceiptHash) setTimeout(() => focusReceipt(focusedReceiptHash), 0);
 }
 
 function focusReceipt(hash) {
+  focusedReceiptHash = hash;
   const item = document.querySelector(`[data-receipt-hash="${hash}"]`);
   if (!item) return;
   item.classList.add('highlighted');

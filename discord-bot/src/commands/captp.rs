@@ -91,7 +91,7 @@ pub async fn handle_share(ctx: &Context, command: &CommandInteraction, state: &B
         return;
     }
 
-    match state.captp.export_cap(&cell_id).await {
+    match state.captp.export_cap(&state.db, &cell_id).await {
         Ok(uri) => {
             let uri_str = uri.to_string();
             let short_cell = if cell_id.len() > 16 {
@@ -137,7 +137,7 @@ pub async fn handle_accept(ctx: &Context, command: &CommandInteraction, state: &
         return;
     }
 
-    match state.captp.accept_cap(&uri_or_token).await {
+    match state.captp.accept_cap(&state.db, &uri_or_token).await {
         Ok(cap) => {
             let cell_id = hex::encode(cap.uri.cell_id);
             let short = if cell_id.len() > 16 {
@@ -242,7 +242,11 @@ pub async fn handle_delegate(ctx: &Context, command: &CommandInteraction, state:
         }
     };
 
-    match state.captp.delegate_cap(&cell_id, &recipient_key).await {
+    match state
+        .captp
+        .delegate_cap(&state.db, &cell_id, &recipient_key)
+        .await
+    {
         Ok(record) => {
             let short_token = if record.token.len() > 72 {
                 format!("{}...", &record.token[..72])
@@ -277,9 +281,36 @@ pub async fn handle_delegate(ctx: &Context, command: &CommandInteraction, state:
 pub async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     defer_ephemeral(ctx, command).await;
 
-    let held = state.captp.list_held().await;
-    let exports = state.captp.list_exports().await;
-    let handoffs = state.captp.list_handoffs().await;
+    let held = match state.captp.list_held(&state.db).await {
+        Ok(held) => held,
+        Err(e) => {
+            let embed = embeds::error_embed("List Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+    let exports = match state.captp.list_exports(&state.db).await {
+        Ok(exports) => exports,
+        Err(e) => {
+            let embed = embeds::error_embed("List Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+    let handoffs = match state.captp.list_handoffs(&state.db).await {
+        Ok(handoffs) => handoffs,
+        Err(e) => {
+            let embed = embeds::error_embed("List Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
 
     if held.is_empty() && exports.is_empty() && handoffs.is_empty() {
         let embed = embeds::dregg_embed("Bot Capabilities")
@@ -367,7 +398,7 @@ pub async fn handle_revoke(ctx: &Context, command: &CommandInteraction, state: &
         return;
     }
 
-    match state.captp.revoke_cap(&cell_id).await {
+    match state.captp.revoke_cap(&state.db, &cell_id).await {
         Ok(()) => {
             let embed = embeds::success_embed("Capability Revoked").description(format!(
                 "Cell `{}` has been revoked. The local sturdy ref is no longer accepted by the bot.",
@@ -426,7 +457,11 @@ async fn handle_handoff_redeem(
         }
     };
 
-    match state.captp.redeem_handoff(token, &recipient_key).await {
+    match state
+        .captp
+        .redeem_handoff(&state.db, token, &recipient_key)
+        .await
+    {
         Ok(record) => {
             let embed = embeds::success_embed("Handoff Redeemed")
                 .description("The bot accepted the handoff token and now holds the delegated live reference.")
@@ -438,7 +473,7 @@ async fn handle_handoff_redeem(
                 .await;
         }
         Err(e) => {
-            let status = state.captp.handoff_status(token).await;
+            let status = state.captp.handoff_status(&state.db, token).await;
             let detail = match status {
                 Some(record) => format!("{}\nCurrent status: `{}`", e, record.status.as_str()),
                 None => e.to_string(),

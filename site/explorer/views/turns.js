@@ -7,6 +7,8 @@ import * as api from '../api.js';
 
 export const name = 'turns';
 
+let focusedTurnHash = null;
+
 export function init(el) {
   bus.on('receipts:updated', (receipts) => {
     if (state.currentPage === 'turns') renderTurnsFromReceipts(receipts);
@@ -51,9 +53,11 @@ function renderTurnsFromReceipts(receipts) {
       if (receipt) renderTurnDetail(receipt);
     });
   });
+  if (focusedTurnHash) setTimeout(() => focusTurn(focusedTurnHash), 0);
 }
 
 function focusTurn(hash) {
+  focusedTurnHash = hash;
   const row = document.querySelector(`tr[data-turn-hash="${hash}"]`);
   if (!row) return;
   row.classList.add('highlighted');

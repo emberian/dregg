@@ -137,6 +137,33 @@ async fn handle_issue(ctx: &Context, command: &CommandInteraction, state: &BotSt
     {
         Ok(result) => {
             let turn_hash = result.turn.turn_hash.clone();
+            if let Err(e) = state
+                .db
+                .store_held_credential(
+                    &discord_id,
+                    &cell_id,
+                    &cell_id,
+                    &result.credential_id,
+                    &result.schema,
+                    result.issued_at,
+                    turn_hash.as_deref(),
+                    &result.encoded_credential,
+                    &result.attributes_json,
+                )
+                .await
+            {
+                let embed = embeds::error_embed(
+                    "Holder Store Failed",
+                    &format!(
+                        "The node accepted the credential turn, but the bot could not persist the held credential locally: {e}"
+                    ),
+                );
+                let _ = command
+                    .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                    .await;
+                return;
+            }
+
             let embed = embeds::success_embed("Credential Issued")
                 .field("Schema", &result.schema, true)
                 .field("Credential ID", format!("`{}`", result.credential_id), true)
@@ -150,7 +177,7 @@ async fn handle_issue(ctx: &Context, command: &CommandInteraction, state: &BotSt
                 )
                 .field(
                     "What Is Stored",
-                    "The node committed the identity issue action as a signed turn. It does not expose a holder-private credential store yet, so keep the credential ID and turn hash for audit.",
+                    "Stored locally in the bot holder store: credential metadata, holder-private encoded credential material, attributes JSON, and the committed turn hash.",
                     false,
                 )
                 .field("Attributes", format!("```json\n{attributes}\n```"), false);
@@ -250,15 +277,89 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
         }
     };
 
-    let embed = embeds::warning_embed(
-        "Proof Request Checkpoints",
+    let candidate = match state
+        .db
+        .find_held_credential_for_predicate(&target_discord, &subject_cell, &predicate)
+        .await
+    {
+        Ok(candidate) => candidate,
+        Err(e) => {
+            let embed = embeds::error_embed("Database Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+    let status = if candidate.is_some() {
+        "credential_metadata_found"
+    } else {
+        "no_local_credential"
+    };
+    let credential_id = candidate
+        .as_ref()
+        .map(|credential| credential.credential_id.as_str());
+    let presentation_json = serde_json::json!({
+        "type": "presentation_placeholder",
+        "predicate": predicate,
+        "status": status,
+        "credential_id": credential_id,
+        "cryptographic_proof": null,
+        "note": "Selective disclosure proof generation is not implemented in the Discord bot."
+    })
+    .to_string();
+    let presentation = match state
+        .db
+        .create_identity_presentation(
+            &discord_id,
+            &target_discord,
+            &subject_cell,
+            &predicate,
+            status,
+            credential_id,
+            &presentation_json,
+        )
+        .await
+    {
+        Ok(presentation) => presentation,
+        Err(e) => {
+            let embed = embeds::error_embed("Database Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+
+    let mut embed = embeds::warning_embed(
+        "Proof Request Stored",
         &format!(
-            "Target <@{target_id}> has cell `{}` and predicate `{}` was accepted. The node now exposes identity receipt/proof checkpoints, but selective disclosure still needs a holder-private credential store and presentation protocol.",
+            "Stored request `{}` for <@{target_id}> cell `{}` with status `{}`. No selective disclosure proof was generated.",
+            presentation.request_id,
             &subject_cell[..16.min(subject_cell.len())],
-            predicate
+            presentation.status
         ),
     )
-    .field(
+    .field("Predicate", format!("`{predicate}`"), false);
+    if let Some(credential) = candidate {
+        embed = embed.field(
+            "Matched Local Credential",
+            format!(
+                "`{}` — schema `{}` issued at {}",
+                short_hash(&credential.credential_id),
+                credential.schema,
+                credential.issued_at
+            ),
+            false,
+        );
+    } else {
+        embed = embed.field(
+            "Matched Local Credential",
+            "None. The request was persisted as a placeholder only.",
+            false,
+        );
+    }
+    let embed = embed.field(
         "Proof Checkpoints",
         identity_proof_checkpoints_field(state, &subject_cell).await,
         false,
@@ -294,18 +395,36 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotSta
         }
     };
 
-    let embed = embeds::warning_embed(
-        "Credential Checkpoints",
-        &format!(
-            "Credential issuance commits canonical identity actions for `{}`. The node exposes identity credential checkpoints from committed receipts, while holder-private credential storage is still bot/user-side work.",
+    let held_credentials = match state
+        .db
+        .list_held_credentials(&discord_id, &cell_id, 10)
+        .await
+    {
+        Ok(credentials) => credentials,
+        Err(e) => {
+            let embed = embeds::error_embed("Database Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+
+    let embed = embeds::success_embed("Held Credentials")
+        .description(format!(
+            "Local holder store for `{}` plus node checkpoint links from committed receipts.",
             &cell_id[..16.min(cell_id.len())],
-        ),
-    )
-    .field(
-        "Recent Credentials",
-        identity_credentials_field(state, &cell_id).await,
-        false,
-    );
+        ))
+        .field(
+            "Local Credentials",
+            held_credentials_field(&held_credentials),
+            false,
+        )
+        .field(
+            "Node Checkpoints",
+            identity_credentials_field(state, &cell_id).await,
+            false,
+        );
     let _ = command
         .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
         .await;
@@ -369,6 +488,32 @@ async fn identity_credentials_field(state: &BotState, cell_id: &str) -> String {
             .join("\n"),
         Err(e) => format!("Could not load `/api/starbridge/identity/credentials`: {e}"),
     }
+}
+
+fn held_credentials_field(credentials: &[crate::db::HeldCredential]) -> String {
+    if credentials.is_empty() {
+        return "No locally held credentials are stored for this hosted identity.".to_string();
+    }
+
+    credentials
+        .iter()
+        .map(|credential| {
+            let turn = credential
+                .turn_hash
+                .as_deref()
+                .map(short_hash)
+                .unwrap_or_else(|| "unknown".to_string());
+            format!(
+                "`{}` — schema `{}` issuer `{}` turn `{}` issued {}",
+                short_hash(&credential.credential_id),
+                credential.schema,
+                short_hash(&credential.issuer_cell_id),
+                turn,
+                credential.issued_at
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 async fn identity_proof_checkpoints_field(state: &BotState, cell_id: &str) -> String {

@@ -8,6 +8,7 @@ import * as api from '../api.js';
 export const name = 'cells';
 
 let container = null;
+let focusedCellId = null;
 
 function starbridgeHref(uri) {
   return `../starbridge/?at=${encodeURIComponent(uri)}&runtime=remote`;
@@ -33,9 +34,9 @@ export function init(el) {
     try {
       const detail = await api.getCell(id);
       renderCellDetail(detail);
+      focusCell(id);
     } catch {
-      const row = container?.querySelector(`tr[data-cell-id="${id}"]`);
-      if (row) row.click();
+      focusCell(id);
     }
   });
 }
@@ -106,6 +107,16 @@ function renderCellsTable(cells) {
       }
     });
   });
+  if (focusedCellId) setTimeout(() => focusCell(focusedCellId), 0);
+}
+
+function focusCell(id) {
+  focusedCellId = id;
+  const row = container?.querySelector(`tr[data-cell-id="${id}"]`);
+  if (!row) return;
+  row.classList.add('highlighted');
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.click();
 }
 
 function renderCellDetail(cell) {

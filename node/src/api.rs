@@ -226,6 +226,20 @@ pub struct AttestedRootInfo {
 }
 
 #[derive(Serialize)]
+pub struct FederationInfo {
+    pub id: String,
+    pub federation_id: String,
+    pub committee_epoch: u64,
+    pub threshold: u32,
+    pub member_count: usize,
+    pub members: Vec<String>,
+    pub is_local: bool,
+    pub latest_height: u64,
+    pub latest_root: Option<String>,
+    pub num_finalized_roots: usize,
+}
+
+#[derive(Serialize)]
 pub struct CellListEntry {
     pub id: String,
     pub balance: u64,
@@ -1087,9 +1101,11 @@ pub fn router(
         .route("/health", get(get_status))
         .route("/federation/roots", get(get_federation_roots))
         .route("/api/blocks", get(get_federation_roots))
+        .route("/api/federations", get(get_federations))
         .route("/api/cells", get(get_all_cells))
         .route("/api/cell/{id}", get(get_cell_detail))
         .route("/api/node/cells/{id}", get(get_cell_detail))
+        .route("/api/tokens", get(get_tokens))
         .route("/api/receipts", get(get_receipts))
         .route("/api/receipts/{hash}/witnesses", get(get_receipt_witnesses))
         .route("/api/starbridge/receipts", get(get_starbridge_receipts))
@@ -1449,9 +1465,16 @@ async fn get_receipt_witnesses(
         .get(&receipt_hash)
         .cloned()
         .unwrap_or_default();
+    let witness_artifacts = witnessed
+        .iter()
+        .map(|witness| witness.to_artifact_bytes().map(|bytes| hex_encode_var(&bytes)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({
         "receipt_hash": hex_encode(&receipt_hash),
         "witness_count": witnessed.len(),
+        "artifact_format": "DWR1",
+        "witness_artifacts": witness_artifacts,
         "witnessed_receipts": witnessed,
     })))
 }
@@ -3241,6 +3264,60 @@ async fn get_federation_roots(State(state): State<NodeState>) -> Json<Vec<Attest
         })
         .collect();
     Json(infos)
+}
+
+async fn get_federations(State(state): State<NodeState>) -> Json<Vec<FederationInfo>> {
+    let s = state.read().await;
+    Json(federation_infos(&s))
+}
+
+fn federation_infos(s: &crate::state::NodeStateInner) -> Vec<FederationInfo> {
+    let roots = s.store.all_attested_roots().unwrap_or_default();
+    let latest_root = roots.iter().max_by_key(|r| r.height);
+    let latest_height = latest_root.map(|r| r.height).unwrap_or(0);
+    let latest_root_hex = latest_root.map(|r| hex_encode(&r.merkle_root));
+
+    let mut infos: Vec<FederationInfo> = s
+        .known_federations
+        .iter()
+        .map(|(id, fed)| FederationInfo {
+            id: id.hex(),
+            federation_id: id.hex(),
+            committee_epoch: fed.epoch(),
+            threshold: fed.threshold(),
+            member_count: fed.members().len(),
+            members: fed.members().iter().map(|pk| pk.hex()).collect(),
+            is_local: id.0 == s.federation_id,
+            latest_height,
+            latest_root: latest_root_hex.clone(),
+            num_finalized_roots: roots.len(),
+        })
+        .collect();
+
+    infos.sort_by(|a, b| a.id.cmp(&b.id));
+
+    if infos.is_empty() {
+        infos.push(FederationInfo {
+            id: hex_encode(&s.federation_id),
+            federation_id: hex_encode(&s.federation_id),
+            committee_epoch: s.committee_epoch,
+            threshold: s.known_federation_keys.len() as u32,
+            member_count: s.known_federation_keys.len(),
+            members: sorted_hex_keys(&s.known_federation_keys),
+            is_local: true,
+            latest_height,
+            latest_root: latest_root_hex,
+            num_finalized_roots: roots.len(),
+        });
+    }
+
+    infos
+}
+
+fn sorted_hex_keys(keys: &[dregg_sdk::PublicKey]) -> Vec<String> {
+    let mut keys: Vec<String> = keys.iter().map(|key| key.hex()).collect();
+    keys.sort();
+    keys
 }
 
 // =============================================================================
@@ -5705,11 +5782,14 @@ async fn post_queue_atomic_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
     use dregg_coord::{AtomicForest, Coordinator, Decision, Vote};
     use dregg_turn::ComputronCosts;
     use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect};
+    use http_body_util::BodyExt;
     use std::collections::{HashMap, VecDeque};
     use std::time::{Duration, Instant};
+    use tower::ServiceExt;
 
     /// Helper: create a deterministic key pair for testing.
     fn test_key(name: &str) -> [u8; 32] {
@@ -5746,6 +5826,19 @@ mod tests {
             effects: vec![format!("effect-{height}")],
             timestamp: height as i64,
         }
+    }
+
+    fn witnessed_with_marker(marker: u8) -> dregg_turn::WitnessedReceipt {
+        let mut receipt = dregg_turn::TurnReceipt::default();
+        receipt.turn_hash = [marker; 32];
+        receipt.effects_hash = [marker.wrapping_add(1); 32];
+        receipt.agent = CellId([marker.wrapping_add(2); 32]);
+        dregg_turn::WitnessedReceipt::from_components(
+            receipt,
+            vec![marker, marker.wrapping_add(1)],
+            vec![marker as u32],
+            None,
+        )
     }
 
     #[test]
@@ -5795,6 +5888,130 @@ mod tests {
         assert!(!infos[1].chain_head);
         assert_eq!(infos[2].chain_index, 0);
         assert!(!infos[2].chain_head);
+    }
+
+    #[tokio::test]
+    async fn explorer_public_contract_endpoints_are_available() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+
+        for path in [
+            "/status",
+            "/api/cells",
+            "/api/tokens",
+            "/api/receipts",
+            "/api/blocks",
+            "/federation/roots",
+            "/api/federations",
+            "/api/intents",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK, "{path} should be public");
+
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes();
+            serde_json::from_slice::<serde_json::Value>(&body)
+                .unwrap_or_else(|err| panic!("{path} should return JSON: {err}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn receipt_witness_endpoint_exports_dwr1_artifacts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let receipt_hash = [0xA5; 32];
+        state
+            .write()
+            .await
+            .push_witnessed_receipt(receipt_hash, witnessed_with_marker(0x41));
+
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/receipts/{}/witnesses", hex_encode(&receipt_hash)))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        assert_eq!(json["artifact_format"], "DWR1");
+        assert_eq!(json["witness_count"], 1);
+        assert_eq!(
+            json["witnessed_receipts"]
+                .as_array()
+                .expect("legacy witness array")
+                .len(),
+            1
+        );
+        let artifact_hex = json["witness_artifacts"][0]
+            .as_str()
+            .expect("artifact hex");
+        let artifact_bytes = hex_decode_var(artifact_hex).expect("valid artifact hex");
+        let decoded = dregg_turn::WitnessedReceipt::from_artifact_bytes(&artifact_bytes)
+            .expect("DWR1 witness artifact decodes");
+        assert_eq!(decoded.proof_bytes, vec![0x41, 0x42]);
+    }
+
+    #[tokio::test]
+    async fn federation_alias_returns_real_local_state_shape() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/federations")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let federations: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let first = federations
+            .as_array()
+            .and_then(|items| items.first())
+            .expect("at least one local federation view");
+        assert_eq!(first["is_local"], true);
+        assert_eq!(first["id"].as_str().expect("id").len(), 64);
+        assert_eq!(first["federation_id"], first["id"]);
+        assert!(first["latest_height"].is_u64());
+        assert!(first["num_finalized_roots"].is_u64());
     }
 
     #[test]

@@ -6,9 +6,8 @@ hints/benches/committee_1024.json
 hints/benches/committee.json
 hints/benches/committee_128.json
 
+extension/dist
 site/dist
-site/extension/*.zip
-site/extension/*.xpi
 site/assets/dregg.pdf
 site/paper/
 paper/*.pdf
@@ -30,3 +29,6 @@ CLAUDIT.md
 
 states/
 spec/states
+
+*.zip
+*.xpi

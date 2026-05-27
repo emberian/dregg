@@ -43,14 +43,8 @@ echo "Restarting Discord bot..."
 sudo install -d -o dregg -g dregg /var/lib/dregg-discord-bot
 sudo systemctl restart dregg-discord-bot
 
-echo "Building static site..."
+echo "Deploying static site..."
 deploy/aws/deploy-site.sh
-
-echo "Updating Caddyfile if needed..."
-if ! diff -q deploy/aws/caddy/Caddyfile /etc/caddy/Caddyfile >/dev/null 2>&1; then
-  sudo cp deploy/aws/caddy/Caddyfile /etc/caddy/Caddyfile
-  sudo systemctl reload caddy
-fi
 
 echo "Running preflight..."
 deploy/aws/preflight-discord-bot.sh

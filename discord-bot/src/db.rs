@@ -92,6 +92,66 @@ pub struct CaptpHandoffRecord {
     pub token_json: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CaptpExportRecord {
+    pub cell_id: String,
+    pub sturdy_uri: String,
+    pub shared_with: Option<String>,
+    pub exported_at: i64,
+    pub revoked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CaptpHeldRecord {
+    pub cell_id: String,
+    pub sturdy_uri: String,
+    pub label: Option<String>,
+    pub shared_by: Option<String>,
+    pub acquired_at: i64,
+    pub live: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CaptpLocalHandoffRecord {
+    pub token_id: String,
+    pub cell_id: String,
+    pub sturdy_uri: String,
+    pub recipient_cell_id: String,
+    pub local_signature: String,
+    pub status: String,
+    pub created_at: i64,
+    pub redeemed_at: Option<i64>,
+}
+
+/// Credential material held locally for a hosted Discord identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HeldCredential {
+    pub credential_id: String,
+    pub discord_id: String,
+    pub holder_cell_id: String,
+    pub issuer_cell_id: String,
+    pub schema: String,
+    pub issued_at: i64,
+    pub turn_hash: Option<String>,
+    pub encoded_credential: String,
+    pub attributes_json: String,
+    pub created_at: i64,
+}
+
+/// Locally recorded presentation request/placeholder state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CredentialPresentation {
+    pub request_id: String,
+    pub verifier_discord_id: String,
+    pub subject_discord_id: String,
+    pub subject_cell_id: String,
+    pub predicate: String,
+    pub status: String,
+    pub credential_id: Option<String>,
+    pub presentation_json: String,
+    pub created_at: i64,
+}
+
 /// Database handle wrapping a SQLite connection pool.
 #[derive(Clone)]
 pub struct Database {
@@ -251,6 +311,100 @@ impl Database {
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_captp_handoffs_recipient_status
              ON captp_handoffs (to_discord_id, status, issued_at DESC)",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS identity_held_credentials (
+                credential_id TEXT PRIMARY KEY,
+                discord_id TEXT NOT NULL,
+                holder_cell_id TEXT NOT NULL,
+                issuer_cell_id TEXT NOT NULL,
+                schema TEXT NOT NULL,
+                issued_at INTEGER NOT NULL,
+                turn_hash TEXT,
+                encoded_credential TEXT NOT NULL,
+                attributes_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_identity_held_credentials_holder
+             ON identity_held_credentials (discord_id, holder_cell_id, issued_at DESC)",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS identity_presentations (
+                request_id TEXT PRIMARY KEY,
+                verifier_discord_id TEXT NOT NULL,
+                subject_discord_id TEXT NOT NULL,
+                subject_cell_id TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                status TEXT NOT NULL,
+                credential_id TEXT,
+                presentation_json TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_identity_presentations_subject
+             ON identity_presentations (subject_discord_id, created_at DESC)",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS captp_exports (
+                cell_id TEXT PRIMARY KEY,
+                sturdy_uri TEXT NOT NULL,
+                shared_with TEXT,
+                exported_at INTEGER NOT NULL,
+                revoked INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS captp_held_refs (
+                cell_id TEXT PRIMARY KEY,
+                sturdy_uri TEXT NOT NULL,
+                label TEXT,
+                shared_by TEXT,
+                acquired_at INTEGER NOT NULL,
+                live INTEGER NOT NULL DEFAULT 1
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS captp_local_handoffs (
+                token_id TEXT PRIMARY KEY,
+                cell_id TEXT NOT NULL,
+                sturdy_uri TEXT NOT NULL,
+                recipient_cell_id TEXT NOT NULL,
+                local_signature TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                redeemed_at INTEGER
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_captp_local_handoffs_cell_status
+             ON captp_local_handoffs (cell_id, status, created_at DESC)",
         )
         .execute(&pool)
         .await?;
@@ -440,6 +594,155 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ─── Identity holder store ───────────────────────────────────────────
+
+    pub async fn store_held_credential(
+        &self,
+        discord_id: &str,
+        holder_cell_id: &str,
+        issuer_cell_id: &str,
+        credential_id: &str,
+        schema: &str,
+        issued_at: i64,
+        turn_hash: Option<&str>,
+        encoded_credential: &str,
+        attributes_json: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO identity_held_credentials
+             (credential_id, discord_id, holder_cell_id, issuer_cell_id, schema, issued_at, turn_hash, encoded_credential, attributes_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(credential_id)
+        .bind(discord_id)
+        .bind(holder_cell_id)
+        .bind(issuer_cell_id)
+        .bind(schema)
+        .bind(issued_at)
+        .bind(turn_hash)
+        .bind(encoded_credential)
+        .bind(attributes_json)
+        .bind(chrono_now())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_held_credentials(
+        &self,
+        discord_id: &str,
+        holder_cell_id: &str,
+        limit: u32,
+    ) -> Result<Vec<HeldCredential>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT credential_id, discord_id, holder_cell_id, issuer_cell_id, schema, issued_at, turn_hash, encoded_credential, attributes_json, created_at
+             FROM identity_held_credentials
+             WHERE discord_id = ? AND holder_cell_id = ?
+             ORDER BY issued_at DESC, created_at DESC
+             LIMIT ?",
+        )
+        .bind(discord_id)
+        .bind(holder_cell_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(held_credential_from_row).collect())
+    }
+
+    pub async fn find_held_credential_for_predicate(
+        &self,
+        discord_id: &str,
+        holder_cell_id: &str,
+        predicate: &str,
+    ) -> Result<Option<HeldCredential>, sqlx::Error> {
+        let schema_hint = predicate
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+            .find(|part| !part.is_empty());
+        let row = if let Some(hint) = schema_hint {
+            sqlx::query(
+                "SELECT credential_id, discord_id, holder_cell_id, issuer_cell_id, schema, issued_at, turn_hash, encoded_credential, attributes_json, created_at
+                 FROM identity_held_credentials
+                 WHERE discord_id = ? AND holder_cell_id = ?
+                   AND (schema = ? OR attributes_json LIKE ?)
+                 ORDER BY issued_at DESC, created_at DESC
+                 LIMIT 1",
+            )
+            .bind(discord_id)
+            .bind(holder_cell_id)
+            .bind(hint)
+            .bind(format!("%\"{hint}\"%"))
+            .fetch_optional(&self.pool)
+            .await?
+        } else {
+            None
+        };
+
+        if row.is_some() {
+            return Ok(row.map(held_credential_from_row));
+        }
+
+        let row = sqlx::query(
+            "SELECT credential_id, discord_id, holder_cell_id, issuer_cell_id, schema, issued_at, turn_hash, encoded_credential, attributes_json, created_at
+             FROM identity_held_credentials
+             WHERE discord_id = ? AND holder_cell_id = ?
+             ORDER BY issued_at DESC, created_at DESC
+             LIMIT 1",
+        )
+        .bind(discord_id)
+        .bind(holder_cell_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(held_credential_from_row))
+    }
+
+    pub async fn create_identity_presentation(
+        &self,
+        verifier_discord_id: &str,
+        subject_discord_id: &str,
+        subject_cell_id: &str,
+        predicate: &str,
+        status: &str,
+        credential_id: Option<&str>,
+        presentation_json: &str,
+    ) -> Result<CredentialPresentation, sqlx::Error> {
+        let request_id = format!(
+            "discord-proof-{}-{}",
+            chrono_now(),
+            short_local_hash(&format!(
+                "{verifier_discord_id}:{subject_discord_id}:{predicate}"
+            ))
+        );
+        let created_at = chrono_now();
+        sqlx::query(
+            "INSERT INTO identity_presentations
+             (request_id, verifier_discord_id, subject_discord_id, subject_cell_id, predicate, status, credential_id, presentation_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&request_id)
+        .bind(verifier_discord_id)
+        .bind(subject_discord_id)
+        .bind(subject_cell_id)
+        .bind(predicate)
+        .bind(status)
+        .bind(credential_id)
+        .bind(presentation_json)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(CredentialPresentation {
+            request_id,
+            verifier_discord_id: verifier_discord_id.to_string(),
+            subject_discord_id: subject_discord_id.to_string(),
+            subject_cell_id: subject_cell_id.to_string(),
+            predicate: predicate.to_string(),
+            status: status.to_string(),
+            credential_id: credential_id.map(str::to_string),
+            presentation_json: presentation_json.to_string(),
+            created_at,
+        })
     }
 
     // ─── Faucet rate limiting ───────────────────────────────────────────────────
@@ -798,6 +1101,171 @@ impl Database {
         Ok(result.rows_affected())
     }
 
+    pub async fn upsert_captp_export(&self, record: &CaptpExportRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO captp_exports (cell_id, sturdy_uri, shared_with, exported_at, revoked)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(cell_id) DO UPDATE SET
+                sturdy_uri = excluded.sturdy_uri,
+                shared_with = excluded.shared_with,
+                exported_at = excluded.exported_at,
+                revoked = excluded.revoked",
+        )
+        .bind(&record.cell_id)
+        .bind(&record.sturdy_uri)
+        .bind(&record.shared_with)
+        .bind(record.exported_at)
+        .bind(record.revoked)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_captp_export(
+        &self,
+        cell_id: &str,
+    ) -> Result<Option<CaptpExportRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT cell_id, sturdy_uri, shared_with, exported_at, revoked
+             FROM captp_exports WHERE cell_id = ?",
+        )
+        .bind(cell_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(captp_export_from_row))
+    }
+
+    pub async fn list_captp_exports(&self) -> Result<Vec<CaptpExportRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT cell_id, sturdy_uri, shared_with, exported_at, revoked
+             FROM captp_exports ORDER BY exported_at DESC, cell_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(captp_export_from_row).collect())
+    }
+
+    pub async fn revoke_captp_export(&self, cell_id: &str) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query("UPDATE captp_exports SET revoked = 1 WHERE cell_id = ?")
+            .bind(cell_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn upsert_captp_held_ref(&self, record: &CaptpHeldRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO captp_held_refs (cell_id, sturdy_uri, label, shared_by, acquired_at, live)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(cell_id) DO UPDATE SET
+                sturdy_uri = excluded.sturdy_uri,
+                label = excluded.label,
+                shared_by = excluded.shared_by,
+                acquired_at = excluded.acquired_at,
+                live = excluded.live",
+        )
+        .bind(&record.cell_id)
+        .bind(&record.sturdy_uri)
+        .bind(&record.label)
+        .bind(&record.shared_by)
+        .bind(record.acquired_at)
+        .bind(record.live)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn list_captp_held_refs(&self) -> Result<Vec<CaptpHeldRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT cell_id, sturdy_uri, label, shared_by, acquired_at, live
+             FROM captp_held_refs ORDER BY acquired_at DESC, cell_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(captp_held_from_row).collect())
+    }
+
+    pub async fn delete_captp_held_ref(&self, cell_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM captp_held_refs WHERE cell_id = ?")
+            .bind(cell_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_captp_local_handoff(
+        &self,
+        record: &CaptpLocalHandoffRecord,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO captp_local_handoffs
+             (token_id, cell_id, sturdy_uri, recipient_cell_id, local_signature, status, created_at, redeemed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(token_id) DO UPDATE SET
+                cell_id = excluded.cell_id,
+                sturdy_uri = excluded.sturdy_uri,
+                recipient_cell_id = excluded.recipient_cell_id,
+                local_signature = excluded.local_signature,
+                status = excluded.status,
+                created_at = excluded.created_at,
+                redeemed_at = excluded.redeemed_at",
+        )
+        .bind(&record.token_id)
+        .bind(&record.cell_id)
+        .bind(&record.sturdy_uri)
+        .bind(&record.recipient_cell_id)
+        .bind(&record.local_signature)
+        .bind(&record.status)
+        .bind(record.created_at)
+        .bind(record.redeemed_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_captp_local_handoff(
+        &self,
+        token_id: &str,
+    ) -> Result<Option<CaptpLocalHandoffRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT token_id, cell_id, sturdy_uri, recipient_cell_id, local_signature, status, created_at, redeemed_at
+             FROM captp_local_handoffs WHERE token_id = ?",
+        )
+        .bind(token_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(captp_local_handoff_from_row))
+    }
+
+    pub async fn list_captp_local_handoffs(
+        &self,
+    ) -> Result<Vec<CaptpLocalHandoffRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT token_id, cell_id, sturdy_uri, recipient_cell_id, local_signature, status, created_at, redeemed_at
+             FROM captp_local_handoffs ORDER BY created_at DESC, token_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(captp_local_handoff_from_row).collect())
+    }
+
+    pub async fn revoke_pending_captp_local_handoffs_for_cell(
+        &self,
+        cell_id: &str,
+        revoked_at: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE captp_local_handoffs
+             SET status = 'revoked', redeemed_at = COALESCE(redeemed_at, ?)
+             WHERE cell_id = ? AND status = 'pending'",
+        )
+        .bind(revoked_at)
+        .bind(cell_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Ensure extra tables exist (called from connect).
     pub async fn ensure_extra_tables(&self) -> Result<(), sqlx::Error> {
         sqlx::query(
@@ -860,6 +1328,55 @@ fn captp_handoff_from_row(row: sqlx::sqlite::SqliteRow) -> CaptpHandoffRecord {
     }
 }
 
+fn captp_export_from_row(row: sqlx::sqlite::SqliteRow) -> CaptpExportRecord {
+    CaptpExportRecord {
+        cell_id: row.get("cell_id"),
+        sturdy_uri: row.get("sturdy_uri"),
+        shared_with: row.get("shared_with"),
+        exported_at: row.get("exported_at"),
+        revoked: row.get::<i64, _>("revoked") != 0,
+    }
+}
+
+fn captp_held_from_row(row: sqlx::sqlite::SqliteRow) -> CaptpHeldRecord {
+    CaptpHeldRecord {
+        cell_id: row.get("cell_id"),
+        sturdy_uri: row.get("sturdy_uri"),
+        label: row.get("label"),
+        shared_by: row.get("shared_by"),
+        acquired_at: row.get("acquired_at"),
+        live: row.get::<i64, _>("live") != 0,
+    }
+}
+
+fn captp_local_handoff_from_row(row: sqlx::sqlite::SqliteRow) -> CaptpLocalHandoffRecord {
+    CaptpLocalHandoffRecord {
+        token_id: row.get("token_id"),
+        cell_id: row.get("cell_id"),
+        sturdy_uri: row.get("sturdy_uri"),
+        recipient_cell_id: row.get("recipient_cell_id"),
+        local_signature: row.get("local_signature"),
+        status: row.get("status"),
+        created_at: row.get("created_at"),
+        redeemed_at: row.get("redeemed_at"),
+    }
+}
+
+fn held_credential_from_row(row: sqlx::sqlite::SqliteRow) -> HeldCredential {
+    HeldCredential {
+        credential_id: row.get("credential_id"),
+        discord_id: row.get("discord_id"),
+        holder_cell_id: row.get("holder_cell_id"),
+        issuer_cell_id: row.get("issuer_cell_id"),
+        schema: row.get("schema"),
+        issued_at: row.get("issued_at"),
+        turn_hash: row.get("turn_hash"),
+        encoded_credential: row.get("encoded_credential"),
+        attributes_json: row.get("attributes_json"),
+        created_at: row.get("created_at"),
+    }
+}
+
 /// A recorded transaction.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TransactionRecord {
@@ -875,6 +1392,11 @@ fn chrono_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+fn short_local_hash(input: &str) -> String {
+    let hash = blake3::hash(input.as_bytes()).to_hex().to_string();
+    hash[..12.min(hash.len())].to_string()
 }
 
 async fn ensure_column(
@@ -946,5 +1468,49 @@ mod tests {
         assert_eq!(rows[0].action, "register");
         assert_eq!(rows[0].guild_id.as_deref(), Some("7"));
         assert_eq!(rows[0].subject.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn identity_holder_store_roundtrips() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.store_held_credential(
+            "42",
+            "holder",
+            "issuer",
+            "cred1",
+            "kyc-v1",
+            123,
+            Some("turn"),
+            "{\"encoded\":\"credential\"}",
+            "{\"age\":21}",
+        )
+        .await
+        .unwrap();
+
+        let rows = db.list_held_credentials("42", "holder", 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].credential_id, "cred1");
+        assert_eq!(rows[0].schema, "kyc-v1");
+
+        let matched = db
+            .find_held_credential_for_predicate("42", "holder", "age>=18")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(matched.credential_id, "cred1");
+
+        let presentation = db
+            .create_identity_presentation(
+                "7",
+                "42",
+                "holder",
+                "age>=18",
+                "presentation_unavailable",
+                Some("cred1"),
+                "{\"status\":\"presentation_unavailable\"}",
+            )
+            .await
+            .unwrap();
+        assert_eq!(presentation.credential_id.as_deref(), Some("cred1"));
     }
 }

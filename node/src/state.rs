@@ -303,7 +303,7 @@ fn load_witnessed_receipts(
                 let Some(encoded) = raw_by_hash.remove(&receipt_hash) else {
                     continue;
                 };
-                match serde_json::from_slice::<Vec<WitnessedReceipt>>(&encoded) {
+                match decode_witnessed_receipt_artifacts(&encoded) {
                     Ok(witnesses) => {
                         witnessed_receipt_order.push_back(receipt_hash);
                         witnessed_receipts.insert(receipt_hash, witnesses);
@@ -326,6 +326,29 @@ fn load_witnessed_receipts(
         }
     }
     (witnessed_receipts, witnessed_receipt_order)
+}
+
+fn encode_witnessed_receipt_artifacts(witnesses: &[WitnessedReceipt]) -> Result<Vec<u8>, String> {
+    let artifacts = witnesses
+        .iter()
+        .map(WitnessedReceipt::to_artifact_bytes)
+        .collect::<Result<Vec<_>, _>>()?;
+    postcard::to_allocvec(&artifacts)
+        .map_err(|e| format!("failed to encode witnessed receipt artifact list: {e}"))
+}
+
+fn decode_witnessed_receipt_artifacts(encoded: &[u8]) -> Result<Vec<WitnessedReceipt>, String> {
+    if let Ok(artifacts) = postcard::from_bytes::<Vec<Vec<u8>>>(encoded) {
+        return artifacts
+            .iter()
+            .map(|artifact| WitnessedReceipt::from_artifact_bytes(artifact))
+            .collect();
+    }
+
+    // Backward compatibility for short-lived node DBs written before the DWR1
+    // artifact envelope was threaded through persistence.
+    serde_json::from_slice::<Vec<WitnessedReceipt>>(encoded)
+        .map_err(|e| format!("invalid witnessed receipt artifact list: {e}"))
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
@@ -804,7 +827,7 @@ impl NodeStateInner {
             .or_default()
             .push(witnessed);
         if let Some(witnesses) = self.witnessed_receipts.get(&receipt_hash) {
-            match serde_json::to_vec(witnesses) {
+            match encode_witnessed_receipt_artifacts(witnesses) {
                 Ok(encoded) => {
                     if let Err(e) = self
                         .store
@@ -1534,6 +1557,22 @@ mod witnessed_receipt_persistence_tests {
                 .await
                 .push_witnessed_receipt(receipt_hash, witnessed_with_marker(9));
             assert_eq!(state.read().await.witnessed_receipt_count(&receipt_hash), 1);
+            let raw_entries = state
+                .read()
+                .await
+                .store
+                .load_witnessed_receipts_raw()
+                .expect("load raw persisted artifacts");
+            let (_, encoded) = raw_entries
+                .iter()
+                .find(|(hash, _)| hash == &receipt_hash)
+                .expect("raw artifact entry");
+            let artifact_bytes: Vec<Vec<u8>> =
+                postcard::from_bytes(encoded).expect("DWR1 artifact list encoding");
+            assert_eq!(artifact_bytes.len(), 1);
+            let decoded = WitnessedReceipt::from_artifact_bytes(&artifact_bytes[0])
+                .expect("DWR1 artifact decodes");
+            assert_eq!(decoded.proof_bytes, vec![9, 10]);
         }
 
         let restored =

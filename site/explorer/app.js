@@ -59,6 +59,7 @@ export const state = {
   intents: null,
   conditionals: null,
   diagnostics: null,
+  invalidBlocklaceBundles: [],
 };
 
 export function updateState(patch) {
@@ -73,6 +74,8 @@ export function updateState(patch) {
 const modules = {};
 let activeView = null;
 const initializedViews = new Set();
+let eventSocket = null;
+let eventReconnectTimer = null;
 
 /**
  * Register a view module. Module must export:
@@ -148,6 +151,44 @@ function parseDreggUri(uri) {
   return { kind: match[1], id: match[2], rest: match[3] || '' };
 }
 
+function safeDecodePathPart(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseExplorerRoute(pathname) {
+  const parts = String(pathname || '')
+    .split('/')
+    .filter(Boolean)
+    .map(safeDecodePathPart);
+  const explorerIndex = parts.lastIndexOf('explorer');
+  if (explorerIndex === -1) return null;
+
+  const routeParts = parts.slice(explorerIndex + 1);
+  if (!routeParts.length) return null;
+
+  const [rawKind, id, ...restParts] = routeParts;
+  const routeKind = String(rawKind || '').toLowerCase();
+  if (!id) return null;
+
+  switch (routeKind) {
+    case 'tx':
+    case 'turn':
+      return { kind: 'turn', routeKind, id, rest: restParts.join('/') };
+    case 'receipt':
+      return { kind: 'receipt', routeKind, id, rest: restParts.join('/') };
+    case 'cell':
+      return { kind: 'cell', routeKind, id, rest: restParts.join('/') };
+    case 'block':
+      return { kind: 'block', routeKind, id, rest: restParts.join('/') };
+    default:
+      return null;
+  }
+}
+
 function pageForDreggKind(kind) {
   switch (kind) {
     case 'block':
@@ -195,6 +236,18 @@ async function openDreggUri(uri) {
   navigateTo(page);
   await loadPageData(page);
   bus.emit('explorer:inspect', { uri, ...parsed, page });
+  return true;
+}
+
+async function openExplorerRoute(route) {
+  if (!route) return false;
+  const page = pageForDreggKind(route.kind);
+  navigateTo(page);
+  await loadPageData(page);
+  const uri = route.kind === 'block'
+    ? `dregg://block/0/${route.id}`
+    : `dregg://${route.kind}/${route.id}`;
+  bus.emit('explorer:inspect', { uri, ...route, page });
   return true;
 }
 
@@ -339,6 +392,59 @@ export function stopAutoRefresh() {
   }
 }
 
+function startEventStream() {
+  if (eventSocket) eventSocket.close();
+  if (eventReconnectTimer) clearTimeout(eventReconnectTimer);
+
+  try {
+    eventSocket = new WebSocket(api.getNodeWsUrl());
+  } catch (err) {
+    console.warn('[ws] unable to create node event stream:', err);
+    return;
+  }
+
+  eventSocket.addEventListener('open', () => {
+    updateState({ connected: true });
+    eventSocket.send(JSON.stringify({
+      type: 'subscribe',
+      topics: ['receipts', 'invalid_blocklace_bundles'],
+    }));
+  });
+
+  eventSocket.addEventListener('message', async (event) => {
+    let msg = null;
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    if (msg.type === 'receipt') {
+      const receipts = await api.getReceipts().catch(() => null);
+      if (receipts) {
+        updateState({ receipts });
+        bus.emit('receipts:updated', receipts);
+      }
+    } else if (msg.type === 'invalid_blocklace_bundle') {
+      const next = [
+        { block_id: msg.block_id, reason: msg.reason, observed_at: new Date().toISOString() },
+        ...state.invalidBlocklaceBundles,
+      ].slice(0, 25);
+      updateState({ invalidBlocklaceBundles: next });
+      bus.emit('blocklace:invalid-bundle', next[0]);
+    }
+  });
+
+  eventSocket.addEventListener('close', () => {
+    updateState({ connected: false });
+    eventReconnectTimer = setTimeout(startEventStream, 5000);
+  });
+
+  eventSocket.addEventListener('error', () => {
+    updateState({ connected: false });
+  });
+}
+
 // =============================================================================
 // Bootstrap
 // =============================================================================
@@ -406,10 +512,14 @@ export async function boot() {
     import('./tweakers/fee-estimator.js'),
   ]);
 
-  // Initialize the requested object route, if Starbridge handed us one.
+  // Initialize the requested object route, if the static fallback handed us one
+  // or Starbridge passed an explicit dregg:// URI.
   const params = new URLSearchParams(window.location.search);
+  const requestedRoute = parseExplorerRoute(window.location.pathname);
   const requestedUri = params.get('at');
-  if (requestedUri && /^dregg:\/\//i.test(requestedUri)) {
+  if (requestedRoute) {
+    await openExplorerRoute(requestedRoute);
+  } else if (requestedUri && /^dregg:\/\//i.test(requestedUri)) {
     await openDreggUri(requestedUri);
   } else {
     navigateTo('overview');
@@ -418,6 +528,7 @@ export async function boot() {
   // Start data flow
   refresh();
   startAutoRefresh();
+  startEventStream();
 }
 
 // Export api for use by views
