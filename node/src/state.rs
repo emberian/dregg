@@ -45,6 +45,8 @@ pub enum NodeEvent {
     Revocation { token_id: String },
     /// A new receipt was appended to the local chain.
     Receipt { hash: String },
+    /// A blocklace turn bundle carried malformed or non-matching artifacts.
+    InvalidBlocklaceBundle { block_id: String, reason: String },
     /// An intent was received (from WS or HTTP) and added to the pool.
     Intent { intent: serde_json::Value },
 }

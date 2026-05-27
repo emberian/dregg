@@ -885,6 +885,55 @@ fn every_effect_variant_round_trips_through_projection() {
     );
 }
 
+/// Regression guard for the variants that previously carried the most
+/// projection debt. The all-variant test above catches any NoOp collapse; this
+/// one also checks that each formerly weak runtime variant lands on its
+/// dedicated VM selector instead of an adjacent placeholder schema.
+#[test]
+fn historically_weak_variants_project_to_dedicated_vm_selectors() {
+    use dregg_circuit::effect_vm::Effect as VmEffect;
+
+    let agent = cell_id(b"variant-cell-a");
+    let variants = all_effect_variants();
+
+    let projected_for = |label: &str| {
+        let effect = variants
+            .iter()
+            .find(|v| v.label == label)
+            .unwrap_or_else(|| panic!("missing variant fixture {label}"));
+        AgentCipherclerk::convert_effects_to_vm(&agent, &[effect.effect.clone()])
+    };
+
+    assert!(matches!(
+        projected_for("IncrementNonce").as_slice(),
+        [VmEffect::IncrementNonce]
+    ));
+    assert!(matches!(
+        projected_for("Unseal").as_slice(),
+        [VmEffect::Unseal { .. }]
+    ));
+    assert!(matches!(
+        projected_for("CreateCellFromFactory").as_slice(),
+        [VmEffect::CreateCellFromFactory { .. }]
+    ));
+    assert!(matches!(
+        projected_for("QueueAtomicTx").as_slice(),
+        [VmEffect::AtomicQueueTx { .. }]
+    ));
+    assert!(matches!(
+        projected_for("QueuePipelineStep").as_slice(),
+        [VmEffect::PipelineStep { .. }]
+    ));
+    assert!(matches!(
+        projected_for("DropRef").as_slice(),
+        [VmEffect::DropRef { .. }]
+    ));
+    assert!(matches!(
+        projected_for("ValidateHandoff").as_slice(),
+        [VmEffect::ValidateHandoff { .. }]
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // Test #3: every variant has a verifying AIR
 // ---------------------------------------------------------------------------

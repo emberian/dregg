@@ -66,6 +66,7 @@ enum Topic {
     Roots,
     Revocations,
     Receipts,
+    InvalidBlocklaceBundles,
     Intents,
     /// Catch-all for unrecognized topics. Prevents deserialization failures
     /// when clients send topics this node version doesn't know about.
@@ -95,6 +96,8 @@ enum ServerMessage {
     Revocation { token_id: String },
     /// A new receipt hash.
     Receipt { hash: String },
+    /// A blocklace turn bundle carried bad receipt/witness material.
+    InvalidBlocklaceBundle { block_id: String, reason: String },
     /// An intent broadcast to subscribers.
     Intent { intent: serde_json::Value },
     /// Response to an authorize request.
@@ -430,6 +433,9 @@ fn should_forward(event: &NodeEvent, topics: &[Topic]) -> bool {
         NodeEvent::Root { .. } => topics.contains(&Topic::Roots),
         NodeEvent::Revocation { .. } => topics.contains(&Topic::Revocations),
         NodeEvent::Receipt { .. } => topics.contains(&Topic::Receipts),
+        NodeEvent::InvalidBlocklaceBundle { .. } => {
+            topics.contains(&Topic::InvalidBlocklaceBundles)
+        }
         NodeEvent::Intent { .. } => topics.contains(&Topic::Intents),
     }
 }
@@ -450,6 +456,12 @@ fn node_event_to_server_message(event: &NodeEvent) -> ServerMessage {
             token_id: token_id.clone(),
         },
         NodeEvent::Receipt { hash } => ServerMessage::Receipt { hash: hash.clone() },
+        NodeEvent::InvalidBlocklaceBundle { block_id, reason } => {
+            ServerMessage::InvalidBlocklaceBundle {
+                block_id: block_id.clone(),
+                reason: reason.clone(),
+            }
+        }
         NodeEvent::Intent { intent } => ServerMessage::Intent {
             intent: intent.clone(),
         },

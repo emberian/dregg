@@ -7,6 +7,8 @@ hints/benches/committee.json
 hints/benches/committee_128.json
 
 site/dist
+site/extension/*.zip
+site/extension/*.xpi
 site/assets/dregg.pdf
 site/paper/
 paper/*.pdf

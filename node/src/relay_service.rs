@@ -1,6 +1,6 @@
 //! Relay operator service.
 //!
-//! Exposes the `dregg-storage` RelayOperator as an HTTP service. Operators bond
+//! Exposes the storage-template relay operator service. Operators bond
 //! computrons to host inboxes, accept store-and-forward messages from senders,
 //! deliver them to recipients on drain, charge fees, and run periodic GC.
 //!
@@ -31,6 +31,11 @@ use tracing::info;
 use dregg_storage::inbox::InboxMessage;
 use dregg_storage::operator::RelayOperator;
 use dregg_storage::queue::DequeueProof;
+use dregg_storage_templates::relay_operator::{
+    BYTES_RELAYED_THIS_EPOCH_SLOT, DEFAULT_EPOCH_DURATION, HOSTED_INBOX_ROOT_SLOT,
+    QUOTA_BYTES_PER_EPOCH_SLOT, initial_state, relay_operator_child_program_vk,
+    relay_operator_factory_descriptor, relay_operator_program_with,
+};
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -108,8 +113,12 @@ impl Default for FeePolicy {
 
 /// Shared relay service state.
 pub struct RelayState {
-    /// The underlying relay operator (from dregg-storage).
+    /// Legacy in-memory queue engine. The storage-template mirror below is the
+    /// public cell-program state; this engine remains the byte queue backend
+    /// until hosted inbox queues are fully cell-backed.
     pub operator: RelayOperator,
+    /// Storage-template cell-program mirror for the relay operator.
+    pub template: RelayTemplateState,
     /// Configuration.
     pub config: RelayConfig,
     /// Current block height (updated by the node or a ticker).
@@ -124,12 +133,118 @@ pub struct RelayState {
 
 pub type SharedRelayState = Arc<RwLock<RelayState>>;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayTemplateState {
+    #[serde(serialize_with = "hex_ser_32", deserialize_with = "hex_de_32")]
+    pub factory_vk: [u8; 32],
+    #[serde(serialize_with = "hex_ser_32", deserialize_with = "hex_de_32")]
+    pub factory_hash: [u8; 32],
+    #[serde(serialize_with = "hex_ser_32", deserialize_with = "hex_de_32")]
+    pub child_program_vk: [u8; 32],
+    pub epoch_duration_blocks: u64,
+    pub slots: [[u8; 32]; 8],
+}
+
+impl RelayTemplateState {
+    pub fn new(config: &RelayConfig) -> Self {
+        let descriptor = relay_operator_factory_descriptor();
+        let operator_pk_hash = blake3_field(&config.operator_key);
+        let route_table_root = default_route_table_root();
+        let quota = config.max_total_capacity as u64;
+        Self {
+            factory_vk: descriptor.factory_vk,
+            factory_hash: descriptor.hash(),
+            child_program_vk: relay_operator_child_program_vk(),
+            epoch_duration_blocks: DEFAULT_EPOCH_DURATION,
+            slots: initial_state(
+                config.bond_amount,
+                config.bond_amount,
+                quota,
+                operator_pk_hash,
+                route_table_root,
+            ),
+        }
+    }
+
+    pub fn hosted_inbox_root(&self) -> [u8; 32] {
+        self.slots[HOSTED_INBOX_ROOT_SLOT as usize]
+    }
+
+    pub fn bytes_relayed_this_epoch(&self) -> u64 {
+        u64_from_field(self.slots[BYTES_RELAYED_THIS_EPOCH_SLOT as usize])
+    }
+
+    pub fn quota_bytes_per_epoch(&self) -> u64 {
+        u64_from_field(self.slots[QUOTA_BYTES_PER_EPOCH_SLOT as usize])
+    }
+
+    fn register_hosted_root(&mut self, new_root: [u8; 32]) -> Result<(), String> {
+        if new_root == [0u8; 32] {
+            return Err("relay template register_inbox would set zero hosted_inbox_root".into());
+        }
+        if new_root == self.hosted_inbox_root() {
+            return Err("relay template register_inbox did not change hosted_inbox_root".into());
+        }
+        self.slots[HOSTED_INBOX_ROOT_SLOT as usize] = new_root;
+        Ok(())
+    }
+
+    fn record_relay_bytes(&mut self, bytes: u64) -> Result<(), String> {
+        let previous = self.bytes_relayed_this_epoch();
+        let next = previous
+            .checked_add(bytes)
+            .ok_or_else(|| "relay template byte counter overflow".to_string())?;
+        let quota = self.quota_bytes_per_epoch();
+        if next > quota {
+            return Err(format!(
+                "relay template RateLimitBySum rejected {previous} + {bytes} > {quota}"
+            ));
+        }
+        self.slots[BYTES_RELAYED_THIS_EPOCH_SLOT as usize] = u64_field(next);
+        Ok(())
+    }
+
+    pub fn relay_case_has_dfa_and_rate_limit(&self) -> bool {
+        let program =
+            relay_operator_program_with(self.quota_bytes_per_epoch(), self.epoch_duration_blocks);
+        let dregg_cell::program::CellProgram::Cases(cases) = program else {
+            return false;
+        };
+        cases.iter().any(|case| {
+            matches!(
+                &case.guard,
+                dregg_cell::program::TransitionGuard::MethodIs { method }
+                    if *method == dregg_storage_templates::relay_operator::relay_method_symbol()
+            ) && case.constraints.iter().any(|c| {
+                matches!(
+                    c,
+                    dregg_cell::StateConstraint::RateLimitBySum { slot_index, .. }
+                        if *slot_index == BYTES_RELAYED_THIS_EPOCH_SLOT
+                )
+            }) && case.constraints.iter().any(|c| {
+                matches!(
+                    c,
+                    dregg_cell::StateConstraint::Witnessed { wp }
+                        if matches!(wp.kind, dregg_cell::predicate::WitnessedPredicateKind::Dfa)
+                )
+            })
+        })
+    }
+}
+
 // ─── HTTP API Types ───────────────────────────────────────────────────────────
 
 /// GET /relay/status response.
 #[derive(Serialize)]
 pub struct RelayStatusResponse {
     pub operator_id: String,
+    pub relay_template_factory_vk: String,
+    pub relay_template_factory_hash: String,
+    pub relay_template_child_program_vk: String,
+    pub relay_template_hosted_inbox_root: String,
+    pub relay_template_bytes_relayed_this_epoch: u64,
+    pub relay_template_quota_bytes_per_epoch: u64,
+    pub relay_template_dfa_rate_limit_bound: bool,
     pub bond: u64,
     pub required_bond: u64,
     pub is_underbonded: bool,
@@ -167,6 +282,7 @@ pub struct SubscribeResponse {
     pub capacity: usize,
     pub min_deposit: u64,
     pub subscription_fee_paid: u64,
+    pub relay_template_hosted_inbox_root: String,
 }
 
 /// DELETE /relay/unsubscribe request.
@@ -193,10 +309,11 @@ pub struct SendRequest {
 }
 
 /// POST /relay/send/:dest response.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct SendResponse {
     pub queue_root: String,
     pub position: usize,
+    pub relay_template_bytes_relayed_this_epoch: u64,
 }
 
 /// GET /relay/drain request (via query params or auth header).
@@ -252,7 +369,7 @@ pub struct ProofResponse {
 }
 
 /// Generic error response.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: String,
 }
@@ -319,6 +436,13 @@ async fn handle_status(State(state): State<SharedRelayState>) -> Json<RelayStatu
     let s = state.read().await;
     Json(RelayStatusResponse {
         operator_id: hex_encode(&s.operator.id),
+        relay_template_factory_vk: hex_encode(&s.template.factory_vk),
+        relay_template_factory_hash: hex_encode(&s.template.factory_hash),
+        relay_template_child_program_vk: hex_encode(&s.template.child_program_vk),
+        relay_template_hosted_inbox_root: hex_encode(&s.template.hosted_inbox_root()),
+        relay_template_bytes_relayed_this_epoch: s.template.bytes_relayed_this_epoch(),
+        relay_template_quota_bytes_per_epoch: s.template.quota_bytes_per_epoch(),
+        relay_template_dfa_rate_limit_bound: s.template.relay_case_has_dfa_and_rate_limit(),
         bond: s.operator.bond,
         required_bond: s.operator.required_bond(),
         is_underbonded: s.operator.is_underbonded(),
@@ -411,6 +535,13 @@ async fn handle_subscribe(
             };
             (status, Json(ErrorResponse { error: msg }))
         })?;
+    let hosted_root = hosted_inbox_commitment_root(&s.operator);
+    s.template.register_hosted_root(hosted_root).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e }),
+        )
+    })?;
 
     let fee = s.config.fee_policy.subscription_fee;
     info!(
@@ -424,6 +555,7 @@ async fn handle_subscribe(
         capacity,
         min_deposit,
         subscription_fee_paid: fee,
+        relay_template_hosted_inbox_root: hex_encode(&hosted_root),
     }))
 }
 
@@ -521,11 +653,24 @@ async fn handle_send(
         ciphertext: payload,
         sender,
     };
+    let relayed_bytes = match &msg {
+        InboxMessage::Encrypted { ciphertext, .. } => ciphertext.len() as u64,
+        InboxMessage::Capability { cert_bytes, .. } => cert_bytes.len() as u64,
+        InboxMessage::SturdyRef { uri, .. } => uri.len() as u64,
+    };
+    let template_before = s.template.clone();
+    s.template.record_relay_bytes(relayed_bytes).map_err(|e| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse { error: e }),
+        )
+    })?;
 
     let root = s
         .operator
         .receive_message(&destination, msg, req.deposit, current_height)
         .map_err(|e| {
+            s.template = template_before;
             let msg = format!("{e:?}");
             let status = match &e {
                 dregg_storage::relay::RelayError::InboxNotFound { .. } => StatusCode::NOT_FOUND,
@@ -542,10 +687,12 @@ async fn handle_send(
 
     s.messages_received += 1;
     let pending = s.operator.total_pending();
+    let bytes_relayed = s.template.bytes_relayed_this_epoch();
 
     Ok(Json(SendResponse {
         queue_root: hex_encode(&root),
         position: pending,
+        relay_template_bytes_relayed_this_epoch: bytes_relayed,
     }))
 }
 
@@ -706,9 +853,11 @@ pub async fn run_relay_service(config: RelayConfig) {
         config.bond_amount,
         config.max_delivery_latency_blocks,
     );
+    let template = RelayTemplateState::new(&config);
 
     let relay_state = Arc::new(RwLock::new(RelayState {
         operator,
+        template,
         config: config.clone(),
         current_height: 0,
         delivery_proofs: std::collections::HashMap::new(),
@@ -780,6 +929,42 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn u64_field(value: u64) -> [u8; 32] {
+    let mut field = [0u8; 32];
+    field[24..].copy_from_slice(&value.to_be_bytes());
+    field
+}
+
+fn u64_from_field(field: [u8; 32]) -> u64 {
+    u64::from_be_bytes(field[24..].try_into().expect("field suffix is 8 bytes"))
+}
+
+fn blake3_field(bytes: &[u8]) -> [u8; 32] {
+    *blake3::hash(bytes).as_bytes()
+}
+
+fn default_route_table_root() -> [u8; 32] {
+    blake3_field(b"dregg-relay-route-table-v1:any-encrypted-message")
+}
+
+fn hosted_inbox_commitment_root(operator: &RelayOperator) -> [u8; 32] {
+    let mut active: Vec<_> = operator
+        .hosted_inboxes
+        .iter()
+        .filter(|(_, hosted)| !hosted.evicted)
+        .collect();
+    active.sort_by_key(|(owner, _)| **owner);
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"dregg-relay-hosted-inbox-root-v1");
+    for (owner, hosted) in active {
+        hasher.update(owner);
+        hasher.update(&(hosted.committed_capacity as u64).to_be_bytes());
+        hasher.update(&operator.inbox_root(owner).unwrap_or([0u8; 32]));
+    }
+    *hasher.finalize().as_bytes()
+}
+
 fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
         return None;
@@ -827,6 +1012,58 @@ mod tests {
         let sk = SigningKey::from_bytes(&seed);
         let pk = sk.verifying_key().to_bytes();
         (sk, pk)
+    }
+
+    fn test_config() -> RelayConfig {
+        RelayConfig {
+            operator_key: [0xAA; 32],
+            bond_amount: 10_000,
+            max_total_capacity: 64,
+            default_inbox_capacity: 8,
+            default_min_deposit: 1,
+            ..RelayConfig::default()
+        }
+    }
+
+    fn test_state(config: RelayConfig) -> RelayState {
+        RelayState {
+            operator: RelayOperator::new(
+                config.operator_key,
+                config.bond_amount,
+                config.max_delivery_latency_blocks,
+            ),
+            template: RelayTemplateState::new(&config),
+            config,
+            current_height: 0,
+            delivery_proofs: std::collections::HashMap::new(),
+            messages_delivered: 0,
+            messages_received: 0,
+        }
+    }
+
+    fn sign_request(sk: &SigningKey, domain: &[u8], payload: &[u8]) -> String {
+        let mut full = Vec::new();
+        full.extend_from_slice(domain);
+        full.extend_from_slice(payload);
+        sk.sign(&full)
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    fn signed_subscribe(sk: &SigningKey, owner: [u8; 32]) -> SubscribeRequest {
+        let nonce = b"sub1";
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&owner);
+        payload.extend_from_slice(nonce);
+        SubscribeRequest {
+            owner: hex_encode(&owner),
+            capacity: Some(2),
+            min_deposit: Some(1),
+            nonce: hex_encode(nonce),
+            signature: sign_request(sk, b"dregg-relay-subscribe-v1", &payload),
+        }
     }
 
     /// F-P1-1: an unsigned drain request must be rejected. (The verifier is
@@ -942,5 +1179,95 @@ mod tests {
             "signature": "00".repeat(64),
         });
         assert!(serde_json::from_value::<UnsubscribeRequest>(good).is_ok());
+    }
+
+    #[test]
+    fn relay_template_mirror_binds_canonical_descriptor_and_dfa_rate_limit_case() {
+        let config = test_config();
+        let template = RelayTemplateState::new(&config);
+        let descriptor = relay_operator_factory_descriptor();
+
+        assert_eq!(template.factory_vk, descriptor.factory_vk);
+        assert_eq!(template.factory_hash, descriptor.hash());
+        assert_eq!(template.child_program_vk, relay_operator_child_program_vk());
+        assert_eq!(
+            template.quota_bytes_per_epoch(),
+            config.max_total_capacity as u64
+        );
+        assert!(template.relay_case_has_dfa_and_rate_limit());
+    }
+
+    #[tokio::test]
+    async fn relay_template_subscribe_updates_hosted_root() {
+        let (sk, owner) = make_key(21);
+        let state = Arc::new(RwLock::new(test_state(test_config())));
+        let before = state.read().await.template.hosted_inbox_root();
+
+        let response = handle_subscribe(State(state.clone()), Json(signed_subscribe(&sk, owner)))
+            .await
+            .expect("subscribe should succeed")
+            .0;
+
+        let after = state.read().await.template.hosted_inbox_root();
+        assert_ne!(before, after);
+        assert_ne!(after, [0u8; 32]);
+        assert_eq!(
+            response.relay_template_hosted_inbox_root,
+            hex_encode(&after)
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_template_send_is_rate_limited_by_counter() {
+        let (sk, owner) = make_key(22);
+        let state = Arc::new(RwLock::new(test_state(RelayConfig {
+            max_total_capacity: 4,
+            ..test_config()
+        })));
+        let _ = handle_subscribe(State(state.clone()), Json(signed_subscribe(&sk, owner)))
+            .await
+            .expect("subscribe should succeed");
+
+        let err = handle_send(
+            State(state.clone()),
+            Path(hex_encode(&owner)),
+            Json(SendRequest {
+                sender: hex_encode(&[0xBC; 32]),
+                payload: {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.encode([1u8; 5])
+                },
+                deposit: 1,
+            }),
+        )
+        .await
+        .expect_err("template RateLimitBySum mirror should reject oversized send");
+
+        assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(state.read().await.template.bytes_relayed_this_epoch(), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_template_failed_legacy_queue_send_rolls_back_counter() {
+        let state = Arc::new(RwLock::new(test_state(test_config())));
+        let missing_owner = [0xCD; 32];
+
+        let err = handle_send(
+            State(state.clone()),
+            Path(hex_encode(&missing_owner)),
+            Json(SendRequest {
+                sender: hex_encode(&[0xBC; 32]),
+                payload: {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.encode([1u8; 3])
+                },
+                deposit: 1,
+            }),
+        )
+        .await
+        .expect_err("legacy queue should still reject missing inbox");
+
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
+        assert_eq!(state.read().await.template.bytes_relayed_this_epoch(), 0);
     }
 }

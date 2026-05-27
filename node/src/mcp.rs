@@ -7318,6 +7318,188 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn silver_captp_node_to_node_exchange_imports_and_verifies_witness_artifact() {
+        let (producer_state, _producer_tmp) = fresh_unlocked_state().await;
+        let (importer_state, _importer_tmp) = fresh_unlocked_state().await;
+
+        let mut introducer_seed = [0u8; 32];
+        introducer_seed[0] = 0xE2;
+        let introducer_sk = dregg_types::SigningKey::from_bytes(&introducer_seed);
+        let introducer_pk = introducer_sk.public_key();
+        let issuer_fed_id = dregg_federation::derive_federation_id_with_epoch(&[introducer_pk], 0);
+
+        let (target_cell, recipient_pk, recipient_sk, recipient_fed_id) = {
+            let mut s = producer_state.write().await;
+            let recipient_pk = s.cclerk.public_key();
+            let recipient_sk = s.cclerk.gossip_signing_key();
+            s.set_federation_keys(vec![recipient_pk]);
+            let recipient_fed_id = s.federation_id;
+            let target_cell = dregg_cell::CellId::derive_raw(&recipient_pk.0, &[0u8; 32]);
+            (target_cell, recipient_pk, recipient_sk, recipient_fed_id)
+        };
+
+        let params = serde_json::json!({
+            "target_cell": hex_encode(&target_cell.0),
+            "introducer_sk": hex_encode(&introducer_seed),
+            "introducer_federation": hex_encode(&issuer_fed_id),
+            "target_federation": hex_encode(&recipient_fed_id),
+            "recipient_pk": hex_encode(&recipient_pk.0),
+            "permissions": "signature",
+            "swiss": "42".repeat(32),
+            "effects": [{
+                "type": "set_field",
+                "cell": hex_encode(&target_cell.0),
+                "index": 1,
+                "value": 154u64,
+            }],
+        });
+        let result = dispatch_tool("dregg_exercise_handoff_cert", params, &producer_state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("committed"),
+            "producer node must commit the handoff before exporting gossip artifacts: {j}"
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("proved"),
+            "producer node must persist replay witness material: {j}"
+        );
+
+        let cert_hex = j
+            .get("handoff_certificate_hex")
+            .and_then(|v| v.as_str())
+            .expect("MCP response must export handoff certificate bytes");
+        let cert_bytes = hex_decode_var(cert_hex).expect("certificate hex decodes");
+        let cert = dregg_captp::HandoffCertificate::from_bytes(&cert_bytes)
+            .expect("certificate exported by producer must decode");
+
+        let (receipt_hash, receipt) = {
+            let s = producer_state.read().await;
+            let receipt = s
+                .cclerk
+                .receipt_chain()
+                .last()
+                .expect("producer commit must append a receipt")
+                .clone();
+            (receipt.receipt_hash(), receipt)
+        };
+
+        // This is the normal `/api/receipts/{hash}/witnesses` response shape:
+        // a receipt hash plus JSON-serializable witnessed receipt artifacts.
+        let exported = {
+            let s = producer_state.read().await;
+            let witnessed = s
+                .witnessed_receipts
+                .get(&receipt_hash)
+                .cloned()
+                .expect("producer storage must retain the witnessed receipt");
+            serde_json::json!({
+                "receipt_hash": hex_encode(&receipt_hash),
+                "witness_count": witnessed.len(),
+                "witnessed_receipts": witnessed,
+            })
+        };
+        assert_eq!(exported["witness_count"], 1);
+
+        let exported_hash = exported
+            .get("receipt_hash")
+            .and_then(|v| v.as_str())
+            .and_then(|h| hex_decode(h).ok())
+            .expect("exported receipt_hash must be 32-byte hex");
+        assert_eq!(exported_hash, receipt_hash);
+        let imported_witnesses: Vec<dregg_turn::WitnessedReceipt> =
+            serde_json::from_value(exported["witnessed_receipts"].clone())
+                .expect("exported witnessed receipts must be importable JSON artifacts");
+        assert_eq!(imported_witnesses.len(), 1);
+
+        {
+            let mut importer = importer_state.write().await;
+            importer.push_witnessed_receipt(receipt_hash, imported_witnesses[0].clone());
+            assert_eq!(
+                importer.witnessed_receipt_count(&receipt_hash),
+                1,
+                "importing node must persist the received witnessed receipt by receipt hash"
+            );
+        }
+
+        let imported = {
+            let importer = importer_state.read().await;
+            importer
+                .witnessed_receipts
+                .get(&receipt_hash)
+                .and_then(|items| items.first())
+                .cloned()
+                .expect("imported node storage must expose the received artifact")
+        };
+        let issuer_desc = test_committee_descriptor("issuer", introducer_pk, issuer_fed_id);
+        let recipient_desc = test_committee_descriptor("recipient", recipient_pk, recipient_fed_id);
+        let issuer_root =
+            test_attested_root_for_receipts(issuer_fed_id, &[], &introducer_sk, 10, b"issuer");
+        let recipient_root = test_attested_root_for_receipts(
+            recipient_fed_id,
+            &[receipt.receipt_hash()],
+            &recipient_sk,
+            20,
+            b"recipient",
+        );
+        let bundle = dregg_federation::CrossFedReceiptBundle::new(
+            vec![imported],
+            issuer_root,
+            recipient_root,
+            cert,
+            None,
+        );
+
+        let verdict = dregg_verifier::cross_fed::verify_cross_fed_bundle(
+            &bundle,
+            &issuer_desc,
+            &recipient_desc,
+        );
+        assert!(
+            verdict.overall_verified,
+            "imported node-to-node Silver artifact must verify end-to-end: {verdict:?}",
+        );
+
+        let mut missing_witness = bundle.clone();
+        missing_witness.recipient_chain[0].witness_bundle = None;
+        let missing_verdict = dregg_verifier::cross_fed::verify_cross_fed_bundle(
+            &missing_witness,
+            &issuer_desc,
+            &recipient_desc,
+        );
+        assert!(
+            !missing_verdict.overall_verified
+                && missing_verdict.summary.contains("has no witness_bundle"),
+            "imported bundle without witnessed replay material must reject: {missing_verdict:?}",
+        );
+
+        let mut swapped_recipient = bundle.clone();
+        swapped_recipient.cross_fed_cert.target_federation = dregg_captp::FederationId([0xF2; 32]);
+        let swapped_verdict = dregg_verifier::cross_fed::verify_cross_fed_bundle(
+            &swapped_recipient,
+            &issuer_desc,
+            &recipient_desc,
+        );
+        assert!(
+            !swapped_verdict.overall_verified,
+            "swapped recipient federation in the handoff certificate must reject: {swapped_verdict:?}",
+        );
+
+        let wrong_recipient_desc =
+            test_committee_descriptor("wrong-recipient", recipient_pk, [0xF3; 32]);
+        let wrong_fed_verdict = dregg_verifier::cross_fed::verify_cross_fed_bundle(
+            &bundle,
+            &issuer_desc,
+            &wrong_recipient_desc,
+        );
+        assert!(
+            !wrong_fed_verdict.overall_verified,
+            "wrong recipient committee federation id must reject imported artifacts: {wrong_fed_verdict:?}",
+        );
+    }
+
     /// Adversarial test: a receipt with a forged Effect-VM proof bytes
     /// must still parse out of the tool response, but the standalone
     /// verifier would reject it. We cannot drive `dregg-verifier

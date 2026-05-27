@@ -537,7 +537,8 @@
       entry.status = "submitting";
       entry.updatedAt = Date.now();
       entry.attempts += 1;
-      const resp = await nodeRequest(nodeConfig, entry.endpoint, {
+      const targetConfig = entry.nodeUrl ? { ...nodeConfig, nodeUrl: entry.nodeUrl } : nodeConfig;
+      const resp = await nodeRequest(targetConfig, entry.endpoint, {
         method: entry.method,
         body: entry.body,
         headers: entry.headers

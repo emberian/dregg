@@ -47,6 +47,12 @@ pub const TOPIC_BLOCKLACE: &str = "dregg/blocklace";
 /// to bound storage growth.
 const MAX_RETAINED_CHECKPOINTS: usize = 5;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvalidBlocklaceBundleEvidence {
+    pub block_id: BlockId,
+    pub reason: String,
+}
+
 // ─── Gossip Message Types ───────────────────────────────────────────────────
 
 /// Wire-format message for blocklace gossip.
@@ -1287,9 +1293,11 @@ async fn execute_finalized_turn(
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect();
-            if let Some(bundle) = artifacts {
-                materialize_blocklace_artifacts(&mut s, &receipt, bundle);
-            }
+            let invalid_bundle_evidence = if let Some(bundle) = artifacts {
+                materialize_blocklace_artifacts(&mut s, block_id, &receipt, bundle)
+            } else {
+                Vec::new()
+            };
 
             // Resolve any pending turns waiting on this receipt.
             s.pending_turns.resolve(
@@ -1413,6 +1421,18 @@ async fn execute_finalized_turn(
 
             drop(s);
 
+            for evidence in invalid_bundle_evidence {
+                warn!(
+                    block_id = %evidence.block_id,
+                    reason = %evidence.reason,
+                    "invalid blocklace turn bundle artifacts"
+                );
+                state.emit(NodeEvent::InvalidBlocklaceBundle {
+                    block_id: evidence.block_id.to_string(),
+                    reason: evidence.reason,
+                });
+            }
+
             // Emit to WS subscribers.
             state.emit(NodeEvent::Receipt {
                 hash: receipt_hash_hex,
@@ -1461,41 +1481,84 @@ async fn execute_finalized_turn(
 
 fn materialize_blocklace_artifacts(
     state: &mut crate::state::NodeStateInner,
+    block_id: BlockId,
     local_receipt: &dregg_turn::TurnReceipt,
     bundle: &TurnArtifactBundle,
-) {
+) -> Vec<InvalidBlocklaceBundleEvidence> {
     let local_receipt_hash = local_receipt.receipt_hash();
+    let mut evidence = Vec::new();
 
     if let Some(receipt_bytes) = &bundle.receipt {
         match decode_blocklace_artifact::<dregg_turn::TurnReceipt>(receipt_bytes) {
-            Ok(bundle_receipt) if bundle_receipt.receipt_hash() == local_receipt_hash => {}
-            Ok(_) => {
-                warn!(
-                    "blocklace turn bundle receipt does not match local execution; ignoring bundled witnesses"
-                );
-                return;
+            Ok(bundle_receipt) => {
+                if bundle_receipt.turn_hash != local_receipt.turn_hash {
+                    evidence.push(invalid_bundle(block_id, "receipt turn_hash mismatch"));
+                    return evidence;
+                }
+                if bundle_receipt.previous_receipt_hash != local_receipt.previous_receipt_hash {
+                    evidence.push(invalid_bundle(
+                        block_id,
+                        "receipt previous_receipt_hash mismatch",
+                    ));
+                    return evidence;
+                }
+                if bundle_receipt.receipt_hash() != local_receipt_hash {
+                    evidence.push(invalid_bundle(
+                        block_id,
+                        "receipt hash does not match local execution",
+                    ));
+                    return evidence;
+                }
             }
             Err(e) => {
-                warn!(error = %e, "failed to decode blocklace bundled receipt; ignoring bundled witnesses");
-                return;
+                evidence.push(invalid_bundle(
+                    block_id,
+                    format!("malformed bundled receipt: {e}"),
+                ));
+                return evidence;
             }
         }
     }
 
-    for witnessed_bytes in &bundle.witnessed_receipts {
+    for (idx, witnessed_bytes) in bundle.witnessed_receipts.iter().enumerate() {
         match decode_blocklace_artifact::<dregg_turn::WitnessedReceipt>(witnessed_bytes) {
             Ok(witnessed) if witnessed.receipt.receipt_hash() == local_receipt_hash => {
-                state.push_witnessed_receipt(local_receipt_hash, witnessed);
+                match witnessed.require_scope2_witness() {
+                    Ok(()) => state.push_witnessed_receipt(local_receipt_hash, witnessed),
+                    Err(e) => evidence.push(invalid_bundle(
+                        block_id,
+                        format!("witnessed_receipts[{idx}] missing scope-2 material: {e}"),
+                    )),
+                }
             }
-            Ok(_) => {
-                warn!(
-                    "blocklace bundled witnessed receipt does not match local execution; skipping"
-                );
+            Ok(witnessed) => {
+                let reason = if witnessed.receipt.turn_hash != local_receipt.turn_hash {
+                    format!("witnessed_receipts[{idx}] receipt turn_hash mismatch")
+                } else if witnessed.receipt.previous_receipt_hash
+                    != local_receipt.previous_receipt_hash
+                {
+                    format!("witnessed_receipts[{idx}] receipt previous_receipt_hash mismatch")
+                } else {
+                    format!("witnessed_receipts[{idx}] receipt hash does not match local execution")
+                };
+                evidence.push(invalid_bundle(block_id, reason));
             }
             Err(e) => {
-                warn!(error = %e, "failed to decode blocklace bundled witnessed receipt; skipping");
+                evidence.push(invalid_bundle(
+                    block_id,
+                    format!("malformed witnessed_receipts[{idx}]: {e}"),
+                ));
             }
         }
+    }
+
+    evidence
+}
+
+fn invalid_bundle(block_id: BlockId, reason: impl Into<String>) -> InvalidBlocklaceBundleEvidence {
+    InvalidBlocklaceBundleEvidence {
+        block_id,
+        reason: reason.into(),
     }
 }
 
@@ -1511,6 +1574,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dregg_circuit::field::BabyBear;
     use dregg_types::CellId;
 
     fn sample_receipt(tag: u8) -> dregg_turn::TurnReceipt {
@@ -1537,24 +1601,24 @@ mod tests {
         }
     }
 
+    fn scope2_witnessed(receipt: dregg_turn::TurnReceipt) -> dregg_turn::WitnessedReceipt {
+        let trace = vec![vec![BabyBear::new_canonical(1)]];
+        dregg_turn::WitnessedReceipt::from_components(
+            receipt,
+            b"proof".to_vec(),
+            vec![1, 2, 3],
+            Some(&trace),
+        )
+    }
+
     #[tokio::test]
     async fn blocklace_turn_bundle_materializes_matching_witnesses_only() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
         let receipt = sample_receipt(9);
         let receipt_hash = receipt.receipt_hash();
-        let witnessed = dregg_turn::WitnessedReceipt::from_components(
-            receipt.clone(),
-            b"proof".to_vec(),
-            vec![1, 2, 3],
-            None,
-        );
-        let mismatched_witnessed = dregg_turn::WitnessedReceipt::from_components(
-            sample_receipt(10),
-            b"proof".to_vec(),
-            vec![1, 2, 3],
-            None,
-        );
+        let witnessed = scope2_witnessed(receipt.clone());
+        let mismatched_witnessed = scope2_witnessed(sample_receipt(10));
         let bundle = TurnArtifactBundle {
             signed_turn: b"signed-turn".to_vec(),
             receipt: Some(serde_json::to_vec(&receipt).expect("receipt encodes")),
@@ -1571,14 +1635,82 @@ mod tests {
         assert_eq!(decoded_witnessed.receipt.receipt_hash(), receipt_hash);
 
         let mut guard = state.write().await;
-        materialize_blocklace_artifacts(&mut guard, &receipt, &bundle);
+        let evidence =
+            materialize_blocklace_artifacts(&mut guard, BlockId([7u8; 32]), &receipt, &bundle);
 
         assert_eq!(guard.witnessed_receipt_count(&receipt_hash), 1);
+        assert_eq!(evidence.len(), 1);
+        assert!(
+            evidence[0].reason.contains("receipt turn_hash mismatch"),
+            "unexpected evidence: {evidence:?}"
+        );
         let stored = guard
             .witnessed_receipts
             .get(&receipt_hash)
             .expect("matching witness is materialized");
         assert_eq!(stored[0].witness_hash, witnessed.witness_hash);
+    }
+
+    #[tokio::test]
+    async fn blocklace_turn_bundle_reports_invalid_artifacts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        let receipt = sample_receipt(20);
+        let mut wrong_previous = receipt.clone();
+        wrong_previous.previous_receipt_hash = Some([99u8; 32]);
+        let no_scope2 = dregg_turn::WitnessedReceipt::from_components(
+            receipt.clone(),
+            b"proof".to_vec(),
+            vec![1, 2, 3],
+            None,
+        );
+        let bundle = TurnArtifactBundle {
+            signed_turn: b"signed-turn".to_vec(),
+            receipt: Some(serde_json::to_vec(&wrong_previous).expect("receipt encodes")),
+            witnessed_receipts: vec![
+                b"not-a-witness".to_vec(),
+                serde_json::to_vec(&no_scope2).expect("witness encodes"),
+            ],
+        };
+
+        let mut guard = state.write().await;
+        let evidence =
+            materialize_blocklace_artifacts(&mut guard, BlockId([8u8; 32]), &receipt, &bundle);
+
+        assert!(guard.witnessed_receipts.is_empty());
+        assert_eq!(evidence.len(), 1);
+        assert!(
+            evidence[0]
+                .reason
+                .contains("receipt previous_receipt_hash mismatch"),
+            "unexpected evidence: {evidence:?}"
+        );
+
+        let bundle = TurnArtifactBundle {
+            signed_turn: b"signed-turn".to_vec(),
+            receipt: None,
+            witnessed_receipts: vec![
+                b"not-a-witness".to_vec(),
+                serde_json::to_vec(&no_scope2).expect("witness encodes"),
+            ],
+        };
+        let evidence =
+            materialize_blocklace_artifacts(&mut guard, BlockId([9u8; 32]), &receipt, &bundle);
+
+        assert!(guard.witnessed_receipts.is_empty());
+        assert_eq!(evidence.len(), 2);
+        assert!(
+            evidence
+                .iter()
+                .any(|e| e.reason.contains("malformed witnessed_receipts[0]")),
+            "unexpected evidence: {evidence:?}"
+        );
+        assert!(
+            evidence
+                .iter()
+                .any(|e| e.reason.contains("missing scope-2 material")),
+            "unexpected evidence: {evidence:?}"
+        );
     }
 
     #[test]

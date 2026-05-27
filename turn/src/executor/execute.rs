@@ -30,6 +30,10 @@ fn distribute_fee_shares(
     }
 }
 
+fn is_zero_hash(bytes: &[u8; 32]) -> bool {
+    bytes.iter().all(|b| *b == 0)
+}
+
 impl TurnExecutor {
     /// Execute a turn against a ledger, returning the result.
     ///
@@ -502,7 +506,35 @@ impl TurnExecutor {
                     at_action: vec![],
                 };
             }
-            // 7. Optional STARK transition proof. When present, the proof
+            // 7. Production sovereign witnesses must name real post-state and
+            //    local-effect commitments. All-zero fields are legacy
+            //    placeholders, not explicit no-op commitments. A no-op
+            //    sovereign transition must still sign the real unchanged
+            //    state commitment and the canonical hash of its empty/local
+            //    effect set rather than using zero sentinels.
+            if is_zero_hash(&witness.new_commitment) {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!(
+                            "sovereign witness for cell {} has zero new_commitment placeholder",
+                            cell_id
+                        ),
+                    },
+                    at_action: vec![],
+                };
+            }
+            if is_zero_hash(&witness.effects_hash) {
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!(
+                            "sovereign witness for cell {} has zero effects_hash placeholder",
+                            cell_id
+                        ),
+                    },
+                    at_action: vec![],
+                };
+            }
+            // 8. Optional STARK transition proof. When present, the proof
             //    is verified through the same path the executor uses for
             //    Phase 3 proof-carrying turns (see `verify_and_commit_proof`).
             //    The PIs bind `old_commitment -> new_commitment +
@@ -732,6 +764,68 @@ impl TurnExecutor {
         // the temporarily-injected cells from the hosted store.
         // The federation stores only the updated 32-byte commitment.
         // =====================================================================
+        for cell_id in &sovereign_cell_ids {
+            let Some(cell) = ledger.get(cell_id) else {
+                journal.rollback(
+                    ledger,
+                    &self.obligations,
+                    &self.escrows,
+                    &self.bridged_nullifiers,
+                    &self.note_nullifiers,
+                    &self.committed_escrows,
+                    &self.committed_escrow_amounts,
+                );
+                for injected_id in &sovereign_cell_ids {
+                    ledger.remove(injected_id);
+                }
+                if let (Some(gate_cell), Some((digest, fee))) =
+                    (&self.budget_gate, &budget_debit_digest)
+                {
+                    gate_cell.lock().unwrap().fast_unlock(*fee, digest);
+                }
+                return TurnResult::Rejected {
+                    reason: TurnError::InvalidEffect {
+                        reason: format!(
+                            "sovereign witness cell {} missing after execution",
+                            cell_id
+                        ),
+                    },
+                    at_action: vec![],
+                };
+            };
+            let actual_new_commitment = cell.state_commitment();
+            let witness = turn
+                .sovereign_witnesses
+                .get(cell_id)
+                .expect("validated sovereign witness must still be present");
+            if actual_new_commitment != witness.new_commitment {
+                journal.rollback(
+                    ledger,
+                    &self.obligations,
+                    &self.escrows,
+                    &self.bridged_nullifiers,
+                    &self.note_nullifiers,
+                    &self.committed_escrows,
+                    &self.committed_escrow_amounts,
+                );
+                for injected_id in &sovereign_cell_ids {
+                    ledger.remove(injected_id);
+                }
+                if let (Some(gate_cell), Some((digest, fee))) =
+                    (&self.budget_gate, &budget_debit_digest)
+                {
+                    gate_cell.lock().unwrap().fast_unlock(*fee, digest);
+                }
+                return TurnResult::Rejected {
+                    reason: TurnError::SovereignCommitmentMismatch {
+                        cell: *cell_id,
+                        expected: witness.new_commitment,
+                        got: actual_new_commitment,
+                    },
+                    at_action: vec![],
+                };
+            }
+        }
         for cell_id in &sovereign_cell_ids {
             if let Some(cell) = ledger.remove(cell_id) {
                 let new_commitment = cell.state_commitment();

@@ -24,6 +24,7 @@ dregg-coord = { path = "../coord" }
 dregg-net = { path = "../net" }
 dregg-blocklace = { path = "../blocklace" }
 dregg-storage = { path = "../storage" }
+dregg-storage-templates = { path = "../dregg-storage-templates" }
 dregg-captp = { path = "../captp" }
 dregg-app-framework = { path = "../app-framework" }
 dregg-credentials = { path = "../credentials" }

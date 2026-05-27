@@ -7039,6 +7039,10 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
 
     // Build a turn that targets the sovereign cell (set a field).
     let new_value = [42u8; 32];
+    let mut expected_cell = sovereign_cell.clone();
+    expected_cell.state.fields[0] = new_value;
+    let expected_new_commitment = expected_cell.state_commitment();
+    let claimed_effects_hash = [7u8; 32];
     let turn = Turn {
         agent: agent_id,
         nonce: 0,
@@ -7076,13 +7080,11 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
             // Build a properly-signed witness with monotonic sequence.
             let timestamp = 1234567890i64;
             let sequence = 1u64;
-            let new_commitment_placeholder = [0u8; 32];
-            let effects_hash_placeholder = [0u8; 32];
             let signing_message = crate::turn::SovereignCellWitness::signing_message(
                 &sovereign_id,
                 &initial_commitment,
-                &new_commitment_placeholder,
-                &effects_hash_placeholder,
+                &expected_new_commitment,
+                &claimed_effects_hash,
                 timestamp,
                 sequence,
             );
@@ -7092,8 +7094,8 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
                 crate::turn::SovereignCellWitness {
                     cell_id: sovereign_id,
                     old_commitment: initial_commitment,
-                    new_commitment: new_commitment_placeholder,
-                    effects_hash: effects_hash_placeholder,
+                    new_commitment: expected_new_commitment,
+                    effects_hash: claimed_effects_hash,
                     timestamp,
                     sequence,
                     signature,
@@ -7124,8 +7126,6 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
     );
 
     // Verify the new commitment matches what we'd expect.
-    let mut expected_cell = sovereign_cell.clone();
-    expected_cell.state.fields[0] = new_value;
     assert_eq!(
         *new_commitment,
         expected_cell.state_commitment(),
@@ -7140,6 +7140,219 @@ fn sovereign_cell_execute_turn_with_valid_witness() {
     assert!(
         ledger.is_sovereign(&sovereign_id),
         "cell should still be sovereign"
+    );
+}
+
+#[test]
+fn sovereign_witness_rejects_zero_placeholder_claims() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10_000);
+    let agent_id = agent.id();
+    ledger.insert_cell(agent).unwrap();
+
+    let (mut sovereign_cell, sovereign_kp) = make_open_cell(2, 500);
+    let sovereign_id = sovereign_cell.id();
+    sovereign_cell.mode = dregg_cell::CellMode::Sovereign;
+    let initial_commitment = sovereign_cell.state_commitment();
+    ledger
+        .register_sovereign_cell(sovereign_id, initial_commitment)
+        .unwrap();
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
+
+    let timestamp = 1234567890i64;
+    let sequence = 1u64;
+    let signing_message = crate::turn::SovereignCellWitness::signing_message(
+        &sovereign_id,
+        &initial_commitment,
+        &[0u8; 32],
+        &[0u8; 32],
+        timestamp,
+        sequence,
+    );
+    let signature = sovereign_kp.signing_key.sign(&signing_message).to_bytes();
+
+    let mut witnesses = std::collections::HashMap::new();
+    witnesses.insert(
+        sovereign_id,
+        crate::turn::SovereignCellWitness {
+            cell_id: sovereign_id,
+            old_commitment: initial_commitment,
+            new_commitment: [0u8; 32],
+            effects_hash: [0u8; 32],
+            timestamp,
+            sequence,
+            signature,
+            cell_state: sovereign_cell,
+            transition_proof: None,
+        },
+    );
+
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: sovereign_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: sovereign_id,
+                        index: 0,
+                        value: [42u8; 32],
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                    witness_blobs: vec![],
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: witnesses,
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    };
+
+    let executor = zero_cost_executor();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_rejected(),
+        "zero sovereign witness placeholders must not be accepted as production claims"
+    );
+    let (error, _) = result.unwrap_rejected();
+    assert!(
+        matches!(error, TurnError::InvalidEffect { ref reason } if reason.contains("zero new_commitment")),
+        "expected zero new_commitment rejection, got: {error}"
+    );
+}
+
+#[test]
+fn sovereign_witness_rejects_false_post_commitment_claim() {
+    let mut ledger = Ledger::new();
+    let (agent, _) = make_open_cell(1, 10_000);
+    let agent_id = agent.id();
+    ledger.insert_cell(agent).unwrap();
+
+    let (mut sovereign_cell, sovereign_kp) = make_open_cell(2, 500);
+    let sovereign_id = sovereign_cell.id();
+    sovereign_cell.mode = dregg_cell::CellMode::Sovereign;
+    let initial_commitment = sovereign_cell.state_commitment();
+    ledger
+        .register_sovereign_cell(sovereign_id, initial_commitment)
+        .unwrap();
+    ledger
+        .get_mut(&agent_id)
+        .unwrap()
+        .capabilities
+        .grant(sovereign_id, AuthRequired::None);
+
+    let claimed_new_commitment = [9u8; 32];
+    let claimed_effects_hash = [8u8; 32];
+    let timestamp = 1234567890i64;
+    let sequence = 1u64;
+    let signing_message = crate::turn::SovereignCellWitness::signing_message(
+        &sovereign_id,
+        &initial_commitment,
+        &claimed_new_commitment,
+        &claimed_effects_hash,
+        timestamp,
+        sequence,
+    );
+    let signature = sovereign_kp.signing_key.sign(&signing_message).to_bytes();
+
+    let mut witnesses = std::collections::HashMap::new();
+    witnesses.insert(
+        sovereign_id,
+        crate::turn::SovereignCellWitness {
+            cell_id: sovereign_id,
+            old_commitment: initial_commitment,
+            new_commitment: claimed_new_commitment,
+            effects_hash: claimed_effects_hash,
+            timestamp,
+            sequence,
+            signature,
+            cell_state: sovereign_cell,
+            transition_proof: None,
+        },
+    );
+
+    let turn = Turn {
+        agent: agent_id,
+        nonce: 0,
+        call_forest: CallForest {
+            roots: vec![CallTree {
+                action: Action {
+                    target: sovereign_id,
+                    method: symbol("set_field"),
+                    args: vec![],
+                    authorization: Authorization::Unchecked,
+                    preconditions: CellPreconditions::default(),
+                    effects: vec![Effect::SetField {
+                        cell: sovereign_id,
+                        index: 0,
+                        value: [42u8; 32],
+                    }],
+                    may_delegate: DelegationMode::None,
+                    commitment_mode: CommitmentMode::Full,
+                    balance_change: None,
+                    witness_blobs: vec![],
+                },
+                children: vec![],
+                hash: [0u8; 32],
+            }],
+            forest_hash: [0u8; 32],
+        },
+        fee: 0,
+        memo: None,
+        valid_until: None,
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: witnesses,
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    };
+
+    let executor = zero_cost_executor();
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        result.is_rejected(),
+        "sovereign witness claims must match the executed post-state commitment"
+    );
+    let (error, _) = result.unwrap_rejected();
+    assert!(
+        matches!(error, TurnError::SovereignCommitmentMismatch { .. }),
+        "expected post-commitment mismatch, got: {error}"
+    );
+    assert_eq!(
+        ledger.get_sovereign_commitment(&sovereign_id),
+        Some(&initial_commitment),
+        "rejected false post-commitment must not update stored sovereign state"
     );
 }
 
