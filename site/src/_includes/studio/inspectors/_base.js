@@ -102,6 +102,9 @@ function ensureInspectorChrome() {
 .dregg-outbox__status--failed { border-color: #d4685c; color: #f18b7d; }
 .dregg-outbox__status--submitted { border-color: #62c47a; color: #8ee6a2; }
 .dregg-outbox__kv dd { overflow-wrap: anywhere; }
+.dregg-outbox__routes { display: flex; flex-wrap: wrap; gap: 6px; }
+.dregg-outbox__routes span { border: 1px solid var(--line, #30363d); border-radius: 999px; padding: 3px 8px; color: var(--fg-dim, #9aa0a6); font-size: 0.7rem; }
+.dregg-outbox__routes strong { color: var(--fg, #e8f0e8); }
 .dregg-cell__summary,
 .dregg-receipt__summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 8px 0 10px; }
 .dregg-receipt__summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }

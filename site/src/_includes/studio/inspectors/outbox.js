@@ -6,11 +6,13 @@ import { parseRef } from '../uri.js';
 import { InspectorBase, emptyState, renderParseError, shortHex } from './_base.js';
 
 function statusCounts(entries) {
-  const counts = { pending: 0, submitting: 0, failed: 0, submitted: 0, total: entries.length };
+  const now = Date.now();
+  const counts = { pending: 0, submitting: 0, failed: 0, submitted: 0, due: 0, total: entries.length };
   for (const entry of entries) {
     const key = entry?.status || 'pending';
     if (counts[key] == null) counts[key] = 0;
     counts[key] += 1;
+    if (key !== 'submitted' && Number(entry?.nextAttemptAt || 0) <= now) counts.due += 1;
   }
   return counts;
 }
@@ -26,6 +28,27 @@ function prettyEndpoint(entry) {
   const node = entry?.nodeUrl || '';
   if (!node) return endpoint;
   return `${node.replace(/\/$/, '')}${endpoint}`;
+}
+
+function endpointGroups(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    let key = 'local extension';
+    try {
+      const endpoint = prettyEndpoint(entry);
+      key = endpoint ? new URL(endpoint, window.location.origin).host : key;
+    } catch {}
+    groups.set(key, (groups.get(key) || 0) + 1);
+  }
+  return Array.from(groups, ([host, count]) => ({ host, count }))
+    .sort((a, b) => b.count - a.count || a.host.localeCompare(b.host));
+}
+
+function payloadHint(entry) {
+  const body = entry?.body || entry?.payload || entry?.request || null;
+  if (!body || typeof body !== 'object') return entry?.method || 'submission';
+  const keys = Object.keys(body).slice(0, 4);
+  return keys.length ? keys.join(', ') : 'empty payload';
 }
 
 class DreggOutbox extends InspectorBase {
@@ -63,6 +86,7 @@ class DreggOutbox extends InspectorBase {
       const entries = Array.isArray(outboxSignal.value) ? outboxSignal.value : [];
       const counts = statusCounts(entries);
       const pending = counts.pending + counts.submitting;
+      const groups = endpointGroups(entries);
 
       if (mode === 'compact') {
         return html`
@@ -100,6 +124,17 @@ class DreggOutbox extends InspectorBase {
             </div>
             <button type="button" class="dregg-outbox__btn" disabled=${!this._runtime.flushOutbox} onClick=${flush}>Flush due now</button>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>Due Now</span><strong>${String(counts.due)}</strong></div>
+            <div><span>Pending</span><strong>${String(pending)}</strong></div>
+            <div><span>Failed</span><strong>${String(counts.failed)}</strong></div>
+            <div><span>Submitted</span><strong>${String(counts.submitted)}</strong></div>
+          </div>
+          <div class="dregg-outbox__routes">
+            ${groups.map(group => html`
+              <span><strong>${String(group.count)}</strong> ${group.host}</span>
+            `)}
+          </div>
           <div class="dregg-outbox__cards">
             ${entries.map((entry) => {
               const id = entry.id || '';
@@ -119,6 +154,7 @@ class DreggOutbox extends InspectorBase {
                     <dt>kind</dt><dd>${entry.kind || 'unknown'}</dd>
                     <dt>target</dt><dd><code title=${prettyEndpoint(entry)}>${prettyEndpoint(entry)}</code></dd>
                     <dt>turn</dt><dd>${entry.turnId ? html`<code title=${entry.turnId}>${shortHex(entry.turnId, 18)}</code>` : 'n/a'}</dd>
+                    <dt>payload</dt><dd><code>${payloadHint(entry)}</code></dd>
                     <dt>attempts</dt><dd>${String(entry.attempts ?? 0)}</dd>
                     <dt>next retry</dt><dd>${fmtTime(entry.nextAttemptAt)}</dd>
                     <dt>updated</dt><dd>${fmtTime(entry.updatedAt)}</dd>
