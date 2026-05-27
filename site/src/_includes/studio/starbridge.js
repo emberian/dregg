@@ -514,6 +514,7 @@ function writeUrlState({ at, runtime }) {
     navHistory.push(key);
     navIndex = navHistory.length - 1;
     updateNavButtons();
+    if (uri) recordHistory(uri);
   }
 
   function updateNavButtons() {
@@ -577,6 +578,31 @@ function writeUrlState({ at, runtime }) {
     const kind = parseKind(uri);
     const id = uri.split('/').pop() || uri;
     return `${kind} ${id.length > 18 ? id.slice(0, 18) + '…' : id}`;
+  }
+
+  function readHistory() {
+    try {
+      const history = JSON.parse(localStorage.getItem('starbridge.history') || '[]');
+      return Array.isArray(history) ? history.filter((item) => item && item.uri) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function writeHistory(history) {
+    try { localStorage.setItem('starbridge.history', JSON.stringify(history.slice(0, 60))); } catch {}
+  }
+
+  function recordHistory(uri) {
+    const history = readHistory().filter((item) => item.uri !== uri);
+    history.unshift({
+      uri,
+      label: pinLabel(uri),
+      kind: parseKind(uri),
+      runtime: currentRuntimeId,
+      visited_at: new Date().toISOString(),
+    });
+    writeHistory(history);
   }
 
   function togglePin(uri = currentUri) {
@@ -648,6 +674,103 @@ function writeUrlState({ at, runtime }) {
     selectWorkbenchTool('raw');
     setStatus('snapshot opened', 'ready');
     logActivity('snapshot', `opened ${record.label}`, { id });
+  }
+
+  function snapshotStats(record) {
+    const snap = record?.snapshot || {};
+    return {
+      cells: Array.isArray(snap.cells) ? snap.cells.length : 0,
+      receipts: Array.isArray(snap.receipts) ? snap.receipts.length : 0,
+      intents: Array.isArray(snap.intents) ? snap.intents.length : 0,
+      blocks: Array.isArray(snap.blocks) ? snap.blocks.length : 0,
+      cursor: snap.cursor ?? 0,
+    };
+  }
+
+  function compareSnapshotRecords(leftId, rightId) {
+    const snapshots = readSnapshots();
+    const left = snapshots.find((snap) => snap.id === leftId);
+    const right = snapshots.find((snap) => snap.id === rightId);
+    if (!left || !right) return;
+    const a = snapshotStats(left);
+    const b = snapshotStats(right);
+    const rows = ['cursor', 'cells', 'receipts', 'intents', 'blocks'].map((key) => ({
+      field: key,
+      left: a[key],
+      right: b[key],
+      delta: Number(b[key] || 0) - Number(a[key] || 0),
+    }));
+    setRawText(JSON.stringify({
+      compare: {
+        left: { id: left.id, created_at: left.created_at, label: left.label },
+        right: { id: right.id, created_at: right.created_at, label: right.label },
+        rows,
+      },
+    }, null, 2));
+    selectWorkbenchTool('raw');
+    setStatus('snapshot comparison opened', 'ready');
+    logActivity('snapshot', `compared ${left.label} -> ${right.label}`, { left: left.id, right: right.id });
+  }
+
+  function mountInspectorSlot(parent, uri) {
+    const slot = document.createElement('section');
+    slot.className = 'sb__side-slot';
+    slot.innerHTML = `
+      <header>
+        <strong>${escapeHtml(pinLabel(uri))}</strong>
+        <code>${escapeHtml(uri)}</code>
+      </header>
+    `;
+    let parsed = null;
+    try { parsed = parseRef(uri); } catch {}
+    if (!parsed) {
+      const empty = document.createElement('div');
+      empty.className = 'sb__inspector-empty';
+      empty.textContent = 'bad URI';
+      slot.appendChild(empty);
+    } else {
+      const tagName = `dregg-${parsed.kind}`;
+      if (customElements.get(tagName)) {
+        const el = document.createElement(tagName);
+        el.setAttribute('uri', uri);
+        slot.appendChild(el);
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'sb__inspector-empty';
+        empty.textContent = `no inspector registered for kind "${parsed.kind}"`;
+        slot.appendChild(empty);
+      }
+    }
+    parent.appendChild(slot);
+  }
+
+  function renderSideBySide(leftUri, rightUri = currentUri) {
+    if (!leftUri || !rightUri) return;
+    inspector.replaceChildren();
+    if (workspaceTitle) workspaceTitle.textContent = 'Side by Side';
+    updateCurrentContext(rightUri);
+    currentUri = rightUri;
+    uriInput.value = rightUri;
+    writeUrlState({ at: rightUri, runtime: currentRuntimeId });
+    const panel = document.createElement('div');
+    panel.className = 'sb__side-by-side';
+    const head = document.createElement('div');
+    head.className = 'sb__side-head';
+    head.innerHTML = `
+      <span>Inspector compare</span>
+      <button type="button" class="sb__icon-btn" data-close-split>Single inspector</button>
+    `;
+    panel.appendChild(head);
+    const grid = document.createElement('div');
+    grid.className = 'sb__side-grid';
+    mountInspectorSlot(grid, leftUri);
+    mountInspectorSlot(grid, rightUri);
+    panel.appendChild(grid);
+    panel.querySelector('[data-close-split]')?.addEventListener('click', () => setCurrentUri(rightUri));
+    inspector.appendChild(panel);
+    rebindRawOnly(rightUri);
+    rememberNavigation(rightUri);
+    setStatus('side-by-side inspectors opened', 'ready');
   }
 
   function jumpNavigation(delta) {
@@ -1093,6 +1216,7 @@ function writeUrlState({ at, runtime }) {
     const counts = currentCounts();
     const pins = readPins();
     const snapshots = readSnapshots();
+    const history = readHistory();
     const boundaryHtml = runtimeBoundaryRows().map(([label, value]) => `
       <div class="sb__boundary-row">
         <span>${escapeHtml(label)}</span>
@@ -1128,10 +1252,23 @@ function writeUrlState({ at, runtime }) {
               <span>${escapeHtml(pin.kind || parseKind(pin.uri))}</span>
               <strong>${escapeHtml(pin.label || pinLabel(pin.uri))}</strong>
             </button>
-            <button type="button" class="sb__pin-remove" data-unpin="${escapeHtml(pin.uri)}" title="Remove pin">×</button>
+            <div class="sb__pin-actions">
+              <button type="button" class="sb__pin-tool" data-uri="${escapeHtml(pin.uri)}" title="Inspect">I</button>
+              <button type="button" class="sb__pin-tool" data-raw-uri="${escapeHtml(pin.uri)}" title="Open raw JSON">R</button>
+              <button type="button" class="sb__pin-tool" data-split-uri="${escapeHtml(pin.uri)}" title="Compare beside current inspector">S</button>
+              <button type="button" class="sb__pin-remove" data-unpin="${escapeHtml(pin.uri)}" title="Remove pin">×</button>
+            </div>
           </div>
         `).join('')
       : '<div class="sb__workbench-empty">No pinned objects</div>';
+    const historyHtml = history.length
+      ? history.slice(0, 8).map((item) => `
+          <button type="button" class="sb__workbench-row" data-uri="${escapeHtml(item.uri)}">
+            <span>${escapeHtml(item.kind || parseKind(item.uri))}</span>
+            <strong>${escapeHtml(item.label || pinLabel(item.uri))}</strong>
+          </button>
+        `).join('')
+      : '<div class="sb__workbench-empty">No inspected objects yet</div>';
     const snapshotsHtml = snapshots.length
       ? snapshots.slice(0, 6).map((snap) => `
           <div class="sb__snapshot-row">
@@ -1139,7 +1276,11 @@ function writeUrlState({ at, runtime }) {
               <span>Snapshot</span>
               <strong>${escapeHtml(snap.label || 'runtime snapshot')}</strong>
             </button>
-            <time>${escapeHtml(new Date(snap.created_at || Date.now()).toLocaleTimeString())}</time>
+            <div class="sb__snapshot-actions">
+              <button type="button" class="sb__pin-tool" data-snapshot="${escapeHtml(snap.id)}" title="Open snapshot raw JSON">O</button>
+              ${snapshots[1] && snap.id !== snapshots[1].id ? `<button type="button" class="sb__pin-tool" data-compare-snapshot="${escapeHtml(snapshots[1].id)}:${escapeHtml(snap.id)}" title="Compare with previous snapshot">C</button>` : ''}
+              <time>${escapeHtml(new Date(snap.created_at || Date.now()).toLocaleTimeString())}</time>
+            </div>
           </div>
         `).join('')
       : '<div class="sb__workbench-empty">No saved snapshots</div>';
@@ -1212,6 +1353,10 @@ function writeUrlState({ at, runtime }) {
           <div class="sb__recent-list">${recentHtml}</div>
         </div>
         <div class="sb__workbench-panel">
+          <h3>Inspector History</h3>
+          <div class="sb__recent-list">${historyHtml}</div>
+        </div>
+        <div class="sb__workbench-panel">
           <h3>Pinned Objects</h3>
           <div class="sb__pin-list">${pinsHtml}</div>
         </div>
@@ -1257,6 +1402,20 @@ function writeUrlState({ at, runtime }) {
     for (const btn of panel.querySelectorAll('[data-uri]')) {
       btn.addEventListener('click', () => setCurrentUri(btn.dataset.uri));
     }
+    for (const btn of panel.querySelectorAll('[data-raw-uri]')) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        rebindRawOnly(btn.dataset.rawUri);
+        selectWorkbenchTool('raw');
+        setStatus('raw inspector opened', 'ready');
+      });
+    }
+    for (const btn of panel.querySelectorAll('[data-split-uri]')) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        renderSideBySide(btn.dataset.splitUri, currentUri || btn.dataset.splitUri);
+      });
+    }
     for (const btn of panel.querySelectorAll('[data-unpin]')) {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1266,6 +1425,13 @@ function writeUrlState({ at, runtime }) {
     }
     for (const btn of panel.querySelectorAll('[data-snapshot]')) {
       btn.addEventListener('click', () => openSnapshotRecord(btn.dataset.snapshot));
+    }
+    for (const btn of panel.querySelectorAll('[data-compare-snapshot]')) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const [leftId, rightId] = btn.dataset.compareSnapshot.split(':');
+        compareSnapshotRecords(leftId, rightId);
+      });
     }
     panel.querySelector('[data-uri-form]')?.addEventListener('submit', (e) => {
       e.preventDefault();
