@@ -1668,6 +1668,12 @@ function writeUrlState({ at, runtime }) {
         : runtime.getBlock(parsed.id);
     } else if (parsed.kind === 'activity' && typeof runtime.getTraceEvents === 'function') {
       sig = runtime.getTraceEvents();
+    } else if (parsed.kind === 'outbox') {
+      if (typeof runtime.getOutbox !== 'function') {
+        setRawText('outbox unavailable in this runtime');
+        return;
+      }
+      sig = runtime.getOutbox();
     } else if (parsed.kind === 'app') {
       const appMeta = appCatalog.get(parsed.id) || { id: parsed.id, page: `/starbridge-apps/${parsed.id}/pages/index.html` };
       setRawText(JSON.stringify(appMeta, null, 2));
