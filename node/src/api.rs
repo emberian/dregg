@@ -139,6 +139,10 @@ pub struct SubmitTurnRequest {
 pub struct SubmitTurnResponse {
     pub accepted: bool,
     pub turn_hash: Option<String>,
+    pub proof_status: ActivityProofStatus,
+    pub has_witness: bool,
+    pub witness_count: usize,
+    pub error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -147,6 +151,9 @@ pub struct SubmitSignedTurnResponse {
     pub turn_hash: Option<String>,
     pub signer: Option<String>,
     pub action_count: usize,
+    pub proof_status: ActivityProofStatus,
+    pub has_witness: bool,
+    pub witness_count: usize,
     pub error: Option<String>,
 }
 
@@ -197,6 +204,10 @@ pub struct SubmitEncryptedTurnResponse {
     /// on success; included so the caller can confirm the encrypted path
     /// was actually taken).
     pub was_encrypted: bool,
+    pub proof_status: ActivityProofStatus,
+    pub has_witness: bool,
+    pub witness_count: usize,
+    pub error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1568,6 +1579,7 @@ fn push_committed_event(
     turn_hash: String,
     cell_id: String,
     effects: Vec<String>,
+    proof_status: ActivityProofStatus,
 ) {
     let store_height = s
         .store
@@ -1599,12 +1611,85 @@ fn push_committed_event(
     s.push_event(CommittedEvent {
         height,
         status: ActivityStatus::Committed,
-        proof_status: ActivityProofStatus::NotRequired,
+        proof_status,
         turn_hash,
         cell_id,
         effects,
         timestamp,
     });
+}
+
+enum HttpWitnessOutcome {
+    Proved(dregg_turn::WitnessedReceipt),
+    NotRequired,
+}
+
+fn http_project_effects(effects: &[&dregg_turn::Effect]) -> Vec<dregg_circuit::effect_vm::Effect> {
+    let mut vm_effects = Vec::new();
+    for effect in effects {
+        match effect {
+            dregg_turn::Effect::Transfer { amount, .. } => {
+                vm_effects.push(dregg_circuit::effect_vm::Effect::Transfer {
+                    amount: *amount,
+                    direction: 1,
+                });
+            }
+            dregg_turn::Effect::SetField { index, value, .. } => {
+                let mut le4 = [0u8; 4];
+                le4.copy_from_slice(&value[..4]);
+                vm_effects.push(dregg_circuit::effect_vm::Effect::SetField {
+                    field_idx: *index as u32,
+                    value: dregg_circuit::BabyBear::new(u32::from_le_bytes(le4)),
+                });
+            }
+            dregg_turn::Effect::IncrementNonce { .. } => {
+                vm_effects.push(dregg_circuit::effect_vm::Effect::NoOp);
+            }
+            _ => {}
+        }
+    }
+    vm_effects
+}
+
+fn build_http_witnessed_receipt(
+    turn: &Turn,
+    receipt: dregg_turn::TurnReceipt,
+    pre_ledger: &dregg_cell::Ledger,
+) -> Result<HttpWitnessOutcome, String> {
+    let effects = turn.call_forest.total_effects();
+    let vm_effects = http_project_effects(&effects);
+    if vm_effects.is_empty() {
+        return Ok(HttpWitnessOutcome::NotRequired);
+    }
+
+    let Some(agent_cell) = pre_ledger.get(&turn.agent) else {
+        return Err(format!(
+            "missing local pre-state for agent {}",
+            hex_encode(&turn.agent.0)
+        ));
+    };
+    let initial_state = dregg_circuit::effect_vm::CellState::new(
+        agent_cell.state.balance(),
+        agent_cell.state.nonce() as u32,
+    );
+    let (trace, mut public_inputs) =
+        dregg_circuit::effect_vm::generate_effect_vm_trace(&initial_state, &vm_effects);
+    public_inputs[dregg_circuit::effect_vm::pi::IS_AGENT_CELL] = dregg_circuit::BabyBear::ONE;
+
+    let air = dregg_circuit::effect_vm::EffectVmAir::new(trace.len());
+    let proof = dregg_circuit::stark::try_prove(&air, &trace, &public_inputs)
+        .map_err(|err| format!("Effect VM proof generation failed: {err}"))?;
+    let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
+    let public_inputs_u32: Vec<u32> = public_inputs.iter().map(|f| f.as_u32()).collect();
+
+    Ok(HttpWitnessOutcome::Proved(
+        dregg_turn::WitnessedReceipt::from_components(
+            receipt,
+            proof_bytes,
+            public_inputs_u32,
+            Some(trace.as_slice()),
+        ),
+    ))
 }
 
 #[tracing::instrument(skip_all, fields(agent = %req.agent))]
@@ -1663,6 +1748,8 @@ async fn post_submit_turn(
     let turn_hash_bytes = turn.hash();
     let turn_hash = hex_encode(&turn_hash_bytes);
 
+    let pre_ledger = s.ledger.clone();
+
     // Execute the turn locally FIRST.
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
     seed_executor_receipt_head(&executor, turn.agent, previous_receipt_hash);
@@ -1689,20 +1776,52 @@ async fn post_submit_turn(
                 }
             }
 
-            if let Err(err) = s.cclerk.append_receipt(receipt) {
+            let witness_outcome =
+                match build_http_witnessed_receipt(&turn, receipt.clone(), &pre_ledger) {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        s.ledger = pre_ledger;
+                        crate::metrics::inc_turns_executed("rejected");
+                        drop(s);
+                        return Ok(Json(SubmitTurnResponse {
+                            accepted: false,
+                            turn_hash: Some(turn_hash),
+                            proof_status: ActivityProofStatus::ProofGenerationFailed,
+                            has_witness: false,
+                            witness_count: 0,
+                            error: Some(err),
+                        }));
+                    }
+                };
+            let proof_status = match &witness_outcome {
+                HttpWitnessOutcome::Proved(_) => ActivityProofStatus::Proved,
+                HttpWitnessOutcome::NotRequired => ActivityProofStatus::NotRequired,
+            };
+
+            if let Err(err) = s.cclerk.append_receipt(receipt.clone()) {
                 crate::metrics::inc_turns_executed("rejected");
                 drop(s);
                 return Ok(Json(SubmitTurnResponse {
                     accepted: false,
                     turn_hash: Some(format!("receipt chain mismatch: {err}")),
+                    proof_status: ActivityProofStatus::NotCommitted,
+                    has_witness: false,
+                    witness_count: 0,
+                    error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            let receipt_hash = receipt.receipt_hash();
+            if let HttpWitnessOutcome::Proved(witnessed) = witness_outcome {
+                s.push_witnessed_receipt(receipt_hash, witnessed);
+            }
+            let witness_count = s.witnessed_receipt_count(&receipt_hash);
 
             push_committed_event(
                 &mut s,
                 turn_hash.clone(),
                 agent,
                 vec!["turn_committed".to_string()],
+                proof_status,
             );
 
             // Serialize the full SignedTurn for gossip (postcard format).
@@ -1735,6 +1854,10 @@ async fn post_submit_turn(
             Ok(Json(SubmitTurnResponse {
                 accepted: true,
                 turn_hash: Some(turn_hash),
+                proof_status,
+                has_witness: witness_count > 0,
+                witness_count,
+                error: None,
             }))
         }
         dregg_turn::TurnResult::Rejected { reason, .. } => {
@@ -1744,6 +1867,10 @@ async fn post_submit_turn(
             Ok(Json(SubmitTurnResponse {
                 accepted: false,
                 turn_hash: Some(format!("rejected: {reason}")),
+                proof_status: ActivityProofStatus::NotCommitted,
+                has_witness: false,
+                witness_count: 0,
+                error: Some(format!("rejected: {reason}")),
             }))
         }
         _ => {
@@ -1752,6 +1879,10 @@ async fn post_submit_turn(
             Ok(Json(SubmitTurnResponse {
                 accepted: false,
                 turn_hash: None,
+                proof_status: ActivityProofStatus::NotCommitted,
+                has_witness: false,
+                witness_count: 0,
+                error: Some("turn did not commit".to_string()),
             }))
         }
     }
@@ -1788,6 +1919,9 @@ async fn post_submit_signed_turn(
             turn_hash: Some(hex_encode(&turn_hash_bytes)),
             signer: Some(hex_encode(&signed.signer.0)),
             action_count: signed.turn.call_forest.action_count(),
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
             error: Some("invalid turn signature".to_string()),
         }));
     }
@@ -1800,6 +1934,9 @@ async fn post_submit_signed_turn(
             turn_hash: Some(hex_encode(&turn_hash_bytes)),
             signer: Some(hex_encode(&signed.signer.0)),
             action_count: signed.turn.call_forest.action_count(),
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
             error: Some("turn agent does not match signer default cell".to_string()),
         }));
     }
@@ -1823,11 +1960,15 @@ async fn post_submit_signed_turn(
                 turn_hash: Some(turn_hash),
                 signer: Some(signer),
                 action_count,
+                proof_status: ActivityProofStatus::NotCommitted,
+                has_witness: false,
+                witness_count: 0,
                 error: Some("receipt chain mismatch".to_string()),
             }));
         }
     }
 
+    let pre_ledger = s.ledger.clone();
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
     seed_executor_receipt_head(&executor, signed.turn.agent, expected_prev);
     let exec_result = executor.execute(&signed.turn, &mut s.ledger);
@@ -1849,7 +1990,31 @@ async fn post_submit_signed_turn(
                 }
             }
 
-            if let Err(err) = s.cclerk.append_receipt(receipt) {
+            let witness_outcome =
+                match build_http_witnessed_receipt(&signed.turn, receipt.clone(), &pre_ledger) {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        s.ledger = pre_ledger;
+                        crate::metrics::inc_turns_executed("rejected");
+                        drop(s);
+                        return Ok(Json(SubmitSignedTurnResponse {
+                            accepted: false,
+                            turn_hash: Some(turn_hash),
+                            signer: Some(signer),
+                            action_count,
+                            proof_status: ActivityProofStatus::ProofGenerationFailed,
+                            has_witness: false,
+                            witness_count: 0,
+                            error: Some(err),
+                        }));
+                    }
+                };
+            let proof_status = match &witness_outcome {
+                HttpWitnessOutcome::Proved(_) => ActivityProofStatus::Proved,
+                HttpWitnessOutcome::NotRequired => ActivityProofStatus::NotRequired,
+            };
+
+            if let Err(err) = s.cclerk.append_receipt(receipt.clone()) {
                 crate::metrics::inc_turns_executed("rejected");
                 drop(s);
                 return Ok(Json(SubmitSignedTurnResponse {
@@ -1857,15 +2022,24 @@ async fn post_submit_signed_turn(
                     turn_hash: Some(turn_hash),
                     signer: Some(signer),
                     action_count,
+                    proof_status: ActivityProofStatus::NotCommitted,
+                    has_witness: false,
+                    witness_count: 0,
                     error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            let receipt_hash = receipt.receipt_hash();
+            if let HttpWitnessOutcome::Proved(witnessed) = witness_outcome {
+                s.push_witnessed_receipt(receipt_hash, witnessed);
+            }
+            let witness_count = s.witnessed_receipt_count(&receipt_hash);
 
             push_committed_event(
                 &mut s,
                 turn_hash.clone(),
                 agent,
                 vec![format!("signed_turn:{action_count}")],
+                proof_status,
             );
 
             let turn_data = postcard::to_stdvec(&signed_for_gossip)
@@ -1897,6 +2071,9 @@ async fn post_submit_signed_turn(
                 turn_hash: Some(turn_hash),
                 signer: Some(signer),
                 action_count,
+                proof_status,
+                has_witness: witness_count > 0,
+                witness_count,
                 error: None,
             }))
         }
@@ -1909,6 +2086,9 @@ async fn post_submit_signed_turn(
                 turn_hash: Some(turn_hash),
                 signer: Some(signer),
                 action_count,
+                proof_status: ActivityProofStatus::NotCommitted,
+                has_witness: false,
+                witness_count: 0,
                 error: Some(format!("rejected: {reason}")),
             }))
         }
@@ -1920,6 +2100,9 @@ async fn post_submit_signed_turn(
                 turn_hash: Some(turn_hash),
                 signer: Some(signer),
                 action_count,
+                proof_status: ActivityProofStatus::NotCommitted,
+                has_witness: false,
+                witness_count: 0,
                 error: Some("turn did not commit".to_string()),
             }))
         }
@@ -1996,11 +2179,33 @@ async fn post_submit_encrypted_turn(
     // Derive the executor's unsealer secret from the cipherclerk. Held in a
     // local for the lifetime of this handler only.
     let sealer_secret = s.cclerk.derive_symmetric_key(TURN_UNSEALER_DOMAIN);
+    let unsealer_public =
+        x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(sealer_secret));
+    let cleartext_turn =
+        match encrypted.decrypt_for_executor(&sealer_secret, unsealer_public.as_bytes()) {
+            Ok(turn) => turn,
+            Err(err) => {
+                crate::metrics::inc_turns_executed("rejected");
+                drop(s);
+                return Ok(Json(SubmitEncryptedTurnResponse {
+                    accepted: false,
+                    turn_hash: Some(format!(
+                        "rejected: encrypted turn decryption failed: {err:?}"
+                    )),
+                    was_encrypted: false,
+                    proof_status: ActivityProofStatus::NotCommitted,
+                    has_witness: false,
+                    witness_count: 0,
+                    error: Some(format!("encrypted turn decryption failed: {err:?}")),
+                }));
+            }
+        };
 
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
     let expected_prev = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
     seed_executor_receipt_head(&executor, encrypted.agent, expected_prev);
 
+    let pre_ledger = s.ledger.clone();
     let result = executor.apply_encrypted_turn(&encrypted, &sealer_secret, &mut s.ledger);
 
     match result {
@@ -2027,21 +2232,54 @@ async fn post_submit_encrypted_turn(
             let turn_hash = hex_encode(&turn_hash_bytes);
             let agent = hex_encode(&receipt.agent.0);
             let was_encrypted = receipt.was_encrypted;
-            if let Err(err) = s.cclerk.append_receipt(receipt) {
+            let witness_outcome =
+                match build_http_witnessed_receipt(&cleartext_turn, receipt.clone(), &pre_ledger) {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        s.ledger = pre_ledger;
+                        crate::metrics::inc_turns_executed("rejected");
+                        drop(s);
+                        return Ok(Json(SubmitEncryptedTurnResponse {
+                            accepted: false,
+                            turn_hash: Some(turn_hash),
+                            was_encrypted: false,
+                            proof_status: ActivityProofStatus::ProofGenerationFailed,
+                            has_witness: false,
+                            witness_count: 0,
+                            error: Some(err),
+                        }));
+                    }
+                };
+            let proof_status = match &witness_outcome {
+                HttpWitnessOutcome::Proved(_) => ActivityProofStatus::Proved,
+                HttpWitnessOutcome::NotRequired => ActivityProofStatus::NotRequired,
+            };
+
+            if let Err(err) = s.cclerk.append_receipt(receipt.clone()) {
                 crate::metrics::inc_turns_executed("rejected");
                 drop(s);
                 return Ok(Json(SubmitEncryptedTurnResponse {
                     accepted: false,
                     turn_hash: Some(format!("receipt chain mismatch: {err}")),
                     was_encrypted: false,
+                    proof_status: ActivityProofStatus::NotCommitted,
+                    has_witness: false,
+                    witness_count: 0,
+                    error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            let receipt_hash = receipt.receipt_hash();
+            if let HttpWitnessOutcome::Proved(witnessed) = witness_outcome {
+                s.push_witnessed_receipt(receipt_hash, witnessed);
+            }
+            let witness_count = s.witnessed_receipt_count(&receipt_hash);
 
             push_committed_event(
                 &mut s,
                 turn_hash.clone(),
                 agent,
                 vec!["encrypted_turn_committed".to_string()],
+                proof_status,
             );
 
             drop(s);
@@ -2055,6 +2293,10 @@ async fn post_submit_encrypted_turn(
                 accepted: true,
                 turn_hash: Some(turn_hash),
                 was_encrypted,
+                proof_status,
+                has_witness: witness_count > 0,
+                witness_count,
+                error: None,
             }))
         }
         Err(reason) => {
@@ -2065,6 +2307,10 @@ async fn post_submit_encrypted_turn(
                 accepted: false,
                 turn_hash: Some(format!("rejected: {reason}")),
                 was_encrypted: false,
+                proof_status: ActivityProofStatus::NotCommitted,
+                has_witness: false,
+                witness_count: 0,
+                error: Some(format!("rejected: {reason}")),
             }))
         }
     }
@@ -4377,6 +4623,7 @@ async fn post_faucet(
                 tx_hash.clone(),
                 req.recipient.clone(),
                 vec!["faucet_materialized_cell".to_string()],
+                ActivityProofStatus::NotRequired,
             );
         }
         return Ok(Json(FaucetResponse {
@@ -4401,6 +4648,7 @@ async fn post_faucet(
                 tx_hash.clone(),
                 req.recipient.clone(),
                 vec![format!("faucet_transfer:{}", req.amount)],
+                ActivityProofStatus::NotRequired,
             );
 
             Ok(Json(FaucetResponse {
@@ -5459,7 +5707,7 @@ mod tests {
     use super::*;
     use dregg_coord::{AtomicForest, Coordinator, Decision, Vote};
     use dregg_turn::ComputronCosts;
-    use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode};
+    use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, Effect};
     use std::collections::{HashMap, VecDeque};
     use std::time::{Duration, Instant};
 
@@ -5561,6 +5809,114 @@ mod tests {
             executor.get_last_receipt_hash(&agent),
             Some(head),
             "fresh per-request executors must inherit the node's committed receipt head"
+        );
+    }
+
+    fn projectable_http_test_turn(agent: CellId) -> Turn {
+        let action = Action {
+            target: agent,
+            method: *blake3::hash(b"http-test-increment").as_bytes(),
+            args: vec![],
+            authorization: Authorization::Unchecked,
+            preconditions: dregg_cell::Preconditions::default(),
+            effects: vec![Effect::IncrementNonce { cell: agent }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let mut call_forest = CallForest::new();
+        call_forest.add_root(action);
+        Turn {
+            agent,
+            nonce: 0,
+            fee: 1_000,
+            memo: Some("http witness test".to_string()),
+            valid_until: None,
+            call_forest,
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn http_submit_witness_helper_generates_projectable_receipt_artifact() {
+        let public_key = [0x23; 32];
+        let token_id = *blake3::hash(b"default").as_bytes();
+        let agent = dregg_cell::CellId::derive_raw(&public_key, &token_id);
+        let mut ledger = dregg_cell::Ledger::new();
+        let mut cell = dregg_cell::Cell::with_balance(public_key, token_id, 10_000);
+        cell.permissions = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+        ledger.insert_cell(cell).expect("insert agent cell");
+        let pre_ledger = ledger.clone();
+        let turn = projectable_http_test_turn(agent);
+        let executor = dregg_turn::TurnExecutor::new(ComputronCosts::default());
+        let (_, receipt, _) = executor.execute(&turn, &mut ledger).unwrap_committed();
+
+        let outcome = build_http_witnessed_receipt(&turn, receipt.clone(), &pre_ledger)
+            .expect("projectable HTTP turn should build a witnessed receipt");
+        let HttpWitnessOutcome::Proved(witnessed) = outcome else {
+            panic!("projectable HTTP turn must not be reported as proof-not-required");
+        };
+
+        assert_eq!(witnessed.receipt.receipt_hash(), receipt.receipt_hash());
+        assert!(
+            witnessed.witness_bundle.is_some(),
+            "HTTP witnessed receipt must retain replay material for receipt APIs"
+        );
+    }
+
+    #[test]
+    fn http_submit_empty_effect_turn_reports_no_witness_honestly() {
+        let agent = CellId([0x42; 32]);
+        let turn = Turn {
+            agent,
+            nonce: 0,
+            fee: 0,
+            memo: None,
+            valid_until: None,
+            call_forest: CallForest::new(),
+            depends_on: vec![],
+            previous_receipt_hash: None,
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+        let receipt = dregg_turn::TurnReceipt {
+            turn_hash: turn.hash(),
+            agent,
+            ..Default::default()
+        };
+
+        let outcome = build_http_witnessed_receipt(&turn, receipt, &dregg_cell::Ledger::new())
+            .expect("empty-effect HTTP turn should not require witness generation");
+        assert!(
+            matches!(outcome, HttpWitnessOutcome::NotRequired),
+            "empty-effect HTTP turns must not claim a null proof as proved"
         );
     }
 

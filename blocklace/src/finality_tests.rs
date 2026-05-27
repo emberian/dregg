@@ -6,7 +6,9 @@ use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 
 use crate::dregg_bridge::{CodManager, DreggBlocklaceBridge, ExecutionTier, classify_turn};
-use crate::finality::{Block, BlockError, Blocklace, FinalityLevel, FinalityTracker, Payload};
+use crate::finality::{
+    Block, BlockError, Blocklace, FinalityLevel, FinalityTracker, Payload, TurnArtifactBundle,
+};
 
 fn random_key() -> SigningKey {
     SigningKey::generate(&mut OsRng)
@@ -31,6 +33,31 @@ fn tampered_block_fails_verification() {
     // Tamper with the payload.
     block.payload = Payload::Data(b"tampered".to_vec());
     assert!(block.verify_signature().is_err());
+}
+
+#[test]
+fn turn_bundle_payload_roundtrips_and_binds_signature() {
+    let key = random_key();
+    let bundle = TurnArtifactBundle {
+        signed_turn: b"signed-turn".to_vec(),
+        receipt: Some(b"receipt".to_vec()),
+        witnessed_receipts: vec![b"witness-a".to_vec(), b"witness-b".to_vec()],
+    };
+
+    let block = Block::new(&key, 7, Payload::TurnBundle(bundle.clone()), Vec::new());
+    let encoded = block.to_bytes();
+    let decoded = Block::from_bytes(&encoded).expect("bundle block decodes");
+
+    assert_eq!(decoded.payload, Payload::TurnBundle(bundle));
+    assert!(decoded.verify_signature().is_ok());
+
+    let mut tampered = decoded.clone();
+    if let Payload::TurnBundle(tampered_bundle) = &mut tampered.payload {
+        tampered_bundle.witnessed_receipts[0][0] ^= 0x01;
+    } else {
+        panic!("decoded payload must be a turn bundle");
+    }
+    assert!(tampered.verify_signature().is_err());
 }
 
 // ─── Virtual Chain ───────────────────────────────────────────────────────────

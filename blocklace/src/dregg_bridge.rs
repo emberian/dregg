@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::finality::{BlockId, Blocklace, Payload};
+use crate::finality::{BlockId, Blocklace, Payload, TurnArtifactBundle};
 
 // ─── Execution Tiers ─────────────────────────────────────────────────────────
 
@@ -167,6 +167,16 @@ impl DreggBlocklaceBridge {
         block.id()
     }
 
+    /// Submit a turn plus receipt/witness material to the blocklace.
+    pub fn submit_turn_bundle(
+        &self,
+        blocklace: &mut Blocklace,
+        bundle: TurnArtifactBundle,
+    ) -> BlockId {
+        let block = blocklace.add_block(Payload::TurnBundle(bundle));
+        block.id()
+    }
+
     /// Process finalized blocks and produce turn receipts.
     ///
     /// Examines the ordered sequence in the finality tracker and produces
@@ -181,7 +191,11 @@ impl DreggBlocklaceBridge {
 
         for block_id in new_blocks {
             if let Some(block) = blocklace.get(block_id) {
-                if let Payload::Turn(ref data) = block.payload {
+                if let Some(data) = match &block.payload {
+                    Payload::Turn(data) => Some(data),
+                    Payload::TurnBundle(bundle) => Some(&bundle.signed_turn),
+                    _ => None,
+                } {
                     self.finality_height += 1;
                     let tier = classify_turn(data, &self.cod);
                     receipts.push(BlocklaceTurnReceipt {

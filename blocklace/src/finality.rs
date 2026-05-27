@@ -46,6 +46,13 @@ impl std::fmt::Display for BlockId {
 pub enum Payload {
     /// A dregg turn (serialized state transition).
     Turn(Vec<u8>),
+    /// A dregg turn plus devnet material produced at commit time.
+    ///
+    /// The blocklace remains payload-semantic agnostic: these fields are
+    /// opaque bytes here and decoded by the node/explorer layer. Keeping raw
+    /// `Turn` alongside this variant preserves compatibility with older
+    /// blocks and peers that only carry signed turn bytes.
+    TurnBundle(TurnArtifactBundle),
     /// An acknowledgment (I've seen these blocks).
     Ack,
     /// A checkpoint (federation root at this height).
@@ -54,6 +61,30 @@ pub enum Payload {
     MembershipVote { action: MembershipAction },
     /// Generic application data.
     Data(Vec<u8>),
+}
+
+/// Full devnet artifact payload for a turn-bearing block.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnArtifactBundle {
+    /// Node-encoded `dregg_sdk::SignedTurn` bytes.
+    pub signed_turn: Vec<u8>,
+    /// Node-encoded `dregg_turn::TurnReceipt`, when a node already has the
+    /// committed receipt at block production time.
+    pub receipt: Option<Vec<u8>>,
+    /// Node-encoded `dregg_turn::WitnessedReceipt` artifacts for the
+    /// receipt above. Multiple entries are expected for bilateral/gamma.2
+    /// flows that produce per-cell witnessed receipts.
+    pub witnessed_receipts: Vec<Vec<u8>>,
+}
+
+impl TurnArtifactBundle {
+    pub fn new(signed_turn: Vec<u8>) -> Self {
+        Self {
+            signed_turn,
+            receipt: None,
+            witnessed_receipts: Vec::new(),
+        }
+    }
 }
 
 /// Membership actions for federation changes.
@@ -223,6 +254,24 @@ impl Block {
                 buf.push(0x01);
                 buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
                 buf.extend_from_slice(data);
+            }
+            Payload::TurnBundle(bundle) => {
+                buf.push(0x06);
+                buf.extend_from_slice(&(bundle.signed_turn.len() as u32).to_le_bytes());
+                buf.extend_from_slice(&bundle.signed_turn);
+                match &bundle.receipt {
+                    Some(receipt) => {
+                        buf.push(0x01);
+                        buf.extend_from_slice(&(receipt.len() as u32).to_le_bytes());
+                        buf.extend_from_slice(receipt);
+                    }
+                    None => buf.push(0x00),
+                }
+                buf.extend_from_slice(&(bundle.witnessed_receipts.len() as u32).to_le_bytes());
+                for witnessed in &bundle.witnessed_receipts {
+                    buf.extend_from_slice(&(witnessed.len() as u32).to_le_bytes());
+                    buf.extend_from_slice(witnessed);
+                }
             }
             Payload::Ack => {
                 buf.push(0x02);

@@ -24,16 +24,16 @@ use dregg_blocklace::constitution::{
     Constitution, ConstitutionManager, LeaveReason, MembershipProposal, MembershipVote,
 };
 use dregg_blocklace::dissemination::MAX_BLOCKS_PER_PUSH;
-use dregg_blocklace::dregg_bridge::DreggBlocklaceBridge;
 use dregg_blocklace::finality::{
     Block, BlockError, BlockId, Blocklace, FinalityLevel, MembershipAction, Payload,
+    TurnArtifactBundle,
 };
 use dregg_blocklace::ordering::tau;
 use dregg_net::gossip::{GossipEvent, GossipNetwork, TopicHandle};
 use dregg_net::message::PeerMessage;
 use dregg_net::node::{NodeId, PeerNode, PeerNodeConfig};
 use dregg_persist::BlocklaceMeta;
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{Notify, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::state::{NodeEvent, NodeState};
@@ -111,7 +111,11 @@ pub struct BlocklaceHandle {
 #[derive(Clone, Debug)]
 pub enum FinalizedBlock {
     /// A dregg turn ready for ledger execution.
-    Turn { block_id: BlockId, data: Vec<u8> },
+    Turn {
+        block_id: BlockId,
+        data: Vec<u8>,
+        artifacts: Option<TurnArtifactBundle>,
+    },
     /// A membership vote/proposal ready for constitution processing.
     Membership {
         block_id: BlockId,
@@ -138,10 +142,31 @@ impl BlocklaceHandle {
         state: &NodeState,
         turn_data: Vec<u8>,
     ) -> (BlockId, FinalityLevel) {
+        self.submit_turn_payload(state, Payload::Turn(turn_data))
+            .await
+    }
+
+    /// Submit a signed turn plus committed receipt/witness artifacts to the
+    /// blocklace. Peers that understand bundle payloads can materialize the
+    /// full devnet artifact; older raw-turn blocks remain valid.
+    pub async fn submit_turn_bundle(
+        &self,
+        state: &NodeState,
+        bundle: TurnArtifactBundle,
+    ) -> (BlockId, FinalityLevel) {
+        self.submit_turn_payload(state, Payload::TurnBundle(bundle))
+            .await
+    }
+
+    async fn submit_turn_payload(
+        &self,
+        state: &NodeState,
+        payload: Payload,
+    ) -> (BlockId, FinalityLevel) {
         // Create the block in our local blocklace.
         let block = {
             let mut lace = self.lace.write().await;
-            lace.add_block(Payload::Turn(turn_data))
+            lace.add_block(payload)
         };
         let block_id = block.id();
 
@@ -245,6 +270,7 @@ impl BlocklaceHandle {
                 .iter()
                 .filter_map(|(id, block)| match &block.payload {
                     Payload::Turn(_)
+                    | Payload::TurnBundle(_)
                     | Payload::MembershipVote { .. }
                     | Payload::Checkpoint { .. } => Some((block.seq, *id)),
                     _ => None,
@@ -280,6 +306,14 @@ impl BlocklaceHandle {
                         finalized.push(FinalizedBlock::Turn {
                             block_id: *block_id,
                             data: data.clone(),
+                            artifacts: None,
+                        });
+                    }
+                    Payload::TurnBundle(bundle) => {
+                        finalized.push(FinalizedBlock::Turn {
+                            block_id: *block_id,
+                            data: bundle.signed_turn.clone(),
+                            artifacts: Some(bundle.clone()),
                         });
                     }
                     Payload::MembershipVote { action } => {
@@ -396,6 +430,7 @@ fn build_ordering_blocklace(
             .collect();
         let payload = match &block.payload {
             Payload::Turn(data) => data.clone(),
+            Payload::TurnBundle(bundle) => bundle.signed_turn.clone(),
             Payload::Ack => vec![],
             Payload::Checkpoint { root, height } => {
                 let mut buf = Vec::with_capacity(40);
@@ -1061,8 +1096,19 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
 
             for block in &finalized_blocks {
                 match block {
-                    FinalizedBlock::Turn { block_id, data } => {
-                        execute_finalized_turn(&state, &handle, *block_id, data).await;
+                    FinalizedBlock::Turn {
+                        block_id,
+                        data,
+                        artifacts,
+                    } => {
+                        execute_finalized_turn(
+                            &state,
+                            &handle,
+                            *block_id,
+                            data,
+                            artifacts.as_ref(),
+                        )
+                        .await;
                     }
                     FinalizedBlock::Membership {
                         block_id,
@@ -1163,6 +1209,7 @@ async fn execute_finalized_turn(
     handle: &BlocklaceHandle,
     block_id: BlockId,
     turn_data: &[u8],
+    artifacts: Option<&TurnArtifactBundle>,
 ) {
     // Deserialize the signed turn.
     let signed_turn: dregg_sdk::SignedTurn = match postcard::from_bytes(turn_data) {
@@ -1240,6 +1287,9 @@ async fn execute_finalized_turn(
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect();
+            if let Some(bundle) = artifacts {
+                materialize_blocklace_artifacts(&mut s, &receipt, bundle);
+            }
 
             // Resolve any pending turns waiting on this receipt.
             s.pending_turns.resolve(
@@ -1406,6 +1456,152 @@ async fn execute_finalized_turn(
                 "finalized turn pending"
             );
         }
+    }
+}
+
+fn materialize_blocklace_artifacts(
+    state: &mut crate::state::NodeStateInner,
+    local_receipt: &dregg_turn::TurnReceipt,
+    bundle: &TurnArtifactBundle,
+) {
+    let local_receipt_hash = local_receipt.receipt_hash();
+
+    if let Some(receipt_bytes) = &bundle.receipt {
+        match decode_blocklace_artifact::<dregg_turn::TurnReceipt>(receipt_bytes) {
+            Ok(bundle_receipt) if bundle_receipt.receipt_hash() == local_receipt_hash => {}
+            Ok(_) => {
+                warn!(
+                    "blocklace turn bundle receipt does not match local execution; ignoring bundled witnesses"
+                );
+                return;
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to decode blocklace bundled receipt; ignoring bundled witnesses");
+                return;
+            }
+        }
+    }
+
+    for witnessed_bytes in &bundle.witnessed_receipts {
+        match decode_blocklace_artifact::<dregg_turn::WitnessedReceipt>(witnessed_bytes) {
+            Ok(witnessed) if witnessed.receipt.receipt_hash() == local_receipt_hash => {
+                state.push_witnessed_receipt(local_receipt_hash, witnessed);
+            }
+            Ok(_) => {
+                warn!(
+                    "blocklace bundled witnessed receipt does not match local execution; skipping"
+                );
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to decode blocklace bundled witnessed receipt; skipping");
+            }
+        }
+    }
+}
+
+fn decode_blocklace_artifact<T>(bytes: &[u8]) -> Result<T, String>
+where
+    T: for<'de> serde::Deserialize<'de>,
+{
+    postcard::from_bytes(bytes)
+        .map_err(|e| e.to_string())
+        .or_else(|_| serde_json::from_slice(bytes).map_err(|e| e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dregg_types::CellId;
+
+    fn sample_receipt(tag: u8) -> dregg_turn::TurnReceipt {
+        dregg_turn::TurnReceipt {
+            turn_hash: [tag; 32],
+            forest_hash: [tag.wrapping_add(1); 32],
+            pre_state_hash: [tag.wrapping_add(2); 32],
+            post_state_hash: [tag.wrapping_add(3); 32],
+            timestamp: 42,
+            effects_hash: [tag.wrapping_add(4); 32],
+            computrons_used: 7,
+            action_count: 1,
+            previous_receipt_hash: None,
+            agent: CellId([tag.wrapping_add(5); 32]),
+            federation_id: [tag.wrapping_add(6); 32],
+            routing_directives: Vec::new(),
+            introduction_exports: Vec::new(),
+            derivation_records: Vec::new(),
+            emitted_events: Vec::new(),
+            executor_signature: None,
+            finality: dregg_turn::Finality::Final,
+            was_encrypted: false,
+            was_burn: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn blocklace_turn_bundle_materializes_matching_witnesses_only() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        let receipt = sample_receipt(9);
+        let receipt_hash = receipt.receipt_hash();
+        let witnessed = dregg_turn::WitnessedReceipt::from_components(
+            receipt.clone(),
+            b"proof".to_vec(),
+            vec![1, 2, 3],
+            None,
+        );
+        let mismatched_witnessed = dregg_turn::WitnessedReceipt::from_components(
+            sample_receipt(10),
+            b"proof".to_vec(),
+            vec![1, 2, 3],
+            None,
+        );
+        let bundle = TurnArtifactBundle {
+            signed_turn: b"signed-turn".to_vec(),
+            receipt: Some(serde_json::to_vec(&receipt).expect("receipt encodes")),
+            witnessed_receipts: vec![
+                serde_json::to_vec(&witnessed).expect("witness encodes"),
+                serde_json::to_vec(&mismatched_witnessed).expect("witness encodes"),
+            ],
+        };
+        let decoded_receipt: dregg_turn::TurnReceipt =
+            decode_blocklace_artifact(bundle.receipt.as_ref().unwrap()).expect("receipt decodes");
+        assert_eq!(decoded_receipt.receipt_hash(), receipt_hash);
+        let decoded_witnessed: dregg_turn::WitnessedReceipt =
+            decode_blocklace_artifact(&bundle.witnessed_receipts[0]).expect("witness decodes");
+        assert_eq!(decoded_witnessed.receipt.receipt_hash(), receipt_hash);
+
+        let mut guard = state.write().await;
+        materialize_blocklace_artifacts(&mut guard, &receipt, &bundle);
+
+        assert_eq!(guard.witnessed_receipt_count(&receipt_hash), 1);
+        let stored = guard
+            .witnessed_receipts
+            .get(&receipt_hash)
+            .expect("matching witness is materialized");
+        assert_eq!(stored[0].witness_hash, witnessed.witness_hash);
+    }
+
+    #[test]
+    fn blocklace_bundle_payload_preserves_signed_turn_for_ordering() {
+        let bundle = TurnArtifactBundle {
+            signed_turn: b"signed-turn".to_vec(),
+            receipt: None,
+            witnessed_receipts: Vec::new(),
+        };
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let mut finality_lace = Blocklace::new_simple(key);
+        let block = finality_lace.add_block(Payload::TurnBundle(bundle.clone()));
+
+        let (ordering_lace, id_map) = build_ordering_blocklace(&finality_lace);
+        let ordering_id = id_map
+            .iter()
+            .find_map(|(ordering, finality)| (*finality == block.id()).then_some(*ordering))
+            .expect("bundle block is mapped into ordering lace");
+        let ordering_block = ordering_lace
+            .get(&ordering_id)
+            .expect("ordering block exists");
+
+        assert_eq!(ordering_block.payload, bundle.signed_turn);
     }
 }
 
