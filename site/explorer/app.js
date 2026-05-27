@@ -52,11 +52,13 @@ export const state = {
   currentPage: 'overview',
   status: null,
   blocks: null,
+  cells: null,
   checkpoint: null,
   receipts: null,
   tokens: null,
   intents: null,
   conditionals: null,
+  diagnostics: null,
 };
 
 export function updateState(patch) {
@@ -204,15 +206,25 @@ let refreshTimer = null;
 
 export async function refresh() {
   try {
-    const status = await api.getStatus();
-    updateState({ status, connected: true });
+    const { data: status, diagnostic } = await api.diagnoseStatus();
+    updateState({ status, connected: true, diagnostics: diagnostic });
     bus.emit('status:updated', status);
+    bus.emit('diagnostics:updated', diagnostic);
     bus.emit('connection:changed', true);
 
     // Load page-specific data
     loadPageData(state.currentPage);
   } catch (err) {
-    updateState({ connected: false });
+    const diagnostic = err?.diagnostic || {
+      ok: false,
+      path: '/status',
+      url: `${api.getNodeUrl()}/status`,
+      status: null,
+      statusText: err?.message || 'Connection failed',
+      checkedAt: new Date().toISOString(),
+    };
+    updateState({ connected: false, diagnostics: diagnostic });
+    bus.emit('diagnostics:updated', diagnostic);
     bus.emit('connection:changed', false);
     bus.emit('error', { source: 'refresh', error: err });
   }
@@ -233,6 +245,7 @@ export async function loadPageData(page) {
         break;
       case 'cells':
         const cells = await api.getCells().catch(() => []);
+        updateState({ cells });
         bus.emit('cells:updated', cells);
         break;
       case 'turns':
@@ -286,14 +299,17 @@ export async function loadPageData(page) {
 }
 
 async function loadOverviewData() {
-  const [intents, conditionals, checkpoint, blocks] = await Promise.all([
+  const [intents, conditionals, checkpoint, blocks, cells, receipts, tokens] = await Promise.all([
     api.getIntents().catch(() => []),
     api.getPendingConditionals().catch(() => []),
     api.getCheckpoint().catch(() => null),
     api.getBlocks().catch(() => []),
+    api.getCells().catch(() => []),
+    api.getReceipts().catch(() => []),
+    api.getTokens().catch(() => []),
   ]);
-  updateState({ intents, conditionals, checkpoint, blocks });
-  bus.emit('overview:updated', { intents, conditionals, checkpoint, blocks });
+  updateState({ intents, conditionals, checkpoint, blocks, cells, receipts, tokens });
+  bus.emit('overview:updated', { intents, conditionals, checkpoint, blocks, cells, receipts, tokens });
 }
 
 async function loadNoteData() {

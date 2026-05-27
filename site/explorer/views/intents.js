@@ -23,6 +23,10 @@ export function update(appState) {
 
 export function destroy() {}
 
+function starbridgeHref(uri) {
+  return `../starbridge/?at=${encodeURIComponent(uri)}&runtime=remote`;
+}
+
 function renderActiveIntents(intents) {
   const container = document.getElementById('intents-active');
   document.getElementById('intents-count-badge').textContent = intents?.length || 0;
@@ -45,6 +49,7 @@ function renderActiveIntents(intents) {
         <div class="intent-item__details">
           expiry: ${intent.expiry || '--'}${intent.matcher ? ` | actions: ${intent.matcher.actions?.length || 0}` : ''}
         </div>
+        ${id ? `<div class="intent-item__actions"><a class="ex-starbridge-link" href="${starbridgeHref(`dregg://intent/${id}`)}">Open intent in Starbridge</a></div>` : ''}
       </div>
     `;
   }).join('');
@@ -67,6 +72,7 @@ function renderConditionals(conditionals) {
       <div class="conditional-item__meta">
         timeout: height ${api.formatNumber(c.timeout_height)} | submitted: height ${api.formatNumber(c.submitted_at)}
       </div>
+      ${c.hash ? `<div class="intent-item__actions"><a class="ex-starbridge-link" href="${starbridgeHref(`dregg://turn/${c.hash}`)}">Debug turn in Starbridge</a></div>` : ''}
     </div>
   `).join('');
 }

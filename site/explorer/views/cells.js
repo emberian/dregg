@@ -73,10 +73,11 @@ function renderCellsTable(cells) {
 
   tableContainer.innerHTML = `
     <table class="ex-table">
-      <thead><tr><th>Cell ID</th><th>Mode</th><th>Balance</th><th>Nonce</th><th>Caps</th><th>Delegation</th><th>Program</th></tr></thead>
+      <thead><tr><th>Cell ID</th><th>Mode</th><th>Balance</th><th>Nonce</th><th>Caps</th><th>Delegation</th><th>Program</th><th>IDE</th></tr></thead>
       <tbody>
         ${cells.map(c => {
           const mode = classifyCell(c);
+          const cellUri = `dregg://cell/${c.id}`;
           return `
           <tr data-cell-id="${c.id}">
             <td class="cell-hash">${api.shortHash(c.id, 10, 6)}</td>
@@ -86,6 +87,7 @@ function renderCellsTable(cells) {
             <td>${c.capability_count}</td>
             <td>${c.has_delegate ? '<span class="cell-badge cell-badge--info">delegated</span>' : '--'}</td>
             <td>${c.has_program ? '<span class="cell-badge cell-badge--success">active</span>' : '<span class="cell-badge cell-badge--warning">none</span>'}</td>
+            <td><a class="ex-starbridge-link" href="${starbridgeHref(cellUri)}">Starbridge</a></td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -93,7 +95,8 @@ function renderCellsTable(cells) {
   `;
 
   tableContainer.querySelectorAll('tr[data-cell-id]').forEach(row => {
-    row.addEventListener('click', async () => {
+    row.addEventListener('click', async (event) => {
+      if (event.target.closest('a')) return;
       try {
         const detail = await api.getCell(row.dataset.cellId);
         renderCellDetail(detail);

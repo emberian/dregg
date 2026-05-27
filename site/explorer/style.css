@@ -875,6 +875,9 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--text-muted);
   line-height: 1.6;
 }
+.intent-item__actions {
+  margin-top: 10px;
+}
 
 .conditional-item {
   padding: 10px 16px;
@@ -1035,6 +1038,43 @@ button { font-family: inherit; cursor: pointer; }
 .ex-modal__checkbox-label input[type="checkbox"] {
   width: 14px; height: 14px;
   accent-color: var(--accent);
+}
+.node-diagnostics {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.node-diagnostics__row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.node-diagnostics__row span {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.node-diagnostics__row strong {
+  min-width: 0;
+  color: var(--text-dim);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.node-diagnostics__message {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.node-diagnostics__message--error {
+  color: var(--danger);
 }
 .ex-modal__actions {
   display: flex;

@@ -60,7 +60,27 @@
           Auto-refresh (every 5s)
         </label>
       </div>
+      <div class="node-diagnostics" id="node-diagnostics">
+        <div class="node-diagnostics__row">
+          <span>Endpoint</span>
+          <strong id="diag-endpoint">/status</strong>
+        </div>
+        <div class="node-diagnostics__row">
+          <span>HTTP</span>
+          <strong id="diag-http">not checked</strong>
+        </div>
+        <div class="node-diagnostics__row">
+          <span>CORS</span>
+          <strong id="diag-cors">--</strong>
+        </div>
+        <div class="node-diagnostics__row">
+          <span>Latency</span>
+          <strong id="diag-latency">--</strong>
+        </div>
+        <div class="node-diagnostics__message" id="diag-message">Open settings or refresh to probe the configured node.</div>
+      </div>
       <div class="ex-modal__actions">
+        <button class="btn btn-secondary" id="settings-test">Test</button>
         <button class="btn btn-secondary" id="settings-cancel">Cancel</button>
         <button class="btn btn-primary" id="settings-save">Save</button>
       </div>
@@ -199,17 +219,17 @@
           </button>
           <button class="object-map__item" type="button" data-map-page="names">
             <span class="object-map__label">Names</span>
-            <span class="object-map__value">dregg://</span>
+            <span class="object-map__value" id="map-names-value">dregg://</span>
             <span class="object-map__desc">routing names</span>
           </button>
           <button class="object-map__item" type="button" data-map-page="queues">
             <span class="object-map__label">Queues</span>
-            <span class="object-map__value">services</span>
+            <span class="object-map__value" id="map-queues-value">services</span>
             <span class="object-map__desc">app ingress</span>
           </button>
           <button class="object-map__item" type="button" data-map-page="delegations">
             <span class="object-map__label">Delegations</span>
-            <span class="object-map__value">authority</span>
+            <span class="object-map__value" id="map-delegations-value">authority</span>
             <span class="object-map__desc">capability flow</span>
           </button>
         </div>

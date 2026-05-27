@@ -65,7 +65,8 @@ function renderBlocksTable(blocks) {
     </table>
   `;
   tableContainer.querySelectorAll('tr[data-height]').forEach(row => {
-    row.addEventListener('click', () => {
+    row.addEventListener('click', (event) => {
+      if (event.target.closest('a')) return;
       const block = sorted.find(b => b.height === parseInt(row.dataset.height));
       if (block) renderBlockDetail(block);
     });

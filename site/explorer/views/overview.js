@@ -26,13 +26,17 @@ export function init(el) {
     if (state.currentPage !== 'overview') return;
     latestOverview = { checkpoint, blocks };
     renderDevnetBrief(state.status, checkpoint, blocks);
-    renderObjectMap({ intents, conditionals, checkpoint, blocks });
+    renderObjectMap({ intents, conditionals, checkpoint, blocks, cells: state.cells, receipts: state.receipts, tokens: state.tokens });
     renderIntentStats(intents, conditionals);
     renderCheckpoint(checkpoint);
     renderRecentRoots(blocks);
   });
 
   bus.on('connection:changed', () => {
+    if (state.currentPage === 'overview') renderDevnetBrief(state.status, latestOverview.checkpoint, latestOverview.blocks);
+  });
+
+  bus.on('diagnostics:updated', () => {
     if (state.currentPage === 'overview') renderDevnetBrief(state.status, latestOverview.checkpoint, latestOverview.blocks);
   });
 }
@@ -149,7 +153,7 @@ function renderDevnetBrief(status, checkpoint, blocks) {
 
   nodeEl.textContent = api.getNodeUrl();
   if (!state.connected) {
-    metaEl.textContent = 'No status response from this node.';
+    metaEl.textContent = diagnosticSummary(state.diagnostics);
     heightEl.textContent = '--';
     rootEl.textContent = '--';
     checkpointEl.textContent = checkpoint?.height ? `#${api.formatNumber(checkpoint.height)}` : '--';
@@ -158,17 +162,27 @@ function renderDevnetBrief(status, checkpoint, blocks) {
 
   const peers = api.statusPeers(status);
   const latestRoot = latestBlock(blocks);
-  metaEl.textContent = `${api.healthLabel(status)} / ${api.formatNumber(peers)} peer${peers === 1 ? '' : 's'} / auto-refresh ${state.autoRefresh ? 'on' : 'off'}`;
+  const latency = Number.isFinite(state.diagnostics?.latencyMs) ? ` / ${state.diagnostics.latencyMs} ms` : '';
+  metaEl.textContent = `${api.healthLabel(status)} / ${api.formatNumber(peers)} peer${peers === 1 ? '' : 's'}${latency} / auto-refresh ${state.autoRefresh ? 'on' : 'off'}`;
   heightEl.textContent = api.formatNumber(api.statusHeight(status));
   rootEl.textContent = api.shortHash(api.blockRoot(latestRoot), 12, 6);
   checkpointEl.textContent = checkpoint?.height ? `#${api.formatNumber(checkpoint.height)}` : '--';
 }
 
-function renderObjectMap({ intents, conditionals, blocks }) {
+function renderObjectMap({ intents, conditionals, blocks, cells, receipts, tokens }) {
   setText('map-blocks-value', blocks?.length ? `${api.formatNumber(blocks.length)} roots` : 'no roots');
+  setText('map-cells-value', cells?.length ? `${api.formatNumber(cells.length)} cells` : 'queryable');
   const intentCount = (intents?.length || 0) + (conditionals?.length || 0);
   setText('map-turns-value', intentCount ? `${api.formatNumber(intentCount)} queued` : 'pool empty');
-  setText('map-receipts-value', state.receipts?.length ? `${api.formatNumber(state.receipts.length)} receipts` : 'proof chain');
+  setText('map-receipts-value', receipts?.length ? `${api.formatNumber(receipts.length)} receipts` : 'proof chain');
+  setText('map-delegations-value', tokens?.length ? `${api.formatNumber(tokens.length)} tokens` : 'authority');
+}
+
+function diagnosticSummary(diagnostic) {
+  if (!diagnostic) return 'No status response from this node.';
+  if (diagnostic.status) return `/status returned ${diagnostic.status} ${diagnostic.statusText || ''}`.trim();
+  if (diagnostic.errorMessage) return `Browser could not read /status: ${diagnostic.errorMessage}`;
+  return 'Browser could not read /status. Check node URL and CORS.';
 }
 
 function latestBlock(blocks) {

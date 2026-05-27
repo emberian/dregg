@@ -59,6 +59,60 @@ async function get(path, { auth = false } = {}) {
   return res.json();
 }
 
+/** Fetch JSON with status, timing, and browser-visible network/CORS failure detail. */
+async function probeJson(path, { auth = false } = {}) {
+  const base = getNodeUrl();
+  const url = `${base}${path}`;
+  const startedAt = performance.now();
+  const headers = { 'Accept': 'application/json' };
+  if (auth) {
+    const tok = getAdminToken();
+    if (!tok) throw new AuthRequired(path);
+    headers['Authorization'] = `Bearer ${tok}`;
+  }
+
+  try {
+    const res = await fetch(url, { headers });
+    const latencyMs = Math.round(performance.now() - startedAt);
+    const contentType = res.headers.get('content-type') || '';
+    const diagnostic = {
+      ok: res.ok,
+      url,
+      path,
+      status: res.status,
+      statusText: res.statusText,
+      latencyMs,
+      contentType,
+      cors: res.type,
+      checkedAt: new Date().toISOString(),
+    };
+    if (!res.ok) {
+      const err = new Error(`GET ${path} returned ${res.status}`);
+      err.diagnostic = diagnostic;
+      throw err;
+    }
+    return { data: await res.json(), diagnostic };
+  } catch (error) {
+    if (error.diagnostic) throw error;
+    const diagnostic = {
+      ok: false,
+      url,
+      path,
+      status: null,
+      statusText: 'Network/CORS failure',
+      latencyMs: Math.round(performance.now() - startedAt),
+      contentType: '',
+      cors: 'blocked',
+      checkedAt: new Date().toISOString(),
+      errorName: error?.name || 'Error',
+      errorMessage: error?.message || String(error),
+    };
+    const err = new Error(`GET ${path} failed before an HTTP response`);
+    err.diagnostic = diagnostic;
+    throw err;
+  }
+}
+
 /** Make a POST request to the node API. */
 async function post(path, body) {
   const base = getNodeUrl();
@@ -83,6 +137,11 @@ async function post(path, body) {
 /** Get node health and basic stats. */
 export async function getStatus() {
   return get('/status');
+}
+
+/** Probe /status and return both the payload and live connection diagnostics. */
+export async function diagnoseStatus() {
+  return probeJson('/status');
 }
 
 /** Get federation attested roots (block list). */
