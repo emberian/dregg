@@ -349,8 +349,7 @@ function writeUrlState({ at, runtime }) {
   function openAppWorkspace(appMeta) {
     if (!appMeta?.id) return;
     if (appMeta.status === 'unported') {
-      consoleLog(`${appMeta.name || appMeta.id} is still a legacy app at ${appMeta.legacy_path || 'apps/'}`, 'err');
-      return;
+      consoleLog(`${appMeta.name || appMeta.id} is a legacy app awaiting Starbridge porting`, 'err');
     }
     appCatalog.set(appMeta.id, appMeta);
     setCurrentUri(`dregg://app/${appMeta.id}`);
@@ -430,6 +429,7 @@ function writeUrlState({ at, runtime }) {
   }
 
   function appPageHref(appMeta, { embedded = false } = {}) {
+    if (appMeta.page === null) return '';
     const pageUrl = new URL(appMeta.page || `/starbridge-apps/${appMeta.id}/pages/index.html`, window.location.origin);
     if (embedded && pageUrl.pathname.endsWith('/index.html')) {
       pageUrl.pathname = pageUrl.pathname.slice(0, -'index.html'.length);
@@ -713,6 +713,9 @@ function writeUrlState({ at, runtime }) {
       { group: 'Workbench', label: 'Export snapshot', detail: 'Download runtime JSON snapshot', run: exportSnapshot },
       { group: 'Workbench', label: 'Inspect activity feed', detail: 'Open activity inspector URI', run: () => setCurrentUri('dregg://activity/feed') },
       { group: 'Workbench', label: 'Inspect outbox', detail: 'Queued extension submissions', priority: 10, run: () => setCurrentUri('dregg://outbox/queue') },
+      { group: 'Collections', label: 'All receipts', detail: 'Open runtime receipt list', priority: 7, run: () => setCurrentUri('dregg://receipt-list/all') },
+      { group: 'Collections', label: 'All federations', detail: 'Open known federation list', priority: 7, run: () => setCurrentUri('dregg://federation-list/all') },
+      { group: 'Collections', label: 'Agent 0 capabilities', detail: 'Open capability list for first agent', priority: 6, run: () => setCurrentUri('dregg://capability-list/0') },
     ];
 
     for (const snap of readSnapshots()) {
@@ -736,10 +739,12 @@ function writeUrlState({ at, runtime }) {
     }
 
     for (const appMeta of appCatalogList()) {
+      const hostMode = appHostMode(appMeta);
       items.push({
         group: 'Programs',
         label: appMeta.name || appMeta.id,
-        detail: `${appMeta.id} · ${compactList(appMeta.required_apis, 'no API requirements')}`,
+        detail: `${hostMode.label} · ${appMeta.id} · ${compactList(appMeta.required_apis, 'no API requirements')}`,
+        priority: appMeta.status === 'unported' ? 1 : 5,
         run: () => openAppWorkspace(appMetaFor(appMeta.id)),
       });
     }
@@ -819,7 +824,10 @@ function writeUrlState({ at, runtime }) {
       btn.setAttribute('role', 'option');
       btn.setAttribute('aria-selected', idx === 0 ? 'true' : 'false');
       btn.innerHTML = `
-        <span class="sb__palette-item-main">${escapeHtml(item.label)}</span>
+        <span class="sb__palette-item-main">
+          <span>${escapeHtml(item.label)}</span>
+          <code>${escapeHtml(item.group)}</code>
+        </span>
         <span class="sb__palette-item-detail">${escapeHtml(item.group)} · ${escapeHtml(item.detail || '')}</span>
       `;
       btn.addEventListener('click', async () => {
@@ -875,6 +883,7 @@ function writeUrlState({ at, runtime }) {
     shell.className = 'sb__app-host';
     const page = appPageHref(appMeta, { embedded: true });
     const standalonePage = appPageHref(appMeta);
+    const hasPage = !!page;
     const registryUri = appMeta.registry_uri || appMeta.registryUri || '';
     const apiRows = appApiRows(appMeta);
     const hostMode = appHostMode(appMeta);
@@ -925,8 +934,8 @@ function writeUrlState({ at, runtime }) {
         <div class="sb__app-actions">
           ${registryUri ? `<button type="button" class="sb__btn sb__btn--small" data-uri="${escapeHtml(registryUri)}">Inspect registry</button>` : ''}
           <button type="button" class="sb__btn sb__btn--small sb__btn--ghost" data-manifest>Manifest</button>
-          <button type="button" class="sb__btn sb__btn--small sb__btn--ghost" data-reload-app>Reload</button>
-          <a class="sb__btn sb__btn--small sb__btn--ghost" href="${escapeHtml(standalonePage)}" target="_blank">Pop out</a>
+          ${hasPage ? '<button type="button" class="sb__btn sb__btn--small sb__btn--ghost" data-reload-app>Reload</button>' : ''}
+          ${standalonePage ? `<a class="sb__btn sb__btn--small sb__btn--ghost" href="${escapeHtml(standalonePage)}" target="_blank">Pop out</a>` : ''}
         </div>
       </div>
       <div class="sb__app-console">
@@ -944,11 +953,23 @@ function writeUrlState({ at, runtime }) {
           <div class="sb__app-chip-row">${factoryButtons || '<span class="sb__app-empty">No factory VKs declared</span>'}</div>
         </section>
       </div>
-      <iframe
-        class="sb__app-frame"
-        title="${escapeHtml(appMeta.name || appMeta.id)} app workspace"
-        src="${escapeHtml(page)}"
-      ></iframe>
+      ${hasPage ? `
+        <iframe
+          class="sb__app-frame"
+          title="${escapeHtml(appMeta.name || appMeta.id)} app workspace"
+          src="${escapeHtml(page)}"
+        ></iframe>
+      ` : `
+        <div class="sb__app-migration">
+          <strong>Legacy app awaiting Starbridge port</strong>
+          <p>This app is visible in the host catalog so the IDE can track its migration, inspect its manifest, and keep the end-user app roadmap in one place.</p>
+          <dl>
+            <div><dt>Legacy path</dt><dd><code>${escapeHtml(appMeta.legacy_path || 'apps/' + appMeta.id)}</code></dd></div>
+            <div><dt>Target URI</dt><dd><code>dregg://app/${escapeHtml(appMeta.id)}</code></dd></div>
+            <div><dt>Status</dt><dd>${escapeHtml(appMeta.status || 'unported')}</dd></div>
+          </dl>
+        </div>
+      `}
     `;
     shell.querySelector('[data-uri]')?.addEventListener('click', (e) => {
       setCurrentUri(e.currentTarget.dataset.uri);
