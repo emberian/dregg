@@ -89,10 +89,8 @@ sudo cp /opt/dregg/deploy/aws/caddy/Caddyfile /etc/caddy/Caddyfile
 sudo systemctl enable caddy
 sudo systemctl restart caddy
 
-# Deploy static site assets
-sudo mkdir -p /opt/dregg/site/explorer /opt/dregg/site/playground
-sudo cp -r /opt/dregg/site/explorer/* /opt/dregg/site/explorer/ 2>/dev/null || true
-sudo cp -r /opt/dregg/site/playground/* /opt/dregg/site/playground/ 2>/dev/null || true
+# Build and deploy static site assets
+/opt/dregg/deploy/aws/deploy-site.sh
 
 echo "=== Setup complete ==="
 echo "Gateway node running on port 8420"

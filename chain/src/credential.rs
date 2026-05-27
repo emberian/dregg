@@ -122,7 +122,7 @@ pub async fn wrap_credential_for_chain(
     predicate_hash: [u8; 32],
 ) -> Result<EvmCredentialProof, ChainError> {
     // Validate the presentation has a well-formed STARK proof header
-    if presentation.stark_proof_bytes.len() < 5 || &presentation.stark_proof_bytes[0..4] != b"PYNA"
+    if presentation.stark_proof_bytes.len() < 5 || &presentation.stark_proof_bytes[0..4] != b"DREG"
     {
         return Err(ChainError::InvalidProof(
             "anonymous presentation has invalid STARK proof header".to_string(),
@@ -244,7 +244,7 @@ mod tests {
     use super::*;
 
     fn mock_presentation() -> AnonymousPresentation {
-        let mut stark_proof = b"PYNA".to_vec();
+        let mut stark_proof = b"DREG".to_vec();
         stark_proof.push(1); // version
         stark_proof.extend_from_slice(&[0u8; 100]); // mock proof body
 

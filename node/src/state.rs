@@ -1532,6 +1532,13 @@ mod witnessed_receipt_persistence_tests {
                 .await
                 .push_witnessed_receipt(receipt_hash, witnessed_with_marker(9));
             assert_eq!(state.read().await.witnessed_receipt_count(&receipt_hash), 1);
+            let raw = state
+                .read()
+                .await
+                .store
+                .load_witnessed_receipts_raw()
+                .expect("load raw persisted witnesses before restart");
+            assert_eq!(raw.len(), 1, "raw witness table populated before restart");
         }
 
         let restored =

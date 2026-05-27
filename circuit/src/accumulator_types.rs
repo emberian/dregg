@@ -211,10 +211,10 @@ pub fn compute_accumulator(revocation_set: &[BabyBear], alpha: ExtElem) -> ExtEl
 /// Uses Poseidon2 hash of a domain separator concatenated with set metadata.
 /// In production, this would include the epoch number and federation attestation.
 pub fn derive_alpha(revocation_set: &[BabyBear]) -> ExtElem {
-    // Domain separator: "pyana-accumulator-v1" hashed, plus set size.
+    // Domain separator: "dregg-accumulator-v1" hashed, plus set size.
     let domain_sep = hash_many(&[
-        BabyBear::new(0x7079616E), // "pyan"
-        BabyBear::new(0x612D6163), // "a-ac"
+        BabyBear::new(0x64726567), // "dreg"
+        BabyBear::new(0x672D6163), // "g-ac"
         BabyBear::new(0x63756D75), // "cumu"
         BabyBear::new(revocation_set.len() as u32),
     ]);

@@ -2033,6 +2033,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "dregg-chain"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "bincode",
+ "blake3",
+ "dregg-types",
+ "hex",
+ "serde",
+ "serde_json",
+ "sp1-build",
+ "sp1-sdk",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "dregg-types"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ed25519-dalek",
+ "getrandom 0.3.4",
+ "serde",
+ "zeroize",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4232,35 +4261,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
 dependencies = [
  "prost",
-]
-
-[[package]]
-name = "dregg-chain"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "bincode",
- "blake3",
- "hex",
- "dregg-types",
- "serde",
- "serde_json",
- "sp1-build",
- "sp1-sdk",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
-name = "dregg-types"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "ed25519-dalek",
- "getrandom 0.3.4",
- "serde",
- "zeroize",
 ]
 
 [[package]]

@@ -909,7 +909,7 @@ async fn complete_settlement(
     // Verify the delivery proof CRYPTOGRAPHICALLY.
     //
     // The proof must:
-    // 1. Deserialize as a valid StarkProof (PYNA header)
+    // 1. Deserialize as a valid StarkProof (DREG header)
     // 2. Have the expected AIR name for compute delivery proofs
     // 3. Be structurally complete (non-empty queries, valid trace length)
     // 4. PASS `stark::verify()` against the compute_delivery_descriptor() DSL circuit

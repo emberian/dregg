@@ -63,21 +63,24 @@ devnet.dregg.fg-goose.online, dregg.fg-goose.online {
         file_server
     }
 
-    # Chain explorer (static files)
-    handle /explorer/* {
-        root * /opt/dregg/site
+    # Chain explorer (built static files; deep links fall back to SPA shell)
+    handle /explorer* {
+        root * /opt/dregg/site/dist
+        try_files {path} {path}/ /explorer/index.html
         file_server
     }
 
-    # Playground (static files)
-    handle /playground/* {
-        root * /opt/dregg/site
+    # Playground (built static files)
+    handle /playground* {
+        root * /opt/dregg/site/dist
+        try_files {path} {path}/ /playground/index.html /playground.html
         file_server
     }
 
-    # Root serves explorer by default
+    # Built site root
     handle {
-        root * /opt/dregg/site/explorer
+        root * /opt/dregg/site/dist
+        try_files {path} {path}.html {path}/ /index.html
         file_server
     }
 

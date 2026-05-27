@@ -3168,6 +3168,7 @@ dependencies = [
  "dregg-storage",
  "dregg-turn",
  "dregg-types",
+ "dregg-verifier",
  "ed25519-dalek",
  "futures-util",
  "getrandom 0.3.4",

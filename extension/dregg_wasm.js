@@ -65,6 +65,32 @@ let wasm_bindgen = (function(exports) {
     exports.agent_mint_token = agent_mint_token;
 
     /**
+     * Attempt time-travel rewind on the sim runtime (STARBRIDGE-FOLLOWUP-03
+     * on blocked §5.10 + Q4).
+     *
+     * For target <= current: returns Ok(()) only for exact current (no-op) or
+     * Err explaining the pending snapshot format dependency.
+     * For target > current: explicit forward-only error.
+     *
+     * Provides the JS-callable surface + error shape for `<dregg-...>`
+     * scrubber / cursor UI to target. `caps.timeTravel` should stay false
+     * in surfaces until real impl lands. See runtime.rs docs and plan §5.10.
+     *
+     * Thin + safe (no proving stack, delegates to stub).
+     * @param {number} handle
+     * @param {bigint} target_height
+     * @returns {any}
+     */
+    function attempt_time_travel(handle, target_height) {
+        const ret = wasm.attempt_time_travel(handle, target_height);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.attempt_time_travel = attempt_time_travel;
+
+    /**
      * Attenuate a macaroon token with service/action restrictions.
      *
      * `actions` is a comma-separated list of action strings (e.g. "read,write").
@@ -446,6 +472,23 @@ let wasm_bindgen = (function(exports) {
     exports.cipherclerk_private_transfer = cipherclerk_private_transfer;
 
     /**
+     * DFA compile/eval stub. In full: delegates to dregg_dfa::compiler + air.
+     * For inspector <dregg-dfa> + relay/pubsub. Returns placeholder shape today.
+     * @param {string} _pattern_json
+     * @returns {any}
+     */
+    function compile_dfa(_pattern_json) {
+        const ptr0 = passStringToWasm0(_pattern_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.compile_dfa(ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.compile_dfa = compile_dfa;
+
+    /**
      * Compose multiple proofs using AND/OR/Chain/Aggregate strategies.
      *
      * `proofs_json`: JSON array of proof objects { proof_json, public_inputs }
@@ -633,6 +676,47 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.create_bearer_cap = create_bearer_cap;
+
+    /**
+     * Create a *real* `BearerCapProof` (SignedDelegation variant) usable in
+     * canonical turns / `Authorization::Bearer`.
+     *
+     * Extended (FOLLOWUP-14 inspector cluster): supports optional revocation_channel
+     * and allowed_effects facet mask for full capability model integration with
+     * <dregg-revocation-channel> and facet attenuation. Empty rev hex or mask=0 means absent.
+     *
+     * Returns JSON-serialized BearerCapProof (matches the shape already
+     * surfaced in AuthorizationView and TurnReceipt actions).
+     * @param {string} delegator_signing_key_hex
+     * @param {string} target_cell_hex
+     * @param {string} permissions
+     * @param {string} bearer_pubkey_hex
+     * @param {bigint} expires_at
+     * @param {string} federation_id_hex
+     * @param {string} revocation_channel_hex
+     * @param {number} allowed_effects_mask
+     * @returns {any}
+     */
+    function create_bearer_cap_proof(delegator_signing_key_hex, target_cell_hex, permissions, bearer_pubkey_hex, expires_at, federation_id_hex, revocation_channel_hex, allowed_effects_mask) {
+        const ptr0 = passStringToWasm0(delegator_signing_key_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(target_cell_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(permissions, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passStringToWasm0(bearer_pubkey_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ptr4 = passStringToWasm0(federation_id_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len4 = WASM_VECTOR_LEN;
+        const ptr5 = passStringToWasm0(revocation_channel_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len5 = WASM_VECTOR_LEN;
+        const ret = wasm.create_bearer_cap_proof(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, expires_at, ptr4, len4, ptr5, len5, allowed_effects_mask);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.create_bearer_cap_proof = create_bearer_cap_proof;
 
     /**
      * Create a cell in the runtime via a real `Effect::CreateCell` turn issued
@@ -1111,6 +1195,40 @@ let wasm_bindgen = (function(exports) {
     exports.execute_turn_step_by_step = execute_turn_step_by_step;
 
     /**
+     * Export runtime snapshot stub (STARBRIDGE-FOLLOWUP-03 on blocked §5.9).
+     *
+     * Returns pretty JSON with current state summary + explicit note that
+     * this is a v0 placeholder pending the canonical WitnessedReceipt stream
+     * format (Houyhnhnm + plan §8 Q4). Unblocks JS/inspector prep for
+     * snapshot-and-replay / time-travel without requiring the human cargo
+     * session for proving changes. Matches the Rust surface added to
+     * DreggRuntime::export_runtime_snapshot_stub.
+     *
+     * Safe thin binding (delegates only; no new crypto, no circuit).
+     * @param {number} handle
+     * @returns {string}
+     */
+    function export_runtime_snapshot_stub(handle) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.export_runtime_snapshot_stub(handle);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    exports.export_runtime_snapshot_stub = export_runtime_snapshot_stub;
+
+    /**
      * Run the full garbled circuit comparison protocol (both parties in-process for demo).
      *
      * Proves `prover_value >= verifier_threshold` without the prover learning the threshold
@@ -1372,6 +1490,23 @@ let wasm_bindgen = (function(exports) {
     exports.get_merkle_tree_viz = get_merkle_tree_viz;
 
     /**
+     * List notes (commitments) for an agent. Returns array of {commitment, value, asset_type, spent}.
+     * Stub for now (always []); real tracking of held notes across create/spend awaits
+     * SimAgent.held_notes field + updates in runtime.rs (Wave 3 note inspector + §5.1 gaps).
+     * @param {number} handle
+     * @param {number} agent_index
+     * @returns {any}
+     */
+    function get_notes(handle, agent_index) {
+        const ret = wasm.get_notes(handle, agent_index);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.get_notes = get_notes;
+
+    /**
      * Convenience: get the agent's PeerExchange public key. Useful for the
      * paste-UX where one side needs to share the verifying key with the
      * other up-front.
@@ -1408,6 +1543,21 @@ let wasm_bindgen = (function(exports) {
     exports.get_peer_view = get_peer_view;
 
     /**
+     * List pending conditional turns in the runtime (for <dregg-conditional-turn>).
+     * Uses the real PendingConditional vec from runtime; condition simplified to string tag.
+     * @param {number} handle
+     * @returns {any}
+     */
+    function get_pending_conditionals(handle) {
+        const ret = wasm.get_pending_conditionals(handle);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.get_pending_conditionals = get_pending_conditionals;
+
+    /**
      * Get the receipt chain for the runtime.
      *
      * Refactor 3: adds `actions: Vec<ActionView>` per receipt, each with
@@ -1426,6 +1576,26 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.get_receipt_chain = get_receipt_chain;
+
+    /**
+     * Return the current dregg-observability event log as the Studio wire JSON
+     * (schema with "schema_version", "events": [{kind, envelope, payload}, ...]).
+     * This is the source for the signal-cached getter in runtime-in-memory.js
+     * and the <dregg-activity> live feed inspector (Task #30).
+     *
+     * The log contains TurnLifecycle (at minimum; full 7 variants when deeper
+     * executor hooks land) plus any future Authorization etc. events.
+     * @param {number} handle
+     * @returns {any}
+     */
+    function get_trace_events_json(handle) {
+        const ret = wasm.get_trace_events_json(handle);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.get_trace_events_json = get_trace_events_json;
 
     /**
      * Return trace steps for the committed turn identified by `turn_hash_hex`.
@@ -1488,6 +1658,21 @@ let wasm_bindgen = (function(exports) {
     exports.is_channel_active = is_channel_active;
 
     /**
+     * Stub for factory descriptor listing (deploy already exists; this closes the read path for <dregg-factory-descriptor>).
+     * Returns the Vks + basic metadata of deployed factories in the executor.
+     * @param {number} handle
+     * @returns {any}
+     */
+    function list_deployed_factories(handle) {
+        const ret = wasm.list_deployed_factories(handle);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.list_deployed_factories = list_deployed_factories;
+
+    /**
      * List all finalized block headers for a federation. Each entry is a
      * compact summary; call `get_federation_block(fed_idx, height)` for the
      * full view. Returns an empty list if nothing has been finalized.
@@ -1505,6 +1690,22 @@ let wasm_bindgen = (function(exports) {
     exports.list_federation_blocks = list_federation_blocks;
 
     /**
+     * List the KnownFederations registry (wasm/sim surface for §5.7).
+     * Returns the SimFederations the runtime knows (analog to node
+     * KnownFederations for the federation-list inspector).
+     * @param {number} handle
+     * @returns {any}
+     */
+    function list_known_federations(handle) {
+        const ret = wasm.list_known_federations(handle);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.list_known_federations = list_known_federations;
+
+    /**
      * List all peer cell ids the agent has registered (hex strings).
      * @param {number} handle
      * @param {number} agent_idx
@@ -1518,6 +1719,22 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.list_peers = list_peers;
+
+    /**
+     * List all known revocation channels (ids + active state). Now uses real
+     * RevocationChannelSet::iter() (the TODO is resolved; inspector cluster A).
+     * Enables <dregg-revocation-channel> list + URI views with live state.
+     * @param {number} handle
+     * @returns {any}
+     */
+    function list_revocation_channels(handle) {
+        const ret = wasm.list_revocation_channels(handle);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.list_revocation_channels = list_revocation_channels;
 
     /**
      * Create the make_sovereign effect payload.
@@ -1716,6 +1933,28 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.prove_committed_threshold = prove_committed_threshold;
+
+    /**
+     * Register (or record) a federation in the runtime's known set (sim).
+     * committee_pubkeys_json: array of hex pubkeys (minimal: derives n).
+     * Unblocks extension `registerFederation` + list in plan §4.3/§5.7.
+     * @param {number} handle
+     * @param {string} name
+     * @param {string} committee_pubkeys_json
+     * @returns {any}
+     */
+    function register_federation(handle, name, committee_pubkeys_json) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(committee_pubkeys_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.register_federation(handle, ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.register_federation = register_federation;
 
     /**
      * Register a peer cell on the named agent's exchange session, anchoring it
@@ -2092,6 +2331,31 @@ let wasm_bindgen = (function(exports) {
     exports.verify_bearer_cap = verify_bearer_cap;
 
     /**
+     * Sig-only verification of a real BearerCapProof (SignedDelegation path).
+     * Does *not* perform the full executor cap-lookup / revocation / amplification
+     * checks (those require a Ledger snapshot); this is the cryptographic piece
+     * for inspector paste-and-verify UX. Accepts the canonical JSON shape of
+     * BearerCapProof (or a minimal subset for the sig fields).
+     * Returns { signature_valid, expired, valid_for_sig }.
+     * @param {string} proof_json
+     * @param {bigint} current_time
+     * @param {string} federation_id_hex
+     * @returns {any}
+     */
+    function verify_bearer_cap_proof_sig(proof_json, current_time, federation_id_hex) {
+        const ptr0 = passStringToWasm0(proof_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(federation_id_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.verify_bearer_cap_proof_sig(ptr0, len0, current_time, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.verify_bearer_cap_proof_sig = verify_bearer_cap_proof_sig;
+
+    /**
      * Verify a committed threshold proof given the public commitments.
      *
      * `threshold_commitment`: the Poseidon2(threshold, blinding) value
@@ -2264,6 +2528,10 @@ let wasm_bindgen = (function(exports) {
             __proto__: null,
             __wbg_Error_bce6d499ff0a4aff: function(arg0, arg1) {
                 const ret = Error(getStringFromWasm0(arg0, arg1));
+                return ret;
+            },
+            __wbg_Number_b7972a139bfbfdf0: function(arg0) {
+                const ret = Number(arg0);
                 return ret;
             },
             __wbg_String_8564e559799eccda: function(arg0, arg1) {

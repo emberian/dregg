@@ -1951,7 +1951,7 @@ pub fn generate_merkle_trace(
 
 pub fn proof_to_bytes(proof: &StarkProof) -> Vec<u8> {
     let mut b = Vec::new();
-    b.extend_from_slice(b"PYNA");
+    b.extend_from_slice(b"DREG");
     b.push(2); // Version 2: ExtElem constraint quotient
     b.extend_from_slice(&proof.trace_commitment);
     b.extend_from_slice(&proof.constraint_commitment);
@@ -2080,7 +2080,7 @@ pub fn proof_from_bytes(bytes: &[u8]) -> Result<StarkProof, String> {
         *p += 32;
         Ok(h)
     };
-    if bytes.len() < 5 || &bytes[0..4] != b"PYNA" || (bytes[4] != 1 && bytes[4] != 2) {
+    if bytes.len() < 5 || &bytes[0..4] != b"DREG" || (bytes[4] != 1 && bytes[4] != 2) {
         return Err("invalid proof header".to_string());
     }
     let version = bytes[4];
@@ -3373,7 +3373,7 @@ mod tests {
     fn deserialization_rejects_invalid_header() {
         assert!(proof_from_bytes(b"").is_err());
         assert!(proof_from_bytes(b"PYNX\x01").is_err()); // wrong magic
-        assert!(proof_from_bytes(b"PYNA\x03").is_err()); // wrong version
+        assert!(proof_from_bytes(b"DREG\x03").is_err()); // wrong version
         assert!(proof_from_bytes(b"PYN").is_err()); // too short
     }
 
@@ -3606,7 +3606,7 @@ mod tests {
         // Provide bytes with huge boundary counts -- must error, not OOM.
         // Craft a minimal valid-looking header followed by huge boundary counts.
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"PYNA");
+        bytes.extend_from_slice(b"DREG");
         bytes.push(1); // version
         bytes.extend_from_slice(&[0u8; 32]); // trace_commitment
         bytes.extend_from_slice(&[0u8; 32]); // constraint_commitment

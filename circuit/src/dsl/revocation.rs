@@ -6,8 +6,8 @@
 //! - [`verify_non_revocation_dsl`] — verify a STARK non-membership proof
 //! - [`revocation_hash_to_field`] — convert 32-byte revocation hash to BabyBear
 //!
-//! Supersedes the old `pyana_circuit::non_revocation_air` (4-ary, hand-written AIR)
-//! and the test-only `pyana_dsl_tests::non_revocation_dsl`.
+//! Supersedes the old `dregg_circuit::non_revocation_air` (4-ary, hand-written AIR)
+//! and the test-only `dregg_dsl_tests::non_revocation_dsl`.
 
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_fact, hash_many};
@@ -395,7 +395,7 @@ pub fn non_revocation_circuit_descriptor() -> CircuitDescriptor {
     ];
 
     CircuitDescriptor {
-        name: "pyana-non-revocation-dsl-v1".into(),
+        name: "dregg-non-revocation-dsl-v1".into(),
         trace_width: TRACE_WIDTH,
         max_degree: 3, // Gated(Binary) is degree 3: selector * col * (col - 1)
         columns,

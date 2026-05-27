@@ -278,8 +278,8 @@ pub fn prove_accumulator_non_membership(
 pub fn derive_alpha_for_set(set_elements: &[BabyBear], set_id: &SetIdentifier) -> ExtElem {
     // Mix the set identifier's domain separator into the alpha derivation.
     let domain_sep = hash_many(&[
-        BabyBear::new(0x7079616E), // "pyan"
-        BabyBear::new(0x612D6E6D), // "a-nm" (non-membership)
+        BabyBear::new(0x64726567), // "dreg"
+        BabyBear::new(0x672D6E6D), // "g-nm" (non-membership)
         set_id.domain_sep,
         BabyBear::new(set_elements.len() as u32),
     ]);

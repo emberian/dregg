@@ -55,13 +55,13 @@ struct GuestFriLayerQuery {
 /// Deserialize a STARK proof from the `proof_to_bytes()` binary format into
 /// the guest-compatible struct.
 ///
-/// The binary format starts with `PYNA` magic (4 bytes) + version byte (1 byte),
+/// The binary format starts with `DREG` magic (4 bytes) + version byte (1 byte),
 /// then contains the proof fields in a fixed order. We parse this and produce
 /// a `GuestStarkProof` that can be bincode-serialized into SP1 stdin.
 #[cfg(feature = "prove")]
 fn deserialize_for_guest(bytes: &[u8]) -> Result<GuestStarkProof, String> {
-    if bytes.len() < 5 || &bytes[0..4] != b"PYNA" {
-        return Err("missing PYNA magic header".to_string());
+    if bytes.len() < 5 || &bytes[0..4] != b"DREG" {
+        return Err("missing DREG magic header".to_string());
     }
     let _version = bytes[4];
     let mut pos = 5;
@@ -279,9 +279,9 @@ async fn mock_wrap(
     use blake3::Hasher;
 
     // Validate that the proof bytes look reasonable
-    if stark_proof_bytes.len() < 5 || &stark_proof_bytes[0..4] != b"PYNA" {
+    if stark_proof_bytes.len() < 5 || &stark_proof_bytes[0..4] != b"DREG" {
         return Err(ChainError::InvalidProof(
-            "invalid proof header (expected PYNA magic)".to_string(),
+            "invalid proof header (expected DREG magic)".to_string(),
         ));
     }
 
@@ -331,7 +331,7 @@ async fn real_wrap(
     // Prepare stdin with the STARK proof and public inputs.
     let mut stdin = SP1Stdin::new();
 
-    // Deserialize the STARK proof from the custom binary format (PYNA header + fields).
+    // Deserialize the STARK proof from the custom binary format (DREG header + fields).
     // The guest program expects a bincode-serialized StarkProof (matching its struct layout).
     // We parse the proof_to_bytes() output and write the guest-compatible struct.
     //
@@ -384,8 +384,8 @@ mod tests {
     #[cfg(feature = "mock")]
     #[tokio::test]
     async fn test_mock_wrap_accepts_valid_header() {
-        // Minimal valid-looking proof: PYNA magic + version byte + some data
-        let mut fake_proof = b"PYNA".to_vec();
+        // Minimal valid-looking proof: DREG magic + version byte + some data
+        let mut fake_proof = b"DREG".to_vec();
         fake_proof.push(1);
         fake_proof.extend_from_slice(&[0u8; 100]);
 
@@ -401,7 +401,7 @@ mod tests {
     #[cfg(feature = "mock")]
     #[tokio::test]
     async fn test_mock_wrap_deterministic() {
-        let mut proof = b"PYNA".to_vec();
+        let mut proof = b"DREG".to_vec();
         proof.push(1);
         proof.extend_from_slice(&[42u8; 64]);
 
@@ -414,10 +414,10 @@ mod tests {
     #[test]
     fn test_deserialize_for_guest_rejects_invalid() {
         assert!(deserialize_for_guest(b"not a proof").is_err());
-        assert!(deserialize_for_guest(b"PYNA").is_err()); // too short, no version byte
+        assert!(deserialize_for_guest(b"DREG").is_err()); // too short, no version byte
 
         // Valid header but truncated body
-        let mut bytes = b"PYNA".to_vec();
+        let mut bytes = b"DREG".to_vec();
         bytes.push(1); // version
         bytes.extend_from_slice(&[0u8; 10]); // not enough for trace_commitment (32 bytes)
         assert!(deserialize_for_guest(&bytes).is_err());

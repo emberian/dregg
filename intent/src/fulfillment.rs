@@ -1483,10 +1483,10 @@ mod tests {
         let proof_bytes = result.proof.as_ref().unwrap();
         assert!(proof_bytes.len() > 100, "STARK proof should be substantial");
 
-        // Verify the proof starts with the PYNA header
+        // Verify the proof starts with the DREG header
         assert_eq!(
             &proof_bytes[0..4],
-            b"PYNA",
+            b"DREG",
             "proof should have STARK header"
         );
 

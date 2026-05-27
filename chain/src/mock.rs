@@ -14,7 +14,7 @@ pub async fn mock_end_to_end(
     merkle_root: u32,
 ) -> Result<EvmProof, ChainError> {
     // Build a fake STARK proof with valid header
-    let mut stark_proof = b"PYNA".to_vec();
+    let mut stark_proof = b"DREG".to_vec();
     stark_proof.push(1); // version
     // Minimal proof body (not a real proof, but has the right structure for mock)
     stark_proof.extend_from_slice(&[0u8; 64]); // trace commitment

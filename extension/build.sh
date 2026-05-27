@@ -22,6 +22,8 @@ WASM_OUT="$TARGET_DIR/wasm32-unknown-unknown/release/dregg_wasm.wasm"
 DIST_DIR="$SCRIPT_DIR/dist"
 
 COMMAND="${1:-all}"
+CHROME_PACKAGE_NAME="dregg-cipherclerk-chrome.zip"
+FIREFOX_PACKAGE_NAME="dregg-cipherclerk-firefox.xpi"
 
 # ---------------------------------------------------------------------------
 # Step 1: Build WASM
@@ -169,7 +171,7 @@ package_extension() {
   done
 
   # --- Chrome package (.zip) ---
-  local ZIP_NAME="dregg-cipherclerk-chrome.zip"
+  local ZIP_NAME="$CHROME_PACKAGE_NAME"
   local CHROME_FILES=("${EXISTING_FILES[@]}")
   CHROME_FILES+=(manifest.json)
   (cd "$SCRIPT_DIR" && zip -q -r "$DIST_DIR/$ZIP_NAME" "${CHROME_FILES[@]}")
@@ -179,7 +181,7 @@ package_extension() {
 
   # --- Firefox package (.xpi) ---
   # Use manifest-firefox.json renamed to manifest.json inside the package.
-  local XPI_NAME="dregg-cipherclerk-firefox.xpi"
+  local XPI_NAME="$FIREFOX_PACKAGE_NAME"
   local XPI_DIR="$DIST_DIR/firefox-tmp-$$"
   mkdir -p "$XPI_DIR"
   for f in "${EXISTING_FILES[@]}"; do
@@ -237,7 +239,7 @@ case "$COMMAND" in
     echo ""
     echo "Extension built and packaged successfully."
     echo "Load in Chrome: chrome://extensions > Load unpacked > $SCRIPT_DIR"
-    echo "Load in Firefox: about:debugging > This Firefox > Load Temporary Add-on > $DIST_DIR/$XPI_NAME"
+    echo "Load in Firefox: about:debugging > This Firefox > Load Temporary Add-on > $DIST_DIR/$FIREFOX_PACKAGE_NAME"
     ;;
   *)
     echo "Usage: $0 [wasm|package|lint|all]"

@@ -79,7 +79,7 @@ function parseProof(hex) {
     };
 
     result.header = {
-      magic: magic === '7079616e' ? 'pyan (valid)' : `unknown (${magic})`,
+      magic: magic === '64726567' ? 'dreg (valid)' : `unknown (${magic})`,
       version,
       air_id: airId,
       air_name: airNames[airId] || `Unknown(0x${airId.toString(16)})`,
@@ -126,7 +126,7 @@ function parseProof(hex) {
       total_bytes: bytes,
     };
 
-    result.valid = magic === '7079616e';
+    result.valid = magic === '64726567';
     if (!result.valid) {
       // Still parse as best-effort even if magic doesn't match
       result.valid = true;

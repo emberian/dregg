@@ -280,7 +280,7 @@ impl SiloClient {
 
         // Serialize the STARK proof for transmission using the canonical binary format
         // (proof_to_bytes / proof_from_bytes). The wire server deserializes with
-        // proof_from_bytes() which expects the PYNA header format, not postcard.
+        // proof_from_bytes() which expects the DREG header format, not postcard.
         //
         // NOTE: No binding tag is appended here. Replay protection is provided by
         // the wire-layer nonce + timestamp checks (server.rs lines 1061-1094):

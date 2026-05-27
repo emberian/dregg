@@ -416,7 +416,7 @@ pub fn accumulator_circuit_descriptor() -> CircuitDescriptor {
     ];
 
     CircuitDescriptor {
-        name: "pyana-accumulator-dsl-v2".into(),
+        name: "dregg-accumulator-dsl-v2".into(),
         trace_width: ACCUMULATOR_DSL_WIDTH,
         max_degree: 2, // Extension field multiplication is degree 2
         columns,

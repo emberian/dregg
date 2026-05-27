@@ -1012,8 +1012,8 @@ fn oversized_proof_bytes_handled_gracefully() {
 
 #[test]
 fn proof_with_valid_header_but_truncated() {
-    // Valid PYNA header but truncated body
-    let mut data = vec![b'P', b'Y', b'N', b'A', 1]; // header + version
+    // Valid DREG header but truncated body
+    let mut data = vec![b'D', b'R', b'E', b'G', 1]; // header + version
     data.extend_from_slice(&[0u8; 10]); // too short for any real proof
     let result = proof_from_bytes(&data);
     assert!(result.is_err(), "Truncated proof must fail to parse");
@@ -1022,7 +1022,7 @@ fn proof_with_valid_header_but_truncated() {
 #[test]
 fn proof_with_valid_header_and_huge_claimed_size() {
     // Valid header but claims impossibly large internal structures
-    let mut data = vec![b'P', b'Y', b'N', b'A', 1]; // header + version
+    let mut data = vec![b'D', b'R', b'E', b'G', 1]; // header + version
     data.extend_from_slice(&[0u8; 32]); // trace_commitment
     data.extend_from_slice(&[0u8; 32]); // constraint_commitment
     // Claim 0xFFFFFFFF FRI commitments (would require 128GB)

@@ -457,7 +457,7 @@ let witness_hash_hex = hex_encode(&bundle.witness_hash());
   effect sequence*.
 
 - **Canonical encoding.** Lines 199-203 explicitly use
-  `stark::proof_to_bytes` (the PYNA-prefixed wire format), not
+  `stark::proof_to_bytes` (the DREG-prefixed wire format), not
   postcard, because the standalone verifier needs the magic header.
 
 ### Guarantees NOT provided

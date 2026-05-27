@@ -43,10 +43,8 @@ echo "Restarting Discord bot..."
 sudo install -d -o dregg -g dregg /var/lib/dregg-discord-bot
 sudo systemctl restart dregg-discord-bot
 
-echo "Updating static site assets..."
-sudo mkdir -p /opt/dregg/site/explorer /opt/dregg/site/playground
-sudo cp -r site/explorer/* /opt/dregg/site/explorer/ 2>/dev/null || true
-sudo cp -r site/playground/* /opt/dregg/site/playground/ 2>/dev/null || true
+echo "Building static site..."
+deploy/aws/deploy-site.sh
 
 echo "Updating Caddyfile if needed..."
 if ! diff -q deploy/aws/caddy/Caddyfile /etc/caddy/Caddyfile >/dev/null 2>&1; then
