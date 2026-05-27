@@ -633,7 +633,7 @@ pub struct TurnReceipt {
     /// When present, this cryptographically binds the receipt to a known executor,
     /// making the federation exit path verifiable (not just a self-reported chain).
     /// Contains exactly 64 bytes when set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub executor_signature: Option<Vec<u8>>,
     /// Finality status of this receipt.
     /// `Final` when backed by a BFT quorum certificate or full fast-path threshold.

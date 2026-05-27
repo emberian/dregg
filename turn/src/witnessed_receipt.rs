@@ -120,7 +120,7 @@ pub struct WitnessBundle {
     /// `trace_rows`. The proof attests acceptance of the same trace; an
     /// adversary cannot replace the trace and reuse the proof because the
     /// proof's own public inputs would no longer match the receipt's PI.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub recursive_proof: Option<RecursiveProofVariant>,
 }
 
@@ -255,14 +255,14 @@ pub struct WitnessedReceipt {
     pub public_inputs: Vec<u32>,
     /// The witness bundle. Optional at the API boundary: a receipt without
     /// a witness is still a (scope-1) verifiable artifact.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub witness_bundle: Option<WitnessBundle>,
     /// Hash of the witness bundle (committed even when the bundle itself
     /// is absent or encrypted). All-zeros when `witness_bundle` is `None`.
     pub witness_hash: [u8; 32],
     /// Cross-cell aggregation hook. See [`AggregateMembership`]. Always
     /// `None` in v1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub aggregate_membership: Option<AggregateMembership>,
 }
 
@@ -329,16 +329,11 @@ impl WitnessedReceipt {
     /// The outer envelope is deliberately tiny and versioned:
     ///
     /// ```text
-    /// "DWR1" || version_u8 || serde_json(WitnessedReceiptArtifactV1)
+    /// "DWR1" || version_u8 || postcard(WitnessedReceiptArtifactV1)
     /// ```
     ///
     /// Versioning lives outside postcard so readers can reject unknown future
-    /// layouts without trying to deserialize them as the current struct. The
-    /// v1 payload intentionally uses serde's struct-order JSON rather than
-    /// direct postcard over [`WitnessedReceipt`]: current postcard decoding of
-    /// this full shape is not stable (`DeserializeBadBool` / short-buffer
-    /// failures), while the bundle hash still commits to the canonical
-    /// postcard encoding of the replay material itself.
+    /// layouts without trying to deserialize them as the current struct.
     ///
     /// Decoding also validates the witness-hash invariant, so a persisted or
     /// gossiped scope-(2) artifact cannot silently detach its trace bundle
@@ -347,7 +342,7 @@ impl WitnessedReceipt {
         let mut out = Vec::with_capacity(WITNESSED_RECEIPT_ARTIFACT_MAGIC.len() + 1);
         out.extend_from_slice(WITNESSED_RECEIPT_ARTIFACT_MAGIC);
         out.push(WITNESSED_RECEIPT_ARTIFACT_VERSION);
-        let payload = serde_json::to_vec(&WitnessedReceiptArtifactV1 {
+        let payload = postcard::to_allocvec(&WitnessedReceiptArtifactV1 {
             receipt: self.clone(),
         })
         .map_err(|e| format!("failed to encode witnessed receipt artifact payload: {e}"))?;
@@ -371,7 +366,7 @@ impl WitnessedReceipt {
             ));
         }
         let payload = &bytes[min_len..];
-        let artifact: WitnessedReceiptArtifactV1 = serde_json::from_slice(payload)
+        let artifact: WitnessedReceiptArtifactV1 = postcard::from_bytes(payload)
             .map_err(|e| format!("invalid witnessed receipt artifact payload: {e}"))?;
         artifact.receipt.validate_artifact_binding()?;
         Ok(artifact.receipt)
@@ -623,6 +618,57 @@ mod tests {
         assert_eq!(back[0].proof_bytes, wr.proof_bytes);
         assert_eq!(back[0].witness_hash, wr.witness_hash);
         assert_eq!(back[0].receipt.turn_hash, wr.receipt.turn_hash);
+    }
+
+    #[test]
+    fn raw_postcard_roundtrip_scope1_receipt() {
+        let wr =
+            WitnessedReceipt::from_components(dummy_receipt(), vec![0u8; 4], vec![1, 2, 3], None);
+        let bytes = postcard::to_allocvec(&wr).expect("raw postcard encode scope-1 WR");
+        let decoded: WitnessedReceipt =
+            postcard::from_bytes(&bytes).expect("raw postcard decode scope-1 WR");
+
+        assert!(decoded.witness_bundle.is_none());
+        assert_eq!(decoded.witness_hash, [0u8; 32]);
+        assert_eq!(decoded.public_inputs, wr.public_inputs);
+        assert_eq!(decoded.receipt.receipt_hash(), wr.receipt.receipt_hash());
+    }
+
+    #[test]
+    fn raw_postcard_roundtrip_scope2_receipt_and_bundle() {
+        use dregg_circuit::field::BabyBear;
+        let trace: Vec<Vec<BabyBear>> = (0..4)
+            .map(|i| {
+                (0..3)
+                    .map(|j| BabyBear::new_canonical((i * 3 + j) as u32))
+                    .collect()
+            })
+            .collect();
+        let wr = WitnessedReceipt::from_components(
+            dummy_receipt(),
+            vec![0u8; 4],
+            vec![1, 2, 3],
+            Some(&trace),
+        );
+        let bundle = wr.witness_bundle.as_ref().expect("scope-2 bundle");
+
+        let bundle_bytes = postcard::to_allocvec(bundle).expect("raw postcard encode bundle");
+        let decoded_bundle: WitnessBundle =
+            postcard::from_bytes(&bundle_bytes).expect("raw postcard decode bundle");
+        assert_eq!(decoded_bundle.witness_hash(), wr.witness_hash);
+
+        let bytes = postcard::to_allocvec(&wr).expect("raw postcard encode scope-2 WR");
+        let decoded: WitnessedReceipt =
+            postcard::from_bytes(&bytes).expect("raw postcard decode scope-2 WR");
+        assert_eq!(decoded.witness_hash, wr.witness_hash);
+        assert_eq!(
+            decoded
+                .witness_bundle
+                .as_ref()
+                .expect("decoded scope-2 bundle")
+                .witness_hash(),
+            decoded.witness_hash
+        );
     }
 
     #[test]
