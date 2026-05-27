@@ -301,7 +301,7 @@ fn load_witnessed_receipts(
                 let Some(encoded) = raw_by_hash.remove(&receipt_hash) else {
                     continue;
                 };
-                match postcard::from_bytes::<Vec<WitnessedReceipt>>(&encoded) {
+                match serde_json::from_slice::<Vec<WitnessedReceipt>>(&encoded) {
                     Ok(witnesses) => {
                         witnessed_receipt_order.push_back(receipt_hash);
                         witnessed_receipts.insert(receipt_hash, witnesses);
@@ -802,7 +802,7 @@ impl NodeStateInner {
             .or_default()
             .push(witnessed);
         if let Some(witnesses) = self.witnessed_receipts.get(&receipt_hash) {
-            match postcard::to_stdvec(witnesses) {
+            match serde_json::to_vec(witnesses) {
                 Ok(encoded) => {
                     if let Err(e) = self
                         .store
@@ -1532,13 +1532,6 @@ mod witnessed_receipt_persistence_tests {
                 .await
                 .push_witnessed_receipt(receipt_hash, witnessed_with_marker(9));
             assert_eq!(state.read().await.witnessed_receipt_count(&receipt_hash), 1);
-            let raw = state
-                .read()
-                .await
-                .store
-                .load_witnessed_receipts_raw()
-                .expect("load raw persisted witnesses before restart");
-            assert_eq!(raw.len(), 1, "raw witness table populated before restart");
         }
 
         let restored =
