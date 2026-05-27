@@ -7,6 +7,8 @@
  * devnet/testnet/mainnet activity through the user's configured Cipherclerk.
  */
 
+import { attachRuntimeObjectAdapter } from './runtime-object-adapter.js';
+
 const CAPS = Object.freeze({
   read: true,
   mutate: false,
@@ -152,7 +154,7 @@ export async function createExtensionRuntime({ signals }) {
     }
   }
 
-  return {
+  return attachRuntimeObjectAdapter({
     caps: CAPS,
     source: { kind: 'extension', label: 'Cipherclerk extension' },
     version,
@@ -198,5 +200,5 @@ export async function createExtensionRuntime({ signals }) {
     advanceHeight: notPermitted('advanceHeight'),
 
     destroy,
-  };
+  });
 }

@@ -13,6 +13,8 @@
  * `_events` EventTarget if any visualizer wants to listen directly.
  */
 
+import { attachRuntimeObjectAdapter } from './runtime-object-adapter.js';
+
 const CAPS = Object.freeze({
   read: true,
   mutate: true,
@@ -590,7 +592,7 @@ export async function createInMemoryRuntime({ wasm, signals }) {
   });
   function listRevocationChannels() { return revChannelsSignal; }
 
-  return {
+  return attachRuntimeObjectAdapter({
     caps: CAPS,
     source: { kind: 'sim', label: 'in-browser sim' },
     version,
@@ -652,5 +654,5 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     _wasm: wasm,
     _handle: handle,
     _sdk: sdkRuntime,
-  };
+  });
 }

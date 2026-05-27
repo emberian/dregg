@@ -23,6 +23,8 @@
  * Starbridge users; see improved logOnce + getJSON catch.)
  */
 
+import { attachRuntimeObjectAdapter } from './runtime-object-adapter.js';
+
 const POLL_INTERVAL_MS = 5000;
 
 const CAPS = Object.freeze({
@@ -337,7 +339,7 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
 
   startPolling();
 
-  return {
+  return attachRuntimeObjectAdapter({
     caps: CAPS,
     source: { kind: 'remote', label: `remote ${base || '(unset)'}` },
     version,
@@ -362,7 +364,7 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     advanceHeight: notPermitted('advanceHeight'),
 
     destroy,
-  };
+  });
 }
 
 // --- helpers ------------------------------------------------------------
