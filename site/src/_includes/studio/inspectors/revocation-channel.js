@@ -9,7 +9,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, emptyState, renderParseError, shortHex } from './_base.js';
 
 class DreggRevocationChannel extends InspectorBase {
   _render() {
@@ -50,34 +50,32 @@ class DreggRevocationChannel extends InspectorBase {
         return html`<span class="dregg-inspector dregg-inspector--compact">revocation-channel</span>`;
       }
       if (!ch) {
-        return html`
-          <div class="dregg-inspector dregg-inspector--revchan">
-            <header><span class="dregg-inspector__kind">revocation-channel</span></header>
-            <div style="font-size:0.8rem;color:var(--fg-dim);">
-              ${parsed
-                ? html`channel not found in this runtime: <code>${shortHex(parsed.id, 16)}</code>`
-                : html`no channel data; provide <code>uri=</code> or <code>data=</code>.`}
-            </div>
-            ${mode === 'lab' && caps.mutate && wasm ? html`<button data-act="create" style="margin-top:6px;font-size:0.75rem;">Create channel via wasm</button>` : null}
-          </div>`;
+        return html`<div class="dregg-inspector dregg-inspector--revchan">
+          ${emptyState(html, 'Revocation channel not found', parsed
+            ? html`No channel <code>${shortHex(parsed.id, 16)}</code> is present in this runtime.`
+            : html`No channel data; provide <code>uri=</code> or <code>data=</code>.`)}
+          ${mode === 'lab' && caps.mutate && wasm ? html`<div class="dregg-inspector__controls"><button class="dregg-inspector__button" data-act="create">Create channel via wasm</button></div>` : null}
+        </div>`;
       }
 
+      const stateLabel = ch.active === true ? 'active' : ch.active === false ? 'tripped' : 'unknown';
       const status = ch.active === true
-        ? html`<span style="color:#166534;">ACTIVE</span>`
+        ? html`<span class="dregg-inspector__notice dregg-inspector__notice--ok">ACTIVE</span>`
         : ch.active === false
-          ? html`<span style="color:#b91c1c;">TRIPPED</span>`
-          : html`<span style="color:var(--fg-dim);">unknown; awaiting channel state</span>`;
+          ? html`<span class="dregg-inspector__notice dregg-inspector__notice--warn">TRIPPED</span>`
+          : html`<span class="dregg-inspector__notice">unknown; awaiting channel state</span>`;
 
       if (mode === 'compact') {
-        const stateLabel = ch.active === true ? 'active' : ch.active === false ? 'tripped' : 'state unknown';
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
             <code>${shortHex(ch.channel_id)}</code> ${stateLabel}
           </span>`;
       }
 
-      const tripBtn = (mode === 'lab' && caps.mutate && wasm && ch.active) ? html`
-        <button data-act="trip" style="font-size:0.75rem;padding:2px 6px;">Trip via wasm</button>
+      const tripBtn = mode === 'lab' && caps.mutate && wasm ? html`
+        <div class="dregg-inspector__controls">
+          <button class="dregg-inspector__button" data-act="trip" disabled=${!ch.active}>Trip via wasm</button>
+        </div>
       ` : null;
 
       return html`
@@ -85,13 +83,19 @@ class DreggRevocationChannel extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">revocation-channel</span>
             <code class="dregg-inspector__id" title=${ch.channel_id}>${shortHex(ch.channel_id, 20)}</code>
+            <span class="dregg-inspector__meta">${stateLabel}</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>State</span><strong>${stateLabel}</strong></div>
+            <div><span>Trip height</span><strong>${ch.trip_height ?? ch.tripped_at ?? 'n/a'}</strong></div>
+            <div><span>Owner</span><strong>${ch.owner ? shortHex(ch.owner, 10) : 'unknown'}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>channel id</dt><dd><code>${ch.channel_id}</code></dd>
             <dt>state</dt><dd>${status}</dd>
           </dl>
           ${tripBtn}
-          <div style="font-size:0.7rem;color:var(--fg-dim);margin-top:6px;">
+          <div class="dregg-inspector__note">
             Revocation channels are sovereign-cell primitives (dregg_cell::RevocationChannel). Trip emits to federation for consensus.
           </div>
         </div>`;

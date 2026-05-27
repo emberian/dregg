@@ -10,7 +10,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, emptyState, renderParseError, shortHex } from './_base.js';
 
 class DreggConditionalTurn extends InspectorBase {
   _render() {
@@ -51,16 +51,12 @@ class DreggConditionalTurn extends InspectorBase {
         return html`<span class="dregg-inspector dregg-inspector--compact">conditional-turn</span>`;
       }
       if (!cond) {
-        return html`
-          <div class="dregg-inspector dregg-inspector--condturn">
-            <header><span class="dregg-inspector__kind">conditional-turn</span></header>
-            <div style="font-size:0.8rem;color:var(--fg-dim);">
-              ${parsed
-                ? html`conditional turn not found in this runtime: <code>${shortHex(parsed.id, 16)}</code>`
-                : html`no pending conditional data; provide <code>uri=</code> or <code>data=</code>.`}
-            </div>
-            ${mode === 'lab' && caps.mutate && wasm ? html`<button data-act="submit-demo" style="margin-top:6px;font-size:0.75rem;">Submit HashPreimage via wasm</button>` : null}
-          </div>`;
+        return html`<div class="dregg-inspector dregg-inspector--condturn">
+          ${emptyState(html, 'Conditional turn not found', parsed
+            ? html`No pending conditional turn <code>${shortHex(parsed.id, 16)}</code> is present in this runtime.`
+            : html`No pending conditional data; provide <code>uri=</code> or <code>data=</code>.`)}
+          ${mode === 'lab' && caps.mutate && wasm ? html`<div class="dregg-inspector__controls"><button class="dregg-inspector__button" data-act="submit-demo">Submit HashPreimage via wasm</button></div>` : null}
+        </div>`;
       }
 
       if (mode === 'compact') {
@@ -75,14 +71,21 @@ class DreggConditionalTurn extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">conditional-turn</span>
             <code class="dregg-inspector__id" title=${cond.id}>${shortHex(cond.id, 20)}</code>
+            <span class="dregg-inspector__meta">${cond.condition_kind || 'condition'} · timeout ${String(cond.timeout_height ?? 'n/a')}</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>Condition</span><strong>${cond.condition_kind || 'unknown'}</strong></div>
+            <div><span>Submitted</span><strong>${String(cond.submitted_height ?? 'n/a')}</strong></div>
+            <div><span>Timeout</span><strong>${String(cond.timeout_height ?? 'n/a')}</strong></div>
+            <div><span>Actions</span><strong>${String(cond.action_count ?? cond.actions?.length ?? 0)}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>id</dt><dd><code>${cond.id}</code></dd>
             <dt>condition</dt><dd>${cond.condition_kind}</dd>
             <dt>submitted at</dt><dd>height ${String(cond.submitted_height)}</dd>
             <dt>timeout</dt><dd>height ${String(cond.timeout_height)}</dd>
           </dl>
-          <div style="font-size:0.75rem;color:var(--fg-dim);">
+          <div class="dregg-inspector__notice">
             ProofCondition variants: HashPreimage, TurnExecuted, RemoteProof, And/Or/Not compositions.
             Use advance_height to simulate timeouts. Real execution on condition proof is via turn executor.
           </div>

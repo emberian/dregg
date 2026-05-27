@@ -441,6 +441,38 @@ function writeUrlState({ at, runtime }) {
     return pageUrl.pathname + pageUrl.search + pageUrl.hash;
   }
 
+  function appApiRows(appMeta) {
+    const api = (typeof window !== 'undefined' && window.dregg) ? window.dregg : null;
+    const runtimeCaps = runtime?.caps || {};
+    return (appMeta.required_apis || []).map((name) => {
+      let available = false;
+      let source = 'missing';
+      if (name === 'signTurn' || name === 'signTurnV3') {
+        available = !!(api && (api[name] || api.signTurn));
+        source = available ? 'extension' : 'extension required';
+      } else if (name.startsWith('builders.') || name.startsWith('cell.')) {
+        available = currentRuntimeId === 'in-memory' || currentRuntimeId === 'extension';
+        source = available ? currentRuntimeId : 'host helper required';
+      } else if (runtimeCaps.read && ['listCells', 'getCell'].includes(name)) {
+        available = true;
+        source = 'runtime';
+      } else if (api && typeof api[name] === 'function') {
+        available = true;
+        source = 'extension';
+      }
+      return { name, available, source };
+    });
+  }
+
+  function appHostMode(appMeta) {
+    const rows = appApiRows(appMeta);
+    if (appMeta.status === 'unported') return { label: 'Legacy', detail: 'not yet ported to Starbridge host' };
+    if (!rows.length) return { label: 'View', detail: 'no explicit API requirements' };
+    const missing = rows.filter((row) => !row.available);
+    if (!missing.length) return { label: 'Ready', detail: 'all declared host APIs available' };
+    return { label: 'Inspect-only', detail: `${missing.length} API requirement(s) unavailable in this host` };
+  }
+
   function compactList(values, empty = 'none') {
     const list = Array.isArray(values) ? values.filter(Boolean) : [];
     return list.length ? list.join(', ') : empty;
@@ -844,6 +876,27 @@ function writeUrlState({ at, runtime }) {
     const page = appPageHref(appMeta, { embedded: true });
     const standalonePage = appPageHref(appMeta);
     const registryUri = appMeta.registry_uri || appMeta.registryUri || '';
+    const apiRows = appApiRows(appMeta);
+    const hostMode = appHostMode(appMeta);
+    const inspectorButtons = (appMeta.inspectors || []).slice(0, 8).map((name) => `
+      <button type="button" class="sb__app-chip" data-inspector-kind="${escapeHtml(String(name).replace(/^dregg-/, ''))}">
+        ${escapeHtml(name)}
+      </button>
+    `).join('');
+    const factoryButtons = (appMeta.factory_vks || []).slice(0, 6).map((vk) => `
+      <button type="button" class="sb__app-chip" data-uri="dregg://factory/${escapeHtml(vk)}">
+        factory ${escapeHtml(String(vk).slice(0, 10))}
+      </button>
+    `).join('');
+    const apiRowsHtml = apiRows.length
+      ? apiRows.map((row) => `
+        <div class="sb__app-api-row" data-ok="${row.available ? 'true' : 'false'}">
+          <span>${escapeHtml(row.available ? 'ready' : 'missing')}</span>
+          <strong>${escapeHtml(row.name)}</strong>
+          <code>${escapeHtml(row.source)}</code>
+        </div>
+      `).join('')
+      : '<div class="sb__app-empty">No required APIs declared</div>';
     const details = [
       ['Version', appMeta.version || 'unknown'],
       ['Required APIs', compactList(appMeta.required_apis)],
@@ -876,6 +929,21 @@ function writeUrlState({ at, runtime }) {
           <a class="sb__btn sb__btn--small sb__btn--ghost" href="${escapeHtml(standalonePage)}" target="_blank">Pop out</a>
         </div>
       </div>
+      <div class="sb__app-console">
+        <section>
+          <h3>Host Readiness <span data-mode="${escapeHtml(hostMode.label.toLowerCase())}">${escapeHtml(hostMode.label)}</span></h3>
+          <p>${escapeHtml(hostMode.detail)}</p>
+          <div class="sb__app-api-grid">${apiRowsHtml}</div>
+        </section>
+        <section>
+          <h3>Contributed Inspectors</h3>
+          <div class="sb__app-chip-row">${inspectorButtons || '<span class="sb__app-empty">No inspectors declared</span>'}</div>
+        </section>
+        <section>
+          <h3>Factories</h3>
+          <div class="sb__app-chip-row">${factoryButtons || '<span class="sb__app-empty">No factory VKs declared</span>'}</div>
+        </section>
+      </div>
       <iframe
         class="sb__app-frame"
         title="${escapeHtml(appMeta.name || appMeta.id)} app workspace"
@@ -893,6 +961,13 @@ function writeUrlState({ at, runtime }) {
       const frame = shell.querySelector('.sb__app-frame');
       if (frame) frame.src = frame.src;
     });
+    for (const btn of shell.querySelectorAll('[data-inspector-kind]')) {
+      btn.addEventListener('click', () => {
+        const kind = btn.dataset.inspectorKind;
+        if (!kind) return;
+        setCurrentUri(`dregg://${kind}/sample`);
+      });
+    }
     inspector.appendChild(shell);
     setStatus(`app workspace · ${appMeta.name || appMeta.id}`, 'ready');
     logActivity('program', `opened ${appMeta.name || appMeta.id}`, { app: appMeta.id, page });
@@ -1963,6 +2038,13 @@ function writeUrlState({ at, runtime }) {
       const uri = e.detail?.uri;
       if (!uri || !isRef(uri)) return;
       e.preventDefault();
+      setCurrentUri(uri);
+    });
+    window.addEventListener('message', (e) => {
+      const data = e.data || {};
+      if (data.type !== 'dregg:navigate' && data.type !== 'starbridge:navigate') return;
+      const uri = data.uri || data.at;
+      if (!uri || !isRef(uri)) return;
       setCurrentUri(uri);
     });
   } catch (e) {

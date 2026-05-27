@@ -16,7 +16,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, emptyState, renderParseError, shortHex } from './_base.js';
 
 class DreggNote extends InspectorBase {
   _render() {
@@ -67,16 +67,16 @@ class DreggNote extends InspectorBase {
               <span class="dregg-inspector__kind">note</span>
               ${parsed ? html`<code class="dregg-inspector__id" title=${parsed.id}>${shortHex(parsed.id, 24)}</code>` : null}
             </header>
-            <div style="font-size:0.75rem;color:var(--fg-dim);margin-top:6px;">
+            <div class="dregg-inspector__notice">
               ${parsed
                 ? html`note not found for agent ${String(agentIndex)}; awaiting runtime note index or use <code>data=</code> with canonical note data.`
                 : html`no note data; provide <code>uri="dregg://note/&lt;commitment&gt;"</code> or <code>data=</code>.`}
             </div>
             ${mode === 'lab' && caps.mutate && wasm ? html`
-              <div style="margin:8px 0;display:flex;gap:8px;flex-wrap:wrap;">
-                <button data-act="create" style="font-size:0.75rem;padding:2px 6px;">Create note via wasm</button>
+              <div class="dregg-inspector__controls">
+                <button class="dregg-inspector__button" data-act="create">Create note via wasm</button>
               </div>
-              <div class="dregg-inspector__note-demo" style="font-size:0.75rem;color:var(--fg-dim);">
+              <div class="dregg-inspector__note">
                 Lab mode calls canonical wasm helpers and refreshes this inspector; it does not synthesize commitments in JS.
               </div>
             ` : null}
@@ -92,12 +92,13 @@ class DreggNote extends InspectorBase {
           </span>`;
       }
 
+      const spent = note.spent === true || note.status === 'spent' || note.nullifier;
       const actions = mode === 'lab' && caps.mutate && wasm ? html`
-        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-          <button data-act="spend" style="font-size:0.75rem;padding:3px 8px;">Spend via wasm</button>
-          <button data-act="create" style="font-size:0.75rem;padding:3px 8px;">Create another via wasm</button>
+        <div class="dregg-inspector__controls">
+          <button class="dregg-inspector__button" data-act="spend" disabled=${spent}>Spend via wasm</button>
+          <button class="dregg-inspector__button" data-act="create">Create another via wasm</button>
         </div>
-        <div style="font-size:0.7rem;color:var(--fg-dim);margin-top:4px;">
+        <div class="dregg-inspector__note">
           Lab mode only. Production note lifecycle is observed through turns, receipts, and nullifier-set updates.
         </div>
       ` : null;
@@ -107,17 +108,23 @@ class DreggNote extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">note</span>
             <code class="dregg-inspector__id" title=${note.commitment}>${shortHex(note.commitment, 24)}</code>
+            <span class="dregg-inspector__meta">${spent ? 'spent' : 'unspent'} · asset ${String(note.asset_type ?? 'unknown')}</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>Value</span><strong>${String(note.value ?? note.amount ?? 'unknown')}</strong></div>
+            <div><span>Asset</span><strong>${String(note.asset_type ?? note.assetType ?? 'unknown')}</strong></div>
+            <div><span>Status</span><strong>${spent ? 'spent' : 'unspent'}</strong></div>
+            <div><span>Nullifier</span><strong>${note.nullifier ? shortHex(note.nullifier, 10) : 'not published'}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>commitment</dt><dd><code title=${note.commitment}>${note.commitment}</code></dd>
-            <dt>value</dt><dd>${String(note.value)}</dd>
-            <dt>asset type</dt><dd>${String(note.asset_type)}</dd>
-            <dt>status</dt><dd>${note.spent ? html`<span style="color:#b91c1c;">SPENT (nullifier published)</span>` : html`<span style="color:#166534;">unspent</span>`}</dd>
+            <dt>nullifier</dt><dd>${note.nullifier ? html`<code title=${note.nullifier}>${note.nullifier}</code>` : html`<span style="opacity:0.6">(not spent)</span>`}</dd>
+            <dt>status</dt><dd>${spent ? html`<span class="dregg-inspector__notice dregg-inspector__notice--warn">SPENT (nullifier published)</span>` : html`<span class="dregg-inspector__notice dregg-inspector__notice--ok">unspent</span>`}</dd>
           </dl>
           ${actions}
-          <details style="margin-top:6px;font-size:0.75rem;">
-            <summary style="cursor:pointer;color:var(--fg-dim);">Lifecycle note (Houyhnhnm meta)</summary>
-            <div style="color:var(--fg-dim);">Inspector reads receipts for spend events. Create is via Effect in turn; nullifier in NullifierSet.</div>
+          <details class="dregg-inspector__section">
+            <summary>Lifecycle</summary>
+            <div class="dregg-inspector__section-body">Inspector reads receipts for spend events. Create is via Effect in turn; nullifier in NullifierSet.</div>
           </details>
         </div>`;
     };

@@ -102,9 +102,17 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   // successful value here and surface it via per-id signal wrappers.
   let cachedStatus = null;            // last /status response
   let cachedCellList = null;          // last /api/cells response
+  let cachedReceipts = null;          // last receipt API response
+  let cachedBlocks = null;            // last block/root API response
+  let cachedFederations = null;       // explicit or synthesized federation list
   const cellSignals = new Map();      // id -> signal<CellState | null>
   const cellPending = new Map();      // id -> in-flight Promise (dedupe)
   let listSignal = null;              // signal<CellSummary[] | null>
+  let receiptListSignal = null;
+  let blockListSignal = null;
+  let federationListSignal = null;
+  const receiptSignals = new Map();
+  const blockSignals = new Map();
 
   // One AbortController per runtime instance; aborted on destroy(). Every
   // fetch wires this in so destroy() actually cancels in-flight requests.
@@ -155,6 +163,14 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     }
   }
 
+  async function getFirstJSON(paths) {
+    for (const path of paths) {
+      const data = await getJSON(path);
+      if (data != null) return data;
+    }
+    return null;
+  }
+
   function fire(type, detail) {
     events.dispatchEvent(new CustomEvent(type, { detail }));
   }
@@ -163,9 +179,12 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   // --- Polling ----------------------------------------------------------
   async function pollOnce() {
     if (destroyed) return;
-    const [status, cells] = await Promise.all([
+    const [status, cells, receipts, blocks, federations] = await Promise.all([
       getJSON('/status'),
       getJSON('/api/cells'),
+      getFirstJSON(['/api/starbridge/receipts?limit=100', '/api/receipts', '/api/receipts/recent']),
+      getFirstJSON(['/api/blocks', '/federation/roots']),
+      getFirstJSON(['/api/federations']),
     ]);
     if (destroyed) return;
 
@@ -188,11 +207,33 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     if (cells) {
       // Cheap change detection: compare length + last-id. Good enough to
       // know whether to re-fetch derived signals.
-      const sigChanged = !sameCellListShape(cells, cachedCellList);
-      cachedCellList = cells;
-      if (listSignal) listSignal.value = cells;
+      const normalized = normalizeCells(cells);
+      const sigChanged = !sameCellListShape(normalized, cachedCellList);
+      cachedCellList = normalized;
+      if (listSignal) listSignal.value = normalized;
       if (sigChanged) changed = true;
     }
+
+    if (receipts) {
+      const normalized = normalizeReceipts(receipts);
+      if (!sameIdListShape(normalized, cachedReceipts, receiptIdOf)) changed = true;
+      cachedReceipts = normalized;
+      if (receiptListSignal) receiptListSignal.value = normalized;
+      for (const [id, sig] of receiptSignals) sig.value = findReceipt(normalized, id);
+    }
+
+    if (blocks) {
+      const normalized = normalizeBlocks(blocks);
+      if (!sameIdListShape(normalized, cachedBlocks, blockIdOf)) changed = true;
+      cachedBlocks = normalized;
+      if (blockListSignal) blockListSignal.value = normalized;
+      for (const [key, sig] of blockSignals) sig.value = findBlock(normalized, key);
+    }
+
+    const normalizedFederations = normalizeFederations(federations, status, cachedBlocks);
+    if (!sameIdListShape(normalizedFederations, cachedFederations, federationIdOf)) changed = true;
+    cachedFederations = normalizedFederations;
+    if (federationListSignal) federationListSignal.value = normalizedFederations;
 
     if (changed) {
       bump();
@@ -229,7 +270,7 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     const p = (async () => {
       const data = await getJSON(`/api/cell/${encodeURIComponent(id)}`);
       if (destroyed) return;
-      sig.value = data;
+      sig.value = normalizeCell(data, id);
     })();
     cellPending.set(id, p);
     try { await p; } finally { cellPending.delete(id); }
@@ -240,6 +281,50 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   events.addEventListener('poll', () => {
     for (const [id, sig] of cellSignals) fetchCellInto(id, sig);
   });
+
+  function listReceipts() {
+    if (!receiptListSignal) receiptListSignal = signal(cachedReceipts || []);
+    return receiptListSignal;
+  }
+
+  function getReceipt(id) {
+    if (!receiptSignals.has(id)) receiptSignals.set(id, signal(findReceipt(cachedReceipts, id)));
+    return receiptSignals.get(id);
+  }
+
+  function listBlocks() {
+    if (!blockListSignal) blockListSignal = signal(cachedBlocks || []);
+    return blockListSignal;
+  }
+
+  function getBlock(ref) {
+    const key = typeof ref === 'object'
+      ? `${ref.fedIndex ?? ref.fed_index ?? 0}/${ref.height ?? ref.block_height ?? 0}`
+      : `0/${ref}`;
+    if (!blockSignals.has(key)) blockSignals.set(key, signal(findBlock(cachedBlocks, key)));
+    return blockSignals.get(key);
+  }
+
+  function listKnownFederations() {
+    if (!federationListSignal) federationListSignal = signal(cachedFederations || []);
+    return federationListSignal;
+  }
+
+  function getFederation(idOrIndex) {
+    const sig = signal(null);
+    const update = () => {
+      const want = String(idOrIndex ?? '0');
+      sig.value = (cachedFederations || []).find((f) =>
+        String(f.fed_index ?? '') === want ||
+        String(f.id ?? '') === want ||
+        String(f.federation_id ?? '') === want ||
+        String(f.name ?? '') === want
+      ) || null;
+    };
+    update();
+    events.addEventListener('poll', update);
+    return sig;
+  }
 
   function destroy() {
     if (destroyed) return;
@@ -261,6 +346,12 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
 
     getCell,
     listCells,
+    listReceipts,
+    getReceipt,
+    listKnownFederations,
+    getFederation,
+    listBlocks,
+    getBlock,
     getTraceEvents,
 
     // Read-only: all mutations refuse.
@@ -295,6 +386,126 @@ function sameCellListShape(a, b) {
   // Compare ids at head + tail; cheap and adequate for change detection.
   const idOf = (x) => x && (x.id || x.cell_id || x.hash);
   return idOf(a[0]) === idOf(b[0]) && idOf(a[a.length - 1]) === idOf(b[b.length - 1]);
+}
+
+function sameIdListShape(a, b, idOf) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  return idOf(a[0]) === idOf(b[0]) && idOf(a[a.length - 1]) === idOf(b[b.length - 1]);
+}
+
+function normalizeCells(cells) {
+  return Array.isArray(cells) ? cells.map((cell) => normalizeCell(cell)).filter(Boolean) : [];
+}
+
+function normalizeCell(cell, fallbackId = '') {
+  if (!cell || typeof cell !== 'object') return null;
+  const id = cell.cell_id || cell.id || fallbackId;
+  return {
+    ...cell,
+    id,
+    cell_id: id,
+    balance: cell.balance ?? cell.state?.balance ?? 0,
+    nonce: cell.nonce ?? cell.state?.nonce ?? 0,
+    num_capabilities: cell.num_capabilities ?? cell.capability_count ?? cell.capabilities?.length ?? 0,
+    proved_state: cell.proved_state ?? cell.provedState ?? false,
+    delegation_epoch: cell.delegation_epoch ?? cell.delegationEpoch ?? 0,
+    program: cell.program || (cell.program_kind ? { kind: cell.program_kind } : null),
+  };
+}
+
+function normalizeReceipts(receipts) {
+  const list = Array.isArray(receipts) ? receipts : (Array.isArray(receipts?.receipts) ? receipts.receipts : []);
+  return list.map((entry) => {
+    const r = entry.receipt || entry;
+    const turnHash = r.turn_hash || r.turnHash || r.hash || r.receipt_hash || '';
+    return {
+      ...entry,
+      ...r,
+      turn_hash: turnHash,
+      receipt_hash: r.receipt_hash || r.receiptHash || turnHash,
+      pre_state_hash: r.pre_state_hash || r.pre_state || r.preState || '',
+      post_state_hash: r.post_state_hash || r.post_state || r.postState || '',
+      action_count: r.action_count ?? r.actions?.length ?? 0,
+      computrons_used: r.computrons_used ?? r.computrons ?? 0,
+      timestamp: r.timestamp ?? r.committed_at ?? '',
+      proof_view: r.proof_view || (r.has_proof || r.has_witness ? {
+        kind: r.has_witness ? 'WitnessedReceipt' : 'ExecutorSignature',
+        public_inputs: [],
+        bilateral_pi: null,
+        is_agent_cell: false,
+        is_sovereign_cell: false,
+      } : null),
+    };
+  }).filter((r) => r.turn_hash || r.receipt_hash);
+}
+
+function receiptIdOf(r) {
+  return r && (r.turn_hash || r.receipt_hash || r.hash);
+}
+
+function findReceipt(receipts, id) {
+  const want = String(id || '').toLowerCase();
+  return (receipts || []).find((r) =>
+    String(r.turn_hash || '').toLowerCase() === want ||
+    String(r.receipt_hash || '').toLowerCase() === want ||
+    String(r.hash || '').toLowerCase() === want
+  ) || null;
+}
+
+function normalizeBlocks(blocks) {
+  const list = Array.isArray(blocks) ? blocks : (Array.isArray(blocks?.blocks) ? blocks.blocks : []);
+  return list.map((block) => {
+    const height = block.height ?? block.block_height ?? block.index ?? 0;
+    const fedIndex = block.fed_index ?? block.federation_index ?? 0;
+    const hash = block.block_hash || block.hash || block.merkle_root || block.root || '';
+    return {
+      ...block,
+      height,
+      block_height: height,
+      fed_index: fedIndex,
+      block_hash: hash,
+      events: Array.isArray(block.events) ? block.events : (block.merkle_root ? [`root:${block.merkle_root}`] : []),
+    };
+  });
+}
+
+function blockIdOf(b) {
+  return b ? `${b.fed_index ?? 0}/${b.height ?? b.block_height ?? 0}/${b.block_hash || ''}` : '';
+}
+
+function findBlock(blocks, key) {
+  const [fed, height] = String(key || '').split('/');
+  return (blocks || []).find((b) =>
+    String(b.fed_index ?? 0) === String(fed ?? 0) &&
+    String(b.height ?? b.block_height ?? 0) === String(height ?? '')
+  ) || null;
+}
+
+function normalizeFederations(federations, status, blocks) {
+  const explicit = Array.isArray(federations) ? federations : (Array.isArray(federations?.federations) ? federations.federations : []);
+  if (explicit.length) return explicit.map((f, idx) => normalizeFederation(f, idx, blocks));
+  if (!status) return [];
+  return [normalizeFederation(status, 0, blocks)];
+}
+
+function normalizeFederation(f, idx, blocks) {
+  const height = pickHeight(f) ?? (blocks || []).reduce((max, b) => Math.max(max, Number(b.height || 0)), 0);
+  return {
+    ...f,
+    fed_index: f.fed_index ?? f.registered_index ?? idx,
+    name: f.name || f.federation_name || f.federation_id || f.silo_id || 'remote federation',
+    height,
+    num_nodes: f.num_nodes ?? f.nodes ?? f.federation_members ?? f.peer_count ?? 0,
+    num_events: f.num_events ?? f.events ?? 0,
+    num_finalized_roots: f.num_finalized_roots ?? (blocks || []).length,
+    latest_root: f.latest_root || f.merkle_root || f.root || (blocks || [])[blocks.length - 1]?.block_hash || null,
+  };
+}
+
+function federationIdOf(f) {
+  return f && (f.fed_index ?? f.id ?? f.federation_id ?? f.name);
 }
 
 function shallowEqual(a, b) {
