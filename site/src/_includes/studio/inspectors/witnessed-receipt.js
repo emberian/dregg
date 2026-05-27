@@ -28,7 +28,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
 
 // ---------------------------------------------------------------------------
 // Scope + tier derivation
@@ -117,6 +117,17 @@ const BADGE_BASE = [
   'white-space:nowrap',
 ].join(';') + ';';
 
+function timestampLabel(ts) {
+  if (ts == null || ts === '') return 'unavailable';
+  if (typeof ts === 'number') {
+    const ms = ts > 10_000_000_000 ? ts : ts * 1000;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
+  }
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
+}
+
 // ---------------------------------------------------------------------------
 // <dregg-witnessed-receipt>
 // ---------------------------------------------------------------------------
@@ -165,16 +176,10 @@ class DreggWitnessedReceipt extends InspectorBase {
       // wb: the witness_bundle object from the receipt (shape TBD when wired)
       const entries = wb && typeof wb === 'object' ? Object.entries(wb) : [];
       if (!entries.length) {
-        return h('div', {
-          class: 'pwr__wb pwr__wb--empty',
-          style: 'color:var(--fg-dim);font-size:0.8rem;padding:8px;border:1px dashed var(--line);border-radius:4px;',
-        }, 'WitnessBundle present (empty / not yet decoded)');
+        return h('div', { class: 'dregg-inspector__notice' }, 'WitnessBundle present, but no decoded fields are exposed by this runtime.');
       }
       return h('div', { class: 'pwr__wb' },
-        h('div', {
-          style: 'color:var(--fg-dim);font-size:0.78rem;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;',
-        }, 'Inline WitnessBundle'),
-        h('dl', { class: 'dregg-inspector__kv', style: 'font-size:0.78rem;' },
+        h('dl', { class: 'dregg-inspector__kv' },
           ...entries.map(([k, v]) => [
             h('dt', null, _esc(k)),
             h('dd', null, h('code', null, _esc(String(v)).slice(0, 64))),
@@ -188,9 +193,8 @@ class DreggWitnessedReceipt extends InspectorBase {
     const ScopeStrip = ({ scope, tier }) => {
       const sm = SCOPE_META[scope] || SCOPE_META[0];
       return h('div', {
-        class: 'pwr__scope-strip',
-        style: `padding:8px 12px;background:${sm.bg};border-radius:4px;margin-bottom:10px;` +
-               'display:flex;align-items:center;gap:10px;flex-wrap:wrap;',
+        class: 'dregg-inspector__notice pwr__scope-strip',
+        style: `background:${sm.bg};display:flex;align-items:center;gap:10px;flex-wrap:wrap;`,
       },
         h(ScopeBadge, { scope }),
         h(TierBadge, { tier }),
@@ -206,14 +210,19 @@ class DreggWitnessedReceipt extends InspectorBase {
       const r = sig.value;
 
       if (!r) {
-        return html`<div class="dregg-inspector dregg-inspector--empty">
-          witnessed-receipt not found: <code>${shortHex(parsed.id, 16)}</code>
-        </div>`;
+        return emptyState(
+          html,
+          'Witnessed receipt not found',
+          html`No committed receipt with hash <code>${shortHex(parsed.id, 16)}</code> is present in this runtime.`,
+          [dreggCodeLink(html, `dregg://turn/${parsed.id}`, 'check matching turn')],
+        );
       }
 
       const scope = receiptScope(r);
       const tier = trustTier(r.proof_view || null);
       const proofUri = `dregg://receipt/${r.turn_hash}`;
+      const actionCount = Number(r.action_count ?? (Array.isArray(r.actions) ? r.actions.length : 0) ?? 0);
+      const computrons = Number(r.computrons_used ?? 0);
 
       // ── Compact mode ───────────────────────────────────────────────────
 
@@ -235,10 +244,20 @@ class DreggWitnessedReceipt extends InspectorBase {
       return h('div', { class: 'dregg-inspector dregg-inspector--cell pwr' },
         // ── Header ──────────────────────────────────────────────────────
         h('header', { class: 'pwr__header' },
-          h('span', { class: 'dregg-inspector__kind' }, 'Receipt'),
+          h('span', { class: 'dregg-inspector__kind' }, 'witnessed receipt'),
           h('code', { class: 'dregg-inspector__id', title: parsed.id }, shortHex(parsed.id, 24)),
           h(ScopeBadge, { scope }),
           h(TierBadge, { tier })
+        ),
+        h('div', { class: 'dregg-receipt__summary' },
+          h('div', null, h('span', null, 'Actions'), h('strong', null, String(actionCount))),
+          h('div', null, h('span', null, 'Computrons'), h('strong', null, String(computrons))),
+          h('div', null, h('span', null, 'Timestamp'), h('strong', { title: String(r.timestamp || '') }, timestampLabel(r.timestamp))),
+          h('div', null, h('span', null, 'Witness'), h('strong', null, scope === 2 ? 'inline' : 'not exposed'))
+        ),
+        h('div', { class: 'dregg-inspector__actions' },
+          dreggCodeLink(html, `dregg://receipt/${r.turn_hash}`, 'open receipt', r.turn_hash),
+          dreggCodeLink(html, `dregg://turn/${r.turn_hash}`, 'open turn', r.turn_hash)
         ),
 
         // ── Scope strip ──────────────────────────────────────────────────
@@ -246,16 +265,16 @@ class DreggWitnessedReceipt extends InspectorBase {
 
         // ── Scope-2 witness bundle pane (only when scope-2) ──────────────
         scope === 2
-          ? h('div', { class: 'pwr__section', style: 'margin-bottom:10px;' },
-              h('div', { class: 'pwr__section-label' }, 'Witness Bundle'),
+          ? h('div', { class: 'dregg-inspector__panel', style: 'margin-bottom:10px;' },
+              h('span', { class: 'dregg-inspector__pill' }, 'Witness Bundle'),
               h(WitnessBundlePane, { wb: r.witness_bundle })
             )
           : null,
 
         // ── Receipt fields sub-pane ──────────────────────────────────────
-        h('details', { class: 'pwr__details', open: true },
-          h('summary', { class: 'pwr__summary' }, 'Receipt fields'),
-          h('div', { class: 'pwr__sub-pane' },
+        h('details', { class: 'dregg-inspector__section', open: true },
+          h('summary', null, 'Receipt fields'),
+          h('div', { class: 'dregg-inspector__section-body' },
             // Embed <dregg-receipt> — the existing inspector handles its own
             // signal subscription and re-render cycle.  Passing uri= as an
             // attribute keeps the element self-contained and avoids a
@@ -265,9 +284,9 @@ class DreggWitnessedReceipt extends InspectorBase {
         ),
 
         // ── Proof sub-pane ───────────────────────────────────────────────
-        h('details', { class: 'pwr__details', style: 'margin-top:6px;', open: scope > 0 },
-          h('summary', { class: 'pwr__summary' }, 'Proof'),
-          h('div', { class: 'pwr__sub-pane' },
+        h('details', { class: 'dregg-inspector__section', open: scope > 0 },
+          h('summary', null, 'Proof'),
+          h('div', { class: 'dregg-inspector__section-body' },
             // <dregg-proof> uses the turn_hash as its receipt id, matching
             // how proof.js resolves proof_view.
             h('dregg-proof', { uri: proofUri, mode: 'default' })

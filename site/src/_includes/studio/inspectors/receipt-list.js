@@ -9,6 +9,36 @@
 
 import { InspectorBase, dreggCodeLink, emptyState, shortHex } from './_base.js';
 
+function receiptHash(r) {
+  return r?.turn_hash || r?.receipt_hash || r?.hash || '';
+}
+
+function proofTier(r) {
+  const pv = r?.proof_view;
+  if (!pv) return 'scope-0';
+  const bp = pv.bilateral_pi;
+  return bp &&
+    bp.outgoing_transfer_root &&
+    bp.incoming_transfer_root &&
+    bp.outgoing_grant_root &&
+    bp.incoming_grant_root &&
+    bp.outgoing_introduce_root &&
+    bp.incoming_introduce_root
+    ? 'golden'
+    : 'silver';
+}
+
+function timestampLabel(ts) {
+  if (ts == null || ts === '') return 'no timestamp';
+  if (typeof ts === 'number') {
+    const ms = ts > 10_000_000_000 ? ts : ts * 1000;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
+  }
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? String(ts) : d.toLocaleString();
+}
+
 class DreggReceiptList extends InspectorBase {
   static get observedAttributes() { return ['uri', 'mode', 'agent']; }
   _render() {
@@ -33,23 +63,44 @@ class DreggReceiptList extends InspectorBase {
       );
       const totalComputrons = rs.reduce((sum, r) => sum + Number(r.computrons_used || 0), 0);
       const totalActions = rs.reduce((sum, r) => sum + Number(r.action_count || 0), 0);
+      const provenCount = rs.filter(r => r.proof_view).length;
+      const head = rs[rs.length - 1];
+      const headHash = receiptHash(head);
       return html`
         <div class="dregg-inspector dregg-inspector--cell-list">
-          <header>${rs.length} receipt${rs.length === 1 ? '' : 's'}${agentIdx != null ? ` (agent #${agentIdx})` : ''}</header>
+          <header>
+            <span class="dregg-inspector__kind">receipt chain</span>
+            <span class="dregg-inspector__meta">${rs.length} receipt${rs.length === 1 ? '' : 's'}${agentIdx != null ? ` · requested agent #${agentIdx}` : ''}</span>
+          </header>
+          ${agentIdx != null ? html`
+            <div class="dregg-inspector__notice">
+              Runtime receipt lookup is currently global. Showing the full committed chain while preserving the requested agent filter.
+            </div>` : null}
           <div class="dregg-inspector__summary">
             <div><span>Receipts</span><strong>${String(rs.length)}</strong></div>
             <div><span>Actions</span><strong>${String(totalActions)}</strong></div>
             <div><span>Computrons</span><strong>${String(totalComputrons)}</strong></div>
-            <div><span>Head</span><strong>${shortHex(rs[rs.length - 1]?.turn_hash, 10)}</strong></div>
+            <div><span>Proofs</span><strong>${String(provenCount)} / ${String(rs.length)}</strong></div>
+            <div><span>Head</span><strong>${headHash ? dreggCodeLink(html, `dregg://receipt/${headHash}`, shortHex(headHash, 10), headHash) : 'none'}</strong></div>
+            <div><span>Latest</span><strong title=${String(head?.timestamp || '')}>${timestampLabel(head?.timestamp)}</strong></div>
           </div>
+          ${headHash ? html`
+            <div class="dregg-inspector__actions">
+              ${dreggCodeLink(html, `dregg://receipt/${headHash}`, 'open head receipt', headHash)}
+              ${dreggCodeLink(html, `dregg://turn/${headHash}`, 'open matching turn', headHash)}
+            </div>` : null}
           <div class="dregg-inspector__rows">
-            ${rs.slice().reverse().map((r, idx) => html`
+            ${rs.slice().reverse().map((r, idx) => {
+              const hash = receiptHash(r);
+              const actions = Number(r.action_count || 0);
+              const computrons = Number(r.computrons_used || 0);
+              return html`
               <div class="dregg-inspector__row">
-                <span>${String(rs.length - idx - 1)}</span>
-                <strong>${dreggCodeLink(html, `dregg://receipt/${r.turn_hash}`, shortHex(r.turn_hash, 18), r.turn_hash)}</strong>
-                <code>${String(r.action_count ?? 0)} action(s) · ${String(r.computrons_used ?? 0)} computrons</code>
-              </div>
-            `)}
+                <span>#${String(rs.length - idx - 1)}</span>
+                <strong>${hash ? dreggCodeLink(html, `dregg://receipt/${hash}`, shortHex(hash, 18), hash) : 'unidentified'}</strong>
+                <code title=${String(r.timestamp || '')}>${String(actions)} action${actions === 1 ? '' : 's'} · ${String(computrons)} computrons · ${proofTier(r)}</code>
+              </div>`;
+            })}
           </div>
         </div>`;
     };
