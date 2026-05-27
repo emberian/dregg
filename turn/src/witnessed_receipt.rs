@@ -29,6 +29,9 @@
 use crate::turn::{Turn, TurnReceipt};
 use serde::{Deserialize, Serialize};
 
+const WITNESSED_RECEIPT_ARTIFACT_MAGIC: &[u8; 4] = b"DWR1";
+const WITNESSED_RECEIPT_ARTIFACT_VERSION: u8 = 1;
+
 // ---------------------------------------------------------------------------
 // AggregateMembership stub (STAGE-7-γ hook; populated by γ.0 when it lands)
 // ---------------------------------------------------------------------------
@@ -263,6 +266,11 @@ pub struct WitnessedReceipt {
     pub aggregate_membership: Option<AggregateMembership>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct WitnessedReceiptArtifactV1 {
+    receipt: WitnessedReceipt,
+}
+
 impl WitnessedReceipt {
     /// True iff this receipt carries self-contained scope-(2) replay material
     /// and the declared `witness_hash` binds that material.
@@ -296,6 +304,77 @@ impl WitnessedReceipt {
             ));
         }
         Ok(())
+    }
+
+    fn validate_artifact_binding(&self) -> Result<(), String> {
+        match (&self.witness_bundle, self.witness_hash) {
+            (None, declared) if declared == [0u8; 32] => Ok(()),
+            (None, _) => Err("scope-1 witnessed receipt has nonzero witness_hash".into()),
+            (Some(_), declared) if declared == [0u8; 32] => {
+                Err("scope-2 witnessed receipt has zero witness_hash".into())
+            }
+            (Some(bundle), declared) => {
+                let recomputed = bundle.witness_hash();
+                if recomputed == declared {
+                    Ok(())
+                } else {
+                    Err("witness_hash does not bind witness_bundle".into())
+                }
+            }
+        }
+    }
+
+    /// Encode this receipt as the production durable/wire artifact format.
+    ///
+    /// The outer envelope is deliberately tiny and versioned:
+    ///
+    /// ```text
+    /// "DWR1" || version_u8 || serde_json(WitnessedReceiptArtifactV1)
+    /// ```
+    ///
+    /// Versioning lives outside postcard so readers can reject unknown future
+    /// layouts without trying to deserialize them as the current struct. The
+    /// v1 payload intentionally uses serde's struct-order JSON rather than
+    /// direct postcard over [`WitnessedReceipt`]: current postcard decoding of
+    /// this full shape is not stable (`DeserializeBadBool` / short-buffer
+    /// failures), while the bundle hash still commits to the canonical
+    /// postcard encoding of the replay material itself.
+    ///
+    /// Decoding also validates the witness-hash invariant, so a persisted or
+    /// gossiped scope-(2) artifact cannot silently detach its trace bundle
+    /// from the hash committed in the receipt wrapper.
+    pub fn to_artifact_bytes(&self) -> Result<Vec<u8>, String> {
+        let mut out = Vec::with_capacity(WITNESSED_RECEIPT_ARTIFACT_MAGIC.len() + 1);
+        out.extend_from_slice(WITNESSED_RECEIPT_ARTIFACT_MAGIC);
+        out.push(WITNESSED_RECEIPT_ARTIFACT_VERSION);
+        let payload = serde_json::to_vec(&WitnessedReceiptArtifactV1 {
+            receipt: self.clone(),
+        })
+        .map_err(|e| format!("failed to encode witnessed receipt artifact payload: {e}"))?;
+        out.extend_from_slice(&payload);
+        Ok(out)
+    }
+
+    /// Decode a [`WitnessedReceipt`] from [`Self::to_artifact_bytes`].
+    pub fn from_artifact_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let min_len = WITNESSED_RECEIPT_ARTIFACT_MAGIC.len() + 1;
+        if bytes.len() < min_len {
+            return Err("witnessed receipt artifact is truncated".into());
+        }
+        if &bytes[..WITNESSED_RECEIPT_ARTIFACT_MAGIC.len()] != WITNESSED_RECEIPT_ARTIFACT_MAGIC {
+            return Err("witnessed receipt artifact has invalid magic".into());
+        }
+        let version = bytes[WITNESSED_RECEIPT_ARTIFACT_MAGIC.len()];
+        if version != WITNESSED_RECEIPT_ARTIFACT_VERSION {
+            return Err(format!(
+                "unsupported witnessed receipt artifact version {version}"
+            ));
+        }
+        let payload = &bytes[min_len..];
+        let artifact: WitnessedReceiptArtifactV1 = serde_json::from_slice(payload)
+            .map_err(|e| format!("invalid witnessed receipt artifact payload: {e}"))?;
+        artifact.receipt.validate_artifact_binding()?;
+        Ok(artifact.receipt)
     }
 
     /// Build a [`WitnessedReceipt`] from raw components produced by the
@@ -544,5 +623,98 @@ mod tests {
         assert_eq!(back[0].proof_bytes, wr.proof_bytes);
         assert_eq!(back[0].witness_hash, wr.witness_hash);
         assert_eq!(back[0].receipt.turn_hash, wr.receipt.turn_hash);
+    }
+
+    #[test]
+    fn artifact_roundtrip_scope1_receipt() {
+        let mut wr = WitnessedReceipt::from_components(
+            dummy_receipt(),
+            vec![1, 2, 3, 4],
+            vec![10, 20, 30],
+            None,
+        );
+        wr.receipt.executor_signature = Some(vec![0x42; 64]);
+
+        let bytes = wr.to_artifact_bytes().expect("encode scope-1 artifact");
+        assert!(bytes.starts_with(WITNESSED_RECEIPT_ARTIFACT_MAGIC));
+
+        let decoded =
+            WitnessedReceipt::from_artifact_bytes(&bytes).expect("decode scope-1 artifact");
+        assert!(decoded.witness_bundle.is_none());
+        assert_eq!(decoded.witness_hash, [0u8; 32]);
+        assert_eq!(decoded.proof_bytes, wr.proof_bytes);
+        assert_eq!(decoded.public_inputs, wr.public_inputs);
+        assert_eq!(decoded.receipt.receipt_hash(), wr.receipt.receipt_hash());
+        assert_eq!(
+            decoded.receipt.executor_signature,
+            wr.receipt.executor_signature
+        );
+    }
+
+    #[test]
+    fn artifact_roundtrip_scope2_preserves_witness_hash_binding() {
+        use dregg_circuit::field::BabyBear;
+        let trace: Vec<Vec<BabyBear>> = (0..4)
+            .map(|i| {
+                (0..3)
+                    .map(|j| BabyBear::new_canonical((i * 3 + j) as u32))
+                    .collect()
+            })
+            .collect();
+        let wr = WitnessedReceipt::from_components(
+            dummy_receipt(),
+            vec![9, 8, 7, 6],
+            vec![10, 20, 30],
+            Some(&trace),
+        );
+
+        let bytes = wr.to_artifact_bytes().expect("encode scope-2 artifact");
+        let decoded =
+            WitnessedReceipt::from_artifact_bytes(&bytes).expect("decode scope-2 artifact");
+
+        let decoded_bundle = decoded
+            .witness_bundle
+            .as_ref()
+            .expect("scope-2 artifact carries inline bundle");
+        assert_eq!(decoded_bundle.trace_rows.len(), trace.len());
+        assert_eq!(decoded.witness_hash, wr.witness_hash);
+        assert_eq!(decoded.witness_hash, decoded_bundle.witness_hash());
+        assert_ne!(decoded.witness_hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn artifact_unknown_version_rejects_before_payload_decode() {
+        let wr =
+            WitnessedReceipt::from_components(dummy_receipt(), vec![0u8; 4], vec![1, 2, 3], None);
+        let mut bytes = wr.to_artifact_bytes().expect("encode artifact");
+        bytes[WITNESSED_RECEIPT_ARTIFACT_MAGIC.len()] = 0xFF;
+
+        let err = WitnessedReceipt::from_artifact_bytes(&bytes)
+            .expect_err("unknown artifact version must reject");
+        assert!(err.contains("unsupported witnessed receipt artifact version"));
+    }
+
+    #[test]
+    fn artifact_corrupt_scope2_witness_hash_rejects() {
+        use dregg_circuit::field::BabyBear;
+        let trace: Vec<Vec<BabyBear>> = (0..2)
+            .map(|i| {
+                (0..3)
+                    .map(|j| BabyBear::new_canonical((i * 3 + j) as u32))
+                    .collect()
+            })
+            .collect();
+        let mut wr = WitnessedReceipt::from_components(
+            dummy_receipt(),
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            Some(&trace),
+        );
+        wr.witness_hash[0] ^= 0x01;
+
+        let bytes = wr.to_artifact_bytes().expect("encode corrupted artifact");
+        let err = WitnessedReceipt::from_artifact_bytes(&bytes)
+            .expect_err("corrupt witness hash must reject");
+        assert!(err.contains("witness_hash"));
     }
 }
