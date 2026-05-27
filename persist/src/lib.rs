@@ -199,6 +199,8 @@ impl PersistentStore {
             // Blocklace tables.
             let _ = write_txn.open_table(tables::BLOCKLACE_BLOCKS)?;
             let _ = write_txn.open_table(tables::BLOCKLACE_META)?;
+            // Node witness artifact tables.
+            let _ = write_txn.open_table(tables::WITNESSED_RECEIPTS)?;
             // Metadata tables.
             let _ = write_txn.open_table(tables::METADATA)?;
             let _ = write_txn.open_table(tables::METADATA_BYTES)?;
@@ -212,6 +214,48 @@ impl PersistentStore {
         self.db
             .compact()
             .map_err(|e| StoreError::Database(e.to_string()))
+    }
+
+    /// Persist a caller-serialized witnessed receipt artifact vector.
+    ///
+    /// The node owns the typed `WitnessedReceipt` encoding; this crate stores the
+    /// bytes under receipt hash so it can stay independent of `dregg-turn`.
+    pub fn store_witnessed_receipts_raw(
+        &self,
+        receipt_hash: &[u8; 32],
+        encoded: &[u8],
+    ) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(tables::WITNESSED_RECEIPTS)?;
+            table.insert(receipt_hash, encoded)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Remove a persisted witnessed receipt artifact vector.
+    pub fn remove_witnessed_receipts_raw(&self, receipt_hash: &[u8; 32]) -> Result<()> {
+        let write_txn = self.db.begin_write()?;
+        {
+            let mut table = write_txn.open_table(tables::WITNESSED_RECEIPTS)?;
+            table.remove(receipt_hash)?;
+        }
+        write_txn.commit()?;
+        Ok(())
+    }
+
+    /// Load every persisted witness artifact vector in key order.
+    pub fn load_witnessed_receipts_raw(&self) -> Result<Vec<([u8; 32], Vec<u8>)>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::WITNESSED_RECEIPTS)?;
+        let mut out = Vec::new();
+        for entry in table.iter()? {
+            let (key, value) =
+                entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            out.push((*key.value(), value.value().to_vec()));
+        }
+        Ok(out)
     }
 
     // =========================================================================

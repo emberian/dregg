@@ -133,3 +133,11 @@ pub const BLOCKLACE_META_KEY: &str = "meta";
 
 /// Key for the executed_up_to index in the BLOCKLACE_META table.
 pub const BLOCKLACE_EXECUTED_UP_TO_KEY: &str = "executed_up_to";
+
+/// Node-local witnessed receipt artifacts.
+///
+/// Key: receipt hash.
+/// Value: caller-owned serialized witness vector. The persist crate keeps this
+/// table byte-oriented so it does not depend on `dregg-turn`.
+pub const WITNESSED_RECEIPTS: TableDefinition<&[u8; 32], &[u8]> =
+    TableDefinition::new("witnessed_receipts");

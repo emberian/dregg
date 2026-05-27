@@ -259,6 +259,72 @@ pub struct NodeStateInner {
 /// Maximum number of events retained in the ring buffer for REST polling.
 pub const MAX_EVENT_LOG: usize = 1000;
 pub const MAX_WITNESSED_RECEIPTS: usize = 1000;
+const WITNESSED_RECEIPT_ORDER_CONFIG: &str = "witnessed_receipt_order";
+
+fn persist_witnessed_receipt_order(store: &PersistentStore, order: &VecDeque<[u8; 32]>) {
+    let order: Vec<[u8; 32]> = order.iter().copied().collect();
+    match postcard::to_stdvec(&order) {
+        Ok(encoded) => {
+            if let Err(e) = store.set_config(WITNESSED_RECEIPT_ORDER_CONFIG, &encoded) {
+                tracing::warn!(
+                    error = %e,
+                    "failed to persist witnessed receipt artifact order"
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "failed to serialize witnessed receipt artifact order"
+            );
+        }
+    }
+}
+
+fn load_witnessed_receipts(
+    store: &PersistentStore,
+) -> (HashMap<[u8; 32], Vec<WitnessedReceipt>>, VecDeque<[u8; 32]>) {
+    let mut witnessed_receipts = HashMap::new();
+    let mut witnessed_receipt_order = VecDeque::new();
+    match store.load_witnessed_receipts_raw() {
+        Ok(entries) => {
+            let mut raw_by_hash: HashMap<[u8; 32], Vec<u8>> = entries.into_iter().collect();
+            let ordered_hashes = store
+                .get_config(WITNESSED_RECEIPT_ORDER_CONFIG)
+                .ok()
+                .flatten()
+                .and_then(|bytes| postcard::from_bytes::<Vec<[u8; 32]>>(&bytes).ok())
+                .filter(|order| !order.is_empty())
+                .unwrap_or_else(|| raw_by_hash.keys().copied().collect());
+            let skip = ordered_hashes.len().saturating_sub(MAX_WITNESSED_RECEIPTS);
+            for receipt_hash in ordered_hashes.into_iter().skip(skip) {
+                let Some(encoded) = raw_by_hash.remove(&receipt_hash) else {
+                    continue;
+                };
+                match postcard::from_bytes::<Vec<WitnessedReceipt>>(&encoded) {
+                    Ok(witnesses) => {
+                        witnessed_receipt_order.push_back(receipt_hash);
+                        witnessed_receipts.insert(receipt_hash, witnesses);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            receipt_hash = ?receipt_hash,
+                            error = %e,
+                            "skipping corrupt persisted witnessed receipt artifact"
+                        );
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "failed to load persisted witnessed receipt artifacts"
+            );
+        }
+    }
+    (witnessed_receipts, witnessed_receipt_order)
+}
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -419,6 +485,7 @@ impl NodeState {
 
         // Issue 5: Load persisted proof hashes from the store.
         let used_proof_hashes = store.load_all_proof_hashes().unwrap_or_default();
+        let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
 
         // Restore ledger from the latest checkpoint (if one exists).
         let ledger = match store.load_latest_ledger_checkpoint() {
@@ -504,8 +571,8 @@ impl NodeState {
                     dregg_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
-                witnessed_receipts: HashMap::new(),
-                witnessed_receipt_order: VecDeque::new(),
+                witnessed_receipts,
+                witnessed_receipt_order,
                 solo_consensus: None,
                 blocklace_handle: None,
             })),
@@ -526,6 +593,7 @@ impl NodeState {
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
 
         let cclerk = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(key_bytes));
+        let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
 
         // Restore ledger from the latest checkpoint (if one exists).
         let ledger = match store.load_latest_ledger_checkpoint() {
@@ -589,8 +657,8 @@ impl NodeState {
                     dregg_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
-                witnessed_receipts: HashMap::new(),
-                witnessed_receipt_order: VecDeque::new(),
+                witnessed_receipts,
+                witnessed_receipt_order,
                 solo_consensus: None,
                 blocklace_handle: None,
             })),
@@ -717,14 +785,45 @@ impl NodeStateInner {
             if self.witnessed_receipt_order.len() >= MAX_WITNESSED_RECEIPTS {
                 if let Some(oldest) = self.witnessed_receipt_order.pop_front() {
                     self.witnessed_receipts.remove(&oldest);
+                    if let Err(e) = self.store.remove_witnessed_receipts_raw(&oldest) {
+                        tracing::warn!(
+                            receipt_hash = ?oldest,
+                            error = %e,
+                            "failed to remove evicted persisted witnessed receipt artifacts"
+                        );
+                    }
                 }
             }
             self.witnessed_receipt_order.push_back(receipt_hash);
+            persist_witnessed_receipt_order(&self.store, &self.witnessed_receipt_order);
         }
         self.witnessed_receipts
             .entry(receipt_hash)
             .or_default()
             .push(witnessed);
+        if let Some(witnesses) = self.witnessed_receipts.get(&receipt_hash) {
+            match postcard::to_stdvec(witnesses) {
+                Ok(encoded) => {
+                    if let Err(e) = self
+                        .store
+                        .store_witnessed_receipts_raw(&receipt_hash, &encoded)
+                    {
+                        tracing::warn!(
+                            receipt_hash = ?receipt_hash,
+                            error = %e,
+                            "failed to persist witnessed receipt artifacts"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        receipt_hash = ?receipt_hash,
+                        error = %e,
+                        "failed to serialize witnessed receipt artifacts"
+                    );
+                }
+            }
+        }
     }
 
     pub fn witnessed_receipt_count(&self, receipt_hash: &[u8; 32]) -> usize {
@@ -1399,5 +1498,77 @@ mod federation_descriptor_tests {
 
         // Cleanup.
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+#[cfg(test)]
+mod witnessed_receipt_persistence_tests {
+    use super::*;
+
+    fn witnessed_with_marker(marker: u8) -> WitnessedReceipt {
+        let mut receipt = dregg_turn::TurnReceipt::default();
+        receipt.turn_hash = [marker; 32];
+        receipt.effects_hash = [marker.wrapping_add(1); 32];
+        receipt.agent = CellId::from_bytes([marker.wrapping_add(2); 32]);
+        WitnessedReceipt::from_components(
+            receipt,
+            vec![marker, marker.wrapping_add(1)],
+            vec![marker as u32],
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn witnessed_receipt_artifacts_survive_node_restart() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let key_bytes = [7u8; 32];
+        let receipt_hash = [42u8; 32];
+
+        {
+            let state =
+                NodeState::with_cclerk(tmp.path(), vec![], key_bytes).expect("create node state");
+            state
+                .write()
+                .await
+                .push_witnessed_receipt(receipt_hash, witnessed_with_marker(9));
+            assert_eq!(state.read().await.witnessed_receipt_count(&receipt_hash), 1);
+        }
+
+        let restored =
+            NodeState::with_cclerk(tmp.path(), vec![], key_bytes).expect("restore node state");
+        let guard = restored.read().await;
+        let witnesses = guard
+            .witnessed_receipts
+            .get(&receipt_hash)
+            .expect("persisted witness vector");
+        assert_eq!(witnesses.len(), 1);
+        assert_eq!(witnesses[0].proof_bytes, vec![9, 10]);
+        assert_eq!(witnesses[0].public_inputs, vec![9]);
+    }
+
+    #[tokio::test]
+    async fn witnessed_receipt_retention_eviction_removes_persisted_artifact() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let key_bytes = [8u8; 32];
+        let first_hash = [1u8; 32];
+
+        {
+            let state =
+                NodeState::with_cclerk(tmp.path(), vec![], key_bytes).expect("create node state");
+            let mut guard = state.write().await;
+            guard.push_witnessed_receipt(first_hash, witnessed_with_marker(1));
+            for marker in 2..=(MAX_WITNESSED_RECEIPTS as u16 + 1) {
+                let mut hash = [0u8; 32];
+                hash[..2].copy_from_slice(&marker.to_le_bytes());
+                guard.push_witnessed_receipt(hash, witnessed_with_marker(marker as u8));
+            }
+            assert!(!guard.witnessed_receipts.contains_key(&first_hash));
+        }
+
+        let restored =
+            NodeState::with_cclerk(tmp.path(), vec![], key_bytes).expect("restore node state");
+        let guard = restored.read().await;
+        assert!(!guard.witnessed_receipts.contains_key(&first_hash));
+        assert_eq!(guard.witnessed_receipts.len(), MAX_WITNESSED_RECEIPTS);
     }
 }
