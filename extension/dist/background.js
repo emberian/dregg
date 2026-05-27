@@ -53,6 +53,50 @@
     }
   }
 
+  // src/browser-compat.ts
+  var SESSION_PREFIX = "_sess_";
+  function sessionFallbackKey(key) {
+    return SESSION_PREFIX + key;
+  }
+  function hasSessionStorage() {
+    try {
+      return typeof chrome !== "undefined" && !!chrome.storage?.session;
+    } catch {
+      return false;
+    }
+  }
+  var compatSession = {
+    async get(key) {
+      if (hasSessionStorage()) {
+        return chrome.storage.session.get(key);
+      }
+      const result = await chrome.storage.local.get(sessionFallbackKey(key));
+      const value = result[sessionFallbackKey(key)];
+      return value !== void 0 ? { [key]: value } : {};
+    },
+    async set(items) {
+      if (hasSessionStorage()) {
+        return chrome.storage.session.set(items);
+      }
+      const prefixed = {};
+      for (const [k, v] of Object.entries(items)) {
+        prefixed[sessionFallbackKey(k)] = v;
+      }
+      return chrome.storage.local.set(prefixed);
+    }
+  };
+  var extensionPrefix = (() => {
+    try {
+      return chrome.runtime.getURL("");
+    } catch {
+      return "";
+    }
+  })();
+  function isExtensionPageUrl(url) {
+    if (!url) return false;
+    return url.startsWith(extensionPrefix);
+  }
+
   // src/background.ts
   var STORAGE_KEY = "dregg_cipherclerk";
   var ENCRYPTED_STATE_KEY = "dregg_cipherclerk_encrypted";
@@ -208,9 +252,8 @@
   function validatePopupSender(message, sender, expectedNonce, expectedPopupPath) {
     if (sender?.tab != null) return false;
     if (!sender?.url) return false;
-    const prefix = `chrome-extension://${chrome.runtime.id}/`;
-    if (!sender.url.startsWith(prefix)) return false;
-    const path = sender.url.slice(prefix.length).split(/[?#]/)[0];
+    if (!isExtensionPageUrl(sender.url)) return false;
+    const path = sender.url.slice(extensionPrefix.length).split(/[?#]/)[0];
     if (path !== expectedPopupPath) return false;
     const nonce = message.nonce;
     if (!nonce || nonce !== expectedNonce) return false;
@@ -218,13 +261,13 @@
     return true;
   }
   async function getInternalEncryptionKey() {
-    const stored = await chrome.storage.session.get("_internalKey");
+    const stored = await compatSession.get("_internalKey");
     let key = stored._internalKey;
     if (!key) {
       const keyBytes = new Uint8Array(32);
       crypto.getRandomValues(keyBytes);
       key = Array.from(keyBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
-      await chrome.storage.session.set({ _internalKey: key });
+      await compatSession.set({ _internalKey: key });
     }
     return key;
   }
@@ -1411,7 +1454,7 @@
     for (const [refId, ref] of liveRefs) {
       summary.push({ refId, cellId: ref.cellId, nodeId: ref.nodeId, createdAt: ref.createdAt });
     }
-    await chrome.storage.session.set({ [LIVE_REFS_KEY]: summary });
+    await compatSession.set({ [LIVE_REFS_KEY]: summary });
   }
   function cleanupTabRefs(tabId) {
     for (const [refId, ref] of liveRefs) {
@@ -1634,7 +1677,7 @@
   }
   function isExtensionPopup(sender) {
     if (!sender?.url) return false;
-    return sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+    return isExtensionPageUrl(sender.url);
   }
   function isContentScript(sender) {
     return sender?.tab != null;
@@ -1853,7 +1896,7 @@
         if (!nonce) return { id: message.id, error: "Missing nonce." };
         const entry = pendingDecisions.get(nonce);
         if (!entry) return { id: message.id, error: "No such pending decision." };
-        const prefix = `chrome-extension://${chrome.runtime.id}/`;
+        const prefix = extensionPrefix;
         const path = (sender.url || "").startsWith(prefix) ? (sender.url || "").slice(prefix.length).split(/[?#]/)[0] : "";
         if (path !== entry.popupPath) {
           return { id: message.id, error: "Popup path mismatch for this nonce." };

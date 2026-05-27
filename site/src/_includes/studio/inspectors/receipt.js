@@ -78,6 +78,11 @@ class DreggReceipt extends InspectorBase {
             <code class="dregg-inspector__id" title=${parsed.id}>${shortHex(parsed.id, 24)}</code>
             <span class="dregg-inspector__meta">${String(r.action_count)} actions · ${String(r.computrons_used)} computrons</span>
           </header>
+          <div class="dregg-receipt__summary">
+            <div><span>Actions</span><strong>${String(r.action_count)}</strong></div>
+            <div><span>Computrons</span><strong>${String(r.computrons_used)}</strong></div>
+            <div><span>Proof</span><strong>${r.proof_view ? (r.proof_view.bilateral_pi ? 'Golden-ready' : 'Silver') : 'Placeholder'}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>turn hash</dt><dd>${dreggCodeLink(html, `dregg://turn/${r.turn_hash}`, shortHex(r.turn_hash, 24), r.turn_hash)}</dd>
             <dt>pre state</dt><dd><code>${r.pre_state_hash}</code></dd>

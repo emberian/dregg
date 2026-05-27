@@ -30,16 +30,9 @@ class DreggCell extends InspectorBase {
     if (this._dispose) { this._dispose(); this._dispose = null; }
     this.replaceChildren();
 
-    let parsed;
-    try { parsed = parseRef(refAttr); }
-    catch (e) {
-      this.innerHTML = `<div class="dregg-inspector dregg-inspector--err">bad ref: ${e.message}</div>`;
-      return;
-    }
-    if (parsed.kind !== 'cell') {
-      this.innerHTML = `<div class="dregg-inspector dregg-inspector--err">wrong kind: ${parsed.kind} (expected cell)</div>`;
-      return;
-    }
+    let parsed = null;
+    try { parsed = parseRef(refAttr); } catch {}
+    if (renderParseError(this, refAttr, parsed, 'cell')) return;
 
     const cellSignal = this._runtime.getCell(parsed.id);
     const root = document.createElement('div');
@@ -57,6 +50,8 @@ class DreggCell extends InspectorBase {
             balance ${String(c.balance)} · ${String(c.num_capabilities)} caps
           </span>`;
       }
+      const receiptHead = c.last_receipt_hash || c.receipt_head || c.latest_receipt || null;
+      const programKind = c.program?.kind || 'None';
       // Program section: render <dregg-cell-program> if a program is present.
       // We pass data-program as a JSON attribute (the element supports this).
       const hasProg = c.program && c.program.kind !== 'None';
@@ -79,10 +74,17 @@ class DreggCell extends InspectorBase {
             <span class="dregg-inspector__kind">cell</span>
             <code class="dregg-inspector__id" title=${parsed.id}>${parsed.id.slice(0, 24)}…</code>
           </header>
+          <div class="dregg-cell__summary">
+            <div><span>Balance</span><strong>${String(c.balance)}</strong></div>
+            <div><span>Nonce</span><strong>${String(c.nonce)}</strong></div>
+            <div><span>Caps</span><strong>${String(c.num_capabilities)}</strong></div>
+            <div><span>Program</span><strong>${programKind}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>balance</dt><dd>${String(c.balance)}</dd>
             <dt>nonce</dt><dd>${String(c.nonce)}</dd>
             <dt>capabilities</dt><dd>${String(c.num_capabilities)}</dd>
+            <dt>latest receipt</dt><dd>${receiptHead ? html`<a class="dregg-inspector__link" href=${`?at=${encodeURIComponent(`dregg://receipt/${receiptHead}`)}`} data-dregg-uri=${`dregg://receipt/${receiptHead}`}><code>${shortHex(receiptHead, 18)}</code></a>` : 'none'}</dd>
             <dt>proved state</dt><dd>${String(c.proved_state)}</dd>
             <dt>delegation epoch</dt><dd>${String(c.delegation_epoch)}</dd>
             <dt>permissions</dt><dd><code>${JSON.stringify(c.permissions)}</code></dd>
@@ -151,6 +153,7 @@ import './inspectors/peer-transition.js';
 import './inspectors/proof.js';
 import './inspectors/merkle-tree.js';
 import './inspectors/stealth-address.js';
+import './inspectors/outbox.js';
 
 // --- <dregg-app-list> (Apps tab for /starbridge/, STARBRIDGE-PLAN §4.8) ---
 // Reads manifests from starbridge-apps/* (created as part of this task).

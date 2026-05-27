@@ -5,6 +5,7 @@
  */
 
 import { nodeRequest, nodeRequestRaw, getNodeHeaders } from "./api";
+import { compatSession, extensionPrefix, isExtensionPageUrl } from "./browser-compat";
 import type {
   AuthorizeRequest,
   AuthorizeResult,
@@ -286,7 +287,7 @@ function consumePendingDecision(nonce: string): PendingDecision | null {
 /**
  * Validate that the inbound message came from the popup we opened with this nonce.
  * Returns true iff:
- *   - sender is an extension page (url starts with chrome-extension://<our id>/)
+ *   - sender is an extension page (url starts with the extension prefix)
  *   - sender is NOT a content script (sender.tab is undefined for popup windows)
  *   - the message's `nonce` field matches a registered pending decision
  *   - the popup's path matches the registered popupPath for that nonce
@@ -305,9 +306,8 @@ function validatePopupSender(
 ): boolean {
   if (sender?.tab != null) return false;
   if (!sender?.url) return false;
-  const prefix = `chrome-extension://${chrome.runtime.id}/`;
-  if (!sender.url.startsWith(prefix)) return false;
-  const path = sender.url.slice(prefix.length).split(/[?#]/)[0];
+  if (!isExtensionPageUrl(sender.url)) return false;
+  const path = sender.url.slice(extensionPrefix.length).split(/[?#]/)[0];
   if (path !== expectedPopupPath) return false;
   const nonce = message.nonce as string | undefined;
   if (!nonce || nonce !== expectedNonce) return false;
@@ -320,13 +320,13 @@ function validatePopupSender(
 // ---------------------------------------------------------------------------
 
 async function getInternalEncryptionKey(): Promise<string> {
-  const stored = await chrome.storage.session.get("_internalKey");
-  let key: string | undefined = stored._internalKey;
+  const stored = await compatSession.get("_internalKey");
+  let key: string | undefined = stored._internalKey as string | undefined;
   if (!key) {
     const keyBytes = new Uint8Array(32);
     crypto.getRandomValues(keyBytes);
     key = Array.from(keyBytes).map(b => b.toString(16).padStart(2, "0")).join("");
-    await chrome.storage.session.set({ _internalKey: key });
+    await compatSession.set({ _internalKey: key });
   }
   return key;
 }
@@ -1752,7 +1752,7 @@ async function persistLiveRefs(): Promise<void> {
   for (const [refId, ref] of liveRefs) {
     summary.push({ refId, cellId: ref.cellId, nodeId: ref.nodeId, createdAt: ref.createdAt });
   }
-  await chrome.storage.session.set({ [LIVE_REFS_KEY]: summary });
+  await compatSession.set({ [LIVE_REFS_KEY]: summary });
 }
 
 function cleanupTabRefs(tabId: number): void {
@@ -2061,7 +2061,7 @@ async function revokeToken(tokenId: string): Promise<{ revoked: boolean; error?:
 
 function isExtensionPopup(sender: chrome.runtime.MessageSender): boolean {
   if (!sender?.url) return false;
-  return sender.url.startsWith(`chrome-extension://${chrome.runtime.id}/`);
+  return isExtensionPageUrl(sender.url);
 }
 
 function isContentScript(sender: chrome.runtime.MessageSender): boolean {
@@ -2291,7 +2291,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       const entry = pendingDecisions.get(nonce);
       if (!entry) return { id: message.id, error: "No such pending decision." };
       // Confirm caller is the right popup HTML.
-      const prefix = `chrome-extension://${chrome.runtime.id}/`;
+      const prefix = extensionPrefix;
       const path = (sender.url || "").startsWith(prefix)
         ? (sender.url || "").slice(prefix.length).split(/[?#]/)[0]
         : "";

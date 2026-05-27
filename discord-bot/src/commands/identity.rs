@@ -136,16 +136,21 @@ async fn handle_issue(ctx: &Context, command: &CommandInteraction, state: &BotSt
         .await
     {
         Ok(result) => {
+            let turn_hash = result.turn.turn_hash.clone();
             let embed = embeds::success_embed("Credential Issued")
                 .field("Schema", &result.schema, true)
                 .field("Credential ID", format!("`{}`", result.credential_id), true)
                 .field(
                     "Turn",
-                    result
-                        .turn
-                        .turn_hash
+                    turn_hash
+                        .as_ref()
                         .map(|hash| format!("`{hash}`"))
                         .unwrap_or_else(|| "`unknown`".to_string()),
+                    false,
+                )
+                .field(
+                    "What Is Stored",
+                    "The node committed the identity issue action as a signed turn. It does not expose a holder-private credential store yet, so keep the credential ID and turn hash for audit.",
                     false,
                 )
                 .field("Attributes", format!("```json\n{attributes}\n```"), false);
@@ -190,8 +195,8 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
 
     defer_ephemeral(ctx, command).await;
 
-    let verifier_cell = match state.db.get_cell_id(&discord_id).await {
-        Ok(Some(id)) => id,
+    match state.db.get_cell_id(&discord_id).await {
+        Ok(Some(_)) => {}
         Ok(None) => {
             let embed = embeds::warning_embed(
                 "No Cipherclerk",
@@ -209,7 +214,7 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
                 .await;
             return;
         }
-    };
+    }
 
     let target_id = match target_user_id {
         Some(id) => id,
@@ -245,31 +250,22 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
         }
     };
 
-    match state
-        .devnet
-        .request_proof(&verifier_cell, &subject_cell, &predicate)
-        .await
-    {
-        Ok(result) => {
-            let embed = embeds::success_embed("Proof Requested")
-                .field("Subject", format!("<@{target_id}>"), true)
-                .field("Predicate", &predicate, true)
-                .field("Request ID", format!("`{}`", result.request_id), true)
-                .field("Status", &result.status, true);
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
-        Err(e) => {
-            let embed = embeds::error_embed(
-                "Verification Request Failed",
-                &format!("Could not request proof: {e}"),
-            );
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
-    }
+    let embed = embeds::warning_embed(
+        "Proof Requests Unavailable",
+        &format!(
+            "Credential proof requests are not exposed by the current node API. Target <@{target_id}> has cell `{}` and predicate `{}` was accepted.\n\nActionable next step: ask the holder to share a credential issue turn hash from `/credential list`, then inspect that turn in the explorer. Selective disclosure still needs a holder-private credential store plus a proof request/read surface.",
+            &subject_cell[..16.min(subject_cell.len())],
+            predicate
+        ),
+    )
+    .field(
+        "Recent Target Turns",
+        recent_identity_turns_field(state, &subject_cell).await,
+        false,
+    );
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
 }
 
 async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotState) {
@@ -298,48 +294,21 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotSta
         }
     };
 
-    match state.devnet.list_credentials(&cell_id).await {
-        Ok(creds) => {
-            if creds.is_empty() {
-                let embed = embeds::dregg_embed("Your Credentials").description(
-                    "You have no credentials yet. Use `/credential issue` to create one.",
-                );
-                let _ = command
-                    .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                    .await;
-                return;
-            }
-
-            let mut description = String::new();
-            for cred in &creds {
-                let short_issuer = if cred.issuer.len() > 16 {
-                    format!("{}...", &cred.issuer[..16])
-                } else {
-                    cred.issuer.clone()
-                };
-                description.push_str(&format!(
-                    "**{}** — `{}`\nIssuer: `{short_issuer}` | Issued: {}\n\n",
-                    cred.schema, cred.credential_id, cred.issued_at,
-                ));
-            }
-
-            let embed = embeds::dregg_embed("Your Credentials")
-                .description(description)
-                .field("Total", creds.len().to_string(), true);
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
-        Err(e) => {
-            let embed = embeds::error_embed(
-                "Credentials Unavailable",
-                &format!("Could not load credentials: {e}\n\nDevnet may be temporarily offline."),
-            );
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
-    }
+    let embed = embeds::warning_embed(
+        "Credential Store Unavailable",
+        &format!(
+            "Credential issuance commits canonical identity actions for `{}`, but the current node read API does not expose holder-private credential storage or an identity index yet.\n\nUse the recent committed turns below as audit checkpoints. If you just issued a credential, keep its credential ID and turn hash from the issue response.",
+            &cell_id[..16.min(cell_id.len())],
+        ),
+    )
+    .field(
+        "Recent Turns For This Cell",
+        recent_identity_turns_field(state, &cell_id).await,
+        false,
+    );
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -353,4 +322,33 @@ async fn defer_ephemeral(ctx: &Context, command: &CommandInteraction) {
             ),
         )
         .await;
+}
+
+async fn recent_identity_turns_field(state: &BotState, cell_id: &str) -> String {
+    match state
+        .devnet
+        .get_recent_identity_issue_turns(cell_id, 5)
+        .await
+    {
+        Ok(events) if events.is_empty() => {
+            "No recent committed turns were returned for this cell.".to_string()
+        }
+        Ok(events) => events
+            .iter()
+            .map(|event| {
+                let turn = event
+                    .tx_hash
+                    .as_deref()
+                    .map(|hash| format!("`{}`", short_hash(hash)))
+                    .unwrap_or_else(|| "`unknown`".to_string());
+                format!("{} — {} at {}", turn, event.summary, event.timestamp)
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(e) => format!("Could not load recent turns from `/api/events`: {e}"),
+    }
+}
+
+fn short_hash(hash: &str) -> String {
+    format!("{}...", &hash[..12.min(hash.len())])
 }

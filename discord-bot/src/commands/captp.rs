@@ -97,7 +97,7 @@ pub async fn handle_share(ctx: &Context, command: &CommandInteraction, state: &B
             };
 
             let embed = embeds::success_embed("Capability Shared")
-                .description("Sturdy ref exported. Anyone with this URI can enliven the cap.")
+                .description("Sturdy ref recorded in the bot's local CapTP table.")
                 .field("Cell", format!("`{short_cell}`"), true)
                 .field("URI", format!("```\n{uri_str}\n```"), false);
 
@@ -339,7 +339,7 @@ pub async fn handle_revoke(ctx: &Context, command: &CommandInteraction, state: &
     match state.captp.revoke_cap(&cell_id).await {
         Ok(()) => {
             let embed = embeds::success_embed("Capability Revoked").description(format!(
-                "Cell `{}` has been revoked. The sturdy ref is no longer valid.",
+                "Cell `{}` has been revoked. The local sturdy ref is no longer accepted by the bot.",
                 &cell_id
             ));
             let _ = command

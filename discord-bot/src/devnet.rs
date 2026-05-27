@@ -122,6 +122,38 @@ pub struct ExplorerStats {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct ReceiptInfo {
+    pub chain_index: u64,
+    pub chain_head: bool,
+    pub receipt_hash: String,
+    pub turn_hash: String,
+    pub agent: String,
+    pub computrons_used: u64,
+    pub action_count: usize,
+    pub finality: String,
+    pub has_proof: bool,
+    pub executor_signed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AttestedRootInfo {
+    pub height: u64,
+    pub merkle_root: String,
+    pub timestamp: i64,
+    pub signatures: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CellListEntry {
+    pub id: String,
+    pub balance: u64,
+    pub nonce: u64,
+    pub capability_count: u32,
+    #[serde(default)]
+    pub has_program: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct CommittedEventWire {
     height: u64,
     turn_hash: String,
@@ -248,6 +280,8 @@ struct NodeStatusResponse {
     healthy: bool,
     peer_count: u32,
     latest_height: u64,
+    #[serde(default)]
+    note_count: u64,
     federation_mode: String,
 }
 
@@ -274,6 +308,7 @@ pub struct DevnetMetrics {
 pub enum DevnetError {
     Http(reqwest::Error),
     Api(String),
+    Unsupported(&'static str),
 }
 
 impl From<reqwest::Error> for DevnetError {
@@ -287,6 +322,7 @@ impl std::fmt::Display for DevnetError {
         match self {
             DevnetError::Http(e) => write!(f, "HTTP error: {e}"),
             DevnetError::Api(msg) => write!(f, "API error: {msg}"),
+            DevnetError::Unsupported(msg) => write!(f, "Unsupported by current devnet API: {msg}"),
         }
     }
 }
@@ -421,72 +457,159 @@ impl DevnetClient {
 
     /// Get turn details by hash.
     pub async fn get_turn_details(&self, turn_hash: &str) -> Result<TurnDetails, DevnetError> {
-        let url = format!("{}/api/node/turns/{turn_hash}", self.base_url);
+        let url = format!("{}/api/receipts", self.base_url);
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
             return Err(DevnetError::Api(format!("status {}", resp.status())));
         }
-        Ok(resp.json().await?)
+        let receipts: Vec<ReceiptInfo> = resp.json().await?;
+        let receipt = receipts
+            .into_iter()
+            .find(|receipt| receipt.turn_hash.eq_ignore_ascii_case(turn_hash))
+            .ok_or_else(|| DevnetError::Api(format!("turn not found: {turn_hash}")))?;
+
+        Ok(TurnDetails {
+            turn_hash: receipt.turn_hash,
+            signer: receipt.agent,
+            effects: vec![TurnEffect {
+                effect_type: "actions".to_string(),
+                details: format!("{} action(s) committed", receipt.action_count),
+            }],
+            fee: receipt.computrons_used,
+            result: receipt.finality,
+            proof_type: if receipt.executor_signed || receipt.has_proof {
+                "executor-signed receipt".to_string()
+            } else {
+                "receipt".to_string()
+            },
+        })
     }
 
     /// Get block details by height.
     pub async fn get_block_details(&self, height: u64) -> Result<BlockDetails, DevnetError> {
-        let url = format!("{}/api/node/blocks/{height}", self.base_url);
+        let url = format!("{}/api/blocks", self.base_url);
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
             return Err(DevnetError::Api(format!("status {}", resp.status())));
         }
-        Ok(resp.json().await?)
+        let blocks: Vec<AttestedRootInfo> = resp.json().await?;
+        let block = blocks
+            .into_iter()
+            .find(|block| block.height == height)
+            .ok_or_else(|| DevnetError::Api(format!("block not found: {height}")))?;
+        Ok(BlockDetails {
+            height: block.height,
+            transactions: Vec::new(),
+            root_hash: block.merkle_root,
+            timestamp: block.timestamp.to_string(),
+            proposer: format!("{} signature(s)", block.signatures),
+        })
     }
 
     /// Get note status by commitment.
-    pub async fn get_note_status(&self, commitment: &str) -> Result<NoteStatus, DevnetError> {
-        let url = format!("{}/api/node/notes/{commitment}", self.base_url);
-        let resp = self.client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+    pub async fn get_note_status(&self, _commitment: &str) -> Result<NoteStatus, DevnetError> {
+        Err(DevnetError::Unsupported(
+            "note-by-commitment lookup is not exposed; /status only reports aggregate note counts",
+        ))
     }
 
     /// Get proof details by hash.
-    pub async fn get_proof_details(&self, hash: &str) -> Result<ProofDetails, DevnetError> {
-        let url = format!("{}/api/node/proofs/{hash}", self.base_url);
-        let resp = self.client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+    pub async fn get_proof_details(&self, _hash: &str) -> Result<ProofDetails, DevnetError> {
+        Err(DevnetError::Unsupported(
+            "proof metadata lookup is not exposed by the current public node API",
+        ))
     }
 
     /// Get factory details by VK hash.
-    pub async fn get_factory_details(&self, vk_hash: &str) -> Result<FactoryDetails, DevnetError> {
-        let url = format!("{}/api/node/factories/{vk_hash}", self.base_url);
-        let resp = self.client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+    pub async fn get_factory_details(&self, _vk_hash: &str) -> Result<FactoryDetails, DevnetError> {
+        Err(DevnetError::Unsupported(
+            "factory lookup is not exposed by the current public node API",
+        ))
     }
 
     /// Search for entities by prefix.
     pub async fn explorer_search(&self, query: &str) -> Result<Vec<SearchResult>, DevnetError> {
-        let url = format!("{}/api/node/search", self.base_url);
-        let resp = self.client.get(&url).query(&[("q", query)]).send().await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        let needle = query.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(resp.json().await?)
+
+        let mut results = Vec::new();
+
+        for cell in self.fetch_cells().await.unwrap_or_default() {
+            if cell.id.to_ascii_lowercase().contains(&needle) {
+                results.push(SearchResult {
+                    kind: "cell".to_string(),
+                    id: cell.id.clone(),
+                    summary: format!(
+                        "balance {} PYN, nonce {}, {} capability(s)",
+                        cell.balance, cell.nonce, cell.capability_count
+                    ),
+                });
+            }
+        }
+
+        for receipt in self.fetch_receipts().await.unwrap_or_default() {
+            if receipt.turn_hash.to_ascii_lowercase().contains(&needle)
+                || receipt.receipt_hash.to_ascii_lowercase().contains(&needle)
+                || receipt.agent.to_ascii_lowercase().contains(&needle)
+            {
+                results.push(SearchResult {
+                    kind: "turn".to_string(),
+                    id: receipt.turn_hash.clone(),
+                    summary: format!(
+                        "{} action(s), {}, chain index {}{}",
+                        receipt.action_count,
+                        receipt.finality,
+                        receipt.chain_index,
+                        if receipt.chain_head { " (head)" } else { "" }
+                    ),
+                });
+            }
+        }
+
+        for block in self.fetch_blocks().await.unwrap_or_default() {
+            let height = block.height.to_string();
+            if height.contains(&needle) || block.merkle_root.to_ascii_lowercase().contains(&needle)
+            {
+                results.push(SearchResult {
+                    kind: "block".to_string(),
+                    id: height,
+                    summary: format!(
+                        "root {}, {} signature(s)",
+                        short_hash(&block.merkle_root),
+                        block.signatures
+                    ),
+                });
+            }
+        }
+
+        Ok(results)
     }
 
     /// Get explorer stats.
     pub async fn explorer_stats(&self) -> Result<ExplorerStats, DevnetError> {
-        let url = format!("{}/api/node/stats", self.base_url);
-        let resp = self.client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+        let status = self.node_status().await?;
+        let cells = self.fetch_cells().await.unwrap_or_default();
+        let receipts = self.fetch_receipts().await.unwrap_or_default();
+        let is_solo = status.federation_mode == "solo";
+        let nodes_total = if is_solo {
+            1
+        } else {
+            status.peer_count.saturating_add(1)
+        };
+        let nodes_up = if status.healthy { nodes_total } else { 0 };
+        Ok(ExplorerStats {
+            block_height: status.latest_height,
+            total_cells_hosted: cells.iter().filter(|cell| !cell.has_program).count() as u64,
+            total_cells_sovereign: cells.iter().filter(|cell| cell.has_program).count() as u64,
+            total_notes_spent: 0,
+            total_notes_unspent: status.note_count,
+            turns_this_epoch: receipts.len() as u64,
+            active_auctions: 0,
+            federation_nodes_up: nodes_up,
+            federation_nodes_total: nodes_total,
+        })
     }
 
     /// Get recent events, optionally filtered by cell_id.
@@ -519,6 +642,19 @@ impl DevnetClient {
         }
         events.reverse();
         Ok(events)
+    }
+
+    /// Get recent committed turns for a cell that may include identity issuance.
+    ///
+    /// The current public node event surface does not expose Starbridge action
+    /// metadata or the turn memo, so callers must present these as audit
+    /// checkpoints rather than as a credential inventory.
+    pub async fn get_recent_identity_issue_turns(
+        &self,
+        cell_id: &str,
+        count: u32,
+    ) -> Result<Vec<RecentEvent>, DevnetError> {
+        self.get_recent_events(count, Some(cell_id)).await
     }
 
     /// Get the explorer base URL for building links.
@@ -615,59 +751,36 @@ impl DevnetClient {
 
     /// List artworks on devnet.
     pub async fn list_artworks(&self) -> Result<Vec<Artwork>, DevnetError> {
-        let url = format!("{}/api/gallery/artworks", self.base_url);
-        let resp = self.client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+        Err(DevnetError::Unsupported(
+            "gallery artworks are not exposed by the current public node API",
+        ))
     }
 
     /// List active auctions.
     pub async fn list_auctions(&self) -> Result<Vec<Auction>, DevnetError> {
-        let url = format!("{}/api/gallery/auctions", self.base_url);
-        let resp = self.client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+        Err(DevnetError::Unsupported(
+            "gallery auctions are not exposed by the current public node API",
+        ))
     }
 
     /// Place a bid on an auction.
     pub async fn place_bid(
         &self,
-        auction_id: &str,
-        bidder_cell: &str,
-        amount: u64,
-        signature: &str,
+        _auction_id: &str,
+        _bidder_cell: &str,
+        _amount: u64,
+        _signature: &str,
     ) -> Result<(), DevnetError> {
-        let url = format!("{}/api/gallery/auctions/{auction_id}/bid", self.base_url);
-        let body = serde_json::json!({
-            "bidder": bidder_cell,
-            "amount": amount,
-            "signature": signature,
-        });
-        let resp = self.client.post(&url).json(&body).send().await?;
-        if !resp.status().is_success() {
-            let msg = resp.text().await.unwrap_or_default();
-            return Err(DevnetError::Api(msg));
-        }
-        Ok(())
+        Err(DevnetError::Unsupported(
+            "gallery bidding is not exposed by the current public node API",
+        ))
     }
 
     /// Get a user's active bids.
-    pub async fn get_user_bids(&self, cell_id: &str) -> Result<Vec<BidInfo>, DevnetError> {
-        let url = format!("{}/api/gallery/bids", self.base_url);
-        let resp = self
-            .client
-            .get(&url)
-            .query(&[("cell_id", cell_id)])
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+    pub async fn get_user_bids(&self, _cell_id: &str) -> Result<Vec<BidInfo>, DevnetError> {
+        Err(DevnetError::Unsupported(
+            "gallery bids are not exposed by the current public node API",
+        ))
     }
 
     // ─── Identity / credential endpoints ───────────────────────────────────────
@@ -675,67 +788,36 @@ impl DevnetClient {
     /// Issue a verifiable credential.
     pub async fn issue_credential(
         &self,
-        issuer_cell: &str,
-        schema: &str,
-        attributes: &str,
-        signature: &str,
+        _issuer_cell: &str,
+        _schema: &str,
+        _attributes: &str,
+        _signature: &str,
     ) -> Result<String, DevnetError> {
-        let url = format!("{}/api/identity/credentials/issue", self.base_url);
-        let body = serde_json::json!({
-            "issuer": issuer_cell,
-            "schema": schema,
-            "attributes": attributes,
-            "signature": signature,
-        });
-        let resp = self.client.post(&url).json(&body).send().await?;
-        if !resp.status().is_success() {
-            let msg = resp.text().await.unwrap_or_default();
-            return Err(DevnetError::Api(msg));
-        }
-        let result: serde_json::Value = resp.json().await?;
-        Ok(result["credential_id"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string())
+        Err(DevnetError::Unsupported(
+            "legacy identity issue endpoint is retired; use canonical Starbridge identity actions",
+        ))
     }
 
     /// Request a proof from another user.
     pub async fn request_proof(
         &self,
-        verifier_cell: &str,
-        subject_cell: &str,
-        predicate: &str,
+        _verifier_cell: &str,
+        _subject_cell: &str,
+        _predicate: &str,
     ) -> Result<ProofRequestResult, DevnetError> {
-        let url = format!("{}/api/identity/proofs/request", self.base_url);
-        let body = serde_json::json!({
-            "verifier": verifier_cell,
-            "subject": subject_cell,
-            "predicate": predicate,
-        });
-        let resp = self.client.post(&url).json(&body).send().await?;
-        if !resp.status().is_success() {
-            let msg = resp.text().await.unwrap_or_default();
-            return Err(DevnetError::Api(msg));
-        }
-        Ok(resp.json().await?)
+        Err(DevnetError::Unsupported(
+            "identity proof request endpoint is not exposed by the current node read/write API",
+        ))
     }
 
     /// List credentials held by a cell.
     pub async fn list_credentials(
         &self,
-        cell_id: &str,
+        _cell_id: &str,
     ) -> Result<Vec<CredentialInfo>, DevnetError> {
-        let url = format!("{}/api/identity/credentials", self.base_url);
-        let resp = self
-            .client
-            .get(&url)
-            .query(&[("cell_id", cell_id)])
-            .send()
-            .await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+        Err(DevnetError::Unsupported(
+            "credential list endpoint is not exposed by the current node read API",
+        ))
     }
 
     // ─── Status / metrics endpoints ────────────────────────────────────────────
@@ -774,15 +856,10 @@ impl DevnetClient {
     }
 
     /// Verify a STARK proof on-chain.
-    pub async fn verify_proof(&self, proof_hex: &str) -> Result<ProofVerifyResult, DevnetError> {
-        let url = format!("{}/api/node/proofs/verify", self.base_url);
-        let body = serde_json::json!({ "proof": proof_hex });
-        let resp = self.client.post(&url).json(&body).send().await?;
-        if !resp.status().is_success() {
-            let msg = resp.text().await.unwrap_or_default();
-            return Err(DevnetError::Api(msg));
-        }
-        Ok(resp.json().await?)
+    pub async fn verify_proof(&self, _proof_hex: &str) -> Result<ProofVerifyResult, DevnetError> {
+        Err(DevnetError::Unsupported(
+            "proof verification is not exposed by the current public node API",
+        ))
     }
 
     /// Get devnet metrics.
@@ -807,6 +884,33 @@ impl DevnetClient {
             memory_usage_mb: 0,
             uptime_secs: 0,
         })
+    }
+
+    async fn fetch_receipts(&self) -> Result<Vec<ReceiptInfo>, DevnetError> {
+        let url = format!("{}/api/receipts", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn fetch_blocks(&self) -> Result<Vec<AttestedRootInfo>, DevnetError> {
+        let url = format!("{}/api/blocks", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    async fn fetch_cells(&self) -> Result<Vec<CellListEntry>, DevnetError> {
+        let url = format!("{}/api/cells", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
     }
 }
 

@@ -43,6 +43,7 @@ export async function createExtensionRuntime({ signals }) {
   const statusSignal = signal(null);
   const traceEventsSignal = signal({ schema_version: 1, event_count: 0, events: [] });
   const balanceSignal = signal(null);
+  const outboxSignal = signal([]);
   let destroyed = false;
 
   function bump() { version.value = version.value + 1; }
@@ -102,13 +103,24 @@ export async function createExtensionRuntime({ signals }) {
     } catch {
       // Older extension builds still deliver live events through dregg.on().
     }
+    try {
+      if (typeof dregg.listOutbox === 'function') {
+        const outbox = await dregg.listOutbox();
+        outboxSignal.value = Array.isArray(outbox) ? outbox : [];
+      }
+    } catch {
+      outboxSignal.value = [];
+    }
     bump();
   }
 
   const listeners = [];
   if (typeof dregg.on === 'function') {
-    for (const name of ['activity', 'receipt', 'root', 'intent', 'note_announcement', 'federation']) {
-      const cb = (payload) => pushEvent(name === 'root' ? 'federation' : name, payload);
+    for (const name of ['activity', 'receipt', 'root', 'intent', 'note_announcement', 'federation', 'outbox']) {
+      const cb = (payload) => {
+        if (name === 'outbox') refresh().catch(() => {});
+        pushEvent(name === 'root' ? 'federation' : name, payload);
+      };
       try {
         dregg.on(name, cb);
         listeners.push([name, cb]);
@@ -165,6 +177,19 @@ export async function createExtensionRuntime({ signals }) {
     getTraceEvents: () => traceEventsSignal,
     getExtensionStatus: () => statusSignal,
     getBalance: () => balanceSignal,
+    getOutbox: () => outboxSignal,
+    flushOutbox: async () => {
+      if (typeof dregg.flushOutbox !== 'function') throw new Error('Cipherclerk extension does not expose flushOutbox');
+      const result = await dregg.flushOutbox();
+      await refresh();
+      return result;
+    },
+    dropOutboxEntry: async (id) => {
+      if (typeof dregg.dropOutboxEntry !== 'function') throw new Error('Cipherclerk extension does not expose dropOutboxEntry');
+      const result = await dregg.dropOutboxEntry(id);
+      await refresh();
+      return result;
+    },
 
     createAgent: notPermitted('createAgent'),
     createCell: notPermitted('createCell'),

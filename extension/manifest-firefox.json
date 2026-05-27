@@ -3,7 +3,16 @@
   "name": "Dragon's Egg Cipherclerk",
   "version": "0.1.0",
   "description": "Capability-based cipherclerk for dregg: manages signing keys, authorization tokens, and capability handles with zero-knowledge proofs",
-  "permissions": ["storage", "activeTab", "contextMenus"],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "contextMenus",
+    "https://devnet.dregg.fg-goose.online/*",
+    "http://localhost:8420/*",
+    "ws://localhost:8420/*",
+    "http://127.0.0.1:8420/*",
+    "ws://127.0.0.1:8420/*"
+  ],
   "host_permissions": [
     "https://devnet.dregg.fg-goose.online/*",
     "http://localhost:8420/*",
@@ -12,7 +21,7 @@
     "ws://127.0.0.1:8420/*"
   ],
   "background": {
-    "service_worker": "dist/background.js"
+    "scripts": ["dist/background.js"]
   },
   "content_scripts": [{
     "matches": ["<all_urls>"],
@@ -30,7 +39,10 @@
     "page": "settings.html",
     "open_in_tab": true
   },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-ancestors 'none'"
+  "content_security_policy": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-ancestors 'none'",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "dregg-cipherclerk@fg-goose.online"
+    }
   }
 }

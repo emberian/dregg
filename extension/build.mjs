@@ -12,7 +12,7 @@ const config = {
   bundle: true,
   outdir: 'dist',
   format: 'iife',  // Chrome extension scripts need IIFE, not ESM
-  target: ['chrome120'],
+  target: ['es2022'],
   // P2-2: sourcemaps only in dev / watch. Production builds expose internal
   // symbol names to devtools observers; never ship to users.
   sourcemap: watch || dev,

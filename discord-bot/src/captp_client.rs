@@ -1,9 +1,13 @@
 //! CapTP client: the bot's own identity and capability session management.
 //!
 //! The bot IS a dregg participant — it has its own keypair, holds live references,
-//! and can enliven/export/revoke sturdy refs via its configured dregg node.
+//! and tracks sturdy refs it has locally exported or accepted. The dregg node does
+//! not currently serve `/captp/export`, `/captp/enliven`, `/captp/handoff`, or
+//! `/captp/revoke`; this client must not pretend those HTTP endpoints exist.
 
 use std::collections::HashMap;
+use std::io::Read;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dregg_captp::FederationId as GroupId;
 use dregg_captp::uri::DreggUri;
@@ -53,8 +57,6 @@ pub struct CapTPClient {
     held: RwLock<HashMap<String, HeldCapability>>,
     /// Exported capabilities (keyed by cell ID).
     exports: RwLock<HashMap<String, ExportedCapability>>,
-    /// HTTP client for node communication.
-    http: reqwest::Client,
 }
 
 impl CapTPClient {
@@ -66,41 +68,17 @@ impl CapTPClient {
             node_url,
             held: RwLock::new(HashMap::new()),
             exports: RwLock::new(HashMap::new()),
-            http: reqwest::Client::new(),
         }
     }
 
     /// Export a cell as a sturdy ref, returning the dregg URI.
     pub async fn export_cap(&self, cell_id: &str) -> Result<DreggUri, CapTPError> {
-        // Request the node to create a swiss entry and return the URI.
-        let url = format!("{}/captp/export", self.node_url);
-        let resp = self
-            .http
-            .post(&url)
-            .json(&serde_json::json!({
-                "cell_id": cell_id,
-                "exporter": self.bot_cell_id,
-            }))
-            .send()
-            .await
-            .map_err(|e| CapTPError::NodeUnreachable(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CapTPError::NodeError {
-                status,
-                message: body,
-            });
-        }
-
-        let result: ExportResponse = resp
-            .json()
-            .await
-            .map_err(|e| CapTPError::DeserializationFailed(e.to_string()))?;
-
-        let uri =
-            DreggUri::parse(&result.uri).map_err(|e| CapTPError::InvalidUri(e.to_string()))?;
+        let cell_bytes = parse_cell_id(cell_id)?;
+        let uri = DreggUri {
+            federation_id: self.federation_id.0,
+            cell_id: cell_bytes,
+            swiss: new_swiss(cell_id, &self.bot_cell_id, self.federation_id.0),
+        };
 
         // Track the export.
         let export = ExportedCapability {
@@ -123,29 +101,25 @@ impl CapTPClient {
     pub async fn accept_cap(&self, uri_str: &str) -> Result<HeldCapability, CapTPError> {
         let uri = DreggUri::parse(uri_str).map_err(|e| CapTPError::InvalidUri(e.to_string()))?;
 
-        // Request the node to enliven the URI.
-        let url = format!("{}/captp/enliven", self.node_url);
-        let resp = self
-            .http
-            .post(&url)
-            .json(&serde_json::json!({
-                "uri": uri_str,
-                "recipient": self.bot_cell_id,
-            }))
-            .send()
-            .await
-            .map_err(|e| CapTPError::NodeUnreachable(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CapTPError::NodeError {
-                status,
-                message: body,
-            });
-        }
-
         let cell_id = hex::encode(uri.cell_id);
+        let exports = self.exports.read().await;
+        let Some(export) = exports.get(&cell_id) else {
+            return Err(CapTPError::Unsupported(format!(
+                "remote enliven is not implemented; URI `{cell_id}` was not exported by this bot instance"
+            )));
+        };
+        if export.revoked {
+            return Err(CapTPError::NotFound(format!(
+                "{cell_id} (local export is revoked)"
+            )));
+        }
+        if export.uri != uri {
+            return Err(CapTPError::NotFound(format!(
+                "{cell_id} (swiss number does not match this bot's active export)"
+            )));
+        }
+        drop(exports);
+
         let cap = HeldCapability {
             uri,
             label: None,
@@ -165,64 +139,26 @@ impl CapTPClient {
         cell_id: &str,
         recipient_key: &str,
     ) -> Result<String, CapTPError> {
-        let url = format!("{}/captp/handoff", self.node_url);
-        let resp = self
-            .http
-            .post(&url)
-            .json(&serde_json::json!({
-                "cell_id": cell_id,
-                "introducer": self.bot_cell_id,
-                "recipient_key": recipient_key,
-            }))
-            .send()
-            .await
-            .map_err(|e| CapTPError::NodeUnreachable(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CapTPError::NodeError {
-                status,
-                message: body,
-            });
-        }
-
-        let result: HandoffResponse = resp
-            .json()
-            .await
-            .map_err(|e| CapTPError::DeserializationFailed(e.to_string()))?;
-
-        debug!(cell_id, recipient_key, "Created handoff certificate");
-        Ok(result.certificate)
+        debug!(cell_id, recipient_key, "Handoff requested but unsupported");
+        Err(CapTPError::Unsupported(
+            "CapTP handoff certificates are not available through the node HTTP API yet"
+                .to_string(),
+        ))
     }
 
     /// Revoke a previously exported capability.
     pub async fn revoke_cap(&self, cell_id: &str) -> Result<(), CapTPError> {
-        let url = format!("{}/captp/revoke", self.node_url);
-        let resp = self
-            .http
-            .post(&url)
-            .json(&serde_json::json!({
-                "cell_id": cell_id,
-                "revoker": self.bot_cell_id,
-            }))
-            .send()
-            .await
-            .map_err(|e| CapTPError::NodeUnreachable(e.to_string()))?;
+        parse_cell_id(cell_id)?;
 
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CapTPError::NodeError {
-                status,
-                message: body,
-            });
-        }
+        let mut exports = self.exports.write().await;
+        let Some(export) = exports.get_mut(cell_id) else {
+            return Err(CapTPError::NotFound(format!(
+                "{cell_id} (no local export to revoke)"
+            )));
+        };
+        export.revoked = true;
+        drop(exports);
 
-        // Mark as revoked in our local state.
-        if let Some(export) = self.exports.write().await.get_mut(cell_id) {
-            export.revoked = true;
-        }
         // Remove from held if we hold it.
         self.held.write().await.remove(cell_id);
 
@@ -251,45 +187,25 @@ impl CapTPClient {
     }
 }
 
-// ─── Wire types ─────────────────────────────────────────────────────────────
-
-#[derive(serde::Deserialize)]
-struct ExportResponse {
-    uri: String,
-}
-
-#[derive(serde::Deserialize)]
-struct HandoffResponse {
-    certificate: String,
-}
-
 // ─── Errors ─────────────────────────────────────────────────────────────────
 
 /// Errors from CapTP client operations.
 #[derive(Debug, Clone)]
 pub enum CapTPError {
-    /// Could not reach the configured dregg node.
-    NodeUnreachable(String),
-    /// The node returned an error.
-    NodeError { status: u16, message: String },
     /// Failed to parse a dregg URI.
     InvalidUri(String),
-    /// Deserialization of node response failed.
-    DeserializationFailed(String),
     /// The requested capability was not found.
     NotFound(String),
+    /// The operation is not implemented by the current backend.
+    Unsupported(String),
 }
 
 impl std::fmt::Display for CapTPError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CapTPError::NodeUnreachable(e) => write!(f, "node unreachable: {e}"),
-            CapTPError::NodeError { status, message } => {
-                write!(f, "node error (HTTP {status}): {message}")
-            }
             CapTPError::InvalidUri(e) => write!(f, "invalid dregg URI: {e}"),
-            CapTPError::DeserializationFailed(e) => write!(f, "deserialization failed: {e}"),
             CapTPError::NotFound(id) => write!(f, "capability not found: {id}"),
+            CapTPError::Unsupported(message) => write!(f, "unsupported: {message}"),
         }
     }
 }
@@ -303,4 +219,36 @@ fn current_epoch() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn parse_cell_id(cell_id: &str) -> Result<[u8; 32], CapTPError> {
+    let bytes = hex::decode(cell_id).map_err(|e| CapTPError::InvalidUri(e.to_string()))?;
+    bytes.try_into().map_err(|bytes: Vec<u8>| {
+        CapTPError::InvalidUri(format!("cell ID must be 32 bytes, got {}", bytes.len()))
+    })
+}
+
+fn new_swiss(cell_id: &str, bot_cell_id: &str, federation_id: [u8; 32]) -> [u8; 32] {
+    let mut swiss = [0u8; 32];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(&mut swiss))
+        .is_ok()
+    {
+        return swiss;
+    }
+
+    static FALLBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let counter = FALLBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    *blake3::Hasher::new()
+        .update(cell_id.as_bytes())
+        .update(bot_cell_id.as_bytes())
+        .update(&federation_id)
+        .update(&now.to_le_bytes())
+        .update(&counter.to_le_bytes())
+        .finalize()
+        .as_bytes()
 }

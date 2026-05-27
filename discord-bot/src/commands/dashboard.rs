@@ -19,7 +19,7 @@ use starbridge_nameservice::{build_register_action, build_set_target_action};
 use crate::BotState;
 use crate::cipherclerk::UserCipherclerk;
 use crate::credential_issue;
-use crate::db::IdentityMode;
+use crate::db::{IdentityMode, StarbridgeActivity};
 use crate::embeds;
 
 const ID_HOME: &str = "dregg:home";
@@ -155,7 +155,7 @@ async fn update_panel(
             identity_components(),
         ),
         "names" => (
-            names_embed(component.guild_id.map(|id| id.get())),
+            names_embed(component.guild_id.map(|id| id.get()), state).await,
             names_components(),
         ),
         "governance" => (
@@ -239,8 +239,8 @@ async fn identity_embed(user_id: u64, state: &BotState) -> CreateEmbed {
         .field("Starbridge App", "`starbridge-apps/identity`", true)
 }
 
-fn names_embed(guild_id: Option<u64>) -> CreateEmbed {
-    embeds::dregg_embed("Nameservice")
+async fn names_embed(guild_id: Option<u64>, state: &BotState) -> CreateEmbed {
+    let mut embed = embeds::dregg_embed("Nameservice")
         .description("Register and resolve names in this Discord guild namespace.")
         .field(
             "Namespace",
@@ -249,7 +249,33 @@ fn names_embed(guild_id: Option<u64>) -> CreateEmbed {
                 .unwrap_or_else(|| "guild required".to_string()),
             false,
         )
-        .field("Starbridge App", "`starbridge-apps/nameservice`", true)
+        .field("Starbridge App", "`starbridge-apps/nameservice`", true);
+    if let Ok(activity) = state
+        .db
+        .get_recent_starbridge_activity_for_app("nameservice", 5)
+        .await
+    {
+        let lines = activity
+            .iter()
+            .filter(|activity| {
+                guild_id
+                    .map(|id| activity.guild_id.as_deref() == Some(&id.to_string()))
+                    .unwrap_or(true)
+            })
+            .take(3)
+            .map(|activity| {
+                let name = activity.subject.as_deref().unwrap_or("unknown");
+                let turn = activity_detail_string(activity, "turn_hash")
+                    .map(|hash| short_hash_tick(&hash))
+                    .unwrap_or_else(|| "`turn unknown`".to_string());
+                format!("`{name}` - {turn}")
+            })
+            .collect::<Vec<_>>();
+        if !lines.is_empty() {
+            embed = embed.field("Recent Registrations", lines.join("\n"), false);
+        }
+    }
+    embed
 }
 
 fn governance_embed(guild_id: Option<u64>) -> CreateEmbed {
@@ -535,27 +561,54 @@ async fn submit_name_register(modal: &ModalInteraction, state: &BotState) -> Cre
         ));
     }
 
+    let guild_id = modal.guild_id.map(|id| id.get().to_string());
     match state
         .devnet
         .submit_app_actions(
             &cclerk,
             actions,
-            Some(format!("discord:nameservice:register:{name}")),
+            Some(format!(
+                "discord:nameservice:register:guild:{}:{name}",
+                guild_id.as_deref().unwrap_or("dm")
+            )),
         )
         .await
     {
-        Ok(result) if result.accepted => embeds::success_embed("Name Registered")
-            .field("Name", name, true)
-            .field("Owner", short_cell(&owner), true)
-            .field("Registry", short_cell(&registry_cell_hex), true)
-            .field(
-                "Turn",
-                result
-                    .turn_hash
-                    .map(|hash| format!("`{hash}`"))
-                    .unwrap_or_else(|| "`unknown`".to_string()),
-                false,
-            ),
+        Ok(result) if result.accepted => {
+            let turn_hash = result.turn_hash.clone();
+            let _ = state
+                .db
+                .record_starbridge_activity(
+                    "nameservice",
+                    "register",
+                    &modal.user.id.get().to_string(),
+                    guild_id.as_deref(),
+                    Some(&name),
+                    "accepted",
+                    serde_json::json!({
+                        "name": name,
+                        "owner": owner,
+                        "registry": registry_cell_hex,
+                        "expiry_height": expiry_height,
+                        "target": if target.trim().is_empty() { None::<String> } else { Some(target.trim().to_string()) },
+                        "turn_hash": turn_hash,
+                    }),
+                )
+                .await;
+
+            embeds::success_embed("Name Registered")
+                .field("Name", name, true)
+                .field("Owner", short_cell(&owner), true)
+                .field("Registry", short_cell(&registry_cell_hex), true)
+                .field(
+                    "Turn",
+                    result
+                        .turn_hash
+                        .map(|hash| format!("`{hash}`"))
+                        .unwrap_or_else(|| "`unknown`".to_string()),
+                    false,
+                )
+        }
         Ok(result) => embeds::error_embed(
             "Registration Rejected",
             result
@@ -572,27 +625,53 @@ async fn submit_name_resolve(modal: &ModalInteraction, state: &BotState) -> Crea
         return embeds::warning_embed("Guild Required", "Names resolve inside a server namespace.");
     };
     let name = modal_value(modal, "name");
-    match state
-        .devnet
-        .client()
-        .get(format!("{}/names/resolve", state.config.devnet_url))
-        .query(&[("guild_id", guild_id.to_string()), ("name", name.clone())])
-        .send()
+    let activity = state
+        .db
+        .get_recent_starbridge_activity_for_app("nameservice", 50)
         .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            let value: serde_json::Value = resp.json().await.unwrap_or_default();
-            embeds::dregg_embed("Name Resolved")
-                .field("Name", name, true)
-                .field("Cell ID", code_field(value.get("cell_id")), false)
-                .field("URI", code_block(value.get("uri")), false)
-        }
-        Ok(resp) if resp.status().as_u16() == 404 => embeds::warning_embed(
-            "Name Not Found",
-            &format!("No registration found for `{name}`."),
-        ),
-        Ok(resp) => embeds::error_embed("Resolve Failed", &response_text(resp).await),
-        Err(e) => embeds::error_embed("Node Unreachable", &e.to_string()),
+        .unwrap_or_default();
+    let matches = activity
+        .iter()
+        .filter(|activity| {
+            activity.action == "register"
+                && activity.guild_id.as_deref() == Some(&guild_id.to_string())
+                && activity.subject.as_deref() == Some(name.as_str())
+        })
+        .take(3)
+        .collect::<Vec<_>>();
+
+    if let Some(activity) = matches.first() {
+        embeds::success_embed("Recent Name Registration")
+            .field("Name", format!("`{name}`"), true)
+            .field("Namespace", format!("`/discord/{guild_id}/`"), true)
+            .field(
+                "Owner",
+                activity_detail_string(activity, "owner")
+                    .map(|owner| short_cell(&owner))
+                    .unwrap_or_else(|| "`unknown`".to_string()),
+                true,
+            )
+            .field(
+                "Registry",
+                activity_detail_string(activity, "registry")
+                    .map(|registry| short_cell(&registry))
+                    .unwrap_or_else(|| "`unknown`".to_string()),
+                true,
+            )
+            .field(
+                "Turn",
+                activity_detail_string(activity, "turn_hash")
+                    .map(|hash| format!("`{hash}`"))
+                    .unwrap_or_else(|| "`unknown`".to_string()),
+                false,
+            )
+    } else {
+        embeds::warning_embed(
+            "No Recent Local Registration",
+            &format!(
+                "No bot-recorded registration for `{name}` in `/discord/{guild_id}/`. The node exposes receipts/events, but not a canonical nameservice slot/index read yet."
+            ),
+        )
     }
 }
 
@@ -627,23 +706,21 @@ async fn submit_credential_issue(modal: &ModalInteraction, state: &BotState) -> 
 async fn submit_credential_verify(modal: &ModalInteraction, state: &BotState) -> CreateEmbed {
     let subject = modal_value(modal, "subject");
     let predicate = modal_value(modal, "predicate");
-    let verifier = match user_cell(modal.user.id.get(), state).await {
-        Ok(cell) => cell,
-        Err(embed) => return embed,
-    };
-
-    match state
-        .devnet
-        .request_proof(&verifier, &subject, &predicate)
-        .await
-    {
-        Ok(result) => embeds::success_embed("Proof Requested")
-            .field("Subject Cell", short_cell(&subject), true)
-            .field("Predicate", predicate, true)
-            .field("Request ID", format!("`{}`", result.request_id), true)
-            .field("Status", result.status, true),
-        Err(e) => embeds::error_embed("Verification Request Failed", &e.to_string()),
+    if let Err(embed) = user_cell(modal.user.id.get(), state).await {
+        return embed;
     }
+    match parse_cell_bytes(&subject) {
+        Ok(_) => {}
+        Err(embed) => return embed,
+    }
+    embeds::warning_embed(
+        "Proof Requests Unavailable",
+        &format!(
+            "Credential proof requests are not exposed by the current node API. Subject `{}` and predicate `{}` are valid inputs, but selective disclosure needs a holder-private credential store and proof/index read surface.",
+            short_cell(&subject),
+            truncate(&predicate, 120)
+        ),
+    )
 }
 
 async fn submit_gov_propose(modal: &ModalInteraction, state: &BotState) -> CreateEmbed {
@@ -1063,32 +1140,6 @@ fn modal_value(modal: &ModalInteraction, id: &str) -> String {
     String::new()
 }
 
-fn code_field(value: Option<&serde_json::Value>) -> String {
-    let text = value_to_string(value);
-    if text.is_empty() {
-        "`unavailable`".to_string()
-    } else {
-        format!("`{}`", truncate(&text, 120))
-    }
-}
-
-fn code_block(value: Option<&serde_json::Value>) -> String {
-    let text = value_to_string(value);
-    if text.is_empty() {
-        "```unavailable```".to_string()
-    } else {
-        format!("```\n{}\n```", truncate(&text, 1500))
-    }
-}
-
-fn value_to_string(value: Option<&serde_json::Value>) -> String {
-    match value {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        Some(value) if !value.is_null() => value.to_string(),
-        _ => String::new(),
-    }
-}
-
 fn parse_cell_id(value: &str) -> Result<CellId, CreateEmbed> {
     parse_cell_bytes(value).map(CellId)
 }
@@ -1204,11 +1255,30 @@ fn parse_route_target(value: &serde_json::Value) -> Result<RouteTarget, CreateEm
 }
 
 fn short_cell(cell: &str) -> String {
-    format!("`{}...`", &cell[..16.min(cell.len())])
+    let trimmed = cell
+        .trim()
+        .strip_prefix("dregg://cell/")
+        .unwrap_or_else(|| cell.trim());
+    format!("`{}...`", &trimmed[..16.min(trimmed.len())])
 }
 
 fn short_queue(queue_id: &str) -> String {
     format!("`{}...`", &queue_id[..16.min(queue_id.len())])
+}
+
+fn short_hash_tick(hash: &str) -> String {
+    format!("`{}...`", &hash[..12.min(hash.len())])
+}
+
+fn activity_detail_string(activity: &StarbridgeActivity, key: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(&activity.details_json)
+        .ok()
+        .and_then(|details| details.get(key).cloned())
+        .and_then(|value| match value {
+            serde_json::Value::String(value) => Some(value),
+            serde_json::Value::Null => None,
+            other => Some(other.to_string()),
+        })
 }
 
 fn message_hash_hex(message: &str) -> String {

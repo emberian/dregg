@@ -3,7 +3,7 @@
 //! Serves a localhost-only API that the browser extension cipherclerk talks to.
 //! All handlers access shared [`NodeState`] via Axum's state extraction.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -35,9 +35,7 @@ use tokio::sync::Mutex;
 use dregg_sdk::{Attenuation, AuthRequest, CellId, SignedTurn};
 use dregg_turn::{CallForest, Turn};
 
-use crate::state::{
-    ActivityProofStatus, ActivityStatus, CommittedEvent, NodeEvent, NodeState,
-};
+use crate::state::{ActivityProofStatus, ActivityStatus, CommittedEvent, NodeEvent, NodeState};
 use crate::ws::handle_ws;
 
 // =============================================================================
@@ -356,6 +354,74 @@ pub struct EventsQuery {
     pub since_height: Option<u64>,
     /// Maximum number of events to return (default 50, max 200).
     pub limit: Option<usize>,
+}
+
+/// Query parameters for public Starbridge indexing reads.
+#[derive(Deserialize)]
+pub struct StarbridgeQuery {
+    /// Maximum results to return (default 50, max 200).
+    pub limit: Option<usize>,
+    /// Receipt/event cursor. For event reads this is exclusive when nonzero.
+    pub since_height: Option<u64>,
+    /// Hex-encoded cell id. Receipt reads match the receipt agent; event and
+    /// turn reads match affected cells/action targets/effect cell references.
+    pub cell: Option<String>,
+    /// Case-insensitive substring match against memo/effect/action summaries.
+    pub memo: Option<String>,
+    /// Case-insensitive effect kind or summary substring.
+    pub effect: Option<String>,
+    /// Exact hex-encoded turn hash.
+    pub turn_hash: Option<String>,
+    /// Exact hex-encoded effects hash for receipt reads.
+    pub effects_hash: Option<String>,
+    /// Case-insensitive app bucket: nameservice, identity, governance, or custom.
+    pub app: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct StarbridgeReceiptInfo {
+    #[serde(flatten)]
+    pub receipt: ReceiptInfo,
+    pub effects_hash: String,
+    pub federation_id: String,
+    pub emitted_event_count: usize,
+    pub routing_directive_count: usize,
+    pub derivation_record_count: usize,
+    pub source: &'static str,
+    pub turn_body_available: bool,
+}
+
+#[derive(Serialize)]
+pub struct StarbridgeSignedTurnInfo {
+    pub queue_index: usize,
+    pub turn_hash: String,
+    pub signer: String,
+    pub agent: String,
+    pub nonce: u64,
+    pub fee: u64,
+    pub memo: Option<String>,
+    pub action_count: usize,
+    pub effect_count: usize,
+    pub action_targets: Vec<String>,
+    pub effect_kinds: Vec<String>,
+    pub touched_cells: Vec<String>,
+    pub app: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct StarbridgeActionInfo {
+    pub source: &'static str,
+    pub queue_index: usize,
+    pub action_index: usize,
+    pub turn_hash: String,
+    pub signer: String,
+    pub agent: String,
+    pub memo: Option<String>,
+    pub app: Option<String>,
+    pub target: String,
+    pub method: String,
+    pub effect_kinds: Vec<String>,
+    pub touched_cells: Vec<String>,
 }
 
 // =============================================================================
@@ -962,6 +1028,10 @@ pub fn router(
         .route("/api/cell/{id}", get(get_cell_detail))
         .route("/api/node/cells/{id}", get(get_cell_detail))
         .route("/api/receipts", get(get_receipts))
+        .route("/api/starbridge/receipts", get(get_starbridge_receipts))
+        .route("/api/starbridge/events", get(get_starbridge_events))
+        .route("/api/starbridge/turns", get(get_starbridge_turns))
+        .route("/api/starbridge/actions", get(get_starbridge_actions))
         .route("/api/intents", get(get_intents))
         .route("/api/conditionals", get(get_pending_conditionals))
         .route("/api/discharge", post(post_discharge))
@@ -1289,6 +1359,64 @@ async fn get_tokens(State(state): State<NodeState>) -> Json<Vec<TokenInfo>> {
 async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> {
     let s = state.read().await;
     Json(receipt_infos_from_chain(s.cclerk.receipt_chain(), 50))
+}
+
+async fn get_starbridge_receipts(
+    Query(params): Query<StarbridgeQuery>,
+    State(state): State<NodeState>,
+) -> Json<Vec<StarbridgeReceiptInfo>> {
+    let limit = starbridge_limit(params.limit);
+    let cell = params.cell.as_deref().map(str::to_ascii_lowercase);
+    let turn_hash = params.turn_hash.as_deref().map(str::to_ascii_lowercase);
+    let effects_hash = params.effects_hash.as_deref().map(str::to_ascii_lowercase);
+
+    let s = state.read().await;
+    let chain = s.cclerk.receipt_chain();
+    let chain_len = chain.len();
+    let receipts = chain
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, r)| {
+            cell.as_ref()
+                .is_none_or(|want| hex_encode(&r.agent.0).eq_ignore_ascii_case(want))
+                && turn_hash
+                    .as_ref()
+                    .is_none_or(|want| hex_encode(&r.turn_hash).eq_ignore_ascii_case(want))
+                && effects_hash
+                    .as_ref()
+                    .is_none_or(|want| hex_encode(&r.effects_hash).eq_ignore_ascii_case(want))
+        })
+        .take(limit)
+        .map(|(idx, r)| StarbridgeReceiptInfo {
+            receipt: ReceiptInfo {
+                chain_index: idx as u64,
+                chain_head: idx + 1 == chain_len,
+                receipt_hash: hex_encode(&r.receipt_hash()),
+                turn_hash: hex_encode(&r.turn_hash),
+                agent: hex_encode(&r.agent.0),
+                pre_state: hex_encode(&r.pre_state_hash),
+                post_state: hex_encode(&r.post_state_hash),
+                timestamp: r.timestamp,
+                computrons_used: r.computrons_used,
+                action_count: r.action_count,
+                previous_receipt_hash: r.previous_receipt_hash.map(|h| hex_encode(&h)),
+                finality: format!("{:?}", r.finality).to_lowercase(),
+                was_encrypted: r.was_encrypted,
+                was_burn: r.was_burn,
+                has_proof: r.executor_signature.is_some(),
+                executor_signed: r.executor_signature.is_some(),
+            },
+            effects_hash: hex_encode(&r.effects_hash),
+            federation_id: hex_encode(&r.federation_id),
+            emitted_event_count: r.emitted_events.len(),
+            routing_directive_count: r.routing_directives.len(),
+            derivation_record_count: r.derivation_records.len(),
+            source: "receipt_chain",
+            turn_body_available: false,
+        })
+        .collect();
+    Json(receipts)
 }
 
 fn receipt_infos_from_chain(chain: &[dregg_turn::TurnReceipt], limit: usize) -> Vec<ReceiptInfo> {
@@ -2144,6 +2272,88 @@ async fn get_events(
 
     let s = state.read().await;
     Json(select_committed_events(&s.event_log, since_height, limit))
+}
+
+async fn get_starbridge_events(
+    Query(params): Query<StarbridgeQuery>,
+    State(state): State<NodeState>,
+) -> Json<Vec<CommittedEvent>> {
+    let limit = starbridge_limit(params.limit);
+    let since_height = params.since_height;
+
+    let s = state.read().await;
+    let events = select_committed_events(&s.event_log, since_height, usize::MAX)
+        .into_iter()
+        .filter(|event| starbridge_event_matches(event, &params))
+        .take(limit)
+        .collect();
+    Json(events)
+}
+
+async fn get_starbridge_turns(
+    Query(params): Query<StarbridgeQuery>,
+    State(state): State<NodeState>,
+) -> Json<Vec<StarbridgeSignedTurnInfo>> {
+    let limit = starbridge_limit(params.limit);
+    let s = state.read().await;
+    let turns = s
+        .consensus_queue
+        .iter()
+        .enumerate()
+        .rev()
+        .filter_map(|(queue_index, signed)| {
+            let info = starbridge_signed_turn_info(queue_index, signed);
+            starbridge_signed_turn_matches(&info, &params).then_some(info)
+        })
+        .take(limit)
+        .collect();
+    Json(turns)
+}
+
+async fn get_starbridge_actions(
+    Query(params): Query<StarbridgeQuery>,
+    State(state): State<NodeState>,
+) -> Json<Vec<StarbridgeActionInfo>> {
+    let limit = starbridge_limit(params.limit);
+    let s = state.read().await;
+    let mut actions = Vec::new();
+
+    for (queue_index, signed) in s.consensus_queue.iter().enumerate().rev() {
+        let turn_hash = hex_encode(&signed.turn.hash());
+        let signer = hex_encode(&signed.signer.0);
+        let agent = hex_encode(&signed.turn.agent.0);
+        let app = classify_starbridge_app(signed.turn.memo.as_deref(), &[]);
+
+        for (action_index, tree) in signed.turn.call_forest.iter_dfs().enumerate() {
+            let effect_kinds: Vec<String> = tree.action.effects.iter().map(effect_kind).collect();
+            let touched_cells = action_touched_cells(&tree.action);
+            let app = app
+                .clone()
+                .or_else(|| classify_starbridge_app(signed.turn.memo.as_deref(), &effect_kinds));
+            let info = StarbridgeActionInfo {
+                source: "consensus_queue",
+                queue_index,
+                action_index,
+                turn_hash: turn_hash.clone(),
+                signer: signer.clone(),
+                agent: agent.clone(),
+                memo: signed.turn.memo.clone(),
+                app,
+                target: hex_encode(&tree.action.target.0),
+                method: hex_encode(&tree.action.method),
+                effect_kinds,
+                touched_cells,
+            };
+            if starbridge_action_matches(&info, &params) {
+                actions.push(info);
+                if actions.len() >= limit {
+                    return Json(actions);
+                }
+            }
+        }
+    }
+
+    Json(actions)
 }
 
 fn select_committed_events(
@@ -4420,6 +4630,239 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// Encode variable-length byte slices to hex (for signatures, etc.).
 fn hex_encode_var(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn starbridge_limit(limit: Option<usize>) -> usize {
+    limit.unwrap_or(50).min(200)
+}
+
+fn text_filter_matches(value: &str, filter: &Option<String>) -> bool {
+    filter.as_ref().is_none_or(|needle| {
+        value
+            .to_ascii_lowercase()
+            .contains(&needle.to_ascii_lowercase())
+    })
+}
+
+fn exact_filter_matches(value: &str, filter: &Option<String>) -> bool {
+    filter
+        .as_ref()
+        .is_none_or(|needle| value.eq_ignore_ascii_case(needle))
+}
+
+fn starbridge_event_matches(event: &CommittedEvent, params: &StarbridgeQuery) -> bool {
+    exact_filter_matches(&event.cell_id, &params.cell)
+        && exact_filter_matches(&event.turn_hash, &params.turn_hash)
+        && params.memo.as_ref().is_none_or(|memo| {
+            event.effects.iter().any(|effect| {
+                effect
+                    .to_ascii_lowercase()
+                    .contains(&memo.to_ascii_lowercase())
+            })
+        })
+        && params.effect.as_ref().is_none_or(|effect| {
+            event.effects.iter().any(|summary| {
+                summary
+                    .to_ascii_lowercase()
+                    .contains(&effect.to_ascii_lowercase())
+            })
+        })
+        && params.app.as_ref().is_none_or(|app| {
+            classify_starbridge_app(None, &event.effects)
+                .as_deref()
+                .is_some_and(|kind| kind.eq_ignore_ascii_case(app))
+        })
+}
+
+fn starbridge_signed_turn_info(
+    queue_index: usize,
+    signed: &SignedTurn,
+) -> StarbridgeSignedTurnInfo {
+    let mut action_targets = Vec::new();
+    let mut effect_kinds = Vec::new();
+    let mut touched = HashSet::new();
+
+    for tree in signed.turn.call_forest.iter_dfs() {
+        let target = hex_encode(&tree.action.target.0);
+        touched.insert(target.clone());
+        action_targets.push(target);
+        for effect in &tree.action.effects {
+            effect_kinds.push(effect_kind(effect));
+            for cell in effect_cells(effect) {
+                touched.insert(cell);
+            }
+        }
+    }
+
+    let mut touched_cells: Vec<String> = touched.into_iter().collect();
+    touched_cells.sort();
+    effect_kinds.sort();
+    effect_kinds.dedup();
+
+    StarbridgeSignedTurnInfo {
+        queue_index,
+        turn_hash: hex_encode(&signed.turn.hash()),
+        signer: hex_encode(&signed.signer.0),
+        agent: hex_encode(&signed.turn.agent.0),
+        nonce: signed.turn.nonce,
+        fee: signed.turn.fee,
+        memo: signed.turn.memo.clone(),
+        action_count: signed.turn.action_count(),
+        effect_count: signed.turn.call_forest.total_effects().len(),
+        action_targets,
+        app: classify_starbridge_app(signed.turn.memo.as_deref(), &effect_kinds),
+        effect_kinds,
+        touched_cells,
+    }
+}
+
+fn starbridge_signed_turn_matches(
+    info: &StarbridgeSignedTurnInfo,
+    params: &StarbridgeQuery,
+) -> bool {
+    exact_filter_matches(&info.turn_hash, &params.turn_hash)
+        && params.cell.as_ref().is_none_or(|cell| {
+            info.touched_cells
+                .iter()
+                .any(|touched| touched.eq_ignore_ascii_case(cell))
+        })
+        && params
+            .memo
+            .as_ref()
+            .is_none_or(|_| text_filter_matches(info.memo.as_deref().unwrap_or(""), &params.memo))
+        && params.effect.as_ref().is_none_or(|effect| {
+            info.effect_kinds.iter().any(|kind| {
+                kind.eq_ignore_ascii_case(effect) || text_filter_matches(kind, &params.effect)
+            })
+        })
+        && params.app.as_ref().is_none_or(|app| {
+            info.app
+                .as_deref()
+                .is_some_and(|kind| kind.eq_ignore_ascii_case(app))
+        })
+}
+
+fn starbridge_action_matches(info: &StarbridgeActionInfo, params: &StarbridgeQuery) -> bool {
+    exact_filter_matches(&info.turn_hash, &params.turn_hash)
+        && params.cell.as_ref().is_none_or(|cell| {
+            info.target.eq_ignore_ascii_case(cell)
+                || info
+                    .touched_cells
+                    .iter()
+                    .any(|touched| touched.eq_ignore_ascii_case(cell))
+        })
+        && params
+            .memo
+            .as_ref()
+            .is_none_or(|_| text_filter_matches(info.memo.as_deref().unwrap_or(""), &params.memo))
+        && params.effect.as_ref().is_none_or(|effect| {
+            info.effect_kinds.iter().any(|kind| {
+                kind.eq_ignore_ascii_case(effect) || text_filter_matches(kind, &params.effect)
+            })
+        })
+        && params.app.as_ref().is_none_or(|app| {
+            info.app
+                .as_deref()
+                .is_some_and(|kind| kind.eq_ignore_ascii_case(app))
+        })
+}
+
+fn classify_starbridge_app(memo: Option<&str>, effect_summaries: &[String]) -> Option<String> {
+    let mut haystack = memo.unwrap_or("").to_ascii_lowercase();
+    for effect in effect_summaries {
+        haystack.push(' ');
+        haystack.push_str(&effect.to_ascii_lowercase());
+    }
+
+    if haystack.contains("nameservice")
+        || haystack.contains("name service")
+        || haystack.contains("register name")
+    {
+        Some("nameservice".to_string())
+    } else if haystack.contains("identity")
+        || haystack.contains("credential")
+        || haystack.contains("profile")
+    {
+        Some("identity".to_string())
+    } else if haystack.contains("governance")
+        || haystack.contains("proposal")
+        || haystack.contains("vote")
+    {
+        Some("governance".to_string())
+    } else {
+        None
+    }
+}
+
+fn effect_kind(effect: &dregg_turn::Effect) -> String {
+    let debug = format!("{effect:?}");
+    debug
+        .split(|c: char| c == ' ' || c == '{' || c == '(')
+        .next()
+        .unwrap_or("Unknown")
+        .to_ascii_lowercase()
+}
+
+fn action_touched_cells(action: &dregg_turn::Action) -> Vec<String> {
+    let mut cells = HashSet::new();
+    cells.insert(hex_encode(&action.target.0));
+    for effect in &action.effects {
+        for cell in effect_cells(effect) {
+            cells.insert(cell);
+        }
+    }
+    let mut cells: Vec<String> = cells.into_iter().collect();
+    cells.sort();
+    cells
+}
+
+fn effect_cells(effect: &dregg_turn::Effect) -> Vec<String> {
+    use dregg_turn::Effect;
+
+    match effect {
+        Effect::SetField { cell, .. }
+        | Effect::RevokeCapability { cell, .. }
+        | Effect::IncrementNonce { cell }
+        | Effect::EmitEvent { cell, .. }
+        | Effect::MakeSovereign { cell }
+        | Effect::Refusal { cell, .. }
+        | Effect::AttenuateCapability { cell, .. } => vec![hex_encode(&cell.0)],
+        Effect::Transfer { from, to, .. }
+        | Effect::GrantCapability { from, to, .. }
+        | Effect::CreateSealPair {
+            sealer_holder: from,
+            unsealer_holder: to,
+        } => vec![hex_encode(&from.0), hex_encode(&to.0)],
+        Effect::SetPermissions { cell, .. } | Effect::SetVerificationKey { cell, .. } => {
+            vec![hex_encode(&cell.0)]
+        }
+        Effect::EnlivenRef {
+            bearer,
+            expected_cell_id,
+            ..
+        } => vec![hex_encode(&bearer.0), hex_encode(&expected_cell_id.0)],
+        Effect::ExportSturdyRef { target, .. }
+        | Effect::CellSeal { target, .. }
+        | Effect::CellUnseal { target }
+        | Effect::CellDestroy { target, .. }
+        | Effect::Burn { target, .. } => vec![hex_encode(&target.0)],
+        Effect::QueueEnqueue { queue, .. }
+        | Effect::QueueDequeue { queue }
+        | Effect::QueueResize { queue, .. } => vec![hex_encode(&queue.0)],
+        Effect::QueuePipelineStep { source, sinks, .. } => {
+            let mut cells = vec![hex_encode(&source.0)];
+            cells.extend(sinks.iter().map(|cell| hex_encode(&cell.0)));
+            cells
+        }
+        Effect::QueueAtomicTx { operations } => operations
+            .iter()
+            .map(|op| match op {
+                dregg_turn::QueueTxOp::Enqueue { queue, .. }
+                | dregg_turn::QueueTxOp::Dequeue { queue } => hex_encode(&queue.0),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn hex_decode(s: &str) -> Result<[u8; 32], ()> {

@@ -38,6 +38,10 @@
   gap: var(--s3);
   flex-wrap: wrap;
 }
+.sb__topbar-row[hidden],
+.sb [hidden] {
+  display: none !important;
+}
 .sb__brand {
   display: grid;
   gap: 1px;
@@ -504,7 +508,7 @@
 }
 .sb__workbench-status {
   display: grid;
-  grid-template-columns: minmax(180px, 1.5fr) repeat(4, minmax(92px, 1fr));
+  grid-template-columns: minmax(180px, 1.5fr) repeat(5, minmax(92px, 1fr));
   gap: var(--s2);
 }
 .sb__hero {
@@ -576,6 +580,16 @@
 }
 .sb__metric {
   padding: var(--s3);
+}
+.sb__metric--button {
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sb__metric--button:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .sb__metric strong {
   font-size: 1.45rem;

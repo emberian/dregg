@@ -191,6 +191,8 @@ function writeUrlState({ at, runtime }) {
   const blockCount = document.getElementById('sb-block-count');
   const activityListEl = document.getElementById('sb-activity-list');
   const activityCount = document.getElementById('sb-activity-count');
+  const outboxListEl = document.getElementById('sb-outbox-list');
+  const outboxCount = document.getElementById('sb-outbox-count');
   const simActions = document.getElementById('sb-sim-actions');
   const inspector  = document.getElementById('sb-inspector');
   const workspaceTitle = document.getElementById('sb-workspace-title');
@@ -299,6 +301,7 @@ function writeUrlState({ at, runtime }) {
       receipts: safeLen(() => runtime?.listReceipts?.().value || []),
       intents: safeLen(() => runtime?.listIntents?.().value || []),
       activities: safeLen(() => runtime?.getTraceEvents?.().value?.events || []),
+      outbox: safeLen(() => runtime?.getOutbox?.().value || []),
     };
   }
 
@@ -677,6 +680,7 @@ function writeUrlState({ at, runtime }) {
       { group: 'Workbench', label: 'Open activity', detail: 'Show runtime event feed', priority: 10, run: () => selectWorkbenchTool('activity') },
       { group: 'Workbench', label: 'Export snapshot', detail: 'Download runtime JSON snapshot', run: exportSnapshot },
       { group: 'Workbench', label: 'Inspect activity feed', detail: 'Open activity inspector URI', run: () => setCurrentUri('dregg://activity/feed') },
+      { group: 'Workbench', label: 'Inspect outbox', detail: 'Queued extension submissions', priority: 10, run: () => setCurrentUri('dregg://outbox/queue') },
     ];
 
     for (const snap of readSnapshots()) {
@@ -965,7 +969,7 @@ function writeUrlState({ at, runtime }) {
           ? 'node ledger required; extension stores keys/tokens/receipts'
           : 'remote node owns ledger state'],
       ['Offline queue', currentRuntimeId === 'extension'
-        ? 'not a durable turn outbox yet'
+        ? `${currentCounts().outbox} queued extension submission(s)`
         : currentRuntimeId === 'in-memory'
           ? 'local-only, not chain-synced'
           : 'read-only'],
@@ -1085,6 +1089,7 @@ function writeUrlState({ at, runtime }) {
         <div class="sb__metric"><span>Receipts</span><strong>${counts.receipts}</strong></div>
         <div class="sb__metric"><span>Intents</span><strong>${counts.intents}</strong></div>
         <div class="sb__metric"><span>Activity</span><strong>${counts.activities}</strong></div>
+        <button type="button" class="sb__metric sb__metric--button" data-uri="dregg://outbox/queue"><span>Outbox</span><strong>${counts.outbox}</strong></button>
       </section>
       <section class="sb__workbench-grid">
         <div class="sb__workbench-panel sb__workbench-panel--programs">
@@ -1117,6 +1122,11 @@ function writeUrlState({ at, runtime }) {
         <div class="sb__workbench-panel">
           <h3>Snapshots</h3>
           <div class="sb__snapshot-list">${snapshotsHtml}</div>
+        </div>
+        <div class="sb__workbench-panel">
+          <h3>Extension Outbox</h3>
+          <dregg-outbox uri="dregg://outbox/queue" mode="compact"></dregg-outbox>
+          <button type="button" class="sb__btn sb__btn--ghost sb__palette-inline" data-uri="dregg://outbox/queue">Open outbox inspector</button>
         </div>
         <div class="sb__workbench-panel">
           <h3>Direct Inspect</h3>
@@ -1322,6 +1332,18 @@ function writeUrlState({ at, runtime }) {
         uri: 'dregg://activity/feed',
         label: `${event.kind || event.event_type || 'event'} #${idx}`,
         title: JSON.stringify(event).slice(0, 180),
+      }),
+    });
+
+    bindSignalList({
+      listEl: outboxListEl,
+      countEl: outboxCount,
+      empty: currentRuntimeId === 'extension' ? 'outbox empty' : 'extension runtime only',
+      getSignal: () => runtime.getOutbox && runtime.getOutbox(),
+      map: (entry) => ({
+        uri: 'dregg://outbox/queue',
+        label: `${entry.status || 'pending'} · ${entry.label || entry.kind || entry.id}`,
+        title: `${entry.endpoint || ''} ${entry.lastError || ''}`,
       }),
     });
 
@@ -1543,7 +1565,7 @@ function writeUrlState({ at, runtime }) {
     switch (cmd.toLowerCase()) {
       case 'help':
       case '?':
-        consoleLog('commands: help, status, seed, transfer, fed, intent, app <id>, inspect <uri>, runtime <id>, raw, console, activity, clear, snapshot', 'ok');
+        consoleLog('commands: help, status, seed, transfer, fed, intent, app <id>, inspect <uri>, runtime <id>, raw, console, activity, outbox, clear, snapshot', 'ok');
         break;
       case 'status': {
         const counts = currentCounts();
@@ -1586,6 +1608,10 @@ function writeUrlState({ at, runtime }) {
       case 'activity':
       case 'events':
         selectWorkbenchTool('activity');
+        break;
+      case 'outbox':
+      case 'queue':
+        setCurrentUri('dregg://outbox/queue');
         break;
       case 'snapshot':
         exportSnapshot();

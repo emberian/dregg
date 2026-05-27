@@ -63,38 +63,44 @@ build_wasm() {
 # Step 2: Validate manifest
 # ---------------------------------------------------------------------------
 
-validate_manifest() {
-  echo "[3/4] Validating manifest.json..."
+validate_one_manifest() {
+  local manifest_path="$1"
+  local manifest_name="$2"
 
-  if [ ! -f "$SCRIPT_DIR/manifest.json" ]; then
-    echo "ERROR: manifest.json not found"
+  if [ ! -f "$manifest_path" ]; then
+    echo "ERROR: $manifest_name not found"
     exit 1
   fi
 
   # Check JSON is well-formed.
-  if ! python3 -c "import json; json.load(open('$SCRIPT_DIR/manifest.json'))" 2>/dev/null; then
-    if ! node -e "JSON.parse(require('fs').readFileSync('$SCRIPT_DIR/manifest.json','utf8'))" 2>/dev/null; then
-      echo "ERROR: manifest.json is not valid JSON"
+  if ! python3 -c "import json; json.load(open('$manifest_path'))" 2>/dev/null; then
+    if ! node -e "JSON.parse(require('fs').readFileSync('$manifest_path','utf8'))" 2>/dev/null; then
+      echo "ERROR: $manifest_name is not valid JSON"
       exit 1
     fi
   fi
 
   # Check required fields.
   local manifest_version
-  manifest_version=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/manifest.json')).get('manifest_version',''))" 2>/dev/null || echo "")
+  manifest_version=$(python3 -c "import json; print(json.load(open('$manifest_path')).get('manifest_version',''))" 2>/dev/null || echo "")
   if [ "$manifest_version" != "3" ]; then
-    echo "WARNING: manifest_version is not 3 (got: $manifest_version)"
+    echo "WARNING: $manifest_name manifest_version is not 3 (got: $manifest_version)"
   fi
 
   # Check no "type": "module" in background (Firefox compat).
-  if grep -q '"type".*:.*"module"' "$SCRIPT_DIR/manifest.json"; then
-    echo "ERROR: manifest.json contains \"type\": \"module\" in background — Firefox incompatible"
+  if grep -q '"type".*:.*"module"' "$manifest_path"; then
+    echo "ERROR: $manifest_name contains \"type\": \"module\" in background — Firefox incompatible"
     exit 1
   fi
+}
+
+validate_manifest() {
+  echo "[3/4] Validating manifests..."
+
+  validate_one_manifest "$SCRIPT_DIR/manifest.json" "manifest.json (Chrome)"
+  validate_one_manifest "$SCRIPT_DIR/manifest-firefox.json" "manifest-firefox.json (Firefox)"
 
   # Check all referenced files exist.
-  # P2-1: the manifest points to dist/* — validate those, not legacy root .js
-  # duplicates.
   local missing=0
   for file in dist/background.js dist/content.js dist/page.js popup.html dist/popup-script.js settings.html settings-script.js; do
     if [ ! -f "$SCRIPT_DIR/$file" ]; then
@@ -104,9 +110,9 @@ validate_manifest() {
   done
 
   if [ "$missing" -eq 0 ]; then
-    echo "  Manifest valid. All referenced files present."
+    echo "  Both manifests valid. All referenced files present."
   else
-    echo "  Manifest valid but $missing referenced file(s) missing."
+    echo "  Manifests valid but $missing referenced file(s) missing."
   fi
 }
 
@@ -119,12 +125,11 @@ package_extension() {
 
   mkdir -p "$DIST_DIR"
 
-  # Files to include in the package.
+  # Base files to include in every package.
   # P2-1: ship only the TS-compiled dist/ scripts for background/content/page/popup,
   # not the legacy root .js files. Static popup HTML + their dedicated JS still ship
   # from the root (they're not TS-built today).
-  local FILES=(
-    manifest.json
+  local BASE_FILES=(
     dist/background.js
     dist/content.js
     dist/page.js
@@ -149,30 +154,46 @@ package_extension() {
 
   # Add WASM files if they exist.
   if [ -f "$SCRIPT_DIR/dregg_wasm.js" ]; then
-    FILES+=(dregg_wasm.js)
+    BASE_FILES+=(dregg_wasm.js)
   fi
   if [ -f "$SCRIPT_DIR/dregg_wasm_bg.wasm" ]; then
-    FILES+=(dregg_wasm_bg.wasm)
+    BASE_FILES+=(dregg_wasm_bg.wasm)
   fi
 
   # Build the file list (only include files that actually exist).
   local EXISTING_FILES=()
-  for f in "${FILES[@]}"; do
+  for f in "${BASE_FILES[@]}"; do
     if [ -f "$SCRIPT_DIR/$f" ]; then
       EXISTING_FILES+=("$f")
     fi
   done
 
-  # Chrome: .zip
+  # --- Chrome package (.zip) ---
   local ZIP_NAME="dregg-cipherclerk-chrome.zip"
-  (cd "$SCRIPT_DIR" && zip -q -r "$DIST_DIR/$ZIP_NAME" "${EXISTING_FILES[@]}")
+  local CHROME_FILES=("${EXISTING_FILES[@]}")
+  CHROME_FILES+=(manifest.json)
+  (cd "$SCRIPT_DIR" && zip -q -r "$DIST_DIR/$ZIP_NAME" "${CHROME_FILES[@]}")
   local ZIP_SIZE
   ZIP_SIZE=$(wc -c < "$DIST_DIR/$ZIP_NAME" | tr -d ' ')
   echo "  Chrome package: $DIST_DIR/$ZIP_NAME ($ZIP_SIZE bytes)"
 
-  # Firefox: .xpi (same format as zip, different extension)
+  # --- Firefox package (.xpi) ---
+  # Use manifest-firefox.json renamed to manifest.json inside the package.
   local XPI_NAME="dregg-cipherclerk-firefox.xpi"
-  cp "$DIST_DIR/$ZIP_NAME" "$DIST_DIR/$XPI_NAME"
+  local XPI_DIR="$DIST_DIR/firefox-tmp-$$"
+  mkdir -p "$XPI_DIR"
+  for f in "${EXISTING_FILES[@]}"; do
+    if [ -f "$SCRIPT_DIR/$f" ]; then
+      # Preserve subdirectory structure (e.g. dist/)
+      local dir
+      dir=$(dirname "$f")
+      mkdir -p "$XPI_DIR/$dir"
+      cp "$SCRIPT_DIR/$f" "$XPI_DIR/$f"
+    fi
+  done
+  cp "$SCRIPT_DIR/manifest-firefox.json" "$XPI_DIR/manifest.json"
+  (cd "$XPI_DIR" && zip -q -r "$DIST_DIR/$XPI_NAME" .)
+  rm -rf "$XPI_DIR"
   echo "  Firefox package: $DIST_DIR/$XPI_NAME ($ZIP_SIZE bytes)"
 
   echo ""
