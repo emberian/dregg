@@ -336,7 +336,7 @@ pub struct ReplayWitnessBundle {
     /// Golden Vision recursive compression. `None` for legacy
     /// Silver-Vision-only chains; `Some` for chains produced with
     /// `recursive_compress = true`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub recursive_proof: Option<ReplayRecursiveProofVariant>,
 }
 

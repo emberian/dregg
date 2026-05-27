@@ -7386,8 +7386,9 @@ mod tests {
             (receipt.receipt_hash(), receipt)
         };
 
-        // This is the normal `/api/receipts/{hash}/witnesses` response shape:
-        // a receipt hash plus JSON-serializable witnessed receipt artifacts.
+        // This mirrors the normal `/api/receipts/{hash}/witnesses` response
+        // shape: legacy JSON remains present for display/debugging, but node to
+        // node import uses the canonical DWR1 artifacts.
         let exported = {
             let s = producer_state.read().await;
             let witnessed = s
@@ -7395,13 +7396,24 @@ mod tests {
                 .get(&receipt_hash)
                 .cloned()
                 .expect("producer storage must retain the witnessed receipt");
+            let witness_artifacts = witnessed
+                .iter()
+                .map(|w| {
+                    w.to_artifact_bytes()
+                        .map(|bytes| hex_encode(&bytes))
+                        .expect("witness artifact encodes")
+                })
+                .collect::<Vec<_>>();
             serde_json::json!({
                 "receipt_hash": hex_encode(&receipt_hash),
                 "witness_count": witnessed.len(),
+                "artifact_format": "DWR1",
+                "witness_artifacts": witness_artifacts,
                 "witnessed_receipts": witnessed,
             })
         };
         assert_eq!(exported["witness_count"], 1);
+        assert_eq!(exported["artifact_format"], "DWR1");
 
         let exported_hash = exported
             .get("receipt_hash")
@@ -7409,9 +7421,17 @@ mod tests {
             .and_then(|h| hex_decode(h).ok())
             .expect("exported receipt_hash must be 32-byte hex");
         assert_eq!(exported_hash, receipt_hash);
-        let imported_witnesses: Vec<dregg_turn::WitnessedReceipt> =
-            serde_json::from_value(exported["witnessed_receipts"].clone())
-                .expect("exported witnessed receipts must be importable JSON artifacts");
+        let imported_witnesses: Vec<dregg_turn::WitnessedReceipt> = exported["witness_artifacts"]
+            .as_array()
+            .expect("canonical witness_artifacts array")
+            .iter()
+            .map(|artifact| {
+                let artifact_hex = artifact.as_str().expect("artifact hex");
+                let artifact_bytes = hex_decode_var(artifact_hex).expect("artifact hex decodes");
+                dregg_turn::WitnessedReceipt::from_artifact_bytes(&artifact_bytes)
+                    .expect("DWR1 witness artifact decodes")
+            })
+            .collect();
         assert_eq!(imported_witnesses.len(), 1);
 
         {
