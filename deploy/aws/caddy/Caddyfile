@@ -77,6 +77,14 @@ devnet.dregg.fg-goose.online, dregg.fg-goose.online {
         file_server
     }
 
+    # Starbridge app shell (single built page; support /starbridge and /starbridge/)
+    @starbridge_shell path /starbridge /starbridge/
+    handle @starbridge_shell {
+        root * /opt/dregg/site/dist
+        try_files /starbridge.html
+        file_server
+    }
+
     # Built site root
     handle {
         root * /opt/dregg/site/dist

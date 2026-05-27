@@ -396,6 +396,11 @@ function startEventStream() {
   if (eventSocket) eventSocket.close();
   if (eventReconnectTimer) clearTimeout(eventReconnectTimer);
 
+  if (!api.getAdminToken()) {
+    eventSocket = null;
+    return;
+  }
+
   try {
     eventSocket = new WebSocket(api.getNodeWsUrl());
   } catch (err) {
@@ -504,6 +509,13 @@ export async function boot() {
   statusBarMod.init();
   searchMod.init();
   authDialogMod.init();
+  window.addEventListener('dregg:admin-token-changed', () => {
+    if (api.getAdminToken()) startEventStream();
+    else if (eventSocket) {
+      eventSocket.close();
+      eventSocket = null;
+    }
+  });
 
   // Load tweaker modules (they register themselves)
   await Promise.all([
