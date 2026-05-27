@@ -275,13 +275,12 @@ class DreggAppList extends HTMLElement {
         <div class="dregg-app-list__name">${escapeHtml(app.name)}${status}</div>
         <div class="dregg-app-list__desc">${escapeHtml(app.description)}</div>
         <div class="dregg-app-list__actions">
-          <button data-act="open" type="button"${unported ? ' disabled' : ''}>Open in workspace</button>
+          <button data-act="open" type="button">${unported ? 'Open migration' : 'Open in workspace'}</button>
           ${standalone}
         </div>
       `;
       const btn = card.querySelector('[data-act=open]');
       btn?.addEventListener('click', () => {
-        if (unported) return;
         this.dispatchEvent(new CustomEvent('app-open', {
           bubbles: true,
           detail: { app }

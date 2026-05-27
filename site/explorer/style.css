@@ -686,6 +686,12 @@ button { font-family: inherit; cursor: pointer; }
   color: var(--lantern);
   margin-left: auto;
 }
+.receipt-item__proofs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
 .receipt-item__states {
   display: flex;
   gap: 20px;
@@ -711,6 +717,18 @@ button { font-family: inherit; cursor: pointer; }
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+.receipt-item__witnesses {
+  margin: 12px 0 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
 }
 .ex-starbridge-link {
   display: inline-flex;

@@ -101,6 +101,7 @@ pub mod names;
 pub mod privacy;
 pub mod runtime;
 pub mod verify;
+pub mod witness_artifact;
 pub mod wordlist;
 
 /// Legacy module name for the cipherclerk surface.
@@ -146,7 +147,7 @@ pub use cipherclerk::AgentCipherclerk as AgentCClerk;
 pub use dregg_cell::{CellId, Ledger};
 pub use dregg_circuit::{BabyBear, IvcProof, verify_ivc};
 pub use dregg_token::{Attenuation, AuthRequest, AuthToken};
-pub use dregg_turn::{Effect, QueueTxOp, Turn, TurnBuilder, TurnReceipt};
+pub use dregg_turn::{Effect, QueueTxOp, Turn, TurnBuilder, TurnReceipt, WitnessedReceipt};
 pub use dregg_turn::{
     VerifyError, verify_receipt_chain, verify_receipt_chain_head, verify_receipt_extends,
 };
@@ -198,6 +199,10 @@ pub use verify::{
     build_federation_tree, verify_authorization_proof, verify_committed_threshold,
     verify_disclosure_presentation, verify_production, verify_selective_disclosure,
     verify_selective_presentation, verify_validated_ivc_proof,
+};
+pub use witness_artifact::{
+    WITNESSED_RECEIPT_ARTIFACT_FORMAT, decode_witnessed_receipt_artifact,
+    decode_witnessed_receipt_artifact_hex, encode_witnessed_receipt_artifact,
 };
 
 // Re-export proof tier types for downstream use.

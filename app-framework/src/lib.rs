@@ -126,8 +126,8 @@ pub use cipherclerk::AppCipherclerk as AppCClerk;
 // Re-export common action / effect types so apps build effects through
 // the framework rather than reaching into `dregg_turn` directly.
 pub use dregg_cell::state::FieldElement;
-pub use dregg_turn::Turn;
 pub use dregg_turn::action::{Action, Authorization, DelegationMode, Effect, Event, symbol};
+pub use dregg_turn::{Turn, WitnessedReceipt};
 
 // Re-export the SDK cipherclerk at the framework root so applications
 // that need to *construct* one (typically in `main`) don't have to add
@@ -135,6 +135,10 @@ pub use dregg_turn::action::{Action, Authorization, DelegationMode, Effect, Even
 // reach for [`AppCipherclerk`] (the narrow handle), not
 // [`AgentCipherclerk`].
 pub use dregg_sdk::AgentCipherclerk;
+pub use dregg_sdk::{
+    WITNESSED_RECEIPT_ARTIFACT_FORMAT, decode_witnessed_receipt_artifact,
+    decode_witnessed_receipt_artifact_hex, encode_witnessed_receipt_artifact,
+};
 
 /// Legacy alias for [`AgentCipherclerk`], re-exported from the SDK.
 // pub use dregg_sdk::AgentCipherclerk as AgentCipherclerk; // already re-exported above

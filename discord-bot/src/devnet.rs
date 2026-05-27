@@ -133,6 +133,10 @@ struct ReceiptInfo {
     pub finality: String,
     pub has_proof: bool,
     pub executor_signed: bool,
+    #[serde(default)]
+    pub has_witness: bool,
+    #[serde(default)]
+    pub witness_count: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -510,7 +514,16 @@ impl DevnetClient {
             fee: receipt.computrons_used,
             result: receipt.finality,
             proof_type: if receipt.executor_signed || receipt.has_proof {
-                "executor-signed receipt".to_string()
+                if receipt.has_witness {
+                    format!(
+                        "executor-signed receipt, {} witness artifact(s)",
+                        receipt.witness_count
+                    )
+                } else {
+                    "executor-signed receipt".to_string()
+                }
+            } else if receipt.has_witness {
+                format!("receipt, {} witness artifact(s)", receipt.witness_count)
             } else {
                 "receipt".to_string()
             },
@@ -574,7 +587,7 @@ impl DevnetClient {
                     kind: "cell".to_string(),
                     id: cell.id.clone(),
                     summary: format!(
-                        "balance {} PYN, nonce {}, {} capability(s)",
+                        "balance {} DEC, nonce {}, {} capability(s)",
                         cell.balance, cell.nonce, cell.capability_count
                     ),
                 });
@@ -590,10 +603,15 @@ impl DevnetClient {
                     kind: "turn".to_string(),
                     id: receipt.turn_hash.clone(),
                     summary: format!(
-                        "{} action(s), {}, chain index {}{}",
+                        "{} action(s), {}, chain index {}{}{}",
                         receipt.action_count,
                         receipt.finality,
                         receipt.chain_index,
+                        if receipt.has_witness {
+                            format!(", {} witness(es)", receipt.witness_count)
+                        } else {
+                            String::new()
+                        },
                         if receipt.chain_head { " (head)" } else { "" }
                     ),
                 });

@@ -32,15 +32,17 @@ function renderTurnsFromReceipts(receipts) {
   }
   container.innerHTML = `
     <table class="ex-table">
-      <thead><tr><th>Turn Hash</th><th>Computrons</th><th>Time</th><th>Auth</th><th>Proof</th><th>Status</th></tr></thead>
+      <thead><tr><th>Turn Hash</th><th>Receipt</th><th>Computrons</th><th>Time</th><th>Auth</th><th>Proof</th><th>Witness</th><th>Status</th></tr></thead>
       <tbody>
         ${receipts.map(r => `
           <tr data-turn-hash="${r.turn_hash}">
             <td class="cell-hash">${api.shortHash(r.turn_hash, 10, 6)}</td>
+            <td class="cell-hash">${api.shortHash(r.receipt_hash, 10, 6)}</td>
             <td class="cell-number">${api.formatNumber(r.computrons_used)}</td>
             <td>${api.relativeTime(r.timestamp)}</td>
             <td>${r.bearer_auth ? '<span class="cell-badge cell-badge--info">bearer</span>' : '<span class="cell-badge cell-badge--hosted">sig</span>'}</td>
-            <td>${r.has_proof ? '<span class="cell-badge cell-badge--success">ZK</span>' : '--'}</td>
+            <td>${r.executor_signed ? '<span class="cell-badge cell-badge--success">executor</span>' : '--'}</td>
+            <td>${r.has_witness ? `<span class="cell-badge cell-badge--success">${r.witness_count || 0}</span>` : '<span class="cell-badge cell-badge--info">0</span>'}</td>
             <td><span class="cell-badge cell-badge--success">committed</span></td>
           </tr>
         `).join('')}
@@ -75,6 +77,8 @@ function renderTurnDetail(receipt) {
     <div class="detail-grid">
       <span class="detail-grid__label">Turn Hash</span>
       <span class="detail-grid__value detail-grid__value--hash">${receipt.turn_hash}</span>
+      <span class="detail-grid__label">Receipt Hash</span>
+      <span class="detail-grid__value detail-grid__value--hash">${receipt.receipt_hash}</span>
       <span class="detail-grid__label">Computrons</span>
       <span class="detail-grid__value detail-grid__value--highlight">${api.formatNumber(receipt.computrons_used)}</span>
       <span class="detail-grid__label">Pre-State</span>
@@ -86,7 +90,9 @@ function renderTurnDetail(receipt) {
       <span class="detail-grid__label">Auth Mode</span>
       <span class="detail-grid__value">${receipt.bearer_auth ? '<span class="cell-badge cell-badge--info">bearer</span>' : '<span class="cell-badge cell-badge--hosted">signature</span>'}</span>
       <span class="detail-grid__label">Proof</span>
-      <span class="detail-grid__value">${receipt.has_proof ? '<span class="cell-badge cell-badge--success">proof-carrying</span>' : 'none'}</span>
+      <span class="detail-grid__value">${receipt.executor_signed ? '<span class="cell-badge cell-badge--success">executor-signed receipt</span>' : 'none'}</span>
+      <span class="detail-grid__label">Witness Artifacts</span>
+      <span class="detail-grid__value">${receipt.has_witness ? `<span class="cell-badge cell-badge--success">${receipt.witness_count || 0} stored</span>` : '<span class="cell-badge cell-badge--info">none stored</span>'}</span>
     </div>
   `;
   document.getElementById('turn-detail-close').onclick = () => panel.hidden = true;

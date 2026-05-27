@@ -39,7 +39,7 @@ pub fn register() -> CreateCommand {
                 .required(true),
             )
             .add_sub_option(
-                CreateCommandOption::new(CommandOptionType::Integer, "amount", "Bid amount in PYN")
+                CreateCommandOption::new(CommandOptionType::Integer, "amount", "Bid amount in DEC")
                     .required(true)
                     .min_int_value(1),
             ),
@@ -127,7 +127,7 @@ async fn handle_auctions(ctx: &Context, command: &CommandInteraction, state: &Bo
                     .map(|b| format!("`{}...`", &b[..16.min(b.len())]))
                     .unwrap_or_else(|| "No bids yet".to_string());
                 description.push_str(&format!(
-                    "**{}** (ID: `{}`)\nCurrent: {} PYN | Top: {}\nEnds: {}\n\n",
+                    "**{}** (ID: `{}`)\nCurrent: {} DEC | Top: {}\nEnds: {}\n\n",
                     auction.title, auction.id, auction.current_bid, bidder_str, auction.ends_at,
                 ));
             }
@@ -214,7 +214,7 @@ async fn handle_bid(ctx: &Context, command: &CommandInteraction, state: &BotStat
         Ok(()) => {
             let embed = embeds::success_embed("Bid Placed")
                 .field("Auction", format!("`{auction_id}`"), true)
-                .field("Amount", format!("{amount} PYN"), true);
+                .field("Amount", format!("{amount} DEC"), true);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
                 .await;
@@ -268,7 +268,7 @@ async fn handle_mybids(ctx: &Context, command: &CommandInteraction, state: &BotS
             let mut description = String::new();
             for bid in &bids {
                 description.push_str(&format!(
-                    "**{}** — {} PYN ({})\nAuction: `{}`\n\n",
+                    "**{}** — {} DEC ({})\nAuction: `{}`\n\n",
                     bid.title, bid.amount, bid.status, bid.auction_id
                 ));
             }

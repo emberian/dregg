@@ -14,7 +14,7 @@ use crate::embeds;
 /// Register the /send command.
 pub fn register_send() -> CreateCommand {
     CreateCommand::new("send")
-        .description("Send PYN tokens to another user")
+        .description("Send DEC tokens to another user")
         .add_option(
             CreateCommandOption::new(CommandOptionType::User, "user", "Recipient").required(true),
         )
@@ -22,7 +22,7 @@ pub fn register_send() -> CreateCommand {
             CreateCommandOption::new(
                 CommandOptionType::Integer,
                 "amount",
-                "Amount of PYN to send",
+                "Amount of DEC to send",
             )
             .required(true)
             .min_int_value(1),
@@ -32,12 +32,12 @@ pub fn register_send() -> CreateCommand {
 /// Register the /tip command.
 pub fn register_tip() -> CreateCommand {
     CreateCommand::new("tip")
-        .description("Tip PYN tokens to another user")
+        .description("Tip DEC tokens to another user")
         .add_option(
             CreateCommandOption::new(CommandOptionType::User, "user", "Recipient").required(true),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::Integer, "amount", "Amount of PYN to tip")
+            CreateCommandOption::new(CommandOptionType::Integer, "amount", "Amount of DEC to tip")
                 .required(true)
                 .min_int_value(1),
         )
@@ -175,7 +175,7 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
 
             let embed = embeds::success_embed("Transfer Sent")
                 .field("To", format!("<@{recipient_id}>"), true)
-                .field("Amount", format!("{amount} PYN"), true)
+                .field("Amount", format!("{amount} DEC"), true)
                 .field(
                     "Tx Hash",
                     format!("`{}...`", &tx_hash[..16.min(tx_hash.len())]),

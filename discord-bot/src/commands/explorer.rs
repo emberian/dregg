@@ -272,7 +272,7 @@ async fn handle_cell(ctx: &Context, command: &CommandInteraction, state: &BotSta
             let embed = embeds::dregg_embed("Cell Details")
                 .field("Cell ID", format!("`{short_id}...`"), false)
                 .field("Mode", &cell.mode, true)
-                .field("Balance", format!("{} PYN", cell.balance), true)
+                .field("Balance", format!("{} DEC", cell.balance), true)
                 .field("Nonce", cell.nonce.to_string(), true)
                 .field("Capabilities", cell.capabilities_count.to_string(), true)
                 .field("Program VK", format!("`{short_vk}`"), true)
@@ -331,7 +331,7 @@ async fn handle_turn(ctx: &Context, command: &CommandInteraction, state: &BotSta
             let embed = embeds::dregg_embed("Turn Details")
                 .field("Hash", format!("`{short_hash}...`"), false)
                 .field("Signer", format!("`{short_signer}...`"), true)
-                .field("Fee", format!("{} PYN", turn.fee), true)
+                .field("Fee", format!("{} DEC", turn.fee), true)
                 .field("Result", &turn.result, true)
                 .field("Proof Type", &turn.proof_type, true)
                 .field(
@@ -512,7 +512,7 @@ async fn handle_factory(ctx: &Context, command: &CommandInteraction, state: &Bot
                 .field("Descriptor", &factory.descriptor, false)
                 .field(
                     "Creation Budget",
-                    format!("{} PYN", factory.creation_budget),
+                    format!("{} DEC", factory.creation_budget),
                     true,
                 )
                 .field("Cells Created", factory.cells_created.to_string(), true)

@@ -42,9 +42,17 @@ if ! jq -e 'type == "array"' >/dev/null <<<"$receipts"; then
   echo "node /api/receipts did not return a JSON array: $receipts" >&2
   exit 1
 fi
-if ! jq -e 'all(.[]; (.receipt_hash | type == "string" and length == 64) and (.turn_hash | type == "string" and length == 64) and (.chain_index | type == "number") and (.chain_head | type == "boolean"))' >/dev/null <<<"$receipts"; then
-  echo "node /api/receipts returned entries without chain/hash fields: $receipts" >&2
+if ! jq -e 'all(.[]; (.receipt_hash | type == "string" and length == 64) and (.turn_hash | type == "string" and length == 64) and (.chain_index | type == "number") and (.chain_head | type == "boolean") and (.has_witness | type == "boolean") and (.witness_count | type == "number"))' >/dev/null <<<"$receipts"; then
+  echo "node /api/receipts returned entries without chain/hash/witness fields: $receipts" >&2
   exit 1
+fi
+head_receipt="$(jq -r 'map(select(.chain_head == true)) | .[0].receipt_hash // empty' <<<"$receipts")"
+if [[ -n "$head_receipt" ]]; then
+  witnesses="$(curl -fsS "$NODE_URL/api/receipts/$head_receipt/witnesses")"
+  if ! jq -e '(.receipt_hash | type == "string" and length == 64) and (.witness_count | type == "number") and (.witnessed_receipts | type == "array")' >/dev/null <<<"$witnesses"; then
+    echo "node receipt witness endpoint returned an unexpected shape: $witnesses" >&2
+    exit 1
+  fi
 fi
 
 echo "checking node activity event surface..."
@@ -53,7 +61,7 @@ if ! jq -e 'type == "array"' >/dev/null <<<"$events"; then
   echo "node /api/events did not return a JSON array: $events" >&2
   exit 1
 fi
-if ! jq -e 'all(.[]; (.height | type == "number") and (.turn_hash | type == "string") and (.cell_id | type == "string") and (.effects | type == "array") and (.timestamp | type == "number"))' >/dev/null <<<"$events"; then
+if ! jq -e 'all(.[]; (.height | type == "number") and (.turn_hash | type == "string") and (.cell_id | type == "string") and (.effects | type == "array") and (.timestamp | type == "number") and (.proof_status | type == "string"))' >/dev/null <<<"$events"; then
   echo "node /api/events returned entries without committed-event fields: $events" >&2
   exit 1
 fi

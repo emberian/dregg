@@ -1467,7 +1467,11 @@ async fn get_receipt_witnesses(
         .unwrap_or_default();
     let witness_artifacts = witnessed
         .iter()
-        .map(|witness| witness.to_artifact_bytes().map(|bytes| hex_encode_var(&bytes)))
+        .map(|witness| {
+            witness
+                .to_artifact_bytes()
+                .map(|bytes| hex_encode_var(&bytes))
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({
@@ -5945,7 +5949,10 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/receipts/{}/witnesses", hex_encode(&receipt_hash)))
+                    .uri(format!(
+                        "/api/receipts/{}/witnesses",
+                        hex_encode(&receipt_hash)
+                    ))
                     .body(Body::empty())
                     .expect("request"),
             )
@@ -5969,9 +5976,7 @@ mod tests {
                 .len(),
             1
         );
-        let artifact_hex = json["witness_artifacts"][0]
-            .as_str()
-            .expect("artifact hex");
+        let artifact_hex = json["witness_artifacts"][0].as_str().expect("artifact hex");
         let artifact_bytes = hex_decode_var(artifact_hex).expect("valid artifact hex");
         let decoded = dregg_turn::WitnessedReceipt::from_artifact_bytes(&artifact_bytes)
             .expect("DWR1 witness artifact decodes");

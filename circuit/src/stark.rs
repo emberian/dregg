@@ -3372,9 +3372,9 @@ mod tests {
     #[test]
     fn deserialization_rejects_invalid_header() {
         assert!(proof_from_bytes(b"").is_err());
-        assert!(proof_from_bytes(b"PYNX\x01").is_err()); // wrong magic
+        assert!(proof_from_bytes(b"DECX\x01").is_err()); // wrong magic
         assert!(proof_from_bytes(b"DREG\x03").is_err()); // wrong version
-        assert!(proof_from_bytes(b"PYN").is_err()); // too short
+        assert!(proof_from_bytes(b"DEC").is_err()); // too short
     }
 
     #[test]

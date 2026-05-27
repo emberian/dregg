@@ -152,7 +152,7 @@ async fn handle_balance(ctx: &Context, command: &CommandInteraction, state: &Bot
     match state.devnet.get_balance(&cell_id).await {
         Ok(balance) => {
             let embed = embeds::dregg_embed("Cipherclerk Balance")
-                .field("Balance", format!("{balance} PYN"), true)
+                .field("Balance", format!("{balance} DEC"), true)
                 .field("Cell ID", format!("`{}...`", &cell_id[..16]), true);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))

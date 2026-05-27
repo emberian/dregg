@@ -1140,7 +1140,12 @@ function writeUrlState({ at, runtime }) {
       return;
     }
     setSurfaceCurrent(parsed.kind === 'activity' ? 'activity' : 'workbench');
-    const tagName = `dregg-${parsed.kind}`;
+    const inspectorAliases = {
+      token: 'attenuated-token',
+      queue: 'programmable-queue',
+    };
+    const inspectorKind = inspectorAliases[parsed.kind] || parsed.kind;
+    const tagName = `dregg-${inspectorKind}`;
     if (!customElements.get(tagName)) {
       const err = document.createElement('div');
       err.className = 'sb__inspector-empty';
@@ -1149,7 +1154,7 @@ function writeUrlState({ at, runtime }) {
       return;
     }
     const el = document.createElement(tagName);
-    el.setAttribute('uri', uri);
+    el.setAttribute('uri', inspectorKind === parsed.kind ? uri : `dregg://${inspectorKind}/${parsed.id}${parsed.sub?.length ? `/${parsed.sub.join('/')}` : ''}`);
     inspector.appendChild(el);
   }
 

@@ -35,11 +35,16 @@ function renderReceiptChain(receipts) {
     return;
   }
   container.innerHTML = receipts.map(r => `
-    <div class="receipt-item" data-receipt-hash="${r.turn_hash}">
+    <div class="receipt-item" data-receipt-hash="${r.receipt_hash}" data-turn-hash="${r.turn_hash}">
       <div class="receipt-item__header">
-        <span class="receipt-item__hash">${api.shortHash(r.turn_hash, 12, 6)}</span>
+        <span class="receipt-item__hash">${api.shortHash(r.receipt_hash, 12, 6)}</span>
         <span class="receipt-item__time">${api.formatTime(r.timestamp)}</span>
         <span class="receipt-item__computrons">${api.formatNumber(r.computrons_used)} computrons</span>
+      </div>
+      <div class="receipt-item__proofs">
+        <span class="cell-badge ${r.executor_signed ? 'cell-badge--success' : 'cell-badge--hosted'}">${r.executor_signed ? 'executor signed' : 'unsigned'}</span>
+        <span class="cell-badge ${r.has_witness ? 'cell-badge--success' : 'cell-badge--info'}">${r.witness_count || 0} witness${(r.witness_count || 0) === 1 ? '' : 'es'}</span>
+        <span class="cell-badge cell-badge--info">${r.finality || 'unknown'}</span>
       </div>
       <div class="receipt-item__states">
         <div class="receipt-item__state">
@@ -52,18 +57,41 @@ function renderReceiptChain(receipts) {
         </div>
       </div>
       <div class="receipt-item__actions">
-        <a class="ex-starbridge-link" href="${starbridgeHref(`dregg://receipt/${r.turn_hash}`)}">Open receipt in Starbridge</a>
+        <a class="ex-starbridge-link" href="${starbridgeHref(`dregg://receipt/${r.receipt_hash}`)}">Open receipt in Starbridge</a>
         <a class="ex-starbridge-link" href="${starbridgeHref(`dregg://turn/${r.turn_hash}`)}">Debug turn</a>
+        <button class="ex-starbridge-link receipt-witness-button" type="button" data-witness-hash="${r.receipt_hash}">Inspect witnesses</button>
       </div>
+      <pre class="receipt-item__witnesses" data-witness-panel="${r.receipt_hash}" hidden></pre>
     </div>
   `).join('');
+  container.querySelectorAll('.receipt-witness-button').forEach(button => {
+    button.addEventListener('click', () => inspectWitnesses(button.dataset.witnessHash));
+  });
   if (focusedReceiptHash) setTimeout(() => focusReceipt(focusedReceiptHash), 0);
 }
 
 function focusReceipt(hash) {
   focusedReceiptHash = hash;
-  const item = document.querySelector(`[data-receipt-hash="${hash}"]`);
+  const item = document.querySelector(`[data-receipt-hash="${hash}"], [data-turn-hash="${hash}"]`);
   if (!item) return;
   item.classList.add('highlighted');
   item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function inspectWitnesses(receiptHash) {
+  const panel = document.querySelector(`[data-witness-panel="${receiptHash}"]`);
+  if (!panel) return;
+  panel.hidden = false;
+  panel.textContent = 'Loading witnessed receipt artifacts...';
+  try {
+    const payload = await api.getReceiptWitnesses(receiptHash);
+    panel.textContent = JSON.stringify({
+      receipt_hash: payload.receipt_hash,
+      witness_count: payload.witness_count,
+      artifact_format: 'node /api/receipts/{hash}/witnesses',
+      witnessed_receipts: payload.witnessed_receipts,
+    }, null, 2);
+  } catch (err) {
+    panel.textContent = `Unable to load witnesses: ${err.message}`;
+  }
 }

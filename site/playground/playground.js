@@ -127,8 +127,8 @@ const PLAYGROUND_SCENARIOS = [
     id: 'foundations',
     label: 'Foundations',
     lede: 'Core browser-local primitives: tokens, proofs, commitments, policy, notes, and delegation.',
-    starbridgeHref: '/starbridge/?at=dregg://token/demo',
-    starbridgeLabel: 'Open token demo in Starbridge',
+    starbridgeHref: '/starbridge/?at=dregg://attenuated-token/demo',
+    starbridgeLabel: 'Open token inspector in Starbridge',
     sections: ['overview', 'tokens', 'proofs', 'merkle', 'datalog', 'notes', 'capabilities'],
   },
   {
@@ -159,8 +159,8 @@ const PLAYGROUND_SCENARIOS = [
     id: 'queues',
     label: 'Queues',
     lede: 'Queue, inbox, ring-trade, and batch execution demos with their own visualizers.',
-    starbridgeHref: '/starbridge/?at=dregg://queue/demo',
-    starbridgeLabel: 'Open queue demo in Starbridge',
+    starbridgeHref: '/starbridge/?at=dregg://programmable-queue/demo',
+    starbridgeLabel: 'Open queue inspector in Starbridge',
     sections: ['blinded-queues', 'programmable-queues', 'ring-trades', 'inboxes', 'batch-executor'],
   },
 ];

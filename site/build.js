@@ -229,6 +229,36 @@ function buildCss() {
   writeDist('assets/style.css', applyBasePath(result.code.toString()));
 }
 
+function sha256File(file) {
+  const { createHash } = require('crypto');
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+function fileInfo(rel) {
+  const file = path.join(DIST, rel);
+  if (!fs.existsSync(file)) {
+    throw new Error(`required artifact missing from dist: ${rel}`);
+  }
+  return {
+    bytes: fs.statSync(file).size,
+    sha256: sha256File(file),
+  };
+}
+
+function writeArtifactsManifest() {
+  const manifest = {
+    schema: 'dregg-web-artifacts-v1',
+    built_at: new Date().toISOString(),
+    artifacts: {
+      'pkg/dregg_wasm.js': fileInfo('pkg/dregg_wasm.js'),
+      'pkg/dregg_wasm_bg.wasm': fileInfo('pkg/dregg_wasm_bg.wasm'),
+      'extension/dregg-cipherclerk.zip': fileInfo('extension/dregg-cipherclerk.zip'),
+      'extension/dregg-cipherclerk-firefox.xpi': fileInfo('extension/dregg-cipherclerk-firefox.xpi'),
+    },
+  };
+  writeDist('artifacts-manifest.json', `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 function build() {
   console.log('Building Dragon\'s Egg site...\n');
 
@@ -376,6 +406,9 @@ function build() {
   } else {
     console.log('  Skip: @dregg/sdk (no dist/ yet; run `cd sdk-ts && npm run build`)');
   }
+
+  console.log('  Build: artifacts-manifest.json');
+  writeArtifactsManifest();
 
   console.log('\nDone.');
 }

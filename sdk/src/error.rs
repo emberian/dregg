@@ -73,6 +73,10 @@ pub enum SdkError {
     #[error("invalid witness: {0}")]
     InvalidWitness(String),
 
+    /// A witnessed receipt artifact could not be encoded or decoded.
+    #[error("witness artifact error: {0}")]
+    WitnessArtifact(String),
+
     /// The caveat chain hash does not match the decoded token's caveats.
     ///
     /// This indicates the encoded token's caveats were mutated after delegation.

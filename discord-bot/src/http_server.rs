@@ -360,7 +360,7 @@ async fn recent_receipts(
             timestamp: tx.timestamp.to_string(),
             cell_id: None,
             summary: format!(
-                "transfer {} PYN from Discord user {} to {}",
+                "transfer {} DEC from Discord user {} to {}",
                 tx.amount, tx.from_user, tx.to_user
             ),
         })

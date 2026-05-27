@@ -1521,7 +1521,7 @@ fn materialize_blocklace_artifacts(
     }
 
     for (idx, witnessed_bytes) in bundle.witnessed_receipts.iter().enumerate() {
-        match decode_blocklace_artifact::<dregg_turn::WitnessedReceipt>(witnessed_bytes) {
+        match decode_blocklace_witnessed_receipt_artifact(witnessed_bytes) {
             Ok(witnessed) if witnessed.receipt.receipt_hash() == local_receipt_hash => {
                 match witnessed.require_scope2_witness() {
                     Ok(()) => state.push_witnessed_receipt(local_receipt_hash, witnessed),
@@ -1569,6 +1569,16 @@ where
     postcard::from_bytes(bytes)
         .map_err(|e| e.to_string())
         .or_else(|_| serde_json::from_slice(bytes).map_err(|e| e.to_string()))
+}
+
+fn decode_blocklace_witnessed_receipt_artifact(
+    bytes: &[u8],
+) -> Result<dregg_turn::WitnessedReceipt, String> {
+    dregg_turn::WitnessedReceipt::from_artifact_bytes(bytes).or_else(|dwr1_err| {
+        decode_blocklace_artifact::<dregg_turn::WitnessedReceipt>(bytes).map_err(|legacy_err| {
+            format!("DWR1 decode failed ({dwr1_err}); legacy decode failed ({legacy_err})")
+        })
+    })
 }
 
 #[cfg(test)]
@@ -1623,15 +1633,18 @@ mod tests {
             signed_turn: b"signed-turn".to_vec(),
             receipt: Some(serde_json::to_vec(&receipt).expect("receipt encodes")),
             witnessed_receipts: vec![
-                serde_json::to_vec(&witnessed).expect("witness encodes"),
-                serde_json::to_vec(&mismatched_witnessed).expect("witness encodes"),
+                witnessed.to_artifact_bytes().expect("DWR1 witness encodes"),
+                mismatched_witnessed
+                    .to_artifact_bytes()
+                    .expect("DWR1 witness encodes"),
             ],
         };
         let decoded_receipt: dregg_turn::TurnReceipt =
             decode_blocklace_artifact(bundle.receipt.as_ref().unwrap()).expect("receipt decodes");
         assert_eq!(decoded_receipt.receipt_hash(), receipt_hash);
         let decoded_witnessed: dregg_turn::WitnessedReceipt =
-            decode_blocklace_artifact(&bundle.witnessed_receipts[0]).expect("witness decodes");
+            decode_blocklace_witnessed_receipt_artifact(&bundle.witnessed_receipts[0])
+                .expect("witness decodes");
         assert_eq!(decoded_witnessed.receipt.receipt_hash(), receipt_hash);
 
         let mut guard = state.write().await;
@@ -1669,7 +1682,7 @@ mod tests {
             receipt: Some(serde_json::to_vec(&wrong_previous).expect("receipt encodes")),
             witnessed_receipts: vec![
                 b"not-a-witness".to_vec(),
-                serde_json::to_vec(&no_scope2).expect("witness encodes"),
+                no_scope2.to_artifact_bytes().expect("DWR1 witness encodes"),
             ],
         };
 
@@ -1691,7 +1704,7 @@ mod tests {
             receipt: None,
             witnessed_receipts: vec![
                 b"not-a-witness".to_vec(),
-                serde_json::to_vec(&no_scope2).expect("witness encodes"),
+                no_scope2.to_artifact_bytes().expect("DWR1 witness encodes"),
             ],
         };
         let evidence =

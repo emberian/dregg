@@ -55,6 +55,12 @@ The update script refuses to deploy over local or untracked changes. It fetches
 `dregg-discord-bot`, restarts both systemd services, updates Caddy when needed,
 and runs `deploy/aws/preflight-discord-bot.sh`.
 
+Preflight treats the explorer/devnet artifact contract as part of deployment:
+node receipts must expose `receipt_hash`, `turn_hash`, `has_witness`, and
+`witness_count`; `/api/receipts/{hash}/witnesses` must return a
+`witnessed_receipts` array; committed activity events must expose
+`proof_status`.
+
 ## Static Site Artifacts
 
 The public site is served from `site/dist`, not raw `site/` sources. Build the
@@ -92,6 +98,34 @@ sudo journalctl -u caddy -f
 # Health check
 curl https://devnet.dregg.fg-goose.online/status
 ```
+
+## Devnet Smoke
+
+After an update, run the coordinator smoke from the checkout to verify the
+browser/devnet surface and a deterministic turn path:
+
+```bash
+cd /opt/dregg
+scripts/devnet-smoke.sh \
+  --skip-build \
+  --node-url http://127.0.0.1:8420 \
+  --site-url https://devnet.dregg.fg-goose.online
+```
+
+For the public endpoint:
+
+```bash
+scripts/devnet-smoke.sh \
+  --skip-build \
+  --node-url https://devnet.dregg.fg-goose.online \
+  --site-url https://devnet.dregg.fg-goose.online
+```
+
+The smoke checks node health, cells, receipts, events, explorer/starbridge
+assets, submits one HTTP turn, confirms the receipt/event is explorer-visible,
+and queries the receipt witness endpoint. Use `--expect-witness` for lanes that
+must produce persisted witnessed receipts; the default HTTP no-op turn may be
+`not_required`.
 
 ## Ports
 

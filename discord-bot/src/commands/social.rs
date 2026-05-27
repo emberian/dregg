@@ -10,12 +10,12 @@ use crate::embeds;
 
 /// Register the /faucet command.
 pub fn register_faucet() -> CreateCommand {
-    CreateCommand::new("faucet").description("Claim free PYN tokens (1 per hour)")
+    CreateCommand::new("faucet").description("Claim free DEC tokens (1 per hour)")
 }
 
 /// Register the /leaderboard command.
 pub fn register_leaderboard() -> CreateCommand {
-    CreateCommand::new("leaderboard").description("Show top PYN holders")
+    CreateCommand::new("leaderboard").description("Show top DEC holders")
 }
 
 /// Register the /history command.
@@ -99,7 +99,7 @@ pub async fn handle_faucet(ctx: &Context, command: &CommandInteraction, state: &
                 .await;
 
             let embed = embeds::success_embed("Faucet Claimed")
-                .field("Amount", format!("{amount} PYN"), true)
+                .field("Amount", format!("{amount} DEC"), true)
                 .field("Next Claim", "In 1 hour", true);
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -152,7 +152,7 @@ pub async fn handle_leaderboard(ctx: &Context, command: &CommandInteraction, sta
                     format!("<@{user_id}>")
                 };
                 description.push_str(&format!(
-                    "{medal} **#{}** {user_display} — {total} PYN\n",
+                    "{medal} **#{}** {user_display} — {total} DEC\n",
                     i + 1
                 ));
             }
@@ -208,14 +208,14 @@ pub async fn handle_history(ctx: &Context, command: &CommandInteraction, state: 
                     } else {
                         format!("<@{}>", tx.to_user)
                     };
-                    format!("\u{1f4e4} Sent {} PYN to {to_display}", tx.amount)
+                    format!("\u{1f4e4} Sent {} DEC to {to_display}", tx.amount)
                 } else {
                     let from_display = if tx.from_user == "faucet" {
                         "Faucet".to_string()
                     } else {
                         format!("<@{}>", tx.from_user)
                     };
-                    format!("\u{1f4e5} Received {} PYN from {from_display}", tx.amount)
+                    format!("\u{1f4e5} Received {} DEC from {from_display}", tx.amount)
                 };
                 description.push_str(&format!("{direction}\n<t:{}:R>\n\n", tx.timestamp));
             }
