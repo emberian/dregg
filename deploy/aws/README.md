@@ -102,13 +102,15 @@ curl https://devnet.dregg.fg-goose.online/status
 ## Devnet Smoke
 
 After an update, run the coordinator smoke from the checkout to verify the
-browser/devnet surface and a deterministic turn path:
+browser/devnet surface, canonical witnessed-receipt artifact endpoint, and a
+deterministic turn path:
 
 ```bash
 cd /opt/dregg
 scripts/devnet-smoke.sh \
   --skip-build \
   --node-url http://127.0.0.1:8420 \
+  --api-token "$DEVNET_API_TOKEN" \
   --site-url https://devnet.dregg.fg-goose.online
 ```
 
@@ -118,14 +120,54 @@ For the public endpoint:
 scripts/devnet-smoke.sh \
   --skip-build \
   --node-url https://devnet.dregg.fg-goose.online \
+  --api-token "$DEVNET_API_TOKEN" \
   --site-url https://devnet.dregg.fg-goose.online
 ```
 
 The smoke checks node health, cells, receipts, events, explorer/starbridge
 assets, submits one HTTP turn, confirms the receipt/event is explorer-visible,
-and queries the receipt witness endpoint. Use `--expect-witness` for lanes that
-must produce persisted witnessed receipts; the default HTTP no-op turn may be
-`not_required`.
+and queries `/api/receipts/{hash}/witnesses`. The witness endpoint is expected
+to expose both the legacy `witnessed_receipts` JSON and canonical
+`artifact_format: "DWR1"` / `witness_artifacts` hex blobs. Use
+`--expect-witness` for lanes that must produce persisted witnessed receipts.
+At the time of writing, the legacy `/api/turns/submit` smoke may reject with
+`call forest is empty`; that is a live submit-path blocker, and the script now
+reports it explicitly instead of masking it as a connectivity failure.
+
+For a local two-terminal smoke:
+
+```bash
+tmpdir="$(mktemp -d /tmp/dregg-smoke-node.XXXXXX)"
+cargo run -p dregg-node -- init --data-dir "$tmpdir"
+cargo run -p dregg-node -- run \
+  --data-dir "$tmpdir" \
+  --port 8420 \
+  --federation-mode solo
+
+scripts/devnet-smoke.sh \
+  --skip-build \
+  --node-url http://127.0.0.1:8420 \
+  --site-url http://127.0.0.1:3000
+```
+
+For a single-command local smoke that starts a temporary node and stops it on
+exit:
+
+```bash
+scripts/devnet-smoke.sh --start-local-node --skip-site-build
+```
+
+`--start-local-node` initializes and unlocks a temporary node, captures the
+returned bearer token, and uses it for protected submit endpoints. Against an
+already-running node, pass `--api-token "$DEVNET_API_TOKEN"` or export
+`DREGG_API_TOKEN` / `DEVNET_API_TOKEN` before running a smoke that submits a
+turn.
+
+When only auditing script wiring on a machine without a running node, use:
+
+```bash
+scripts/devnet-smoke.sh --skip-build --no-trigger --non-strict
+```
 
 ## Ports
 

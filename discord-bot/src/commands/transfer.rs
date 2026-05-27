@@ -7,7 +7,7 @@ use serenity::all::{
 };
 
 use crate::BotState;
-use crate::cipherclerk::{UserCipherclerk, sign_legacy};
+use crate::cipherclerk::UserCipherclerk;
 use crate::db::IdentityMode;
 use crate::embeds;
 
@@ -152,18 +152,17 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
         }
     };
 
-    // Derive sender's cclerk to sign the transfer.
+    // Derive sender's cclerk and submit a canonical signed turn.
     let cclerk = UserCipherclerk::derive(
         &state.config.bot_secret,
         sender_id,
         state.federation_id_bytes,
     );
-    let signature = sign_transfer(&cclerk, &recipient_cell, amount);
 
     // Submit transfer to devnet.
     match state
         .devnet
-        .submit_transfer(&sender_cell, &recipient_cell, amount, &signature)
+        .submit_transfer_turn(&cclerk, &sender_cell, &recipient_cell, amount)
         .await
     {
         Ok(tx_hash) => {
@@ -197,22 +196,6 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
                 .await;
         }
     }
-}
-
-/// Sign a transfer using the legacy BLAKE3-MAC wire scheme the current
-/// devnet `/api/turns/submit` endpoint expects. The body is
-/// `b"transfer:" + to_cell + b":" + amount_le_bytes` and the MAC is
-/// `blake3(body || raw_secret)` per `cclerk::sign_legacy`.
-///
-/// When the devnet wire format moves to canonical signed Actions,
-/// replace with `cclerk.app.make_action(...)` + post the action bytes.
-fn sign_transfer(cclerk: &UserCipherclerk, to_cell: &str, amount: u64) -> String {
-    let mut msg = Vec::new();
-    msg.extend_from_slice(b"transfer:");
-    msg.extend_from_slice(to_cell.as_bytes());
-    msg.extend_from_slice(b":");
-    msg.extend_from_slice(&amount.to_le_bytes());
-    sign_legacy(cclerk, &msg)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

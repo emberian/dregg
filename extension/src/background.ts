@@ -32,6 +32,7 @@ import type {
   PageResponseMessage,
   PredicateFact,
   PredicateProofResult,
+  ReceiptWitnessArtifacts,
   DreggWasm,
   SignTurnResult,
   StealthMetaAddress,
@@ -2131,7 +2132,7 @@ const PAGE_ALLOWED_METHODS = new Set<MessageType>([
   "dregg:listOutbox", "dregg:flushOutbox", "dregg:dropOutboxEntry",
   "dregg:federationStatus", "dregg:proposeRoutes", "dregg:voteOnProposal",
   "dregg:registerFederation", "dregg:listKnownFederations",
-  "dregg:createCapTpDeliveredAuth",
+  "dregg:createCapTpDeliveredAuth", "dregg:getReceiptWitnesses",
 ]);
 
 const POPUP_ONLY_METHODS = new Set<MessageType>([
@@ -2249,6 +2250,31 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
     // consumable by <dregg-activity> (or direct .on('activity')) and for RemoteRuntime bridge.
     case "dregg:getActivityFeed": {
       return { id: message.id, result: activityFeed };
+    }
+
+    case "dregg:getReceiptWitnesses": {
+      const receiptHash = String(message.receiptHash || message.hash || "");
+      if (!/^[0-9a-fA-F]{64}$/.test(receiptHash)) {
+        return { id: message.id, error: "receiptHash must be a 32-byte hex string" };
+      }
+      const resp = await nodeRequest<Partial<ReceiptWitnessArtifacts>>(nodeConfig, `/api/receipts/${encodeURIComponent(receiptHash)}/witnesses`);
+      if (!resp.ok) return { id: message.id, error: resp.error || "Unable to fetch receipt witnesses" };
+      const payload = resp.data || {};
+      const witnessArtifacts = Array.isArray(payload.witness_artifacts)
+        ? payload.witness_artifacts.filter((artifact): artifact is string => typeof artifact === "string" && artifact.length > 0)
+        : [];
+      const legacyReceipts = Array.isArray(payload.witnessed_receipts) ? payload.witnessed_receipts : [];
+      return {
+        id: message.id,
+        result: {
+          ...payload,
+          receipt_hash: payload.receipt_hash || receiptHash,
+          witness_count: Number(payload.witness_count ?? witnessArtifacts.length ?? legacyReceipts.length ?? 0),
+          artifact_format: witnessArtifacts.length > 0 ? (payload.artifact_format || "DWR1") : (payload.artifact_format || "legacy-json"),
+          witness_artifacts: witnessArtifacts,
+          witnessed_receipts: legacyReceipts,
+        } satisfies ReceiptWitnessArtifacts,
+      };
     }
 
     case "dregg:listOutbox": {

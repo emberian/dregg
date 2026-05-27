@@ -422,6 +422,8 @@ function normalizeReceipts(receipts) {
   return list.map((entry) => {
     const r = entry.receipt || entry;
     const turnHash = r.turn_hash || r.turnHash || r.hash || r.receipt_hash || '';
+    const witnessArtifacts = Array.isArray(r.witness_artifacts) ? r.witness_artifacts : [];
+    const witnessCount = Number(r.witness_count ?? witnessArtifacts.length ?? 0);
     return {
       ...entry,
       ...r,
@@ -432,8 +434,12 @@ function normalizeReceipts(receipts) {
       action_count: r.action_count ?? r.actions?.length ?? 0,
       computrons_used: r.computrons_used ?? r.computrons ?? 0,
       timestamp: r.timestamp ?? r.committed_at ?? '',
-      proof_view: r.proof_view || (r.has_proof || r.has_witness ? {
-        kind: r.has_witness ? 'WitnessedReceipt' : 'ExecutorSignature',
+      has_witness: Boolean(r.has_witness || witnessCount > 0),
+      witness_count: witnessCount,
+      artifact_format: r.artifact_format || (witnessArtifacts.length ? 'DWR1' : undefined),
+      witness_artifacts: witnessArtifacts,
+      proof_view: r.proof_view || (r.has_proof || r.has_witness || witnessCount > 0 ? {
+        kind: (r.has_witness || witnessCount > 0) ? 'WitnessedReceipt' : 'ExecutorSignature',
         public_inputs: [],
         bilateral_pi: null,
         is_agent_cell: false,

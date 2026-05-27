@@ -187,6 +187,7 @@ export type MessageType =
   | "dregg:listKnownFederations"
   // CapTP delivered authorization
   | "dregg:createCapTpDeliveredAuth"
+  | "dregg:getReceiptWitnesses"
   | "dregg:getActivityFeed"  // Phase 1 debugger: activity feed for <dregg-activity>
   // Internal decision messages
   | "dregg:provisionDecision"
@@ -205,6 +206,15 @@ export interface KnownFederation {
   name: string;
   committeePubkeys: string[];
   registeredAt: number;
+}
+
+/** Canonical witnessed-receipt artifact payload from `/api/receipts/{hash}/witnesses`. */
+export interface ReceiptWitnessArtifacts {
+  receipt_hash: string;
+  witness_count: number;
+  artifact_format: "DWR1" | "legacy-json" | string;
+  witness_artifacts: string[];
+  witnessed_receipts?: unknown[];
 }
 
 // ---------------------------------------------------------------------------

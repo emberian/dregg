@@ -10,6 +10,7 @@ import type {
   MessageType,
   OutboxEntry,
   PageRequestMessage,
+  ReceiptWitnessArtifacts,
   StealthMetaAddress,
 } from "./types";
 
@@ -212,6 +213,8 @@ export interface DreggAPI {
   listKnownFederations(): Promise<KnownFederation[]>;
   /** Return the extension-backed live activity feed used by Starbridge. */
   getActivityFeed(): Promise<{ schema_version: number; event_count: number; events: unknown[] }>;
+  /** Fetch canonical DWR1 witness artifacts for a committed receipt. */
+  getReceiptWitnesses(receiptHash: string): Promise<ReceiptWitnessArtifacts>;
   /**
    * Build a serialized Authorization::CapTpDelivered envelope for attaching
    * to a turn during a CapTP handoff.
@@ -384,6 +387,10 @@ const dregg: DreggAPI = {
 
   getActivityFeed() {
     return sendMessage("dregg:getActivityFeed", {}) as Promise<{ schema_version: number; event_count: number; events: unknown[] }>;
+  },
+
+  getReceiptWitnesses(receiptHash) {
+    return sendMessage("dregg:getReceiptWitnesses", { receiptHash }) as Promise<ReceiptWitnessArtifacts>;
   },
 
   createCapTpDeliveredAuth({ handoffCertB58, introducerPk, senderPk }) {

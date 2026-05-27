@@ -16,6 +16,7 @@
 //! GET  /relay/proof/:msg_id     -- get dequeue proof for a delivered message
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +31,7 @@ use tracing::info;
 
 use dregg_storage::inbox::InboxMessage;
 use dregg_storage::operator::RelayOperator;
-use dregg_storage::queue::DequeueProof;
+use dregg_storage::queue::{DequeueProof, MerkleQueue, QueueEntry};
 use dregg_storage_templates::relay_operator::{
     BYTES_RELAYED_THIS_EPOCH_SLOT, DEFAULT_EPOCH_DURATION, HOSTED_INBOX_ROOT_SLOT,
     QUOTA_BYTES_PER_EPOCH_SLOT, initial_state, relay_operator_child_program_vk,
@@ -143,6 +144,44 @@ pub struct RelayTemplateState {
     pub child_program_vk: [u8; 32],
     pub epoch_duration_blocks: u64,
     pub slots: [[u8; 32]; 8],
+    pub hosted_inboxes: BTreeMap<[u8; 32], RelayTemplateHostedInbox>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayTemplateHostedInbox {
+    #[serde(serialize_with = "hex_ser_32", deserialize_with = "hex_de_32")]
+    pub owner: [u8; 32],
+    pub committed_capacity: usize,
+    pub min_deposit: u64,
+    #[serde(serialize_with = "hex_ser_32", deserialize_with = "hex_de_32")]
+    pub queue_root: [u8; 32],
+    pub pending_messages: usize,
+    pub last_drain_height: u64,
+    pub evicted: bool,
+    pub queue_entries: Vec<RelayTemplateQueueEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayTemplateQueueEntry {
+    #[serde(serialize_with = "hex_ser_32", deserialize_with = "hex_de_32")]
+    pub content_hash: [u8; 32],
+    #[serde(serialize_with = "hex_ser_32", deserialize_with = "hex_de_32")]
+    pub sender: [u8; 32],
+    pub deposit: u64,
+    pub enqueued_at: u64,
+    pub size: usize,
+}
+
+impl From<&RelayTemplateQueueEntry> for QueueEntry {
+    fn from(entry: &RelayTemplateQueueEntry) -> Self {
+        Self {
+            content_hash: entry.content_hash,
+            sender: entry.sender,
+            deposit: entry.deposit,
+            enqueued_at: entry.enqueued_at,
+            size: entry.size,
+        }
+    }
 }
 
 impl RelayTemplateState {
@@ -163,6 +202,7 @@ impl RelayTemplateState {
                 operator_pk_hash,
                 route_table_root,
             ),
+            hosted_inboxes: BTreeMap::new(),
         }
     }
 
@@ -178,15 +218,208 @@ impl RelayTemplateState {
         u64_from_field(self.slots[QUOTA_BYTES_PER_EPOCH_SLOT as usize])
     }
 
-    fn register_hosted_root(&mut self, new_root: [u8; 32]) -> Result<(), String> {
-        if new_root == [0u8; 32] {
+    pub fn active_inbox_count(&self) -> usize {
+        self.hosted_inboxes
+            .values()
+            .filter(|inbox| !inbox.evicted)
+            .count()
+    }
+
+    pub fn total_capacity(&self) -> usize {
+        self.hosted_inboxes
+            .values()
+            .filter(|inbox| !inbox.evicted)
+            .map(|inbox| inbox.committed_capacity)
+            .sum()
+    }
+
+    pub fn total_pending(&self) -> usize {
+        self.hosted_inboxes
+            .values()
+            .filter(|inbox| !inbox.evicted)
+            .map(|inbox| inbox.pending_messages)
+            .sum()
+    }
+
+    fn register_inbox(
+        &mut self,
+        owner: [u8; 32],
+        capacity: usize,
+        min_deposit: u64,
+        queue_root: [u8; 32],
+    ) -> Result<[u8; 32], String> {
+        if self
+            .hosted_inboxes
+            .get(&owner)
+            .is_some_and(|inbox| !inbox.evicted)
+        {
+            return Err("relay template register_inbox rejected already-hosted inbox".into());
+        }
+        self.hosted_inboxes.insert(
+            owner,
+            RelayTemplateHostedInbox {
+                owner,
+                committed_capacity: capacity,
+                min_deposit,
+                queue_root,
+                pending_messages: 0,
+                last_drain_height: 0,
+                evicted: false,
+                queue_entries: Vec::new(),
+            },
+        );
+        self.commit_hosted_root()
+    }
+
+    fn mark_inbox_evicted(&mut self, owner: &[u8; 32]) -> Result<[u8; 32], String> {
+        let inbox = self
+            .hosted_inboxes
+            .get_mut(owner)
+            .ok_or_else(|| "relay template unsubscribe rejected missing inbox".to_string())?;
+        if inbox.evicted {
+            return Err("relay template unsubscribe rejected already-evicted inbox".into());
+        }
+        inbox.evicted = true;
+        inbox.pending_messages = 0;
+        inbox.queue_root = [0u8; 32];
+        inbox.queue_entries.clear();
+        self.commit_hosted_root()
+    }
+
+    fn record_enqueue(
+        &mut self,
+        owner: &[u8; 32],
+        msg: InboxMessage,
+        deposit: u64,
+        height: u64,
+    ) -> Result<(), String> {
+        let before = self.clone();
+        let bytes = msg.size() as u64;
+        self.record_relay_bytes(bytes)?;
+        let inbox = match self.hosted_inboxes.get_mut(owner) {
+            Some(inbox) if !inbox.evicted => inbox,
+            Some(_) => {
+                *self = before;
+                return Err("relay template enqueue rejected evicted inbox".into());
+            }
+            None => {
+                *self = before;
+                return Err("relay template enqueue rejected missing inbox".into());
+            }
+        };
+        if inbox.pending_messages >= inbox.committed_capacity {
+            *self = before;
+            return Err("relay template enqueue rejected full inbox".into());
+        }
+        inbox.queue_entries.push(RelayTemplateQueueEntry {
+            content_hash: inbox_message_content_hash(&msg),
+            sender: msg.sender(),
+            deposit,
+            enqueued_at: height,
+            size: msg.size(),
+        });
+        inbox.pending_messages = inbox.queue_entries.len();
+        inbox.queue_root = queue_root_from_template_entries(
+            inbox.committed_capacity,
+            inbox.queue_entries.iter().map(QueueEntry::from),
+        )?;
+        if let Err(e) = self.commit_hosted_root() {
+            *self = before;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    fn drain_inbox(
+        &mut self,
+        owner: &[u8; 32],
+        max: usize,
+        height: u64,
+    ) -> Result<Vec<(QueueEntry, DequeueProof)>, String> {
+        let before = self.clone();
+        let inbox = match self.hosted_inboxes.get_mut(owner) {
+            Some(inbox) if !inbox.evicted => inbox,
+            Some(_) => return Err("relay template drain rejected evicted inbox".into()),
+            None => return Err("relay template drain rejected missing inbox".into()),
+        };
+        let drain_count = max.min(inbox.queue_entries.len());
+        let mut queue = template_queue_from_entries(
+            inbox.committed_capacity,
+            inbox.queue_entries.iter().map(QueueEntry::from),
+        )?;
+        let mut drained = Vec::with_capacity(drain_count);
+        for _ in 0..drain_count {
+            let (entry, proof) = queue
+                .dequeue()
+                .map_err(|e| format!("relay template drain queue rejected: {e:?}"))?;
+            drained.push((entry, proof));
+        }
+        inbox.queue_entries.drain(0..drain_count);
+        inbox.pending_messages = inbox.queue_entries.len();
+        inbox.queue_root = queue.root();
+        inbox.last_drain_height = height;
+        if let Err(e) = self.commit_hosted_root() {
+            *self = before;
+            return Err(e);
+        }
+        Ok(drained)
+    }
+
+    fn validate_enqueue(&self, owner: &[u8; 32], bytes: u64, deposit: u64) -> Result<(), String> {
+        let previous = self.bytes_relayed_this_epoch();
+        let next = previous
+            .checked_add(bytes)
+            .ok_or_else(|| "relay template byte counter overflow".to_string())?;
+        let quota = self.quota_bytes_per_epoch();
+        if next > quota {
+            return Err(format!(
+                "relay template RateLimitBySum rejected {previous} + {bytes} > {quota}"
+            ));
+        }
+        let inbox = match self.hosted_inboxes.get(owner) {
+            Some(inbox) if !inbox.evicted => inbox,
+            Some(_) => return Err("relay template enqueue rejected evicted inbox".into()),
+            None => return Err("relay template enqueue rejected missing inbox".into()),
+        };
+        if inbox.pending_messages >= inbox.committed_capacity {
+            return Err("relay template enqueue rejected full inbox".into());
+        }
+        if deposit < inbox.min_deposit {
+            return Err(format!(
+                "relay template enqueue rejected insufficient deposit {deposit} < {}",
+                inbox.min_deposit
+            ));
+        }
+        Ok(())
+    }
+
+    fn commit_hosted_root(&mut self) -> Result<[u8; 32], String> {
+        let new_root = self.compute_hosted_root();
+        if new_root == [0u8; 32] && self.active_inbox_count() > 0 {
             return Err("relay template register_inbox would set zero hosted_inbox_root".into());
         }
-        if new_root == self.hosted_inbox_root() {
-            return Err("relay template register_inbox did not change hosted_inbox_root".into());
-        }
         self.slots[HOSTED_INBOX_ROOT_SLOT as usize] = new_root;
-        Ok(())
+        Ok(new_root)
+    }
+
+    fn compute_hosted_root(&self) -> [u8; 32] {
+        if self.active_inbox_count() == 0 {
+            return [0u8; 32];
+        }
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"dregg-relay-template-hosted-inbox-root-v1");
+        for (owner, inbox) in &self.hosted_inboxes {
+            if inbox.evicted {
+                continue;
+            }
+            hasher.update(owner);
+            hasher.update(&(inbox.committed_capacity as u64).to_be_bytes());
+            hasher.update(&inbox.min_deposit.to_be_bytes());
+            hasher.update(&inbox.queue_root);
+            hasher.update(&(inbox.pending_messages as u64).to_be_bytes());
+            hasher.update(&inbox.last_drain_height.to_be_bytes());
+        }
+        *hasher.finalize().as_bytes()
     }
 
     fn record_relay_bytes(&mut self, bytes: u64) -> Result<(), String> {
@@ -446,8 +679,8 @@ async fn handle_status(State(state): State<SharedRelayState>) -> Json<RelayStatu
         bond: s.operator.bond,
         required_bond: s.operator.required_bond(),
         is_underbonded: s.operator.is_underbonded(),
-        active_inboxes: s.operator.active_inbox_count(),
-        total_pending_messages: s.operator.total_pending(),
+        active_inboxes: s.template.active_inbox_count(),
+        total_pending_messages: s.template.total_pending(),
         earned_fees: s.operator.earned_fees,
         max_delivery_latency_blocks: s.operator.max_delivery_latency,
         current_height: s.current_height,
@@ -503,13 +736,7 @@ async fn handle_subscribe(
     let min_deposit = req.min_deposit.unwrap_or(s.config.default_min_deposit);
 
     // Check total capacity limit.
-    let current_total: usize = s
-        .operator
-        .hosted_inboxes
-        .values()
-        .filter(|h| !h.evicted)
-        .map(|h| h.committed_capacity)
-        .sum();
+    let current_total = s.template.total_capacity();
     if current_total + capacity > s.config.max_total_capacity {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -535,13 +762,16 @@ async fn handle_subscribe(
             };
             (status, Json(ErrorResponse { error: msg }))
         })?;
-    let hosted_root = hosted_inbox_commitment_root(&s.operator);
-    s.template.register_hosted_root(hosted_root).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e }),
-        )
-    })?;
+    let queue_root = s.operator.inbox_root(&owner).unwrap_or([0u8; 32]);
+    let hosted_root = s
+        .template
+        .register_inbox(owner, capacity, min_deposit, queue_root)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
+        })?;
 
     let fee = s.config.fee_policy.subscription_fee;
     info!(
@@ -600,6 +830,12 @@ async fn handle_unsubscribe(
 
     let mut s = state.write().await;
     let refunds = s.operator.evict_inbox(&owner);
+    s.template.mark_inbox_evicted(&owner).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e }),
+        )
+    })?;
 
     info!(
         owner = %req.owner,
@@ -658,36 +894,36 @@ async fn handle_send(
         InboxMessage::Capability { cert_bytes, .. } => cert_bytes.len() as u64,
         InboxMessage::SturdyRef { uri, .. } => uri.len() as u64,
     };
-    let template_before = s.template.clone();
-    s.template.record_relay_bytes(relayed_bytes).map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse { error: e }),
-        )
-    })?;
-
-    let root = s
-        .operator
-        .receive_message(&destination, msg, req.deposit, current_height)
+    s.template
+        .validate_enqueue(&destination, relayed_bytes, req.deposit)
         .map_err(|e| {
-            s.template = template_before;
-            let msg = format!("{e:?}");
-            let status = match &e {
-                dregg_storage::relay::RelayError::InboxNotFound { .. } => StatusCode::NOT_FOUND,
-                dregg_storage::relay::RelayError::InsufficientDeposit { .. } => {
-                    StatusCode::PAYMENT_REQUIRED
-                }
-                dregg_storage::relay::RelayError::QueueFull { .. } => {
-                    StatusCode::SERVICE_UNAVAILABLE
-                }
-                _ => StatusCode::BAD_REQUEST,
+            let status = if e.contains("missing inbox") {
+                StatusCode::NOT_FOUND
+            } else if e.contains("insufficient deposit") {
+                StatusCode::PAYMENT_REQUIRED
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
             };
-            (status, Json(ErrorResponse { error: msg }))
+            (status, Json(ErrorResponse { error: e }))
+        })?;
+    s.template
+        .record_enqueue(&destination, msg, req.deposit, current_height)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e }),
+            )
         })?;
 
     s.messages_received += 1;
-    let pending = s.operator.total_pending();
+    let pending = s.template.total_pending();
     let bytes_relayed = s.template.bytes_relayed_this_epoch();
+    let root = s
+        .template
+        .hosted_inboxes
+        .get(&destination)
+        .map(|inbox| inbox.queue_root)
+        .unwrap_or([0u8; 32]);
 
     Ok(Json(SendResponse {
         queue_root: hex_encode(&root),
@@ -738,8 +974,17 @@ async fn handle_drain(
 
     let mut s = state.write().await;
     let current_height = s.current_height;
-    let drained = s.operator.drain_for_owner(&owner, max, current_height);
-
+    let drained = s
+        .template
+        .drain_inbox(&owner, max, current_height)
+        .map_err(|e| {
+            let status = if e.contains("missing inbox") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (status, Json(ErrorResponse { error: e }))
+        })?;
     // Store delivery proofs and build response.
     let messages: Vec<DrainedMessage> = drained
         .into_iter()
@@ -759,8 +1004,12 @@ async fn handle_drain(
         })
         .collect();
 
-    // Get new queue root after drain.
-    let new_root = s.operator.inbox_root(&owner).unwrap_or([0u8; 32]);
+    let new_root = s
+        .template
+        .hosted_inboxes
+        .get(&owner)
+        .map(|inbox| inbox.queue_root)
+        .unwrap_or([0u8; 32]);
 
     Ok(Json(DrainResponse {
         messages,
@@ -782,7 +1031,7 @@ async fn handle_inbox_status(
     })?;
 
     let s = state.read().await;
-    let hosted = s.operator.hosted_inboxes.get(&owner).ok_or_else(|| {
+    let hosted = s.template.hosted_inboxes.get(&owner).ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -791,13 +1040,11 @@ async fn handle_inbox_status(
         )
     })?;
 
-    let root = s.operator.inbox_root(&owner).unwrap_or([0u8; 32]);
-
     Ok(Json(InboxStatusResponse {
         owner: id,
-        pending_messages: hosted.inbox.len(),
+        pending_messages: hosted.pending_messages,
         committed_capacity: hosted.committed_capacity,
-        queue_root: hex_encode(&root),
+        queue_root: hex_encode(&hosted.queue_root),
         last_drain_height: hosted.last_drain_height,
         evicted: hosted.evicted,
     }))
@@ -947,22 +1194,46 @@ fn default_route_table_root() -> [u8; 32] {
     blake3_field(b"dregg-relay-route-table-v1:any-encrypted-message")
 }
 
-fn hosted_inbox_commitment_root(operator: &RelayOperator) -> [u8; 32] {
-    let mut active: Vec<_> = operator
-        .hosted_inboxes
-        .iter()
-        .filter(|(_, hosted)| !hosted.evicted)
-        .collect();
-    active.sort_by_key(|(owner, _)| **owner);
-
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"dregg-relay-hosted-inbox-root-v1");
-    for (owner, hosted) in active {
-        hasher.update(owner);
-        hasher.update(&(hosted.committed_capacity as u64).to_be_bytes());
-        hasher.update(&operator.inbox_root(owner).unwrap_or([0u8; 32]));
+fn inbox_message_content_hash(msg: &InboxMessage) -> [u8; 32] {
+    let mut buf = Vec::new();
+    match msg {
+        InboxMessage::Capability { cert_bytes, sender } => {
+            buf.push(0x01);
+            buf.extend_from_slice(sender);
+            buf.extend_from_slice(cert_bytes);
+        }
+        InboxMessage::SturdyRef { uri, sender } => {
+            buf.push(0x02);
+            buf.extend_from_slice(sender);
+            buf.extend_from_slice(uri.as_bytes());
+        }
+        InboxMessage::Encrypted { ciphertext, sender } => {
+            buf.push(0x03);
+            buf.extend_from_slice(sender);
+            buf.extend_from_slice(ciphertext);
+        }
     }
-    *hasher.finalize().as_bytes()
+    *blake3::hash(&buf).as_bytes()
+}
+
+fn template_queue_from_entries(
+    capacity: usize,
+    entries: impl IntoIterator<Item = QueueEntry>,
+) -> Result<MerkleQueue, String> {
+    let mut queue = MerkleQueue::new(capacity);
+    for entry in entries {
+        queue
+            .enqueue(entry)
+            .map_err(|e| format!("relay template queue rebuild rejected: {e:?}"))?;
+    }
+    Ok(queue)
+}
+
+fn queue_root_from_template_entries(
+    capacity: usize,
+    entries: impl IntoIterator<Item = QueueEntry>,
+) -> Result<[u8; 32], String> {
+    Ok(template_queue_from_entries(capacity, entries)?.root())
 }
 
 fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
@@ -1218,6 +1489,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relay_template_inbox_status_uses_template_registry() {
+        let (sk, owner) = make_key(23);
+        let state = Arc::new(RwLock::new(test_state(test_config())));
+        let _ = handle_subscribe(State(state.clone()), Json(signed_subscribe(&sk, owner)))
+            .await
+            .expect("subscribe should succeed");
+
+        state.write().await.operator.hosted_inboxes.remove(&owner);
+
+        let response = handle_inbox_status(State(state), Path(hex_encode(&owner)))
+            .await
+            .expect("template registry should be sufficient for status")
+            .0;
+
+        assert_eq!(response.owner, hex_encode(&owner));
+        assert_eq!(response.committed_capacity, 2);
+        assert_eq!(response.pending_messages, 0);
+        assert!(!response.evicted);
+    }
+
+    #[tokio::test]
+    async fn relay_template_unsubscribe_updates_hosted_root_and_status() {
+        let (sk, owner) = make_key(24);
+        let state = Arc::new(RwLock::new(test_state(test_config())));
+        let _ = handle_subscribe(State(state.clone()), Json(signed_subscribe(&sk, owner)))
+            .await
+            .expect("subscribe should succeed");
+        let before = state.read().await.template.hosted_inbox_root();
+
+        let nonce = b"unsub1";
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&owner);
+        payload.extend_from_slice(nonce);
+        let response = handle_unsubscribe(
+            State(state.clone()),
+            Json(UnsubscribeRequest {
+                owner: hex_encode(&owner),
+                nonce: hex_encode(nonce),
+                signature: sign_request(&sk, b"dregg-relay-unsubscribe-v1", &payload),
+            }),
+        )
+        .await
+        .expect("unsubscribe should succeed")
+        .0;
+
+        assert_eq!(response["refunds_issued"], 0);
+        let status = handle_inbox_status(State(state.clone()), Path(hex_encode(&owner)))
+            .await
+            .expect("evicted template inbox remains inspectable")
+            .0;
+        assert!(status.evicted);
+        assert_eq!(status.queue_root, hex_encode(&[0u8; 32]));
+        assert_ne!(state.read().await.template.hosted_inbox_root(), before);
+    }
+
+    #[tokio::test]
     async fn relay_template_send_is_rate_limited_by_counter() {
         let (sk, owner) = make_key(22);
         let state = Arc::new(RwLock::new(test_state(RelayConfig {
@@ -1248,7 +1575,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relay_template_failed_legacy_queue_send_rolls_back_counter() {
+    async fn relay_template_rejects_missing_inbox_before_backend_send() {
         let state = Arc::new(RwLock::new(test_state(test_config())));
         let missing_owner = [0xCD; 32];
 
@@ -1269,5 +1596,59 @@ mod tests {
 
         assert_eq!(err.0, StatusCode::NOT_FOUND);
         assert_eq!(state.read().await.template.bytes_relayed_this_epoch(), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_template_send_and_drain_do_not_need_operator_queue_backend() {
+        let (sk, owner) = make_key(25);
+        let state = Arc::new(RwLock::new(test_state(test_config())));
+        let _ = handle_subscribe(State(state.clone()), Json(signed_subscribe(&sk, owner)))
+            .await
+            .expect("subscribe should succeed");
+
+        state.write().await.operator.hosted_inboxes.remove(&owner);
+
+        let send = handle_send(
+            State(state.clone()),
+            Path(hex_encode(&owner)),
+            Json(SendRequest {
+                sender: hex_encode(&[0xBC; 32]),
+                payload: {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.encode([1u8; 3])
+                },
+                deposit: 1,
+            }),
+        )
+        .await
+        .expect("template queue should accept send without operator inbox")
+        .0;
+
+        assert_eq!(send.position, 1);
+        assert_eq!(state.read().await.template.total_pending(), 1);
+
+        let nonce = b"drain-template";
+        let max = 1usize;
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&owner);
+        payload.extend_from_slice(nonce);
+        payload.extend_from_slice(&(max as u64).to_le_bytes());
+        let drain = handle_drain(
+            State(state.clone()),
+            axum::extract::Query(DrainQuery {
+                owner: hex_encode(&owner),
+                max: Some(max),
+                nonce: hex_encode(nonce),
+                signature: sign_request(&sk, b"dregg-relay-drain-v1", &payload),
+            }),
+        )
+        .await
+        .expect("template queue should drain without operator inbox")
+        .0;
+
+        assert_eq!(drain.messages.len(), 1);
+        assert_eq!(drain.messages[0].sender, hex_encode(&[0xBC; 32]));
+        assert_eq!(state.read().await.template.total_pending(), 0);
+        assert_eq!(state.read().await.messages_delivered, 1);
     }
 }

@@ -1,8 +1,8 @@
 //! Client for the dregg devnet API.
 
 use crate::cipherclerk::UserCipherclerk;
-use dregg_sdk::SignedTurn;
-use dregg_turn::Action;
+use dregg_sdk::{CellId, SignedTurn};
+use dregg_turn::{Action, Effect};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::Deserialize;
 use std::env;
@@ -212,6 +212,19 @@ fn committed_events_to_recent(committed: Vec<CommittedEventWire>) -> Vec<RecentE
 
 fn short_hash(hash: &str) -> String {
     format!("{}...", &hash[..12.min(hash.len())])
+}
+
+fn parse_cell_id(hex_cell: &str) -> Result<CellId, DevnetError> {
+    let bytes = hex::decode(hex_cell.trim()).map_err(|e| {
+        DevnetError::Api(format!("invalid cell id `{hex_cell}`: expected hex: {e}"))
+    })?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        DevnetError::Api(format!(
+            "invalid cell id `{hex_cell}`: expected 32 bytes, got {}",
+            bytes.len()
+        ))
+    })?;
+    Ok(CellId(bytes))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -453,6 +466,52 @@ impl DevnetClient {
 
         let signed = cclerk.app.sign_turn(&turn);
         self.submit_signed_turn(&signed).await
+    }
+
+    /// Submit a transfer as a canonical Ed25519-signed dregg turn.
+    ///
+    /// This is the live bot command path for `/send` and `/tip`. The older
+    /// JSON `/api/turns/submit` helper below remains only as an explicitly
+    /// legacy compatibility surface for deployments that have not yet moved
+    /// to `SignedTurn` ingress.
+    pub async fn submit_transfer_turn(
+        &self,
+        cclerk: &UserCipherclerk,
+        from_cell: &str,
+        to_cell: &str,
+        amount: u64,
+    ) -> Result<String, DevnetError> {
+        let from = parse_cell_id(from_cell)?;
+        let to = parse_cell_id(to_cell)?;
+        if from.0 != cclerk.cell_id_bytes() {
+            return Err(DevnetError::Api(format!(
+                "sender identity mismatch: command is linked to {from_cell}, but hosted cclerk is {}",
+                cclerk.cell_id_hex()
+            )));
+        }
+
+        let action = cclerk.app.make_action(
+            from,
+            "transfer",
+            vec![Effect::Transfer { from, to, amount }],
+        );
+        let result = self
+            .submit_app_action(
+                cclerk,
+                action,
+                Some(format!("discord transfer {amount} DEC")),
+            )
+            .await?;
+        if !result.accepted {
+            return Err(DevnetError::Api(
+                result
+                    .error
+                    .unwrap_or_else(|| "canonical transfer rejected".to_string()),
+            ));
+        }
+        result
+            .turn_hash
+            .ok_or_else(|| DevnetError::Api("canonical transfer response omitted turn_hash".into()))
     }
 
     async fn fetch_cell_nonce(&self, cell_id: &str) -> Result<u64, DevnetError> {
@@ -796,8 +855,11 @@ impl DevnetClient {
         Ok(cell.balance)
     }
 
-    /// Submit a transfer between two cells.
-    pub async fn submit_transfer(
+    /// Submit a transfer through the legacy BLAKE3-MAC JSON endpoint.
+    ///
+    /// New bot commands should use [`Self::submit_transfer_turn`]. This is
+    /// retained only for explicit compatibility with older devnet deployments.
+    pub async fn submit_transfer_legacy_mac(
         &self,
         from_cell: &str,
         to_cell: &str,

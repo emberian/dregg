@@ -16,17 +16,16 @@
 //!
 //! # Wire-signature transition gap
 //!
-//! The legacy devnet wire format (still in use for `/api/turns/submit`,
-//! `/api/gallery/auctions/<id>/bid`, `/api/identity/credentials/issue`, etc.)
+//! Some legacy devnet endpoints (`/api/gallery/auctions/<id>/bid`,
+//! `/api/identity/credentials/issue`, etc.)
 //! expects a hex-encoded `signature` field defined as
 //! `blake3(action_bytes || raw_secret)`. That scheme is *not* Ed25519, and
 //! `AppCipherclerk` deliberately hides the raw secret to keep apps from
-//! reaching past the framework. Until the devnet endpoints accept
-//! canonical signed `Action`s / `Turn`s, this cclerk retains the raw
-//! 32-byte seed alongside the `AppCipherclerk` and exposes it via
-//! [`UserCipherclerk::legacy_secret`] for the BLAKE3-MAC wire-signature path.
-//! Once the devnet wire format moves to canonical actions, that field
-//! and its accessor should be deleted in favor of `AppCipherclerk::sign_action`.
+//! reaching past the framework. Transfer commands now use canonical
+//! `SignedTurn` ingress, but this cclerk still retains the raw 32-byte seed
+//! for the remaining explicitly legacy BLAKE3-MAC paths. Once those endpoints
+//! move to canonical actions, this field and its accessor should be deleted in
+//! favor of `AppCipherclerk::sign_action`.
 
 use dregg_app_framework::AppCipherclerk;
 use dregg_sdk::AgentCipherclerk;
@@ -117,8 +116,8 @@ impl UserCipherclerk {
     }
 
     /// The raw secret bytes (== Ed25519 secret) — exposed only for the
-    /// legacy BLAKE3-MAC wire signature path used by current devnet
-    /// endpoints. See module docs.
+    /// legacy BLAKE3-MAC wire signature path used by old devnet endpoints.
+    /// See module docs.
     pub fn legacy_secret(&self) -> &[u8; 32] {
         &self.legacy_secret
     }
@@ -134,7 +133,7 @@ impl UserCipherclerk {
 }
 
 /// Sign a string action using the legacy BLAKE3-MAC scheme accepted by
-/// the current devnet endpoints. Returns a hex-encoded 32-byte MAC.
+/// old devnet endpoints. Returns a hex-encoded 32-byte MAC.
 ///
 /// This is the wire signature path described in the module docs — it
 /// will be deleted once the devnet endpoints accept canonical signed

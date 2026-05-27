@@ -88,8 +88,9 @@ async function inspectWitnesses(receiptHash) {
     panel.textContent = JSON.stringify({
       receipt_hash: payload.receipt_hash,
       witness_count: payload.witness_count,
-      artifact_format: 'node /api/receipts/{hash}/witnesses',
-      witnessed_receipts: payload.witnessed_receipts,
+      artifact_format: payload.artifact_format,
+      witness_artifacts: payload.witness_artifacts,
+      legacy_witnessed_receipts: payload.witness_artifacts.length ? undefined : payload.witnessed_receipts,
     }, null, 2);
   } catch (err) {
     panel.textContent = `Unable to load witnesses: ${err.message}`;

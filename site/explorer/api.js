@@ -197,7 +197,29 @@ export async function getReceipts() {
 
 /** Get witnessed receipt artifacts for a receipt hash. */
 export async function getReceiptWitnesses(receiptHash) {
-  return get(`/api/receipts/${encodeURIComponent(receiptHash)}/witnesses`);
+  const payload = await get(`/api/receipts/${encodeURIComponent(receiptHash)}/witnesses`);
+  return normalizeReceiptWitnessPayload(payload);
+}
+
+/** Normalize the node's canonical DWR1 witness endpoint with legacy fallback. */
+export function normalizeReceiptWitnessPayload(payload) {
+  const witnessArtifacts = Array.isArray(payload?.witness_artifacts)
+    ? payload.witness_artifacts.filter((artifact) => typeof artifact === 'string' && artifact.length > 0)
+    : [];
+  const legacyReceipts = Array.isArray(payload?.witnessed_receipts) ? payload.witnessed_receipts : [];
+  const artifactFormat = witnessArtifacts.length > 0
+    ? (payload?.artifact_format || 'DWR1')
+    : (payload?.artifact_format || 'legacy-json');
+  return {
+    ...payload,
+    receipt_hash: payload?.receipt_hash || '',
+    witness_count: Number(payload?.witness_count ?? witnessArtifacts.length ?? legacyReceipts.length ?? 0),
+    artifact_format: artifactFormat,
+    witness_artifacts: witnessArtifacts,
+    witnessed_receipts: legacyReceipts,
+    has_dwr1_artifacts: artifactFormat === 'DWR1' && witnessArtifacts.length > 0,
+    has_legacy_witnesses: legacyReceipts.length > 0,
+  };
 }
 
 /** Get active intents in the pool. */

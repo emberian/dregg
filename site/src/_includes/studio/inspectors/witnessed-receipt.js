@@ -6,11 +6,9 @@
  *
  * Scope determination (from NEW-WORLD.md + STARBRIDGE-PLAN.md § 4.5):
  *   Scope-0 — proof_view is null/absent: sim runtime, no STARK generated.
- *   Scope-1 — proof_view present, no inline witness_bundle: the standard
- *              verifiable shape (ALL current non-null proof_views fall here;
- *              the binding does not yet surface witness bundles separately).
- *   Scope-2 — proof_view present AND receipt carries an inline witness_bundle
- *              field: any verifier can re-execute the AIR end-to-end.
+ *   Scope-1 — proof_view present, but no full witness material is exposed.
+ *   Scope-2 — proof_view present AND either inline witness_bundle is present
+ *              or the node exposes DWR1 witness_artifacts for this receipt.
  *
  * Trust-tier badge is derived by the same heuristic as <dregg-proof>:
  *   Placeholder — scope-0
@@ -44,8 +42,10 @@ function receiptScope(r) {
   if (!r) return 0;
   const pv = r.proof_view;
   if (!pv) return 0;
-  // Scope-2: inline witness_bundle present on the receipt
+  // Scope-2: inline witness_bundle or canonical node-exported DWR1 artifacts.
   if (r.witness_bundle != null) return 2;
+  if (r.artifact_format === 'DWR1' && Array.isArray(r.witness_artifacts) && r.witness_artifacts.length > 0) return 2;
+  if (Number(r.witness_count || 0) > 0 && r.has_witness) return 2;
   return 1;
 }
 
@@ -173,7 +173,21 @@ class DreggWitnessedReceipt extends InspectorBase {
     // ── Scope-2 witness bundle summary ────────────────────────────────────
 
     const WitnessBundlePane = ({ wb }) => {
-      // wb: the witness_bundle object from the receipt (shape TBD when wired)
+      // wb: inline witness bundle object or canonical DWR1 artifact list.
+      if (Array.isArray(wb)) {
+        return h('div', { class: 'pwr__wb' },
+          h('dl', { class: 'dregg-inspector__kv' },
+            h('dt', null, 'artifact_format'),
+            h('dd', null, h('code', null, 'DWR1')),
+            h('dt', null, 'artifact_count'),
+            h('dd', null, h('code', null, String(wb.length))),
+            ...wb.slice(0, 3).map((artifact, idx) => [
+              h('dt', null, `artifact_${idx}`),
+              h('dd', null, h('code', { title: artifact }, shortHex(artifact, 64))),
+            ]).flat()
+          )
+        );
+      }
       const entries = wb && typeof wb === 'object' ? Object.entries(wb) : [];
       if (!entries.length) {
         return h('div', { class: 'dregg-inspector__notice' }, 'WitnessBundle present, but no decoded fields are exposed by this runtime.');
@@ -253,7 +267,7 @@ class DreggWitnessedReceipt extends InspectorBase {
           h('div', null, h('span', null, 'Actions'), h('strong', null, String(actionCount))),
           h('div', null, h('span', null, 'Computrons'), h('strong', null, String(computrons))),
           h('div', null, h('span', null, 'Timestamp'), h('strong', { title: String(r.timestamp || '') }, timestampLabel(r.timestamp))),
-          h('div', null, h('span', null, 'Witness'), h('strong', null, scope === 2 ? 'inline' : 'not exposed'))
+          h('div', null, h('span', null, 'Witness'), h('strong', null, scope === 2 ? `${String(r.witness_count ?? 1)} artifact${Number(r.witness_count ?? 1) === 1 ? '' : 's'}` : 'not exposed'))
         ),
         h('div', { class: 'dregg-inspector__actions' },
           dreggCodeLink(html, `dregg://receipt/${r.turn_hash}`, 'open receipt', r.turn_hash),
@@ -267,7 +281,7 @@ class DreggWitnessedReceipt extends InspectorBase {
         scope === 2
           ? h('div', { class: 'dregg-inspector__panel', style: 'margin-bottom:10px;' },
               h('span', { class: 'dregg-inspector__pill' }, 'Witness Bundle'),
-              h(WitnessBundlePane, { wb: r.witness_bundle })
+              h(WitnessBundlePane, { wb: r.witness_bundle ?? r.witness_artifacts })
             )
           : null,
 

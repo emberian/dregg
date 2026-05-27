@@ -307,6 +307,79 @@ fn require_pre_state(
     })
 }
 
+fn require_local_cell_for_commit(
+    ledger: &dregg_cell::Ledger,
+    cell: &dregg_cell::CellId,
+    label: &str,
+) -> Result<(), McpToolResult> {
+    if ledger.get(cell).is_some() {
+        return Ok(());
+    }
+    Err(McpToolResult::json(&serde_json::json!({
+        "activity_status": "rejected",
+        "proof_status": "missing_pre_state",
+        "committed": false,
+        "exercised": false,
+        "error": format!("{label}: cell {} is not in the local ledger; refusing to synthesize a remote stub for a committed proof-bearing turn", hex_encode(&cell.0)),
+    })))
+}
+
+fn require_effect_cells_for_commit(
+    ledger: &dregg_cell::Ledger,
+    effects: &[dregg_turn::Effect],
+    label: &str,
+) -> Result<(), McpToolResult> {
+    for effect in effects {
+        match effect {
+            dregg_turn::Effect::Transfer { from, to, .. } => {
+                require_local_cell_for_commit(ledger, from, label)?;
+                require_local_cell_for_commit(ledger, to, label)?;
+            }
+            dregg_turn::Effect::GrantCapability { from, to, cap } => {
+                require_local_cell_for_commit(ledger, from, label)?;
+                require_local_cell_for_commit(ledger, to, label)?;
+                require_local_cell_for_commit(ledger, &cap.target, label)?;
+            }
+            dregg_turn::Effect::SetField { cell, .. }
+            | dregg_turn::Effect::IncrementNonce { cell }
+            | dregg_turn::Effect::RevokeCapability { cell, .. }
+            | dregg_turn::Effect::EmitEvent { cell, .. }
+            | dregg_turn::Effect::SetPermissions { cell, .. }
+            | dregg_turn::Effect::SetVerificationKey { cell, .. }
+            | dregg_turn::Effect::Refusal { cell, .. } => {
+                require_local_cell_for_commit(ledger, cell, label)?;
+            }
+            dregg_turn::Effect::Introduce {
+                introducer,
+                recipient,
+                target,
+                ..
+            } => {
+                require_local_cell_for_commit(ledger, introducer, label)?;
+                require_local_cell_for_commit(ledger, recipient, label)?;
+                require_local_cell_for_commit(ledger, target, label)?;
+            }
+            dregg_turn::Effect::CreateSealPair {
+                sealer_holder,
+                unsealer_holder,
+            } => {
+                require_local_cell_for_commit(ledger, sealer_holder, label)?;
+                require_local_cell_for_commit(ledger, unsealer_holder, label)?;
+            }
+            dregg_turn::Effect::Unseal { recipient, .. } => {
+                require_local_cell_for_commit(ledger, recipient, label)?;
+            }
+            dregg_turn::Effect::CellSeal { target, .. }
+            | dregg_turn::Effect::CellUnseal { target }
+            | dregg_turn::Effect::CellDestroy { target, .. } => {
+                require_local_cell_for_commit(ledger, target, label)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn require_effect_vm_proof(
     initial_balance: u64,
     initial_nonce: u64,
@@ -1672,24 +1745,18 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
     };
     let cap_slot = cap.slot;
 
-    // For inter-process / inter-federation grants, the recipient cell may not
-    // yet exist in this node's local ledger (the recipient lives on a peer's
-    // node). Insert a remote-stub placeholder so the GrantCapability effect
-    // has a landing site for the c-list entry. The stub carries the same
-    // content-addressed id the peer would derive; its pk and balance are
-    // placeholders since the canonical state lives on the peer.
-    if s.ledger.get(&to_cell_id).is_none() {
-        let stub = dregg_cell::Cell::remote_stub_with_id(to_cell_id);
-        if let Err(e) = s.ledger.insert_cell(stub) {
-            eprintln!("[dregg_grant_capability] stub recipient insert failed: {e}");
-        }
-    }
-
     let effect = dregg_turn::Effect::GrantCapability {
         from: agent_cell_id,
         to: to_cell_id,
         cap,
     };
+    if let Err(result) = require_effect_cells_for_commit(
+        &s.ledger,
+        std::slice::from_ref(&effect),
+        "grant capability",
+    ) {
+        return result;
+    }
 
     let nonce = s.cclerk.receipt_chain_length() as u64;
     let turn = Turn {
@@ -3046,52 +3113,15 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
         None => s.cclerk.public_key().0,
     };
 
-    // Auto-insert stubs for any cells referenced by the parsed effects that
-    // aren't yet in this node's local ledger. The bearer-cap holder
-    // (typically on a different node than the cell's home) needs the cells
-    // present locally for the executor's ledger.get(...) lookups to succeed.
-    // Give source cells a generous balance so Transfer doesn't trip
-    // InsufficientBalance — the canonical state lives on the remote node.
-    // (cell_id, balance, pk) — the pk slot pairs the stub to the right
-    // delegator when the executor walks the ledger by public_key. The
-    // delegator stub *must* carry the delegator_pk so the bearer-cap
-    // verify path can find it; downstream cells (Bob, intermediaries) just
-    // need balances.
-    let mut cells_to_stub: Vec<(dregg_cell::CellId, u64, [u8; 32])> = Vec::new();
-    if s.ledger.get(&target_cell_id).is_none() {
-        cells_to_stub.push((target_cell_id, 1_000_000, delegator_pk));
+    if let Err(result) =
+        require_local_cell_for_commit(&s.ledger, &target_cell_id, "bearer cap exercise target")
+    {
+        return result;
     }
-    for effect in &parsed_effects {
-        match effect {
-            dregg_turn::Effect::Transfer { from, to, amount } => {
-                if s.ledger.get(from).is_none() {
-                    // The 'from' cell of a Transfer is the same as the
-                    // bearer-cap target in the demo flow; tag with delegator_pk.
-                    let pk = if *from == target_cell_id {
-                        delegator_pk
-                    } else {
-                        [0u8; 32]
-                    };
-                    cells_to_stub.push((*from, (*amount).saturating_mul(10).max(1_000_000), pk));
-                }
-                if s.ledger.get(to).is_none() {
-                    cells_to_stub.push((*to, 0, [0u8; 32]));
-                }
-            }
-            dregg_turn::Effect::SetField { cell, .. }
-            | dregg_turn::Effect::IncrementNonce { cell } => {
-                if s.ledger.get(cell).is_none() {
-                    cells_to_stub.push((*cell, 0, [0u8; 32]));
-                }
-            }
-            _ => {}
-        }
-    }
-    for (id, bal, pk) in cells_to_stub {
-        let stub = dregg_cell::Cell::remote_stub_with_id_pk_balance(id, pk, bal);
-        if let Err(e) = s.ledger.insert_cell(stub) {
-            let _ = e;
-        }
+    if let Err(result) =
+        require_effect_cells_for_commit(&s.ledger, &parsed_effects, "bearer cap exercise")
+    {
+        return result;
     }
 
     // Construct the delegation proof data. Use the first 32 bytes as delegator_pk,
@@ -4471,13 +4501,15 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
     );
     let recipient_signature = dregg_types::sign(&s.cclerk.gossip_signing_key(), &signing_msg);
 
-    if s.ledger.get(&target_cell_id).is_none() {
-        let stub = dregg_cell::Cell::remote_stub_with_id_pk_balance(
-            target_cell_id,
-            recipient_pk,
-            1_000_000,
-        );
-        let _ = s.ledger.insert_cell(stub);
+    if let Err(result) =
+        require_local_cell_for_commit(&s.ledger, &target_cell_id, "captp delivery target")
+    {
+        return result;
+    }
+    if let Err(result) =
+        require_effect_cells_for_commit(&s.ledger, &parsed_effects, "captp delivery effect")
+    {
+        return result;
     }
 
     let cert_nonce_hex = hex_encode(&cert.nonce);
@@ -4779,30 +4811,12 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
             "error": format!("handoff cert exercise: target cell {} is not in the local ledger; refusing to synthesize a stub for a committed proof-bearing turn", target_cell_hex),
         }));
     }
-    // Stub any effect-referenced cells.
-    for effect in &downstream_effects {
-        match effect {
-            dregg_turn::Effect::Transfer { from, to, amount } => {
-                if s.ledger.get(from).is_none() {
-                    let bal = (*amount).saturating_mul(10).max(1_000_000);
-                    let stub =
-                        dregg_cell::Cell::remote_stub_with_id_pk_balance(*from, recipient_pk, bal);
-                    let _ = s.ledger.insert_cell(stub);
-                }
-                if s.ledger.get(to).is_none() {
-                    let stub = dregg_cell::Cell::remote_stub_with_id(*to);
-                    let _ = s.ledger.insert_cell(stub);
-                }
-            }
-            dregg_turn::Effect::SetField { cell, .. }
-            | dregg_turn::Effect::IncrementNonce { cell } => {
-                if s.ledger.get(cell).is_none() {
-                    let stub = dregg_cell::Cell::remote_stub_with_id(*cell);
-                    let _ = s.ledger.insert_cell(stub);
-                }
-            }
-            _ => {}
-        }
+    if let Err(result) = require_effect_cells_for_commit(
+        &s.ledger,
+        &downstream_effects,
+        "handoff cert exercise downstream effect",
+    ) {
+        return result;
     }
 
     // ── Snapshot agent pre-state for Effect-VM proof ──────────────────────────
@@ -6802,13 +6816,19 @@ mod tests {
     #[tokio::test]
     async fn grant_capability_commits_witness_artifact_for_receipt_chain() {
         let (state, _tmp) = fresh_unlocked_state().await;
-        let target_cell = {
-            let s = state.read().await;
+        let (target_cell, recipient_cell) = {
+            let mut s = state.write().await;
             let id = dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
-            hex_encode(&id.0)
+            let recipient_pk = [0x77u8; 32];
+            let recipient = dregg_cell::Cell::with_balance(recipient_pk, [0u8; 32], 0);
+            let recipient_id = recipient.id();
+            s.ledger
+                .insert_cell(recipient)
+                .expect("recipient cell insert must succeed");
+            (hex_encode(&id.0), hex_encode(&recipient_id.0))
         };
         let params = serde_json::json!({
-            "to_agent": "77".repeat(32),
+            "to_agent": recipient_cell,
             "target_cell": target_cell,
             "permissions": "signature",
         });
@@ -6845,6 +6865,72 @@ mod tests {
         assert!(
             stored[0].witness_bundle.is_some(),
             "stored witnessed receipt must carry replay material"
+        );
+    }
+
+    #[tokio::test]
+    async fn grant_capability_rejects_missing_recipient_pre_state_instead_of_stub() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let target_cell = {
+            let s = state.read().await;
+            let id = dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
+            hex_encode(&id.0)
+        };
+        let params = serde_json::json!({
+            "to_agent": "77".repeat(32),
+            "target_cell": target_cell,
+            "permissions": "signature",
+        });
+
+        let result = dispatch_tool("dregg_grant_capability", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("rejected")
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("missing_pre_state")
+        );
+        assert_eq!(
+            state.read().await.cclerk.receipt_chain_length(),
+            0,
+            "missing recipient pre-state must not be hidden behind a synthetic stub"
+        );
+    }
+
+    #[tokio::test]
+    async fn bearer_cap_exercise_rejects_missing_target_pre_state_instead_of_stub() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let params = serde_json::json!({
+            "target_cell": "11".repeat(32),
+            "method": "transfer",
+            "delegation_chain": "33".repeat(64),
+            "delegator_pk": "44".repeat(32),
+            "bearer_pk": "55".repeat(32),
+            "expires_at": 10_000u64,
+            "effects": [{
+                "type": "transfer",
+                "from": "11".repeat(32),
+                "to": "22".repeat(32),
+                "amount": 1u64,
+            }]
+        });
+
+        let result = dispatch_tool("dregg_exercise_bearer_cap", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("rejected")
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("missing_pre_state")
+        );
+        assert_eq!(
+            state.read().await.cclerk.receipt_chain_length(),
+            0,
+            "missing bearer target pre-state must not be hidden behind a synthetic stub"
         );
     }
 
@@ -6905,6 +6991,45 @@ mod tests {
             state.read().await.cclerk.receipt_chain_length(),
             0,
             "handoff rejection must happen before the receipt chain advances"
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_cert_rejects_missing_downstream_pre_state_instead_of_stub() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let target_cell = {
+            let s = state.read().await;
+            dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32])
+        };
+        let mut seed = [0u8; 32];
+        seed[0] = 0xE2;
+        let params = serde_json::json!({
+            "target_cell": hex_encode(&target_cell.0),
+            "introducer_sk": hex_encode(&seed),
+            "permissions": "signature",
+            "effects": [{
+                "type": "transfer",
+                "from": hex_encode(&target_cell.0),
+                "to": "ab".repeat(32),
+                "amount": 1u64,
+            }]
+        });
+
+        let result = dispatch_tool("dregg_exercise_handoff_cert", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("rejected")
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("missing_pre_state")
+        );
+        assert_eq!(j.get("exercised").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            state.read().await.cclerk.receipt_chain_length(),
+            0,
+            "missing downstream pre-state must not be hidden behind a synthetic stub"
         );
     }
 
