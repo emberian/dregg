@@ -285,9 +285,8 @@ fn require_effect_vm_proof(
 /// via `BabyBear::new_canonical` and re-derives the witness_hash to check
 /// the binding.
 ///
-/// If `vm_effects` is empty, returns
-/// `(String::new(), vec![], vec![], String::new())` — the caller decides
-/// whether to omit the proof field or signal a warning.
+/// If `vm_effects` is empty, the checked helper returns an error. The tuple
+/// wrapper is retained for older tests that only call it with non-empty effects.
 fn generate_effect_vm_proof(
     initial_balance: u64,
     initial_nonce: u64,
@@ -1661,27 +1660,23 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
     let signed = s.cclerk.sign_turn(&turn);
     let turn_hash = hex_encode(&turn.hash());
 
-    // Snapshot the agent's pre-state so a post-execution Effect VM proof can be
-    // generated over the (balance, nonce) the GrantCapability turn started from.
-    // If the agent cell isn't in the ledger (it should be, but defensively),
-    // skip proof generation rather than fail the tool.
+    // Snapshot and prove before execution. A grant that cannot produce its
+    // Effect VM proof is a structured rejection, not a committed null-proof turn.
     let pre_state: Option<(u64, u64)> = s
         .ledger
         .get(&agent_cell_id)
         .map(|c| (c.state.balance(), c.state.nonce()));
 
-    let vm_effects = project_effects_for_mcp(&parsed_effects);
-    let proof_material = if vm_effects.is_empty() {
-        None
-    } else {
-        let (bal, n) = match require_pre_state(&agent_cell_id, pre_state, "bearer cap exercise") {
-            Ok(pre) => pre,
-            Err(result) => return result,
-        };
-        match require_effect_vm_proof(bal, n, &vm_effects, "bearer cap exercise") {
-            Ok(material) => Some(material),
-            Err(result) => return result,
-        }
+    let vm_effects = vec![dregg_circuit::effect_vm::Effect::GrantCapability {
+        cap_entry: dregg_circuit::BabyBear::new(cap_slot.wrapping_add(1)),
+    }];
+    let (bal, n) = match require_pre_state(&agent_cell_id, pre_state, "grant capability") {
+        Ok(pre) => pre,
+        Err(result) => return result,
+    };
+    let proof_material = match require_effect_vm_proof(bal, n, &vm_effects, "grant capability") {
+        Ok(material) => material,
+        Err(result) => return result,
     };
 
     // Execute locally.
@@ -1708,47 +1703,14 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
                 });
             }
 
-            // Project the GrantCapability effect into the Effect VM domain.
-            // The AIR variant is what matters for soundness here; cap_entry is a
-            // deterministic projection from (target, slot) — the AIR doesn't
-            // examine its semantic contents. Slot is fixed at 0 in the turn
-            // construction above; we still encode it for forward-compatibility.
-            let vm_effects = vec![dregg_circuit::effect_vm::Effect::GrantCapability {
-                cap_entry: dregg_circuit::BabyBear::new(cap_slot.wrapping_add(1)),
-            }];
-
-            let (proof_hex, public_inputs, trace_rows, witness_hash_hex) = match pre_state {
-                Some((bal, nonce)) => generate_effect_vm_proof(bal, nonce, &vm_effects),
-                None => {
-                    eprintln!(
-                        "tool_grant_capability: agent cell {} not in ledger; skipping Effect VM proof",
-                        hex_encode(&agent_cell_id.0)
-                    );
-                    (String::new(), Vec::new(), Vec::new(), String::new())
-                }
-            };
-
-            let proof_field: serde_json::Value = if proof_hex.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String(proof_hex)
-            };
-            // Scope-(2) WitnessedReceipt material: ship the trace rows so
-            // alice.py can include them in the on-disk artifact and
-            // charlie.py's replay-chain assembly can attach an Inline
-            // WitnessBundle instead of a scope-1 zero-witness stub.
-            let trace_field: serde_json::Value = if trace_rows.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::to_value(&trace_rows).unwrap_or(serde_json::Value::Null)
-            };
-            let witness_hash_field: serde_json::Value = if witness_hash_hex.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String(witness_hash_hex)
-            };
+            let proof_field = proof_material.proof_json();
+            let public_inputs = proof_material.public_inputs.clone();
+            let trace_field = proof_material.trace_json();
+            let witness_hash_field = proof_material.witness_hash_json();
 
             McpToolResult::json(&serde_json::json!({
+                "activity_status": "committed",
+                "proof_status": "proved",
                 "granted": true,
                 "to_agent": to_agent_hex,
                 "target_cell": target_cell_hex,
@@ -1763,13 +1725,20 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         dregg_turn::TurnResult::Rejected { reason, .. } => {
             drop(s);
             McpToolResult::json(&serde_json::json!({
+                "activity_status": "rejected",
+                "proof_status": "not_committed",
                 "granted": false,
                 "error": format!("turn rejected: {reason}"),
             }))
         }
         _ => {
             drop(s);
-            McpToolResult::error("grant capability turn did not commit")
+            McpToolResult::json(&serde_json::json!({
+                "activity_status": "rejected",
+                "proof_status": "not_committed",
+                "granted": false,
+                "error": "grant capability turn did not commit",
+            }))
         }
     }
 }
@@ -3120,6 +3089,20 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
         .ledger
         .get(&agent_cell_id)
         .map(|c| (c.state.balance(), c.state.nonce()));
+
+    let vm_effects = project_effects_for_mcp(&parsed_effects);
+    let proof_material = if vm_effects.is_empty() {
+        None
+    } else {
+        let (bal, n) = match require_pre_state(&agent_cell_id, pre_state, "bearer cap exercise") {
+            Ok(pre) => pre,
+            Err(result) => return result,
+        };
+        match require_effect_vm_proof(bal, n, &vm_effects, "bearer cap exercise") {
+            Ok(material) => Some(material),
+            Err(result) => return result,
+        }
+    };
 
     // Execute locally.
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
@@ -4704,14 +4687,14 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
     );
     let recipient_signature = dregg_types::sign(&s.cclerk.gossip_signing_key(), &signing_msg);
 
-    // ── Stub target cell if absent ────────────────────────────────────────────
     if s.ledger.get(&target_cell_id).is_none() {
-        let stub = dregg_cell::Cell::remote_stub_with_id_pk_balance(
-            target_cell_id,
-            recipient_pk,
-            1_000_000,
-        );
-        let _ = s.ledger.insert_cell(stub);
+        return McpToolResult::json(&serde_json::json!({
+            "activity_status": "rejected",
+            "proof_status": "missing_pre_state",
+            "exercised": false,
+            "target_cell": target_cell_hex,
+            "error": format!("handoff cert exercise: target cell {} is not in the local ledger; refusing to synthesize a stub for a committed proof-bearing turn", target_cell_hex),
+        }));
     }
     // Stub any effect-referenced cells.
     for effect in &downstream_effects {
@@ -6573,6 +6556,19 @@ mod tests {
         (state, tmp)
     }
 
+    async fn fresh_unlocked_state_without_agent_cell() -> (NodeState, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut seed = [0u8; 32];
+        seed[0] = 0xD7;
+        let state =
+            NodeState::with_cclerk(tmp.path(), vec![], seed).expect("NodeState::with_cclerk");
+        {
+            let mut s = state.write().await;
+            s.unlocked = true;
+        }
+        (state, tmp)
+    }
+
     fn extract_json(result: &McpToolResult) -> Value {
         assert!(
             !result.is_error.unwrap_or(false),
@@ -6628,6 +6624,134 @@ mod tests {
                 .map(|s| s.len() == 64)
                 .unwrap_or(false),
             "[{label}] witness_hash_hex must be a 64-char hex string"
+        );
+    }
+
+    #[tokio::test]
+    async fn bearer_cap_exercise_rejects_missing_agent_pre_state_before_commit() {
+        let (state, _tmp) = fresh_unlocked_state_without_agent_cell().await;
+        let target_cell = "11".repeat(32);
+        let recipient_cell = "22".repeat(32);
+        let params = serde_json::json!({
+            "target_cell": target_cell,
+            "method": "transfer",
+            "delegation_chain": "33".repeat(64),
+            "delegator_pk": "44".repeat(32),
+            "bearer_pk": "55".repeat(32),
+            "expires_at": 10_000u64,
+            "effects": [{
+                "type": "transfer",
+                "from": "11".repeat(32),
+                "to": recipient_cell,
+                "amount": 1u64,
+            }]
+        });
+
+        let result = dispatch_tool("dregg_exercise_bearer_cap", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("rejected")
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("missing_pre_state")
+        );
+        assert_eq!(j.get("exercised").and_then(|v| v.as_bool()), Some(false));
+        assert!(
+            j.get("effect_vm_proof_hex").is_none(),
+            "missing pre-state must not surface a null proof as if the turn committed: {j}"
+        );
+        assert_eq!(
+            state.read().await.cclerk.receipt_chain_length(),
+            0,
+            "truthful rejection must happen before the receipt chain advances"
+        );
+    }
+
+    #[tokio::test]
+    async fn grant_capability_rejects_missing_agent_pre_state_before_commit() {
+        let (state, _tmp) = fresh_unlocked_state_without_agent_cell().await;
+        let params = serde_json::json!({
+            "to_agent": "77".repeat(32),
+            "target_cell": "88".repeat(32),
+            "permissions": "signature",
+        });
+
+        let result = dispatch_tool("dregg_grant_capability", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("rejected")
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("missing_pre_state")
+        );
+        assert_eq!(
+            state.read().await.cclerk.receipt_chain_length(),
+            0,
+            "grant rejection must happen before the receipt chain advances"
+        );
+    }
+
+    #[tokio::test]
+    async fn bilateral_action_rejects_missing_to_pre_state_instead_of_stub_commit() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let from_cell = {
+            let s = state.read().await;
+            dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32])
+        };
+        let params = serde_json::json!({
+            "mode": "transfer",
+            "from": hex_encode(&from_cell.0),
+            "to": "66".repeat(32),
+            "amount": 5u64,
+        });
+
+        let result = dispatch_tool("dregg_bilateral_action", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("rejected")
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("missing_pre_state")
+        );
+        assert_eq!(j.get("committed").and_then(|v| v.as_bool()), Some(false));
+        assert!(
+            j.get("to_side").is_none(),
+            "a rejected bilateral action must not present null witnessed receipts: {j}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_cert_rejects_missing_target_pre_state_before_commit() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let mut seed = [0u8; 32];
+        seed[0] = 0xE1;
+        let params = serde_json::json!({
+            "target_cell": "99".repeat(32),
+            "introducer_sk": hex_encode(&seed),
+            "permissions": "signature",
+        });
+
+        let result = dispatch_tool("dregg_exercise_handoff_cert", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("rejected")
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("missing_pre_state")
+        );
+        assert_eq!(j.get("exercised").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            state.read().await.cclerk.receipt_chain_length(),
+            0,
+            "handoff rejection must happen before the receipt chain advances"
         );
     }
 

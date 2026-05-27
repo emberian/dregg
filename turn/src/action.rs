@@ -259,8 +259,8 @@ pub enum Authorization {
         /// The introducer-signed handoff certificate that authorized this delivery.
         handoff_cert: dregg_captp::HandoffCertificate,
         /// The introducer's public key (used to verify `handoff_cert.introducer_signature`).
-        /// Must derive from `handoff_cert.introducer` (the federation id) — the executor
-        /// rejects the variant if they disagree.
+        /// The certificate's `introducer` field is the federation identity; this is the
+        /// concrete committee/signer key that issued the certificate.
         introducer_pk: [u8; 32],
         /// The recipient/sender public key. Must equal `handoff_cert.recipient_pk`.
         sender_pk: [u8; 32],
