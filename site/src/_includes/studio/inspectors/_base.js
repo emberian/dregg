@@ -43,9 +43,12 @@ export class InspectorBase extends HTMLElement {
     super();
     this._unmount = null;
     this._dispose = null;
+    this._connectToken = 0;
   }
   async connectedCallback() {
+    const token = ++this._connectToken;
     const [api, runtime] = await Promise.all([ready(), findRuntime(this)]);
+    if (!this.isConnected || token !== this._connectToken) return;
     ensureInspectorChrome();
     this._runtime = runtime;
     this._api = api;
@@ -56,6 +59,7 @@ export class InspectorBase extends HTMLElement {
     if (this._api) this._render();
   }
   disconnectedCallback() {
+    this._connectToken++;
     this.removeEventListener('click', this._onNavigateClick);
     if (this._dispose) this._dispose();
     if (this._unmount) this._unmount();
@@ -78,14 +82,22 @@ export class InspectorBase extends HTMLElement {
 /** Render a parse error in-place; returns true if errored. */
 export function renderParseError(el, refAttr, parsed, expectedKind) {
   if (!parsed) {
-    el.innerHTML = `<div class="dregg-inspector dregg-inspector--err">bad ref: ${refAttr}</div>`;
+    renderErrorText(el, `bad ref: ${refAttr}`);
     return true;
   }
   if (expectedKind && parsed.kind !== expectedKind) {
-    el.innerHTML = `<div class="dregg-inspector dregg-inspector--err">wrong kind: ${parsed.kind} (expected ${expectedKind})</div>`;
+    renderErrorText(el, `wrong kind: ${parsed.kind} (expected ${expectedKind})`);
     return true;
   }
   return false;
+}
+
+function renderErrorText(el, message) {
+  el.replaceChildren();
+  const div = document.createElement('div');
+  div.className = 'dregg-inspector dregg-inspector--err';
+  div.textContent = message;
+  el.appendChild(div);
 }
 
 /** Short hex display: first 8 chars + ellipsis (with full hex as title attr). */

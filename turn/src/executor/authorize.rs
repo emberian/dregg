@@ -297,13 +297,23 @@ impl TurnExecutor {
             ));
         }
 
-        // 2. introducer_pk must derive from cert.introducer (FederationId).
-        // FederationId is the ed25519 public key bytes of the introducer (per
-        // captp/src/handoff.rs:427 `FederationId(pk.0)`).
-        if introducer_pk != &handoff_cert.introducer.0 {
+        // 2. The cert must target this federation and this action's cell. The
+        // cert's introducer is a federation identity; introducer_pk is the
+        // concrete committee/signer key that verifies the cert.
+        if handoff_cert.target_federation.0 != self.local_federation_id {
             return Err((
                 TurnError::InvalidAuthorization {
-                    reason: "captp-delivered: introducer_pk does not match cert.introducer"
+                    reason:
+                        "captp-delivered: cert.target_federation does not match local federation"
+                            .to_string(),
+                },
+                path.to_vec(),
+            ));
+        }
+        if handoff_cert.target_cell != action.target {
+            return Err((
+                TurnError::InvalidAuthorization {
+                    reason: "captp-delivered: cert.target_cell does not match action target"
                         .to_string(),
                 },
                 path.to_vec(),

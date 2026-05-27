@@ -174,6 +174,99 @@ fn build_signed_forest(
     forest
 }
 
+#[derive(Debug)]
+struct EffectVmProofMaterial {
+    proof_hex: String,
+    public_inputs: Vec<u64>,
+    trace_rows: Vec<Vec<u32>>,
+    witness_hash_hex: String,
+}
+
+impl EffectVmProofMaterial {
+    fn into_parts(self) -> (String, Vec<u64>, Vec<Vec<u32>>, String) {
+        (
+            self.proof_hex,
+            self.public_inputs,
+            self.trace_rows,
+            self.witness_hash_hex,
+        )
+    }
+
+    fn proof_json(&self) -> serde_json::Value {
+        serde_json::Value::String(self.proof_hex.clone())
+    }
+
+    fn trace_json(&self) -> serde_json::Value {
+        serde_json::to_value(&self.trace_rows).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn witness_hash_json(&self) -> serde_json::Value {
+        serde_json::Value::String(self.witness_hash_hex.clone())
+    }
+}
+
+fn project_effects_for_mcp(
+    effects: &[dregg_turn::Effect],
+) -> Vec<dregg_circuit::effect_vm::Effect> {
+    let mut vm_effects = Vec::new();
+    for e in effects {
+        match e {
+            dregg_turn::Effect::Transfer { amount, .. } => {
+                vm_effects.push(dregg_circuit::effect_vm::Effect::Transfer {
+                    amount: *amount,
+                    direction: 1,
+                });
+            }
+            dregg_turn::Effect::SetField { index, value, .. } => {
+                let mut le4 = [0u8; 4];
+                le4.copy_from_slice(&value[..4]);
+                vm_effects.push(dregg_circuit::effect_vm::Effect::SetField {
+                    field_idx: *index as u32,
+                    value: dregg_circuit::BabyBear::new(u32::from_le_bytes(le4)),
+                });
+            }
+            dregg_turn::Effect::IncrementNonce { .. } => {
+                vm_effects.push(dregg_circuit::effect_vm::Effect::NoOp);
+            }
+            _ => {}
+        }
+    }
+    vm_effects
+}
+
+fn require_pre_state(
+    cell: &dregg_cell::CellId,
+    pre_state: Option<(u64, u64)>,
+    label: &str,
+) -> Result<(u64, u64), McpToolResult> {
+    pre_state.ok_or_else(|| {
+        McpToolResult::json(&serde_json::json!({
+            "activity_status": "rejected",
+            "proof_status": "missing_pre_state",
+            "committed": false,
+            "exercised": false,
+            "error": format!("{label}: cell {} is not in the local ledger; refusing to execute without Effect VM pre-state", hex_encode(&cell.0)),
+        }))
+    })
+}
+
+fn require_effect_vm_proof(
+    initial_balance: u64,
+    initial_nonce: u64,
+    vm_effects: &[dregg_circuit::effect_vm::Effect],
+    label: &str,
+) -> Result<EffectVmProofMaterial, McpToolResult> {
+    try_generate_effect_vm_proof(initial_balance, initial_nonce, vm_effects).map_err(|e| {
+        McpToolResult::json(&serde_json::json!({
+            "activity_status": "rejected",
+            "proof_status": "proof_generation_failed",
+            "committed": false,
+            "exercised": false,
+            "error": format!("{label}: Effect VM proof generation failed: {e}"),
+        }))
+    })
+}
+
 /// Generate an Effect VM STARK proof for a sequence of VM-domain effects.
 ///
 /// Builds a fresh `CellState` from `(initial_balance, initial_nonce)`, runs the
@@ -200,8 +293,19 @@ fn generate_effect_vm_proof(
     initial_nonce: u64,
     vm_effects: &[dregg_circuit::effect_vm::Effect],
 ) -> (String, Vec<u64>, Vec<Vec<u32>>, String) {
+    match try_generate_effect_vm_proof(initial_balance, initial_nonce, vm_effects) {
+        Ok(material) => material.into_parts(),
+        Err(e) => panic!("{e}"),
+    }
+}
+
+fn try_generate_effect_vm_proof(
+    initial_balance: u64,
+    initial_nonce: u64,
+    vm_effects: &[dregg_circuit::effect_vm::Effect],
+) -> Result<EffectVmProofMaterial, String> {
     if vm_effects.is_empty() {
-        return (String::new(), Vec::new(), Vec::new(), String::new());
+        return Err("empty Effect VM projection".to_string());
     }
 
     let initial_state =
@@ -230,7 +334,8 @@ fn generate_effect_vm_proof(
     // sized to the actual trace height, not the raw effect count (passing
     // `vm_effects.len()` panics when it's less than 2 or not a power of two).
     let air = dregg_circuit::effect_vm::EffectVmAir::new(trace.len());
-    let proof = dregg_circuit::stark::prove(&air, &trace, &public_inputs);
+    let proof =
+        dregg_circuit::stark::try_prove(&air, &trace, &public_inputs).map_err(|e| e.to_string())?;
     // Use the canonical PYNA-prefixed byte format that the standalone
     // dregg-verifier binary deserializes via stark::proof_from_bytes.
     // postcard's encoding lacks the magic-header and is not what the
@@ -245,7 +350,12 @@ fn generate_effect_vm_proof(
     let bundle = dregg_turn::WitnessBundle::inline_from_trace(&trace);
     let trace_rows = bundle.trace_rows.clone();
     let witness_hash_hex = hex_encode(&bundle.witness_hash());
-    (proof_hex, public_inputs_u64, trace_rows, witness_hash_hex)
+    Ok(EffectVmProofMaterial {
+        proof_hex,
+        public_inputs: public_inputs_u64,
+        trace_rows,
+        witness_hash_hex,
+    })
 }
 
 // =============================================================================
@@ -1559,6 +1669,20 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         .ledger
         .get(&agent_cell_id)
         .map(|c| (c.state.balance(), c.state.nonce()));
+
+    let vm_effects = project_effects_for_mcp(&parsed_effects);
+    let proof_material = if vm_effects.is_empty() {
+        None
+    } else {
+        let (bal, n) = match require_pre_state(&agent_cell_id, pre_state, "bearer cap exercise") {
+            Ok(pre) => pre,
+            Err(result) => return result,
+        };
+        match require_effect_vm_proof(bal, n, &vm_effects, "bearer cap exercise") {
+            Ok(material) => Some(material),
+            Err(result) => return result,
+        }
+    };
 
     // Execute locally.
     let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
@@ -3011,71 +3135,31 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
                 hash: turn_hash.clone(),
             });
 
-            // Project executed effects into the Effect VM domain.
-            // - turn::Effect::Transfer (any from/to) → VM Effect::Transfer with
-            //   direction=1 (outgoing from agent's perspective).
-            // - turn::Effect::IncrementNonce → no VM analogue (nonce is already
-            //   tracked by the AIR); emit a NoOp so the trace length matches.
-            // - turn::Effect::SetField → VM Effect::SetField with the first 4
-            //   value-bytes interpreted as a little-endian u32 → BabyBear.
-            // Other turn effects (capability grants, notes, etc.) are skipped:
-            // the demo's two flows (grant + transfer/setfield) don't need them.
-            let mut vm_effects: Vec<dregg_circuit::effect_vm::Effect> = Vec::new();
-            for e in &parsed_effects {
-                match e {
-                    dregg_turn::Effect::Transfer { amount, .. } => {
-                        vm_effects.push(dregg_circuit::effect_vm::Effect::Transfer {
-                            amount: *amount,
-                            direction: 1,
-                        });
-                    }
-                    dregg_turn::Effect::SetField { index, value, .. } => {
-                        let mut le4 = [0u8; 4];
-                        le4.copy_from_slice(&value[..4]);
-                        vm_effects.push(dregg_circuit::effect_vm::Effect::SetField {
-                            field_idx: *index as u32,
-                            value: dregg_circuit::BabyBear::new(u32::from_le_bytes(le4)),
-                        });
-                    }
-                    dregg_turn::Effect::IncrementNonce { .. } => {
-                        vm_effects.push(dregg_circuit::effect_vm::Effect::NoOp);
-                    }
-                    _ => {}
-                }
-            }
-
-            let (proof_hex, public_inputs, trace_rows, witness_hash_hex) = match pre_state {
-                Some((bal, n)) if !vm_effects.is_empty() => {
-                    generate_effect_vm_proof(bal, n, &vm_effects)
-                }
-                Some(_) => (String::new(), Vec::new(), Vec::new(), String::new()),
-                None => {
-                    eprintln!(
-                        "tool_exercise_bearer_cap: agent cell {} not in ledger; skipping Effect VM proof",
-                        hex_encode(&agent_cell_id.0)
-                    );
-                    (String::new(), Vec::new(), Vec::new(), String::new())
-                }
-            };
-
-            let proof_field: serde_json::Value = if proof_hex.is_empty() {
-                serde_json::Value::Null
+            let proof_status = if proof_material.is_some() {
+                "proved"
             } else {
-                serde_json::Value::String(proof_hex)
+                "not_required"
             };
-            // Scope-(2) WitnessedReceipt material (see grant path).
-            let trace_field: serde_json::Value = if trace_rows.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::to_value(&trace_rows).unwrap_or(serde_json::Value::Null)
-            };
-            let witness_hash_field: serde_json::Value = if witness_hash_hex.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String(witness_hash_hex)
-            };
+            let proof_field = proof_material
+                .as_ref()
+                .map(|m| m.proof_json())
+                .unwrap_or(serde_json::Value::Null);
+            let public_inputs = proof_material
+                .as_ref()
+                .map(|m| m.public_inputs.clone())
+                .unwrap_or_default();
+            let trace_field = proof_material
+                .as_ref()
+                .map(|m| m.trace_json())
+                .unwrap_or(serde_json::Value::Null);
+            let witness_hash_field = proof_material
+                .as_ref()
+                .map(|m| m.witness_hash_json())
+                .unwrap_or(serde_json::Value::Null);
 
             McpToolResult::json(&serde_json::json!({
+                "activity_status": "committed",
+                "proof_status": proof_status,
                 "exercised": true,
                 "target_cell": target_cell_hex,
                 "method": method,
@@ -3089,6 +3173,8 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
         dregg_turn::TurnResult::Rejected { reason, .. } => {
             drop(s);
             McpToolResult::json(&serde_json::json!({
+                "activity_status": "rejected",
+                "proof_status": "not_committed",
                 "exercised": false,
                 "error": format!("turn rejected: {reason}"),
             }))
@@ -3096,6 +3182,8 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
         _ => {
             drop(s);
             McpToolResult::json(&serde_json::json!({
+                "activity_status": "rejected",
+                "proof_status": "not_committed",
                 "exercised": false,
                 "error": "bearer cap turn did not commit",
             }))
@@ -4657,6 +4745,19 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
         .get(&agent_cell_id)
         .map(|c| (c.state.balance(), c.state.nonce()));
 
+    let mut vm_effects: Vec<dregg_circuit::effect_vm::Effect> =
+        vec![dregg_circuit::effect_vm::Effect::NoOp];
+    vm_effects.extend(project_effects_for_mcp(&downstream_effects));
+    let (bal, n) = match require_pre_state(&agent_cell_id, pre_state, "handoff cert exercise") {
+        Ok(pre) => pre,
+        Err(result) => return result,
+    };
+    let proof_material = match require_effect_vm_proof(bal, n, &vm_effects, "handoff cert exercise")
+    {
+        Ok(material) => material,
+        Err(result) => return result,
+    };
+
     // ── Build and execute the Turn ────────────────────────────────────────────
     let action = dregg_turn::Action {
         target: target_cell_id,
@@ -4712,64 +4813,14 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
                 hash: turn_hash.clone(),
             });
 
-            // ── Project downstream effects into the Effect-VM domain ──────────
-            // ValidateHandoff has no VM-domain analogue; emit a NoOp so the
-            // trace length stays at ≥ 2. Downstream effects are projected
-            // the same way as tool_exercise_bearer_cap.
-            let mut vm_effects: Vec<dregg_circuit::effect_vm::Effect> =
-                vec![dregg_circuit::effect_vm::Effect::NoOp]; // ValidateHandoff → NoOp
-            for e in &downstream_effects {
-                match e {
-                    dregg_turn::Effect::Transfer { amount, .. } => {
-                        vm_effects.push(dregg_circuit::effect_vm::Effect::Transfer {
-                            amount: *amount,
-                            direction: 1,
-                        });
-                    }
-                    dregg_turn::Effect::SetField { index, value, .. } => {
-                        let mut le4 = [0u8; 4];
-                        le4.copy_from_slice(&value[..4]);
-                        vm_effects.push(dregg_circuit::effect_vm::Effect::SetField {
-                            field_idx: *index as u32,
-                            value: dregg_circuit::BabyBear::new(u32::from_le_bytes(le4)),
-                        });
-                    }
-                    dregg_turn::Effect::IncrementNonce { .. } => {
-                        vm_effects.push(dregg_circuit::effect_vm::Effect::NoOp);
-                    }
-                    _ => {}
-                }
-            }
-
-            let (proof_hex, public_inputs, trace_rows, witness_hash_hex) = match pre_state {
-                Some((bal, n)) => generate_effect_vm_proof(bal, n, &vm_effects),
-                None => {
-                    eprintln!(
-                        "tool_exercise_handoff_cert: agent cell {} not in ledger; \
-                         skipping Effect VM proof",
-                        hex_encode(&agent_cell_id.0)
-                    );
-                    (String::new(), Vec::new(), Vec::new(), String::new())
-                }
-            };
-
-            let proof_field: serde_json::Value = if proof_hex.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String(proof_hex)
-            };
-            let trace_field: serde_json::Value = if trace_rows.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::to_value(&trace_rows).unwrap_or(serde_json::Value::Null)
-            };
-            let witness_hash_field: serde_json::Value = if witness_hash_hex.is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::Value::String(witness_hash_hex)
-            };
+            let proof_field = proof_material.proof_json();
+            let public_inputs = proof_material.public_inputs.clone();
+            let trace_field = proof_material.trace_json();
+            let witness_hash_field = proof_material.witness_hash_json();
 
             McpToolResult::json(&serde_json::json!({
+                "activity_status": "committed",
+                "proof_status": "proved",
                 "exercised": true,
                 "target_cell": target_cell_hex,
                 "turn_hash": turn_hash,
@@ -4790,6 +4841,8 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
         dregg_turn::TurnResult::Rejected { reason, .. } => {
             drop(s);
             McpToolResult::json(&serde_json::json!({
+                "activity_status": "rejected",
+                "proof_status": "not_committed",
                 "exercised": false,
                 "error": format!("handoff cert exercise rejected: {reason}"),
                 "turn_hash": turn_hash,
@@ -4799,6 +4852,8 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
         _ => {
             drop(s);
             McpToolResult::json(&serde_json::json!({
+                "activity_status": "rejected",
+                "proof_status": "not_committed",
                 "exercised": false,
                 "error": "handoff cert exercise did not commit",
             }))
@@ -5058,16 +5113,20 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
     }
 
     if s.ledger.get(&from_cell).is_none() {
-        let stub = dregg_cell::Cell::remote_stub_with_id_pk_balance(
-            from_cell,
-            s.cclerk.public_key().0,
-            10_000_000,
-        );
-        let _ = s.ledger.insert_cell(stub);
+        return McpToolResult::json(&serde_json::json!({
+            "activity_status": "rejected",
+            "proof_status": "missing_pre_state",
+            "committed": false,
+            "error": format!("bilateral action: from cell {} is not in the local ledger; refusing to synthesize a stub for a committed proof-bearing turn", from_hex),
+        }));
     }
     if s.ledger.get(&to_cell).is_none() {
-        let stub = dregg_cell::Cell::remote_stub_with_id(to_cell);
-        let _ = s.ledger.insert_cell(stub);
+        return McpToolResult::json(&serde_json::json!({
+            "activity_status": "rejected",
+            "proof_status": "missing_pre_state",
+            "committed": false,
+            "error": format!("bilateral action: to cell {} is not in the local ledger; refusing to synthesize a stub for a committed proof-bearing turn", to_hex),
+        }));
     }
 
     let agent_cell_id = from_cell;
@@ -5118,38 +5177,6 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
         .get(&to_cell)
         .map(|c| (c.state.balance(), c.state.nonce()));
 
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
-    let exec_result = executor.execute(&turn, &mut s.ledger);
-
-    let (committed_receipt_opt, error_str) = match exec_result {
-        dregg_turn::TurnResult::Committed { receipt, .. } => {
-            s.cclerk
-                .append_receipt(receipt.clone())
-                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
-            (Some(receipt), None)
-        }
-        dregg_turn::TurnResult::Rejected { reason, .. } => {
-            (None, Some(format!("turn rejected: {reason}")))
-        }
-        _ => (None, Some("bilateral turn did not commit".to_string())),
-    };
-    drop(s);
-
-    let receipt = match committed_receipt_opt {
-        Some(r) => r,
-        None => {
-            return McpToolResult::json(&serde_json::json!({
-                "committed": false,
-                "error": error_str.unwrap_or_else(|| "unknown".to_string()),
-                "turn_hash": turn_hash,
-            }));
-        }
-    };
-
-    let sched = dregg_turn::bilateral_schedule::ExpectedBilateral::from_turn(&turn);
-    let from_counts = sched.counts_for(&from_cell);
-    let to_counts = sched.counts_for(&to_cell);
-
     let (from_vm, to_vm): (
         Vec<dregg_circuit::effect_vm::Effect>,
         Vec<dregg_circuit::effect_vm::Effect>,
@@ -5178,15 +5205,62 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
         ),
         _ => (Vec::new(), Vec::new()),
     };
+    let from_pre = match require_pre_state(&from_cell, from_pre, "bilateral action from-side") {
+        Ok(pre) => pre,
+        Err(result) => return result,
+    };
+    let to_pre = match require_pre_state(&to_cell, to_pre, "bilateral action to-side") {
+        Ok(pre) => pre,
+        Err(result) => return result,
+    };
+    let from_proof = match require_effect_vm_proof(
+        from_pre.0,
+        from_pre.1,
+        &from_vm,
+        "bilateral action from-side",
+    ) {
+        Ok(material) => material,
+        Err(result) => return result,
+    };
+    let to_proof =
+        match require_effect_vm_proof(to_pre.0, to_pre.1, &to_vm, "bilateral action to-side") {
+            Ok(material) => material,
+            Err(result) => return result,
+        };
 
-    let (from_proof_hex, from_pi, from_trace, _from_wh) = match from_pre {
-        Some((b, n)) if !from_vm.is_empty() => generate_effect_vm_proof(b, n, &from_vm),
-        _ => (String::new(), Vec::new(), Vec::new(), String::new()),
+    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let exec_result = executor.execute(&turn, &mut s.ledger);
+
+    let (committed_receipt_opt, error_str) = match exec_result {
+        dregg_turn::TurnResult::Committed { receipt, .. } => {
+            s.cclerk
+                .append_receipt(receipt.clone())
+                .expect("local executor and cclerk chains must agree; divergence is a serious bug");
+            (Some(receipt), None)
+        }
+        dregg_turn::TurnResult::Rejected { reason, .. } => {
+            (None, Some(format!("turn rejected: {reason}")))
+        }
+        _ => (None, Some("bilateral turn did not commit".to_string())),
     };
-    let (to_proof_hex, to_pi, to_trace, _to_wh) = match to_pre {
-        Some((b, n)) if !to_vm.is_empty() => generate_effect_vm_proof(b, n, &to_vm),
-        _ => (String::new(), Vec::new(), Vec::new(), String::new()),
+    drop(s);
+
+    let receipt = match committed_receipt_opt {
+        Some(r) => r,
+        None => {
+            return McpToolResult::json(&serde_json::json!({
+                "activity_status": "rejected",
+                "proof_status": "not_committed",
+                "committed": false,
+                "error": error_str.unwrap_or_else(|| "unknown".to_string()),
+                "turn_hash": turn_hash,
+            }));
+        }
     };
+
+    let sched = dregg_turn::bilateral_schedule::ExpectedBilateral::from_turn(&turn);
+    let from_counts = sched.counts_for(&from_cell);
+    let to_counts = sched.counts_for(&to_cell);
 
     let build_witnessed = |proof_hex: &str, pi: &[u64], trace_rows: &[Vec<u32>]| -> Value {
         if proof_hex.is_empty() {
@@ -5218,10 +5292,20 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
         serde_json::to_value(&wr).unwrap_or(serde_json::Value::Null)
     };
 
-    let from_wr_json = build_witnessed(&from_proof_hex, &from_pi, &from_trace);
-    let to_wr_json = build_witnessed(&to_proof_hex, &to_pi, &to_trace);
+    let from_wr_json = build_witnessed(
+        &from_proof.proof_hex,
+        &from_proof.public_inputs,
+        &from_proof.trace_rows,
+    );
+    let to_wr_json = build_witnessed(
+        &to_proof.proof_hex,
+        &to_proof.public_inputs,
+        &to_proof.trace_rows,
+    );
 
     McpToolResult::json(&serde_json::json!({
+        "activity_status": "committed",
+        "proof_status": "proved",
         "committed": true,
         "mode": mode,
         "turn_hash": turn_hash,

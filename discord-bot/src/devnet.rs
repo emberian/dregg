@@ -244,6 +244,14 @@ pub struct FederationHealth {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct NodeStatusResponse {
+    healthy: bool,
+    peer_count: u32,
+    latest_height: u64,
+    federation_mode: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ProofVerifyResult {
     pub valid: bool,
     pub air_name: Option<String>,
@@ -734,7 +742,30 @@ impl DevnetClient {
 
     /// Get federation health.
     pub async fn federation_health(&self) -> Result<FederationHealth, DevnetError> {
-        let url = format!("{}/api/node/health", self.base_url);
+        let status = self.node_status().await?;
+        let is_solo = status.federation_mode == "solo";
+        let nodes_total = if is_solo {
+            1
+        } else {
+            status.peer_count.saturating_add(1)
+        };
+        let nodes_up = if status.healthy { nodes_total } else { 0 };
+        Ok(FederationHealth {
+            status: if status.healthy {
+                "healthy".to_string()
+            } else {
+                "degraded".to_string()
+            },
+            nodes_up,
+            nodes_total,
+            block_height: status.latest_height,
+            last_block_time: "n/a".to_string(),
+            avg_block_time_ms: 0,
+        })
+    }
+
+    async fn node_status(&self) -> Result<NodeStatusResponse, DevnetError> {
+        let url = format!("{}/status", self.base_url);
         let resp = self.client.get(&url).send().await?;
         if !resp.status().is_success() {
             return Err(DevnetError::Api(format!("status {}", resp.status())));
@@ -756,12 +787,26 @@ impl DevnetClient {
 
     /// Get devnet metrics.
     pub async fn metrics(&self) -> Result<DevnetMetrics, DevnetError> {
-        let url = format!("{}/api/node/metrics", self.base_url);
-        let resp = self.client.get(&url).send().await?;
-        if !resp.status().is_success() {
-            return Err(DevnetError::Api(format!("status {}", resp.status())));
-        }
-        Ok(resp.json().await?)
+        let status = self.node_status().await?;
+        let cells_url = format!("{}/api/cells", self.base_url);
+        let active_cells = match self.client.get(&cells_url).send().await {
+            Ok(resp) if resp.status().is_success() => resp
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|value| value.as_array().map(|cells| cells.len() as u64))
+                .unwrap_or(0),
+            _ => 0,
+        };
+
+        Ok(DevnetMetrics {
+            tps: 0.0,
+            block_height: status.latest_height,
+            pending_turns: 0,
+            active_cells,
+            memory_usage_mb: 0,
+            uptime_secs: 0,
+        })
     }
 }
 
@@ -786,6 +831,22 @@ mod tests {
         assert_eq!(details.nonce, 7);
         assert_eq!(details.capabilities_count, 3);
         assert!(details.program_vk.is_none());
+    }
+
+    #[test]
+    fn node_status_maps_to_federation_health_shape() {
+        let status: NodeStatusResponse = serde_json::from_value(json!({
+            "healthy": true,
+            "peer_count": 0,
+            "latest_height": 12,
+            "federation_mode": "solo",
+            "public_key": "ignored"
+        }))
+        .expect("node /status response should deserialize");
+
+        assert!(status.healthy);
+        assert_eq!(status.latest_height, 12);
+        assert_eq!(status.federation_mode, "solo");
     }
 
     #[test]

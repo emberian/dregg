@@ -10,11 +10,11 @@ use serenity::all::{
 
 use dregg_app_framework::{CellId, FieldElement, field_from_bytes, hex_encode_32};
 use dregg_dfa::{RouteTable, RouteTarget};
-use starbridge_nameservice::{build_register_action, build_set_target_action};
 use starbridge_governed_namespace::{
     VoteKind, build_propose_table_update_action, build_route_table, build_vote_on_proposal_action,
     route_table_commitment,
 };
+use starbridge_nameservice::{build_register_action, build_set_target_action};
 
 use crate::BotState;
 use crate::cipherclerk::UserCipherclerk;
@@ -409,7 +409,9 @@ fn credential_verify_modal() -> CreateModal {
 
 fn gov_propose_modal() -> CreateModal {
     CreateModal::new(ID_GOV_PROPOSE, "Create Governance Proposal").components(vec![
-        short_row(short_input("namespace_cell", "Namespace cell id", "64 hex chars").max_length(64)),
+        short_row(
+            short_input("namespace_cell", "Namespace cell id", "64 hex chars").max_length(64),
+        ),
         CreateActionRow::InputText(
             CreateInputText::new(InputTextStyle::Paragraph, "Routes JSON", "routes_json")
                 .placeholder(r#"[{"path":"/public/*","target":"public"}]"#)
@@ -428,7 +430,9 @@ fn gov_propose_modal() -> CreateModal {
 
 fn gov_vote_modal() -> CreateModal {
     CreateModal::new(ID_GOV_VOTE, "Vote on Proposal").components(vec![
-        short_row(short_input("namespace_cell", "Namespace cell id", "64 hex chars").max_length(64)),
+        short_row(
+            short_input("namespace_cell", "Namespace cell id", "64 hex chars").max_length(64),
+        ),
         short_row(
             short_input("prior_proposal_root", "Prior proposal root", "64 hex chars")
                 .max_length(64),
@@ -696,7 +700,11 @@ async fn submit_gov_propose(modal: &ModalInteraction, state: &BotState) -> Creat
     {
         Ok(result) if result.accepted => embeds::success_embed("Proposal Submitted")
             .field("Namespace", short_cell(&namespace_cell_hex), true)
-            .field("Proposed Root", format!("`{}`", hex_encode_32(&proposed_root)), false)
+            .field(
+                "Proposed Root",
+                format!("`{}`", hex_encode_32(&proposed_root)),
+                false,
+            )
             .field("Dispute Window", dispute_window_height.to_string(), true)
             .field("Description", truncate(&description, 900), false)
             .field("Turn", turn_hash_field(result.turn_hash), false),
@@ -761,7 +769,11 @@ async fn submit_gov_vote(modal: &ModalInteraction, state: &BotState) -> CreateEm
         Ok(result) if result.accepted => embeds::success_embed("Vote Submitted")
             .field("Namespace", short_cell(&namespace_cell_hex), true)
             .field("Vote", vote, true)
-            .field("Prior Proposal Root", short_cell(&prior_proposal_root_hex), false)
+            .field(
+                "Prior Proposal Root",
+                short_cell(&prior_proposal_root_hex),
+                false,
+            )
             .field("Turn", turn_hash_field(result.turn_hash), false),
         Ok(result) => embeds::error_embed(
             "Vote Rejected",
@@ -1168,11 +1180,21 @@ fn parse_route_target(value: &serde_json::Value) -> Result<RouteTarget, CreateEm
             .get("value")
             .and_then(|v| v.as_str())
             .map(RouteTarget::handler)
-            .ok_or_else(|| embeds::warning_embed("Invalid Routes JSON", "Handler targets need a string `value`.")),
+            .ok_or_else(|| {
+                embeds::warning_embed(
+                    "Invalid Routes JSON",
+                    "Handler targets need a string `value`.",
+                )
+            }),
         Some("federation") => obj
             .get("value")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| embeds::warning_embed("Invalid Routes JSON", "Federation targets need a hex `value`."))
+            .ok_or_else(|| {
+                embeds::warning_embed(
+                    "Invalid Routes JSON",
+                    "Federation targets need a hex `value`.",
+                )
+            })
             .and_then(|hex| parse_cell_bytes(hex).map(RouteTarget::federation)),
         _ => Err(embeds::warning_embed(
             "Invalid Routes JSON",

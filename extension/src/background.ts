@@ -27,6 +27,7 @@ import type {
   NodeRequestResult,
   OriginPermission,
   OriginPermissionDisplay,
+  OutboxEntry,
   PageResponseMessage,
   PredicateFact,
   PredicateProofResult,
@@ -69,8 +70,12 @@ const DEFAULT_INTENT_EXPIRY_MS = 5 * 60 * 1000;
 const INTENT_GC_INTERVAL = 60_000;
 const LIVE_REFS_KEY = "dregg_live_refs";
 const KNOWN_FEDERATIONS_KEY = "dregg_known_federations";
+const OUTBOX_KEY = "dregg_extension_outbox";
 const WS_MAX_RECONNECT_DELAY = 60000;
 const WS_AUTH_TIMEOUT_MS = 5000;
+const OUTBOX_MAX_ENTRIES = 200;
+const OUTBOX_FLUSH_INTERVAL_MS = 30_000;
+const OUTBOX_ALARM_NAME = "dregg-outbox-flush";
 
 // ---------------------------------------------------------------------------
 // Node configuration
@@ -525,6 +530,183 @@ function notifySubscribers(event: string, payload: unknown): void {
       });
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Durable outbox
+// ---------------------------------------------------------------------------
+
+type OutboxSubmitResult<T = unknown> =
+  | { submitted: true; data?: T }
+  | { submitted: false; queued: true; outboxId: string; error: string }
+  | { submitted: false; queued: false; error: string; status?: number };
+
+async function readOutbox(): Promise<OutboxEntry[]> {
+  const stored = await chrome.storage.local.get(OUTBOX_KEY);
+  const entries = stored[OUTBOX_KEY];
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry): entry is OutboxEntry => !!entry && typeof entry.id === "string" && typeof entry.endpoint === "string")
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+async function writeOutbox(entries: OutboxEntry[]): Promise<void> {
+  const trimmed = entries
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-OUTBOX_MAX_ENTRIES);
+  await chrome.storage.local.set({ [OUTBOX_KEY]: trimmed });
+  notifySubscribers("outbox", summarizeOutbox(trimmed));
+  pushActivity("outbox", summarizeOutbox(trimmed), { source: "extension" });
+}
+
+function summarizeOutbox(entries: OutboxEntry[]): Record<string, unknown> {
+  return {
+    pending: entries.filter(e => e.status === "pending" || e.status === "submitting").length,
+    failed: entries.filter(e => e.status === "failed").length,
+    submitted: entries.filter(e => e.status === "submitted").length,
+    total: entries.length,
+  };
+}
+
+function shouldQueueNodeFailure(resp: NodeRequestResult<unknown>): boolean {
+  return !resp.ok && (!resp.status || resp.status >= 500);
+}
+
+function outboxBackoffMs(attempts: number): number {
+  return Math.min(5 * 60_000, 2_000 * Math.max(1, Math.pow(2, Math.min(attempts, 7))));
+}
+
+async function enqueueOutboxEntry(input: {
+  kind: OutboxEntry["kind"];
+  label: string;
+  endpoint: string;
+  body: string;
+  headers?: Record<string, string>;
+  turnId?: string;
+  metadata?: Record<string, unknown>;
+  error: string;
+}): Promise<OutboxEntry> {
+  const now = Date.now();
+  const entries = await readOutbox();
+  const existing = input.turnId
+    ? entries.find(e => e.turnId === input.turnId && e.endpoint === input.endpoint && e.status !== "submitted")
+    : null;
+  if (existing) {
+    existing.updatedAt = now;
+    existing.lastError = input.error;
+    existing.status = "pending";
+    existing.nextAttemptAt = now + outboxBackoffMs(existing.attempts);
+    await writeOutbox(entries);
+    return existing;
+  }
+  const entry: OutboxEntry = {
+    id: `outbox_${now.toString(36)}_${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`,
+    kind: input.kind,
+    label: input.label,
+    endpoint: input.endpoint,
+    method: "POST",
+    body: input.body,
+    headers: input.headers,
+    nodeUrl: nodeConfig.nodeUrl,
+    turnId: input.turnId,
+    createdAt: now,
+    updatedAt: now,
+    attempts: 0,
+    nextAttemptAt: now + outboxBackoffMs(0),
+    status: "pending",
+    lastError: input.error,
+    metadata: input.metadata,
+  };
+  entries.push(entry);
+  await writeOutbox(entries);
+  return entry;
+}
+
+async function submitNodeJsonWithOutbox<T = unknown>(input: {
+  kind: OutboxEntry["kind"];
+  label: string;
+  endpoint: string;
+  body: unknown;
+  headers?: Record<string, string>;
+  turnId?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<OutboxSubmitResult<T>> {
+  const body = typeof input.body === "string" ? input.body : JSON.stringify(input.body);
+  const resp = await nodeRequest<T>(nodeConfig, input.endpoint, {
+    method: "POST",
+    body,
+    headers: input.headers,
+  });
+  if (resp.ok) return { submitted: true, data: resp.data };
+  if (!shouldQueueNodeFailure(resp as NodeRequestResult<unknown>)) {
+    return { submitted: false, queued: false, error: resp.error || "node rejected submission", status: resp.status };
+  }
+  const entry = await enqueueOutboxEntry({
+    kind: input.kind,
+    label: input.label,
+    endpoint: input.endpoint,
+    body,
+    headers: input.headers,
+    turnId: input.turnId,
+    metadata: input.metadata,
+    error: resp.error || "node unavailable",
+  });
+  return { submitted: false, queued: true, outboxId: entry.id, error: entry.lastError || "queued" };
+}
+
+async function flushOutbox(options: { force?: boolean } = {}): Promise<{ submitted: number; failed: number; pending: number; entries: OutboxEntry[] }> {
+  const entries = await readOutbox();
+  const now = Date.now();
+  let submitted = 0;
+  let failed = 0;
+  let changed = false;
+  for (const entry of entries) {
+    if (entry.status === "submitted") continue;
+    if (!options.force && entry.nextAttemptAt > now && entry.status !== "failed") continue;
+    changed = true;
+    entry.status = "submitting";
+    entry.updatedAt = Date.now();
+    entry.attempts += 1;
+    const resp = await nodeRequest(nodeConfig, entry.endpoint, {
+      method: entry.method,
+      body: entry.body,
+      headers: entry.headers,
+    });
+    entry.updatedAt = Date.now();
+    if (resp.ok) {
+      entry.status = "submitted";
+      entry.lastError = undefined;
+      submitted += 1;
+      continue;
+    }
+    if (shouldQueueNodeFailure(resp as NodeRequestResult<unknown>)) {
+      entry.status = "pending";
+      entry.lastError = resp.error || "node unavailable";
+      entry.nextAttemptAt = Date.now() + outboxBackoffMs(entry.attempts);
+    } else {
+      entry.status = "failed";
+      entry.lastError = resp.error || "node rejected submission";
+      entry.nextAttemptAt = Date.now() + outboxBackoffMs(entry.attempts);
+    }
+    failed += 1;
+  }
+  const retained = entries.filter(entry => entry.status !== "submitted");
+  if (changed || retained.length !== entries.length) {
+    await writeOutbox(retained);
+  }
+  return {
+    submitted,
+    failed,
+    pending: retained.filter(entry => entry.status === "pending" || entry.status === "submitting").length,
+    entries: retained,
+  };
+}
+
+async function dropOutboxEntry(id: string): Promise<{ dropped: boolean; id: string }> {
+  const entries = await readOutbox();
+  const next = entries.filter(entry => entry.id !== id);
+  await writeOutbox(next);
+  return { dropped: next.length !== entries.length, id };
 }
 
 // ---------------------------------------------------------------------------
@@ -1674,7 +1856,7 @@ async function getFederationStatus(): Promise<{ mode?: string; height?: number; 
   };
 }
 
-async function proposeRoutes(routes: unknown[]): Promise<{ proposalId?: string; submitted?: boolean; error?: string }> {
+async function proposeRoutes(routes: unknown[]): Promise<{ proposalId?: string; submitted?: boolean; queued?: boolean; error?: string }> {
   const cc = await loadState();
   if (cc.locked) return { error: "Cipherclerk is locked" };
   if (!cc.secretKey) return { error: "Cipherclerk secret key not available" };
@@ -1689,23 +1871,28 @@ async function proposeRoutes(routes: unknown[]): Promise<{ proposalId?: string; 
       method: "propose_routes",
       memo_json: JSON.stringify({ routes }),
     }));
-    const resp = await nodeRequest<{ proposal_id?: string }>(nodeConfig, "/turns/submit", {
-      method: "POST",
-      body: JSON.stringify({
+    const submit = await submitNodeJsonWithOutbox<{ proposal_id?: string }>({
+      kind: "turn",
+      label: "propose routes",
+      endpoint: "/turns/submit",
+      turnId: built.turn_id,
+      body: {
         turn_id: built.turn_id,
         turn_bytes: Array.from(built.turn_bytes),
         sender_pubkey: cc.publicKey,
-      }),
+      },
+      metadata: { action: "proposeRoutes", routes },
     });
-    if (!resp.ok) return { error: `Proposal failed: ${resp.error}` };
-    return { proposalId: resp.data?.proposal_id || built.turn_id, submitted: true };
+    if (submit.submitted) return { proposalId: submit.data?.proposal_id || built.turn_id, submitted: true };
+    if (submit.queued) return { proposalId: built.turn_id, submitted: false, queued: true, error: `Queued for retry: ${submit.error}` };
+    return { error: `Proposal failed: ${submit.error}` };
   } catch (e: unknown) {
     const err = e as Error;
     return { error: err.message || "cipherclerk_make_action_turn failed" };
   }
 }
 
-async function voteOnProposal(proposalId: string, approve: boolean): Promise<{ accepted?: boolean; proposalId?: string; error?: string }> {
+async function voteOnProposal(proposalId: string, approve: boolean): Promise<{ accepted?: boolean; proposalId?: string; queued?: boolean; error?: string }> {
   const cc = await loadState();
   if (cc.locked) return { error: "Cipherclerk is locked" };
   if (!cc.secretKey) return { error: "Cipherclerk secret key not available" };
@@ -1720,16 +1907,21 @@ async function voteOnProposal(proposalId: string, approve: boolean): Promise<{ a
       method: "vote_on_proposal",
       memo_json: JSON.stringify({ proposal_id: proposalId, vote: !!approve }),
     }));
-    const resp = await nodeRequest<{ accepted?: boolean }>(nodeConfig, "/turns/submit", {
-      method: "POST",
-      body: JSON.stringify({
+    const submit = await submitNodeJsonWithOutbox<{ accepted?: boolean }>({
+      kind: "turn",
+      label: "vote on proposal",
+      endpoint: "/turns/submit",
+      turnId: built.turn_id,
+      body: {
         turn_id: built.turn_id,
         turn_bytes: Array.from(built.turn_bytes),
         sender_pubkey: cc.publicKey,
-      }),
+      },
+      metadata: { action: "voteOnProposal", proposalId, approve },
     });
-    if (!resp.ok) return { error: `Vote failed: ${resp.error}` };
-    return { accepted: resp.data?.accepted !== false, proposalId };
+    if (submit.submitted) return { accepted: submit.data?.accepted !== false, proposalId };
+    if (submit.queued) return { accepted: false, proposalId, queued: true, error: `Queued for retry: ${submit.error}` };
+    return { error: `Vote failed: ${submit.error}` };
   } catch (e: unknown) {
     const err = e as Error;
     return { error: err.message || "cipherclerk_make_action_turn failed" };
@@ -1935,6 +2127,7 @@ const PAGE_ALLOWED_METHODS = new Set<MessageType>([
   "dregg:shareCapability", "dregg:acceptCapability", "dregg:createHandoff",
   "dregg:mountService", "dregg:discoverServices", "dregg:resolvePath",
   "dregg:storageWrite", "dregg:storageRead", "dregg:storageQuota",
+  "dregg:listOutbox", "dregg:flushOutbox", "dregg:dropOutboxEntry",
   "dregg:federationStatus", "dregg:proposeRoutes", "dregg:voteOnProposal",
   "dregg:registerFederation", "dregg:listKnownFederations",
   "dregg:createCapTpDeliveredAuth",
@@ -2055,6 +2248,20 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
     // consumable by <dregg-activity> (or direct .on('activity')) and for RemoteRuntime bridge.
     case "dregg:getActivityFeed": {
       return { id: message.id, result: activityFeed };
+    }
+
+    case "dregg:listOutbox": {
+      return { id: message.id, result: await readOutbox() };
+    }
+
+    case "dregg:flushOutbox": {
+      const result = await flushOutbox({ force: true });
+      return { id: message.id, result };
+    }
+
+    case "dregg:dropOutboxEntry": {
+      const result = await dropOutboxEntry(String(message.outboxId || message.idToDrop || message.entryId || ""));
+      return { id: message.id, result };
     }
 
     case "dregg:provisionDecision":
@@ -2360,16 +2567,26 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       // Submit the signed factory turn to the node. The node's executor
       // validates the factory descriptor + params and mints the cell,
       // tracking provenance for downstream verifyProvenance calls.
-      const resp = await nodeRequest(nodeConfig, "/turns/submit", {
-        method: "POST",
-        body: JSON.stringify({
+      const submit = await submitNodeJsonWithOutbox<Record<string, unknown>>({
+        kind: "turn",
+        label: "create cell from factory",
+        endpoint: "/turns/submit",
+        turnId: turnData.turn_id,
+        body: {
           turn_id: turnData.turn_id,
           turn_bytes: Array.from(turnData.turn_bytes),
           sender_pubkey: cc.publicKey,
-        }),
+        },
+        metadata: {
+          action: "createFromFactory",
+          childVk: turnData.child_vk,
+          paramHash: turnData.param_hash,
+          factoryVk: turnData.factory_vk,
+          agentCellId: turnData.agent_cell_id,
+        },
       });
 
-      if (!resp.ok) {
+      if (!submit.submitted) {
         return {
           id: message.id,
           // Even when submission fails the caller can still display the
@@ -2380,7 +2597,9 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
             paramHash: turnData.param_hash,
             factoryVk: turnData.factory_vk,
             submitted: false,
-            error: `Factory turn rejected by node: ${resp.error}`,
+            queued: submit.queued,
+            outboxId: submit.queued ? submit.outboxId : undefined,
+            error: submit.queued ? `Queued for retry: ${submit.error}` : `Factory turn rejected by node: ${submit.error}`,
             turnId: turnData.turn_id,
           },
         };
@@ -2405,7 +2624,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
           submitted: true,
           turnId: turnData.turn_id,
           agentCellId: turnData.agent_cell_id,
-          nodeResult: resp.data as Record<string, unknown> | undefined,
+          nodeResult: submit.data as Record<string, unknown> | undefined,
         },
       };
     }
@@ -2538,14 +2757,27 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         // gossip propagation. The wasm binding emits both the
         // postcard bytes (for direct-peer use) and an axum-compatible
         // JSON form for the `/intents/encrypted` HTTP endpoint.
-        const resp = await nodeRequest(nodeConfig, "/intents/encrypted", {
-          method: "POST",
+        const submit = await submitNodeJsonWithOutbox({
+          kind: "encrypted_intent",
+          label: "encrypted intent",
+          endpoint: "/intents/encrypted",
           body: result.encrypted_intent_json,
           headers: { "Content-Type": "application/json" },
+          metadata: { action: "postEncryptedIntent", intentId: result.intent_id, kind },
         });
-        const submitted = resp.ok;
         resetLockTimer();
-        return { id: message.id, result: { intentId: result.intent_id, expiry: result.expiry, encrypted: true, submitted, submitError: submitted ? undefined : resp.error } };
+        return {
+          id: message.id,
+          result: {
+            intentId: result.intent_id,
+            expiry: result.expiry,
+            encrypted: true,
+            submitted: submit.submitted,
+            queued: !submit.submitted && submit.queued,
+            outboxId: !submit.submitted && submit.queued ? submit.outboxId : undefined,
+            submitError: submit.submitted ? undefined : submit.error,
+          },
+        };
       } catch (e: unknown) {
         const err = e as Error;
         return { id: message.id, error: err.message || "post_encrypted_intent failed" };
@@ -2584,13 +2816,17 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
             view_pubkey: recipientMeta.viewPubkey,
           },
         }));
-        const resp = await nodeRequest(nodeConfig, "/turns/submit", {
-          method: "POST",
-          body: JSON.stringify({
+        const submit = await submitNodeJsonWithOutbox({
+          kind: "turn",
+          label: "private transfer",
+          endpoint: "/turns/submit",
+          turnId: result.turn_id,
+          body: {
             turn_id: result.turn_id,
             turn_bytes: Array.from(result.turn_bytes),
             sender_pubkey: cc.publicKey,
-          }),
+          },
+          metadata: { action: "privateTransfer", amount, assetType: assetTypeU64 },
         });
         cc.log.push({
           action: "privateTransfer",
@@ -2608,9 +2844,11 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         return {
           id: message.id,
           result: {
-            success: resp.ok,
+            success: submit.submitted,
             turnId: result.turn_id,
-            error: resp.ok ? undefined : `Submit failed: ${resp.error}`,
+            queued: !submit.submitted && submit.queued,
+            outboxId: !submit.submitted && submit.queued ? submit.outboxId : undefined,
+            error: submit.submitted ? undefined : `Submit failed: ${submit.error}`,
           },
         };
       } catch (e: unknown) {
@@ -2785,6 +3023,7 @@ function tryConnect(url: string, onFail: () => void): void {
         wsAuthenticated = true;
         clearTimeout(ws._authTimer!);
         nodeWs!.send(JSON.stringify({ type: "subscribe", topics: ["roots", "revocations", "receipts", "intents", "note_announcements"] }));
+        flushOutbox({ force: true }).catch(() => {});
       } else {
         nodeWs!.close();
       }
@@ -2925,10 +3164,19 @@ async function fetchDiscovery(): Promise<void> {
 }
 
 let discoveryInterval: ReturnType<typeof setInterval> | null = null;
+let outboxFlushInterval: ReturnType<typeof setInterval> | null = null;
 
 function startDiscoveryPolling(): void {
   fetchDiscovery();
   discoveryInterval = setInterval(fetchDiscovery, DISCOVERY_POLL_INTERVAL);
+}
+
+function startOutboxFlushLoop(): void {
+  flushOutbox().catch(() => {});
+  outboxFlushInterval = setInterval(() => {
+    flushOutbox().catch(() => {});
+  }, OUTBOX_FLUSH_INTERVAL_MS);
+  chrome.alarms.create(OUTBOX_ALARM_NAME, { periodInMinutes: 1 });
 }
 
 // ---------------------------------------------------------------------------
@@ -2977,6 +3225,12 @@ chrome.contextMenus.onClicked.addListener(async (info: chrome.contextMenus.OnCli
   }
 });
 
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === OUTBOX_ALARM_NAME) {
+    flushOutbox().catch(() => {});
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
@@ -2985,3 +3239,4 @@ loadNodeConfig();
 loadState();
 connectNodeWs();
 startDiscoveryPolling();
+startOutboxFlushLoop();

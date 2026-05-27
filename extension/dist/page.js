@@ -54,7 +54,8 @@
       "intent",
       "note_announcement",
       "federation",
-      "activity"
+      "activity",
+      "outbox"
     ];
     if (!validEvents.includes(event)) {
       throw new Error(`dregg.on: unknown event "${event}". Valid: ${validEvents.join(", ")}`);
@@ -209,11 +210,23 @@
     signTurnV3(turnBytes) {
       return sendMessage("dregg:signTurnV3", { turnBytes: Array.from(turnBytes) });
     },
+    listOutbox() {
+      return sendMessage("dregg:listOutbox", {});
+    },
+    flushOutbox() {
+      return sendMessage("dregg:flushOutbox", {});
+    },
+    dropOutboxEntry(id) {
+      return sendMessage("dregg:dropOutboxEntry", { outboxId: id });
+    },
     registerFederation(federationId, name, committeePubkeys) {
       return sendMessage("dregg:registerFederation", { federationId, name, committeePubkeys });
     },
     listKnownFederations() {
       return sendMessage("dregg:listKnownFederations", {});
+    },
+    getActivityFeed() {
+      return sendMessage("dregg:getActivityFeed", {});
     },
     createCapTpDeliveredAuth({ handoffCertB58, introducerPk, senderPk }) {
       return sendMessage("dregg:createCapTpDeliveredAuth", { handoffCertB58, introducerPk, senderPk });

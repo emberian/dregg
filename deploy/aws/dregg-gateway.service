@@ -19,7 +19,7 @@ ExecStart=/opt/dregg/target/release/dregg-node run \
     --enable-faucet \
     --federation-mode solo \
     --consensus blocklace
-ExecStartPost=/opt/dregg/deploy/aws/unlock-gateway.sh
+ExecStartPost=+/opt/dregg/deploy/aws/unlock-gateway.sh
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info

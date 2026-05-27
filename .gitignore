@@ -15,6 +15,7 @@ pdfs/
 target
 node_modules
 __pycache__
+.playwright-mcp
 
 # Devnet secrets
 deploy/genesis/keys/

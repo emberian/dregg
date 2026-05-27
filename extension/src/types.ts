@@ -178,6 +178,10 @@ export type MessageType =
   | "dregg:clearDisclosurePref"
   // Turn v3 (pre-built postcard bytes)
   | "dregg:signTurnV3"
+  // Durable offline outbox
+  | "dregg:listOutbox"
+  | "dregg:flushOutbox"
+  | "dregg:dropOutboxEntry"
   // Federation registry
   | "dregg:registerFederation"
   | "dregg:listKnownFederations"
@@ -334,8 +338,32 @@ export interface TurnSpec {
 export interface SignTurnResult {
   turnId?: string;
   submitted: boolean;
+  queued?: boolean;
+  outboxId?: string;
   error?: string;
   nodeResult?: Record<string, unknown>;
+}
+
+export type OutboxStatus = "pending" | "submitting" | "submitted" | "failed";
+
+/** Durable signed submission waiting for a node to accept it. */
+export interface OutboxEntry {
+  id: string;
+  kind: "turn" | "encrypted_intent";
+  label: string;
+  endpoint: string;
+  method: "POST";
+  body: string;
+  headers?: Record<string, string>;
+  nodeUrl: string;
+  turnId?: string;
+  createdAt: number;
+  updatedAt: number;
+  attempts: number;
+  nextAttemptAt: number;
+  status: OutboxStatus;
+  lastError?: string;
+  metadata?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------

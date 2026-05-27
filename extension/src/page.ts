@@ -8,6 +8,7 @@ import type {
   AuthorizeResult,
   KnownFederation,
   MessageType,
+  OutboxEntry,
   PageRequestMessage,
   StealthMetaAddress,
 } from "./types";
@@ -67,7 +68,7 @@ type DreggEvent = "ready" | "authorization" | "revoked" | "stealthNoteReceived" 
   // directly usable from page/dapp context via window.dregg.on(). Foundational for embedding
   // <dregg-activity> and other Studio inspectors as the extension's debugger UI. Subscribe
   // wires through background to the node WS bus (and synthesized activity trace events).
-  | "receipt" | "root" | "intent" | "note_announcement" | "federation" | "activity";
+  | "receipt" | "root" | "intent" | "note_announcement" | "federation" | "activity" | "outbox";
 
 const eventListeners = new Map<string, Set<(payload: unknown) => void>>();
 
@@ -76,7 +77,7 @@ function addListener(event: DreggEvent, callback: (payload: unknown) => void): v
     throw new TypeError("dregg.on: callback must be a function");
   }
   const validEvents: DreggEvent[] = ["ready", "authorization", "revoked", "stealthNoteReceived", "privateTransfer", "intentFulfilled", "privacyModeChanged",
-    "receipt", "root", "intent", "note_announcement", "federation", "activity"];
+    "receipt", "root", "intent", "note_announcement", "federation", "activity", "outbox"];
   if (!validEvents.includes(event)) {
     throw new Error(`dregg.on: unknown event "${event}". Valid: ${validEvents.join(", ")}`);
   }
@@ -137,8 +138,8 @@ export interface DreggAPI {
   provision(tokenBytes: Uint8Array | Record<string, unknown>): Promise<{ accepted: boolean; tokenId?: string }>;
   postIntent(matchSpec: Record<string, unknown>, options?: Record<string, unknown>): Promise<{ intentId: string; expiry: number }>;
   getStealthAddress(): Promise<StealthMetaAddress>;
-  postEncryptedIntent(matchSpec: Record<string, unknown>, options?: Record<string, unknown>): Promise<{ intentId: string; expiry: number; encrypted: boolean }>;
-  privateTransfer(amount: number, assetType: string, recipientStealthMeta: StealthMetaAddress): Promise<{ success: boolean; turnId?: string; commitment?: number[] }>;
+  postEncryptedIntent(matchSpec: Record<string, unknown>, options?: Record<string, unknown>): Promise<{ intentId: string; expiry: number; encrypted: boolean; submitted?: boolean; queued?: boolean; outboxId?: string; submitError?: string }>;
+  privateTransfer(amount: number, assetType: string, recipientStealthMeta: StealthMetaAddress): Promise<{ success: boolean; turnId?: string; commitment?: number[]; queued?: boolean; outboxId?: string; error?: string }>;
   createBearerCap(targetCellHex: string, action: string, expiry?: number): Promise<{ bearerTokenHex: string; targetCell: string; action: string }>;
   verifyBearerCap(bearerTokenHex: string, delegatorKeyHex: string, targetCellHex: string, action: string, expiry: number): Promise<{ valid: boolean; expired: boolean }>;
   /**
@@ -164,6 +165,8 @@ export interface DreggAPI {
     paramHash: string;
     factoryVk: string;
     submitted?: boolean;
+    queued?: boolean;
+    outboxId?: string;
     turnId?: string;
     agentCellId?: string;
     error?: string;
@@ -184,8 +187,8 @@ export interface DreggAPI {
   storageRead(hash: string): Promise<{ hash: string; data: ArrayBuffer; size: number }>;
   storageQuota(): Promise<{ bytesStored: number; bytesLimit: number; computronsUsed: number; computronsRemaining: number; objectCount: number }>;
   federationStatus(): Promise<{ mode: string; height: number; peerCount: number; merkleRoot: string }>;
-  proposeRoutes(routes: unknown[]): Promise<{ proposalId: string; submitted: boolean }>;
-  voteOnProposal(proposalId: string, approve: boolean): Promise<{ accepted: boolean; proposalId: string }>;
+  proposeRoutes(routes: unknown[]): Promise<{ proposalId: string; submitted: boolean; queued?: boolean; error?: string }>;
+  voteOnProposal(proposalId: string, approve: boolean): Promise<{ accepted: boolean; proposalId: string; queued?: boolean; error?: string }>;
   /**
    * Sign and submit a pre-built postcard-encoded Turn (v3 wire format).
    * starbridge-apps' turn-builders produce raw bytes; use this instead of
@@ -193,7 +196,13 @@ export interface DreggAPI {
    *
    * Note: requires the wasm `sign_turn_v3` export (stub until it lands).
    */
-  signTurnV3(turnBytes: Uint8Array): Promise<{ turnId?: string; submitted: boolean; error?: string }>;
+  signTurnV3(turnBytes: Uint8Array): Promise<{ turnId?: string; submitted: boolean; queued?: boolean; outboxId?: string; error?: string }>;
+  /** List locally persisted signed submissions waiting for node acceptance. */
+  listOutbox(): Promise<OutboxEntry[]>;
+  /** Retry pending outbox submissions against the configured node. */
+  flushOutbox(): Promise<{ submitted: number; failed: number; pending: number; entries: OutboxEntry[] }>;
+  /** Remove one pending/failed outbox entry. */
+  dropOutboxEntry(id: string): Promise<{ dropped: boolean; id: string }>;
   /**
    * Register a known federation in the local KnownFederations registry.
    * Persisted in chrome.storage.local under `dregg_known_federations`.
@@ -253,11 +262,11 @@ const dregg: DreggAPI = {
   },
 
   postEncryptedIntent(matchSpec, options) {
-    return sendMessage("dregg:postEncryptedIntent", { matchSpec, options }) as Promise<{ intentId: string; expiry: number; encrypted: boolean }>;
+    return sendMessage("dregg:postEncryptedIntent", { matchSpec, options }) as Promise<{ intentId: string; expiry: number; encrypted: boolean; submitted?: boolean; queued?: boolean; outboxId?: string; submitError?: string }>;
   },
 
   privateTransfer(amount, assetType, recipientStealthMeta) {
-    return sendMessage("dregg:privateTransfer", { amount, assetType, recipientStealthMeta }) as Promise<{ success: boolean; turnId?: string; commitment?: number[] }>;
+    return sendMessage("dregg:privateTransfer", { amount, assetType, recipientStealthMeta }) as Promise<{ success: boolean; turnId?: string; commitment?: number[]; queued?: boolean; outboxId?: string; error?: string }>;
   },
 
   createBearerCap(targetCellHex, action, expiry) {
@@ -269,7 +278,7 @@ const dregg: DreggAPI = {
   },
 
   createFromFactory(factoryVkHex, ownerPubkeyHex, initialBalance) {
-    return sendMessage("dregg:createFromFactory", { factoryVkHex, ownerPubkeyHex, initialBalance }) as Promise<{ childVk: string; paramHash: string; factoryVk: string }>;
+    return sendMessage("dregg:createFromFactory", { factoryVkHex, ownerPubkeyHex, initialBalance }) as Promise<{ childVk: string; paramHash: string; factoryVk: string; submitted?: boolean; queued?: boolean; outboxId?: string; turnId?: string; error?: string }>;
   },
 
   verifyProvenance(cellVkHex, knownFactoryVks) {
@@ -342,15 +351,27 @@ const dregg: DreggAPI = {
   },
 
   proposeRoutes(routes) {
-    return sendMessage("dregg:proposeRoutes", { routes }) as Promise<{ proposalId: string; submitted: boolean }>;
+    return sendMessage("dregg:proposeRoutes", { routes }) as Promise<{ proposalId: string; submitted: boolean; queued?: boolean; error?: string }>;
   },
 
   voteOnProposal(proposalId, approve) {
-    return sendMessage("dregg:voteOnProposal", { proposalId, approve }) as Promise<{ accepted: boolean; proposalId: string }>;
+    return sendMessage("dregg:voteOnProposal", { proposalId, approve }) as Promise<{ accepted: boolean; proposalId: string; queued?: boolean; error?: string }>;
   },
 
   signTurnV3(turnBytes) {
-    return sendMessage("dregg:signTurnV3", { turnBytes: Array.from(turnBytes) }) as Promise<{ turnId?: string; submitted: boolean; error?: string }>;
+    return sendMessage("dregg:signTurnV3", { turnBytes: Array.from(turnBytes) }) as Promise<{ turnId?: string; submitted: boolean; queued?: boolean; outboxId?: string; error?: string }>;
+  },
+
+  listOutbox() {
+    return sendMessage("dregg:listOutbox", {}) as Promise<OutboxEntry[]>;
+  },
+
+  flushOutbox() {
+    return sendMessage("dregg:flushOutbox", {}) as Promise<{ submitted: number; failed: number; pending: number; entries: OutboxEntry[] }>;
+  },
+
+  dropOutboxEntry(id) {
+    return sendMessage("dregg:dropOutboxEntry", { outboxId: id }) as Promise<{ dropped: boolean; id: string }>;
   },
 
   registerFederation(federationId, name, committeePubkeys) {

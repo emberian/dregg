@@ -35,7 +35,9 @@ use tokio::sync::Mutex;
 use dregg_sdk::{Attenuation, AuthRequest, CellId, SignedTurn};
 use dregg_turn::{CallForest, Turn};
 
-use crate::state::{CommittedEvent, NodeEvent, NodeState};
+use crate::state::{
+    ActivityProofStatus, ActivityStatus, CommittedEvent, NodeEvent, NodeState,
+};
 use crate::ws::handle_ws;
 
 // =============================================================================
@@ -1362,6 +1364,8 @@ fn push_committed_event(
 
     s.push_event(CommittedEvent {
         height,
+        status: ActivityStatus::Committed,
+        proof_status: ActivityProofStatus::NotRequired,
         turn_hash,
         cell_id,
         effects,
@@ -4722,6 +4726,8 @@ mod tests {
     fn test_event(height: u64) -> CommittedEvent {
         CommittedEvent {
             height,
+            status: ActivityStatus::Committed,
+            proof_status: ActivityProofStatus::NotRequired,
             turn_hash: format!("turn-{height}"),
             cell_id: format!("cell-{height}"),
             effects: vec![format!("effect-{height}")],

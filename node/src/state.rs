@@ -250,11 +250,32 @@ pub struct NodeStateInner {
 /// Maximum number of events retained in the ring buffer for REST polling.
 pub const MAX_EVENT_LOG: usize = 1000;
 
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityStatus {
+    Committed,
+    Rejected,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityProofStatus {
+    Proved,
+    NotRequired,
+    MissingPreState,
+    ProofGenerationFailed,
+    NotCommitted,
+}
+
 /// A committed event stored in the ring buffer for the REST event stream.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct CommittedEvent {
     /// Block height at which this event was committed.
     pub height: u64,
+    /// Typed lifecycle status for explorer/devnet consumers.
+    pub status: ActivityStatus,
+    /// Typed proof status; null/absent proof material must not be read as proved.
+    pub proof_status: ActivityProofStatus,
     /// Hex-encoded turn hash.
     pub turn_hash: String,
     /// Hex-encoded cell ID affected.

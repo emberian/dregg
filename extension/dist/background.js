@@ -76,8 +76,12 @@
   var INTENT_GC_INTERVAL = 6e4;
   var LIVE_REFS_KEY = "dregg_live_refs";
   var KNOWN_FEDERATIONS_KEY = "dregg_known_federations";
+  var OUTBOX_KEY = "dregg_extension_outbox";
   var WS_MAX_RECONNECT_DELAY = 6e4;
   var WS_AUTH_TIMEOUT_MS = 5e3;
+  var OUTBOX_MAX_ENTRIES = 200;
+  var OUTBOX_FLUSH_INTERVAL_MS = 3e4;
+  var OUTBOX_ALARM_NAME = "dregg-outbox-flush";
   var nodeConfig = {
     nodeUrl: DEFAULT_NODE_URL,
     wssUrl: DEFAULT_NODE_WSS_URL,
@@ -393,6 +397,142 @@
         });
       }
     }
+  }
+  async function readOutbox() {
+    const stored = await chrome.storage.local.get(OUTBOX_KEY);
+    const entries = stored[OUTBOX_KEY];
+    if (!Array.isArray(entries)) return [];
+    return entries.filter((entry) => !!entry && typeof entry.id === "string" && typeof entry.endpoint === "string").sort((a, b) => a.createdAt - b.createdAt);
+  }
+  async function writeOutbox(entries) {
+    const trimmed = entries.sort((a, b) => a.createdAt - b.createdAt).slice(-OUTBOX_MAX_ENTRIES);
+    await chrome.storage.local.set({ [OUTBOX_KEY]: trimmed });
+    notifySubscribers("outbox", summarizeOutbox(trimmed));
+    pushActivity("outbox", summarizeOutbox(trimmed), { source: "extension" });
+  }
+  function summarizeOutbox(entries) {
+    return {
+      pending: entries.filter((e) => e.status === "pending" || e.status === "submitting").length,
+      failed: entries.filter((e) => e.status === "failed").length,
+      submitted: entries.filter((e) => e.status === "submitted").length,
+      total: entries.length
+    };
+  }
+  function shouldQueueNodeFailure(resp) {
+    return !resp.ok && (!resp.status || resp.status >= 500);
+  }
+  function outboxBackoffMs(attempts) {
+    return Math.min(5 * 6e4, 2e3 * Math.max(1, Math.pow(2, Math.min(attempts, 7))));
+  }
+  async function enqueueOutboxEntry(input) {
+    const now = Date.now();
+    const entries = await readOutbox();
+    const existing = input.turnId ? entries.find((e) => e.turnId === input.turnId && e.endpoint === input.endpoint && e.status !== "submitted") : null;
+    if (existing) {
+      existing.updatedAt = now;
+      existing.lastError = input.error;
+      existing.status = "pending";
+      existing.nextAttemptAt = now + outboxBackoffMs(existing.attempts);
+      await writeOutbox(entries);
+      return existing;
+    }
+    const entry = {
+      id: `outbox_${now.toString(36)}_${crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`,
+      kind: input.kind,
+      label: input.label,
+      endpoint: input.endpoint,
+      method: "POST",
+      body: input.body,
+      headers: input.headers,
+      nodeUrl: nodeConfig.nodeUrl,
+      turnId: input.turnId,
+      createdAt: now,
+      updatedAt: now,
+      attempts: 0,
+      nextAttemptAt: now + outboxBackoffMs(0),
+      status: "pending",
+      lastError: input.error,
+      metadata: input.metadata
+    };
+    entries.push(entry);
+    await writeOutbox(entries);
+    return entry;
+  }
+  async function submitNodeJsonWithOutbox(input) {
+    const body = typeof input.body === "string" ? input.body : JSON.stringify(input.body);
+    const resp = await nodeRequest(nodeConfig, input.endpoint, {
+      method: "POST",
+      body,
+      headers: input.headers
+    });
+    if (resp.ok) return { submitted: true, data: resp.data };
+    if (!shouldQueueNodeFailure(resp)) {
+      return { submitted: false, queued: false, error: resp.error || "node rejected submission", status: resp.status };
+    }
+    const entry = await enqueueOutboxEntry({
+      kind: input.kind,
+      label: input.label,
+      endpoint: input.endpoint,
+      body,
+      headers: input.headers,
+      turnId: input.turnId,
+      metadata: input.metadata,
+      error: resp.error || "node unavailable"
+    });
+    return { submitted: false, queued: true, outboxId: entry.id, error: entry.lastError || "queued" };
+  }
+  async function flushOutbox(options = {}) {
+    const entries = await readOutbox();
+    const now = Date.now();
+    let submitted = 0;
+    let failed = 0;
+    let changed = false;
+    for (const entry of entries) {
+      if (entry.status === "submitted") continue;
+      if (!options.force && entry.nextAttemptAt > now && entry.status !== "failed") continue;
+      changed = true;
+      entry.status = "submitting";
+      entry.updatedAt = Date.now();
+      entry.attempts += 1;
+      const resp = await nodeRequest(nodeConfig, entry.endpoint, {
+        method: entry.method,
+        body: entry.body,
+        headers: entry.headers
+      });
+      entry.updatedAt = Date.now();
+      if (resp.ok) {
+        entry.status = "submitted";
+        entry.lastError = void 0;
+        submitted += 1;
+        continue;
+      }
+      if (shouldQueueNodeFailure(resp)) {
+        entry.status = "pending";
+        entry.lastError = resp.error || "node unavailable";
+        entry.nextAttemptAt = Date.now() + outboxBackoffMs(entry.attempts);
+      } else {
+        entry.status = "failed";
+        entry.lastError = resp.error || "node rejected submission";
+        entry.nextAttemptAt = Date.now() + outboxBackoffMs(entry.attempts);
+      }
+      failed += 1;
+    }
+    const retained = entries.filter((entry) => entry.status !== "submitted");
+    if (changed || retained.length !== entries.length) {
+      await writeOutbox(retained);
+    }
+    return {
+      submitted,
+      failed,
+      pending: retained.filter((entry) => entry.status === "pending" || entry.status === "submitting").length,
+      entries: retained
+    };
+  }
+  async function dropOutboxEntry(id) {
+    const entries = await readOutbox();
+    const next = entries.filter((entry) => entry.id !== id);
+    await writeOutbox(next);
+    return { dropped: next.length !== entries.length, id };
   }
   var state = null;
   var cclerkPassphrase = null;
@@ -1362,16 +1502,21 @@
         method: "propose_routes",
         memo_json: JSON.stringify({ routes })
       }));
-      const resp = await nodeRequest(nodeConfig, "/turns/submit", {
-        method: "POST",
-        body: JSON.stringify({
+      const submit = await submitNodeJsonWithOutbox({
+        kind: "turn",
+        label: "propose routes",
+        endpoint: "/turns/submit",
+        turnId: built.turn_id,
+        body: {
           turn_id: built.turn_id,
           turn_bytes: Array.from(built.turn_bytes),
           sender_pubkey: cc.publicKey
-        })
+        },
+        metadata: { action: "proposeRoutes", routes }
       });
-      if (!resp.ok) return { error: `Proposal failed: ${resp.error}` };
-      return { proposalId: resp.data?.proposal_id || built.turn_id, submitted: true };
+      if (submit.submitted) return { proposalId: submit.data?.proposal_id || built.turn_id, submitted: true };
+      if (submit.queued) return { proposalId: built.turn_id, submitted: false, queued: true, error: `Queued for retry: ${submit.error}` };
+      return { error: `Proposal failed: ${submit.error}` };
     } catch (e) {
       const err = e;
       return { error: err.message || "cipherclerk_make_action_turn failed" };
@@ -1392,16 +1537,21 @@
         method: "vote_on_proposal",
         memo_json: JSON.stringify({ proposal_id: proposalId, vote: !!approve })
       }));
-      const resp = await nodeRequest(nodeConfig, "/turns/submit", {
-        method: "POST",
-        body: JSON.stringify({
+      const submit = await submitNodeJsonWithOutbox({
+        kind: "turn",
+        label: "vote on proposal",
+        endpoint: "/turns/submit",
+        turnId: built.turn_id,
+        body: {
           turn_id: built.turn_id,
           turn_bytes: Array.from(built.turn_bytes),
           sender_pubkey: cc.publicKey
-        })
+        },
+        metadata: { action: "voteOnProposal", proposalId, approve }
       });
-      if (!resp.ok) return { error: `Vote failed: ${resp.error}` };
-      return { accepted: resp.data?.accepted !== false, proposalId };
+      if (submit.submitted) return { accepted: submit.data?.accepted !== false, proposalId };
+      if (submit.queued) return { accepted: false, proposalId, queued: true, error: `Queued for retry: ${submit.error}` };
+      return { error: `Vote failed: ${submit.error}` };
     } catch (e) {
       const err = e;
       return { error: err.message || "cipherclerk_make_action_turn failed" };
@@ -1556,6 +1706,9 @@
     "dregg:storageWrite",
     "dregg:storageRead",
     "dregg:storageQuota",
+    "dregg:listOutbox",
+    "dregg:flushOutbox",
+    "dregg:dropOutboxEntry",
     "dregg:federationStatus",
     "dregg:proposeRoutes",
     "dregg:voteOnProposal",
@@ -1672,6 +1825,17 @@
       }
       case "dregg:getActivityFeed": {
         return { id: message.id, result: activityFeed };
+      }
+      case "dregg:listOutbox": {
+        return { id: message.id, result: await readOutbox() };
+      }
+      case "dregg:flushOutbox": {
+        const result = await flushOutbox({ force: true });
+        return { id: message.id, result };
+      }
+      case "dregg:dropOutboxEntry": {
+        const result = await dropOutboxEntry(String(message.outboxId || message.idToDrop || message.entryId || ""));
+        return { id: message.id, result };
       }
       case "dregg:provisionDecision":
       case "dregg:intentConfirmation":
@@ -1896,15 +2060,25 @@
           const err = e;
           return { id: message.id, error: `Failed to build factory turn: ${err.message || String(err)}` };
         }
-        const resp = await nodeRequest(nodeConfig, "/turns/submit", {
-          method: "POST",
-          body: JSON.stringify({
+        const submit = await submitNodeJsonWithOutbox({
+          kind: "turn",
+          label: "create cell from factory",
+          endpoint: "/turns/submit",
+          turnId: turnData.turn_id,
+          body: {
             turn_id: turnData.turn_id,
             turn_bytes: Array.from(turnData.turn_bytes),
             sender_pubkey: cc.publicKey
-          })
+          },
+          metadata: {
+            action: "createFromFactory",
+            childVk: turnData.child_vk,
+            paramHash: turnData.param_hash,
+            factoryVk: turnData.factory_vk,
+            agentCellId: turnData.agent_cell_id
+          }
         });
-        if (!resp.ok) {
+        if (!submit.submitted) {
           return {
             id: message.id,
             // Even when submission fails the caller can still display the
@@ -1915,7 +2089,9 @@
               paramHash: turnData.param_hash,
               factoryVk: turnData.factory_vk,
               submitted: false,
-              error: `Factory turn rejected by node: ${resp.error}`,
+              queued: submit.queued,
+              outboxId: submit.queued ? submit.outboxId : void 0,
+              error: submit.queued ? `Queued for retry: ${submit.error}` : `Factory turn rejected by node: ${submit.error}`,
               turnId: turnData.turn_id
             }
           };
@@ -1938,7 +2114,7 @@
             submitted: true,
             turnId: turnData.turn_id,
             agentCellId: turnData.agent_cell_id,
-            nodeResult: resp.data
+            nodeResult: submit.data
           }
         };
       }
@@ -2048,14 +2224,27 @@
             kind: kind === "offer" ? "Offer" : kind === "query" ? "Query" : "Need",
             expiry
           }));
-          const resp = await nodeRequest(nodeConfig, "/intents/encrypted", {
-            method: "POST",
+          const submit = await submitNodeJsonWithOutbox({
+            kind: "encrypted_intent",
+            label: "encrypted intent",
+            endpoint: "/intents/encrypted",
             body: result.encrypted_intent_json,
-            headers: { "Content-Type": "application/json" }
+            headers: { "Content-Type": "application/json" },
+            metadata: { action: "postEncryptedIntent", intentId: result.intent_id, kind }
           });
-          const submitted = resp.ok;
           resetLockTimer();
-          return { id: message.id, result: { intentId: result.intent_id, expiry: result.expiry, encrypted: true, submitted, submitError: submitted ? void 0 : resp.error } };
+          return {
+            id: message.id,
+            result: {
+              intentId: result.intent_id,
+              expiry: result.expiry,
+              encrypted: true,
+              submitted: submit.submitted,
+              queued: !submit.submitted && submit.queued,
+              outboxId: !submit.submitted && submit.queued ? submit.outboxId : void 0,
+              submitError: submit.submitted ? void 0 : submit.error
+            }
+          };
         } catch (e) {
           const err = e;
           return { id: message.id, error: err.message || "post_encrypted_intent failed" };
@@ -2087,13 +2276,17 @@
               view_pubkey: recipientMeta.viewPubkey
             }
           }));
-          const resp = await nodeRequest(nodeConfig, "/turns/submit", {
-            method: "POST",
-            body: JSON.stringify({
+          const submit = await submitNodeJsonWithOutbox({
+            kind: "turn",
+            label: "private transfer",
+            endpoint: "/turns/submit",
+            turnId: result.turn_id,
+            body: {
               turn_id: result.turn_id,
               turn_bytes: Array.from(result.turn_bytes),
               sender_pubkey: cc.publicKey
-            })
+            },
+            metadata: { action: "privateTransfer", amount, assetType: assetTypeU64 }
           });
           cc.log.push({
             action: "privateTransfer",
@@ -2111,9 +2304,11 @@
           return {
             id: message.id,
             result: {
-              success: resp.ok,
+              success: submit.submitted,
               turnId: result.turn_id,
-              error: resp.ok ? void 0 : `Submit failed: ${resp.error}`
+              queued: !submit.submitted && submit.queued,
+              outboxId: !submit.submitted && submit.queued ? submit.outboxId : void 0,
+              error: submit.submitted ? void 0 : `Submit failed: ${submit.error}`
             }
           };
         } catch (e) {
@@ -2258,6 +2453,8 @@
           wsAuthenticated = true;
           clearTimeout(ws._authTimer);
           nodeWs.send(JSON.stringify({ type: "subscribe", topics: ["roots", "revocations", "receipts", "intents", "note_announcements"] }));
+          flushOutbox({ force: true }).catch(() => {
+          });
         } else {
           nodeWs.close();
         }
@@ -2385,9 +2582,19 @@
     }
   }
   var discoveryInterval = null;
+  var outboxFlushInterval = null;
   function startDiscoveryPolling() {
     fetchDiscovery();
     discoveryInterval = setInterval(fetchDiscovery, DISCOVERY_POLL_INTERVAL);
+  }
+  function startOutboxFlushLoop() {
+    flushOutbox().catch(() => {
+    });
+    outboxFlushInterval = setInterval(() => {
+      flushOutbox().catch(() => {
+      });
+    }, OUTBOX_FLUSH_INTERVAL_MS);
+    chrome.alarms.create(OUTBOX_ALARM_NAME, { periodInMinutes: 1 });
   }
   chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({
@@ -2426,8 +2633,15 @@
       }
     }
   });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === OUTBOX_ALARM_NAME) {
+      flushOutbox().catch(() => {
+      });
+    }
+  });
   loadNodeConfig();
   loadState();
   connectNodeWs();
   startDiscoveryPolling();
+  startOutboxFlushLoop();
 })();

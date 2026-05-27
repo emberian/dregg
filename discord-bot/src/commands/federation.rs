@@ -90,58 +90,39 @@ pub async fn handle_setup(ctx: &Context, command: &CommandInteraction, state: &B
 
     defer_ephemeral(ctx, command).await;
 
-    let url = format!("{}/federation/register-guild", state.config.devnet_url);
-    let body = serde_json::json!({
-        "guild_id": guild_id,
-        "bot_cell": state.captp.bot_cell_id,
-        "guild_name": command.guild_id.map(|g| g.get().to_string()).unwrap_or_default(),
-    });
+    let actor = command.user.id.get().to_string();
+    let _ = state
+        .db
+        .record_starbridge_activity(
+            "federation",
+            "guild.configure",
+            &actor,
+            Some(&guild_id.to_string()),
+            Some(&format!("/discord/{guild_id}/")),
+            "accepted",
+            serde_json::json!({
+                "bot_cell": state.captp.bot_cell_id,
+                "mode": "discord-local",
+            }),
+        )
+        .await;
 
-    let resp = state.devnet.client().post(&url).json(&body).send().await;
-
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let result: SetupResponse = match r.json().await {
-                Ok(s) => s,
-                Err(e) => {
-                    let embed = embeds::error_embed("Parse Error", &e.to_string());
-                    let _ = command
-                        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                        .await;
-                    return;
-                }
-            };
-
-            let embed = embeds::success_embed("Federation Registered")
-                .description("This guild is now a dregg reference group.")
-                .field("Federation ID", format!("`{}`", result.federation_id), true)
-                .field("Namespace", format!("`/discord/{guild_id}/`"), true)
-                .field(
-                    "Bot Cell",
-                    format!(
-                        "`{}...`",
-                        &state.captp.bot_cell_id[..16.min(state.captp.bot_cell_id.len())]
-                    ),
-                    true,
-                );
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
-        Ok(r) => {
-            let body = r.text().await.unwrap_or_default();
-            let embed = embeds::error_embed("Setup Failed", &body);
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
-        Err(e) => {
-            let embed = embeds::error_embed("Node Unreachable", &e.to_string());
-            let _ = command
-                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
-                .await;
-        }
-    }
+    let embed = embeds::success_embed("Federation Configured")
+        .description(
+            "This guild is configured as a Discord-local Starbridge namespace. The old `/federation/register-guild` node endpoint has been retired; route and app state now move through canonical Starbridge app actions.",
+        )
+        .field("Namespace", format!("`/discord/{guild_id}/`"), true)
+        .field(
+            "Bot Cell",
+            format!(
+                "`{}...`",
+                &state.captp.bot_cell_id[..16.min(state.captp.bot_cell_id.len())]
+            ),
+            true,
+        );
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
 }
 
 /// Handle `/link-cipherclerk`.
@@ -271,13 +252,6 @@ fn ownership_challenge(discord_id: &str, address: &str) -> String {
         "dregg-discord-link-v1:{}",
         blake3::hash(input.as_bytes()).to_hex()
     )
-}
-
-// ─── Wire types ─────────────────────────────────────────────────────────────
-
-#[derive(serde::Deserialize)]
-struct SetupResponse {
-    federation_id: String,
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
