@@ -263,6 +263,38 @@ pub struct CredentialInfo {
     pub issued_at: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct IdentityCredentialCheckpoint {
+    pub source: String,
+    pub chain_index: u64,
+    pub receipt_hash: String,
+    pub turn_hash: String,
+    pub issuer_cell: String,
+    #[serde(default)]
+    pub subject_cells: Vec<String>,
+    pub timestamp: i64,
+    pub effects_hash: String,
+    pub event_count: usize,
+    pub derivation_record_count: usize,
+    pub proof_status: String,
+    pub finality: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IdentityProofCheckpoint {
+    pub source: String,
+    pub chain_index: u64,
+    pub receipt_hash: String,
+    pub turn_hash: String,
+    pub cell_id: String,
+    pub timestamp: i64,
+    pub effects_hash: String,
+    pub proof_status: String,
+    pub executor_signed: bool,
+    pub witness_count: usize,
+    pub finality: String,
+}
+
 // ─── Status response types ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -655,6 +687,53 @@ impl DevnetClient {
         count: u32,
     ) -> Result<Vec<RecentEvent>, DevnetError> {
         self.get_recent_events(count, Some(cell_id)).await
+    }
+
+    /// Get real Starbridge identity credential checkpoints from node receipts.
+    pub async fn get_identity_credentials(
+        &self,
+        cell_id: &str,
+        count: u32,
+    ) -> Result<Vec<IdentityCredentialCheckpoint>, DevnetError> {
+        let url = format!("{}/api/starbridge/identity/credentials", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[
+                ("cell", cell_id.to_string()),
+                ("limit", count.clamp(1, 200).to_string()),
+            ])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Get identity proof/audit checkpoints from committed node receipts.
+    pub async fn get_identity_proof_checkpoints(
+        &self,
+        cell_id: &str,
+        count: u32,
+    ) -> Result<Vec<IdentityProofCheckpoint>, DevnetError> {
+        let url = format!(
+            "{}/api/starbridge/identity/proof-checkpoints",
+            self.base_url
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[
+                ("cell", cell_id.to_string()),
+                ("limit", count.clamp(1, 200).to_string()),
+            ])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(DevnetError::Api(format!("status {}", resp.status())));
+        }
+        Ok(resp.json().await?)
     }
 
     /// Get the explorer base URL for building links.

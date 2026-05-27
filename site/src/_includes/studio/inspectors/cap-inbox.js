@@ -16,7 +16,19 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import {
+  InspectorBase,
+  caveatSummaries,
+  cellIdFrom,
+  dreggCodeLink,
+  emptyState,
+  fieldU64,
+  hasConstraint,
+  programBadge,
+  programConstraints,
+  renderParseError,
+  shortHex,
+} from './_base.js';
 
 class DreggCapInbox extends InspectorBase {
   _render() {
@@ -49,53 +61,77 @@ class DreggCapInbox extends InspectorBase {
       }
 
       if (!cell) {
-        return html`<div class="dregg-inspector dregg-inspector--empty">cap-inbox cell not found (supply uri to real cell or data-inbox)</div>`;
+        return emptyState(html, 'Cap inbox unavailable', 'Supply a URI for a runtime cell or data-inbox JSON with fields/program data.');
       }
 
       const fields = cell.fields || [];
-      const head = fields[0] ? parseInt(fields[0], 16) || 0 : 0;
-      const tail = fields[1] ? parseInt(fields[1], 16) || 0 : 0;
-      const cap = fields[2] ? parseInt(fields[2], 16) || 0 : 0;
-      const minDep = fields[3] ? parseInt(fields[3], 16) || 0 : 0;
+      const head = fieldU64(fields, 0);
+      const tail = fieldU64(fields, 1);
+      const cap = fieldU64(fields, 2);
+      const minDep = fieldU64(fields, 3);
       const owner = fields[4] ? shortHex(fields[4], 8) : '—';
       const senderRoot = fields[5] ? shortHex(fields[5], 8) : '—';
-      const totalDep = fields[6] ? parseInt(fields[6], 16) || 0 : 0;
+      const totalDep = fieldU64(fields, 6);
       const msgRoot = fields[7] ? shortHex(fields[7], 8) : '—';
-
       const prog = cell.program;
+      const constraints = programConstraints(prog);
+      const caveats = caveatSummaries(constraints, ['MonotonicSequence', 'SenderAuthorized', 'FieldLte', 'FieldGte', 'WriteOnce', 'Immutable']);
+      const id = cellIdFrom(cell, parsed);
+      const inFlight = head != null && tail != null ? Math.max(0, head - tail) : null;
+      const hasSenderAuth = hasConstraint(constraints, c => c.kind === 'SenderAuthorized');
+      const hasSequence = hasConstraint(constraints, c => c.kind === 'MonotonicSequence' || c.kind === 'Monotonic');
+      const capText = cap == null ? 'unavailable' : String(cap);
 
       if (mode === 'compact') {
-        return html`<span class="dregg-inspector dregg-inspector--compact">inbox H=${head} T=${tail} cap=${cap}</span>`;
+        return html`<span class="dregg-inspector dregg-inspector--compact">inbox H=${head ?? '—'} T=${tail ?? '—'} cap=${capText}</span>`;
       }
 
       return html`
-        <div class="dregg-inspector dregg-inspector--cell pci">
-          <header>
-            <span class="dregg-inspector__kind">cap-inbox</span>
-            <dregg-cell uri=${`dregg://cell/${cell.cell_id || parsed?.id}`} mode="compact"></dregg-cell>
+        <div class="dregg-inspector dregg-inspector--cell dregg-storage-pattern pci">
+          <header class="dregg-storage-pattern__head">
+            <div>
+              <div class="dregg-storage-pattern__title">
+                <span class="dregg-inspector__kind">cap-inbox</span>
+                ${id ? dreggCodeLink(html, `dregg://cell/${id}`, shortHex(id, 18), id) : null}
+              </div>
+              <div class="dregg-storage-pattern__subtitle">Capability delivery queue backed by live slots: head/tail sequencing, deposits, sender root, and message root.</div>
+            </div>
+            <div class="dregg-storage-pattern__badges">
+              <span class=${`dregg-storage-pattern__badge ${prog && prog.kind !== 'None' ? 'dregg-storage-pattern__badge--ok' : 'dregg-storage-pattern__badge--warn'}`}>${programBadge(prog, constraints)}</span>
+              ${hasSequence ? html`<span class="dregg-storage-pattern__badge dregg-storage-pattern__badge--ok">sequenced</span>` : html`<span class="dregg-storage-pattern__badge dregg-storage-pattern__badge--warn">sequence caveat unavailable</span>`}
+              ${hasSenderAuth ? html`<span class="dregg-storage-pattern__badge dregg-storage-pattern__badge--ok">sender gated</span>` : null}
+            </div>
           </header>
 
+          <div class="dregg-storage-pattern__summary">
+            <div><span>in-flight</span><strong>${inFlight == null ? 'unavailable' : `${inFlight}${cap == null ? '' : ` / ${cap}`}`}</strong></div>
+            <div><span>head / tail</span><strong>${head ?? '—'} / ${tail ?? '—'}</strong></div>
+            <div><span>min deposit</span><strong>${minDep ?? 'unavailable'}</strong></div>
+            <div><span>deposits</span><strong>${totalDep ?? 'unavailable'}</strong></div>
+          </div>
+
           <dl class="pci__kv">
-            <dt>head_seq (next send)</dt><dd>${head}</dd>
-            <dt>tail_seq (next dequeue)</dt><dd>${tail}</dd>
-            <dt>capacity</dt><dd>${cap} (in-flight ≤ cap)</dd>
-            <dt>min_deposit</dt><dd>${minDep}</dd>
+            <dt>head_seq (next send)</dt><dd>${head ?? html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
+            <dt>tail_seq (next dequeue)</dt><dd>${tail ?? html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
+            <dt>capacity</dt><dd>${capText}${cap != null ? ' (in-flight <= cap)' : ''}</dd>
+            <dt>min_deposit</dt><dd>${minDep ?? html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
             <dt>owner_pk_hash</dt><dd><code>${owner}</code></dd>
             <dt>sender_set_root</dt><dd><code>${senderRoot}</code> (SenderAuthorized)</dd>
-            <dt>total_deposits</dt><dd>${totalDep}</dd>
+            <dt>total_deposits</dt><dd>${totalDep ?? html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
             <dt>message_root</dt><dd><code>${msgRoot}</code></dd>
           </dl>
 
-          <details open>
-            <summary style="cursor:pointer;font-size:0.8rem;color:var(--fg-dim);">Cell program (enforces inbox invariants)</summary>
-            ${prog ? html`<dregg-cell-program data-program=${JSON.stringify(prog)} mode="default"></dregg-cell-program>`
-              : html`<div style="font-size:0.8rem;">no program (any change allowed — post-migration this cell declares WriteOnce/MonotonicSequence/SenderAuthorized etc)</div>`}
-          </details>
+          <section class="dregg-storage-pattern__section">
+            <h4>Interpreted caveats</h4>
+            ${caveats.length ? html`<ul class="dregg-storage-pattern__caveats">${caveats.map(c => html`<li><code>${c.split(' ')[0]}</code><span>${c.replace(/^[^ ]+ ?/, '')}</span></li>`)}</ul>`
+              : html`<div class="dregg-storage-pattern__unavailable">The cell fields are visible, but no inbox-shaped caveats are available in the program.</div>`}
+          </section>
 
-          <div style="font-size:0.75rem;margin-top:6px;color:var(--fg-dim);">
-            Operations are Effect::SetField(0/1/6/7) + Transfer(deposit) + EmitEvent("inbox.sent") under the cell program.
-            This replaces storage::CapInbox + app-framework HTTP shim (Phase 3).
-          </div>
+          <details open>
+            <summary>Cell program (enforces inbox invariants)</summary>
+            ${prog ? html`<dregg-cell-program data-program=${JSON.stringify(prog)} mode="default"></dregg-cell-program>`
+              : html`<div class="dregg-storage-pattern__unavailable">No program attached; post-migration inbox cells declare sequencing, sender authorization, and immutable/root constraints here.</div>`}
+          </details>
         </div>`;
     };
 

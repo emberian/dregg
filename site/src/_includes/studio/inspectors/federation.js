@@ -9,7 +9,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
 
 class DreggFederation extends InspectorBase {
   _render() {
@@ -31,7 +31,12 @@ class DreggFederation extends InspectorBase {
 
     const Component = () => {
       const f = sig.value;
-      if (!f) return html`<div class="dregg-inspector dregg-inspector--empty">federation #${fedIdx} not found</div>`;
+      if (!f) return emptyState(
+        html,
+        'Federation not found',
+        html`Federation <code>#${fedIdx}</code> is not registered in this runtime.`,
+      );
+      const density = Number(f.height || 0) > 0 ? `${Number(f.num_events || 0)} events over ${Number(f.height || 0)} block(s)` : 'genesis only';
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
@@ -45,7 +50,14 @@ class DreggFederation extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">federation</span>
             <code class="dregg-inspector__id">${f.name} (#${String(f.fed_index)})</code>
+            <span class="dregg-inspector__meta">${density}</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>Height</span><strong>${String(f.height)}</strong></div>
+            <div><span>Nodes</span><strong>${String(f.num_nodes)}</strong></div>
+            <div><span>Events</span><strong>${String(f.num_events)}</strong></div>
+            <div><span>Roots</span><strong>${String(f.num_finalized_roots)}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>name</dt><dd>${f.name}</dd>
             <dt>height</dt><dd>${String(f.height)}</dd>
@@ -56,6 +68,10 @@ class DreggFederation extends InspectorBase {
               ? html`<code title=${f.latest_root}>${shortHex(f.latest_root, 24)}</code>`
               : html`<span style="opacity:0.6">(none)</span>`}</dd>
           </dl>
+          <div class="dregg-inspector__actions">
+            ${dreggCodeLink(html, `dregg://block-dag/${f.fed_index ?? fedIdx}`, 'open block DAG')}
+            ${Number(f.height || 0) > 0 ? dreggCodeLink(html, `dregg://block/${f.fed_index ?? fedIdx}/${f.height}`, 'latest block') : null}
+          </div>
         </div>`;
     };
     this._dispose = effect(() => { render(h(Component, {}), root); });

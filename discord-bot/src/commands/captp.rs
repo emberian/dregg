@@ -28,10 +28,14 @@ pub fn register_share() -> CreateCommand {
 /// Register `/cap-accept <dregg-uri>`.
 pub fn register_accept() -> CreateCommand {
     CreateCommand::new("cap-accept")
-        .description("Enliven a shared dregg URI — bot holds the live ref")
+        .description("Enliven a shared dregg URI or redeem a handoff token")
         .add_option(
-            CreateCommandOption::new(CommandOptionType::String, "uri", "dregg:// URI to enliven")
-                .required(true),
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "uri",
+                "dregg:// URI or dregg-handoff-* token",
+            )
+            .required(true),
         )
 }
 
@@ -116,7 +120,7 @@ pub async fn handle_share(ctx: &Context, command: &CommandInteraction, state: &B
 
 /// Handle `/cap-accept`.
 pub async fn handle_accept(ctx: &Context, command: &CommandInteraction, state: &BotState) {
-    let uri = command
+    let uri_or_token = command
         .data
         .options
         .first()
@@ -128,7 +132,12 @@ pub async fn handle_accept(ctx: &Context, command: &CommandInteraction, state: &
 
     defer_ephemeral(ctx, command).await;
 
-    match state.captp.accept_cap(&uri).await {
+    if uri_or_token.starts_with("dregg-handoff-") {
+        handle_handoff_redeem(ctx, command, state, &uri_or_token).await;
+        return;
+    }
+
+    match state.captp.accept_cap(&uri_or_token).await {
         Ok(cap) => {
             let cell_id = hex::encode(cap.uri.cell_id);
             let short = if cell_id.len() > 16 {
@@ -234,17 +243,22 @@ pub async fn handle_delegate(ctx: &Context, command: &CommandInteraction, state:
     };
 
     match state.captp.delegate_cap(&cell_id, &recipient_key).await {
-        Ok(cert) => {
-            let short_cert = if cert.len() > 64 {
-                format!("{}...", &cert[..64])
+        Ok(record) => {
+            let short_token = if record.token.len() > 72 {
+                format!("{}...", &record.token[..72])
             } else {
-                cert.clone()
+                record.token.clone()
             };
+            let short_sig = truncate(&record.local_signature, 32);
 
             let embed = embeds::success_embed("Capability Delegated")
-                .description(format!("Handoff certificate created for <@{target_id}>."))
-                .field("Cell", format!("`{}`", &cell_id), true)
-                .field("Certificate", format!("```\n{short_cert}\n```"), false);
+                .description(format!(
+                    "Local CapTP handoff created for <@{target_id}>. They can redeem it with `/cap-accept`."
+                ))
+                .field("Cell", format!("`{}`", truncate(&record.cell_id, 16)), true)
+                .field("Status", record.status.as_str(), true)
+                .field("Token", format!("```\n{short_token}\n```"), false)
+                .field("Local Signature", format!("`{short_sig}`"), false);
 
             let _ = command
                 .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -265,8 +279,9 @@ pub async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &Bo
 
     let held = state.captp.list_held().await;
     let exports = state.captp.list_exports().await;
+    let handoffs = state.captp.list_handoffs().await;
 
-    if held.is_empty() && exports.is_empty() {
+    if held.is_empty() && exports.is_empty() && handoffs.is_empty() {
         let embed = embeds::dregg_embed("Bot Capabilities")
             .description("No capabilities currently held or exported.");
         let _ = command
@@ -305,10 +320,26 @@ pub async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &Bo
         }
     }
 
+    if !handoffs.is_empty() {
+        if !desc.is_empty() {
+            desc.push('\n');
+        }
+        desc.push_str("**Handoffs:**\n");
+        for handoff in &handoffs {
+            desc.push_str(&format!(
+                "- `{}` -> `{}` [{}]\n",
+                truncate(&handoff.cell_id, 16),
+                truncate(&handoff.recipient_key, 16),
+                handoff.status.as_str()
+            ));
+        }
+    }
+
     let embed = embeds::dregg_embed("Bot Capabilities")
         .description(desc)
         .field("Held", held.len().to_string(), true)
-        .field("Exported", exports.len().to_string(), true);
+        .field("Exported", exports.len().to_string(), true)
+        .field("Handoffs", handoffs.len().to_string(), true);
 
     let _ = command
         .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
@@ -357,6 +388,69 @@ pub async fn handle_revoke(ctx: &Context, command: &CommandInteraction, state: &
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+async fn handle_handoff_redeem(
+    ctx: &Context,
+    command: &CommandInteraction,
+    state: &BotState,
+    token: &str,
+) {
+    let discord_id = command.user.id.get().to_string();
+    let recipient_key = match state.db.get_user_identity(&discord_id).await {
+        Ok(Some(identity)) if identity.mode != IdentityMode::ExternalPending => identity.cell_id,
+        Ok(Some(_)) => {
+            let embed = embeds::warning_embed(
+                "Identity Pending",
+                "Your external identity link is pending ownership proof and cannot redeem handoffs yet.",
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+        Ok(None) => {
+            let embed = embeds::warning_embed(
+                "No Cipherclerk",
+                "Create or link a dregg identity before redeeming a handoff.",
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Database Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+
+    match state.captp.redeem_handoff(token, &recipient_key).await {
+        Ok(record) => {
+            let embed = embeds::success_embed("Handoff Redeemed")
+                .description("The bot accepted the handoff token and now holds the delegated live reference.")
+                .field("Cell", format!("`{}`", truncate(&record.cell_id, 16)), true)
+                .field("Status", record.status.as_str(), true)
+                .field("URI", format!("```\n{}\n```", record.uri), false);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let status = state.captp.handoff_status(token).await;
+            let detail = match status {
+                Some(record) => format!("{}\nCurrent status: `{}`", e, record.status.as_str()),
+                None => e.to_string(),
+            };
+            let embed = embeds::error_embed("Redeem Failed", &detail);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
 async fn defer_ephemeral(ctx: &Context, command: &CommandInteraction) {
     let _ = command
         .create_response(
@@ -400,5 +494,13 @@ async fn ensure_user_can_manage_cell(
             "Create a hosted cipherclerk with `/cipherclerk create` before managing capabilities.",
         )),
         Err(e) => Err(embeds::error_embed("Database Error", &e.to_string())),
+    }
+}
+
+fn truncate(value: &str, max: usize) -> String {
+    if value.len() > max {
+        format!("{}...", &value[..max])
+    } else {
+        value.to_string()
     }
 }

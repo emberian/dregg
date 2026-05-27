@@ -10,14 +10,24 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import {
+  InspectorBase,
+  caveatSummaries,
+  cellIdFrom,
+  dreggCodeLink,
+  emptyState,
+  fieldHex,
+  hasConstraint,
+  programBadge,
+  programConstraints,
+  renderParseError,
+  shortHex,
+} from './_base.js';
 
 class DreggProgrammableQueue extends InspectorBase {
   _render() {
     const { h, render, html, effect } = this._api;
     const refAttr = this.getAttribute('uri');
-    const mode = this.getAttribute('mode') || 'default';
-
     if (this._dispose) { this._dispose(); this._dispose = null; }
     this.replaceChildren();
 
@@ -30,24 +40,52 @@ class DreggProgrammableQueue extends InspectorBase {
 
     const Component = () => {
       const cell = parsed && this._runtime.getCell ? this._runtime.getCell(parsed.id).value : null;
-      if (!cell) return html`<div class="dregg-inspector dregg-inspector--empty">programmable-queue cell not found</div>`;
+      if (!cell) return emptyState(html, 'Programmable queue unavailable', 'This runtime does not have a cell for the supplied programmable-queue URI.');
 
       const fields = cell.fields || [];
-      // Typical programmable queue slots: capacity, length (now root), owner, program_vk etc per audit.
-      const len = fields[1] ? shortHex(fields[1], 10) : '— (use root post-migration)';
+      const prog = cell.program;
+      const constraints = programConstraints(prog);
+      const caveats = caveatSummaries(constraints, ['SenderAuthorized', 'RateLimit', 'RateLimitBySum', 'MonotonicSequence', 'FieldGte', 'FieldLte', 'TemporalGate', 'PreimageGate', 'Witnessed']);
+      const id = cellIdFrom(cell, parsed);
+      const root = fieldHex(fields, 1, 14);
+      const hasAcl = hasConstraint(constraints, c => c.kind === 'SenderAuthorized');
+      const hasSequence = hasConstraint(constraints, c => c.kind === 'MonotonicSequence' || c.kind === 'Monotonic' || c.kind === 'StrictMonotonic');
+      const hasThrottle = hasConstraint(constraints, c => c.kind === 'RateLimit' || c.kind === 'RateLimitBySum');
 
       return html`
-        <div class="dregg-inspector dregg-inspector--cell ppq">
-          <header>
-            <span class="dregg-inspector__kind">programmable-queue</span>
-            <dregg-cell uri=${`dregg://cell/${parsed.id}`} mode="compact"></dregg-cell>
+        <div class="dregg-inspector dregg-inspector--cell dregg-storage-pattern ppq">
+          <header class="dregg-storage-pattern__head">
+            <div>
+              <div class="dregg-storage-pattern__title">
+                <span class="dregg-inspector__kind">programmable-queue</span>
+                ${id ? dreggCodeLink(html, `dregg://cell/${id}`, shortHex(id, 18), id) : null}
+              </div>
+              <div class="dregg-storage-pattern__subtitle">Queue policy is read from the cell program; this inspector does not run a JS queue evaluator.</div>
+            </div>
+            <div class="dregg-storage-pattern__badges">
+              <span class=${`dregg-storage-pattern__badge ${prog && prog.kind !== 'None' ? 'dregg-storage-pattern__badge--ok' : 'dregg-storage-pattern__badge--warn'}`}>${programBadge(prog, constraints)}</span>
+              ${hasAcl ? html`<span class="dregg-storage-pattern__badge dregg-storage-pattern__badge--ok">authorized senders</span>` : html`<span class="dregg-storage-pattern__badge dregg-storage-pattern__badge--warn">ACL unavailable</span>`}
+              ${hasThrottle ? html`<span class="dregg-storage-pattern__badge">rate limited</span>` : null}
+            </div>
           </header>
-          <div>length/root: <code>${len}</code></div>
+
+          <div class="dregg-storage-pattern__summary">
+            <div><span>queue root</span><strong><code title=${fields[1] || ''}>${root}</code></strong></div>
+            <div><span>capacity slot</span><strong><code title=${fields[0] || ''}>${fieldHex(fields, 0, 12)}</code></strong></div>
+            <div><span>program</span><strong>${prog?.kind || 'None'}</strong></div>
+            <div><span>sequencing</span><strong>${hasSequence ? 'declared' : 'unavailable'}</strong></div>
+          </div>
+
+          <section class="dregg-storage-pattern__section">
+            <h4>Interpreted caveats</h4>
+            ${caveats.length ? html`<ul class="dregg-storage-pattern__caveats">${caveats.map(c => html`<li><code>${c.split(' ')[0]}</code><span>${c.replace(/^[^ ]+ ?/, '')}</span></li>`)}</ul>`
+              : html`<div class="dregg-storage-pattern__unavailable">No queue-shaped caveats are available on this runtime cell.</div>`}
+          </section>
+
           <details>
-            <summary>Program (the migration proof — constraints now live here)</summary>
-            ${cell.program ? html`<dregg-cell-program data-program=${JSON.stringify(cell.program)}></dregg-cell-program>` : html`<em>no program</em>`}
+            <summary>Full cell program</summary>
+            ${prog ? html`<dregg-cell-program data-program=${JSON.stringify(prog)}></dregg-cell-program>` : html`<div class="dregg-storage-pattern__unavailable">No program attached to this cell.</div>`}
           </details>
-          <div style="font-size:0.7rem;color:var(--fg-dim);">Phase 2: this cell's StateConstraints *are* the queue. Old storage::programmable evaluator deleted. See queue.rs + programmable.rs.</div>
         </div>`;
     };
 

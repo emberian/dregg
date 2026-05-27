@@ -17,7 +17,31 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
+
+function coerceJson(value) {
+  if (typeof value !== 'string') return value;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
+function proofKind(proof) {
+  if (!proof) return 'none';
+  if (proof.SignedDelegation || proof.signed_delegation) return 'SignedDelegation';
+  if (proof.StarkDelegation || proof.stark_delegation) return 'StarkDelegation';
+  return Object.keys(proof)[0] || 'delegation';
+}
+
+function targetOf(cap) {
+  return cap?.target || cap?.target_cell || cap?.targetCell || '';
+}
+
+function statusLabel(v) {
+  if (!v) return null;
+  const valid = Boolean(v.valid || v.valid_for_sig);
+  if (valid && !v.expired) return 'valid';
+  if (v.expired) return 'expired';
+  return 'invalid';
+}
 
 class DreggBearerCap extends InspectorBase {
   _render() {
@@ -53,82 +77,92 @@ class DreggBearerCap extends InspectorBase {
       const s = demoState.value;
 
       // Detect real BearerCapProof shape vs legacy shim (per FOLLOWUP-14)
-      const created = s.lastCreated || data;
+      const created = coerceJson(s.lastCreated || data);
       const isReal = created && (created.delegation_proof || created.target || created.permissions);
       const isShim = !isReal && (created && created.bearer_token_hex);
       const kindLabel = `bearer-cap${isReal ? ' (real)' : isShim ? ' (shim)' : ''}`;
+      const target = targetOf(created);
 
       if (mode === 'compact') {
-        const tok = (created && (created.bearer_token_hex || created.delegation_proof ? 'real' : '')) || (created && created.bearer_token_hex) || '';
+        const tok = created ? (created.bearer_token_hex || target || proofKind(created.delegation_proof)) : '';
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
             <span class="dregg-inspector__kind">${kindLabel}</span>
-            <code>${shortHex(tok || (created && created.target ? shortHex(created.target,8) : ''), 10)}</code>
+            ${tok ? html`<code title=${tok}>${shortHex(tok, 12)}</code>` : html`<span class="dregg-inspector__meta">no data</span>`}
           </span>`;
       }
 
       const verifyRes = s.lastVerify;
+      const verification = statusLabel(verifyRes);
 
       const note = isReal
-        ? html`<div style="background:#e6f4ea;border:1px solid #a3d9b1;padding:4px 6px;font-size:0.7rem;border-radius:3px;margin:4px 0;">
-            REAL BearerCapProof (SignedDelegation path shown). Revocation/facet fields supported in substrate.
-          </div>`
+        ? html`<div class="dregg-inspector__notice dregg-inspector__notice--ok">Canonical BearerCapProof. Delegation, expiry, and revocation fields are interpreted below.</div>`
         : (isShim ? html`
-        <div style="background:#fef3c7;border:1px solid #fcd34d;padding:4px 6px;font-size:0.7rem;border-radius:3px;margin:4px 0;">
-          SHIM (compat): legacy binding. Prefer real create_bearer_cap_proof for canonical use in turns.
-        </div>` : html`<div style="font-size:0.7rem;color:var(--fg-dim);">No cap data.</div>`);
+        <div class="dregg-inspector__notice dregg-inspector__notice--warn">Legacy bearer-cap shim. It is shown for compatibility; canonical turns should use BearerCapProof.</div>` : null);
 
-      const form = (caps.mutate && wasm) ? html`
-        <div style="border-top:1px solid var(--line);margin-top:8px;padding-top:6px;font-size:0.8rem;">
-          <div><strong>Demo create (real BearerCapProof preferred; shim fallback)</strong></div>
-          <input id="bc-target" placeholder="target cell hex (32B)" style="width:220px;font-family:var(--mono);font-size:0.75rem;" value="0000000000000000000000000000000000000000000000000000000000000000" />
-          <select id="bc-perm" style="width:90px;font-size:0.75rem;"><option>Signature</option><option>None</option><option>Proof</option><option>Either</option></select>
-          <input id="bc-bearer" placeholder="bearer pk (hex, optional)" style="width:140px;font-family:var(--mono);font-size:0.75rem;" value="" />
-          <input id="bc-exp" value="0" style="width:60px;font-size:0.75rem;" title="expires unix (0=none)" />
-          <button data-act="create" style="font-size:0.7rem;">Create (real)</button>
-          <div style="margin-top:4px;">
-            <button data-act="verify" style="font-size:0.7rem;">Verify last / pasted</button>
-            <button data-act="create-shim" style="font-size:0.65rem;opacity:0.7;">Legacy shim</button>
-          </div>
-          ${s.error ? html`<div style="color:#b91c1c;font-size:0.7rem;">${s.error}</div>` : null}
+      const canCreateReal = caps.mutate && wasm?.create_bearer_cap_proof;
+      const canCreateShim = caps.mutate && wasm?.create_bearer_cap;
+      const canVerifyReal = wasm?.verify_bearer_cap_proof_sig;
+      const canVerifyShim = wasm?.verify_bearer_cap;
+      const form = (wasm && (canCreateReal || canCreateShim || canVerifyReal || canVerifyShim)) ? html`
+        <div class="dregg-inspector__controls">
+          <input class="dregg-inspector__input" id="bc-target" placeholder="target cell hex (32B)" value=${target || '00'.repeat(32)} />
+          <select class="dregg-inspector__select" id="bc-perm"><option>Signature</option><option>None</option><option>Proof</option><option>Either</option></select>
+          <input class="dregg-inspector__input" id="bc-bearer" placeholder="bearer pk hex" />
+          <input class="dregg-inspector__input" id="bc-exp" value="0" title="expires unix (0=none)" />
+          <button class="dregg-inspector__button" data-act="create" disabled=${!canCreateReal}>Create proof</button>
+          <button class="dregg-inspector__button" data-act="verify" disabled=${!(canVerifyReal || canVerifyShim)}>Verify</button>
+          <button class="dregg-inspector__button" data-act="create-shim" disabled=${!canCreateShim}>Legacy shim</button>
+          ${s.error ? html`<div class="dregg-inspector__notice dregg-inspector__notice--warn">${s.error}</div>` : null}
         </div>
-      ` : null;
+      ` : html`<div class="dregg-inspector__notice">No bearer-cap wasm controls are exposed by this runtime.</div>`;
+
+      if (!created && mode !== 'demo') return emptyState(
+        html,
+        'No bearer capability loaded',
+        html`Pass a bearer-cap URI or <code>data</code> JSON, or switch to demo mode when wasm create/verify exports are available.`,
+      );
 
       return html`
         <div class="dregg-inspector dregg-inspector--bearer">
           <header>
             <span class="dregg-inspector__kind">${kindLabel}</span>
-            ${created ? html`<code class="dregg-inspector__id" title=${(created.bearer_token_hex || created.target || '')}>${shortHex((created.bearer_token_hex || (created.target ? created.target : '')), 16)}</code>` : ''}
+            ${created ? html`<code class="dregg-inspector__id" title=${created.bearer_token_hex || target || ''}>${shortHex(created.bearer_token_hex || target || '', 16)}</code>` : ''}
           </header>
           ${note}
           ${created ? html`
+            <div class="dregg-inspector__summary">
+              <div><span>shape</span><strong>${isReal ? 'proof' : isShim ? 'shim' : 'unknown'}</strong></div>
+              <div><span>delegation</span><strong>${proofKind(created.delegation_proof)}</strong></div>
+              <div><span>expiry</span><strong>${String(created.expires_at || created.expiry || 0)}</strong></div>
+            </div>
+          ` : null}
+          ${created ? html`
             <dl class="dregg-inspector__kv">
               ${isReal ? html`
-                <dt>target</dt><dd><code>${shortHex(created.target || '', 12)}</code></dd>
+                <dt>target</dt><dd>${target ? dreggCodeLink(html, `dregg://cell/${target}`, shortHex(target, 24), target) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
                 <dt>permissions</dt><dd>${created.permissions || 'n/a'}</dd>
-                <dt>delegation</dt><dd><code>${(created.delegation_proof && created.delegation_proof.SignedDelegation) ? 'SignedDelegation' : (created.delegation_proof ? 'StarkDelegation' : 'n/a')}</code></dd>
+                <dt>delegation</dt><dd><code>${proofKind(created.delegation_proof)}</code></dd>
                 <dt>expires_at</dt><dd>${created.expires_at || 0}</dd>
                 <dt>revocation_channel</dt><dd>${created.revocation_channel ? html`<dregg-revocation-channel data=${JSON.stringify({channel_id: created.revocation_channel})} mode="compact"></dregg-revocation-channel>` : html`<em>none</em>`}</dd>
-                <dt>allowed_effects</dt><dd><code>${created.allowed_effects ? JSON.stringify(created.allowed_effects) : 'unrestricted'}</code></dd>
+                <dt>allowed effects</dt><dd>${created.allowed_effects ? created.allowed_effects.map(e => html`<code>${String(e)}</code> `) : 'unrestricted'}</dd>
               ` : html`
                 <dt>token (sig)</dt><dd><code title=${created.bearer_token_hex}>${shortHex(created.bearer_token_hex, 20)}</code></dd>
                 <dt>delegator pub</dt><dd><code>${shortHex(created.delegator_pubkey_hex || '', 12)}</code></dd>
-                <dt>target</dt><dd><code>${shortHex(created.target_cell || '', 12)}</code></dd>
+                <dt>target</dt><dd>${target ? dreggCodeLink(html, `dregg://cell/${target}`, shortHex(target, 24), target) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
                 <dt>action</dt><dd>${created.action || 'n/a'}</dd>
                 <dt>expiry</dt><dd>${created.expiry || 0}</dd>
               `}
             </dl>
-          ` : html`<div style="font-size:0.8rem;color:var(--fg-dim);">No cap loaded. Use form or data= attr (real proof JSON or shim shape).</div>`}
+          ` : null}
           ${verifyRes ? html`
-            <div style="margin-top:6px;font-size:0.8rem;">
-              Verify: <strong style="color:${(verifyRes.valid || verifyRes.valid_for_sig) ? '#166534' : '#b91c1c'}">${(verifyRes.valid || verifyRes.valid_for_sig) ? 'VALID' : 'INVALID'}</strong>
-              (sig:${verifyRes.signature_valid || verifyRes.valid_for_sig} expired:${verifyRes.expired})
+            <div class=${`dregg-inspector__notice ${verification === 'valid' ? 'dregg-inspector__notice--ok' : 'dregg-inspector__notice--warn'}`}>
+              Verify: <strong>${verification}</strong>
+              · sig ${String(verifyRes.signature_valid || verifyRes.valid_for_sig || false)}
+              · expired ${String(verifyRes.expired || false)}
             </div>
           ` : null}
           ${form}
-          <div style="font-size:0.65rem;color:var(--fg-dim);margin-top:4px;">
-            Bearer caps are transferable proofs (paste between sovereign tabs). Real shape binds to executor + revocation channels for capability model.
-          </div>
         </div>`;
     };
 
@@ -158,12 +192,12 @@ class DreggBearerCap extends InspectorBase {
             const action = 'transfer'; // shim still uses action str
             res = wasm.create_bearer_cap(demoSeed, target, action, expires);
           }
-          demoState.value = { ...demoState.value, lastCreated: res, lastVerify: null, error: null };
+          demoState.value = { ...demoState.value, lastCreated: coerceJson(res), lastVerify: null, error: null };
         } catch (err) {
           demoState.value = { ...demoState.value, error: String(err) };
         }
       } else if (act === 'verify') {
-        const created = demoState.value.lastCreated || data;
+        const created = coerceJson(demoState.value.lastCreated || data);
         if (!created) return;
         try {
           const now = Math.floor(Date.now() / 1000);

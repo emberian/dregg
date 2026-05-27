@@ -11,7 +11,17 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, emptyState, renderParseError, shortHex } from './_base.js';
+
+function expiryState(expiry) {
+  const n = Number(expiry || 0);
+  if (!n) return { label: 'open', detail: 'no expiry', tone: '' };
+  const ms = n > 10_000_000_000 ? n : n * 1000;
+  const delta = ms - Date.now();
+  if (delta < 0) return { label: 'expired', detail: new Date(ms).toLocaleString(), tone: 'warn' };
+  const mins = Math.max(0, Math.round(delta / 60000));
+  return { label: mins < 90 ? `${mins}m` : new Date(ms).toLocaleDateString(), detail: new Date(ms).toLocaleString(), tone: 'ok' };
+}
 
 class DreggIntent extends InspectorBase {
   _render() {
@@ -32,27 +42,53 @@ class DreggIntent extends InspectorBase {
 
     const Component = () => {
       const i = sig.value;
-      if (!i) return html`<div class="dregg-inspector dregg-inspector--empty">intent not in JS ledger: <code>${shortHex(parsed.id, 16)}</code></div>`;
+      if (!i) return emptyState(
+        html,
+        'Intent not found',
+        html`No intent with id/index <code>${shortHex(parsed.id, 16)}</code> is present in this runtime's intent ledger.`,
+      );
+      const actions = Array.isArray(i.actions) ? i.actions : [];
+      const constraints = Array.isArray(i.constraints) ? i.constraints : [];
+      const expiry = expiryState(i.expiry);
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
             <code title=${i.intent_id}>${shortHex(i.intent_id)}</code>
             · ${i.kind}
-            · ${i.actions.length} action${i.actions.length === 1 ? '' : 's'}
+            · ${actions.length} action${actions.length === 1 ? '' : 's'}
           </span>`;
       }
-      const actionsRender = i.actions.length
-        ? i.actions.map(a => html`<code>${a.action}@${a.resource}</code> `)
+      const actionsRender = actions.length
+        ? html`<div class="dregg-inspector__rows">${actions.map((a, idx) => html`
+            <div class="dregg-inspector__row">
+              <span>${String(idx)}</span>
+              <strong>${a.action || a.kind || 'action'}</strong>
+              <code>${a.resource || a.target || i.resource_pattern || '*'}</code>
+            </div>`)}</div>`
         : html`<span style="opacity:0.6">(none)</span>`;
-      const constraintsRender = i.constraints.length
-        ? i.constraints.map(c => html`<code>${JSON.stringify(c)}</code> `)
+      const constraintsRender = constraints.length
+        ? html`<div class="dregg-inspector__rows">${constraints.map((c) => {
+            const kind = c.Service || c.service || c.kind || Object.keys(c)[0] || 'constraint';
+            return html`<div class="dregg-inspector__row">
+              <span>${kind}</span>
+              <strong>${c.value || c.name || c.Service || c.kind || 'required'}</strong>
+              <code>${JSON.stringify(c).slice(0, 96)}</code>
+            </div>`;
+          })}</div>`
         : html`<span style="opacity:0.6">(none)</span>`;
       return html`
         <div class="dregg-inspector dregg-inspector--cell">
           <header>
             <span class="dregg-inspector__kind">intent</span>
             <code class="dregg-inspector__id" title=${i.intent_id}>${shortHex(i.intent_id, 24)}</code>
+            <span class="dregg-inspector__meta">${i.kind} · ${expiry.detail}</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>Actions</span><strong>${String(actions.length)}</strong></div>
+            <div><span>Constraints</span><strong>${String(constraints.length)}</strong></div>
+            <div><span>Creator</span><strong>#${String(i.agent_index ?? 'n/a')}</strong></div>
+            <div><span>Expiry</span><strong>${expiry.label}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>kind</dt><dd>${i.kind}</dd>
             <dt>intent id</dt><dd><code>${i.intent_id}</code></dd>

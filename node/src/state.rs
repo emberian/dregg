@@ -22,6 +22,7 @@ use dregg_coord::budget::{
 use dregg_dsl_runtime::ProgramRegistry;
 use dregg_persist::{PersistentStore, Poseidon2NoteTree};
 use dregg_sdk::AgentCipherclerk;
+use dregg_turn::WitnessedReceipt;
 
 use crate::gossip::GossipHandle;
 use crate::routing_table::RoutingTable;
@@ -237,6 +238,14 @@ pub struct NodeStateInner {
     /// endpoint (`GET /api/events?since_height=N`). Capped at `MAX_EVENT_LOG` entries.
     pub event_log: VecDeque<CommittedEvent>,
 
+    /// Node-local witness artifacts keyed by receipt hash.
+    ///
+    /// MCP/devnet mutation paths can produce `WitnessedReceipt`s at commit time.
+    /// Keeping them here lets later HTTP, explorer, and verifier flows retrieve
+    /// the same artifact instead of relying on the original tool response.
+    pub witnessed_receipts: HashMap<[u8; 32], Vec<WitnessedReceipt>>,
+    witnessed_receipt_order: VecDeque<[u8; 32]>,
+
     /// Solo consensus state: nullifier log, height tracking, auto-upgrade detection.
     /// `Some(_)` when this node was configured as solo (committee of one)
     /// at startup. Per FEDERATION-UNIFICATION-DESIGN.md §5, "solo" is no
@@ -249,6 +258,7 @@ pub struct NodeStateInner {
 
 /// Maximum number of events retained in the ring buffer for REST polling.
 pub const MAX_EVENT_LOG: usize = 1000;
+pub const MAX_WITNESSED_RECEIPTS: usize = 1000;
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -494,6 +504,8 @@ impl NodeState {
                     dregg_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
+                witnessed_receipts: HashMap::new(),
+                witnessed_receipt_order: VecDeque::new(),
                 solo_consensus: None,
                 blocklace_handle: None,
             })),
@@ -577,6 +589,8 @@ impl NodeState {
                     dregg_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
+                witnessed_receipts: HashMap::new(),
+                witnessed_receipt_order: VecDeque::new(),
                 solo_consensus: None,
                 blocklace_handle: None,
             })),
@@ -693,6 +707,31 @@ impl NodeStateInner {
             self.event_log.pop_front();
         }
         self.event_log.push_back(event);
+    }
+
+    /// Store replay material for a committed receipt, evicting oldest receipt
+    /// keys at capacity. Multiple witnesses may share one receipt hash, e.g. a
+    /// bilateral turn with per-side witnessed receipts.
+    pub fn push_witnessed_receipt(&mut self, receipt_hash: [u8; 32], witnessed: WitnessedReceipt) {
+        if !self.witnessed_receipts.contains_key(&receipt_hash) {
+            if self.witnessed_receipt_order.len() >= MAX_WITNESSED_RECEIPTS {
+                if let Some(oldest) = self.witnessed_receipt_order.pop_front() {
+                    self.witnessed_receipts.remove(&oldest);
+                }
+            }
+            self.witnessed_receipt_order.push_back(receipt_hash);
+        }
+        self.witnessed_receipts
+            .entry(receipt_hash)
+            .or_default()
+            .push(witnessed);
+    }
+
+    pub fn witnessed_receipt_count(&self, receipt_hash: &[u8; 32]) -> usize {
+        self.witnessed_receipts
+            .get(receipt_hash)
+            .map(Vec::len)
+            .unwrap_or(0)
     }
 
     /// Remove proposals older than `PROPOSAL_EXPIRY_SECS`.

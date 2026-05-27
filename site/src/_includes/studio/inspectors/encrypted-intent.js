@@ -18,7 +18,11 @@
  * Composes <dregg-proof> for reveal proofs when available.
  */
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, renderParseError, shortHex, emptyState } from './_base.js';
+
+function pct(n) {
+  return Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
+}
 
 class DreggEncryptedIntent extends InspectorBase {
   _render() {
@@ -35,8 +39,9 @@ class DreggEncryptedIntent extends InspectorBase {
 
     let parsed = null;
     let data = null;
+    let parseError = null;
     if (dataAttr) {
-      try { data = JSON.parse(dataAttr); } catch {}
+      try { data = JSON.parse(dataAttr); } catch (e) { parseError = e; }
     }
     if (!data && refAttr) {
       try { parsed = parseRef(refAttr); } catch {}
@@ -50,19 +55,32 @@ class DreggEncryptedIntent extends InspectorBase {
 
     const Component = () => {
       const s = viewState.value;
-      const intent = data || { intent_id: (parsed && parsed.id) || '', threshold: null, shares: [] };
+      if (parseError) {
+        return html`<div class="dregg-inspector dregg-inspector--err">bad encrypted intent data JSON: ${parseError.message}</div>`;
+      }
+      if (!data && !parsed) {
+        return emptyState(
+          html,
+          'Encrypted intent unavailable',
+          html`Provide a <code>uri</code> or <code>data</code> JSON with threshold and share status to inspect reveal progress.`
+        );
+      }
+      const intent = data || { intent_id: parsed.id, threshold: null, shares: [] };
       const shares = Array.isArray(intent.shares) ? intent.shares : [];
       const received = shares.filter(sh => sh && sh.received).length;
-      const threshold = Number(intent.threshold || 0);
-      const prog = threshold > 0 ? Math.min(100, Math.floor((received / threshold) * 100)) : 0;
+      const threshold = Number(intent.threshold || intent.reveal_threshold || 0);
+      const expected = Number(intent.validator_count || (Array.isArray(intent.validators) ? intent.validators.length : intent.validators) || shares.length || 0);
+      const prog = threshold > 0 ? pct(Math.floor((received / threshold) * 100)) : 0;
+      const complete = threshold > 0 && received >= threshold;
+      const status = complete ? 'threshold met' : threshold ? 'collecting shares' : 'threshold unknown';
 
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
             <span class="dregg-inspector__kind">encrypted-intent</span>
             <code>${shortHex(intent.intent_id, 8)}</code>
-            <span style="display:inline-block;width:60px;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;">
-              <span style="display:block;height:100%;width:${prog}%;background:#3b82f6;"></span>
+            <span class="dregg-inspector__progress" style="width:60px;height:6px;">
+              <span class="dregg-inspector__progress-fill" style=${`width:${prog}%;`}></span>
             </span>
             ${threshold ? `${received}/${threshold}` : 'awaiting threshold'}
           </span>`;
@@ -71,20 +89,21 @@ class DreggEncryptedIntent extends InspectorBase {
       const shareRows = shares.map((sh, i) => html`
         <tr>
           <td><code>${shortHex(sh.validator || 'v' + i, 8)}</code></td>
-          <td>${sh.received ? html`<span style="color:#166534;">received</span>` : html`<span style="color:#b91c1c;">pending</span>`}</td>
-          <td><code>${sh.share_ct ? shortHex(sh.share_ct, 10) : '—'}</code></td>
+          <td><span class=${`dregg-inspector__pill ${sh.received ? '' : 'dregg-inspector__meta'}`}>${sh.received ? 'received' : 'pending'}</span></td>
+          <td>${sh.share_ct ? html`<code title=${sh.share_ct}>${shortHex(sh.share_ct, 10)}</code>` : html`<span class="dregg-inspector__meta">not supplied</span>`}</td>
+          <td>${sh.proof ? html`<dregg-proof data-proof=${JSON.stringify(sh.proof)} mode="compact"></dregg-proof>` : html`<span class="dregg-inspector__meta">not supplied</span>`}</td>
         </tr>
       `);
 
       const revealAvailable = caps.mutate && wasm && typeof wasm.reveal_encrypted_intent === 'function';
       const form = revealAvailable ? html`
-        <div style="margin-top:6px;font-size:0.75rem;">
-          <button data-act="reveal" style="font-size:0.7rem;margin-left:4px;">Attempt reveal</button>
+        <div class="dregg-inspector__panel">
+          <button data-act="reveal">Attempt reveal</button>
           ${s.error ? html`<div style="color:#b91c1c;">${s.error}</div>` : null}
         </div>
       ` : html`
-        <div style="font-size:0.7rem;color:var(--fg-dim);margin-top:6px;">
-          awaiting wasm32 support for threshold reveal; share rows are read from receipt/runtime data only.
+        <div class="dregg-inspector__note">
+          Reveal action unavailable in this runtime. Share rows are read from supplied receipt/runtime data only.
         </div>`;
 
       return html`
@@ -92,21 +111,31 @@ class DreggEncryptedIntent extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">encrypted-intent</span>
             <code class="dregg-inspector__id">${shortHex(intent.intent_id || '', 20)}</code>
+            <span class="dregg-inspector__pill">${status}</span>
           </header>
-          <div style="margin:4px 0;">
-            Progress: ${threshold ? `${received}/${threshold}` : 'awaiting threshold'} shares
-            <span style="display:inline-block;width:120px;height:8px;background:#e5e7eb;border-radius:4px;vertical-align:middle;">
-              <span style="display:block;height:100%;width:${prog}%;background:#3b82f6;border-radius:4px;"></span>
-            </span>
-            ${prog}%
-          </div>
-          <table style="font-size:0.7rem;border-collapse:collapse;">
-            <tr><th>validator</th><th>status</th><th>share</th></tr>
-            ${shareRows.length ? shareRows : html`<tr><td colspan="3" style="color:var(--fg-dim);">awaiting encrypted intent share data from runtime</td></tr>`}
+          <dl class="dregg-inspector__kv">
+            <dt>shares</dt><dd>${threshold ? `${received}/${threshold} threshold` : `${received} received`}${expected ? html` · ${expected} expected` : ''}</dd>
+            <dt>progress</dt><dd>
+              <span class="dregg-inspector__progress">
+                <span class="dregg-inspector__progress-fill" style=${`width:${prog}%;`}></span>
+              </span>
+              ${prog}%
+            </dd>
+            ${intent.ciphertext || intent.intent_ct ? html`<dt>ciphertext</dt><dd><code title=${intent.ciphertext || intent.intent_ct}>${shortHex(intent.ciphertext || intent.intent_ct, 18)}</code></dd>` : null}
+            ${intent.reveal_epoch || intent.deadline ? html`<dt>reveal window</dt><dd>${intent.reveal_epoch || intent.deadline}</dd>` : null}
+          </dl>
+          <table class="dregg-inspector__table">
+            <tr><th>validator</th><th>status</th><th>share</th><th>proof</th></tr>
+            ${shareRows.length ? shareRows : html`<tr><td colspan="4" class="dregg-inspector__meta">no share rows supplied by runtime data</td></tr>`}
           </table>
+          ${intent.reveal_proof ? html`
+            <details class="dregg-inspector__section" open>
+              <summary>Reveal proof</summary>
+              <div class="dregg-inspector__section-body"><dregg-proof data-proof=${JSON.stringify(intent.reveal_proof)}></dregg-proof></div>
+            </details>` : null}
           ${form}
-          <div style="font-size:0.65rem;color:var(--fg-dim);margin-top:4px;">
-            Threshold decryption. Placeholder until real STARK verifier (§5.8). Reveal emits proof for <dregg-proof>.
+          <div class="dregg-inspector__note">
+            Threshold decryption status from supplied intent data. This inspector does not decrypt shares or verify fulfillment proofs in JavaScript.
           </div>
         </div>`;
     };

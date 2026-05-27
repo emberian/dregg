@@ -251,16 +251,16 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction, state: &BotS
     };
 
     let embed = embeds::warning_embed(
-        "Proof Requests Unavailable",
+        "Proof Request Checkpoints",
         &format!(
-            "Credential proof requests are not exposed by the current node API. Target <@{target_id}> has cell `{}` and predicate `{}` was accepted.\n\nActionable next step: ask the holder to share a credential issue turn hash from `/credential list`, then inspect that turn in the explorer. Selective disclosure still needs a holder-private credential store plus a proof request/read surface.",
+            "Target <@{target_id}> has cell `{}` and predicate `{}` was accepted. The node now exposes identity receipt/proof checkpoints, but selective disclosure still needs a holder-private credential store and presentation protocol.",
             &subject_cell[..16.min(subject_cell.len())],
             predicate
         ),
     )
     .field(
-        "Recent Target Turns",
-        recent_identity_turns_field(state, &subject_cell).await,
+        "Proof Checkpoints",
+        identity_proof_checkpoints_field(state, &subject_cell).await,
         false,
     );
     let _ = command
@@ -295,15 +295,15 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotSta
     };
 
     let embed = embeds::warning_embed(
-        "Credential Store Unavailable",
+        "Credential Checkpoints",
         &format!(
-            "Credential issuance commits canonical identity actions for `{}`, but the current node read API does not expose holder-private credential storage or an identity index yet.\n\nUse the recent committed turns below as audit checkpoints. If you just issued a credential, keep its credential ID and turn hash from the issue response.",
+            "Credential issuance commits canonical identity actions for `{}`. The node exposes identity credential checkpoints from committed receipts, while holder-private credential storage is still bot/user-side work.",
             &cell_id[..16.min(cell_id.len())],
         ),
     )
     .field(
-        "Recent Turns For This Cell",
-        recent_identity_turns_field(state, &cell_id).await,
+        "Recent Credentials",
+        identity_credentials_field(state, &cell_id).await,
         false,
     );
     let _ = command
@@ -346,6 +346,59 @@ async fn recent_identity_turns_field(state: &BotState, cell_id: &str) -> String 
             .collect::<Vec<_>>()
             .join("\n"),
         Err(e) => format!("Could not load recent turns from `/api/events`: {e}"),
+    }
+}
+
+async fn identity_credentials_field(state: &BotState, cell_id: &str) -> String {
+    match state.devnet.get_identity_credentials(cell_id, 5).await {
+        Ok(checkpoints) if checkpoints.is_empty() => {
+            recent_identity_turns_field(state, cell_id).await
+        }
+        Ok(checkpoints) => checkpoints
+            .iter()
+            .map(|checkpoint| {
+                format!(
+                    "`{}` — issuer `{}` proof {} finality {}",
+                    short_hash(&checkpoint.turn_hash),
+                    short_hash(&checkpoint.issuer_cell),
+                    checkpoint.proof_status,
+                    checkpoint.finality
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(e) => format!("Could not load `/api/starbridge/identity/credentials`: {e}"),
+    }
+}
+
+async fn identity_proof_checkpoints_field(state: &BotState, cell_id: &str) -> String {
+    match state
+        .devnet
+        .get_identity_proof_checkpoints(cell_id, 5)
+        .await
+    {
+        Ok(checkpoints) if checkpoints.is_empty() => {
+            recent_identity_turns_field(state, cell_id).await
+        }
+        Ok(checkpoints) => checkpoints
+            .iter()
+            .map(|checkpoint| {
+                let witness = if checkpoint.witness_count == 1 {
+                    "1 witness".to_string()
+                } else {
+                    format!("{} witnesses", checkpoint.witness_count)
+                };
+                format!(
+                    "`{}` — proof {} {} finality {}",
+                    short_hash(&checkpoint.turn_hash),
+                    checkpoint.proof_status,
+                    witness,
+                    checkpoint.finality
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(e) => format!("Could not load `/api/starbridge/identity/proof-checkpoints`: {e}"),
     }
 }
 

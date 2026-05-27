@@ -9,14 +9,24 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import {
+  InspectorBase,
+  caveatSummaries,
+  cellIdFrom,
+  dreggCodeLink,
+  emptyState,
+  fieldHex,
+  hasConstraint,
+  programBadge,
+  programConstraints,
+  renderParseError,
+  shortHex,
+} from './_base.js';
 
 class DreggBlindedQueue extends InspectorBase {
   _render() {
     const { h, render, html, effect } = this._api;
     const refAttr = this.getAttribute('uri');
-    const mode = this.getAttribute('mode') || 'default';
-
     if (this._dispose) { this._dispose(); this._dispose = null; }
     this.replaceChildren();
 
@@ -29,21 +39,49 @@ class DreggBlindedQueue extends InspectorBase {
 
     const Component = () => {
       const cell = parsed && this._runtime.getCell ? this._runtime.getCell(parsed.id).value : null;
-      if (!cell) return html`<div class="dregg-inspector dregg-inspector--empty">blinded-queue cell not found</div>`;
+      if (!cell) return emptyState(html, 'Blinded queue unavailable', 'This runtime does not have a cell for the supplied blinded-queue URI.');
 
       const prog = cell.program;
-      const hasWitnessed = prog && prog.kind === 'Predicate' && (prog.constraints || []).some(c => c.kind === 'Witnessed' || /BlindedSet/.test(JSON.stringify(c)));
+      const fields = cell.fields || [];
+      const constraints = programConstraints(prog);
+      const hasWitnessed = hasConstraint(constraints, c => c.kind === 'Witnessed' || /BlindedSet|Custom/.test(JSON.stringify(c)));
+      const hasAppendOnly = hasConstraint(constraints, c => c.kind === 'Monotonic' || c.kind === 'StrictMonotonic' || c.kind === 'MonotonicSequence');
+      const caveats = caveatSummaries(constraints, ['Witnessed', 'BlindedSet', 'Custom', 'Monotonic']);
+      const id = cellIdFrom(cell, parsed);
 
       return html`
-        <div class="dregg-inspector dregg-inspector--cell pbq">
-          <header><span class="dregg-inspector__kind">blinded-queue</span> (sovereign)</header>
-          <dregg-cell uri=${`dregg://cell/${parsed.id}`} mode="compact"></dregg-cell>
-          ${hasWitnessed ? html`<div style="color:#c9a84c;font-size:0.8rem;">Contains Witnessed(BlindedSet) — Phase 1 predicate registry in use</div>` : ''}
+        <div class="dregg-inspector dregg-inspector--cell dregg-storage-pattern pbq">
+          <header class="dregg-storage-pattern__head">
+            <div>
+              <div class="dregg-storage-pattern__title">
+                <span class="dregg-inspector__kind">blinded-queue</span>
+                ${id ? dreggCodeLink(html, `dregg://cell/${id}`, shortHex(id, 18), id) : null}
+              </div>
+              <div class="dregg-storage-pattern__subtitle">Private consumption view over commitment and nullifier roots; spend validity comes from the attached witnessed predicate.</div>
+            </div>
+            <div class="dregg-storage-pattern__badges">
+              <span class=${`dregg-storage-pattern__badge ${hasWitnessed ? 'dregg-storage-pattern__badge--ok' : 'dregg-storage-pattern__badge--warn'}`}>${hasWitnessed ? 'witnessed spend' : 'spend predicate unavailable'}</span>
+              <span class=${`dregg-storage-pattern__badge ${prog && prog.kind !== 'None' ? 'dregg-storage-pattern__badge--ok' : 'dregg-storage-pattern__badge--warn'}`}>${programBadge(prog, constraints)}</span>
+            </div>
+          </header>
+
+          <div class="dregg-storage-pattern__summary">
+            <div><span>commitment root</span><strong><code title=${fields[0] || ''}>${fieldHex(fields, 0, 14)}</code></strong></div>
+            <div><span>nullifier root</span><strong><code title=${fields[1] || ''}>${fieldHex(fields, 1, 14)}</code></strong></div>
+            <div><span>spend auth</span><strong>${hasWitnessed ? 'registered' : 'unavailable'}</strong></div>
+            <div><span>append-only</span><strong>${hasAppendOnly ? 'declared' : 'unavailable'}</strong></div>
+          </div>
+
+          <section class="dregg-storage-pattern__section">
+            <h4>Program interpretation</h4>
+            ${caveats.length ? html`<ul class="dregg-storage-pattern__caveats">${caveats.map(c => html`<li><code>${c.split(' ')[0]}</code><span>${c.replace(/^[^ ]+ ?/, '')}</span></li>`)}</ul>`
+              : html`<div class="dregg-storage-pattern__unavailable">No blinded-spend caveat was found on this runtime cell. Roots are shown, but spend verification cannot be interpreted here.</div>`}
+          </section>
+
           <details>
-            <summary>Cell program (Blinded spend AIR + caveats)</summary>
-            ${prog ? html`<dregg-cell-program data-program=${JSON.stringify(prog)}></dregg-cell-program>` : ''}
+            <summary>Cell program (spend AIR + caveats)</summary>
+            ${prog ? html`<dregg-cell-program data-program=${JSON.stringify(prog)}></dregg-cell-program>` : html`<div class="dregg-storage-pattern__unavailable">No program attached to this cell.</div>`}
           </details>
-          <div style="font-size:0.7rem;">Per STORAGE-AS-CELL-PROGRAMS §3.4: one new predicate kind (BlindedSet) registered against vk_hash. Private claims/votes.</div>
         </div>`;
     };
 

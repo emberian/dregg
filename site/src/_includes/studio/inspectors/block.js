@@ -23,7 +23,7 @@ class DreggBlock extends InspectorBase {
   _render() {
     const { h, render, html, effect } = this._api;
     const refAttr = this.getAttribute('uri');
-    const mode = this.getAttribute('mode') || 'compact';
+    const mode = this.getAttribute('mode') || 'default';
 
     if (this._dispose) { this._dispose(); this._dispose = null; }
     this.replaceChildren();
@@ -57,21 +57,37 @@ class DreggBlock extends InspectorBase {
             · <code title=${b.block_hash}>${shortHex(b.block_hash)}</code>
           </span>`;
       }
+      const events = Array.isArray(b.events) ? b.events : [];
       return html`
         <div class="dregg-inspector dregg-inspector--cell">
           <header>
             <span class="dregg-inspector__kind">block</span>
             <code class="dregg-inspector__id">height ${String(b.height)}</code>
-            <span class="dregg-inspector__meta">fed #${String(b.fed_index)} · ${String(b.events?.length || 0)} events</span>
+            <span class="dregg-inspector__meta">fed #${String(b.fed_index)} · ${String(events.length)} events</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>Height</span><strong>${String(b.height)}</strong></div>
+            <div><span>Federation</span><strong>#${String(b.fed_index)}</strong></div>
+            <div><span>Events</span><strong>${String(events.length)}</strong></div>
+            <div><span>Hash</span><strong title=${b.block_hash}>${shortHex(b.block_hash, 10)}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>height</dt><dd>${String(b.height)}</dd>
             <dt>federation</dt><dd>${dreggCodeLink(html, `dregg://federation/${b.fed_index}`, `#${String(b.fed_index)}`)}</dd>
             <dt>block hash</dt><dd><code>${b.block_hash}</code></dd>
-            <dt>events</dt><dd>${b.events?.length
-              ? html`<code>${b.events.length} event${b.events.length === 1 ? '' : 's'}</code>`
+            <dt>events</dt><dd>${events.length
+              ? html`<div class="dregg-inspector__rows">${events.map((event, idx) => html`
+                  <div class="dregg-inspector__row">
+                    <span>${String(idx)}</span>
+                    <strong>${typeof event === 'string' ? shortHex(event, 18) : (event.kind || event.type || 'event')}</strong>
+                    <code>${typeof event === 'string' ? event : JSON.stringify(event).slice(0, 120)}</code>
+                  </div>`)}</div>`
               : html`<span style="opacity:0.6">(empty)</span>`}</dd>
           </dl>
+          <div class="dregg-inspector__actions">
+            ${dreggCodeLink(html, `dregg://federation/${b.fed_index}`, 'open federation')}
+            ${dreggCodeLink(html, `dregg://block-dag/${b.fed_index}`, 'open DAG')}
+          </div>
         </div>`;
     };
     this._dispose = effect(() => { render(h(Component, {}), root); });

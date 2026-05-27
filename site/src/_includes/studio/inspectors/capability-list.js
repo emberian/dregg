@@ -6,6 +6,11 @@
 
 import { InspectorBase, dreggCodeLink, emptyState, shortHex } from './_base.js';
 
+function capPerms(c) {
+  if (Array.isArray(c.permissions)) return c.permissions.filter(Boolean).map(String);
+  return String(c.permissions || '').split(/[,\s|]+/).map(s => s.trim()).filter(Boolean);
+}
+
 class DreggCapabilityList extends InspectorBase {
   static get observedAttributes() { return ['uri', 'mode', 'agent']; }
   _render() {
@@ -31,6 +36,9 @@ class DreggCapabilityList extends InspectorBase {
         html`Agent <code>#${agentIdx}</code> is not available in this runtime.`,
       );
       const caps = tree.capabilities || [];
+      const withBreadstuff = caps.filter(c => c.has_breadstuff).length;
+      const targetCount = new Set(caps.map(c => c.target || c.target_cell).filter(Boolean)).size;
+      const permissionCount = new Set(caps.flatMap(capPerms)).size;
       if (!caps.length) return html`
         <div class="dregg-inspector dregg-inspector--cell-list">
           <header>0 capabilities (agent ${tree.agent_name || `#${agentIdx}`})</header>
@@ -50,10 +58,15 @@ class DreggCapabilityList extends InspectorBase {
             · ${tree.agent_name || `agent #${agentIdx}`}
             · cell ${tree.cell_id ? dreggCodeLink(html, `dregg://cell/${tree.cell_id}`, shortHex(tree.cell_id), tree.cell_id) : html`<span class="dregg-inspector__meta">unavailable</span>`}
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>targets</span><strong>${String(targetCount)}</strong></div>
+            <div><span>permissions</span><strong>${String(permissionCount)}</strong></div>
+            <div><span>breadstuff</span><strong>${String(withBreadstuff)}</strong></div>
+          </div>
           <ul>
             ${caps.map(c => html`
               <li>
-                ${dreggCodeLink(html, `dregg://capability/${agentIdx}/${c.slot}`, 'open')}
+                ${dreggCodeLink(html, `dregg://capability/${agentIdx}/${c.slot}`, `slot ${String(c.slot)}`)}
                 <dregg-capability uri=${`dregg://capability/${agentIdx}/${c.slot}`} mode="compact"></dregg-capability>
               </li>
             `)}

@@ -122,6 +122,8 @@ pub struct ReceiptInfo {
     pub was_burn: bool,
     pub has_proof: bool,
     pub executor_signed: bool,
+    pub has_witness: bool,
+    pub witness_count: usize,
 }
 
 #[derive(Deserialize)]
@@ -422,6 +424,56 @@ pub struct StarbridgeActionInfo {
     pub method: String,
     pub effect_kinds: Vec<String>,
     pub touched_cells: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct StarbridgeIdentityEventInfo {
+    pub source: &'static str,
+    pub chain_index: Option<u64>,
+    pub event_index: Option<usize>,
+    pub height: Option<u64>,
+    pub receipt_hash: Option<String>,
+    pub turn_hash: String,
+    pub cell_id: String,
+    pub timestamp: i64,
+    pub topic: Option<serde_json::Value>,
+    pub data: Option<serde_json::Value>,
+    pub effects: Vec<String>,
+    pub proof_status: ActivityProofStatus,
+    pub finality: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct StarbridgeIdentityCredentialInfo {
+    pub source: &'static str,
+    pub chain_index: u64,
+    pub receipt_hash: String,
+    pub turn_hash: String,
+    pub issuer_cell: String,
+    pub subject_cells: Vec<String>,
+    pub timestamp: i64,
+    pub effects_hash: String,
+    pub event_count: usize,
+    pub derivation_record_count: usize,
+    pub proof_status: ActivityProofStatus,
+    pub finality: String,
+}
+
+#[derive(Serialize)]
+pub struct StarbridgeIdentityProofCheckpointInfo {
+    pub source: &'static str,
+    pub chain_index: u64,
+    pub receipt_hash: String,
+    pub turn_hash: String,
+    pub cell_id: String,
+    pub timestamp: i64,
+    pub effects_hash: String,
+    pub pre_state: String,
+    pub post_state: String,
+    pub proof_status: ActivityProofStatus,
+    pub executor_signed: bool,
+    pub witness_count: usize,
+    pub finality: String,
 }
 
 // =============================================================================
@@ -1028,10 +1080,23 @@ pub fn router(
         .route("/api/cell/{id}", get(get_cell_detail))
         .route("/api/node/cells/{id}", get(get_cell_detail))
         .route("/api/receipts", get(get_receipts))
+        .route("/api/receipts/{hash}/witnesses", get(get_receipt_witnesses))
         .route("/api/starbridge/receipts", get(get_starbridge_receipts))
         .route("/api/starbridge/events", get(get_starbridge_events))
         .route("/api/starbridge/turns", get(get_starbridge_turns))
         .route("/api/starbridge/actions", get(get_starbridge_actions))
+        .route(
+            "/api/starbridge/identity/events",
+            get(get_starbridge_identity_events),
+        )
+        .route(
+            "/api/starbridge/identity/credentials",
+            get(get_starbridge_identity_credentials),
+        )
+        .route(
+            "/api/starbridge/identity/proof-checkpoints",
+            get(get_starbridge_identity_proof_checkpoints),
+        )
         .route("/api/intents", get(get_intents))
         .route("/api/conditionals", get(get_pending_conditionals))
         .route("/api/discharge", post(post_discharge))
@@ -1358,7 +1423,26 @@ async fn get_tokens(State(state): State<NodeState>) -> Json<Vec<TokenInfo>> {
 
 async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> {
     let s = state.read().await;
-    Json(receipt_infos_from_chain(s.cclerk.receipt_chain(), 50))
+    Json(receipt_infos_from_chain(&s, 50))
+}
+
+async fn get_receipt_witnesses(
+    AxumPath(hash): AxumPath<String>,
+    State(state): State<NodeState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let bytes = hex_decode(&hash).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let receipt_hash: [u8; 32] = bytes.try_into().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let s = state.read().await;
+    let witnessed = s
+        .witnessed_receipts
+        .get(&receipt_hash)
+        .cloned()
+        .unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "receipt_hash": hex_encode(&receipt_hash),
+        "witness_count": witnessed.len(),
+        "witnessed_receipts": witnessed,
+    })))
 }
 
 async fn get_starbridge_receipts(
@@ -1388,11 +1472,67 @@ async fn get_starbridge_receipts(
                     .is_none_or(|want| hex_encode(&r.effects_hash).eq_ignore_ascii_case(want))
         })
         .take(limit)
-        .map(|(idx, r)| StarbridgeReceiptInfo {
-            receipt: ReceiptInfo {
+        .map(|(idx, r)| {
+            let receipt_hash = r.receipt_hash();
+            let witness_count = s.witnessed_receipt_count(&receipt_hash);
+            StarbridgeReceiptInfo {
+                receipt: ReceiptInfo {
+                    chain_index: idx as u64,
+                    chain_head: idx + 1 == chain_len,
+                    receipt_hash: hex_encode(&receipt_hash),
+                    turn_hash: hex_encode(&r.turn_hash),
+                    agent: hex_encode(&r.agent.0),
+                    pre_state: hex_encode(&r.pre_state_hash),
+                    post_state: hex_encode(&r.post_state_hash),
+                    timestamp: r.timestamp,
+                    computrons_used: r.computrons_used,
+                    action_count: r.action_count,
+                    previous_receipt_hash: r.previous_receipt_hash.map(|h| hex_encode(&h)),
+                    finality: format!("{:?}", r.finality).to_lowercase(),
+                    was_encrypted: r.was_encrypted,
+                    was_burn: r.was_burn,
+                    has_proof: r.executor_signature.is_some(),
+                    executor_signed: r.executor_signature.is_some(),
+                    has_witness: witness_count > 0,
+                    witness_count,
+                },
+                effects_hash: hex_encode(&r.effects_hash),
+                federation_id: hex_encode(&r.federation_id),
+                emitted_event_count: r.emitted_events.len(),
+                routing_directive_count: r.routing_directives.len(),
+                derivation_record_count: r.derivation_records.len(),
+                source: "receipt_chain",
+                turn_body_available: false,
+            }
+        })
+        .collect();
+    Json(receipts)
+}
+
+fn receipt_infos_from_chain(s: &crate::state::NodeStateInner, limit: usize) -> Vec<ReceiptInfo> {
+    receipt_infos_from_chain_with_witnesses(s.cclerk.receipt_chain(), limit, |hash| {
+        s.witnessed_receipt_count(hash)
+    })
+}
+
+fn receipt_infos_from_chain_with_witnesses(
+    chain: &[dregg_turn::TurnReceipt],
+    limit: usize,
+    witness_count_for: impl Fn(&[u8; 32]) -> usize,
+) -> Vec<ReceiptInfo> {
+    let chain_len = chain.len();
+    chain
+        .iter()
+        .enumerate()
+        .rev()
+        .take(limit)
+        .map(|(idx, r)| {
+            let receipt_hash = r.receipt_hash();
+            let witness_count = witness_count_for(&receipt_hash);
+            ReceiptInfo {
                 chain_index: idx as u64,
                 chain_head: idx + 1 == chain_len,
-                receipt_hash: hex_encode(&r.receipt_hash()),
+                receipt_hash: hex_encode(&receipt_hash),
                 turn_hash: hex_encode(&r.turn_hash),
                 agent: hex_encode(&r.agent.0),
                 pre_state: hex_encode(&r.pre_state_hash),
@@ -1406,43 +1546,9 @@ async fn get_starbridge_receipts(
                 was_burn: r.was_burn,
                 has_proof: r.executor_signature.is_some(),
                 executor_signed: r.executor_signature.is_some(),
-            },
-            effects_hash: hex_encode(&r.effects_hash),
-            federation_id: hex_encode(&r.federation_id),
-            emitted_event_count: r.emitted_events.len(),
-            routing_directive_count: r.routing_directives.len(),
-            derivation_record_count: r.derivation_records.len(),
-            source: "receipt_chain",
-            turn_body_available: false,
-        })
-        .collect();
-    Json(receipts)
-}
-
-fn receipt_infos_from_chain(chain: &[dregg_turn::TurnReceipt], limit: usize) -> Vec<ReceiptInfo> {
-    let chain_len = chain.len();
-    chain
-        .iter()
-        .enumerate()
-        .rev()
-        .take(limit)
-        .map(|(idx, r)| ReceiptInfo {
-            chain_index: idx as u64,
-            chain_head: idx + 1 == chain_len,
-            receipt_hash: hex_encode(&r.receipt_hash()),
-            turn_hash: hex_encode(&r.turn_hash),
-            agent: hex_encode(&r.agent.0),
-            pre_state: hex_encode(&r.pre_state_hash),
-            post_state: hex_encode(&r.post_state_hash),
-            timestamp: r.timestamp,
-            computrons_used: r.computrons_used,
-            action_count: r.action_count,
-            previous_receipt_hash: r.previous_receipt_hash.map(|h| hex_encode(&h)),
-            finality: format!("{:?}", r.finality).to_lowercase(),
-            was_encrypted: r.was_encrypted,
-            was_burn: r.was_burn,
-            has_proof: r.executor_signature.is_some(),
-            executor_signed: r.executor_signature.is_some(),
+                has_witness: witness_count > 0,
+                witness_count,
+            }
         })
         .collect()
 }
@@ -2354,6 +2460,161 @@ async fn get_starbridge_actions(
     }
 
     Json(actions)
+}
+
+async fn get_starbridge_identity_events(
+    Query(params): Query<StarbridgeQuery>,
+    State(state): State<NodeState>,
+) -> Json<Vec<StarbridgeIdentityEventInfo>> {
+    let limit = starbridge_limit(params.limit);
+    let since_height = params.since_height;
+    let s = state.read().await;
+    let mut out = Vec::new();
+
+    for event in select_committed_events(&s.event_log, since_height, usize::MAX) {
+        if !starbridge_event_matches(&event, &identity_scoped_params(&params)) {
+            continue;
+        }
+        out.push(StarbridgeIdentityEventInfo {
+            source: "event_log",
+            chain_index: None,
+            event_index: None,
+            height: Some(event.height),
+            receipt_hash: None,
+            turn_hash: event.turn_hash,
+            cell_id: event.cell_id,
+            timestamp: event.timestamp,
+            topic: None,
+            data: None,
+            effects: event.effects,
+            proof_status: event.proof_status,
+            finality: None,
+        });
+        if out.len() >= limit {
+            return Json(out);
+        }
+    }
+
+    let chain = s.cclerk.receipt_chain();
+    for (chain_index, receipt) in chain.iter().enumerate().rev() {
+        if !identity_receipt_matches(receipt, &params) {
+            continue;
+        }
+        for (event_index, event) in receipt.emitted_events.iter().enumerate() {
+            if params.cell.as_ref().is_some_and(|cell| {
+                !hex_encode(&event.cell.0).eq_ignore_ascii_case(cell)
+                    && !hex_encode(&receipt.agent.0).eq_ignore_ascii_case(cell)
+            }) {
+                continue;
+            }
+            out.push(StarbridgeIdentityEventInfo {
+                source: "receipt_chain",
+                chain_index: Some(chain_index as u64),
+                event_index: Some(event_index),
+                height: Some((chain_index + 1) as u64),
+                receipt_hash: Some(hex_encode(&receipt.receipt_hash())),
+                turn_hash: hex_encode(&receipt.turn_hash),
+                cell_id: hex_encode(&event.cell.0),
+                timestamp: receipt.timestamp,
+                topic: Some(serde_json::to_value(&event.topic).unwrap_or(serde_json::Value::Null)),
+                data: Some(serde_json::to_value(&event.data).unwrap_or(serde_json::Value::Null)),
+                effects: Vec::new(),
+                proof_status: receipt_proof_status(receipt),
+                finality: Some(format!("{:?}", receipt.finality).to_lowercase()),
+            });
+            if out.len() >= limit {
+                return Json(out);
+            }
+        }
+    }
+
+    Json(out)
+}
+
+async fn get_starbridge_identity_credentials(
+    Query(params): Query<StarbridgeQuery>,
+    State(state): State<NodeState>,
+) -> Json<Vec<StarbridgeIdentityCredentialInfo>> {
+    let limit = starbridge_limit(params.limit);
+    let s = state.read().await;
+    let chain = s.cclerk.receipt_chain();
+    let credentials = chain
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, receipt)| identity_receipt_matches(receipt, &params))
+        .filter(|(_, receipt)| {
+            !receipt.emitted_events.is_empty() || !receipt.derivation_records.is_empty()
+        })
+        .take(limit)
+        .map(|(chain_index, receipt)| {
+            let receipt_hash = receipt.receipt_hash();
+            let mut subject_cells: Vec<String> = receipt
+                .derivation_records
+                .iter()
+                .map(|record| hex_encode(&record.target_cell.0))
+                .chain(
+                    receipt
+                        .emitted_events
+                        .iter()
+                        .map(|event| hex_encode(&event.cell.0)),
+                )
+                .collect();
+            subject_cells.sort();
+            subject_cells.dedup();
+            StarbridgeIdentityCredentialInfo {
+                source: "receipt_chain",
+                chain_index: chain_index as u64,
+                receipt_hash: hex_encode(&receipt_hash),
+                turn_hash: hex_encode(&receipt.turn_hash),
+                issuer_cell: hex_encode(&receipt.agent.0),
+                subject_cells,
+                timestamp: receipt.timestamp,
+                effects_hash: hex_encode(&receipt.effects_hash),
+                event_count: receipt.emitted_events.len(),
+                derivation_record_count: receipt.derivation_records.len(),
+                proof_status: receipt_proof_status(receipt),
+                finality: format!("{:?}", receipt.finality).to_lowercase(),
+            }
+        })
+        .collect();
+    Json(credentials)
+}
+
+async fn get_starbridge_identity_proof_checkpoints(
+    Query(params): Query<StarbridgeQuery>,
+    State(state): State<NodeState>,
+) -> Json<Vec<StarbridgeIdentityProofCheckpointInfo>> {
+    let limit = starbridge_limit(params.limit);
+    let s = state.read().await;
+    let checkpoints = s
+        .cclerk
+        .receipt_chain()
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(_, receipt)| identity_receipt_matches(receipt, &params))
+        .take(limit)
+        .map(|(chain_index, receipt)| {
+            let receipt_hash = receipt.receipt_hash();
+            StarbridgeIdentityProofCheckpointInfo {
+                source: "receipt_chain",
+                chain_index: chain_index as u64,
+                receipt_hash: hex_encode(&receipt_hash),
+                turn_hash: hex_encode(&receipt.turn_hash),
+                cell_id: hex_encode(&receipt.agent.0),
+                timestamp: receipt.timestamp,
+                effects_hash: hex_encode(&receipt.effects_hash),
+                pre_state: hex_encode(&receipt.pre_state_hash),
+                post_state: hex_encode(&receipt.post_state_hash),
+                proof_status: receipt_proof_status(receipt),
+                executor_signed: receipt.executor_signature.is_some(),
+                witness_count: s.witnessed_receipt_count(&receipt_hash),
+                finality: format!("{:?}", receipt.finality).to_lowercase(),
+            }
+        })
+        .collect();
+    Json(checkpoints)
 }
 
 fn select_committed_events(
@@ -4767,6 +5028,67 @@ fn starbridge_action_matches(info: &StarbridgeActionInfo, params: &StarbridgeQue
         })
 }
 
+fn identity_scoped_params(params: &StarbridgeQuery) -> StarbridgeQuery {
+    StarbridgeQuery {
+        limit: params.limit,
+        since_height: params.since_height,
+        cell: params.cell.clone(),
+        memo: params.memo.clone(),
+        effect: params.effect.clone(),
+        turn_hash: params.turn_hash.clone(),
+        effects_hash: params.effects_hash.clone(),
+        app: Some(params.app.clone().unwrap_or_else(|| "identity".to_string())),
+    }
+}
+
+fn receipt_proof_status(receipt: &dregg_turn::TurnReceipt) -> ActivityProofStatus {
+    if receipt.executor_signature.is_some() {
+        ActivityProofStatus::Proved
+    } else {
+        ActivityProofStatus::NotRequired
+    }
+}
+
+fn identity_receipt_matches(receipt: &dregg_turn::TurnReceipt, params: &StarbridgeQuery) -> bool {
+    let receipt_hash = hex_encode(&receipt.receipt_hash());
+    let event_text = receipt
+        .emitted_events
+        .iter()
+        .filter_map(|event| serde_json::to_string(event).ok())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let identity_hint = event_text.to_ascii_lowercase().contains("identity")
+        || event_text.to_ascii_lowercase().contains("credential")
+        || !receipt.derivation_records.is_empty()
+        || !receipt.emitted_events.is_empty();
+
+    identity_hint
+        && exact_filter_matches(&hex_encode(&receipt.turn_hash), &params.turn_hash)
+        && exact_filter_matches(&hex_encode(&receipt.effects_hash), &params.effects_hash)
+        && params.cell.as_ref().is_none_or(|cell| {
+            hex_encode(&receipt.agent.0).eq_ignore_ascii_case(cell)
+                || receipt
+                    .emitted_events
+                    .iter()
+                    .any(|event| hex_encode(&event.cell.0).eq_ignore_ascii_case(cell))
+                || receipt
+                    .derivation_records
+                    .iter()
+                    .any(|record| hex_encode(&record.target_cell.0).eq_ignore_ascii_case(cell))
+        })
+        && params.memo.as_ref().is_none_or(|memo| {
+            text_filter_matches(&event_text, &Some(memo.clone()))
+                || text_filter_matches(&receipt_hash, &Some(memo.clone()))
+        })
+        && params.effect.as_ref().is_none_or(|effect| {
+            text_filter_matches(&event_text, &Some(effect.clone()))
+                || text_filter_matches("credential derivation emitted_event", &Some(effect.clone()))
+        })
+        && params.app.as_ref().is_none_or(|app| {
+            app.eq_ignore_ascii_case("identity") || app.eq_ignore_ascii_case("credential")
+        })
+}
+
 fn classify_starbridge_app(memo: Option<&str>, effect_summaries: &[String]) -> Option<String> {
     let mut haystack = memo.unwrap_or("").to_ascii_lowercase();
     for effect in effect_summaries {
@@ -5217,7 +5539,7 @@ mod tests {
             });
         }
 
-        let infos = receipt_infos_from_chain(&chain, 50);
+        let infos = receipt_infos_from_chain_with_witnesses(&chain, 50, |_| 0);
         assert_eq!(infos.len(), 3);
         assert_eq!(infos[0].chain_index, 2);
         assert!(infos[0].chain_head);

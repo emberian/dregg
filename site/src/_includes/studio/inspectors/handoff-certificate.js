@@ -8,7 +8,13 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, renderParseError, shortHex, emptyState } from './_base.js';
+
+function compact(value, max = 180) {
+  if (value == null || value === '') return '';
+  const s = typeof value === 'string' ? value : JSON.stringify(value);
+  return s.length > max ? s.slice(0, max) + '…' : s;
+}
 
 class DreggHandoffCertificate extends InspectorBase {
   _render() {
@@ -22,8 +28,9 @@ class DreggHandoffCertificate extends InspectorBase {
 
     let parsed = null;
     let data = null;
+    let parseError = null;
     if (dataAttr) {
-      try { data = JSON.parse(dataAttr); } catch {}
+      try { data = JSON.parse(dataAttr); } catch (e) { parseError = e; }
     }
     if (!data && refAttr) {
       try { parsed = parseRef(refAttr); } catch {}
@@ -35,13 +42,22 @@ class DreggHandoffCertificate extends InspectorBase {
 
     const Component = () => {
       if (!data) {
-        return html`
-          <div class="dregg-inspector dregg-inspector--empty">
-            handoff certificate data not available${parsed ? html`: <code>${shortHex(parsed.id, 16)}</code>` : ''};
-            awaiting runtime/wasm binding for full <code>HandoffCertificate</code> lookup.
-          </div>`;
+        if (parseError) {
+          return html`<div class="dregg-inspector dregg-inspector--err">bad handoff certificate data JSON: ${parseError.message}</div>`;
+        }
+        return emptyState(
+          html,
+          'Handoff certificate unavailable',
+          parsed
+            ? html`The URI parsed as <code>${shortHex(parsed.id, 16)}</code>, but this runtime cannot look up the full certificate. Supply <code>data</code> with a <code>handoff_cert_summary</code> or certificate object to inspect the handoff.`
+            : html`Supply <code>data</code> with a <code>handoff_cert_summary</code> or certificate object to inspect the handoff.`
+        );
       }
       const cert = data.handoff_cert_summary || data; // support both shapes
+      const signatures = Array.isArray(cert.signatures) ? cert.signatures : Array.isArray(data.signatures) ? data.signatures : [];
+      const expiry = cert.expires_at || cert.expiry || cert.not_after;
+      const issued = cert.issued_at || cert.not_before;
+      const status = cert.status || (expiry ? 'time-bound' : 'summary');
 
       if (mode === 'compact') {
         return html`
@@ -56,18 +72,31 @@ class DreggHandoffCertificate extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">handoff-certificate</span>
             <code class="dregg-inspector__id" title=${cert.nonce || ''}>${shortHex(cert.nonce || 'n/a', 16)}</code>
+            <span class="dregg-inspector__pill">${status}</span>
           </header>
           <dl class="dregg-inspector__kv">
-            <dt>introducer federation</dt><dd><code title=${cert.introducer_federation}>${shortHex(cert.introducer_federation, 16)}</code></dd>
-            <dt>recipient pk</dt><dd><code title=${cert.recipient_pk}>${shortHex(cert.recipient_pk, 16)}</code></dd>
-            <dt>nonce</dt><dd><code title=${cert.nonce}>${shortHex(cert.nonce, 16)}</code></dd>
-            ${cert.introducer_pk ? html`<dt>introducer pk</dt><dd><code>${shortHex(cert.introducer_pk, 12)}</code></dd>` : ''}
+            <dt>introducer federation</dt><dd>${cert.introducer_federation ? html`<code title=${cert.introducer_federation}>${shortHex(cert.introducer_federation, 16)}</code>` : html`<span class="dregg-inspector__meta">not supplied</span>`}</dd>
+            <dt>recipient pk</dt><dd>${cert.recipient_pk ? html`<code title=${cert.recipient_pk}>${shortHex(cert.recipient_pk, 16)}</code>` : html`<span class="dregg-inspector__meta">not supplied</span>`}</dd>
+            <dt>nonce</dt><dd>${cert.nonce ? html`<code title=${cert.nonce}>${shortHex(cert.nonce, 16)}</code>` : html`<span class="dregg-inspector__meta">not supplied</span>`}</dd>
+            ${cert.introducer_pk ? html`<dt>introducer pk</dt><dd><code title=${cert.introducer_pk}>${shortHex(cert.introducer_pk, 16)}</code></dd>` : ''}
+            ${issued ? html`<dt>issued</dt><dd>${issued}</dd>` : null}
+            ${expiry ? html`<dt>expires</dt><dd>${expiry}</dd>` : null}
+            <dt>signatures</dt><dd>${signatures.length}</dd>
           </dl>
-          <div style="font-size:0.7rem;color:var(--fg-dim);">
-            HandoffCertificate enables 3-party CapTP handoff (introducer → recipient). See Authorization::CapTpDelivered + dregg_captp handoff.
-            Paste-friendly compact form: dregg-handoff:... (summary only; full cert oversized by design).
-          </div>
-          <div style="font-size:0.6rem;color:#888;margin-top:2px;">Full cert fields beyond the summary are shown only when supplied by runtime data.</div>
+          ${signatures.length ? html`
+            <details class="dregg-inspector__section">
+              <summary>Signature material</summary>
+              <div class="dregg-inspector__section-body">
+                <ul class="dregg-inspector__list">
+                  ${signatures.map((sig, i) => html`<li><code>${compact(sig, 160)}</code></li>`)}
+                </ul>
+              </div>
+            </details>` : null}
+          <details class="dregg-inspector__section">
+            <summary>Supplied certificate fields</summary>
+            <div class="dregg-inspector__section-body"><code>${compact(cert, 900)}</code></div>
+          </details>
+          <div class="dregg-inspector__note">CapTP handoff summary. Verification and oversized full-certificate retrieval remain runtime responsibilities; this inspector only displays fields supplied by the caller.</div>
         </div>`;
     };
 

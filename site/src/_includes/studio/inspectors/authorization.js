@@ -25,7 +25,7 @@
  * Default mode: KV grid with all fields for the variant.
  */
 
-import { InspectorBase, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, shortHex } from './_base.js';
 
 // ---------------------------------------------------------------------------
 // Color palette for authorization kinds
@@ -76,7 +76,7 @@ function variantRows(auth, html) {
 
   if (kind === 'Bearer') {
     return html`
-      <dt>target</dt><dd><code title=${auth.target}>${shortHex(auth.target, 24)}</code></dd>
+      <dt>target</dt><dd>${auth.target ? dreggCodeLink(html, `dregg://cell/${auth.target}`, shortHex(auth.target, 24), auth.target) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
       <dt>expires at</dt><dd>${String(auth.expires_at)}</dd>
       <dt>delegation kind</dt><dd><code>${auth.delegation_kind}</code></dd>
     `;
@@ -101,7 +101,7 @@ function variantRows(auth, html) {
     return html`
       <dt>predicate kind</dt><dd><code>${auth.predicate_kind}</code></dd>
       <dt>commitment</dt><dd><code title=${auth.commitment}>${shortHex(auth.commitment, 16)}</code></dd>
-      <dt>input ref</dt><dd><code>${auth.input_ref}</code></dd>
+      <dt>input ref</dt><dd>${typeof auth.input_ref === 'string' && auth.input_ref.startsWith('dregg://') ? dreggCodeLink(html, auth.input_ref, auth.input_ref) : html`<code>${auth.input_ref || 'n/a'}</code>`}</dd>
       <dt>proof witness idx</dt><dd>${String(auth.proof_witness_index)}</dd>
     `;
   }
@@ -113,8 +113,25 @@ function variantRows(auth, html) {
     `;
   }
 
-  // Unknown variant — dump raw JSON
-  return html`<dt>raw</dt><dd><code>${JSON.stringify(auth)}</code></dd>`;
+  const keys = Object.keys(auth).filter(k => k !== 'kind');
+  return html`
+    <dt>fields</dt><dd>${keys.length ? keys.map(k => html`<code>${k}</code> `) : html`<span class="dregg-inspector__meta">none</span>`}</dd>
+    <dt>note</dt><dd>Unknown authorization variant surfaced by runtime.</dd>
+  `;
+}
+
+function variantSummary(auth) {
+  switch (auth.kind) {
+    case 'Signature': return { primary: 'signature', detail: auth.r && auth.s ? 'r/s present' : 'missing component', risk: 'direct signer proof' };
+    case 'Proof': return { primary: 'zk proof', detail: `${auth.proof_bytes_len || 0} bytes`, risk: 'bound to action/resource' };
+    case 'Breadstuff': return { primary: 'breadstuff', detail: shortHex(auth.token_hash || '', 12), risk: 'token hash auth' };
+    case 'Bearer': return { primary: 'bearer', detail: auth.delegation_kind || 'delegation', risk: Number(auth.expires_at || 0) ? 'expires' : 'no expiry surfaced' };
+    case 'Unchecked': return { primary: 'unchecked', detail: 'no proof', risk: 'simulation only' };
+    case 'CapTpDelivered': return { primary: 'captp', detail: auth.handoff_cert_summary ? 'handoff cert' : 'no cert summary', risk: 'delivered authority' };
+    case 'Custom': return { primary: 'custom', detail: auth.predicate_kind || 'predicate', risk: auth.proof_witness_index != null ? 'witnessed' : 'unwitnessed' };
+    case 'OneOf': return { primary: 'one-of', detail: `${auth.num_candidates || 0} candidates`, risk: auth.proof_index != null ? `index ${auth.proof_index}` : 'no selected proof' };
+    default: return { primary: auth.kind || 'unknown', detail: `${Object.keys(auth).length} fields`, risk: 'unknown variant' };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,13 +152,16 @@ class DreggAuthorization extends InspectorBase {
     // Parse the data attribute — no runtime lookup needed.
     let auth = null;
     try {
-      auth = JSON.parse(dataAttr);
+      auth = dataAttr ? JSON.parse(dataAttr) : null;
     } catch (e) {
       this.innerHTML = `<div class="dregg-inspector dregg-inspector--err">dregg-authorization: bad data attr: ${e.message}</div>`;
       return;
     }
     if (!auth || typeof auth.kind !== 'string') {
-      this.innerHTML = `<div class="dregg-inspector dregg-inspector--err">dregg-authorization: data missing "kind" field</div>`;
+      this.replaceChildren();
+      const root = document.createElement('div');
+      this.appendChild(root);
+      this._dispose = effect(() => render(emptyState(html, 'Authorization missing', html`No authorization variant was provided in the <code>data</code> attribute.`), root));
       return;
     }
 
@@ -149,11 +169,12 @@ class DreggAuthorization extends InspectorBase {
     this.appendChild(root);
 
     const Component = () => {
+      const summary = variantSummary(auth);
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact dregg-authorization--badge"
                 style=${kindStyle(auth.kind)}>
-            ${auth.kind}
+            ${auth.kind}${summary.detail ? html` · ${summary.detail}` : ''}
           </span>`;
       }
 
@@ -164,6 +185,11 @@ class DreggAuthorization extends InspectorBase {
             <span class="dregg-inspector__kind">authorization</span>
             <span class="dregg-authorization--badge" style=${kindStyle(auth.kind)}>${auth.kind}</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>variant</span><strong>${summary.primary}</strong></div>
+            <div><span>detail</span><strong title=${summary.detail}>${summary.detail}</strong></div>
+            <div><span>interpretation</span><strong title=${summary.risk}>${summary.risk}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             ${variantRows(auth, html)}
           </dl>

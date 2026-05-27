@@ -19,7 +19,28 @@
  * Per STARBRIDGE-PLAN §4.5 + token/README.md + STORAGE cell-programs.
  */
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, emptyState, renderParseError, shortHex } from './_base.js';
+
+function asList(value) {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function tokenId(tok, parsed) {
+  return tok?.token || tok?.encoded || tok?.root_token || tok?.token_id || parsed?.id || '';
+}
+
+function caveatsFor(step) {
+  return asList(step?.restrictions || step?.caveats || step?.services || step?.actions);
+}
+
+function caveatLabel(caveat) {
+  if (typeof caveat === 'string') return caveat;
+  if (!caveat || typeof caveat !== 'object') return String(caveat ?? 'empty');
+  if (caveat.kind) return `${caveat.kind}${caveat.until ? ` until ${caveat.until}` : ''}`;
+  if (caveat.service) return `${caveat.service}${caveat.actions ? `:${caveat.actions}` : ''}`;
+  return Object.entries(caveat).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : String(v)}`).join(', ');
+}
 
 class DreggAttenuatedToken extends InspectorBase {
   _render() {
@@ -53,11 +74,11 @@ class DreggAttenuatedToken extends InspectorBase {
       const s = viewState.value;
       const tok = data || null;
       if (!tok) {
-        return html`
-          <div class="dregg-inspector dregg-inspector--empty">
-            attenuated token data not available${parsed ? html`: <code>${shortHex(parsed.id, 16)}</code>` : ''};
-            awaiting runtime/wasm support for held-token lookup.
-          </div>`;
+        return emptyState(
+          html,
+          'Token data not available',
+          html`Held-token lookup is not exposed by this runtime yet${parsed ? html`; requested <code>${shortHex(parsed.id, 16)}</code>` : ''}.`,
+        );
       }
 
       if (mode === 'compact') {
@@ -65,53 +86,64 @@ class DreggAttenuatedToken extends InspectorBase {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
             <span class="dregg-inspector__kind">attenuated-token</span>
-            <code>${shortHex(tok.root_token || '', 10)}</code>
+            <code title=${tokenId(tok, parsed)}>${shortHex(tokenId(tok, parsed), 10)}</code>
             ${len ? html`· ${len} attenuation${len === 1 ? '' : 's'}` : ''}
           </span>`;
       }
 
       const chain = tok.chain || [];
+      const rootToken = tokenId(tok, parsed);
+      const service = tok.service || tok.audience || '';
+      const actionSet = asList(tok.actions || tok.allowed_actions).join(', ') || 'unspecified';
+      const restrictionCount = chain.reduce((n, step) => n + caveatsFor(step).length, 0);
       const chainView = chain.length
         ? html`
-          <div style="margin-top:6px;font-size:0.75rem;">
-            <div style="color:var(--fg-dim);margin-bottom:2px;">Attenuation chain:</div>
-            <ol style="margin:0;padding-left:1.2em;">
+          <div class="dregg-inspector__notice">
+            <strong>Attenuation chain</strong>
+            <ol>
               ${chain.map((step, i) => html`
                 <li>
-                  <code>${shortHex(step.attenuator || '', 8)}</code>
-                  restrictions: <code>${JSON.stringify(step.restrictions || step.caveats || [])}</code>
+                  <code title=${step.attenuator || step.by || ''}>${shortHex(step.attenuator || step.by || `step-${i + 1}`, 12)}</code>
+                  ${caveatsFor(step).length
+                    ? html`limits ${caveatsFor(step).map(c => html`<code>${caveatLabel(c)}</code> `)}`
+                    : html`<span class="dregg-inspector__meta">no caveats surfaced</span>`}
                 </li>
               `)}
             </ol>
           </div>`
-        : html`<div style="font-size:0.75rem;color:var(--fg-dim);">No attenuations yet (root token).</div>`;
+        : html`<div class="dregg-inspector__notice dregg-inspector__notice--ok">Root token: no attenuation steps are surfaced.</div>`;
 
-      const attenuateAvailable = mode === 'lab' && caps.mutate && wasm && (wasm.cipherclerk_attenuate || wasm.attenuate_token);
+      const attenuateAvailable = mode === 'lab' && caps.mutate && wasm && wasm.attenuate_token && rootToken;
       const form = attenuateAvailable ? html`
-        <div style="border-top:1px solid var(--line);margin-top:8px;padding-top:6px;font-size:0.75rem;">
-          <div><strong>Lab attenuate via wasm token backend</strong></div>
-          <input id="at-restrict" placeholder='e.g. {"kind":"time","until":123456}' style="width:260px;font-family:var(--mono);font-size:0.7rem;" />
-          <button data-act="attenuate" style="font-size:0.7rem;margin-left:4px;">Attenuate</button>
-          ${s.error ? html`<div style="color:#b91c1c;font-size:0.65rem;">${s.error}</div>` : null}
+        <div class="dregg-inspector__controls">
+          <input class="dregg-inspector__input" id="at-root-key" placeholder="32-byte root key hex" />
+          <input class="dregg-inspector__input" id="at-service" placeholder="service" value=${service} />
+          <input class="dregg-inspector__input" id="at-actions" placeholder="actions: read,write" value=${actionSet === 'unspecified' ? '' : actionSet} />
+          <input class="dregg-inspector__input" id="at-exp" placeholder="expires secs" value="0" />
+          <button class="dregg-inspector__button" data-act="attenuate">Attenuate via wasm</button>
+          ${s.error ? html`<div class="dregg-inspector__notice dregg-inspector__notice--warn">${s.error}</div>` : null}
+          ${s.last ? html`<div class="dregg-inspector__notice dregg-inspector__notice--ok">Created <code title=${s.last.token || ''}>${shortHex(s.last.token || '', 20)}</code></div>` : null}
         </div>
-      ` : html`<div style="font-size:0.65rem;color:var(--fg-dim);margin-top:4px;">awaiting first-class held-token attenuation runtime API</div>`;
+      ` : html`<div class="dregg-inspector__notice">Interactive attenuation needs lab mode, mutation access, token data, and the canonical <code>attenuate_token</code> wasm export.</div>`;
 
       return html`
         <div class="dregg-inspector dregg-inspector--attoken">
           <header>
             <span class="dregg-inspector__kind">attenuated-token</span>
-            <code class="dregg-inspector__id" title=${tok.root_token || ''}>${shortHex(tok.root_token || 'n/a', 20)}</code>
+            <code class="dregg-inspector__id" title=${rootToken}>${shortHex(rootToken || 'n/a', 20)}</code>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>depth</span><strong>${String(chain.length)}</strong></div>
+            <div><span>caveats</span><strong>${String(restrictionCount)}</strong></div>
+            <div><span>actions</span><strong title=${actionSet}>${actionSet}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
-            <dt>root</dt><dd><code title=${tok.root_token}>${shortHex(tok.root_token || '', 24)}</code></dd>
+            <dt>token</dt><dd><code title=${rootToken}>${shortHex(rootToken || '', 24)}</code></dd>
+            <dt>service</dt><dd>${service ? html`<code>${service}</code>` : html`<span class="dregg-inspector__meta">unspecified</span>`}</dd>
             <dt>depth</dt><dd>${String(chain.length)}</dd>
           </dl>
           ${chainView}
           ${form}
-          <div style="font-size:0.65rem;color:var(--fg-dim);margin-top:4px;">
-            Attenuations are monotonic (token crate). Restrictions become caveats in cell-programs / bearer flows.
-            Full list_held_tokens pending first-class wasm export (see cipherclerk TODO).
-          </div>
         </div>`;
     };
 
@@ -122,13 +154,14 @@ class DreggAttenuatedToken extends InspectorBase {
       if (!btn || !wasm || mode !== 'lab') return;
       if (btn.dataset.act === 'attenuate') {
         try {
-          const restrictStr = root.querySelector('#at-restrict')?.value?.trim() || '{}';
-          let restrictions = {};
-          try { restrictions = JSON.parse(restrictStr); } catch {}
-          const attenuate = wasm.cipherclerk_attenuate || wasm.attenuate_token;
-          if (!attenuate) throw new Error('attenuation wasm export is not available');
-          attenuate(0, restrictions);
-          viewState.value = { ...viewState.value, error: null };
+          const keyHex = root.querySelector('#at-root-key')?.value?.trim() || '';
+          const service = root.querySelector('#at-service')?.value?.trim() || '';
+          const actions = root.querySelector('#at-actions')?.value?.trim() || '';
+          const expires = parseInt(root.querySelector('#at-exp')?.value?.trim() || '0', 10) || 0;
+          if (!/^[0-9a-fA-F]{64}$/.test(keyHex)) throw new Error('root key must be 32 bytes of hex');
+          const key = new Uint8Array(keyHex.match(/../g).map(b => parseInt(b, 16)));
+          const res = wasm.attenuate_token(tokenId(data, parsed), key, service, actions, expires);
+          viewState.value = { ...viewState.value, last: res, error: null };
           if (this._runtime?.version) this._runtime.version.value++;
         } catch (err) {
           viewState.value = { ...viewState.value, error: String(err) };

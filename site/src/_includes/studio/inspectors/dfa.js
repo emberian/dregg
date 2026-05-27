@@ -15,8 +15,21 @@
  * runtime/wasm DFA bindings; it does not fabricate sample automata.
  */
 
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, renderParseError, shortHex, emptyState } from './_base.js';
 import { parseRef } from '../uri.js';
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function transitionLabel(t) {
+  if (t == null) return '?';
+  if (t.byte != null) return String(t.byte);
+  if (t.symbol != null) return String(t.symbol);
+  if (t.pattern != null) return String(t.pattern);
+  if (t.guard != null) return String(t.guard);
+  return '*';
+}
 
 class DreggDfa extends InspectorBase {
   _render() {
@@ -47,58 +60,72 @@ class DreggDfa extends InspectorBase {
     const Component = () => {
       if (!dfaData) {
         return html`
-          <div class="dregg-inspector dregg-inspector--dfa pdfa">
-            <div class="pdfa__header"><span class="dregg-inspector__kind">dfa</span> ${parsed ? shortHex(parsed.id, 12) : ''}</div>
-            <div style="color:var(--fg-dim);font-size:0.8rem;margin:4px 0;">
-              awaiting DFA data (data-dfa JSON or wasm compile_dfa / get_dfa binding from dregg_dfa crate).
-            </div>
-            <div style="font-size:0.7rem;color:var(--fg-dim);">
-              Ties to blocklace Constitution.routes_commitment (BLAKE3 of RouteTable). See dfa/{compiler,router}.rs + DFA-RATIONALIZATION-DESIGN.md + blocklace/src/constitution.rs:54.
-            </div>
-          </div>`;
+          ${emptyState(
+            html,
+            'DFA unavailable',
+            parsed
+              ? html`The URI parsed as <code>${shortHex(parsed.id, 12)}</code>, but this runtime has no DFA lookup. Provide <code>data-dfa</code> from a route table, relay operator, or predicate witness to render states and transitions.`
+              : html`Provide <code>data-dfa</code> from a route table, relay operator, or predicate witness to render states and transitions.`
+          )}`;
       }
 
-      const states = dfaData.states || dfaData.nodes || [];
-      const trans = dfaData.transitions || dfaData.edges || [];
+      const trans = asArray(dfaData.transitions || dfaData.edges);
+      let states = asArray(dfaData.states || dfaData.nodes);
+      if (!states.length && trans.length) {
+        const ids = new Set();
+        trans.forEach(t => {
+          ids.add(String(t.from ?? t.source ?? 0));
+          ids.add(String(t.to ?? t.target ?? 0));
+        });
+        states = Array.from(ids).map(id => ({ id }));
+      }
+      const start = dfaData.start_state ?? dfaData.start ?? dfaData.initial;
+      const accepting = new Set(asArray(dfaData.accepting_states || dfaData.accepting || dfaData.final_states).map(String));
+      const dead = new Set(asArray(dfaData.dead_states || dfaData.dead).map(String));
+      const commitment = dfaData.air_fingerprint || dfaData.routes_commitment || dfaData.hash || '';
 
       if (mode === 'compact') {
-        return html`<span class="dregg-inspector dregg-inspector--compact">DFA ${states.length} states · ${trans.length} trans</span>`;
+        return html`<span class="dregg-inspector dregg-inspector--compact">DFA ${states.length} states · ${trans.length} transitions${commitment ? html` · <code>${shortHex(commitment, 8)}</code>` : ''}</span>`;
       }
 
       // Improved SVG visualization (layered layout + proper edges, following delegation-graph/merkle patterns; no JS reimpl of DFA semantics)
-      const stateCount = states.length || 4;
+      const stateCount = Math.max(states.length, 1);
       const cols = Math.min(5, Math.max(1, Math.ceil(Math.sqrt(stateCount))));
       const boxW = 520, boxH = 160;
-      const nodeR = 12;
       const nodeW = 58, nodeH = 24;
+      const stateIndex = new Map(states.map((s, i) => [String(s.id ?? s.name ?? i), i]));
 
       const svgNodes = states.map((s, i) => {
         const col = i % cols;
         const row = Math.floor(i / cols);
         const x = 30 + col * (nodeW + 24);
         const y = 28 + row * 42;
-        const isDead = s.dead || s.id === 0 /* convention from DEAD_STATE in dfa::compiler */;
+        const id = String(s.id ?? s.name ?? i);
+        const isDead = s.dead || dead.has(id);
+        const isAccepting = s.accepting || accepting.has(id);
+        const isStart = start != null && String(start) === id;
         return h('g', {},
           h('rect', {
             x: x - nodeW/2, y: y - nodeH/2, width: nodeW, height: nodeH, rx: 4,
-            fill: isDead ? '#3a1a1a' : '#1a2e1a', stroke: isDead ? '#f87171' : '#4ade80', 'stroke-width': 1.5
+            fill: isDead ? '#3a1a1a' : isAccepting ? '#16351f' : '#182233',
+            stroke: isDead ? '#f87171' : isAccepting ? '#4ade80' : '#60a5fa',
+            'stroke-width': isStart ? 2 : 1.5
           }),
-          h('text', { x, y: y + 4, 'text-anchor': 'middle', 'font-size': '8px', fill: '#e4ddd0', 'font-family': 'ui-monospace,monospace' }, String(s.id ?? i))
+          h('text', { x, y: y + 4, 'text-anchor': 'middle', 'font-size': '8px', fill: '#e4ddd0', 'font-family': 'ui-monospace,monospace' }, id)
         );
       });
 
       const svgEdges = trans.slice(0, 30).map((t) => {
-        const fi = (t.from ?? 0);
-        const ti = (t.to ?? 1);
+        const fi = stateIndex.get(String(t.from ?? t.source ?? 0)) ?? 0;
+        const ti = stateIndex.get(String(t.to ?? t.target ?? 0)) ?? 0;
         const fcol = fi % cols, frow = Math.floor(fi / cols);
         const tcol = ti % cols, trow = Math.floor(ti / cols);
         const fx = 30 + fcol * (nodeW + 24), fy = 28 + frow * 42;
         const tx = 30 + tcol * (nodeW + 24), ty = 28 + trow * 42;
-        // simple line + label (first byte or '*')
-        const label = t.byte != null ? String(t.byte) : (t.pattern ? '*' : '?');
+        const label = transitionLabel(t);
         return h('g', {},
           h('line', { x1: fx + 8, y1: fy, x2: tx - 8, y2: ty, stroke: '#60a5fa', 'stroke-width': 1, opacity: 0.7 }),
-          h('text', { x: (fx+tx)/2, y: (fy+ty)/2 - 2, 'font-size': '6px', fill: '#94a3b8' }, label)
+          h('text', { x: (fx+tx)/2, y: (fy+ty)/2 - 2, 'font-size': '6px', fill: '#94a3b8' }, String(label).slice(0, 18))
         );
       });
 
@@ -109,11 +136,23 @@ class DreggDfa extends InspectorBase {
             ${svgEdges}
             ${svgNodes}
           </svg>
-          <div style="font-size:0.75rem;margin-top:4px;color:var(--fg-dim);">
-            ${states.length} states · ${trans.length} transitions (from dregg_dfa::compiler / RouteTable). Use for RelayOperator, PubSubTopicFilter, CapTP pre-filters, governed routing.
-          </div>
-          ${dfaData.air_fingerprint || dfaData.routes_commitment ? html`<div style="font-size:0.65rem;">commit / AIR: ${shortHex(dfaData.air_fingerprint || dfaData.routes_commitment || '', 10)}</div>` : ''}
-          <div style="font-size:0.65rem;margin-top:2px;color:#6a8070;">data-dfa should come from the dregg_dfa crate or a runtime route table binding; compile_dfa is a wasm substrate gap.</div>
+          <dl class="dregg-inspector__kv">
+            <dt>states</dt><dd>${states.length}${start != null ? html` · start <code>${start}</code>` : ''}${accepting.size ? html` · accepting ${accepting.size}` : ''}</dd>
+            <dt>transitions</dt><dd>${trans.length}${trans.length > 30 ? html` · showing first 30` : ''}</dd>
+            ${commitment ? html`<dt>commitment</dt><dd><code title=${commitment}>${shortHex(commitment, 18)}</code></dd>` : null}
+          </dl>
+          <details class="dregg-inspector__section">
+            <summary>Transition table</summary>
+            <div class="dregg-inspector__section-body">
+              <table class="dregg-inspector__table">
+                <tr><th>from</th><th>label</th><th>to</th></tr>
+                ${trans.length
+                  ? trans.slice(0, 40).map(t => html`<tr><td><code>${t.from ?? t.source ?? '?'}</code></td><td>${transitionLabel(t)}</td><td><code>${t.to ?? t.target ?? '?'}</code></td></tr>`)
+                  : html`<tr><td colspan="3" class="dregg-inspector__meta">no transitions supplied</td></tr>`}
+              </table>
+            </div>
+          </details>
+          <div class="dregg-inspector__note">Rendered from caller-supplied DFA or route-table data. This view does not compile route rules or evaluate input strings.</div>
         </div>`;
     };
 

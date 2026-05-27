@@ -205,6 +205,34 @@ impl EffectVmProofMaterial {
     }
 }
 
+fn witnessed_receipt_from_effect_material(
+    receipt: dregg_turn::TurnReceipt,
+    proof: &EffectVmProofMaterial,
+) -> Option<dregg_turn::WitnessedReceipt> {
+    let proof_bytes = hex_decode_var(&proof.proof_hex).ok()?;
+    let public_inputs: Vec<u32> = proof.public_inputs.iter().map(|x| *x as u32).collect();
+    let trace: Vec<Vec<dregg_circuit::BabyBear>> = proof
+        .trace_rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|v| dregg_circuit::BabyBear::new(*v))
+                .collect()
+        })
+        .collect();
+
+    Some(dregg_turn::WitnessedReceipt::from_components(
+        receipt,
+        proof_bytes,
+        public_inputs,
+        if trace.is_empty() {
+            None
+        } else {
+            Some(trace.as_slice())
+        },
+    ))
+}
+
 fn project_effects_for_mcp(
     effects: &[dregg_turn::Effect],
 ) -> Vec<dregg_circuit::effect_vm::Effect> {
@@ -1685,6 +1713,12 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
 
     match exec_result {
         dregg_turn::TurnResult::Committed { receipt, .. } => {
+            let receipt_hash = receipt.receipt_hash();
+            if let Some(witnessed) =
+                witnessed_receipt_from_effect_material(receipt.clone(), &proof_material)
+            {
+                s.push_witnessed_receipt(receipt_hash, witnessed);
+            }
             s.cclerk
                 .append_receipt(receipt)
                 .expect("local executor and cclerk chains must agree; divergence is a serious bug");
@@ -2331,13 +2365,18 @@ async fn tool_get_receipt_chain(params: &Value, state: &NodeState) -> McpToolRes
         .rev()
         .take(limit)
         .map(|r| {
+            let receipt_hash = r.receipt_hash();
+            let witness_count = s.witnessed_receipt_count(&receipt_hash);
             serde_json::json!({
+                "receipt_hash": hex_encode(&receipt_hash),
                 "turn_hash": hex_encode(&r.turn_hash),
                 "pre_state": hex_encode(&r.pre_state_hash),
                 "post_state": hex_encode(&r.post_state_hash),
                 "timestamp": r.timestamp,
                 "computrons_used": r.computrons_used,
                 "action_count": r.action_count,
+                "has_witness": witness_count > 0,
+                "witness_count": witness_count,
             })
         })
         .collect();
@@ -3110,6 +3149,14 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
 
     match exec_result {
         dregg_turn::TurnResult::Committed { receipt, .. } => {
+            let receipt_hash = receipt.receipt_hash();
+            if let Some(proof) = proof_material.as_ref() {
+                if let Some(witnessed) =
+                    witnessed_receipt_from_effect_material(receipt.clone(), proof)
+                {
+                    s.push_witnessed_receipt(receipt_hash, witnessed);
+                }
+            }
             s.cclerk
                 .append_receipt(receipt)
                 .expect("local executor and cclerk chains must agree; divergence is a serious bug");
@@ -4788,6 +4835,12 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
 
     match exec_result {
         dregg_turn::TurnResult::Committed { receipt, .. } => {
+            let receipt_hash = receipt.receipt_hash();
+            if let Some(witnessed) =
+                witnessed_receipt_from_effect_material(receipt.clone(), &proof_material)
+            {
+                s.push_witnessed_receipt(receipt_hash, witnessed);
+            }
             s.cclerk
                 .append_receipt(receipt)
                 .expect("local executor and cclerk chains must agree");
@@ -5216,6 +5269,17 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
 
     let (committed_receipt_opt, error_str) = match exec_result {
         dregg_turn::TurnResult::Committed { receipt, .. } => {
+            let receipt_hash = receipt.receipt_hash();
+            if let Some(witnessed) =
+                witnessed_receipt_from_effect_material(receipt.clone(), &from_proof)
+            {
+                s.push_witnessed_receipt(receipt_hash, witnessed);
+            }
+            if let Some(witnessed) =
+                witnessed_receipt_from_effect_material(receipt.clone(), &to_proof)
+            {
+                s.push_witnessed_receipt(receipt_hash, witnessed);
+            }
             s.cclerk
                 .append_receipt(receipt.clone())
                 .expect("local executor and cclerk chains must agree; divergence is a serious bug");
@@ -6680,6 +6744,7 @@ mod tests {
 
         let result = dispatch_tool("dregg_grant_capability", params, &state).await;
         let j = extract_json(&result);
+        eprintln!("grant witness artifact response: {j}");
         assert_eq!(
             j.get("activity_status").and_then(|v| v.as_str()),
             Some("rejected")
@@ -6692,6 +6757,55 @@ mod tests {
             state.read().await.cclerk.receipt_chain_length(),
             0,
             "grant rejection must happen before the receipt chain advances"
+        );
+    }
+
+    #[tokio::test]
+    async fn grant_capability_commits_witness_artifact_for_receipt_chain() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+        let target_cell = {
+            let s = state.read().await;
+            let id = dregg_cell::CellId::derive_raw(&s.cclerk.public_key().0, &[0u8; 32]);
+            hex_encode(&id.0)
+        };
+        let params = serde_json::json!({
+            "to_agent": "77".repeat(32),
+            "target_cell": target_cell,
+            "permissions": "signature",
+        });
+
+        let result = dispatch_tool("dregg_grant_capability", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("committed"),
+            "unexpected response: {j}"
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("proved")
+        );
+
+        let s = state.read().await;
+        let receipt = s
+            .cclerk
+            .receipt_chain()
+            .last()
+            .expect("grant must append a receipt");
+        let receipt_hash = receipt.receipt_hash();
+        assert_eq!(
+            s.witnessed_receipt_count(&receipt_hash),
+            1,
+            "committed proof-bearing MCP turn must leave a retrievable witnessed receipt"
+        );
+        let stored = s
+            .witnessed_receipts
+            .get(&receipt_hash)
+            .expect("witnessed receipt entry must exist");
+        assert_eq!(stored[0].receipt.receipt_hash(), receipt_hash);
+        assert!(
+            stored[0].witness_bundle.is_some(),
+            "stored witnessed receipt must carry replay material"
         );
     }
 

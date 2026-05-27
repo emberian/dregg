@@ -7,7 +7,7 @@
  * `get_receipts_for_agent(handle, agent_idx)` getter.
  */
 
-import { InspectorBase, dreggCodeLink, emptyState } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, shortHex } from './_base.js';
 
 class DreggReceiptList extends InspectorBase {
   static get observedAttributes() { return ['uri', 'mode', 'agent']; }
@@ -31,17 +31,26 @@ class DreggReceiptList extends InspectorBase {
           ? html`Agent <code>#${agentIdx}</code> has no committed receipts in the current chain view.`
           : html`Execute a turn to populate the receipt chain.`,
       );
+      const totalComputrons = rs.reduce((sum, r) => sum + Number(r.computrons_used || 0), 0);
+      const totalActions = rs.reduce((sum, r) => sum + Number(r.action_count || 0), 0);
       return html`
         <div class="dregg-inspector dregg-inspector--cell-list">
           <header>${rs.length} receipt${rs.length === 1 ? '' : 's'}${agentIdx != null ? ` (agent #${agentIdx})` : ''}</header>
-          <ul>
-            ${rs.map(r => html`
-              <li>
-                ${dreggCodeLink(html, `dregg://receipt/${r.turn_hash}`, 'open')}
-                <dregg-receipt uri=${`dregg://receipt/${r.turn_hash}`} mode="compact"></dregg-receipt>
-              </li>
+          <div class="dregg-inspector__summary">
+            <div><span>Receipts</span><strong>${String(rs.length)}</strong></div>
+            <div><span>Actions</span><strong>${String(totalActions)}</strong></div>
+            <div><span>Computrons</span><strong>${String(totalComputrons)}</strong></div>
+            <div><span>Head</span><strong>${shortHex(rs[rs.length - 1]?.turn_hash, 10)}</strong></div>
+          </div>
+          <div class="dregg-inspector__rows">
+            ${rs.slice().reverse().map((r, idx) => html`
+              <div class="dregg-inspector__row">
+                <span>${String(rs.length - idx - 1)}</span>
+                <strong>${dreggCodeLink(html, `dregg://receipt/${r.turn_hash}`, shortHex(r.turn_hash, 18), r.turn_hash)}</strong>
+                <code>${String(r.action_count ?? 0)} action(s) · ${String(r.computrons_used ?? 0)} computrons</code>
+              </div>
             `)}
-          </ul>
+          </div>
         </div>`;
     };
     this._dispose = effect(() => { render(h(Component, {}), root); });

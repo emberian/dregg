@@ -76,6 +76,22 @@ pub struct StarbridgeQueueSubscription {
     pub subscribed_at: i64,
 }
 
+/// Durable Discord-mediated CapTP handoff state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CaptpHandoffRecord {
+    pub token_id: String,
+    pub cell_id: String,
+    pub sturdy_uri: String,
+    pub from_discord_id: String,
+    pub to_discord_id: String,
+    pub recipient_cell_id: String,
+    pub status: String,
+    pub issued_at: i64,
+    pub redeemed_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+    pub token_json: String,
+}
+
 /// Database handle wrapping a SQLite connection pool.
 #[derive(Clone)]
 pub struct Database {
@@ -210,6 +226,31 @@ impl Database {
                 subscribed_at INTEGER NOT NULL,
                 PRIMARY KEY (namespace_path, discord_id)
             )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS captp_handoffs (
+                token_id TEXT PRIMARY KEY,
+                cell_id TEXT NOT NULL,
+                sturdy_uri TEXT NOT NULL,
+                from_discord_id TEXT NOT NULL,
+                to_discord_id TEXT NOT NULL,
+                recipient_cell_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                issued_at INTEGER NOT NULL,
+                redeemed_at INTEGER,
+                revoked_at INTEGER,
+                token_json TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_captp_handoffs_recipient_status
+             ON captp_handoffs (to_discord_id, status, issued_at DESC)",
         )
         .execute(&pool)
         .await?;
@@ -675,6 +716,88 @@ impl Database {
         Ok(row.0)
     }
 
+    // ─── CapTP durable handoffs ───────────────────────────────────────────
+
+    pub async fn create_captp_handoff(
+        &self,
+        token_id: &str,
+        cell_id: &str,
+        sturdy_uri: &str,
+        from_discord_id: &str,
+        to_discord_id: &str,
+        recipient_cell_id: &str,
+        token_json: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO captp_handoffs
+             (token_id, cell_id, sturdy_uri, from_discord_id, to_discord_id, recipient_cell_id, status, issued_at, redeemed_at, revoked_at, token_json)
+             VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, ?)",
+        )
+        .bind(token_id)
+        .bind(cell_id)
+        .bind(sturdy_uri)
+        .bind(from_discord_id)
+        .bind(to_discord_id)
+        .bind(recipient_cell_id)
+        .bind(chrono_now())
+        .bind(token_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_captp_handoff(
+        &self,
+        token_id: &str,
+    ) -> Result<Option<CaptpHandoffRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT token_id, cell_id, sturdy_uri, from_discord_id, to_discord_id, recipient_cell_id, status, issued_at, redeemed_at, revoked_at, token_json
+             FROM captp_handoffs
+             WHERE token_id = ?",
+        )
+        .bind(token_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(captp_handoff_from_row))
+    }
+
+    pub async fn redeem_captp_handoff(
+        &self,
+        token_id: &str,
+        to_discord_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE captp_handoffs
+             SET status = 'redeemed', redeemed_at = ?
+             WHERE token_id = ? AND to_discord_id = ? AND status = 'pending'",
+        )
+        .bind(chrono_now())
+        .bind(token_id)
+        .bind(to_discord_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn revoke_captp_handoffs_for_cell(
+        &self,
+        cell_id: &str,
+        from_discord_id: &str,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE captp_handoffs
+             SET status = 'revoked', revoked_at = ?
+             WHERE cell_id = ? AND from_discord_id = ? AND status = 'pending'",
+        )
+        .bind(chrono_now())
+        .bind(cell_id)
+        .bind(from_discord_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Ensure extra tables exist (called from connect).
     pub async fn ensure_extra_tables(&self) -> Result<(), sqlx::Error> {
         sqlx::query(
@@ -718,6 +841,22 @@ fn activity_from_row(row: sqlx::sqlite::SqliteRow) -> StarbridgeActivity {
         status: row.get("status"),
         details_json: row.get("details_json"),
         timestamp: row.get("timestamp"),
+    }
+}
+
+fn captp_handoff_from_row(row: sqlx::sqlite::SqliteRow) -> CaptpHandoffRecord {
+    CaptpHandoffRecord {
+        token_id: row.get("token_id"),
+        cell_id: row.get("cell_id"),
+        sturdy_uri: row.get("sturdy_uri"),
+        from_discord_id: row.get("from_discord_id"),
+        to_discord_id: row.get("to_discord_id"),
+        recipient_cell_id: row.get("recipient_cell_id"),
+        status: row.get("status"),
+        issued_at: row.get("issued_at"),
+        redeemed_at: row.get("redeemed_at"),
+        revoked_at: row.get("revoked_at"),
+        token_json: row.get("token_json"),
     }
 }
 

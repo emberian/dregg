@@ -29,7 +29,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, renderParseError, shortHex, emptyState } from './_base.js';
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -41,6 +41,11 @@ function esc(s) {
 function modeLabel(m) {
   if (!m) return 'hosted';
   return String(m).toLowerCase() === 'sovereign' ? 'sovereign' : 'hosted';
+}
+
+function compactJson(value, max = 160) {
+  const s = typeof value === 'string' ? value : JSON.stringify(value);
+  return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
 // --- <dregg-factory-descriptor> --------------------------------------------
@@ -78,17 +83,13 @@ class DreggFactoryDescriptor extends InspectorBase {
 
     const Component = () => {
       if (!descriptor) {
-        return html`
-          <div class="dregg-inspector dregg-inspector--factory pfd">
-            <div class="pfd__header">
-              <span class="dregg-inspector__kind">factory-descriptor</span>
-              ${parsed ? html`<code class="dregg-inspector__id" title=${parsed.id}>${shortHex(parsed.id, 16)}</code>` : ''}
-            </div>
-            <div class="pfd__placeholder" style="font-size:0.82rem;color:var(--fg-dim);padding:8px 0;">
-              awaiting wasm binding for deployed factories (deploy_factory_descriptor exists; get/list pending per §5.7/STORAGE-AS-CELL-PROGRAMS Phase 1).<br>
-              Pass <code>data-factory="..."</code> JSON (from deploy result or app manifest) to render.
-            </div>
-          </div>`;
+        return emptyState(
+          html,
+          'Factory descriptor unavailable',
+          parsed
+            ? html`The URI parsed as factory <code>${shortHex(parsed.id, 16)}</code>, but this runtime has no deployed-factory lookup. Provide <code>data-factory</code> from a deploy result or app manifest to inspect constructor transparency data.`
+            : html`Provide <code>data-factory</code> JSON from a deploy result or app manifest to inspect constructor transparency data.`
+        );
       }
 
       const vk = descriptor.factory_vk || descriptor.vk || '';
@@ -99,6 +100,7 @@ class DreggFactoryDescriptor extends InspectorBase {
       const capTemplates = descriptor.allowed_cap_templates || descriptor.cap_templates || [];
       const defMode = modeLabel(descriptor.default_mode || descriptor.mode);
       const creationBudget = descriptor.creation_budget;
+      const provenance = descriptor.provenance || descriptor.created_by || descriptor.source;
 
       const progData = descriptor.child_program
         ? JSON.stringify(descriptor.child_program)
@@ -137,14 +139,15 @@ class DreggFactoryDescriptor extends InspectorBase {
             <dt>Cap templates</dt><dd>${capTemplates.length || 0}</dd>
             <dt>Field constraints (creation)</dt><dd>${fieldConstraints.length || 0}</dd>
             <dt>State constraints (perpetual)</dt><dd>${stateConstraints.length || 0} — these are the cell-program invariants</dd>
+            ${provenance ? html`<dt>Provenance</dt><dd><code>${compactJson(provenance, 120)}</code></dd>` : null}
           </dl>
 
           ${capTemplates.length > 0 ? html`
             <details class="pfd__section" open>
               <summary class="pfd__summary">Allowed capability templates</summary>
               <div class="pfd__sub">
-                <ul style="margin:4px 0 0;padding-left:18px;font-size:0.8rem;">
-                  ${capTemplates.map(t => html`<li><code>${esc(JSON.stringify(t).slice(0,120))}</code></li>`)}
+                <ul class="dregg-inspector__list">
+                  ${capTemplates.map(t => html`<li><code>${compactJson(t, 180)}</code></li>`)}
                 </ul>
               </div>
             </details>` : ''}
@@ -152,8 +155,20 @@ class DreggFactoryDescriptor extends InspectorBase {
           ${fieldConstraints.length > 0 ? html`
             <details class="pfd__section">
               <summary class="pfd__summary">Field constraints (creation-time)</summary>
-              <div class="pfd__sub" style="font-family:monospace;font-size:0.78rem;">
-                ${fieldConstraints.map(fc => html`<div>${esc(JSON.stringify(fc))}</div>`)}
+              <div class="pfd__sub">
+                <ul class="dregg-inspector__list">
+                  ${fieldConstraints.map(fc => html`<li><code>${compactJson(fc, 220)}</code></li>`)}
+                </ul>
+              </div>
+            </details>` : ''}
+
+          ${stateConstraints.length > 0 && !progData ? html`
+            <details class="pfd__section" open>
+              <summary class="pfd__summary">State constraints</summary>
+              <div class="pfd__sub">
+                <ul class="dregg-inspector__list">
+                  ${stateConstraints.map(sc => html`<li><code>${compactJson(sc, 220)}</code></li>`)}
+                </ul>
               </div>
             </details>` : ''}
 
@@ -162,18 +177,16 @@ class DreggFactoryDescriptor extends InspectorBase {
             <div class="pfd__sub">
               ${progData
                 ? html`<dregg-cell-program data-program=${progData} mode="default"></dregg-cell-program>`
-                : html`<div style="color:var(--fg-dim);font-size:0.82rem;">No inline child program view. Constraints shown via state_constraints above (storage patterns: WriteOnce + MonotonicSequence + SenderAuthorized etc per STORAGE-AS-CELL-PROGRAMS §3).</div>`}
+                : html`<div class="dregg-inspector__note">No inline child program view was supplied. The inspector can show state constraints when present, but it does not derive a canonical child program in JavaScript.</div>`}
               ${stateConstraints.length > 0 ? html`
-                <div style="margin-top:6px;font-size:0.75rem;color:var(--fg-dim);">
-                  ${stateConstraints.length} perpetual constraints govern every transition on cells minted from this factory.
-                  This is how <strong>storage primitives become cell programs</strong>: CapInbox, ProgrammableQueue etc are expressed as compositions of these 21 variants + WitnessedPredicate (Phase 1).
+                <div class="dregg-inspector__note" style="margin-top:6px;">
+                  ${stateConstraints.length} perpetual constraints were supplied for cells minted from this factory.
                 </div>` : ''}
             </div>
           </details>
 
-          <div class="pfd__footer" style="margin-top:8px;font-size:0.7rem;color:var(--fg-dim);">
-            Constructor transparency: anyone with the factory_vk can re-derive the exact invariants.
-            Provenance recorded on created cells via <code>Provenance.created_by_factory</code>.
+          <div class="pfd__footer dregg-inspector__note" style="margin-top:8px;">
+            Constructor transparency view from supplied descriptor data. Hashing, validation, and child-program derivation stay in the runtime.
           </div>
         </div>`;
     };

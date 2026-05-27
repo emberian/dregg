@@ -13,6 +13,21 @@
 import { parseRef } from '../uri.js';
 import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
 
+function permissionParts(permissions) {
+  if (Array.isArray(permissions)) return permissions.filter(Boolean).map(String);
+  return String(permissions || '')
+    .split(/[,\s|]+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function permissionSummary(c) {
+  const parts = permissionParts(c.permissions);
+  if (!parts.length) return 'No permissions recorded';
+  if (parts.includes('*')) return 'Full delegated access';
+  return parts.join(', ');
+}
+
 class DreggCapability extends InspectorBase {
   _render() {
     const { h, render, html, effect } = this._api;
@@ -44,14 +59,17 @@ class DreggCapability extends InspectorBase {
         'Capability not found',
         html`Agent <code>#${agentIdx}</code> does not currently expose a capability at slot <code>${slotOrIdx}</code>.`,
       );
+      const parts = permissionParts(c.permissions);
+      const target = c.target || c.target_cell || '';
+      const holder = c.cell_id || c.holder_cell || '';
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
             <code>slot ${String(c.slot)}</code>
-            · target ${c.target
-              ? dreggCodeLink(html, `dregg://cell/${c.target}`, shortHex(c.target), c.target)
+            · target ${target
+              ? dreggCodeLink(html, `dregg://cell/${target}`, shortHex(target), target)
               : html`<span class="dregg-inspector__meta">unavailable</span>`}
-            · ${c.permissions}
+            · ${permissionSummary(c)}
           </span>`;
       }
       return html`
@@ -59,14 +77,20 @@ class DreggCapability extends InspectorBase {
           <header>
             <span class="dregg-inspector__kind">capability</span>
             <code class="dregg-inspector__id">agent #${String(c.agent_index)} · slot ${String(c.slot)}</code>
-            <span class="dregg-inspector__meta">${c.permissions || 'no permissions'}</span>
+            <span class="dregg-inspector__meta">${permissionSummary(c)}</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>permissions</span><strong>${parts.length || 0}</strong></div>
+            <div><span>breadstuff</span><strong>${c.has_breadstuff ? 'attached' : 'none'}</strong></div>
+            <div><span>target</span><strong title=${target}>${target ? shortHex(target, 12) : 'unavailable'}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>agent</dt><dd>${c.agent_name || `#${String(c.agent_index)}`}</dd>
-            <dt>holder cell</dt><dd>${c.cell_id ? dreggCodeLink(html, `dregg://cell/${c.cell_id}`, shortHex(c.cell_id, 24), c.cell_id) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
-            <dt>target cell</dt><dd>${c.target ? dreggCodeLink(html, `dregg://cell/${c.target}`, shortHex(c.target, 24), c.target) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
-            <dt>permissions</dt><dd><code>${c.permissions}</code></dd>
+            <dt>holder cell</dt><dd>${holder ? dreggCodeLink(html, `dregg://cell/${holder}`, shortHex(holder, 24), holder) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
+            <dt>target cell</dt><dd>${target ? dreggCodeLink(html, `dregg://cell/${target}`, shortHex(target, 24), target) : html`<span class="dregg-inspector__meta">unavailable</span>`}</dd>
+            <dt>permissions</dt><dd>${parts.length ? parts.map(p => html`<code>${p}</code> `) : html`<span class="dregg-inspector__meta">none recorded</span>`}</dd>
             <dt>breadstuff</dt><dd>${c.has_breadstuff ? 'attached' : 'none'}</dd>
+            <dt>capability URI</dt><dd>${dreggCodeLink(html, `dregg://capability/${agentIdx}/${c.slot}`, `slot ${String(c.slot)}`)}</dd>
           </dl>
         </div>`;
     };
