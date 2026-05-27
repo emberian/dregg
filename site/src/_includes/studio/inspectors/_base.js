@@ -96,6 +96,9 @@ function ensureInspectorChrome() {
 .dregg-outbox__entry { border: 1px solid var(--line, #30363d); border-radius: 5px; background: var(--bg-raised, #161b22); padding: 10px; }
 .dregg-outbox__entry-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .dregg-outbox__entry-head strong { margin-left: 6px; font-size: 0.84rem; }
+.dregg-outbox__entry-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.dregg-outbox__entry-actions span,
+.dregg-outbox__notice-time { color: var(--fg-dim, #9aa0a6); font-size: 0.68rem; }
 .dregg-outbox__status { border: 1px solid var(--line, #30363d); border-radius: 999px; padding: 2px 7px; color: var(--fg-dim, #9aa0a6); font-size: 0.66rem; text-transform: uppercase; }
 .dregg-outbox__status--pending { border-color: #c9a84c; color: #f2d06b; }
 .dregg-outbox__status--submitting { border-color: var(--accent, #64c8ff); color: var(--accent-bright, #8fddff); }

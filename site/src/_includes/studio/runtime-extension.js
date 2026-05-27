@@ -43,6 +43,7 @@ export async function createExtensionRuntime({ signals }) {
   const cellsSignal = signal([]);
   const knownFedsSignal = signal([]);
   const statusSignal = signal(null);
+  const outboxStatusSignal = signal({ state: 'idle', message: 'Outbox idle', updatedAt: 0 });
   const traceEventsSignal = signal({ schema_version: 1, event_count: 0, events: [] });
   const balanceSignal = signal(null);
   const outboxSignal = signal([]);
@@ -51,6 +52,11 @@ export async function createExtensionRuntime({ signals }) {
   function bump() { version.value = version.value + 1; }
   function fire(type, detail) {
     events.dispatchEvent(new CustomEvent(type, { detail }));
+  }
+
+  function setOutboxStatus(state, message, extra = {}) {
+    outboxStatusSignal.value = { state, message, updatedAt: Date.now(), ...extra };
+    bump();
   }
 
   function pushEvent(kind, payload) {
@@ -112,6 +118,7 @@ export async function createExtensionRuntime({ signals }) {
       }
     } catch {
       outboxSignal.value = [];
+      setOutboxStatus('unavailable', 'Outbox unavailable from this extension build');
     }
     bump();
   }
@@ -180,17 +187,42 @@ export async function createExtensionRuntime({ signals }) {
     getExtensionStatus: () => statusSignal,
     getBalance: () => balanceSignal,
     getOutbox: () => outboxSignal,
+    getOutboxStatus: () => outboxStatusSignal,
     flushOutbox: async () => {
       if (typeof dregg.flushOutbox !== 'function') throw new Error('Cipherclerk extension does not expose flushOutbox');
-      const result = await dregg.flushOutbox();
-      await refresh();
-      return result;
+      setOutboxStatus('flushing', 'Retrying queued submissions against the configured node');
+      try {
+        const result = await dregg.flushOutbox();
+        if (result && Array.isArray(result.entries)) outboxSignal.value = result.entries;
+        await refresh();
+        const submitted = Number(result?.submitted || 0);
+        const failed = Number(result?.failed || 0);
+        const pending = Number(result?.pending || 0);
+        setOutboxStatus(
+          failed ? 'warn' : 'ok',
+          `Flush complete: ${submitted} replayed, ${failed} failed, ${pending} still pending`,
+          { result },
+        );
+        return result;
+      } catch (e) {
+        const message = e?.message || String(e);
+        setOutboxStatus('error', `Flush failed: ${message}`);
+        throw e;
+      }
     },
     dropOutboxEntry: async (id) => {
       if (typeof dregg.dropOutboxEntry !== 'function') throw new Error('Cipherclerk extension does not expose dropOutboxEntry');
-      const result = await dregg.dropOutboxEntry(id);
-      await refresh();
-      return result;
+      setOutboxStatus('dropping', 'Dropping queued submission');
+      try {
+        const result = await dregg.dropOutboxEntry(id);
+        await refresh();
+        setOutboxStatus(result?.dropped ? 'ok' : 'warn', result?.dropped ? 'Queued submission dropped' : 'No matching queued submission found', { result });
+        return result;
+      } catch (e) {
+        const message = e?.message || String(e);
+        setOutboxStatus('error', `Drop failed: ${message}`);
+        throw e;
+      }
     },
 
     createAgent: notPermitted('createAgent'),

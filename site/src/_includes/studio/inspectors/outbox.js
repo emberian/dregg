@@ -7,12 +7,13 @@ import { InspectorBase, emptyState, renderParseError, shortHex } from './_base.j
 
 function statusCounts(entries) {
   const now = Date.now();
-  const counts = { pending: 0, submitting: 0, failed: 0, submitted: 0, due: 0, total: entries.length };
+  const counts = { pending: 0, submitting: 0, failed: 0, submitted: 0, due: 0, blocked: 0, total: entries.length };
   for (const entry of entries) {
     const key = entry?.status || 'pending';
     if (counts[key] == null) counts[key] = 0;
     counts[key] += 1;
     if (key !== 'submitted' && Number(entry?.nextAttemptAt || 0) <= now) counts.due += 1;
+    if (key === 'failed') counts.blocked += 1;
   }
   return counts;
 }
@@ -23,11 +24,48 @@ function fmtTime(ms) {
   try { return new Date(n).toLocaleTimeString(); } catch { return String(ms); }
 }
 
+function fmtDelay(ms) {
+  const n = Number(ms || 0);
+  if (!n) return 'now';
+  const delta = n - Date.now();
+  if (delta <= 0) return 'now';
+  const seconds = Math.ceil(delta / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.ceil(minutes / 60)}h`;
+}
+
 function prettyEndpoint(entry) {
   const endpoint = entry?.endpoint || '';
   const node = entry?.nodeUrl || '';
   if (!node) return endpoint;
   return `${node.replace(/\/$/, '')}${endpoint}`;
+}
+
+function authHint(entry) {
+  const headers = entry?.headers || {};
+  const keys = Object.keys(headers);
+  if (!keys.length) return 'none';
+  const authKey = keys.find(k => k.toLowerCase() === 'authorization');
+  if (authKey && headers[authKey]) return 'authorization header present';
+  const nodeKey = keys.find(k => k.toLowerCase().includes('dregg') || k.toLowerCase().includes('devnet'));
+  return nodeKey ? `${nodeKey} header present` : `${keys.length} header${keys.length === 1 ? '' : 's'}`;
+}
+
+function statusMessage(counts, status) {
+  if (status?.message) return status.message;
+  if (!counts.total) return 'No queued extension submissions.';
+  if (counts.due) return `${counts.due} queued submission${counts.due === 1 ? '' : 's'} ready to replay.`;
+  if (counts.failed) return `${counts.failed} submission${counts.failed === 1 ? '' : 's'} blocked until manual retry or drop.`;
+  return 'Queued submissions are waiting for retry backoff.';
+}
+
+function statusTone(status) {
+  const state = status?.state || 'idle';
+  if (state === 'ok') return 'ok';
+  if (state === 'warn' || state === 'error' || state === 'unavailable') return 'warn';
+  return '';
 }
 
 function endpointGroups(entries) {
@@ -65,6 +103,7 @@ class DreggOutbox extends InspectorBase {
     if (renderParseError(this, refAttr, parsed, 'outbox')) return;
 
     const outboxSignal = this._runtime.getOutbox ? this._runtime.getOutbox() : null;
+    const outboxStatusSignal = this._runtime.getOutboxStatus ? this._runtime.getOutboxStatus() : null;
     const root = document.createElement('div');
     this.appendChild(root);
 
@@ -84,9 +123,12 @@ class DreggOutbox extends InspectorBase {
         );
       }
       const entries = Array.isArray(outboxSignal.value) ? outboxSignal.value : [];
+      const outboxStatus = outboxStatusSignal?.value || null;
       const counts = statusCounts(entries);
       const pending = counts.pending + counts.submitting;
       const groups = endpointGroups(entries);
+      const canFlush = !!this._runtime.flushOutbox && entries.some(entry => entry.status !== 'submitted');
+      const noticeClass = `dregg-inspector__notice${statusTone(outboxStatus) ? ` dregg-inspector__notice--${statusTone(outboxStatus)}` : ''}`;
 
       if (mode === 'compact') {
         return html`
@@ -96,7 +138,7 @@ class DreggOutbox extends InspectorBase {
               <span><strong>${pending}</strong> pending</span>
               <span><strong>${counts.failed}</strong> failed</span>
             </div>
-            <button type="button" class="dregg-outbox__btn" disabled=${!this._runtime.flushOutbox || !entries.length} onClick=${flush}>Flush</button>
+            <button type="button" class="dregg-outbox__btn" disabled=${!canFlush} onClick=${flush}>Replay</button>
           </div>`;
       }
 
@@ -108,7 +150,7 @@ class DreggOutbox extends InspectorBase {
                 <span class="dregg-inspector__kind">outbox</span>
                 <code class="dregg-inspector__id">queue</code>
               </div>
-              <button type="button" class="dregg-outbox__btn" disabled=${!this._runtime.flushOutbox} onClick=${flush}>Flush</button>
+              <button type="button" class="dregg-outbox__btn" disabled=${!this._runtime.flushOutbox} onClick=${flush}>Replay queue</button>
             </header>
             ${emptyState(html, 'Outbox empty', 'Signed submissions are reaching the node or no offline work has been queued yet.')}
           </div>`;
@@ -122,8 +164,12 @@ class DreggOutbox extends InspectorBase {
               <code class="dregg-inspector__id">queue</code>
               <span class="dregg-inspector__meta">${counts.total} entries · ${pending} pending · ${counts.failed} failed</span>
             </div>
-            <button type="button" class="dregg-outbox__btn" disabled=${!this._runtime.flushOutbox} onClick=${flush}>Flush due now</button>
+            <button type="button" class="dregg-outbox__btn" disabled=${!canFlush} onClick=${flush}>Replay / flush</button>
           </header>
+          <div class=${noticeClass}>
+            ${statusMessage(counts, outboxStatus)}
+            ${outboxStatus?.updatedAt ? html`<span class="dregg-outbox__notice-time"> Updated ${fmtTime(outboxStatus.updatedAt)}.</span>` : null}
+          </div>
           <div class="dregg-inspector__summary">
             <div><span>Due Now</span><strong>${String(counts.due)}</strong></div>
             <div><span>Pending</span><strong>${String(pending)}</strong></div>
@@ -147,12 +193,16 @@ class DreggOutbox extends InspectorBase {
                       <span class=${statusClass}>${status}</span>
                       <strong>${entry.label || entry.kind || 'submission'}</strong>
                     </div>
-                    <button type="button" class="dregg-outbox__drop" disabled=${!this._runtime.dropOutboxEntry} onClick=${() => drop(id)}>Drop</button>
+                    <div class="dregg-outbox__entry-actions">
+                      <span title=${entry.nextAttemptAt ? `Next retry: ${fmtTime(entry.nextAttemptAt)}` : ''}>retry ${fmtDelay(entry.nextAttemptAt)}</span>
+                      <button type="button" class="dregg-outbox__drop" disabled=${!this._runtime.dropOutboxEntry} onClick=${() => drop(id)}>Drop local</button>
+                    </div>
                   </div>
                   <dl class="dregg-inspector__kv dregg-outbox__kv">
                     <dt>id</dt><dd><code title=${id}>${shortHex(id, 18)}</code></dd>
                     <dt>kind</dt><dd>${entry.kind || 'unknown'}</dd>
-                    <dt>target</dt><dd><code title=${prettyEndpoint(entry)}>${prettyEndpoint(entry)}</code></dd>
+                    <dt>node target</dt><dd><code title=${prettyEndpoint(entry)}>${prettyEndpoint(entry)}</code></dd>
+                    <dt>auth</dt><dd>${authHint(entry)}</dd>
                     <dt>turn</dt><dd>${entry.turnId ? html`<code title=${entry.turnId}>${shortHex(entry.turnId, 18)}</code>` : 'n/a'}</dd>
                     <dt>payload</dt><dd><code>${payloadHint(entry)}</code></dd>
                     <dt>attempts</dt><dd>${String(entry.attempts ?? 0)}</dd>
