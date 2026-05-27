@@ -12,6 +12,22 @@
     "dregg-name-registry",
     "dregg-name-register-form"
   ],
+  "host_inspectors": [
+    { "id": "registry", "label": "Registry", "tag": "dregg-name-registry", "uri_attribute": "uri" },
+    { "id": "name", "label": "Name Cell", "tag": "dregg-name", "uri_attribute": "uri" },
+    { "id": "register", "label": "Register", "tag": "dregg-name-register-form", "uri_attribute": "registry-uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_registry", "label": "Inspect registry", "uri": "dregg://cell/registry-default", "kind": "inspect" },
+    { "id": "register_name", "label": "Register name", "builder": "register_name", "kind": "turn" },
+    { "id": "renew_name", "label": "Renew name", "builder": "renew_name", "kind": "turn" },
+    { "id": "transfer_name", "label": "Transfer name", "builder": "transfer_name", "kind": "turn" },
+    { "id": "revoke_name", "label": "Revoke name", "builder": "revoke_name", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "registry_uri", "label": "Registry URI", "type": "uri", "default": "dregg://cell/registry-default" },
+    { "id": "mode", "label": "Mutation mode", "type": "select", "options": ["register", "renew", "transfer", "revoke", "set-target"], "default": "register" }
+  ],
   "turn_builders": [
     "register_name",
     "renew_name",
@@ -36,5 +52,10 @@
     "WriteOnce(NAME_HASH_SLOT)",
     "Monotonic(EXPIRY_SLOT)",
     "WriteOnce(REVOKED_SLOT)"
-  ]
+  ],
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "source_of_truth": "starbridge-apps/nameservice/src/lib.rs"
+  }
 }

@@ -12,6 +12,22 @@
     "subscription-publish-form",
     "subscription-feed"
   ],
+  "host_inspectors": [
+    { "id": "topic", "label": "Topic", "tag": "dregg-subscription", "uri_attribute": "uri" },
+    { "id": "publish", "label": "Publish", "tag": "dregg-subscription-publish-form", "uri_attribute": "uri" },
+    { "id": "feed", "label": "Feed", "tag": "dregg-subscription-feed", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_topic", "label": "Inspect topic", "uri": "dregg://cell/subscription-default", "kind": "inspect" },
+    { "id": "publish", "label": "Publish message", "builder": "publish", "kind": "turn" },
+    { "id": "consume", "label": "Consume message", "builder": "consume", "kind": "turn" },
+    { "id": "grant_publisher", "label": "Grant publisher", "builder": "grant_publisher", "kind": "turn" },
+    { "id": "grant_consumer", "label": "Grant consumer", "builder": "grant_consumer", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "topic_uri", "label": "Topic URI", "type": "uri", "default": "dregg://cell/subscription-default" },
+    { "id": "capacity", "label": "Capacity slot", "type": "slot", "slot": 4 }
+  ],
   "turn_builders": [
     "publish",
     "consume",
@@ -40,5 +56,10 @@
     "FieldLteField(SEQ_TAIL_SLOT, SEQ_HEAD_SLOT)",
     "MethodIs(publish) => MonotonicSequence(SEQ_HEAD_SLOT)",
     "MethodIs(consume) => MonotonicSequence(SEQ_TAIL_SLOT)"
-  ]
+  ],
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "source_of_truth": "starbridge-apps/subscription/src/lib.rs"
+  }
 }

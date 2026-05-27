@@ -13,6 +13,23 @@
     "credential-present-form",
     "credential-verifier"
   ],
+  "host_inspectors": [
+    { "id": "credential", "label": "Credential", "tag": "dregg-credential", "uri_attribute": "uri" },
+    { "id": "issue", "label": "Issue", "tag": "dregg-credential-issue-form", "uri_attribute": "issuer-uri" },
+    { "id": "present", "label": "Present", "tag": "dregg-credential-present-form", "uri_attribute": "credential-uri" },
+    { "id": "verify", "label": "Verify", "tag": "dregg-credential-verifier", "uri_attribute": "presentation-uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_issuer", "label": "Inspect issuer", "uri": "dregg://cell/identity-issuer-default", "kind": "inspect" },
+    { "id": "issue_credential", "label": "Issue credential", "builder": "issue_credential", "kind": "turn" },
+    { "id": "revoke_credential", "label": "Revoke credential", "builder": "revoke_credential", "kind": "turn" },
+    { "id": "present_credential", "label": "Present credential", "builder": "present_credential", "kind": "local" },
+    { "id": "verify_presentation", "label": "Verify presentation", "builder": "verify_presentation", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "issuer_uri", "label": "Issuer URI", "type": "uri", "default": "dregg://cell/identity-issuer-default" },
+    { "id": "privacy", "label": "Disclosure", "type": "select", "options": ["selective", "full"], "default": "selective" }
+  ],
   "turn_builders": [
     "issue_credential",
     "revoke_credential",
@@ -36,5 +53,10 @@
     "MonotonicSequence(ISSUANCE_COUNTER_SLOT)",
     "Monotonic(REVOCATION_ROOT_SLOT)",
     "SenderAuthorized(PublicRoot(ISSUER_AUTH_ROOT_SLOT))"
-  ]
+  ],
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "source_of_truth": "starbridge-apps/identity/src/lib.rs"
+  }
 }

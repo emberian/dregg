@@ -13,6 +13,23 @@
     "namespace-proposal",
     "namespace-dispatch"
   ],
+  "host_inspectors": [
+    { "id": "namespace", "label": "Namespace", "tag": "dregg-namespace", "uri_attribute": "uri" },
+    { "id": "routes", "label": "Routes", "tag": "dregg-namespace-route-table", "uri_attribute": "uri" },
+    { "id": "proposal", "label": "Proposal", "tag": "dregg-namespace-proposal", "uri_attribute": "proposal-uri" },
+    { "id": "dispatch", "label": "Dispatch", "tag": "dregg-namespace-dispatch", "uri_attribute": "namespace-uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_namespace", "label": "Inspect namespace", "uri": "dregg://cell/governed-namespace-default", "kind": "inspect" },
+    { "id": "propose_table_update", "label": "Propose table update", "builder": "propose_table_update", "kind": "turn" },
+    { "id": "vote_on_proposal", "label": "Vote on proposal", "builder": "vote_on_proposal", "kind": "turn" },
+    { "id": "commit_table_update", "label": "Commit table update", "builder": "commit_table_update", "kind": "turn" },
+    { "id": "register_service", "label": "Register service", "builder": "register_service", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "namespace_uri", "label": "Namespace URI", "type": "uri", "default": "dregg://cell/governed-namespace-default" },
+    { "id": "proposal_phase", "label": "Proposal phase", "type": "select", "options": ["draft", "voting", "commit"], "default": "draft" }
+  ],
   "turn_builders": [
     "propose_table_update",
     "vote_on_proposal",
@@ -39,5 +56,10 @@
     "Monotonic(VERSION_SLOT)",
     "Monotonic(DISPUTE_WINDOW_HEIGHT_SLOT)",
     "MethodIs(commit_table_update) => MonotonicSequence(VERSION_SLOT)"
-  ]
+  ],
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "source_of_truth": "starbridge-apps/governed-namespace/src/lib.rs"
+  }
 }

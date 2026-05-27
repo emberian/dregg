@@ -76,6 +76,71 @@ function installPreviewBridge(runtime, wasm) {
   return api;
 }
 
+function appIdFromPath(pathname = window.location.pathname) {
+  const match = pathname.match(/\/starbridge-apps\/([^/]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+async function loadAppManifest() {
+  const appId = appIdFromPath();
+  if (!appId) return null;
+  try {
+    const resp = await fetch(`/starbridge-apps/${encodeURIComponent(appId)}/manifest.json`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
+  } catch (e) {
+    console.warn(`[starbridge-app] manifest unavailable for ${appId}:`, e);
+    return { id: appId, manifest_health: { status: 'unavailable', detail: String(e?.message || e) } };
+  }
+}
+
+function postHostMessage(type, detail) {
+  const message = { type, detail };
+  if (detail && typeof detail === 'object') Object.assign(message, detail);
+  if (!window.parent || window.parent === window) return;
+  try {
+    window.parent.postMessage(message, window.location.origin);
+  } catch {
+    window.parent.postMessage(message, '*');
+  }
+}
+
+function installHostBridge(manifest, appEl, runtime) {
+  const api = {
+    manifest,
+    appId: manifest?.id || appIdFromPath(),
+    actions: Array.isArray(manifest?.host_actions) ? manifest.host_actions : [],
+    inspectors: Array.isArray(manifest?.host_inspectors)
+      ? manifest.host_inspectors
+      : (manifest?.inspectors || []).map((name) => ({ id: name, label: name, tag: name })),
+    controls: Array.isArray(manifest?.host_controls) ? manifest.host_controls : [],
+    inspect(uri) {
+      const target = uri || appEl?.getAttribute('registry-uri') || appEl?.getAttribute('uri') || '';
+      postHostMessage('starbridge:inspect', { appId: this.appId, uri: target });
+    },
+    navigate(uri) {
+      const target = uri || appEl?.getAttribute('registry-uri') || appEl?.getAttribute('uri') || '';
+      postHostMessage('starbridge:navigate', { uri: target });
+    },
+    requestAction(actionId, payload = {}) {
+      postHostMessage('starbridge:action', { appId: this.appId, actionId, payload });
+    },
+  };
+  window.__starbridgeAppHost = api;
+  postHostMessage('starbridge:app-ready', {
+    appId: api.appId,
+    manifest,
+    actions: api.actions,
+    inspectors: api.inspectors,
+    controls: api.controls,
+    registryUri: appEl?.getAttribute('registry-uri') || appEl?.getAttribute('uri') || '',
+    runtime: runtime ? 'host-attached' : 'local-preview',
+  });
+  return api;
+}
+
 function installDevtoolsLink(appEl) {
   const params = new URLSearchParams(window.location.search);
   if (params.get('embedded') === '1') return;
@@ -114,6 +179,8 @@ function installEmbeddedChromeReset() {
       min-height: 100%;
       max-width: none;
       background: transparent;
+      color-scheme: light;
+      overflow-x: hidden;
     }
     html[data-embedded="starbridge"] .starbridge-devtools-link,
     html[data-embedded="starbridge"] .site-header,
@@ -123,8 +190,13 @@ function installEmbeddedChromeReset() {
     }
     html[data-embedded="starbridge"] header {
       margin: 0;
-      padding: 0.75rem 1rem;
+      padding: 0.75rem 0.875rem;
       border-bottom: 1px solid #ddd;
+      background: rgba(255, 255, 255, 0.72);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      backdrop-filter: blur(10px);
     }
     html[data-embedded="starbridge"] header h1 {
       margin: 0;
@@ -141,7 +213,18 @@ function installEmbeddedChromeReset() {
       min-height: 100%;
     }
     html[data-embedded="starbridge"] main {
-      padding: 1rem;
+      padding: 0.875rem;
+    }
+    html[data-embedded="starbridge"] section,
+    html[data-embedded="starbridge"] aside,
+    html[data-embedded="starbridge"] dregg-app > * {
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    html[data-embedded="starbridge"] pre,
+    html[data-embedded="starbridge"] code {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
   `;
   document.head.appendChild(style);
@@ -153,6 +236,7 @@ async function boot() {
   await wasm.default();
   const params = new URLSearchParams(window.location.search);
   const embedded = params.get('embedded') === '1';
+  const manifest = await loadAppManifest();
   if (embedded) installEmbeddedChromeReset();
   let hostRuntime = null;
   if (embedded && window.parent && window.parent !== window) {
@@ -184,12 +268,14 @@ async function boot() {
 
   const first = apps[0];
   if (first) installDevtoolsLink(first);
+  if (first) installHostBridge(manifest, first, runtimes.get(first));
 
   window.__starbridgeApp = {
     apps,
     runtimes,
     wasm,
     hexFromBytes,
+    manifest,
   };
 }
 
