@@ -446,7 +446,7 @@ impl TurnExecutor {
         _cell_id: &CellId,
         old_commitment: &[u8; 32],
         new_commitment: &[u8; 32],
-        _effects_hash: &[u8; 32],
+        effects_hash: &[u8; 32],
         proof_bytes: &[u8],
     ) -> Result<(), TurnError> {
         use dregg_circuit::effect_vm::pi;
@@ -458,6 +458,7 @@ impl TurnExecutor {
 
         let old_commit_4 = Self::commitment_to_4bb(old_commitment);
         let new_commit_4 = Self::commitment_to_4bb(new_commitment);
+        let effects_hash_4 = Self::commitment_to_4bb(effects_hash);
 
         let min_pi_count = pi::BASE_COUNT;
         if proof.public_inputs.len() < min_pi_count {
@@ -479,6 +480,9 @@ impl TurnExecutor {
         }
         for i in 0..pi::NEW_COMMIT_LEN {
             public_inputs[pi::NEW_COMMIT_BASE + i] = new_commit_4[i];
+        }
+        for i in 0..pi::EFFECTS_HASH_LEN {
+            public_inputs[pi::EFFECTS_HASH_BASE + i] = effects_hash_4[i];
         }
 
         // Append custom-effect entries from the proof's PIs (the AIR
@@ -512,6 +516,20 @@ impl TurnExecutor {
                     "sovereign witness STARK new_commitment mismatch at felt {}",
                     i
                 )));
+            }
+        }
+        for i in 0..pi::EFFECTS_HASH_LEN {
+            let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE + i]);
+            if proof_v != effects_hash_4[i] {
+                return Err(TurnError::EffectsHashMismatch {
+                    expected: *effects_hash,
+                    got: Self::commitment_4bb_to_bytes([
+                        BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE]),
+                        BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE + 1]),
+                        BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE + 2]),
+                        BabyBear::new_canonical(proof.public_inputs[pi::EFFECTS_HASH_BASE + 3]),
+                    ]),
+                });
             }
         }
 

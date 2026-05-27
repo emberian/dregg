@@ -264,6 +264,40 @@ pub struct WitnessedReceipt {
 }
 
 impl WitnessedReceipt {
+    /// True iff this receipt carries self-contained scope-(2) replay material
+    /// and the declared `witness_hash` binds that material.
+    pub fn has_bound_inline_witness(&self) -> bool {
+        match &self.witness_bundle {
+            Some(bundle) => {
+                self.witness_hash != [0u8; 32] && bundle.witness_hash() == self.witness_hash
+            }
+            None => self.witness_hash == [0u8; 32],
+        }
+    }
+
+    /// Require full scope-(2) replay material. This is the production gate for
+    /// artifacts that are meant to travel as receipt/witness gossip, not just as
+    /// scope-(1) proof summaries.
+    pub fn require_scope2_witness(&self) -> Result<(), crate::error::TurnError> {
+        let Some(bundle) = &self.witness_bundle else {
+            return Err(crate::error::TurnError::InvalidExecutionProof(
+                "witnessed receipt is missing scope-2 witness_bundle".into(),
+            ));
+        };
+        if self.witness_hash == [0u8; 32] {
+            return Err(crate::error::TurnError::InvalidExecutionProof(
+                "witnessed receipt has witness_bundle but zero witness_hash".into(),
+            ));
+        }
+        let recomputed = bundle.witness_hash();
+        if recomputed != self.witness_hash {
+            return Err(crate::error::TurnError::InvalidExecutionProof(
+                "witnessed receipt witness_hash does not bind witness_bundle".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Build a [`WitnessedReceipt`] from raw components produced by the
     /// prove call. This is the lane-agnostic factory; both
     /// `node/src/mcp.rs::generate_effect_vm_proof` and any future

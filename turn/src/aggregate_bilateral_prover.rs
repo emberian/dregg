@@ -146,9 +146,10 @@ pub(crate) fn cell_id_to_felts_8(c: &CellId) -> [BabyBear; 8] {
 ///
 ///   1. Reconstructs the bilateral schedule from `turn.call_forest +
 ///      turn.nonce`.
-///   2. Per cell, verifies the WR's `public_inputs` carry the expected
-///      bilateral counts + roots (the same per-cell check Phase 1's Rust
-///      loop does — we run it here to fail fast before invoking the prover).
+///   2. Per cell, verifies the WR is a full scope-(2) receipt/witness
+///      artifact, then checks its `public_inputs` carry the expected bilateral
+///      counts + roots (the same per-cell check Phase 1's Rust loop does — we
+///      run it here to fail fast before invoking the prover).
 ///   3. Builds the outer AIR trace (one row per WR, padded to power of two).
 ///   4. Computes the outer public-input vector from the canonical Turn.
 ///   5. Runs the outer STARK prover (via `EffectVmAir`'s
@@ -158,11 +159,10 @@ pub(crate) fn cell_id_to_felts_8(c: &CellId) -> [BabyBear; 8] {
 ///
 /// **Important:** this function does not run the per-cell Effect VM STARK
 /// verification — the brief makes step 1 (Phase-1 verify each WR) a
-/// caller-provided precondition. The aggregator-internal checks above (the
-/// PI counts/roots match what the schedule predicts) are sufficient to
-/// detect every flagged adversarial case (tampered participant proof,
-/// sender vs. receiver disagreement, tampered transfer_id, missing
-/// participant).
+/// caller-provided precondition. It does, however, require the full inline
+/// witness bundle and witness-hash binding. Aggregated gamma.2 output is a
+/// devnet gossip artifact; accepting scope-(1)-only WRs here would make the
+/// aggregate look stronger than the receipt/witness material it summarizes.
 pub fn prove_aggregated_bundle(
     turn: &Turn,
     per_cell: &[(CellId, WitnessedReceipt)],
@@ -171,6 +171,15 @@ pub fn prove_aggregated_bundle(
         return Err(TurnError::InvalidExecutionProof(
             "aggregate_bilateral: bundle must contain at least one WR".into(),
         ));
+    }
+
+    for (cid, wr) in per_cell {
+        wr.require_scope2_witness().map_err(|e| {
+            TurnError::InvalidExecutionProof(format!(
+                "aggregate_bilateral: cell {:?} is not a full scope-2 witnessed receipt: {e}",
+                cid
+            ))
+        })?;
     }
 
     // Phase-1 bundle check is the load-bearing soundness gate. We invoke
@@ -769,6 +778,13 @@ mod tests {
         }
     }
 
+    fn dummy_scope2_trace() -> Vec<Vec<BabyBear>> {
+        vec![vec![
+            BabyBear::ZERO;
+            dregg_circuit::effect_vm::EFFECT_VM_WIDTH
+        ]]
+    }
+
     /// Build a per-cell WitnessedReceipt whose PI is fabricated from the
     /// canonical Turn's bilateral schedule. Mirrors
     /// `dregg_verifier::bilateral_pair::fabricate_witnessed_receipt`.
@@ -796,7 +812,13 @@ mod tests {
             BabyBear::ZERO
         };
         let pi_u32: Vec<u32> = pi_bb.iter().map(|x| x.as_u32()).collect();
-        WitnessedReceipt::from_components(dummy_receipt(turn.agent.clone()), vec![], pi_u32, None)
+        let trace = dummy_scope2_trace();
+        WitnessedReceipt::from_components(
+            dummy_receipt(turn.agent.clone()),
+            vec![],
+            pi_u32,
+            Some(&trace),
+        )
     }
 
     fn make_transfer_turn(alice: CellId, bob: CellId, amount: u64, nonce: u64) -> Turn {
@@ -825,6 +847,25 @@ mod tests {
         assert_eq!(bundle.bundle_epoch, 1);
 
         verify_aggregated_bundle(&bundle).expect("verify");
+    }
+
+    #[test]
+    fn aggregate_rejects_scope1_only_witnessed_receipt() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let mut alice_wr = fabricate_wr(&turn, &alice);
+        alice_wr.witness_bundle = None;
+        alice_wr.witness_hash = [0u8; 32];
+
+        let entries = vec![(alice, alice_wr), (bob, fabricate_wr(&turn, &bob))];
+        let err = prove_aggregated_bundle(&turn, &entries)
+            .expect_err("scope-1-only WR must not aggregate as a gossip artifact");
+        assert!(
+            format!("{err}").contains("scope-2"),
+            "expected scope-2 rejection, got {err}"
+        );
     }
 
     /// **Happy path** — the 3-cell bilateral Transfer-and-Grant ring the
