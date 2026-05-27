@@ -69,6 +69,7 @@ tempfile = "3"
 http-body-util = "0.1"
 x25519-dalek = { workspace = true }
 postcard = { version = "1", features = ["use-std"] }
+dregg-verifier = { path = "../verifier" }
 
 [[bin]]
 name = "dregg-node"

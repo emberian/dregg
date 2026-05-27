@@ -144,6 +144,7 @@ fn build_signed_forest(
     target: CellId,
     effects: Vec<dregg_turn::Effect>,
     cclerk: &dregg_sdk::AgentCipherclerk,
+    federation_id: &[u8; 32],
 ) -> CallForest {
     let mut action = dregg_turn::Action {
         target,
@@ -160,8 +161,7 @@ fn build_signed_forest(
     // Compute the canonical signing message and replace Unchecked with
     // Authorization::Signature so cells with `delegate: Signature` accept
     // the action.
-    let federation_id = [0u8; 32];
-    let msg = dregg_turn::TurnExecutor::compute_signing_message(&action, &federation_id);
+    let msg = dregg_turn::TurnExecutor::compute_signing_message(&action, federation_id);
     let sig = cclerk.sign_bytes(&msg);
     let mut r = [0u8; 32];
     let mut s = [0u8; 32];
@@ -209,8 +209,29 @@ fn witnessed_receipt_from_effect_material(
     receipt: dregg_turn::TurnReceipt,
     proof: &EffectVmProofMaterial,
 ) -> Option<dregg_turn::WitnessedReceipt> {
-    let proof_bytes = hex_decode_var(&proof.proof_hex).ok()?;
-    let public_inputs: Vec<u32> = proof.public_inputs.iter().map(|x| *x as u32).collect();
+    let mut public_inputs: Vec<u32> = proof.public_inputs.iter().map(|x| *x as u32).collect();
+    let needed = dregg_circuit::effect_vm::pi::BASE_COUNT
+        .max(
+            dregg_circuit::effect_vm::pi::TURN_HASH_BASE
+                + dregg_circuit::effect_vm::pi::TURN_HASH_LEN,
+        )
+        .max(
+            dregg_circuit::effect_vm::pi::PREVIOUS_RECEIPT_HASH_BASE
+                + dregg_circuit::effect_vm::pi::PREVIOUS_RECEIPT_HASH_LEN,
+        );
+    if public_inputs.len() < needed {
+        public_inputs.resize(needed, 0);
+    }
+    let turn_hash = dregg_commit::typed::canonical_32_to_felts_4(&receipt.turn_hash);
+    for (i, felt) in turn_hash.iter().enumerate() {
+        public_inputs[dregg_circuit::effect_vm::pi::TURN_HASH_BASE + i] = felt.as_u32();
+    }
+    let previous = dregg_commit::typed::canonical_32_to_felts_4(
+        &receipt.previous_receipt_hash.unwrap_or([0u8; 32]),
+    );
+    for (i, felt) in previous.iter().enumerate() {
+        public_inputs[dregg_circuit::effect_vm::pi::PREVIOUS_RECEIPT_HASH_BASE + i] = felt.as_u32();
+    }
     let trace: Vec<Vec<dregg_circuit::BabyBear>> = proof
         .trace_rows
         .iter()
@@ -220,6 +241,14 @@ fn witnessed_receipt_from_effect_material(
                 .collect()
         })
         .collect();
+    let public_input_felts: Vec<dregg_circuit::BabyBear> = public_inputs
+        .iter()
+        .map(|v| dregg_circuit::BabyBear::new(*v))
+        .collect();
+    let air = dregg_circuit::effect_vm::EffectVmAir::new(trace.len());
+    let receipt_bound_proof =
+        dregg_circuit::stark::try_prove(&air, &trace, &public_input_felts).ok()?;
+    let proof_bytes = dregg_circuit::stark::proof_to_bytes(&receipt_bound_proof);
 
     Some(dregg_turn::WitnessedReceipt::from_components(
         receipt,
@@ -363,7 +392,7 @@ fn try_generate_effect_vm_proof(
     let air = dregg_circuit::effect_vm::EffectVmAir::new(trace.len());
     let proof =
         dregg_circuit::stark::try_prove(&air, &trace, &public_inputs).map_err(|e| e.to_string())?;
-    // Use the canonical PYNA-prefixed byte format that the standalone
+    // Use the canonical DREG-prefixed byte format that the standalone
     // dregg-verifier binary deserializes via stark::proof_from_bytes.
     // postcard's encoding lacks the magic-header and is not what the
     // verifier accepts on the wire.
@@ -1361,7 +1390,6 @@ async fn tool_create_agent(params: &Value, state: &NodeState) -> McpToolResult {
     if !s.unlocked {
         return McpToolResult::error("cipherclerk is locked; unlock first");
     }
-
     // MCP-first identity: the calling AI process IS this node, so
     // "create agent" means "register this node's cipherclerk identity as a
     // cell in the ledger so it can be granted/received capabilities and
@@ -1530,7 +1558,10 @@ async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpToolResult {
     let turn_hash = hex_encode(&turn_hash_bytes);
 
     // Execute the turn locally.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let federation_id = s.federation_id;
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    executor.set_local_federation_id(federation_id);
+    executor.set_executor_signing_key(s.cclerk.gossip_signing_key().to_bytes());
     let exec_result = executor.execute(&turn, &mut s.ledger);
 
     match exec_result {
@@ -1671,7 +1702,7 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         valid_until: None,
         // Use a signed action so the cell's `delegate: Signature` permission
         // accepts it. (Hosted-cell grants require the cell owner's signature.)
-        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.cclerk),
+        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.cclerk, &s.federation_id),
         depends_on: vec![],
         previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
@@ -2873,7 +2904,7 @@ async fn tool_create_bearer_cap(params: &Value, state: &NodeState) -> McpToolRes
         3 => dregg_cell::AuthRequired::Either,
         _ => dregg_cell::AuthRequired::Impossible,
     };
-    let federation_id = [0u8; 32];
+    let federation_id = s.federation_id;
     let msg = dregg_turn::TurnExecutor::compute_bearer_delegation_message(
         &dregg_cell::CellId(target_cell_arr),
         &perm_auth_required,
@@ -2975,6 +3006,7 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
     if !s.unlocked {
         return McpToolResult::error("cipherclerk is locked; unlock first");
     }
+    let federation_id = s.federation_id;
 
     // Check expiry against current height.
     let current_height = s
@@ -3144,7 +3176,9 @@ async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) -> McpToolR
     };
 
     // Execute locally.
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    executor.set_local_federation_id(federation_id);
+    executor.set_executor_signing_key(s.cclerk.gossip_signing_key().to_bytes());
     let exec_result = executor.execute(&turn, &mut s.ledger);
 
     match exec_result {
@@ -4426,7 +4460,7 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
     let agent_cell_id = target_cell_id;
 
     let turn_nonce = s.cclerk.receipt_chain_length() as u64;
-    let federation_id = [0u8; 32];
+    let federation_id = s.federation_id;
     let signing_msg = dregg_turn::Authorization::captp_delivered_signing_message_for_federation(
         &federation_id,
         &cert.nonce,
@@ -4488,7 +4522,9 @@ async fn tool_captp_deliver(params: &Value, state: &NodeState) -> McpToolResult 
     };
     let turn_hash = hex_encode(&turn.hash());
 
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    executor.set_local_federation_id(federation_id);
+    executor.set_executor_signing_key(s.cclerk.gossip_signing_key().to_bytes());
     let exec_result = executor.execute(&turn, &mut s.ledger);
 
     match exec_result {
@@ -4723,7 +4759,7 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
     // ── Sender signature (recipient signs the canonical delivery message) ─────
     let agent_cell_id = target_cell_id;
     let turn_nonce = s.cclerk.receipt_chain_length() as u64;
-    let federation_id = [0u8; 32];
+    let federation_id = s.federation_id;
     let signing_msg = dregg_turn::Authorization::captp_delivered_signing_message_for_federation(
         &federation_id,
         &cert.nonce,
@@ -4830,7 +4866,9 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
     };
     let turn_hash = hex_encode(&turn.hash());
 
-    let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+    executor.set_local_federation_id(federation_id);
+    executor.set_executor_signing_key(s.cclerk.gossip_signing_key().to_bytes());
     let exec_result = executor.execute(&turn, &mut s.ledger);
 
     match exec_result {
@@ -4861,6 +4899,7 @@ async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState) -> McpToo
                 "target_cell": target_cell_hex,
                 "turn_hash": turn_hash,
                 "cert_nonce": cert_nonce_hex,
+                "handoff_certificate_hex": hex_encode(&cert_bytes),
                 "cert_hash": hex_encode(&cert_hash),
                 "introducer_pk": hex_encode(&introducer_pk_bytes),
                 "introducer_federation": hex_encode(&introducer_federation_bytes),
@@ -5485,7 +5524,7 @@ async fn tool_create_cell_from_factory_effect(params: &Value, state: &NodeState)
         fee: 10_000,
         memo: Some("create cell from factory (mcp)".to_string()),
         valid_until: None,
-        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.cclerk),
+        call_forest: build_signed_forest(agent_cell_id, vec![effect], &s.cclerk, &s.federation_id),
         depends_on: vec![],
         previous_receipt_hash: s.cclerk.receipt_chain().last().map(|r| r.receipt_hash()),
         conservation_proof: None,
@@ -7080,6 +7119,205 @@ mod tests {
         );
     }
 
+    fn test_committee_descriptor(
+        role: &str,
+        pk: dregg_types::PublicKey,
+        federation_id: [u8; 32],
+    ) -> dregg_verifier::cross_fed::CommitteeDescriptor {
+        dregg_verifier::cross_fed::CommitteeDescriptor {
+            federation_id: hex_encode(&federation_id),
+            committee_epoch: 0,
+            threshold: 1,
+            validators: vec![dregg_verifier::cross_fed::ValidatorDescriptor {
+                name: role.to_string(),
+                public_key: hex_encode(&pk.0),
+            }],
+        }
+    }
+
+    fn sign_test_attested_root(
+        mut root: dregg_types::AttestedRoot,
+        sk: &dregg_types::SigningKey,
+    ) -> dregg_types::AttestedRoot {
+        let sig = dregg_types::sign(sk, &root.signing_message());
+        root.quorum_signatures = vec![(sk.public_key(), sig)];
+        root
+    }
+
+    fn test_attested_root_for_receipts(
+        federation_id: [u8; 32],
+        receipt_hashes: &[[u8; 32]],
+        signing_key: &dregg_types::SigningKey,
+        height: u64,
+        tag: &[u8],
+    ) -> dregg_types::AttestedRoot {
+        let receipt_stream_root = dregg_types::merkle_root_of_receipt_hashes(receipt_hashes);
+        let mut h = blake3::Hasher::new_derive_key("dregg-node-mcp-silver-captp-root-v1");
+        h.update(tag);
+        h.update(&height.to_le_bytes());
+        h.update(&receipt_stream_root);
+        let merkle_root = *h.finalize().as_bytes();
+        sign_test_attested_root(
+            dregg_types::AttestedRoot {
+                merkle_root,
+                note_tree_root: None,
+                nullifier_set_root: None,
+                height,
+                timestamp: 1_700_000_000 + height as i64,
+                blocklace_block_id: Some(
+                    *blake3::hash([tag, b":blocklace"].concat().as_slice()).as_bytes(),
+                ),
+                finality_round: Some(height),
+                quorum_signatures: Vec::new(),
+                threshold_qc: None,
+                threshold: 1,
+                federation_id: dregg_types::FederationId(federation_id),
+                receipt_stream_root: Some(receipt_stream_root),
+            },
+            signing_key,
+        )
+    }
+
+    #[tokio::test]
+    async fn silver_captp_mcp_path_exports_cross_fed_verifiable_bundle() {
+        let (state, _tmp) = fresh_unlocked_state().await;
+
+        let mut introducer_seed = [0u8; 32];
+        introducer_seed[0] = 0xE1;
+        let introducer_sk = dregg_types::SigningKey::from_bytes(&introducer_seed);
+        let introducer_pk = introducer_sk.public_key();
+        let issuer_fed_id = dregg_federation::derive_federation_id_with_epoch(&[introducer_pk], 0);
+
+        let (target_cell, recipient_pk, recipient_sk, recipient_fed_id) = {
+            let mut s = state.write().await;
+            let recipient_pk = s.cclerk.public_key();
+            let recipient_sk = s.cclerk.gossip_signing_key();
+            s.set_federation_keys(vec![recipient_pk]);
+            let recipient_fed_id = s.federation_id;
+            let target_cell = dregg_cell::CellId::derive_raw(&recipient_pk.0, &[0u8; 32]);
+            (target_cell, recipient_pk, recipient_sk, recipient_fed_id)
+        };
+
+        let params = serde_json::json!({
+            "target_cell": hex_encode(&target_cell.0),
+            "introducer_sk": hex_encode(&introducer_seed),
+            "introducer_federation": hex_encode(&issuer_fed_id),
+            "target_federation": hex_encode(&recipient_fed_id),
+            "recipient_pk": hex_encode(&recipient_pk.0),
+            "permissions": "signature",
+            "swiss": "42".repeat(32),
+            "effects": [{
+                "type": "set_field",
+                "cell": hex_encode(&target_cell.0),
+                "index": 1,
+                "value": 153u64,
+            }],
+        });
+        let result = dispatch_tool("dregg_exercise_handoff_cert", params, &state).await;
+        let j = extract_json(&result);
+        assert_eq!(
+            j.get("activity_status").and_then(|v| v.as_str()),
+            Some("committed"),
+            "MCP Silver handoff must commit before bundle export: {j}"
+        );
+        assert_eq!(
+            j.get("proof_status").and_then(|v| v.as_str()),
+            Some("proved"),
+            "MCP Silver handoff must produce replay witness material: {j}"
+        );
+
+        let cert_hex = j
+            .get("handoff_certificate_hex")
+            .and_then(|v| v.as_str())
+            .expect("MCP response must export the actual handoff certificate bytes");
+        let cert_bytes = hex_decode_var(cert_hex).expect("certificate hex decodes");
+        let cert = dregg_captp::HandoffCertificate::from_bytes(&cert_bytes)
+            .expect("certificate exported by MCP must decode");
+
+        let (receipt, witnessed) = {
+            let s = state.read().await;
+            let receipt = s
+                .cclerk
+                .receipt_chain()
+                .last()
+                .expect("committed MCP turn must append a receipt")
+                .clone();
+            assert_eq!(
+                receipt.federation_id, recipient_fed_id,
+                "node-facing CapTP receipt must bind the configured recipient federation"
+            );
+            assert!(
+                receipt.executor_signature.is_some(),
+                "node-facing CapTP receipt must carry executor signature material"
+            );
+            let receipt_hash = receipt.receipt_hash();
+            let stored = s
+                .witnessed_receipts
+                .get(&receipt_hash)
+                .expect("committed MCP handoff must persist a witnessed receipt artifact");
+            assert_eq!(stored.len(), 1);
+            assert!(
+                stored[0].witness_bundle.is_some(),
+                "stored witnessed receipt must carry scope-2 replay material"
+            );
+            (receipt, stored[0].clone())
+        };
+
+        let issuer_desc = test_committee_descriptor("issuer", introducer_pk, issuer_fed_id);
+        let recipient_desc = test_committee_descriptor("recipient", recipient_pk, recipient_fed_id);
+        let issuer_root =
+            test_attested_root_for_receipts(issuer_fed_id, &[], &introducer_sk, 10, b"issuer");
+        let recipient_root = test_attested_root_for_receipts(
+            recipient_fed_id,
+            &[receipt.receipt_hash()],
+            &recipient_sk,
+            20,
+            b"recipient",
+        );
+        let bundle = dregg_federation::CrossFedReceiptBundle::new(
+            vec![witnessed],
+            issuer_root,
+            recipient_root,
+            cert,
+            None,
+        );
+
+        let verdict = dregg_verifier::cross_fed::verify_cross_fed_bundle(
+            &bundle,
+            &issuer_desc,
+            &recipient_desc,
+        );
+        assert!(
+            verdict.overall_verified,
+            "MCP-produced Silver artifacts must verify as a cross-fed bundle: {verdict:?}",
+        );
+
+        let mut missing_witness = bundle.clone();
+        missing_witness.recipient_chain[0].witness_bundle = None;
+        let missing_verdict = dregg_verifier::cross_fed::verify_cross_fed_bundle(
+            &missing_witness,
+            &issuer_desc,
+            &recipient_desc,
+        );
+        assert!(
+            !missing_verdict.overall_verified
+                && missing_verdict.summary.contains("has no witness_bundle"),
+            "missing witnessed material must reject: {missing_verdict:?}",
+        );
+
+        let mut swapped_recipient = bundle;
+        swapped_recipient.cross_fed_cert.target_federation = dregg_captp::FederationId([0xF2; 32]);
+        let swapped_verdict = dregg_verifier::cross_fed::verify_cross_fed_bundle(
+            &swapped_recipient,
+            &issuer_desc,
+            &recipient_desc,
+        );
+        assert!(
+            !swapped_verdict.overall_verified,
+            "swapped target federation must reject: {swapped_verdict:?}",
+        );
+    }
+
     /// Adversarial test: a receipt with a forged Effect-VM proof bytes
     /// must still parse out of the tool response, but the standalone
     /// verifier would reject it. We cannot drive `dregg-verifier
@@ -7107,7 +7345,7 @@ mod tests {
             dregg_circuit::stark::proof_from_bytes(&proof_bytes).is_ok(),
             "real proof must deserialize"
         );
-        // Forge: flip every byte. The PYNA magic header check rejects.
+        // Forge: flip every byte. The DREG magic header check rejects.
         let mut forged = proof_bytes.clone();
         for b in &mut forged {
             *b ^= 0xFF;
