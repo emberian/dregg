@@ -9,6 +9,10 @@ export const name = 'cells';
 
 let container = null;
 
+function starbridgeHref(uri) {
+  return `../starbridge/?at=${encodeURIComponent(uri)}&runtime=remote`;
+}
+
 export function init(el) {
   container = el;
 
@@ -22,6 +26,17 @@ export function init(el) {
 
   bus.on('search:hash', (hash) => {
     // Will be handled by search component fetching the cell
+  });
+
+  bus.on('explorer:inspect', async ({ kind, id }) => {
+    if (kind !== 'cell') return;
+    try {
+      const detail = await api.getCell(id);
+      renderCellDetail(detail);
+    } catch {
+      const row = container?.querySelector(`tr[data-cell-id="${id}"]`);
+      if (row) row.click();
+    }
   });
 }
 
@@ -127,6 +142,10 @@ function renderCellDetail(cell) {
       <span class="detail-grid__value">${cell.has_program ? '<span class="cell-badge cell-badge--success">active</span>' : '<span class="cell-badge cell-badge--warning">none</span>'}</span>
       <span class="detail-grid__label">Proved State</span>
       <span class="detail-grid__value">${cell.proved_state ? '<span class="cell-badge cell-badge--success">verified</span>' : 'no'}</span>
+    </div>
+    <div class="block-detail__actions" style="margin-top: 16px;">
+      <a class="btn btn-sm btn-primary" href="${starbridgeHref(`dregg://cell/${cell.id}`)}">Open cell in Starbridge</a>
+      <button class="btn btn-sm btn-secondary" onclick="document.getElementById('cell-detail').hidden=true">Close</button>
     </div>
   `;
   document.getElementById('cell-detail-close').onclick = () => panel.hidden = true;

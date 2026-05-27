@@ -140,6 +140,62 @@ export function navigateTo(page) {
   bus.emit('navigate', { from: prev, to: page });
 }
 
+function parseDreggUri(uri) {
+  const match = /^dregg:\/\/([a-z-]+)\/([^?#/]+)(?:\/([^?#]+))?/i.exec(String(uri || '').trim());
+  if (!match) return null;
+  return { kind: match[1], id: match[2], rest: match[3] || '' };
+}
+
+function pageForDreggKind(kind) {
+  switch (kind) {
+    case 'block':
+    case 'block-dag':
+    case 'federation-list':
+      return 'blocks';
+    case 'receipt':
+    case 'receipt-list':
+    case 'witnessed-receipt':
+      return 'receipts';
+    case 'turn':
+      return 'turns';
+    case 'cell':
+      return 'cells';
+    case 'capability':
+    case 'capability-list':
+      return 'capabilities';
+    case 'intent':
+      return 'intents';
+    case 'federation':
+      return 'federation';
+    case 'note':
+      return 'notes';
+    case 'app':
+      return 'apps';
+    case 'pubsub-topic':
+    case 'cap-inbox':
+    case 'blinded-queue':
+    case 'programmable-queue':
+      return 'queues';
+    case 'delegation-graph':
+    case 'handoff-certificate':
+      return 'delegations';
+    case 'proof':
+      return 'proofs';
+    default:
+      return 'overview';
+  }
+}
+
+async function openDreggUri(uri) {
+  const parsed = parseDreggUri(uri);
+  if (!parsed) return false;
+  const page = pageForDreggKind(parsed.kind);
+  navigateTo(page);
+  await loadPageData(page);
+  bus.emit('explorer:inspect', { uri, ...parsed, page });
+  return true;
+}
+
 // =============================================================================
 // Data Refresh
 // =============================================================================
@@ -334,8 +390,14 @@ export async function boot() {
     import('./tweakers/fee-estimator.js'),
   ]);
 
-  // Initialize the default view
-  navigateTo('overview');
+  // Initialize the requested object route, if Starbridge handed us one.
+  const params = new URLSearchParams(window.location.search);
+  const requestedUri = params.get('at');
+  if (requestedUri && /^dregg:\/\//i.test(requestedUri)) {
+    await openDreggUri(requestedUri);
+  } else {
+    navigateTo('overview');
+  }
 
   // Start data flow
   refresh();

@@ -23,12 +23,15 @@ export function init(el) {
   bus.on('search:block', (height) => {
     // Highlight the searched block
     setTimeout(() => {
-      const row = container.querySelector(`tr[data-height="${height}"]`);
-      if (row) {
-        row.classList.add('highlighted');
-        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      focusBlockHeight(height);
     }, 100);
+  });
+
+  bus.on('explorer:inspect', ({ kind, id, rest }) => {
+    if (kind === 'block') {
+      const height = rest || id;
+      focusBlockHeight(height);
+    }
   });
 }
 
@@ -67,6 +70,14 @@ function renderBlocksTable(blocks) {
       if (block) renderBlockDetail(block);
     });
   });
+}
+
+function focusBlockHeight(height) {
+  const row = container?.querySelector(`tr[data-height="${height}"]`);
+  if (!row) return;
+  row.classList.add('highlighted');
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.click();
 }
 
 function renderBlockDetail(block) {

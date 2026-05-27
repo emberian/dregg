@@ -11,6 +11,9 @@ export function init(el) {
   bus.on('receipts:updated', (receipts) => {
     if (state.currentPage === 'receipts') renderReceiptChain(receipts);
   });
+  bus.on('explorer:inspect', ({ kind, id }) => {
+    if (kind === 'receipt') focusReceipt(id);
+  });
 }
 
 export function update(appState) {
@@ -30,7 +33,7 @@ function renderReceiptChain(receipts) {
     return;
   }
   container.innerHTML = receipts.map(r => `
-    <div class="receipt-item">
+    <div class="receipt-item" data-receipt-hash="${r.turn_hash}">
       <div class="receipt-item__header">
         <span class="receipt-item__hash">${api.shortHash(r.turn_hash, 12, 6)}</span>
         <span class="receipt-item__time">${api.formatTime(r.timestamp)}</span>
@@ -52,4 +55,11 @@ function renderReceiptChain(receipts) {
       </div>
     </div>
   `).join('');
+}
+
+function focusReceipt(hash) {
+  const item = document.querySelector(`[data-receipt-hash="${hash}"]`);
+  if (!item) return;
+  item.classList.add('highlighted');
+  item.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }

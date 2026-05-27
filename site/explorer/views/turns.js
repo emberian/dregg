@@ -11,6 +11,9 @@ export function init(el) {
   bus.on('receipts:updated', (receipts) => {
     if (state.currentPage === 'turns') renderTurnsFromReceipts(receipts);
   });
+  bus.on('explorer:inspect', ({ kind, id }) => {
+    if (kind === 'turn') focusTurn(id);
+  });
 }
 
 export function update(appState) {
@@ -48,6 +51,14 @@ function renderTurnsFromReceipts(receipts) {
       if (receipt) renderTurnDetail(receipt);
     });
   });
+}
+
+function focusTurn(hash) {
+  const row = document.querySelector(`tr[data-turn-hash="${hash}"]`);
+  if (!row) return;
+  row.classList.add('highlighted');
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.click();
 }
 
 function renderTurnDetail(receipt) {
