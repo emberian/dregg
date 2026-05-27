@@ -28,7 +28,7 @@
  * inspectors. Config via federation committee (constitution in blocklace crate).
  */
 
-import { InspectorBase, shortHex } from './_base.js';
+import { InspectorBase, dreggHref, shortHex } from './_base.js';
 
 // ---------------------------------------------------------------------------
 // Permission palette
@@ -54,6 +54,10 @@ function permAbbrev(permissions) {
 
 function permColor(abbrev) {
   return PERM_COLORS[abbrev] || '#94a3b8';
+}
+
+function inspectorLink(uri, label) {
+  return `<a class="dregg-inspector__link" href="${dreggHref(uri)}" data-dregg-uri="${uri}" title="${uri}"><code>${label}</code></a>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,18 +326,31 @@ class DreggDelegationGraph extends InspectorBase {
     const header = document.createElement('header');
     header.style.cssText = 'padding:10px 14px;display:flex;justify-content:space-between;align-items:baseline;';
     header.innerHTML =
-      `<span class="dregg-inspector__kind" style="background:var(--accent,#5b8a5a);color:#0a0f0d;padding:2px 8px;border-radius:3px;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.04em;">delegation graph</span>` +
-      `<span style="font-size:0.8rem;color:var(--fg-dim,#8a948f);font-family:ui-monospace,monospace;">` +
+      `<span class="dregg-inspector__kind">delegation graph</span>` +
+      `<code class="dregg-inspector__id">capability graph</code>` +
+      `<span class="dregg-inspector__meta">` +
         `${nodes.length} cell${nodes.length !== 1 ? 's' : ''} · ` +
         `${edges.length} cap${edges.length !== 1 ? 's' : ''}` +
       `</span>`;
     container.appendChild(header);
 
+    const namedCells = nodes.filter(n => n.agent_name).length;
+    const summary = document.createElement('div');
+    summary.className = 'dregg-inspector__summary';
+    summary.style.margin = '0 12px 10px';
+    summary.innerHTML = [
+      `<div><span>Cells</span><strong>${nodes.length}</strong></div>`,
+      `<div><span>Named</span><strong>${namedCells}</strong></div>`,
+      `<div><span>Delegations</span><strong>${edges.length}</strong></div>`,
+    ].join('');
+    container.appendChild(summary);
+
     if (nodes.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'dregg-inspector dregg-inspector--empty';
       empty.style.cssText = 'margin:0;border-radius:0 0 6px 6px;';
-      empty.textContent = 'no cells in this runtime';
+      empty.innerHTML = `<div class="dregg-inspector__empty-title">No capability graph yet</div>
+        <div class="dregg-inspector__empty-body">The runtime did not return any cells or delegations. This view will populate from real capability state when cells exist.</div>`;
       container.appendChild(empty);
       this.appendChild(container);
       return;
@@ -386,6 +403,15 @@ class DreggDelegationGraph extends InspectorBase {
         detail: { uri: g.dataset.uri },
       }));
     });
+
+    const actions = document.createElement('div');
+    actions.className = 'dregg-inspector__actions';
+    actions.style.padding = '0 14px 12px';
+    actions.innerHTML = [
+      nodes[0] ? inspectorLink(`dregg://cell/${nodes[0].cell_id}`, 'open first cell') : '',
+      `<span class="dregg-inspector__meta">Hover nodes and edges for IDs, slots, and permissions.</span>`,
+    ].join('');
+    container.appendChild(actions);
 
     this.appendChild(container);
 

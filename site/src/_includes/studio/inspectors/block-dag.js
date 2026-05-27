@@ -1,5 +1,6 @@
 /**
- * <dregg-block-dag uri="dregg://federation/<idx>"> — DAG visualizer for a
+ * <dregg-block-dag uri="dregg://federation/<idx>"> or
+ * <dregg-block-dag uri="dregg://block-dag/<idx>"> — DAG visualizer for a
  * federation's blocklace.
  *
  * Reads ACTUAL federation block data via the wasm bindings exposed by
@@ -30,7 +31,7 @@
  */
 
 import { parseRef } from '../uri.js';
-import { InspectorBase, renderParseError, shortHex } from './_base.js';
+import { InspectorBase, dreggHref, renderParseError, shortHex } from './_base.js';
 
 // ---------------------------------------------------------------------------
 // Colour derivation — deterministic from proposer pubkey (or "genesis")
@@ -77,6 +78,10 @@ function qcStatusColor(status) {
   if (status === 'finalized') return '#4ade80'; // green
   if (status === 'failed')    return '#f87171'; // red
   return '#fbbf24'; // amber — pending
+}
+
+function inspectorLink(uri, label) {
+  return `<a class="dregg-inspector__link" href="${dreggHref(uri)}" data-dregg-uri="${uri}" title="${uri}"><code>${label}</code></a>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -347,7 +352,14 @@ class DreggBlockDag extends InspectorBase {
 
     let parsed = null;
     try { parsed = parseRef(refAttr); } catch {}
-    if (renderParseError(this, refAttr, parsed, 'federation')) return;
+    if (!parsed) {
+      renderParseError(this, refAttr, parsed, 'federation');
+      return;
+    }
+    if (parsed.kind !== 'federation' && parsed.kind !== 'block-dag') {
+      renderParseError(this, refAttr, parsed, 'federation');
+      return;
+    }
 
     const fedIdx = Number(parsed.id);
 
@@ -365,7 +377,10 @@ class DreggBlockDag extends InspectorBase {
     this.replaceChildren();
 
     if (!fedState) {
-      this.innerHTML = `<div class="dregg-inspector dregg-inspector--empty">federation #${fedIdx} not found</div>`;
+      this.innerHTML = `<div class="dregg-inspector dregg-inspector--empty">
+        <div class="dregg-inspector__empty-title">Federation not found</div>
+        <div class="dregg-inspector__empty-body">Federation <code>#${fedIdx}</code> is not registered in this runtime.</div>
+      </div>`;
       return;
     }
 
@@ -430,22 +445,35 @@ class DreggBlockDag extends InspectorBase {
     const header = document.createElement('header');
     header.style.cssText = 'padding:10px 14px;display:flex;justify-content:space-between;align-items:baseline;';
     const lastFinalized = blocks.filter(b => qcStatus(b) === 'finalized');
+    const latest = blocks[blocks.length - 1];
     header.innerHTML =
-      `<span class="dregg-inspector__kind" style="background:var(--accent,#5b8a5a);color:#0a0f0d;` +
-        `padding:2px 8px;border-radius:3px;font-size:0.75rem;text-transform:uppercase;` +
-        `letter-spacing:0.04em;">block dag</span>` +
-      `<span style="font-size:0.8rem;color:var(--fg-dim,#8a948f);font-family:ui-monospace,monospace;">` +
+      `<span class="dregg-inspector__kind">block DAG</span>` +
+      `<code class="dregg-inspector__id">fed #${fedIdx}</code>` +
+      `<span class="dregg-inspector__meta">` +
         `fed #${fedIdx} · h=${fedState.height} · ${fedState.num_nodes} nodes · ` +
         `${blocks.length} block${blocks.length !== 1 ? 's' : ''} · ` +
         `${lastFinalized.length} finalized` +
       `</span>`;
     container.appendChild(header);
 
+    const summary = document.createElement('div');
+    summary.className = 'dregg-inspector__summary';
+    summary.style.margin = '0 12px 10px';
+    summary.innerHTML = [
+      `<div><span>Height</span><strong>${fedState.height ?? 0}</strong></div>`,
+      `<div><span>Blocks</span><strong>${blocks.length}</strong></div>`,
+      `<div><span>Finalized</span><strong>${lastFinalized.length}</strong></div>`,
+      `<div><span>Head</span><strong title="${latest?.block_hash || ''}">${latest ? shortHex(latest.block_hash || '', 10) : 'none'}</strong></div>`,
+    ].join('');
+    container.appendChild(summary);
+
     if (blocks.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'dregg-inspector dregg-inspector--empty';
       empty.style.cssText = 'margin:0;border-radius:0 0 6px 6px;';
-      empty.textContent = 'no blocks finalized yet — propose a block to populate the DAG';
+      empty.innerHTML = `<div class="dregg-inspector__empty-title">No blocks in this DAG</div>
+        <div class="dregg-inspector__empty-body">Federation <code>#${fedIdx}</code> exists, but the runtime has no block records to draw yet.</div>
+        <div class="dregg-inspector__empty-actions">${inspectorLink(`dregg://federation/${fedIdx}`, 'open federation')}</div>`;
       container.appendChild(empty);
       this.appendChild(container);
       return;
@@ -526,6 +554,8 @@ class DreggBlockDag extends InspectorBase {
       `<span style="color:#fbbf24;">&#9632; pending</span>`,
       `<span style="color:#f87171;">&#9632; failed</span>`,
       `<span style="color:#8a948f;">rect color = proposer</span>`,
+      inspectorLink(`dregg://federation/${fedIdx}`, 'open federation'),
+      latest ? inspectorLink(`dregg://block/${fedIdx}/${latest.height}`, 'open head block') : '',
     ].join('');
     container.appendChild(legend);
 

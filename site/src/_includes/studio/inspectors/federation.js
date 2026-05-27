@@ -11,6 +11,11 @@
 import { parseRef } from '../uri.js';
 import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
 
+function countLabel(n, noun) {
+  const value = Number(n || 0);
+  return `${String(value)} ${noun}${value === 1 ? '' : 's'}`;
+}
+
 class DreggFederation extends InspectorBase {
   _render() {
     const { h, render, html, effect } = this._api;
@@ -36,7 +41,11 @@ class DreggFederation extends InspectorBase {
         'Federation not found',
         html`Federation <code>#${fedIdx}</code> is not registered in this runtime.`,
       );
-      const density = Number(f.height || 0) > 0 ? `${Number(f.num_events || 0)} events over ${Number(f.height || 0)} block(s)` : 'genesis only';
+      const height = Number(f.height || 0);
+      const events = Number(f.num_events || 0);
+      const roots = Number(f.num_finalized_roots || 0);
+      const density = height > 0 ? `${countLabel(events, 'event')} over ${countLabel(height, 'block')}` : 'genesis only';
+      const rootLabel = f.latest_root ? shortHex(f.latest_root, 24) : 'not finalized';
       if (mode === 'compact') {
         return html`
           <span class="dregg-inspector dregg-inspector--compact">
@@ -58,16 +67,27 @@ class DreggFederation extends InspectorBase {
             <div><span>Events</span><strong>${String(f.num_events)}</strong></div>
             <div><span>Roots</span><strong>${String(f.num_finalized_roots)}</strong></div>
           </div>
+          <div class=${`dregg-inspector__notice ${f.latest_root ? 'dregg-inspector__notice--ok' : ''}`}>
+            ${height > 0
+              ? html`Chain head is height <code>${String(height)}</code>; latest finalized root is <code title=${f.latest_root || ''}>${rootLabel}</code>.`
+              : html`This federation is registered, but no proposed blocks are visible in the runtime yet.`}
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>name</dt><dd>${f.name}</dd>
-            <dt>height</dt><dd>${String(f.height)}</dd>
-            <dt>nodes</dt><dd>${String(f.num_nodes)}</dd>
-            <dt>events</dt><dd>${String(f.num_events)}</dd>
-            <dt>finalized roots</dt><dd>${String(f.num_finalized_roots)}</dd>
+            <dt>height</dt><dd>${String(height)}</dd>
+            <dt>committee</dt><dd>${countLabel(f.num_nodes, 'node')}</dd>
+            <dt>events</dt><dd>${countLabel(events, 'event')}</dd>
+            <dt>finalized roots</dt><dd>${countLabel(roots, 'root')}</dd>
             <dt>latest root</dt><dd>${f.latest_root
               ? html`<code title=${f.latest_root}>${shortHex(f.latest_root, 24)}</code>`
-              : html`<span style="opacity:0.6">(none)</span>`}</dd>
+              : html`<span class="dregg-inspector__meta">none recorded</span>`}</dd>
           </dl>
+          ${height > 0 ? null : emptyState(
+            html,
+            'No blocks proposed',
+            html`Use the federation actions or runtime controls to propose a block; this inspector will update when real block data arrives.`,
+            [dreggCodeLink(html, `dregg://block-dag/${f.fed_index ?? fedIdx}`, 'open empty DAG')],
+          )}
           <div class="dregg-inspector__actions">
             ${dreggCodeLink(html, `dregg://block-dag/${f.fed_index ?? fedIdx}`, 'open block DAG')}
             ${Number(f.height || 0) > 0 ? dreggCodeLink(html, `dregg://block/${f.fed_index ?? fedIdx}/${f.height}`, 'latest block') : null}

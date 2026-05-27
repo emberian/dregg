@@ -19,6 +19,16 @@
 import { parseRef } from '../uri.js';
 import { InspectorBase, dreggCodeLink, emptyState, renderParseError, shortHex } from './_base.js';
 
+function eventLabel(event) {
+  if (typeof event === 'string') return shortHex(event, 18);
+  return event?.kind || event?.type || event?.method || 'event';
+}
+
+function eventDetail(event) {
+  if (typeof event === 'string') return event;
+  try { return JSON.stringify(event); } catch { return String(event); }
+}
+
 class DreggBlock extends InspectorBase {
   _render() {
     const { h, render, html, effect } = this._api;
@@ -58,12 +68,16 @@ class DreggBlock extends InspectorBase {
           </span>`;
       }
       const events = Array.isArray(b.events) ? b.events : [];
+      const prevHeight = Number(b.height) > 0 ? Number(b.height) - 1 : null;
+      const eventSummary = events.length === 0
+        ? 'no events recorded'
+        : `${String(events.length)} event${events.length === 1 ? '' : 's'} captured`;
       return html`
         <div class="dregg-inspector dregg-inspector--cell">
           <header>
             <span class="dregg-inspector__kind">block</span>
             <code class="dregg-inspector__id">height ${String(b.height)}</code>
-            <span class="dregg-inspector__meta">fed #${String(b.fed_index)} · ${String(events.length)} events</span>
+            <span class="dregg-inspector__meta">fed #${String(b.fed_index)} · ${eventSummary}</span>
           </header>
           <div class="dregg-inspector__summary">
             <div><span>Height</span><strong>${String(b.height)}</strong></div>
@@ -71,22 +85,33 @@ class DreggBlock extends InspectorBase {
             <div><span>Events</span><strong>${String(events.length)}</strong></div>
             <div><span>Hash</span><strong title=${b.block_hash}>${shortHex(b.block_hash, 10)}</strong></div>
           </div>
+          <div class=${`dregg-inspector__notice ${events.length ? 'dregg-inspector__notice--ok' : ''}`}>
+            ${events.length
+              ? html`This block was captured from the local proposal log with ${String(events.length)} runtime event${events.length === 1 ? '' : 's'}.`
+              : html`The local proposal log has this block, but no runtime events were recorded for it.`}
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>height</dt><dd>${String(b.height)}</dd>
             <dt>federation</dt><dd>${dreggCodeLink(html, `dregg://federation/${b.fed_index}`, `#${String(b.fed_index)}`)}</dd>
             <dt>block hash</dt><dd><code>${b.block_hash}</code></dd>
-            <dt>events</dt><dd>${events.length
-              ? html`<div class="dregg-inspector__rows">${events.map((event, idx) => html`
+          </dl>
+          <details class="dregg-inspector__section" open=${events.length > 0}>
+            <summary>events (${String(events.length)})</summary>
+            <div class="dregg-inspector__section-body">
+              ${events.length
+                ? html`<div class="dregg-inspector__rows">${events.map((event, idx) => html`
                   <div class="dregg-inspector__row">
                     <span>${String(idx)}</span>
-                    <strong>${typeof event === 'string' ? shortHex(event, 18) : (event.kind || event.type || 'event')}</strong>
-                    <code>${typeof event === 'string' ? event : JSON.stringify(event).slice(0, 120)}</code>
+                    <strong>${eventLabel(event)}</strong>
+                    <code title=${eventDetail(event)}>${eventDetail(event).slice(0, 160)}</code>
                   </div>`)}</div>`
-              : html`<span style="opacity:0.6">(empty)</span>`}</dd>
-          </dl>
+                : emptyState(html, 'No events in block log', html`This block entry has no attached events. The inspector is showing only runtime data that is present.`)}
+            </div>
+          </details>
           <div class="dregg-inspector__actions">
             ${dreggCodeLink(html, `dregg://federation/${b.fed_index}`, 'open federation')}
             ${dreggCodeLink(html, `dregg://block-dag/${b.fed_index}`, 'open DAG')}
+            ${prevHeight == null ? null : dreggCodeLink(html, `dregg://block/${b.fed_index}/${prevHeight}`, 'previous block')}
           </div>
         </div>`;
     };
