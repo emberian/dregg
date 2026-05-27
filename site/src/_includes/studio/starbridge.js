@@ -1952,8 +1952,10 @@ function writeUrlState({ at, runtime }) {
       selectWorkbenchTool('raw');
     });
     surfaceAppsBtn?.addEventListener('click', () => {
+      setCurrentUri(null);
       setSurfaceCurrent('apps');
-      openPalette('app');
+      if (workspaceTitle) workspaceTitle.textContent = 'Apps';
+      inspector.querySelector('.sb__workbench-panel--programs')?.scrollIntoView({ block: 'start' });
     });
     surfaceActivityBtn?.addEventListener('click', () => {
       setCurrentUri('dregg://activity/feed');

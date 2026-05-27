@@ -75,6 +75,12 @@ class DreggTurn extends InspectorBase {
             <code class="dregg-inspector__id" title=${parsed.id}>${shortHex(parsed.id, 24)}</code>
             <span class="dregg-inspector__meta">${String(t.action_count)} effects · ${String(t.computrons_used)} computrons</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>Effects</span><strong>${String(t.action_count)}</strong></div>
+            <div><span>Computrons</span><strong>${String(t.computrons_used)}</strong></div>
+            <div><span>Proof</span><strong>${t.proof_view ? 'attached' : 'placeholder'}</strong></div>
+            <div><span>Trace</span><strong>${this._runtime.getTurnTrace ? 'available' : 'unavailable'}</strong></div>
+          </div>
           <dl class="dregg-inspector__kv">
             <dt>turn hash</dt><dd>${dreggCodeLink(html, `dregg://turn/${t.turn_hash}`, shortHex(t.turn_hash, 24), t.turn_hash)}</dd>
             <dt>effects</dt><dd>${String(t.action_count)}</dd>
@@ -92,9 +98,11 @@ class DreggTurn extends InspectorBase {
               <dregg-receipt uri=${`dregg://receipt/${t.turn_hash}`} mode="compact"></dregg-receipt>
             </dd>
           </dl>
-          <details style="margin-top:var(--s3,8px);">
-            <summary style="cursor:pointer;color:var(--fg-dim);font-size:0.82rem;user-select:none;">Trace</summary>
-            <dregg-turn-debugger uri=${`dregg://turn/${t.turn_hash}`} mode="default"></dregg-turn-debugger>
+          <details class="dregg-inspector__section">
+            <summary>Trace</summary>
+            <div class="dregg-inspector__section-body">
+              <dregg-turn-debugger uri=${`dregg://turn/${t.turn_hash}`} mode="default"></dregg-turn-debugger>
+            </div>
           </details>
         </div>`;
     };

@@ -22,6 +22,21 @@
   color: var(--fg);
 }
 
+body:has(.sb) {
+  overflow-x: clip;
+}
+
+body:has(.sb) .nav {
+  min-width: 0;
+}
+
+body:has(.sb) .nav__links {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
 /* ---------- topbar ---------- */
 .sb__topbar {
   flex: 0 0 auto;
@@ -176,7 +191,10 @@
   align-items: center;
   gap: var(--s2);
   padding-top: var(--s1);
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 .sb__surface-pill {
   flex: 0 0 auto;

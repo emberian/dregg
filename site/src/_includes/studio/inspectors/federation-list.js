@@ -10,7 +10,7 @@
  * Supports register affordance (placeholder until extension cclerk + binding).
  */
 
-import { InspectorBase, shortHex } from './_base.js';
+import { InspectorBase, dreggCodeLink, emptyState, shortHex } from './_base.js';
 
 class DreggFederationList extends InspectorBase {
   _render() {
@@ -22,57 +22,68 @@ class DreggFederationList extends InspectorBase {
 
     const root = document.createElement('div');
     this.appendChild(root);
+    const knownSignal = this._runtime.listKnownFederations ? this._runtime.listKnownFederations() : null;
+    const blocksSignal = this._runtime.listBlocks ? this._runtime.listBlocks() : null;
 
     const Component = () => {
-      // In real: const list = this._runtime.listKnownFederations().value || [];
-      // Today we synthesize from blocks signal if present (coarse).
       let feds = [];
       try {
-        const blocksSig = this._runtime.listBlocks ? this._runtime.listBlocks() : null;
-        // Heuristic: collect unique fed indices seen in blocks (weak but works for sim)
+        if (knownSignal && Array.isArray(knownSignal.value) && knownSignal.value.length) {
+          feds = knownSignal.value;
+        }
         const seen = new Set();
-        // Fallback: the federation inspector test fixtures create via createFederation.
-        // For production, this list will come from wasm.get_known_federations or equivalent.
+        for (const f of feds) seen.add(String(f.fed_index ?? f.registered_index ?? f.id ?? 0));
+        for (const block of (blocksSignal?.value || [])) {
+          const idx = block.fed_index ?? block.federation_index ?? 0;
+          if (!seen.has(String(idx))) {
+            seen.add(String(idx));
+            feds.push({ fed_index: idx, name: `federation #${idx}`, height: block.height ?? 0 });
+          }
+        }
         if (this._runtime._wasm && typeof this._runtime._wasm.list_federation_blocks === 'function') {
-          // best-effort scan 0..4
           for (let i = 0; i < 8; i++) {
             try {
               const bl = this._runtime._wasm.list_federation_blocks(this._runtime._handle, i);
-              if (bl && bl.length) seen.add(i);
+              if (bl && bl.length && !seen.has(String(i))) {
+                seen.add(String(i));
+                feds.push({ fed_index: i, name: `fed-${i}`, height: bl.length });
+              }
             } catch {}
           }
         }
-        feds = Array.from(seen).map(i => ({ fed_index: i, name: `fed-${i}` }));
       } catch (e) { /* silent */ }
 
       if (mode === 'compact') {
         return html`<span class="dregg-inspector dregg-inspector--compact">federations: ${feds.length}</span>`;
       }
 
+      const totalHeight = feds.reduce((sum, f) => sum + Number(f.height || 0), 0);
+      const totalNodes = feds.reduce((sum, f) => sum + Number(f.num_nodes || f.nodes || 0), 0);
       return html`
         <div class="dregg-inspector dregg-inspector--cell pfl">
           <header>
             <span class="dregg-inspector__kind">federation-list</span>
             <span class="pfl__count">${feds.length} known</span>
           </header>
+          <div class="dregg-inspector__summary">
+            <div><span>Federations</span><strong>${String(feds.length)}</strong></div>
+            <div><span>Total Height</span><strong>${String(totalHeight)}</strong></div>
+            <div><span>Known Nodes</span><strong>${String(totalNodes)}</strong></div>
+          </div>
           ${feds.length === 0
-            ? html`<div class="pfl__empty" style="color:var(--fg-dim);font-size:0.82rem;">no federations in this runtime (create via runtime.createFederation or register_federation binding)</div>`
-            : html`<ul class="pfl__list" style="margin:6px 0;padding-left:0;list-style:none;">
+            ? emptyState(html, 'No federations known', 'Create a local federation, connect a remote node, or use the extension federation registry.')
+            : html`<div class="dregg-inspector__rows">
                 ${feds.map(f => html`
-                  <li style="margin:4px 0;padding:4px 8px;border:1px solid var(--line);border-radius:3px;">
-                    <dregg-federation uri=${`dregg://federation/${f.fed_index}`} mode="compact"></dregg-federation>
-                    <dregg-block-dag uri=${`dregg://federation/${f.fed_index}`} mode="compact" style="margin-left:8px;"></dregg-block-dag>
-                    <!-- Cluster B integration (FOLLOWUP-15): real blocklace DAG via block-dag (dregg-blocklace + dregg_federation);
-                         educational sim + config (constitution threshold/timeout/routes_commitment DFA) via blocklace-sim;
-                         delegation graph, merkle (for receipts/ARs), DFA routing (constitution.routes_commitment), factory descriptors for cell minting in fed. -->
-                    <div style="margin-top:4px;font-size:0.65rem;color:var(--fg-dim);">
-                      <dregg-delegation-graph mode="compact" style="margin-right:6px;"></dregg-delegation-graph>
-                      <dregg-dfa mode="compact" data-dfa=${JSON.stringify({name:'route-sample', states:[{id:0,dead:true},{id:1}], transitions:[{from:0,to:1,byte:47}]})} style="margin-right:6px;"></dregg-dfa>
-                      <span title="blocklace constitution + dfa routes + factories govern cell creation & routing in this fed (see blocklace/src/constitution.rs, dfa/src/router.rs, cell/src/factory.rs)">+ blocklace/DFA/factory config</span>
-                    </div>
-                  </li>`)}
-              </ul>`}
-          <div class="pfl__note" style="font-size:0.7rem;color:var(--fg-dim);margin-top:6px;">
+                  <div class="dregg-inspector__row">
+                    <span>#${String(f.fed_index ?? f.registered_index ?? f.id ?? 0)}</span>
+                    <strong>${dreggCodeLink(html, `dregg://federation/${f.fed_index ?? f.registered_index ?? f.id ?? 0}`, f.name || f.federation_id || 'federation')}</strong>
+                    <code>${String(f.height ?? 0)} height · ${String(f.num_nodes ?? f.nodes ?? 0)} nodes · ${shortHex(f.latest_root || f.federation_id || '', 14)}</code>
+                  </div>`)}
+              </div>`}
+          <div class="dregg-inspector__actions">
+            ${feds.length ? dreggCodeLink(html, `dregg://block-dag/${feds[0].fed_index ?? 0}`, 'open first DAG') : null}
+          </div>
+          <div class="dregg-inspector__note">
             KnownFederations registry (node + extension) + sim list. Add via <code>registerFederation</code> (Task #28 / §4.3).
           </div>
         </div>`;

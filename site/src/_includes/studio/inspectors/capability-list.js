@@ -63,14 +63,15 @@ class DreggCapabilityList extends InspectorBase {
             <div><span>permissions</span><strong>${String(permissionCount)}</strong></div>
             <div><span>breadstuff</span><strong>${String(withBreadstuff)}</strong></div>
           </div>
-          <ul>
+          <div class="dregg-inspector__rows">
             ${caps.map(c => html`
-              <li>
-                ${dreggCodeLink(html, `dregg://capability/${agentIdx}/${c.slot}`, `slot ${String(c.slot)}`)}
-                <dregg-capability uri=${`dregg://capability/${agentIdx}/${c.slot}`} mode="compact"></dregg-capability>
-              </li>
+              <div class="dregg-inspector__row">
+                <span>${String(c.slot)}</span>
+                <strong>${dreggCodeLink(html, `dregg://capability/${agentIdx}/${c.slot}`, capPerms(c).join(', ') || 'capability')}</strong>
+                <code>${c.target || c.target_cell || 'target unavailable'} ${c.has_breadstuff ? '· breadstuff' : ''}</code>
+              </div>
             `)}
-          </ul>
+          </div>
         </div>`;
     };
     this._dispose = effect(() => { render(h(Component, {}), root); });
