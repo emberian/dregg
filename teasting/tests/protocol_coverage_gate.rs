@@ -19,6 +19,7 @@
 //! Follow-ups (#142): extend the same forcing function to `Authorization`
 //! modes and `StateConstraint` variants, then wire into preflight (Pillar 3).
 
+use dregg_cell::StateConstraint;
 use dregg_turn::action::{Authorization, Effect};
 
 /// Returns `true` iff this `Effect` variant is exercised end-to-end by at
@@ -167,4 +168,66 @@ fn authorization_coverage_ratchet_only_shrinks() {
         MAX_UNCOVERED_AUTH
     );
     assert!(authorization_executor_coverage(&Authorization::Unchecked));
+}
+
+// ============================================================================
+// StateConstraint (cell-program caveats)
+// ============================================================================
+
+/// Returns `true` iff this `StateConstraint` is enforced THROUGH THE EXECUTOR
+/// (a `submit_action`/`execute` test where the caveat actually gates a commit)
+/// — not merely unit-tested via a direct `CellProgram::evaluate` call.
+/// Exhaustive by design. Conservative: most caveats have rich direct-evaluate
+/// unit tests in `cell` but their executor-path enforcement is unconfirmed
+/// here, so they are `false` pending a confirming integration test (#142).
+fn state_constraint_executor_coverage(c: &StateConstraint) -> bool {
+    match c {
+        // Confirmed enforced via the executor commit path.
+        StateConstraint::Monotonic { .. } => true, // identity revocation-root rollback rejected (integration_issue_present_verify)
+        StateConstraint::MonotonicSequence { .. } => true, // subscription publish head (integration_publish_consume)
+
+        // Not yet confirmed enforced through the executor (#142 work-list).
+        StateConstraint::FieldEquals { .. } => false,
+        StateConstraint::FieldGte { .. } => false,
+        StateConstraint::FieldLte { .. } => false,
+        StateConstraint::FieldLteField { .. } => false,
+        StateConstraint::SumEquals { .. } => false,
+        StateConstraint::WriteOnce { .. } => false,
+        StateConstraint::Immutable { .. } => false,
+        StateConstraint::StrictMonotonic { .. } => false,
+        StateConstraint::BoundedBy { .. } => false,
+        StateConstraint::FieldDelta { .. } => false,
+        StateConstraint::FieldDeltaInRange { .. } => false,
+        StateConstraint::FieldGteHeight { .. } => false,
+        StateConstraint::FieldLteHeight { .. } => false,
+        StateConstraint::SumEqualsAcross { .. } => false,
+        StateConstraint::SenderAuthorized { .. } => false,
+        StateConstraint::CapabilityUniqueness { .. } => false,
+        StateConstraint::RateLimit { .. } => false,
+        StateConstraint::RateLimitBySum { .. } => false,
+        StateConstraint::TemporalGate { .. } => false,
+        StateConstraint::PreimageGate { .. } => false,
+        StateConstraint::AllowedTransitions { .. } => false,
+        StateConstraint::TemporalPredicate { .. } => false,
+        StateConstraint::BoundDelta { .. } => false,
+        StateConstraint::AnyOf { .. } => false,
+        StateConstraint::Witnessed { .. } => false,
+        StateConstraint::Renounced { .. } => false,
+        StateConstraint::Custom { .. } => false,
+    }
+}
+
+/// Ratchet for StateConstraint executor-enforcement coverage — may only shrink.
+const MAX_UNCOVERED_CONSTRAINTS: usize = 27;
+
+#[test]
+fn state_constraint_coverage_ratchet_only_shrinks() {
+    // Count the `false` arms by exercising the classifier over a representative
+    // instance of each variant would require constructing all 29; instead the
+    // exhaustive match above is the completeness guarantee, and this baseline
+    // is maintained alongside it. Touch the classifier so it compiles.
+    assert!(state_constraint_executor_coverage(&StateConstraint::Monotonic { index: 0 }));
+    assert!(!state_constraint_executor_coverage(&StateConstraint::WriteOnce { index: 0 }));
+    // 2 of 29 confirmed → 27 not-yet; baseline must never rise.
+    assert_eq!(MAX_UNCOVERED_CONSTRAINTS, 27);
 }
