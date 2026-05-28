@@ -64,6 +64,7 @@ pub mod builder;
 pub mod composer;
 pub mod conditional;
 pub mod conflict;
+pub mod cross_fed_cite;
 pub mod dsl;
 pub mod economics;
 pub mod encrypted;

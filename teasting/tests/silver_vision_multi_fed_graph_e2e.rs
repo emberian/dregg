@@ -366,42 +366,10 @@ fn build_attested_root(
 // different F1' cannot be substituted.
 // ---------------------------------------------------------------------------
 
-const CROSS_FED_RECEIPT_CITE_KIND_TAG: u32 = 0x0001; // stable tag for cross-fed receipt citations
-
-fn cross_fed_receipt_cite(
-    citing_cell_id: &CellId,
-    source_federation_id: &[u8; 32],
-    cited_receipt_hash: &[u8; 32],
-) -> UnilateralAttestation {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"dregg-cross-fed-receipt-cite-v1");
-    hasher.update(citing_cell_id.as_bytes());
-    hasher.update(source_federation_id);
-    hasher.update(cited_receipt_hash);
-    UnilateralAttestation {
-        kind: UnilateralAttestationKind::Custom {
-            kind_tag: CROSS_FED_RECEIPT_CITE_KIND_TAG,
-        },
-        attestation_data: *hasher.finalize().as_bytes(),
-    }
-}
-
-/// Verify that an attestation is a valid cross-fed receipt cite for the
-/// given (citing_cell_id, source_federation_id, cited_receipt_hash) triple.
-fn verify_cross_fed_citation(
-    attestation: &UnilateralAttestation,
-    citing_cell_id: &CellId,
-    source_federation_id: &[u8; 32],
-    cited_receipt_hash: &[u8; 32],
-) -> bool {
-    match &attestation.kind {
-        UnilateralAttestationKind::Custom { kind_tag }
-            if *kind_tag == CROSS_FED_RECEIPT_CITE_KIND_TAG => {}
-        _ => return false,
-    }
-    let expected = cross_fed_receipt_cite(citing_cell_id, source_federation_id, cited_receipt_hash);
-    attestation.attestation_data == expected.attestation_data
-}
+// Canonical cross-fed receipt-citation helpers now live in the shared
+// `dregg_turn::cross_fed_cite` module (task #123) so producers and verifiers
+// across the workspace agree byte-for-byte. Re-exported here for this test.
+use dregg_turn::cross_fed_cite::{cross_fed_receipt_cite, verify_cross_fed_citation};
 
 // ---------------------------------------------------------------------------
 // The multi-federation integration test
