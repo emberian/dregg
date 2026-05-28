@@ -67,5 +67,12 @@
     <!-- Real local-preview runtime: creates a real governance cell, binds the
          placeholder URI to it, installs a real window.dregg.signTurn. -->
     <script type="module" src="/starbridge-apps/shared/app-runtime-ready.js"></script>
+    <!-- REAL propose → vote → threshold-sig commit flow: a 2-of-3 committee of
+         distinct cipherclerks drives propose/vote turns and a real
+         Authorization::Custom commit (Ed25519 threshold-sig over the canonical
+         signing message, validated by a registered verifier) against a cell
+         carrying the canonical governance cell-program. Exposes
+         window.dregg.appFlows.governedNamespace(). -->
+    <script type="module" src="/starbridge-apps/shared/app-multi-agent.js"></script>
   </body>
 </html>

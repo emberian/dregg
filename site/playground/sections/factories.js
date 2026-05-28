@@ -115,12 +115,9 @@ export function initFactories(wasm) {
     try {
       result = wasm.create_from_factory(factory.vk, ownerPubkey, BigInt(100));
     } catch (e) {
-      // Fallback: simulate the derivation
-      result = {
-        child_vk: randomHex(32),
-        param_hash: randomHex(32),
-        factory_vk: factory.vk,
-      };
+      // No fabrication: a real derivation failure is surfaced, not simulated.
+      showResult(resultDiv, 'error', `create_from_factory failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 
@@ -157,11 +154,9 @@ export function initFactories(wasm) {
     try {
       result = wasm.verify_provenance(cell.vk, JSON.stringify(factoryVks));
     } catch (e) {
-      // Fallback
-      result = {
-        from_factory: !!cell.fromFactory,
-        factory_vk: cell.fromFactory ? factories.find(f => f.name === cell.fromFactory)?.vk : null,
-      };
+      // No fabrication: surface the real verification failure.
+      showResult(resultDiv, 'error', `verify_provenance failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 

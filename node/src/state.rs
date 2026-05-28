@@ -590,6 +590,12 @@ impl NodeState {
                 trustless_intent_engine: dregg_intent::trustless::TrustlessIntentEngine::new(
                     // Defaults: 1-of-1 (solo); upgraded when threshold_key_share
                     // is configured via the federation epoch ceremony.
+                    //
+                    // `::new` installs the STRICT (fail-CLOSED) verifier: a
+                    // solver submission that omits `witnessed_predicate` is
+                    // rejected, so the `validity_proof` is always
+                    // cryptographically dispatched through the registry rather
+                    // than waved through (SILVER-DEBT T1.2 fail-open: closed).
                     1, 1,
                 ),
                 delay_pool: dregg_intent::delay_pool::DelayPool::new(
@@ -676,6 +682,12 @@ impl NodeState {
                 trustless_intent_engine: dregg_intent::trustless::TrustlessIntentEngine::new(
                     // Defaults: 1-of-1 (solo); upgraded when threshold_key_share
                     // is configured via the federation epoch ceremony.
+                    //
+                    // `::new` installs the STRICT (fail-CLOSED) verifier: a
+                    // solver submission that omits `witnessed_predicate` is
+                    // rejected, so the `validity_proof` is always
+                    // cryptographically dispatched through the registry rather
+                    // than waved through (SILVER-DEBT T1.2 fail-open: closed).
                     1, 1,
                 ),
                 delay_pool: dregg_intent::delay_pool::DelayPool::new(

@@ -3,20 +3,18 @@
 //!
 //! # Why this test exists
 //!
-//! Audit finding #82 notes that `TrustlessIntentEngine::new` uses
-//! `WitnessedProofVerifier::with_stub_registry()` as its default verifier.
-//! The stub registry's built-in kind verifiers (Dfa, Temporal, …) accept *any*
-//! non-empty proof bytes, so a submission with a forged/garbage proof would pass
-//! if:
-//!   1. The structural checks (score sum, distinct intents, membership) pass, AND
-//!   2. The witnessed_predicate is absent (None) — permissive fallback path, OR
-//!   3. The witnessed_predicate.kind is one the stub registry handles.
+//! `TrustlessIntentEngine::new` installs the STRICT
+//! `WitnessedProofVerifier::strict(default_builtins())` as its default verifier
+//! (SILVER-DEBT T1.2 fail-open: CLOSED). A submission that omits its
+//! `witnessed_predicate` is REJECTED — the prior permissive fallback that waved
+//! garbage proof bytes through on the structural check alone is gone. When a
+//! predicate IS present, the proof dispatches through the registry, which
+//! installs `NotYetWiredVerifier` (fail-closed) for kinds without a real
+//! algebra adapter.
 //!
 //! These tests:
-//!   A. Prove that garbage-proof submissions WITHOUT a witnessed predicate pass the
-//!      stub registry (this is the documented permissive-mode behaviour; the test
-//!      names this explicitly so the day #82 is resolved the test becomes a
-//!      regression gate rather than a characterisation test).
+//!   A. Prove that garbage-proof submissions WITHOUT a witnessed predicate are
+//!      REJECTED by the strict production default (the closed-hole regression gate).
 //!   B. Prove that garbage-proof submissions WITH a witnessed predicate are REJECTED
 //!      by strict mode regardless of proof content.
 //!   C. Prove that a fully-formed submission is accepted by a custom AcceptAll
@@ -154,30 +152,30 @@ fn witnessed_predicate_for(intents: &[Intent], kind: WitnessedPredicateKind) -> 
 }
 
 // ============================================================================
-// Test A: Permissive stub — garbage proof WITHOUT predicate passes
-//   (documents pre-#82-fix behaviour; when stubs are replaced this should fail)
+// Test A: Production default REJECTS a garbage proof WITHOUT a predicate.
+//   (SILVER-DEBT T1.2 fail-open: CLOSED. The default `TrustlessIntentEngine::new`
+//    now installs the STRICT verifier, so a predicate-less submission is rejected
+//    rather than waved through on the structural check alone.)
 // ============================================================================
 
 #[test]
-fn stub_registry_accepts_garbage_proof_without_predicate() {
+fn default_engine_rejects_garbage_proof_without_predicate() {
     let (key, shares) = make_keys(2, 3);
     let mut engine = TrustlessIntentEngine::new(2, 3);
     let intents = vec![make_intent(1), make_intent(2)];
     drive_to_solving(&mut engine, &key, &shares, &intents);
 
     // Garbage proof (still non-empty so the empty-proof guard passes).
-    // No witnessed_predicate — permissive stub path applies.
+    // No witnessed_predicate — the strict production default must reject this;
+    // the garbage proof bytes are never accepted on the structural check alone.
     let garbage: Vec<u8> = (0..32u8).collect();
     let sub = make_structural_submission(0xAA, &intents, 5.0, garbage, None);
 
-    // PRE-#82: passes. POST-#82: should fail once real verifier is wired in.
     let result = engine.submit_solution(sub);
     assert!(
-        result.is_ok(),
-        "Pre-#82: stub permissive path should accept structurally-valid submission \
-         with garbage proof bytes (no witnessed_predicate). \
-         If this assertion starts FAILING after #82 lands that is expected — \
-         flip to assert!(result.is_err())."
+        matches!(result, Err(EngineError::InvalidProof { .. })),
+        "HOLE CLOSED: strict production default must REJECT a predicate-less \
+         submission (garbage proof bytes never verified otherwise), got: {result:?}"
     );
 }
 

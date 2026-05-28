@@ -4,8 +4,8 @@
 set -euo pipefail
 
 # Source repository. Override with DREGG_REPO_URL for a fork or mirror.
-# Canonical default is the current upstream remote (git@github.com:emberian/pyana.git).
-REPO_URL="${DREGG_REPO_URL:-git@github.com:emberian/pyana.git}"
+# Canonical default is the current upstream remote (git@github.com:emberian/dregg.git).
+REPO_URL="${DREGG_REPO_URL:-git@github.com:emberian/dregg.git}"
 REPO_DIR="${REPO_DIR:-/opt/dregg}"
 BRANCH="${BRANCH:-main}"
 

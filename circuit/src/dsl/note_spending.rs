@@ -240,6 +240,18 @@ pub fn note_spending_circuit_descriptor() -> CircuitDescriptor {
             col: col::DESTINATION_FEDERATION,
             pi_index: pi::DESTINATION_FEDERATION,
         },
+        // Row 0: value_hi == pi[5]
+        // 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5): pins the high u34
+        // limb of the note value (col 19) to verifier-supplied pi[5]. Combined
+        // with the VALUE (pi[2]) low-30 binding, the proof now binds the FULL
+        // u64 amount. Two amounts differing above bit 30 yield distinct pi[5]
+        // and therefore distinct proofs; a verifier passing the honest high
+        // limb rejects any proof whose trace high limb differs.
+        BoundaryDef::PiBinding {
+            row: BoundaryRow::First,
+            col: col::VALUE_HI,
+            pi_index: pi::VALUE_HI,
+        },
     ];
 
     // Column definitions
@@ -294,16 +306,23 @@ pub fn note_spending_circuit_descriptor() -> CircuitDescriptor {
             index: col::DESTINATION_FEDERATION,
             kind: ColumnKind::Value,
         },
+        ColumnDef {
+            name: "value_hi".into(),
+            index: col::VALUE_HI,
+            kind: ColumnKind::Value,
+        },
     ];
 
     CircuitDescriptor {
-        name: "dregg-note-spending-dsl-v2".into(),
+        name: "dregg-note-spending-dsl-v3".into(),
         trace_width: NOTE_SPENDING_WIDTH,
         max_degree: 4, // Position validity is degree 4
         columns,
         constraints,
         boundaries,
-        public_input_count: 5, // [nullifier, merkle_root, value, asset_type, destination_federation]
+        // [nullifier, merkle_root, value(lo30), asset_type,
+        //  destination_federation, value_hi(u34)]
+        public_input_count: 6,
         lookup_tables: vec![],
     }
 }
@@ -317,13 +336,55 @@ pub fn note_spending_dsl_circuit() -> DslCircuit {
 // DSL Merkle root computation
 // ============================================================================
 
+/// Compute the note commitment with the DSL hashing convention
+/// (`hash_fact(owner, [value, asset_type, creation_nonce, randomness])`).
+///
+/// This matches the C2 commitment constraint, which uses `ConstraintExpr::Hash`
+/// (=`hash_fact`), NOT the witness's `hash_many`-based `commitment()`. The two
+/// hashes differ, so the DSL trace MUST use this form.
+pub fn dsl_commitment(witness: &NoteSpendingWitness) -> BabyBear {
+    hash_fact(
+        witness.owner,
+        &[
+            witness.value,
+            witness.asset_type,
+            witness.creation_nonce,
+            witness.randomness,
+        ],
+    )
+}
+
+/// Compute the note nullifier with the DSL two-step hashing convention
+/// (matches C3 + C4). Mirrors `generate_note_spending_trace`'s derivation.
+pub fn dsl_nullifier(witness: &NoteSpendingWitness) -> BabyBear {
+    let commitment = dsl_commitment(witness);
+    let intermediate = hash_fact(
+        commitment,
+        &[
+            witness.spending_key[0],
+            witness.spending_key[1],
+            witness.spending_key[2],
+            witness.spending_key[3],
+        ],
+    );
+    hash_fact(
+        intermediate,
+        &[
+            witness.spending_key[4],
+            witness.spending_key[5],
+            witness.spending_key[6],
+            witness.spending_key[7],
+        ],
+    )
+}
+
 /// Compute the Merkle root using the DSL convention: `hash_fact(current, [sib0, sib1, sib2, position])`.
 ///
 /// This differs from `NoteSpendingWitness::merkle_root()` which uses `hash_4_to_1` with
 /// Lagrange-interpolated child ordering. The DSL version uses `hash_fact` which is what
 /// the `ConstraintExpr::Hash` evaluator computes.
 pub fn dsl_merkle_root(witness: &NoteSpendingWitness) -> BabyBear {
-    let commitment = witness.commitment();
+    let commitment = dsl_commitment(witness);
     let mut current = commitment;
 
     for (i, siblings) in witness.merkle_siblings.iter().enumerate() {
@@ -355,8 +416,12 @@ pub fn generate_note_spending_trace(
         "Need at least depth {MIN_MERKLE_DEPTH}"
     );
 
-    let commitment = witness.commitment();
-    let nullifier = witness.nullifier();
+    // The DSL constraints (C2, C3, C4) recompute commitment and nullifier with
+    // `hash_fact` (predicate + terms), NOT the witness's `hash_many`-based
+    // `commitment()`/`nullifier()`. The trace MUST use the same `hash_fact`
+    // form or the row-0 commitment/nullifier constraints fail. (The witness
+    // accessors remain the canonical hashing for the legacy hand-written AIR.)
+    let commitment = dsl_commitment(witness);
 
     // Compute intermediate for the DSL two-step nullifier hash.
     // Step 1: intermediate = hash_fact(commitment, [key[0], key[1], key[2], key[3]])
@@ -367,6 +432,16 @@ pub fn generate_note_spending_trace(
             witness.spending_key[1],
             witness.spending_key[2],
             witness.spending_key[3],
+        ],
+    );
+    // Step 2: nullifier = hash_fact(intermediate, [key[4], key[5], key[6], key[7]])
+    let nullifier = hash_fact(
+        intermediate,
+        &[
+            witness.spending_key[4],
+            witness.spending_key[5],
+            witness.spending_key[6],
+            witness.spending_key[7],
         ],
     );
 
@@ -390,6 +465,12 @@ pub fn generate_note_spending_trace(
     row0[col::IS_MERKLE] = BabyBear::ZERO;
     row0[NULLIFIER_INTERMEDIATE] = intermediate;
     row0[col::DESTINATION_FEDERATION] = witness.destination_federation;
+    // 30-bit-trunc fix: high u34 limb of the note value. The witness `value`
+    // is a single field element (the committed low limb), so the standard
+    // trace leaves the high limb at zero. The bridge-mint path builds the
+    // full-u64 trace via `generate_note_spending_trace_with_value_hi`, which
+    // overrides this column with the real high bits before proving.
+    row0[col::VALUE_HI] = BabyBear::ZERO;
     trace.push(row0);
 
     // Rows 1..depth+1: Merkle membership proof
@@ -447,7 +528,27 @@ pub fn generate_note_spending_trace(
         witness.value,
         witness.asset_type,
         witness.destination_federation,
+        BabyBear::ZERO, // pi::VALUE_HI: standard (felt-sized) value has no high bits
     ];
+    (trace, public_inputs)
+}
+
+/// Generate a note-spending trace binding a FULL u64 value via the high limb.
+///
+/// 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5). The standard
+/// [`generate_note_spending_trace`] leaves `col::VALUE_HI` (and `pi[5]`) at
+/// zero because a `NoteSpendingWitness::value` is a single field element. The
+/// bridge-mint executor path, however, presents a u64 amount whose high 34
+/// bits previously were silently masked away. This function takes the high
+/// limb explicitly and binds it into the trace + PI so the proof commits to
+/// the entire u64 (low 30 bits via `col::VALUE`, high 34 via `col::VALUE_HI`).
+pub fn generate_note_spending_trace_with_value_hi(
+    witness: &NoteSpendingWitness,
+    value_hi: BabyBear,
+) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+    let (mut trace, mut public_inputs) = generate_note_spending_trace(witness);
+    trace[0][col::VALUE_HI] = value_hi;
+    public_inputs[pi::VALUE_HI] = value_hi;
     (trace, public_inputs)
 }
 
@@ -461,6 +562,20 @@ pub fn generate_note_spending_trace(
 pub fn prove_note_spend_dsl(witness: &NoteSpendingWitness) -> StarkProof {
     let circuit = note_spending_dsl_circuit();
     let (trace, public_inputs) = generate_note_spending_trace(witness);
+    stark::prove(&circuit, &trace, &public_inputs)
+}
+
+/// Generate a DSL-native STARK proof binding a FULL u64 value (30-bit-trunc fix).
+///
+/// `value_hi` is the upper-34-bit limb of the note's u64 amount; the witness's
+/// `value` field supplies the low-30 limb that participates in the commitment.
+/// Pair with [`verify_note_spend_dsl_full`].
+pub fn prove_note_spend_dsl_full(
+    witness: &NoteSpendingWitness,
+    value_hi: BabyBear,
+) -> StarkProof {
+    let circuit = note_spending_dsl_circuit();
+    let (trace, public_inputs) = generate_note_spending_trace_with_value_hi(witness, value_hi);
     stark::prove(&circuit, &trace, &public_inputs)
 }
 
@@ -508,13 +623,47 @@ pub fn verify_note_spend_dsl_with_destination(
         return Err("Proof trace too short for note spending circuit".to_string());
     }
 
+    // BabyBear-typed callers bind a felt-sized value; the high limb is zero.
+    verify_note_spend_dsl_full(
+        nullifier,
+        merkle_root,
+        value,
+        BabyBear::ZERO,
+        asset_type,
+        destination_federation,
+        proof,
+    )
+}
+
+/// Verify a note-spending proof binding the FULL u64 value via both limbs.
+///
+/// 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5). `value_lo` is the low-30
+/// limb (the felt that participates in the note commitment) and `value_hi` is
+/// the upper 34 bits. The verifier rejects any proof whose trace `VALUE_HI`
+/// column does not match `value_hi` — so two amounts differing above bit 30
+/// (same low limb, different high limb) cannot share a proof.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_note_spend_dsl_full(
+    nullifier: BabyBear,
+    merkle_root: BabyBear,
+    value_lo: BabyBear,
+    value_hi: BabyBear,
+    asset_type: BabyBear,
+    destination_federation: BabyBear,
+    proof: &StarkProof,
+) -> Result<(), String> {
+    if proof.trace_len < 4 {
+        return Err("Proof trace too short for note spending circuit".to_string());
+    }
+
     let circuit = note_spending_dsl_circuit();
     let public_inputs = vec![
         nullifier,
         merkle_root,
-        value,
+        value_lo,
         asset_type,
         destination_federation,
+        value_hi,
     ];
     stark::verify(&circuit, proof, &public_inputs)
 }

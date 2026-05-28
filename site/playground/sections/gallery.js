@@ -107,8 +107,15 @@ export function initGallery(wasm) {
       let commitResult;
       try {
         commitResult = wasm.create_value_commitment(BigInt(bidder.amount), blinding);
-      } catch {
-        commitResult = { commitment: Array.from(new Uint8Array(32).map(() => Math.floor(Math.random() * 256))) };
+      } catch (e) {
+        // No fabrication: a real wasm failure is surfaced honestly and aborts.
+        aucState = { phase: 'idle', bids: [], winner: null, bearerCap: null };
+        aucRevealBtn.disabled = true;
+        aucSettleBtn.disabled = true;
+        aucDisplay.innerHTML = `<div class="result-panel"><div class="result-panel__body">
+          <div class="output-entry error">create_value_commitment failed for ${bidder.name}: ${escapeHtml(String(e && e.message || e))}</div>
+        </div></div>`;
+        return;
       }
 
       const commitHex = Array.from(new Uint8Array(commitResult.commitment))
@@ -169,8 +176,12 @@ export function initGallery(wasm) {
     let bearerResult;
     try {
       bearerResult = wasm.create_bearer_cap(sellerSigningSeed, nftCellId, 'transfer', BigInt(0));
-    } catch {
-      bearerResult = { bearer_token_hex: randomHex(64), delegator_pubkey_hex: randomHex(32) };
+    } catch (e) {
+      // No fabrication: surface the real failure rather than minting a fake cap.
+      aucDisplay.innerHTML = `<div class="result-panel"><div class="result-panel__body">
+        <div class="output-entry error">create_bearer_cap failed: ${escapeHtml(String(e && e.message || e))}</div>
+      </div></div>`;
+      return;
     }
 
     aucState.bearerCap = bearerResult.bearer_token_hex;

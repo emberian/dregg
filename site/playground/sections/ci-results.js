@@ -78,7 +78,7 @@ export function initCiResults() {
     // Metadata
     const shortSha = data.commit ? data.commit.substring(0, 8) : '?';
     metaEl.innerHTML = `
-      <span class="ci-meta-item">Commit: <a href="https://github.com/emberian/pyana/commit/${data.commit || ''}">${shortSha}</a></span>
+      <span class="ci-meta-item">Commit: <a href="https://github.com/emberian/dregg/commit/${data.commit || ''}">${shortSha}</a></span>
       <span class="ci-meta-item">Generated: ${data.timestamp ? formatTimestamp(data.timestamp) : 'unknown'}</span>
     `;
 

@@ -122,14 +122,12 @@ export function initBearer(wasm) {
     try {
       result = wasm.create_bearer_cap(delegatorSigningSeed, targetCell, action, BigInt(expiry));
     } catch (e) {
-      // Fallback (no real signature — for demo display only).
-      result = {
-        bearer_token_hex: randomHex(64), // 64-byte sig in fallback
-        delegator_pubkey_hex: randomHex(32),
-        target_cell: targetCell,
-        action,
-        expiry,
-      };
+      // No fabrication: bearer caps are real Ed25519 signatures. A failure is
+      // surfaced honestly rather than minting an unforgeable-looking fake.
+      explainerDiv.innerHTML = `<div class="result-panel"><div class="result-panel__body">
+        <div class="output-entry error">create_bearer_cap failed: ${escapeHtml(String(e && e.message || e))}</div>
+      </div></div>`;
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 

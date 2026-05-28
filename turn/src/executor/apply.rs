@@ -1145,10 +1145,15 @@ impl TurnExecutor {
         //     `BabyBear::encode_hash(bytes)` → Poseidon2 `hash_many` →
         //     single field element (the same `bytes_to_babybear`
         //     compression used by `bridge::present` and the SDK).
-        //   * value, asset_type: low-30 bits of the u64 reduced mod the
-        //     BabyBear prime as a canonical `BabyBear::new` element. The
-        //     prover must place the same value into `witness.value` /
-        //     `witness.asset_type` to satisfy the boundary constraint.
+        //   * value: split into TWO limbs — low 30 bits (PI[VALUE], the felt
+        //     in the note commitment) + upper 34 bits (PI[VALUE_HI]). The
+        //     proof now binds the FULL u64 amount, closing the 30-bit
+        //     truncation gap (CAVEAT-LAYER-COVERAGE.md §6.5).
+        //   * asset_type: low-30 bits of the u64 reduced mod the BabyBear
+        //     prime as a canonical `BabyBear::new` element (asset tags are
+        //     small enumerated identifiers, not balances). The prover must
+        //     place the same value into `witness.value` / `witness.asset_type`
+        //     to satisfy the boundary constraint.
         let verify_stark = |nullifier: &[u8; 32],
                             root: &[u8; 32],
                             dest_federation: &[u8; 32],
@@ -1157,7 +1162,7 @@ impl TurnExecutor {
                             proof_bytes: &[u8]|
          -> Result<(), String> {
             use dregg_circuit::BabyBear;
-            use dregg_circuit::dsl::note_spending::verify_note_spend_dsl_with_destination;
+            use dregg_circuit::dsl::note_spending::verify_note_spend_dsl_full;
             use dregg_circuit::poseidon2;
             use dregg_circuit::stark::proof_from_bytes;
 
@@ -1167,10 +1172,18 @@ impl TurnExecutor {
                 let limbs = BabyBear::encode_hash(bytes);
                 poseidon2::hash_many(&limbs)
             }
-            // Reduce a u64 to a canonical BabyBear (low 30 bits, then mod p).
-            // The prover must use the same reduction for its witness scalars.
-            fn u64_to_bb(v: u64) -> BabyBear {
-                BabyBear::new((v & ((1u64 << 30) - 1)) as u32)
+            // 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5): split a u64
+            // into (low 30 bits, upper 34 bits). The low limb is the field
+            // element that participates in the note commitment; the high limb
+            // is bound separately into the proof's PI[VALUE_HI] slot. Both
+            // limbs are < p so each is a canonical BabyBear. A u64 above 2^30
+            // now produces a non-zero high limb that the AIR boundary
+            // constraint pins, so two amounts differing above bit 30 can no
+            // longer share a proof.
+            fn u64_to_limbs(v: u64) -> (BabyBear, BabyBear) {
+                let lo = (v & ((1u64 << 30) - 1)) as u32;
+                let hi = (v >> 30) as u32; // fits in u32 since v < 2^64
+                (BabyBear::new(lo), BabyBear::new(hi))
             }
 
             let stark_proof = proof_from_bytes(proof_bytes)
@@ -1179,19 +1192,23 @@ impl TurnExecutor {
             let nullifier_bb = compress(nullifier);
             let root_bb = compress(root);
             let dest_bb = compress(dest_federation);
-            let value_bb = u64_to_bb(value);
-            let asset_bb = u64_to_bb(asset_type);
+            let (value_lo, value_hi) = u64_to_limbs(value);
+            // asset_type stays a single felt: asset identifiers are small
+            // enumerated tags, not balances, so 30-bit binding is faithful.
+            let asset_bb = BabyBear::new((asset_type & ((1u64 << 30) - 1)) as u32);
 
             // SECURITY: This call rejects any proof whose embedded PI vector
-            // does not match (nullifier_bb, root_bb, value_bb, asset_bb,
-            // dest_bb). The AIR's boundary constraints at row 0 columns
-            // {NULLIFIER, VALUE, ASSET_TYPE, DESTINATION_FEDERATION} and at
-            // the last row col CURRENT (merkle root) pin the prover's trace
-            // to whatever the verifier passes here.
-            verify_note_spend_dsl_with_destination(
+            // does not match (nullifier_bb, root_bb, value_lo, value_hi,
+            // asset_bb, dest_bb). The AIR's boundary constraints at row 0
+            // columns {NULLIFIER, VALUE, VALUE_HI, ASSET_TYPE,
+            // DESTINATION_FEDERATION} and at the last row col CURRENT (merkle
+            // root) pin the prover's trace to whatever the verifier passes
+            // here — including the FULL u64 amount via the two value limbs.
+            verify_note_spend_dsl_full(
                 nullifier_bb,
                 root_bb,
-                value_bb,
+                value_lo,
+                value_hi,
                 asset_bb,
                 dest_bb,
                 &stark_proof,

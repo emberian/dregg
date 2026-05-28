@@ -27,7 +27,7 @@ use dregg_intent::{
     ActionPattern, CommitmentId, Constraint, Intent, IntentKind, MatchSpec, VerificationMode,
 };
 use dregg_sdk::AgentCipherclerk;
-use dregg_turn::action::Authorization;
+use dregg_turn::action::{Authorization, WitnessBlob};
 use dregg_turn::builder::ActionBuilder;
 use dregg_turn::conditional::{ConditionalTurn, ProofCondition};
 use dregg_turn::forest::CallTree;
@@ -224,6 +224,13 @@ pub struct SimFederation {
     /// inspector can surface input intent alongside the canonical
     /// `RevocationBlock`.
     pub submitted_token_ids: Vec<Vec<String>>,
+}
+
+/// Carrier for an `Authorization::Custom` attached to an app turn: the
+/// witnessed predicate plus the proof bytes that discharge it.
+struct CustomAuth {
+    predicate: dregg_cell::WitnessedPredicate,
+    proof_bytes: Vec<u8>,
 }
 
 /// A pending conditional turn.
@@ -1291,6 +1298,295 @@ impl DreggRuntime {
         self.ledger.get(cell_id).map(|c| c.state_commitment())
     }
 
+    // =========================================================================
+    // Starbridge-app cell surface: multi-agent turns + Authorization::Custom.
+    //
+    // These methods are what makes the subscription `grant` flow and the
+    // governed-namespace propose/vote/commit flow REAL in-browser. They drive
+    // the canonical `TurnExecutor` against an app cell whose canonical
+    // cell-program is installed via `app_programs` (which mirrors the
+    // starbridge-app crates' program values; those crates can't be a wasm dep
+    // because they pull axum/tokio). Every turn is a real signed turn; the
+    // commit turn is a real `Authorization::Custom` discharged by a real
+    // Ed25519 threshold verifier.
+    // =========================================================================
+
+    /// Install a canonical app cell-program + initial state on a cell, opening
+    /// permissions so that turns from agents other than the cell's owner apply
+    /// (the slot-caveat cell-program is the load-bearing enforcement; this
+    /// mirrors the integration tests' `install_program` + relaxed permissions).
+    ///
+    /// `program_kind` ∈ {"subscription", "governed-namespace"}. The cell must
+    /// already exist in the ledger (mint it via `mint_cell_from_genesis` first).
+    pub fn install_app_program(
+        &mut self,
+        cell_id: &CellId,
+        program: dregg_cell::CellProgram,
+        initial_state: dregg_cell::CellState,
+    ) -> Result<(), String> {
+        let cell = self
+            .ledger
+            .get_mut(cell_id)
+            .ok_or_else(|| format!("cell {} not found in ledger", hex_encode_bytes(&cell_id.0)))?;
+        cell.program = program;
+        cell.permissions = app_programs::open_permissions();
+        cell.state = initial_state;
+        Ok(())
+    }
+
+    /// Grant the acting agent's cell a capability to *reach* `target_cell`.
+    /// The executor's cross-cell reachability check requires the actor cell to
+    /// hold a `CapabilityRef` to any non-self target it acts on. A publisher /
+    /// consumer / committee member acting on an app cell they don't own needs
+    /// this cap inserted first (the integration tests sidestep it by having the
+    /// actor BE the cell owner; the in-browser multi-agent flow grants it
+    /// explicitly). `AuthRequired::None` matches the open target permissions.
+    pub fn grant_reach_capability(
+        &mut self,
+        agent_idx: usize,
+        target_cell: CellId,
+    ) -> Result<u32, String> {
+        let actor_cell = self
+            .agents
+            .get(agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {agent_idx}"))?
+            .cell_id;
+        let cell = self
+            .ledger
+            .get_mut(&actor_cell)
+            .ok_or_else(|| "actor cell not found in ledger".to_string())?;
+        cell.capabilities
+            .grant(target_cell, AuthRequired::None)
+            .ok_or_else(|| "capability slot counter overflow".to_string())
+    }
+
+    /// Read a single 32-byte slot of a cell's state.
+    pub fn cell_field(&self, cell_id: &CellId, index: usize) -> Option<[u8; 32]> {
+        self.ledger
+            .get(cell_id)
+            .and_then(|c| c.state.fields.get(index).copied())
+    }
+
+    /// Build + execute a real signed turn where `agent_idx` is the actor/signer
+    /// and the action targets a DIFFERENT cell (`target_cell`) using an explicit
+    /// `method` symbol. This is the multi-agent path: a publisher (agent B) can
+    /// drive a `publish` turn against a topic cell owned by the publisher (agent
+    /// A), and a consumer (agent C) can `consume` it — all distinct cipherclerks
+    /// signing real turns through the canonical executor.
+    ///
+    /// The cell-program on `target_cell` (installed via `install_app_program`)
+    /// enforces the per-method slot caveats; the actor's signature is verified
+    /// against the actor cell's stored key (open target permissions let a
+    /// non-owner's turn apply, exactly as the integration tests' harness does).
+    pub fn execute_app_turn_for_agent(
+        &mut self,
+        agent_idx: usize,
+        target_cell: CellId,
+        method: &str,
+        effects: Vec<Effect>,
+        fee: u64,
+    ) -> Result<TurnResult, String> {
+        self.execute_app_turn_inner(agent_idx, target_cell, method, effects, None, fee)
+    }
+
+    /// Like [`execute_app_turn_for_agent`] but the action carries an
+    /// `Authorization::Custom { predicate }` discharged by a registered
+    /// `WitnessedPredicateKind::Custom { vk_hash }` verifier, with the
+    /// threshold-signature proof bytes in `witness_blobs[0]`. This is the
+    /// governed-namespace `commit_table_update` path.
+    ///
+    /// `vk_hash` must have a verifier registered via
+    /// [`register_threshold_verifier`]; `committee_commitment` is carried in the
+    /// predicate's `commitment` field (the governance committee root). The proof
+    /// bytes are `t` concatenated `(pubkey[32] ‖ sig[64])` records over the
+    /// canonical custom signing message — produced by [`sign_custom_commit`].
+    pub fn execute_custom_auth_turn_for_agent(
+        &mut self,
+        agent_idx: usize,
+        target_cell: CellId,
+        method: &str,
+        effects: Vec<Effect>,
+        vk_hash: [u8; 32],
+        committee_commitment: [u8; 32],
+        proof_bytes: Vec<u8>,
+        fee: u64,
+    ) -> Result<TurnResult, String> {
+        let predicate = dregg_cell::WitnessedPredicate::custom(
+            vk_hash,
+            committee_commitment,
+            dregg_cell::InputRef::SigningMessage,
+            0,
+        );
+        let auth = CustomAuth {
+            predicate,
+            proof_bytes,
+        };
+        self.execute_app_turn_inner(agent_idx, target_cell, method, effects, Some(auth), fee)
+    }
+
+    fn execute_app_turn_inner(
+        &mut self,
+        agent_idx: usize,
+        target_cell: CellId,
+        method: &str,
+        effects: Vec<Effect>,
+        custom: Option<CustomAuth>,
+        fee: u64,
+    ) -> Result<TurnResult, String> {
+        let actor_cell = self
+            .agents
+            .get(agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {agent_idx}"))?
+            .cell_id;
+
+        let nonce = self
+            .ledger
+            .get(&actor_cell)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
+
+        let mut builder = TurnBuilder::new(actor_cell, nonce);
+        builder.set_fee(fee);
+
+        // The action target is the APP cell; caller is the actor. For the Custom
+        // path we attach the predicate + witness blob directly (no signature
+        // override — the predicate is the load-bearing auth). For the signed
+        // path we leave Unchecked so `sign_call_forest` stamps a real Ed25519
+        // signature from the actor's cipherclerk.
+        {
+            let mut ab = ActionBuilder::new_unchecked_for_tests(target_cell, method, actor_cell);
+            for effect in effects {
+                ab = ab.effect(effect);
+            }
+            builder.add_action(ab.build());
+        }
+
+        let mut turn = builder.build();
+
+        if turn.previous_receipt_hash.is_none() {
+            if let Some(prev) = self.executor.get_last_receipt_hash(&actor_cell) {
+                turn.previous_receipt_hash = Some(prev);
+            }
+        }
+
+        let federation_id = self.executor.local_federation_id;
+
+        if let Some(custom) = custom {
+            // Attach the Custom predicate + threshold-sig witness blob to the
+            // single root action, replacing the Unchecked authorization.
+            if let Some(root) = turn.call_forest.roots.first_mut() {
+                root.action.authorization = Authorization::Custom {
+                    predicate: custom.predicate,
+                };
+                root.action.witness_blobs = vec![WitnessBlob::proof(custom.proof_bytes)];
+                root.hash = [0u8; 32];
+            }
+            turn.call_forest.forest_hash = [0u8; 32];
+        } else {
+            let cclerk = &self.agents[agent_idx].cclerk;
+            sign_call_forest(&mut turn, cclerk, &federation_id);
+        }
+
+        let result = self.executor.execute(&turn, &mut self.ledger);
+        if let TurnResult::Committed { receipt, .. } = &result {
+            self.receipts.push(receipt.clone());
+            self.turns.push(turn.clone());
+        }
+        Ok(result)
+    }
+
+    /// Compute the canonical custom signing message the executor will recompute
+    /// for a `commit_table_update` action carrying the given effects. Committee
+    /// members sign THIS exact message; the signatures are bundled into the
+    /// threshold proof. Mirrors the executor's
+    /// `TurnExecutor::compute_custom_signing_message`, parameterized by the
+    /// actor's current nonce.
+    pub fn custom_commit_signing_message(
+        &self,
+        agent_idx: usize,
+        target_cell: CellId,
+        method: &str,
+        effects: &[Effect],
+        vk_hash: [u8; 32],
+        committee_commitment: [u8; 32],
+    ) -> Result<Vec<u8>, String> {
+        let actor_cell = self
+            .agents
+            .get(agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {agent_idx}"))?
+            .cell_id;
+        let nonce = self
+            .ledger
+            .get(&actor_cell)
+            .map(|c| c.state.nonce())
+            .unwrap_or(0);
+
+        let predicate = dregg_cell::WitnessedPredicate::custom(
+            vk_hash,
+            committee_commitment,
+            dregg_cell::InputRef::SigningMessage,
+            0,
+        );
+
+        // Reconstruct the exact Action the executor will hash. ActionBuilder
+        // with the Custom authorization produces the canonical body.
+        let mut ab = ActionBuilder::new_unchecked_for_tests(target_cell, method, actor_cell);
+        for effect in effects {
+            ab = ab.effect(effect.clone());
+        }
+        let mut action = ab.build();
+        action.authorization = Authorization::Custom {
+            predicate: predicate.clone(),
+        };
+        action.witness_blobs = Vec::new();
+
+        Ok(TurnExecutor::compute_custom_signing_message(
+            &action,
+            &predicate,
+            0,
+            &self.executor.local_federation_id,
+            nonce,
+        ))
+    }
+
+    /// Register a real Ed25519 threshold verifier under `vk_hash`. The verifier
+    /// requires `threshold` distinct valid committee signatures over the
+    /// canonical custom signing message before any `Authorization::Custom`
+    /// commit turn against that `vk_hash` is accepted.
+    pub fn register_threshold_verifier(
+        &mut self,
+        vk_hash: [u8; 32],
+        committee: Vec<[u8; 32]>,
+        threshold: usize,
+    ) {
+        let mut registry = dregg_cell::WitnessedPredicateRegistry::empty();
+        registry.register_custom(
+            vk_hash,
+            std::sync::Arc::new(EdThresholdVerifier::new(vk_hash, committee, threshold)),
+        );
+        self.executor.set_witnessed_registry(registry);
+    }
+
+    /// Sign the canonical custom commit message with a specific agent's
+    /// cipherclerk, returning a `(pubkey[32] ‖ sig[64])` 96-byte record. The
+    /// caller concatenates `threshold` such records into the proof bytes passed
+    /// to [`execute_custom_auth_turn_for_agent`].
+    pub fn sign_custom_commit(
+        &self,
+        signer_agent_idx: usize,
+        message: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let agent = self
+            .agents
+            .get(signer_agent_idx)
+            .ok_or_else(|| format!("invalid agent index: {signer_agent_idx}"))?;
+        let sig = agent.cclerk.sign_bytes(message);
+        let mut out = Vec::with_capacity(96);
+        out.extend_from_slice(&agent.public_key);
+        out.extend_from_slice(&sig.0);
+        Ok(out)
+    }
+
     /// Export a minimal snapshot of runtime state (STARBRIDGE-FOLLOWUP-03
     /// progress on §5.9 / §5.10 / Q4).
     ///
@@ -1382,6 +1678,341 @@ impl DreggRuntime {
              (STARBRIDGE-FOLLOWUP-03 stub; no proving stack changes.)",
             target_height
         ))
+    }
+}
+
+// ============================================================================
+// Starbridge-app cell-programs (multi-agent + Authorization::Custom surface)
+//
+// The subscription + governed-namespace starbridge-apps live in crates that
+// depend on `dregg-app-framework` (axum + tokio(full) + reqwest), which is NOT
+// wasm32-safe. We therefore cannot pull those crates into the wasm cdylib.
+// Instead we re-materialize the *program values* they author from canonical
+// `dregg_cell` types here. The constraint sets below mirror
+// `starbridge_subscription::subscription_program` and
+// `starbridge_governed_namespace::governance_program` EXACTLY — minus the
+// `SenderAuthorized` constraints, which the apps' own executor-level
+// integration tests also strip (they require Merkle-witness bundles that the
+// in-browser harness doesn't carry; see
+// `integration_publish_consume.rs::executor_shape_program` and
+// `integration_propose_vote_commit.rs::stripped_governance_program`). Slot
+// indices, method symbols, monotonic/immutable invariants, and the
+// MonotonicSequence(version) commit caveat are all preserved, so the executor
+// enforces the same real shape end-to-end.
+// ============================================================================
+
+pub mod app_programs {
+    use dregg_cell::program::{
+        CellProgram, SimpleStateConstraint, StateConstraint, TransitionCase, TransitionGuard,
+    };
+    use dregg_cell::{CellState, FieldElement, Permissions};
+    use dregg_turn::action::symbol;
+
+    // ---- subscription slot layout (mirrors starbridge_subscription) ----
+    pub const SUB_SEQ_HEAD_SLOT: u8 = 0;
+    pub const SUB_SEQ_TAIL_SLOT: u8 = 1;
+    pub const SUB_CAPACITY_SLOT: u8 = 2;
+    pub const SUB_PUBLISHERS_ROOT_SLOT: u8 = 3;
+    pub const SUB_CONSUMERS_ROOT_SLOT: u8 = 4;
+    pub const SUB_OWNER_PK_HASH_SLOT: u8 = 5;
+    pub const SUB_MESSAGE_ROOT_SLOT: u8 = 6;
+    pub const SUB_LATEST_PAYLOAD_SLOT: u8 = 7;
+
+    // ---- governed-namespace slot layout (mirrors starbridge_governed_namespace) ----
+    pub const GOV_ROUTE_TABLE_ROOT_SLOT: u8 = 0;
+    pub const GOV_VERSION_SLOT: u8 = 1;
+    pub const GOV_COMMITTEE_ROOT_SLOT: u8 = 2;
+    pub const GOV_THRESHOLD_SLOT: u8 = 3;
+    pub const GOV_DISPUTE_WINDOW_HEIGHT_SLOT: u8 = 4;
+    pub const GOV_PENDING_PROPOSAL_ROOT_SLOT: u8 = 5;
+    pub const GOV_RESERVED_SLOT_6: u8 = 6;
+    pub const GOV_RESERVED_SLOT_7: u8 = 7;
+
+    fn u64_field(value: u64) -> FieldElement {
+        let mut out = [0u8; 32];
+        out[24..32].copy_from_slice(&value.to_be_bytes());
+        out
+    }
+
+    fn slot_changed(index: u8) -> StateConstraint {
+        StateConstraint::AnyOf {
+            variants: vec![SimpleStateConstraint::Not(Box::new(
+                SimpleStateConstraint::Immutable { index },
+            ))],
+        }
+    }
+
+    /// Permissions with every action open. The integration tests relax
+    /// permissions to `AuthRequired::None` so multi-agent turns (a publisher
+    /// or voter that is NOT the cell owner) can apply; the cell-program slot
+    /// caveats remain the load-bearing enforcement. We mirror that here.
+    pub fn open_permissions() -> Permissions {
+        use dregg_cell::AuthRequired::None as N;
+        Permissions {
+            send: N,
+            receive: N,
+            set_state: N,
+            set_permissions: N,
+            set_verification_key: N,
+            increment_nonce: N,
+            delegate: N,
+            access: N,
+        }
+    }
+
+    /// Canonical subscription cell-program (SenderAuthorized stripped, exactly
+    /// as `integration_publish_consume.rs::executor_shape_program`).
+    pub fn subscription_program() -> CellProgram {
+        CellProgram::Cases(vec![
+            TransitionCase {
+                guard: TransitionGuard::Always,
+                constraints: vec![
+                    StateConstraint::Immutable { index: SUB_CAPACITY_SLOT },
+                    StateConstraint::Immutable { index: SUB_OWNER_PK_HASH_SLOT },
+                    StateConstraint::FieldLteField {
+                        left_index: SUB_SEQ_TAIL_SLOT,
+                        right_index: SUB_SEQ_HEAD_SLOT,
+                    },
+                ],
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs { method: symbol("publish") },
+                constraints: vec![
+                    StateConstraint::MonotonicSequence { seq_index: SUB_SEQ_HEAD_SLOT },
+                    StateConstraint::Immutable { index: SUB_SEQ_TAIL_SLOT },
+                    StateConstraint::Immutable { index: SUB_PUBLISHERS_ROOT_SLOT },
+                    StateConstraint::Immutable { index: SUB_CONSUMERS_ROOT_SLOT },
+                    slot_changed(SUB_MESSAGE_ROOT_SLOT),
+                    StateConstraint::FieldGte { index: SUB_MESSAGE_ROOT_SLOT, value: u64_field(1) },
+                ],
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs { method: symbol("consume") },
+                constraints: vec![
+                    StateConstraint::MonotonicSequence { seq_index: SUB_SEQ_TAIL_SLOT },
+                    StateConstraint::Immutable { index: SUB_SEQ_HEAD_SLOT },
+                    StateConstraint::Immutable { index: SUB_MESSAGE_ROOT_SLOT },
+                    StateConstraint::Immutable { index: SUB_LATEST_PAYLOAD_SLOT },
+                    StateConstraint::Immutable { index: SUB_PUBLISHERS_ROOT_SLOT },
+                    StateConstraint::Immutable { index: SUB_CONSUMERS_ROOT_SLOT },
+                ],
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs { method: symbol("grant_publisher") },
+                constraints: vec![
+                    slot_changed(SUB_PUBLISHERS_ROOT_SLOT),
+                    StateConstraint::FieldGte { index: SUB_PUBLISHERS_ROOT_SLOT, value: u64_field(1) },
+                    StateConstraint::Immutable { index: SUB_SEQ_HEAD_SLOT },
+                    StateConstraint::Immutable { index: SUB_SEQ_TAIL_SLOT },
+                    StateConstraint::Immutable { index: SUB_CONSUMERS_ROOT_SLOT },
+                    StateConstraint::Immutable { index: SUB_MESSAGE_ROOT_SLOT },
+                    StateConstraint::Immutable { index: SUB_LATEST_PAYLOAD_SLOT },
+                ],
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs { method: symbol("grant_consumer") },
+                constraints: vec![
+                    slot_changed(SUB_CONSUMERS_ROOT_SLOT),
+                    StateConstraint::FieldGte { index: SUB_CONSUMERS_ROOT_SLOT, value: u64_field(1) },
+                    StateConstraint::Immutable { index: SUB_SEQ_HEAD_SLOT },
+                    StateConstraint::Immutable { index: SUB_SEQ_TAIL_SLOT },
+                    StateConstraint::Immutable { index: SUB_PUBLISHERS_ROOT_SLOT },
+                    StateConstraint::Immutable { index: SUB_MESSAGE_ROOT_SLOT },
+                    StateConstraint::Immutable { index: SUB_LATEST_PAYLOAD_SLOT },
+                ],
+            },
+        ])
+    }
+
+    /// Build the initial subscription cell state. `capacity` immutable; head/tail
+    /// zero; owner_pk_hash set so the `Immutable` invariant has a concrete anchor.
+    pub fn subscription_initial_state(owner_pk_hash: FieldElement, capacity: u64) -> CellState {
+        let mut state = CellState::new(1_000_000);
+        state.fields[SUB_CAPACITY_SLOT as usize] = u64_field(capacity);
+        state.fields[SUB_OWNER_PK_HASH_SLOT as usize] = owner_pk_hash;
+        state
+    }
+
+    /// Canonical governed-namespace cell-program (SenderAuthorized stripped,
+    /// exactly as `integration_propose_vote_commit.rs::stripped_governance_program`).
+    pub fn governance_program() -> CellProgram {
+        CellProgram::Cases(vec![
+            TransitionCase {
+                guard: TransitionGuard::Always,
+                constraints: vec![
+                    StateConstraint::Immutable { index: GOV_COMMITTEE_ROOT_SLOT },
+                    StateConstraint::Immutable { index: GOV_THRESHOLD_SLOT },
+                    StateConstraint::Monotonic { index: GOV_VERSION_SLOT },
+                    StateConstraint::Monotonic { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                    StateConstraint::Immutable { index: GOV_RESERVED_SLOT_6 },
+                    StateConstraint::Immutable { index: GOV_RESERVED_SLOT_7 },
+                ],
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs { method: symbol("propose_table_update") },
+                constraints: vec![
+                    StateConstraint::Immutable { index: GOV_ROUTE_TABLE_ROOT_SLOT },
+                    StateConstraint::Immutable { index: GOV_VERSION_SLOT },
+                    StateConstraint::Monotonic { index: GOV_PENDING_PROPOSAL_ROOT_SLOT },
+                    StateConstraint::Monotonic { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                ],
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs { method: symbol("vote_on_proposal") },
+                constraints: vec![
+                    StateConstraint::Immutable { index: GOV_ROUTE_TABLE_ROOT_SLOT },
+                    StateConstraint::Immutable { index: GOV_VERSION_SLOT },
+                    StateConstraint::Immutable { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                ],
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs { method: symbol("commit_table_update") },
+                constraints: vec![
+                    StateConstraint::MonotonicSequence { seq_index: GOV_VERSION_SLOT },
+                    StateConstraint::Immutable { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                ],
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs { method: symbol("register_service") },
+                constraints: vec![
+                    StateConstraint::Immutable { index: GOV_ROUTE_TABLE_ROOT_SLOT },
+                    StateConstraint::Immutable { index: GOV_VERSION_SLOT },
+                    StateConstraint::Immutable { index: GOV_PENDING_PROPOSAL_ROOT_SLOT },
+                    StateConstraint::Immutable { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                ],
+            },
+        ])
+    }
+
+    /// Build the initial governed-namespace cell state, mirroring
+    /// `integration_propose_vote_commit.rs::init_namespace_cell`.
+    pub fn governance_initial_state(
+        committee_root: FieldElement,
+        threshold: u64,
+        initial_route_table_root: FieldElement,
+    ) -> CellState {
+        let mut state = CellState::new(1_000_000);
+        state.fields[GOV_ROUTE_TABLE_ROOT_SLOT as usize] = initial_route_table_root;
+        state.fields[GOV_VERSION_SLOT as usize] = u64_field(0);
+        state.fields[GOV_COMMITTEE_ROOT_SLOT as usize] = committee_root;
+        state.fields[GOV_THRESHOLD_SLOT as usize] = u64_field(threshold);
+        state.fields[GOV_DISPUTE_WINDOW_HEIGHT_SLOT as usize] = u64_field(0);
+        state.fields[GOV_PENDING_PROPOSAL_ROOT_SLOT as usize] = [0u8; 32];
+        state
+    }
+}
+
+/// A real Ed25519 threshold-signature verifier for the governed-namespace
+/// `commit_table_update` flow's `Authorization::Custom`.
+///
+/// This is NOT a stub: the `proof_bytes` carry `t` concatenated 96-byte records
+/// `(committee_member_pubkey[32] ‖ ed25519_signature[64])`; the verifier checks
+/// that there are at least `threshold` records, that every signature is a valid
+/// Ed25519 signature (via the canonical `dregg_types::verify`) over the exact
+/// canonical custom signing message the executor recomputes, and that all
+/// signing members are distinct and belong to the committee. Only then does it
+/// return `Ok(())`, and only then does the executor commit the atomic route-table
+/// swap. This is the in-browser realization of
+/// `dregg_dfa::ThresholdVerifier::verify` over a real committee.
+pub struct EdThresholdVerifier {
+    vk_hash: [u8; 32],
+    /// Committee member public keys; a valid signature must come from one of these.
+    committee: Vec<[u8; 32]>,
+    /// Number of distinct committee signatures required.
+    threshold: usize,
+}
+
+impl EdThresholdVerifier {
+    pub fn new(vk_hash: [u8; 32], committee: Vec<[u8; 32]>, threshold: usize) -> Self {
+        Self {
+            vk_hash,
+            committee,
+            threshold,
+        }
+    }
+}
+
+impl dregg_cell::WitnessedPredicateVerifier for EdThresholdVerifier {
+    fn name(&self) -> &'static str {
+        "wasm-ed25519-threshold"
+    }
+    fn kind(&self) -> dregg_cell::WitnessedPredicateKind {
+        dregg_cell::WitnessedPredicateKind::Custom {
+            vk_hash: self.vk_hash,
+        }
+    }
+    fn verify(
+        &self,
+        _commitment: &[u8; 32],
+        input: &dregg_cell::PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), dregg_cell::WitnessedPredicateError> {
+        use dregg_cell::WitnessedPredicateError as E;
+        use dregg_types::{PublicKey, Signature, verify};
+
+        let message = match input {
+            dregg_cell::PredicateInput::SigningMessage(bytes) => *bytes,
+            _ => {
+                return Err(E::InputShapeMismatch {
+                    kind_name: "wasm-ed25519-threshold",
+                    expected: "SigningMessage",
+                    actual: "other",
+                });
+            }
+        };
+
+        // Each record is pubkey[32] ‖ sig[64] = 96 bytes.
+        const REC: usize = 96;
+        if proof_bytes.is_empty() || proof_bytes.len() % REC != 0 {
+            return Err(E::Rejected {
+                kind_name: "wasm-ed25519-threshold",
+                reason: format!(
+                    "proof bytes not a multiple of {REC} (got {})",
+                    proof_bytes.len()
+                ),
+            });
+        }
+
+        let mut seen: Vec<[u8; 32]> = Vec::new();
+        for chunk in proof_bytes.chunks_exact(REC) {
+            let mut pk = [0u8; 32];
+            pk.copy_from_slice(&chunk[..32]);
+            let mut sig = [0u8; 64];
+            sig.copy_from_slice(&chunk[32..96]);
+
+            if !self.committee.contains(&pk) {
+                return Err(E::Rejected {
+                    kind_name: "wasm-ed25519-threshold",
+                    reason: "signer is not a committee member".to_string(),
+                });
+            }
+            if seen.contains(&pk) {
+                return Err(E::Rejected {
+                    kind_name: "wasm-ed25519-threshold",
+                    reason: "duplicate committee signer".to_string(),
+                });
+            }
+            if !verify(&PublicKey(pk), message, &Signature(sig)) {
+                return Err(E::Rejected {
+                    kind_name: "wasm-ed25519-threshold",
+                    reason: "invalid Ed25519 signature over the canonical custom message"
+                        .to_string(),
+                });
+            }
+            seen.push(pk);
+        }
+
+        if seen.len() < self.threshold {
+            return Err(E::Rejected {
+                kind_name: "wasm-ed25519-threshold",
+                reason: format!(
+                    "threshold not met: {} valid distinct committee signatures, need {}",
+                    seen.len(),
+                    self.threshold
+                ),
+            });
+        }
+        Ok(())
     }
 }
 

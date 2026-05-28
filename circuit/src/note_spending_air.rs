@@ -97,8 +97,10 @@ use crate::poseidon2::{hash_4_to_1, hash_many};
 use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the note spending AIR.
-/// 19 columns: 5 note preimage + commitment + 8 key limbs + nullifier + randomness + is_merkle + 2 unused.
-pub const NOTE_SPENDING_WIDTH: usize = 19;
+/// 20 columns: 5 note preimage + commitment + 8 key limbs + nullifier +
+/// randomness + is_merkle + nullifier_intermediate + destination_federation +
+/// value_hi (the 30-bit-trunc fix high limb).
+pub const NOTE_SPENDING_WIDTH: usize = 20;
 
 /// Number of BabyBear limbs for the spending key (248 bits of security).
 pub const SPENDING_KEY_LIMBS: usize = 8;
@@ -130,6 +132,18 @@ pub mod col {
     /// single target federation. For non-bridge spends the prover sets this
     /// (and pi[4]) to BabyBear::ZERO.
     pub const DESTINATION_FEDERATION: usize = 18;
+    /// High limb of the note value (bits 30..64 of the claimed u64 amount),
+    /// commitment row only. Bound to `pi::VALUE_HI` by a boundary constraint.
+    ///
+    /// The 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5): `col::VALUE`
+    /// (pi[2]) holds the low-30-bit limb that participates in the note
+    /// commitment; this column holds the upper 34 bits so the proof binds the
+    /// FULL u64 amount, not just the low 30 bits. For a u64 amount `v`, the
+    /// prover sets `VALUE = v & ((1<<30)-1)` and `VALUE_HI = v >> 30`. Two
+    /// amounts differing above bit 30 produce distinct `VALUE_HI` and thus
+    /// distinct proofs. For amounts that fit in 30 bits (and all pre-fix
+    /// callers using the BabyBear-typed API), `VALUE_HI == 0`.
+    pub const VALUE_HI: usize = 19;
 }
 
 /// Column indices for Merkle level rows.
@@ -172,6 +186,14 @@ pub mod pi {
     /// boundary constraint. This prevents replay of a spending proof against a
     /// federation the prover did not commit to.
     pub const DESTINATION_FEDERATION: usize = 4;
+    /// The high limb of the note value (bits 30..64 of the claimed u64 amount).
+    ///
+    /// 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5): `pi[2]` (VALUE) holds
+    /// the low 30 bits (the felt that participates in the commitment); this
+    /// slot holds the upper 34 bits. Bound to `col::VALUE_HI` by a boundary
+    /// constraint at row 0 so the proof binds the FULL u64 amount. For amounts
+    /// ≤ 2^30 (and all BabyBear-typed callers), this is `BabyBear::ZERO`.
+    pub const VALUE_HI: usize = 5;
 }
 
 /// Witness for a note spending proof.

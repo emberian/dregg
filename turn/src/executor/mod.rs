@@ -376,6 +376,13 @@ pub use costs::ComputronCosts;
 mod migration;
 pub use migration::{CellMigrationManager, MigrationCancelReason, MigrationError, MigrationState};
 
+/// Real STARK-backed MerkleMembership predicate verifier (SenderAuthorized AIR
+/// teeth). Lives here (not in `cell/`) because it depends on `dregg-circuit`.
+pub mod membership_verifier;
+pub use membership_verifier::{
+    MerkleMembershipStarkVerifier, registry_with_real_sender_membership,
+};
+
 /// The turn executor: applies turns to a ledger atomically.
 mod effect_vm_bridge;
 use effect_vm_bridge::convert_turn_effects_to_vm;

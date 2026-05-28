@@ -499,6 +499,52 @@ export async function createInMemoryRuntime({ wasm, signals }) {
   });
   function getTraceEvents() { return traceEventsSignal; }
 
+  // --- Starbridge-app flows: multi-agent + Authorization::Custom -----------
+  // Thin passthroughs to the new wasm app-cell surface (runtime.rs +
+  // bindings.rs). These drive the canonical TurnExecutor for the subscription
+  // grant flow and the governed-namespace propose/vote/commit flow. Sim-only;
+  // always route through wasm directly (the SDK has no equivalent yet).
+  async function installAppProgram(cellIdHex, programKind, config = {}) {
+    const r = wasm.install_app_program(handle, String(cellIdHex), String(programKind), JSON.stringify(config));
+    bump();
+    fire('app-program-installed', { cellIdHex, programKind });
+    return r;
+  }
+  async function executeAppTurn(agentIndex, targetCellIdHex, method, actions, fee = 1_000_000) {
+    const r = wasm.execute_app_turn(handle, Number(agentIndex), String(targetCellIdHex), String(method), JSON.stringify(actions), BigInt(fee));
+    bump();
+    fire('app-turn-executed', { agentIndex, targetCellIdHex, method, result: r });
+    return r;
+  }
+  function registerThresholdVerifier(vkHashHex, committeePubkeys, threshold) {
+    const r = wasm.register_threshold_verifier(handle, String(vkHashHex), JSON.stringify(committeePubkeys), Number(threshold) >>> 0);
+    bump();
+    return r;
+  }
+  function customCommitSigningMessage(agentIndex, targetCellIdHex, method, actions, vkHashHex, committeeCommitmentHex) {
+    return wasm.custom_commit_signing_message(handle, Number(agentIndex), String(targetCellIdHex), String(method), JSON.stringify(actions), String(vkHashHex), String(committeeCommitmentHex));
+  }
+  function signCustomCommit(signerAgentIndex, messageHex) {
+    return wasm.sign_custom_commit(handle, Number(signerAgentIndex), String(messageHex));
+  }
+  async function executeCustomAuthTurn(agentIndex, targetCellIdHex, method, actions, vkHashHex, committeeCommitmentHex, proofHex, fee = 1_000_000) {
+    const r = wasm.execute_custom_auth_turn(handle, Number(agentIndex), String(targetCellIdHex), String(method), JSON.stringify(actions), String(vkHashHex), String(committeeCommitmentHex), String(proofHex), BigInt(fee));
+    bump();
+    fire('app-custom-turn-executed', { agentIndex, targetCellIdHex, method, result: r });
+    return r;
+  }
+  function readCellField(cellIdHex, index) {
+    return wasm.read_cell_field(handle, String(cellIdHex), Number(index));
+  }
+  function grantReachCapability(agentIndex, targetCellIdHex) {
+    const r = wasm.grant_reach_capability(handle, Number(agentIndex), String(targetCellIdHex));
+    bump();
+    return r;
+  }
+  function routeTableCommitment(routes) {
+    return wasm.route_table_commitment(JSON.stringify(routes));
+  }
+
   // --- Peer transition decode -----------------------------------------------
   // Non-cached; called per-paste. Bytes is a Uint8Array.
   function decodePeerTransition(bytes) {
@@ -689,6 +735,17 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     createIntent,
     proposeBlock,
     simulateConsensusRound,
+
+    // Starbridge-app flows (multi-agent + Authorization::Custom)
+    installAppProgram,
+    executeAppTurn,
+    registerThresholdVerifier,
+    customCommitSigningMessage,
+    signCustomCommit,
+    executeCustomAuthTurn,
+    readCellField,
+    routeTableCommitment,
+    grantReachCapability,
 
     destroy,
 

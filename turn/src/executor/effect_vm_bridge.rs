@@ -32,13 +32,29 @@ pub(super) fn convert_turn_effects_to_vm(
         // 4 bytes (P1-2 in AUDIT-turn-executor.md). Many distinct effects
         // collapse to the same circuit-side identifier; the proof binds to
         // a coarse equivalence class rather than the specific effect.
-        // The coordinated fix expands each per-effect PI slot (nullifier,
-        // commitment, message_hash, pipeline_id, etc.) to 8 BabyBears via
-        // `bytes32_to_babybear`, matching the executor's `compute_effects_hash`
-        // which already hashes the full bytes. This is purely a circuit
-        // PI-layout change on the runtime side, but the AIR's
-        // domain-specific constraints over these slots must be widened in
-        // tandem -- a single coordinated landing.
+        //
+        // SCOPED OUT (AIR-soundness lane, 2026-05-28): widening these to a
+        // faithful 8-limb encoding is a genuinely cross-surface coordinated
+        // change and is NOT safe to land from this lane alone. It requires,
+        // in lockstep:
+        //   1. the `dregg_circuit::effect_vm::Effect` enum variants to carry
+        //      8-limb hashes instead of single felts (circuit crate);
+        //   2. the EffectVM AIR constraints + `compute_effects_hash` + the PI
+        //      layout to consume the wider columns (circuit crate);
+        //   3. THIS projector AND the parallel SDK projector
+        //      (`sdk/src/cipherclerk.rs::convert_*`) — they MUST agree byte-
+        //      for-byte or the effects-hash diverges and no proof verifies;
+        //   4. the differential invariant in
+        //      `protocol-tests/.../effect_vm_differential.rs`, which asserts
+        //      the executor and SDK projectors produce identical VM effects.
+        // Items 3-4 live outside this lane's write surface (sdk/, protocol-
+        // tests/). Changing only the executor side would desync the two
+        // projectors and break every bridge proof, so it is deferred to a
+        // single coordinated landing rather than partially applied here.
+        // (The full-u64 amount truncation, by contrast, WAS closed: the VM
+        // effect carries `value_full` bound via 4×16-bit PI limbs +
+        // effects_hash, and the note-spending spend proof now binds the full
+        // u64 via the VALUE_HI column — see apply.rs + dsl::note_spending.)
         fn hash_to_bb(h: &[u8; 32]) -> BabyBear {
             let val_u32 = u32::from_le_bytes([h[0], h[1], h[2], h[3]]);
             BabyBear::new(val_u32 % dregg_circuit::field::BABYBEAR_P)

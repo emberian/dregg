@@ -1,279 +1,253 @@
 /**
- * Blocklace Simulation Section — simulate N nodes producing blocks,
- * visualize the DAG, observe tau ordering and finality.
+ * Federation Consensus Section.
+ *
+ * NO in-browser simulation. This drives the canonical wasm runtime's real
+ * `dregg_federation` consensus: a real BFT committee (threshold n − ⌊n/3⌋),
+ * real BLAKE3 block hash-chaining (each block folds in its predecessor's
+ * hash), real quorum certificates, and the ledger's real Merkle root captured
+ * at block time. Every value rendered here comes back from the wasm runtime —
+ * `create_federation` / `propose_block` / `list_federation_blocks` /
+ * `get_federation_block` — exactly the surface the Explorer and Starbridge
+ * <dregg-block-dag> inspector read.
+ *
+ * The full Cordial-Miners blocklace DAG (multi-proposer, equivocation
+ * detection) runs in the `dregg-node`; explore it live in the Explorer.
  */
 
-import { state, notifyStateChange } from '../playground.js';
+import { ensureStudioRuntime, deepLinkBanner } from '../studio-embed.js';
 
-const NODE_COLORS = ['#6ba3c7', '#d99a3f', '#9bb87a', '#c77ab8', '#7ac7b8'];
+const NODE_COLORS = ['#6ba3c7', '#d99a3f', '#9bb87a', '#c77ab8', '#7ac7b8', '#b89b6b', '#9a7ac7'];
 
-let simulation = null;
-let animationFrame = null;
+let ctx = null;          // { runtime, wasm }
+let fed = null;          // { fed_index, num_nodes, threshold, max_faults, name }
+let autoTimer = null;
 
-export function initBlocklaceSim(wasm) {
+export function initBlocklaceSim() {
   const section = document.getElementById('section-blocklace-sim');
   if (!section) return;
 
   section.innerHTML = `
     <div class="pg-section__header">
-      <h2>Blocklace Simulator</h2>
-      <p>Simulate a Cordial Miners consensus with N nodes. Watch blocks form a DAG, observe finality progression, detect equivocators.</p>
+      <h2>Federation Consensus</h2>
+      ${deepLinkBanner(
+        [{ label: '<dregg-block-dag>', uri: 'dregg://block-dag/0' }],
+        'real finalized blocks with cryptographic prev_hash linkage',
+      )}
+      <p>
+        Drive the wasm runtime's real <code>dregg_federation</code> committee. Propose blocks and
+        watch them finalize with a real quorum certificate (threshold = n − ⌊n/3⌋) and real
+        BLAKE3 hash-chaining. Every block, hash, and root below comes straight from the wasm —
+        no JavaScript simulation. The full multi-proposer Cordial-Miners blocklace runs in the
+        node; explore it live in the <a href="/explorer/" style="color:var(--accent-bright);">Explorer</a>.
+      </p>
     </div>
 
     <div class="bsim-controls">
       <div class="bsim-controls__row">
         <label class="bsim-label">
-          Nodes
-          <input type="number" id="bsim-node-count" value="3" min="2" max="7" class="bsim-input bsim-input--small">
+          Committee size
+          <input type="number" id="bsim-node-count" value="4" min="2" max="7" class="bsim-input bsim-input--small">
         </label>
         <label class="bsim-label">
-          Block Rate (ms)
-          <input type="number" id="bsim-rate" value="1000" min="200" max="5000" step="100" class="bsim-input bsim-input--small">
-        </label>
-        <label class="bsim-label">
-          Network Delay (ms)
-          <input type="number" id="bsim-delay" value="100" min="0" max="2000" step="50" class="bsim-input bsim-input--small">
-        </label>
-        <label class="bsim-label">
-          <input type="checkbox" id="bsim-equivocate">
-          Inject Equivocator
+          Auto rate (ms)
+          <input type="number" id="bsim-rate" value="900" min="200" max="5000" step="100" class="bsim-input bsim-input--small">
         </label>
       </div>
       <div class="bsim-controls__actions">
-        <button class="pg-btn pg-btn--accent" id="bsim-start">Start</button>
+        <button class="pg-btn pg-btn--accent" id="bsim-propose">Propose Block</button>
+        <button class="pg-btn pg-btn--ghost" id="bsim-auto">Auto</button>
         <button class="pg-btn pg-btn--ghost" id="bsim-stop" disabled>Stop</button>
-        <button class="pg-btn pg-btn--ghost" id="bsim-step">Step</button>
-        <button class="pg-btn pg-btn--ghost" id="bsim-reset">Reset</button>
+        <button class="pg-btn pg-btn--ghost" id="bsim-reset">Reset committee</button>
       </div>
     </div>
 
     <div class="bsim-stats" id="bsim-stats">
       <div class="bsim-stat"><span class="bsim-stat__label">Blocks</span><span class="bsim-stat__value" id="bsim-block-count">0</span></div>
-      <div class="bsim-stat"><span class="bsim-stat__label">Final</span><span class="bsim-stat__value" id="bsim-final-count">0</span></div>
-      <div class="bsim-stat"><span class="bsim-stat__label">Wave</span><span class="bsim-stat__value" id="bsim-wave">0</span></div>
-      <div class="bsim-stat"><span class="bsim-stat__label">Equivocations</span><span class="bsim-stat__value" id="bsim-equivocations">0</span></div>
+      <div class="bsim-stat"><span class="bsim-stat__label">Height</span><span class="bsim-stat__value" id="bsim-height">0</span></div>
+      <div class="bsim-stat"><span class="bsim-stat__label">Quorum</span><span class="bsim-stat__value" id="bsim-quorum">--</span></div>
+      <div class="bsim-stat"><span class="bsim-stat__label">Faults tol.</span><span class="bsim-stat__value" id="bsim-faults">--</span></div>
     </div>
 
     <div class="bsim-dag" id="bsim-dag">
-      <div class="pg-empty">Press Start or Step to begin the simulation.</div>
+      <div class="pg-empty">Booting the wasm runtime…</div>
     </div>
 
     <div class="bsim-log" id="bsim-log">
-      <div class="bsim-log__header">Event Log</div>
+      <div class="bsim-log__header">Finalized blocks (real <code>block_hash</code> ← <code>prev_hash</code>)</div>
       <div class="bsim-log__body" id="bsim-log-body"></div>
     </div>
   `;
 
-  wireSimControls();
+  document.getElementById('bsim-propose').addEventListener('click', proposeBlock);
+  document.getElementById('bsim-auto').addEventListener('click', startAuto);
+  document.getElementById('bsim-stop').addEventListener('click', stopAuto);
+  document.getElementById('bsim-reset').addEventListener('click', () => { stopAuto(); resetCommittee(); });
+
+  // Boot the shared runtime and create the committee.
+  ensureStudioRuntime()
+    .then(({ runtime, wasm }) => { ctx = { runtime, wasm }; return resetCommittee(); })
+    .catch((e) => {
+      const dag = document.getElementById('bsim-dag');
+      if (dag) dag.innerHTML = `<div class="pg-empty" style="color:var(--danger);">runtime unavailable: ${escapeHtml(String(e && e.message || e))}</div>`;
+    });
 }
 
-function wireSimControls() {
-  document.getElementById('bsim-start').addEventListener('click', startSimulation);
-  document.getElementById('bsim-stop').addEventListener('click', stopSimulation);
-  document.getElementById('bsim-step').addEventListener('click', stepSimulation);
-  document.getElementById('bsim-reset').addEventListener('click', resetSimulation);
+async function resetCommittee() {
+  if (!ctx) return;
+  const n = clampInt(document.getElementById('bsim-node-count')?.value, 2, 7, 4);
+  try {
+    // A real committee: create_federation builds a canonical Federation from a
+    // deterministic Ed25519 committee with BFT threshold n − ⌊n/3⌋.
+    const result = await ctx.runtime.createFederation(`consensus-demo-${n}-${heightSalt()}`, n);
+    fed = {
+      fed_index: Number(result?.fed_index ?? 0),
+      num_nodes: Number(result?.num_nodes ?? n),
+      threshold: Number(result?.threshold ?? 0),
+      max_faults: Number(result?.max_faults ?? 0),
+    };
+    document.getElementById('bsim-quorum').textContent = `${fed.threshold}/${fed.num_nodes}`;
+    document.getElementById('bsim-faults').textContent = String(fed.max_faults);
+    render();
+  } catch (e) {
+    const dag = document.getElementById('bsim-dag');
+    if (dag) dag.innerHTML = `<div class="pg-empty" style="color:var(--danger);">create_federation failed: ${escapeHtml(String(e && e.message || e))}</div>`;
+  }
 }
 
-function createSimulation() {
-  const nodeCount = parseInt(document.getElementById('bsim-node-count').value) || 3;
-  const rate = parseInt(document.getElementById('bsim-rate').value) || 1000;
-  const delay = parseInt(document.getElementById('bsim-delay').value) || 100;
-  const equivocate = document.getElementById('bsim-equivocate').checked;
-
-  return {
-    nodeCount,
-    rate,
-    delay,
-    equivocate,
-    blocks: [],
-    nodes: Array.from({ length: nodeCount }, (_, i) => ({
-      id: i,
-      height: 0,
-      tip: null,
-      seen: new Set(),
-    })),
-    time: 0,
-    wave: 0,
-    finalCount: 0,
-    equivocations: 0,
-    log: [],
-  };
+async function proposeBlock() {
+  if (!ctx || !fed) return;
+  // The revocation target is a real input to the canonical consensus round.
+  // (A random 32-byte token id — a genuine input, not fabricated output.)
+  const tokenId = randomHex(32);
+  try {
+    const result = await ctx.runtime.proposeBlock(fed.fed_index, [tokenId]);
+    if (!result || result.finalized === false) {
+      addLogRaw(`<span style="color:var(--danger);">round did not finalize (quorum ${fed.threshold}/${fed.num_nodes} not reached)</span>`);
+      return;
+    }
+    render();
+  } catch (e) {
+    addLogRaw(`<span style="color:var(--danger);">propose_block failed: ${escapeHtml(String(e && e.message || e))}</span>`);
+  }
 }
 
-function startSimulation() {
-  if (!simulation) simulation = createSimulation();
-
-  document.getElementById('bsim-start').disabled = true;
+function startAuto() {
+  if (autoTimer || !fed) return;
+  document.getElementById('bsim-auto').disabled = true;
   document.getElementById('bsim-stop').disabled = false;
-
-  const tick = () => {
-    stepSimulation();
-    animationFrame = setTimeout(tick, simulation.rate);
-  };
-  tick();
+  const rate = clampInt(document.getElementById('bsim-rate')?.value, 200, 5000, 900);
+  const tick = async () => { await proposeBlock(); if (autoTimer) autoTimer = setTimeout(tick, rate); };
+  autoTimer = setTimeout(tick, 0);
 }
 
-function stopSimulation() {
-  if (animationFrame) {
-    clearTimeout(animationFrame);
-    animationFrame = null;
-  }
-  document.getElementById('bsim-start').disabled = false;
-  document.getElementById('bsim-stop').disabled = true;
+function stopAuto() {
+  if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+  const a = document.getElementById('bsim-auto'); if (a) a.disabled = false;
+  const s = document.getElementById('bsim-stop'); if (s) s.disabled = true;
 }
 
-function stepSimulation() {
-  if (!simulation) simulation = createSimulation();
-
-  // Pick a random node to produce a block
-  const creatorIdx = Math.floor(Math.random() * simulation.nodeCount);
-  const creator = simulation.nodes[creatorIdx];
-
-  // Build predecessors (blocks this node has seen from others)
-  const predecessors = [];
-  simulation.nodes.forEach((node, idx) => {
-    if (idx !== creatorIdx && node.tip !== null) {
-      predecessors.push(node.tip);
-    }
-  });
-
-  // Create block
-  const blockId = simulation.blocks.length;
-  const block = {
-    id: blockId,
-    creator: creatorIdx,
-    height: creator.height,
-    predecessors: predecessors.map(b => b.id),
-    timestamp: simulation.time,
-    hash: Math.floor(Math.random() * 0xFFFFFFFF).toString(16).padStart(8, '0'),
-    isEquivocator: false,
-    isFinal: false,
-    wave: simulation.wave,
-    signatures: 0,
-  };
-
-  // Check for equivocation injection
-  if (simulation.equivocate && creatorIdx === 0 && simulation.blocks.length > 0 && Math.random() < 0.1) {
-    block.isEquivocator = true;
-    simulation.equivocations++;
-    addLog(`Node ${creatorIdx} EQUIVOCATED at height ${block.height}`, 'danger');
+/** Read the real finalized chain from wasm and render it. */
+function render() {
+  if (!ctx || !fed) return;
+  let blocks = [];
+  try {
+    blocks = ctx.wasm.list_federation_blocks(ctx.runtime._handle, fed.fed_index) || [];
+  } catch (e) {
+    const dag = document.getElementById('bsim-dag');
+    if (dag) dag.innerHTML = `<div class="pg-empty" style="color:var(--danger);">list_federation_blocks failed: ${escapeHtml(String(e && e.message || e))}</div>`;
+    return;
   }
 
-  // Count signatures (nodes that have seen previous blocks from this creator)
-  block.signatures = Math.min(simulation.nodeCount, 1 + predecessors.length);
+  document.getElementById('bsim-block-count').textContent = String(blocks.length);
+  document.getElementById('bsim-height').textContent = String(blocks.length ? blocks[blocks.length - 1].height : 0);
 
-  // Check finality (2f+1 threshold)
-  const threshold = Math.floor((simulation.nodeCount * 2) / 3) + 1;
-  if (block.signatures >= threshold) {
-    block.isFinal = true;
-    simulation.finalCount++;
-  }
-
-  simulation.blocks.push(block);
-  creator.height++;
-  creator.tip = block;
-
-  // Propagate to other nodes (with delay simulation)
-  simulation.nodes.forEach((node, idx) => {
-    if (idx !== creatorIdx) {
-      node.seen.add(blockId);
-    }
-  });
-
-  // Advance time and wave
-  simulation.time += simulation.rate;
-  if (simulation.blocks.length % simulation.nodeCount === 0) {
-    simulation.wave++;
-  }
-
-  addLog(`Node ${creatorIdx} produced block #${blockId} (h=${block.height}, sigs=${block.signatures}${block.isFinal ? ', FINAL' : ''})`, block.isFinal ? 'success' : 'info');
-
-  renderSimState();
+  renderDag(blocks);
+  renderLog(blocks);
 }
 
-function resetSimulation() {
-  stopSimulation();
-  simulation = null;
-  document.getElementById('bsim-dag').innerHTML = '<div class="pg-empty">Press Start or Step to begin the simulation.</div>';
-  document.getElementById('bsim-log-body').innerHTML = '';
-  document.getElementById('bsim-block-count').textContent = '0';
-  document.getElementById('bsim-final-count').textContent = '0';
-  document.getElementById('bsim-wave').textContent = '0';
-  document.getElementById('bsim-equivocations').textContent = '0';
-}
-
-function renderSimState() {
-  if (!simulation) return;
-
-  // Update stats
-  document.getElementById('bsim-block-count').textContent = simulation.blocks.length;
-  document.getElementById('bsim-final-count').textContent = simulation.finalCount;
-  document.getElementById('bsim-wave').textContent = simulation.wave;
-  document.getElementById('bsim-equivocations').textContent = simulation.equivocations;
-
-  // Render DAG as SVG
-  renderDag();
-}
-
-function renderDag() {
+function renderDag(blocks) {
   const container = document.getElementById('bsim-dag');
-  if (!simulation || !simulation.blocks.length) return;
-
-  const width = container.clientWidth || 600;
-  const blocks = simulation.blocks;
-  const maxHeight = Math.max(...blocks.map(b => b.height));
-  const svgHeight = Math.max(300, (maxHeight + 2) * 50);
-
-  // Position nodes
-  const positions = {};
-  blocks.forEach(block => {
-    const x = 60 + (block.creator * (width - 120) / Math.max(simulation.nodeCount - 1, 1));
-    const y = svgHeight - 40 - block.height * 45;
-    positions[block.id] = { x, y };
-  });
+  if (!container) return;
+  if (!blocks.length) {
+    container.innerHTML = '<div class="pg-empty">Propose a block to finalize the genesis-most block (links to all-zeros).</div>';
+    return;
+  }
+  const width = container.clientWidth || 640;
+  const rowH = 46;
+  const svgHeight = Math.max(120, blocks.length * rowH + 40);
+  const cx = Math.min(width / 2, 320);
 
   let svg = `<svg width="${width}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">`;
+  const pos = (i) => ({ x: cx, y: 24 + i * rowH });
 
-  // Edges
-  blocks.forEach(block => {
-    const to = positions[block.id];
-    block.predecessors.forEach(predId => {
-      const from = positions[predId];
-      if (from && to) {
-        svg += `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="rgba(232,224,208,0.15)" stroke-width="1"/>`;
-      }
-    });
-  });
+  // prev_hash edges (real cryptographic linkage)
+  for (let i = 1; i < blocks.length; i++) {
+    const a = pos(i - 1), b = pos(i);
+    svg += `<line x1="${a.x}" y1="${a.y + 10}" x2="${b.x}" y2="${b.y - 10}" stroke="rgba(232,224,208,0.25)" stroke-width="1.5"/>`;
+  }
+  // Genesis link to all-zeros
+  const g = pos(0);
+  svg += `<text x="${cx + 26}" y="${g.y - 14}" font-family="'JetBrains Mono',monospace" font-size="8" fill="rgba(232,224,208,0.4)">prev = 0x000…000 (genesis)</text>`;
 
-  // Nodes
-  blocks.forEach(block => {
-    const pos = positions[block.id];
-    const color = block.isEquivocator ? '#d4685c' : NODE_COLORS[block.creator % NODE_COLORS.length];
-    const r = block.isFinal ? 9 : 6;
-
-    if (block.isFinal) {
-      svg += `<circle cx="${pos.x}" cy="${pos.y}" r="${r + 4}" fill="none" stroke="${color}" stroke-width="1" opacity="0.3"/>`;
-    }
-    svg += `<circle cx="${pos.x}" cy="${pos.y}" r="${r}" fill="${color}" opacity="${block.isFinal ? 1 : 0.6}"/>`;
-  });
-
-  // Creator labels at top
-  simulation.nodes.forEach((node, idx) => {
-    const x = 60 + (idx * (width - 120) / Math.max(simulation.nodeCount - 1, 1));
-    svg += `<text x="${x}" y="20" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="9" fill="${NODE_COLORS[idx]}">Node ${idx}</text>`;
+  blocks.forEach((b, i) => {
+    const p = pos(i);
+    const color = NODE_COLORS[(Number(b.height) - 1) % NODE_COLORS.length] || NODE_COLORS[0];
+    svg += `<circle cx="${p.x}" cy="${p.y}" r="11" fill="none" stroke="${color}" stroke-width="1" opacity="0.4"/>`;
+    svg += `<circle cx="${p.x}" cy="${p.y}" r="7" fill="${color}"/>`;
+    svg += `<text x="${p.x - 22}" y="${p.y + 3}" text-anchor="end" font-family="'JetBrains Mono',monospace" font-size="9" fill="var(--text-dim)">h=${b.height}</text>`;
+    svg += `<text x="${p.x + 22}" y="${p.y + 3}" font-family="'JetBrains Mono',monospace" font-size="9" fill="var(--text-dim)">${shortHash(b.block_hash)}</text>`;
   });
 
   svg += `</svg>`;
   container.innerHTML = svg;
 }
 
-function addLog(message, type = 'info') {
-  if (!simulation) return;
-  simulation.log.push({ message, type, time: simulation.time });
-
+function renderLog(blocks) {
   const body = document.getElementById('bsim-log-body');
-  const colorMap = { info: 'var(--text-dim)', success: 'var(--accent-bright)', danger: 'var(--danger)' };
-  body.innerHTML = simulation.log.slice(-20).reverse().map(entry =>
-    `<div class="bsim-log__entry" style="color: ${colorMap[entry.type] || colorMap.info};">${entry.message}</div>`
-  ).join('');
+  if (!body) return;
+  if (!blocks.length) { body.innerHTML = ''; return; }
+  // Newest first; pull full detail (votes/threshold/state root) for each.
+  const rows = blocks.slice(-12).reverse().map((b) => {
+    let detail = null;
+    try { detail = ctx.wasm.get_federation_block(ctx.runtime._handle, fed.fed_index, BigInt(b.height)); } catch {}
+    const votes = detail ? `${detail.num_votes}/${detail.qc_threshold} QC` : `${b.num_events} ev`;
+    const root = detail ? shortHash(detail.post_state_root) : '';
+    return `<div class="bsim-log__entry" style="color:var(--text-dim);">
+      <span style="color:var(--accent-bright);">#${b.height}</span>
+      block <code>${shortHash(b.block_hash)}</code> ← <code>${shortHash(b.prev_hash)}</code>
+      <span style="color:var(--lantern);">${votes}</span>${root ? ` · state ${root}` : ''}
+    </div>`;
+  });
+  body.innerHTML = rows.join('');
+}
+
+function addLogRaw(html) {
+  const body = document.getElementById('bsim-log-body');
+  if (!body) return;
+  const div = document.createElement('div');
+  div.className = 'bsim-log__entry';
+  div.innerHTML = html;
+  body.insertBefore(div, body.firstChild);
+}
+
+// --- helpers ----------------------------------------------------------------
+function randomHex(n) {
+  const bytes = new Uint8Array(n);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+function shortHash(h) {
+  if (!h) return '0x000…000';
+  const s = String(h);
+  return `0x${s.slice(0, 6)}…${s.slice(-4)}`;
+}
+function clampInt(v, lo, hi, dflt) {
+  const n = parseInt(v, 10);
+  if (Number.isNaN(n)) return dflt;
+  return Math.max(lo, Math.min(hi, n));
+}
+let _salt = 0;
+function heightSalt() { _salt += 1; return _salt; }
+function escapeHtml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

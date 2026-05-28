@@ -64,5 +64,10 @@
     <!-- Real local-preview runtime: creates a real queue cell, binds the
          placeholder URI to it, installs a real window.dregg.signTurn. -->
     <script type="module" src="/starbridge-apps/shared/app-runtime-ready.js"></script>
+    <!-- REAL multi-agent grant flow: distinct owner/publisher/consumer
+         cipherclerks drive grant_publisher/grant_consumer/publish/consume turns
+         against a topic cell carrying the canonical subscription cell-program.
+         Exposes window.dregg.appFlows.subscription(). -->
+    <script type="module" src="/starbridge-apps/shared/app-multi-agent.js"></script>
   </body>
 </html>

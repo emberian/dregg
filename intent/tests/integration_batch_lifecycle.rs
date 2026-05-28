@@ -8,7 +8,10 @@
 //! submissions either carry a witnessed_predicate or run against the strict
 //! verifier so the proof path is explicit.
 
-use dregg_cell::predicate::WitnessedPredicateRegistry;
+use dregg_cell::predicate::{
+    InputRef, NonMembershipNeighborProof, WitnessedPredicate, WitnessedPredicateKind,
+    WitnessedPredicateRegistry,
+};
 use dregg_federation::threshold_decrypt::{
     KeyShare, ThresholdEncryptionKey, generate_epoch_key, produce_decryption_share,
     threshold_encrypt,
@@ -115,6 +118,44 @@ fn plain_submission(solver_byte: u8, intents: &[Intent], score: f64) -> SolverSu
     }
 }
 
+/// A submission carrying a **real**, cryptographically-verifiable
+/// `witnessed_predicate` (a `NonMembership` neighbor proof — the one built-in
+/// kind with a real verifier). Accepted by the strict production default only
+/// because the proof bytes genuinely verify against the batch binding.
+fn real_submission(solver_byte: u8, intents: &[Intent], score: f64) -> SolverSubmission {
+    let participants: Vec<IntentId> = intents.iter().map(|i| i.id).collect();
+    let settlements: Vec<Settlement> = intents
+        .iter()
+        .enumerate()
+        .map(|(i, it)| Settlement {
+            from: it.creator,
+            to: intents[(i + 1) % intents.len()].creator,
+            asset: [i as u8; 32],
+            amount: 10,
+        })
+        .collect();
+    let commitment = WitnessedProofVerifier::compute_batch_binding(intents);
+    let proof = NonMembershipNeighborProof::new(&commitment, [0x00; 32], [0xFF; 32]);
+    SolverSubmission {
+        solver_id: [solver_byte; 32],
+        solution: vec![RingTrade {
+            participants,
+            settlements,
+            score,
+        }],
+        total_score: score,
+        validity_proof: proof.to_bytes().to_vec(),
+        witnessed_predicate: Some(WitnessedPredicate {
+            kind: WitnessedPredicateKind::NonMembership,
+            commitment,
+            input_ref: InputRef::PublicInput { pi_index: 0 },
+            proof_witness_index: 0,
+        }),
+        bond: DEFAULT_MIN_SOLVER_BOND,
+        submitted_at: 11,
+    }
+}
+
 // ============================================================================
 // Test: second submission of the same encrypted intent is rejected (replay)
 // ============================================================================
@@ -181,14 +222,14 @@ fn bond_conservation_winner_released_loser_slashed() {
     drive_to_solving(&mut engine, &key, &shares, &intents);
 
     // Solver A wins with score 5.
-    let sub_a = plain_submission(0xAA, &intents, 5.0);
+    let sub_a = real_submission(0xAA, &intents, 5.0);
     engine.submit_solution(sub_a).unwrap();
     assert_eq!(engine.batch_state(), BatchState::Challenging);
 
     // Solver B challenges and wins with score 9.
     engine.advance_height(3); // within challenge window
     engine
-        .challenge(plain_submission(0xBB, &intents, 9.0))
+        .challenge(real_submission(0xBB, &intents, 9.0))
         .unwrap();
     assert_eq!(engine.winning_score(), Some(9.0));
 
@@ -219,7 +260,7 @@ fn cannot_finalize_inside_challenge_window() {
     let intents = vec![make_intent(20)];
     drive_to_solving(&mut engine, &key, &shares, &intents);
 
-    let sub = plain_submission(0xAA, &intents, 3.0);
+    let sub = real_submission(0xAA, &intents, 3.0);
     engine.submit_solution(sub).unwrap();
     assert_eq!(engine.batch_state(), BatchState::Challenging);
 
@@ -245,7 +286,7 @@ fn after_settlement_fresh_batch_starts() {
     drive_to_solving(&mut engine, &key, &shares, &intents);
 
     engine
-        .submit_solution(plain_submission(0xAA, &intents, 4.0))
+        .submit_solution(real_submission(0xAA, &intents, 4.0))
         .unwrap();
     engine.advance_height(20); // past window
     let output = engine.finalize().unwrap();

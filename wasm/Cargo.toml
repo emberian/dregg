@@ -39,6 +39,15 @@ dregg-captp = { path = "../captp" }
 # Federation (pure types + consensus orchestration). The `runtime` feature
 # (tokio + crossbeam transport) is non-wasm32, hence default-features = false.
 dregg-federation = { path = "../federation", default-features = false }
+# DFA — canonical route-table commitment for the governed-namespace app flow
+# (RouteTableBuilder + route_table_commitment). Pure blake3 + serde + postcard;
+# the heavy `dregg-federation` dep is optional and stays off here, so wasm32-safe.
+# We do NOT depend on starbridge-governed-namespace / starbridge-subscription
+# directly because they pull `dregg-app-framework`, which depends on axum +
+# tokio(full) + reqwest (non-wasm32). The cell-programs those crates author are
+# re-materialized from canonical `dregg_cell` types in `runtime.rs::app_programs`
+# (the program *value* is canonical; only the assembly is local).
+dregg-dfa = { path = "../dfa", default-features = false }
 # Observability (EventLog + Emitter for live <dregg-activity> feed). All
 # heavy deps (circuit/federation) already gated in its own Cargo.toml;
 # wasm consumes with default-features=false for wasm32 safety.

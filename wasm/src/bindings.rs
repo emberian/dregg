@@ -560,6 +560,298 @@ pub fn execute_turn_step_by_step(
 }
 
 // ============================================================================
+// Starbridge-app flows: multi-agent turns + Authorization::Custom
+//
+// These bindings surface the runtime's app-cell methods so the subscription
+// `grant` flow and the governed-namespace propose/vote/commit flow run as REAL
+// signed turns (multi-agent + real threshold-sig Custom auth) through the
+// canonical TurnExecutor, with inspectable on-ledger state + receipt events.
+// ============================================================================
+
+/// Install a canonical starbridge-app cell-program + initial state on a cell.
+///
+/// `program_kind`:
+///   - `"subscription"` — installs `subscription_program` (CapInbox shape).
+///     `owner_pk_hash_hex` seeds slot 5; `capacity` seeds slot 2.
+///   - `"governed-namespace"` — installs `governance_program`.
+///     `committee_root_hex` seeds slot 2; `threshold` seeds slot 3;
+///     `initial_route_table_root_hex` seeds slot 0.
+///
+/// Permissions are opened so multi-agent turns apply; the slot-caveat
+/// cell-program is the load-bearing enforcement (mirrors the apps' executor
+/// integration-test harness exactly).
+#[wasm_bindgen]
+pub fn install_app_program(
+    handle: usize,
+    cell_id_hex: &str,
+    program_kind: &str,
+    config_json: &str,
+) -> Result<JsValue, JsError> {
+    use crate::runtime::app_programs;
+    with_runtime(handle, |rt| {
+        let cell_id = parse_cell_id(cell_id_hex)?;
+
+        #[derive(Deserialize, Default)]
+        struct Config {
+            owner_pk_hash_hex: Option<String>,
+            capacity: Option<u64>,
+            committee_root_hex: Option<String>,
+            threshold: Option<u64>,
+            initial_route_table_root_hex: Option<String>,
+        }
+        let cfg: Config = serde_json::from_str(config_json).map_err(|e| e.to_string())?;
+
+        let (program, state) = match program_kind {
+            "subscription" => {
+                let owner = match cfg.owner_pk_hash_hex {
+                    Some(ref h) => hex_decode_32(h)?,
+                    None => [0x11u8; 32],
+                };
+                let capacity = cfg.capacity.unwrap_or(1_000_000);
+                (
+                    app_programs::subscription_program(),
+                    app_programs::subscription_initial_state(owner, capacity),
+                )
+            }
+            "governed-namespace" => {
+                let committee = match cfg.committee_root_hex {
+                    Some(ref h) => hex_decode_32(h)?,
+                    None => *blake3::hash(b"committee-v0").as_bytes(),
+                };
+                let threshold = cfg.threshold.unwrap_or(2);
+                let route_root = match cfg.initial_route_table_root_hex {
+                    Some(ref h) => hex_decode_32(h)?,
+                    None => *blake3::hash(b"empty-table").as_bytes(),
+                };
+                (
+                    app_programs::governance_program(),
+                    app_programs::governance_initial_state(committee, threshold, route_root),
+                )
+            }
+            other => return Err(format!("unknown program_kind: {other}")),
+        };
+
+        rt.install_app_program(&cell_id, program, state)?;
+
+        #[derive(Serialize)]
+        struct InstallResult {
+            ok: bool,
+            cell_id: String,
+            program_kind: String,
+        }
+        serde_wasm_bindgen::to_value(&InstallResult {
+            ok: true,
+            cell_id: cell_id_hex.to_string(),
+            program_kind: program_kind.to_string(),
+        })
+        .map_err(|e| e.to_string())
+    })
+}
+
+/// Execute a real signed multi-agent app turn: `agent_index` signs, the action
+/// targets `target_cell_id_hex` with method `method`, carrying the effects in
+/// `actions_json` (same shape as `execute_turn`, now including `emit_event`).
+#[wasm_bindgen]
+pub fn execute_app_turn(
+    handle: usize,
+    agent_index: usize,
+    target_cell_id_hex: &str,
+    method: &str,
+    actions_json: &str,
+    fee: u64,
+) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        if agent_index >= rt.agents.len() {
+            return Err("invalid agent index".to_string());
+        }
+        let target = parse_cell_id(target_cell_id_hex)?;
+        let raw_actions: Vec<RawAction> =
+            serde_json::from_str(actions_json).map_err(|e| e.to_string())?;
+        let effects = parse_effects(&raw_actions, &target)?;
+        let result = rt.execute_app_turn_for_agent(agent_index, target, method, effects, fee)?;
+        serialize_turn_result(&result)
+    })
+}
+
+/// Register a real Ed25519 threshold verifier under `vk_hash_hex` for the
+/// governed-namespace `commit_table_update` flow. `committee_pubkeys_json` is a
+/// JSON array of 64-char hex public keys; `threshold` is the count of distinct
+/// valid committee signatures required.
+#[wasm_bindgen]
+pub fn register_threshold_verifier(
+    handle: usize,
+    vk_hash_hex: &str,
+    committee_pubkeys_json: &str,
+    threshold: usize,
+) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        let vk_hash = hex_decode_32(vk_hash_hex)?;
+        let pk_hexes: Vec<String> =
+            serde_json::from_str(committee_pubkeys_json).map_err(|e| e.to_string())?;
+        let mut committee = Vec::with_capacity(pk_hexes.len());
+        for h in &pk_hexes {
+            committee.push(hex_decode_32(h)?);
+        }
+        rt.register_threshold_verifier(vk_hash, committee, threshold);
+        #[derive(Serialize)]
+        struct R {
+            ok: bool,
+            committee_size: usize,
+            threshold: usize,
+        }
+        serde_wasm_bindgen::to_value(&R {
+            ok: true,
+            committee_size: pk_hexes.len(),
+            threshold,
+        })
+        .map_err(|e| e.to_string())
+    })
+}
+
+/// Compute the canonical custom signing message a `commit_table_update` action
+/// (with the given effects) binds to. Returns lowercase hex. Committee members
+/// sign these exact bytes via `sign_custom_commit`.
+#[wasm_bindgen]
+pub fn custom_commit_signing_message(
+    handle: usize,
+    agent_index: usize,
+    target_cell_id_hex: &str,
+    method: &str,
+    actions_json: &str,
+    vk_hash_hex: &str,
+    committee_commitment_hex: &str,
+) -> Result<String, JsError> {
+    with_runtime_ref(handle, |rt| {
+        let target = parse_cell_id(target_cell_id_hex)?;
+        let raw_actions: Vec<RawAction> =
+            serde_json::from_str(actions_json).map_err(|e| e.to_string())?;
+        let effects = parse_effects(&raw_actions, &target)?;
+        let vk_hash = hex_decode_32(vk_hash_hex)?;
+        let committee = hex_decode_32(committee_commitment_hex)?;
+        let msg = rt.custom_commit_signing_message(
+            agent_index,
+            target,
+            method,
+            &effects,
+            vk_hash,
+            committee,
+        )?;
+        Ok(hex_encode(&msg))
+    })
+}
+
+/// Sign the given canonical message (hex) with `signer_agent_index`'s
+/// cipherclerk, returning a 96-byte `(pubkey ‖ sig)` record as hex. Concatenate
+/// `threshold` such records (hex) to form the proof for
+/// `execute_custom_auth_turn`.
+#[wasm_bindgen]
+pub fn sign_custom_commit(
+    handle: usize,
+    signer_agent_index: usize,
+    message_hex: &str,
+) -> Result<String, JsError> {
+    with_runtime_ref(handle, |rt| {
+        let message = hex_decode_vec(message_hex)?;
+        let rec = rt.sign_custom_commit(signer_agent_index, &message)?;
+        Ok(hex_encode(&rec))
+    })
+}
+
+/// Execute a real `Authorization::Custom` commit turn. `proof_hex` is the
+/// concatenation of `threshold` 96-byte `(pubkey ‖ sig)` records (hex) produced
+/// by `sign_custom_commit`. The turn is accepted only if the registered
+/// threshold verifier validates the signatures over the canonical message and
+/// the cell-program's `MonotonicSequence(version)` caveat accepts the +1 bump.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn execute_custom_auth_turn(
+    handle: usize,
+    agent_index: usize,
+    target_cell_id_hex: &str,
+    method: &str,
+    actions_json: &str,
+    vk_hash_hex: &str,
+    committee_commitment_hex: &str,
+    proof_hex: &str,
+    fee: u64,
+) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        if agent_index >= rt.agents.len() {
+            return Err("invalid agent index".to_string());
+        }
+        let target = parse_cell_id(target_cell_id_hex)?;
+        let raw_actions: Vec<RawAction> =
+            serde_json::from_str(actions_json).map_err(|e| e.to_string())?;
+        let effects = parse_effects(&raw_actions, &target)?;
+        let vk_hash = hex_decode_32(vk_hash_hex)?;
+        let committee = hex_decode_32(committee_commitment_hex)?;
+        let proof = hex_decode_vec(proof_hex)?;
+        let result = rt.execute_custom_auth_turn_for_agent(
+            agent_index,
+            target,
+            method,
+            effects,
+            vk_hash,
+            committee,
+            proof,
+            fee,
+        )?;
+        serialize_turn_result(&result)
+    })
+}
+
+/// Grant the acting agent's cell a capability to reach `target_cell_id_hex`.
+/// Required before a non-owner agent can drive a turn against an app cell.
+#[wasm_bindgen]
+pub fn grant_reach_capability(
+    handle: usize,
+    agent_index: usize,
+    target_cell_id_hex: &str,
+) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        let target = parse_cell_id(target_cell_id_hex)?;
+        let slot = rt.grant_reach_capability(agent_index, target)?;
+        #[derive(Serialize)]
+        struct R {
+            ok: bool,
+            slot: u32,
+        }
+        serde_wasm_bindgen::to_value(&R { ok: true, slot }).map_err(|e| e.to_string())
+    })
+}
+
+/// Read a single 32-byte cell slot as lowercase hex (or `null` if absent).
+#[wasm_bindgen]
+pub fn read_cell_field(
+    handle: usize,
+    cell_id_hex: &str,
+    index: usize,
+) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        let cell_id = parse_cell_id(cell_id_hex)?;
+        let val = rt.cell_field(&cell_id, index).map(|f| hex_encode(&f));
+        serde_wasm_bindgen::to_value(&val).map_err(|e| e.to_string())
+    })
+}
+
+/// Canonical route-table commitment for a governed-namespace route table.
+/// `routes_json` is a JSON array of `[path, handler]` pairs. Returns the BLAKE3
+/// commitment hex — the value that becomes slot 0 after a successful commit.
+/// Uses `dregg_dfa::RouteTableBuilder` + `RouteTable::commitment` (canonical).
+#[wasm_bindgen]
+pub fn route_table_commitment(routes_json: &str) -> Result<String, JsError> {
+    use dregg_dfa::{RouteTableBuilder, RouteTarget};
+    let routes: Vec<(String, String)> =
+        serde_json::from_str(routes_json).map_err(|e| JsError::new(&e.to_string()))?;
+    let mut b = RouteTableBuilder::new();
+    for (path, handler) in &routes {
+        b = b.route(path, RouteTarget::handler(handler));
+    }
+    let table = b.compile();
+    Ok(hex_encode(&table.commitment))
+}
+
+// ============================================================================
 // Capabilities
 // ============================================================================
 
@@ -2886,6 +3178,21 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], String> {
     Ok(result)
 }
 
+fn hex_decode_vec(hex: &str) -> Result<Vec<u8>, String> {
+    if hex.len() % 2 != 0 {
+        return Err(format!("hex length must be even, got {}", hex.len()));
+    }
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    let bytes = hex.as_bytes();
+    let mut i = 0;
+    while i < hex.len() {
+        let s = std::str::from_utf8(&bytes[i..i + 2]).map_err(|e| e.to_string())?;
+        out.push(u8::from_str_radix(s, 16).map_err(|e| format!("invalid hex at {i}: {e}"))?);
+        i += 2;
+    }
+    Ok(out)
+}
+
 fn parse_cell_id(hex: &str) -> Result<CellId, String> {
     let bytes = hex_decode_32(hex)?;
     Ok(CellId::from_bytes(bytes))
@@ -2914,6 +3221,16 @@ struct RawAction {
     amount: Option<u64>,
     index: Option<usize>,
     value_hex: Option<String>,
+    /// `emit_event`: event topic (plaintext name; hashed via `symbol()`).
+    topic: Option<String>,
+    /// `emit_event`: event data as a list of 64-char hex field elements.
+    data_hex: Option<Vec<String>>,
+    /// `grant`: target cell of the granted capability (the cell the grantee may act on).
+    cap_target: Option<String>,
+    /// `grant`: c-list slot for the granted capability.
+    slot: Option<u32>,
+    /// `grant`: required permission to exercise (`none`|`signature`|`proof`|`either`).
+    permissions: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -3029,6 +3346,68 @@ fn parse_effects(raw_actions: &[RawAction], agent_cell_id: &CellId) -> Result<Ve
                     *agent_cell_id
                 };
                 effects.push(Effect::IncrementNonce { cell });
+            }
+            "emit_event" => {
+                // EmitEvent is part of the canonical Effect surface and is what
+                // the subscription + governed-namespace flows emit (their
+                // receipts' `emitted_events` carry the new head/root/payload,
+                // proposal/vote/commit data). Previously `parse_effects` dropped
+                // events entirely, so in-browser receipts had no inspectable
+                // events. Now they flow through the real executor → receipt path.
+                let cell = if let Some(ref cell_hex) = action.cell {
+                    parse_cell_id(cell_hex)?
+                } else {
+                    *agent_cell_id
+                };
+                let topic_name = action
+                    .topic
+                    .as_ref()
+                    .ok_or("emit_event requires 'topic' field")?;
+                let topic = dregg_turn::action::symbol(topic_name);
+                let mut data = Vec::new();
+                for d in action.data_hex.iter().flatten() {
+                    data.push(hex_decode_32(d)?);
+                }
+                effects.push(Effect::EmitEvent {
+                    cell,
+                    event: dregg_turn::action::Event { topic, data },
+                });
+            }
+            "grant" => {
+                // Effect::GrantCapability — the canonical capability-grant effect
+                // (the "Grant" the apps lane flagged as missing from the wasm
+                // effect surface). `from` defaults to the actor cell; `to` is the
+                // grantee cell; `cap_target` is the cell the grantee may act on
+                // (defaults to `from`); `permissions` is the required auth to
+                // exercise. This drives the γ.2 Grant primitive's on-ledger leg.
+                let from = if let Some(ref from_hex) = action.from {
+                    parse_cell_id(from_hex)?
+                } else {
+                    *agent_cell_id
+                };
+                let to_hex = action.to.as_ref().ok_or("grant requires 'to' field")?;
+                let to = parse_cell_id(to_hex)?;
+                let cap_target = if let Some(ref t) = action.cap_target {
+                    parse_cell_id(t)?
+                } else {
+                    from
+                };
+                let permissions = match action.permissions.as_deref() {
+                    Some("none") | None => AuthRequired::None,
+                    Some("signature") => AuthRequired::Signature,
+                    Some("proof") => AuthRequired::Proof,
+                    Some("either") => AuthRequired::Either,
+                    Some(other) => return Err(format!("grant: unknown permissions '{other}'")),
+                };
+                let cap = dregg_cell::capability::CapabilityRef {
+                    target: cap_target,
+                    slot: action.slot.unwrap_or(0),
+                    permissions,
+                    breadstuff: None,
+                    expires_at: None,
+                    allowed_effects: None,
+                };
+                effects.push(Effect::GrantCapability { from, to, cap });
             }
             other => {
                 return Err(format!("unknown action type: {other}"));

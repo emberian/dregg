@@ -39,7 +39,14 @@ export function initEffectVm(wasm) {
         [{ label: '<dregg-turn-debugger>', uri: 'dregg://turn/feed' }],
         'real get_turn_trace step-by-step AIR trace',
       )}
-      <p>Build an effect sequence, watch the execution trace form, check constraints, and prove it.</p>
+      <p>
+        The canonical AIR trace + proof for a real committed turn is the turn debugger below
+        (it reads <code>get_turn_trace</code> over the seeded turn — every row is real). The
+        builder beneath it is an <strong>illustrative</strong> tool: pick effects to see which
+        witness columns each one populates and which AIR constraints apply. Example column values
+        are shown for shape only — to generate and verify a <em>real</em> STARK proof, use the
+        <a href="#" data-goto="proofs" style="color:var(--accent-bright);">Proofs section</a>.
+      </p>
       ${inspectorEmbed(
         `<dregg-turn-debugger id="evm-inspector" uri="dregg://turn/seed"></dregg-turn-debugger>`,
         'Canonical turn debugger (real seeded turn)',
@@ -65,7 +72,7 @@ export function initEffectVm(wasm) {
 
       <div class="effect-vm-trace">
         <div class="effect-vm-trace__header">
-          <span>Execution Trace</span>
+          <span>Trace columns <span style="color:var(--text-muted);font-weight:400;">(illustrative)</span></span>
           <span class="effect-vm-trace__meta" id="evm-trace-meta">0 rows</span>
         </div>
         <div class="effect-vm-trace__body" id="evm-trace-table">
@@ -83,9 +90,14 @@ export function initEffectVm(wasm) {
       </div>
 
       <div class="effect-vm-proof">
-        <button class="pg-btn pg-btn--accent" id="evm-prove-btn" disabled>Generate Proof</button>
-        <button class="pg-btn pg-btn--ghost" id="evm-verify-btn" disabled>Verify</button>
-        <div class="effect-vm-proof__result" id="evm-proof-result"></div>
+        <div class="effect-vm-proof__result" id="evm-proof-result">
+          <div class="output-entry info" style="font-size:12px;line-height:1.5;">
+            This builder illustrates the AIR <em>structure</em> — it does not mint a proof
+            (a real proof needs a real committed execution, not example columns).
+            The turn debugger above shows the real AIR trace; generate and verify an actual
+            STARK proof in the <a href="#" data-goto="proofs" style="color:var(--accent-bright);">Proofs section</a>.
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -114,13 +126,15 @@ export function initEffectVm(wasm) {
     updateProofButtons();
   });
 
-  document.getElementById('evm-prove-btn').addEventListener('click', () => {
-    generateProof(wasm);
+  // "Proofs section" deep-links navigate to the real STARK proving surface.
+  section.querySelectorAll('[data-goto]').forEach((a) => {
+    a.addEventListener('click', (e) => { e.preventDefault(); navTo(a.dataset.goto); });
   });
+}
 
-  document.getElementById('evm-verify-btn').addEventListener('click', () => {
-    verifyProof(wasm);
-  });
+function navTo(sectionId) {
+  const btn = document.querySelector(`.pg-nav__item[data-section="${sectionId}"]`);
+  if (btn) btn.click();
 }
 
 function addEffect(typeId) {
@@ -259,81 +273,6 @@ function renderConstraints() {
   `).join('');
 }
 
-function updateProofButtons() {
-  const proveBtn = document.getElementById('evm-prove-btn');
-  const verifyBtn = document.getElementById('evm-verify-btn');
-  proveBtn.disabled = trace.length === 0;
-  verifyBtn.disabled = !proofResult;
-}
-
-function generateProof(wasm) {
-  const resultEl = document.getElementById('evm-proof-result');
-  const startTime = performance.now();
-
-  // Simulate proof generation (or use real WASM if available)
-  if (wasm && wasm.prove_effect_trace) {
-    try {
-      const traceData = JSON.stringify(trace.map(r => {
-        const clean = {};
-        for (const [k, v] of Object.entries(r)) {
-          if (!k.startsWith('_')) clean[k] = v;
-        }
-        return clean;
-      }));
-      proofResult = wasm.prove_effect_trace(traceData);
-    } catch (e) {
-      // Fallback to simulated proof
-      proofResult = simulateProof();
-    }
-  } else {
-    proofResult = simulateProof();
-  }
-
-  const elapsed = (performance.now() - startTime).toFixed(1);
-  state.proofCount++;
-  notifyStateChange();
-
-  resultEl.innerHTML = `
-    <div class="evm-proof-success">
-      <span class="evm-proof-success__badge">PROOF GENERATED</span>
-      <span class="evm-proof-success__time">${elapsed}ms</span>
-      <span class="evm-proof-success__size">${proofResult.size} bytes</span>
-      <span class="evm-proof-success__air">${proofResult.air}</span>
-    </div>
-  `;
-  updateProofButtons();
-}
-
-function verifyProof(wasm) {
-  const resultEl = document.getElementById('evm-proof-result');
-  if (!proofResult) return;
-
-  const startTime = performance.now();
-  let verified = true;
-
-  if (wasm && wasm.verify_effect_proof) {
-    try {
-      verified = wasm.verify_effect_proof(proofResult.data);
-    } catch {
-      verified = true; // Simulated always passes
-    }
-  }
-
-  const elapsed = (performance.now() - startTime).toFixed(1);
-  resultEl.innerHTML = `
-    <div class="evm-proof-success">
-      <span class="evm-proof-success__badge" style="background: ${verified ? 'var(--success-soft)' : 'var(--danger-soft)'}; color: ${verified ? 'var(--accent-bright)' : 'var(--danger)'};">${verified ? 'VERIFIED' : 'INVALID'}</span>
-      <span class="evm-proof-success__time">${elapsed}ms verification</span>
-    </div>
-  `;
-}
-
-function simulateProof() {
-  return {
-    data: new Uint8Array(256).fill(0),
-    size: 128 + trace.length * 32,
-    air: 'MultiStepAir',
-    trace_len: trace.length,
-    num_cols: [...new Set(trace.flatMap(r => Object.keys(r).filter(k => !k.startsWith('_'))))].length,
-  };
-}
+// The builder is illustrative; there are no proof buttons to toggle. Kept as a
+// no-op so the existing render callsites don't need to change.
+function updateProofButtons() {}

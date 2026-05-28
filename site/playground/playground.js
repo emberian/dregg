@@ -151,7 +151,7 @@ const PLAYGROUND_SCENARIOS = [
   {
     id: 'proving',
     label: 'Proving',
-    lede: 'Effect traces, blocklace simulation, proof composition, revocation, circuit design, and sandboxing.',
+    lede: 'Effect traces, real federation consensus, proof composition, revocation, circuit design, and sandboxing.',
     starbridgeHref: '/starbridge/?at=dregg://turn/demo',
     starbridgeLabel: 'Open turn demo in Starbridge',
     sections: ['effect-vm', 'blocklace-sim', 'circuit-playground', 'sandbox'],

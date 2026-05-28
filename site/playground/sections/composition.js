@@ -106,7 +106,9 @@ export function initComposition(wasm) {
       const result = wasm.generate_demo_stark_proof(leafValue, 3);
       proofJson = JSON.stringify(result);
     } catch (e) {
-      proofJson = JSON.stringify({ type: 'membership', leaf: leafValue, depth: 3, proof_hash: randomHex(32) });
+      // No fabrication: a wasm proof failure is surfaced, not faked.
+      showResult(resultDiv, 'error', `generate_demo_stark_proof failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 
@@ -139,7 +141,8 @@ export function initComposition(wasm) {
       const result = wasm.generate_range_proof(BigInt(amount), blindingBytes, commitBytes);
       proofJson = JSON.stringify(result);
     } catch (e) {
-      proofJson = JSON.stringify({ type: 'range', amount, proof_hash: randomHex(32) });
+      showResult(resultDiv, 'error', `generate_range_proof failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 
@@ -214,12 +217,8 @@ export function initComposition(wasm) {
     try {
       result = wasm.compose_proofs(JSON.stringify(proofsInput), mode);
     } catch (e) {
-      result = {
-        composed_proof: randomHex(32),
-        mode,
-        input_count: proofs.length,
-        valid: false,
-      };
+      showResult(resultDiv, 'error', `compose_proofs failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 

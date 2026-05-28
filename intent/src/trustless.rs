@@ -591,27 +591,20 @@ impl ProofVerifier for WitnessedProofVerifier {
                     "strict verifier requires a witnessed_predicate on the submission".into(),
                 );
             }
-            // SECURITY (SILVER-DEBT T1.2 — KNOWN SOUNDNESS HOLE, fail-OPEN):
-            // In non-strict mode (the current `TrustlessIntentEngine::new`
-            // default, also used by the live node at node/src/state.rs), a
-            // submission that omits `witnessed_predicate` entirely is accepted
-            // on the STRUCTURAL check alone. The `validity_proof` bytes are
-            // NEVER cryptographically verified on this branch — a malicious
-            // solver can bypass all proof verification simply by not attaching
-            // a predicate. This is the inverse of the strict-mode posture and
-            // is an intentional-but-unsound interim: closing it requires either
-            //   (a) flipping `new()` to `strict()` (breaks ~12 predicate-less
-            //       in-crate tests + the node REST path that does not yet force
-            //       a predicate onto submissions), or
-            //   (b) the real STARK/registry wiring per SILVER-DEBT T1.2 / T2.8,
-            //       which the in-tree note at `Self::new` records as BLOCKED ON
-            //       HUMAN.
-            // Until one of those lands, ANY production deployment MUST construct
-            // the engine with `WitnessedProofVerifier::strict(..)` via
-            // `TrustlessIntentEngine::with_verifier`, OR reject predicate-less
-            // submissions at the ingress layer. The adversarial test
-            // `nonstrict_default_accepts_predicateless_submission_KNOWN_HOLE`
-            // pins this behavior so any future flip to strict surfaces here.
+            // SOUNDNESS NOTE (SILVER-DEBT T1.2 — CLOSED):
+            // The predicate-less fail-OPEN hole is closed. The production
+            // engine (`TrustlessIntentEngine::new`) and the live node
+            // (node/src/state.rs) now construct the verifier with
+            // `WitnessedProofVerifier::strict(..)`, so a submission that omits
+            // `witnessed_predicate` is REJECTED above before reaching this
+            // branch — its `validity_proof` is never accepted on the structural
+            // check alone. This permissive branch is reachable only via the
+            // explicit non-strict constructors (`WitnessedProofVerifier::new` /
+            // `::with_stub_registry`), which exist solely for plumbing-coverage
+            // tests where the proof algebra is out of scope; they MUST NOT be
+            // used in any production path. The closed-hole assertion is pinned
+            // by `predicateless_submission_is_rejected_hole_closed` and
+            // `strict_verifier_rejects_predicateless_submission`.
             return Ok(());
         };
 
@@ -765,8 +758,12 @@ impl TrustlessIntentEngine {
     /// (P0 #82 fix).
     ///
     /// The default verifier is
-    /// `WitnessedProofVerifier::new(WitnessedPredicateRegistry::default_builtins())`:
+    /// `WitnessedProofVerifier::strict(WitnessedPredicateRegistry::default_builtins())`:
     ///
+    /// - Submissions that OMIT `witnessed_predicate` are **rejected**
+    ///   (fail-CLOSED). The `validity_proof` bytes are never accepted on the
+    ///   structural check alone — the prior predicate-less bypass (SILVER-DEBT
+    ///   T1.2) is closed.
     /// - Submissions that carry a `witnessed_predicate` dispatch through the
     ///   canonical registry. Built-in kinds (`Dfa`, `Temporal`,
     ///   `MerkleMembership`, `BlindedSet`, `BridgePredicate`,
@@ -804,7 +801,12 @@ impl TrustlessIntentEngine {
             decrypt_threshold,
             num_validators,
             current_height: 0,
-            verifier: Box::new(WitnessedProofVerifier::new(registry)),
+            // STRICT by default (fail-CLOSED). A submission that omits
+            // `witnessed_predicate` is REJECTED — the `validity_proof` bytes
+            // are never waved through on a structural check alone. See
+            // `WitnessedProofVerifier::strict` and the closed-hole note in
+            // `verify_submission`.
+            verifier: Box::new(WitnessedProofVerifier::strict(registry)),
             next_batch_id: 1,
             settled_batches: HashMap::new(),
             bond_escrow: BondEscrow::new(),
@@ -1522,6 +1524,66 @@ mod tests {
         }
     }
 
+    /// Helper: build a solver submission that carries a **real**,
+    /// cryptographically-verifiable `witnessed_predicate` — a
+    /// `NonMembership` neighbor proof. This is the only built-in kind that
+    /// ships a real (non-`NotYetWired`) verifier
+    /// (`SortedNeighborNonMembershipVerifier` in the cell crate), so a
+    /// submission built this way is accepted by the STRICT default verifier
+    /// only because the proof bytes genuinely verify against the batch
+    /// binding — not because the predicate is absent.
+    ///
+    /// Construction: the verifier feeds `PredicateInput::Bytes(commitment)`
+    /// (the batch binding) as the candidate, requiring `lower < candidate <
+    /// upper` plus a commitment-keyed adjacency tag. We pick `lower =
+    /// [0x00; 32]` and `upper = [0xFF; 32]` so any candidate is strictly
+    /// inside the interval, and compute the honest adjacency tag.
+    fn make_real_submission(
+        solver_byte: u8,
+        intents: &[Intent],
+        score: f64,
+        height: u64,
+    ) -> SolverSubmission {
+        use dregg_cell::predicate::NonMembershipNeighborProof;
+
+        let participants: Vec<IntentId> = intents.iter().map(|i| i.id).collect();
+        let mut settlements = Vec::new();
+        for i in 0..intents.len() {
+            let next = (i + 1) % intents.len();
+            settlements.push(Settlement {
+                from: intents[i].creator,
+                to: intents[next].creator,
+                asset: [i as u8; 32],
+                amount: 100,
+            });
+        }
+        let ring = RingTrade {
+            participants,
+            settlements,
+            score,
+        };
+
+        let commitment = WitnessedProofVerifier::compute_batch_binding(intents);
+        // Honest neighbor proof: lower < candidate(=commitment) < upper.
+        let proof = NonMembershipNeighborProof::new(&commitment, [0x00; 32], [0xFF; 32]);
+        let wp = WitnessedPredicate {
+            kind: WitnessedPredicateKind::NonMembership,
+            commitment,
+            input_ref: InputRef::PublicInput { pi_index: 0 },
+            proof_witness_index: 0,
+        };
+
+        SolverSubmission {
+            solver_id: [solver_byte; 32],
+            solution: vec![ring],
+            total_score: score,
+            validity_proof: proof.to_bytes().to_vec(),
+            witnessed_predicate: Some(wp),
+            bond: DEFAULT_MIN_SOLVER_BOND,
+            submitted_at: height,
+        }
+    }
+
     // =========================================================================
     // Test: Encrypted intents cannot be read before decrypt
     // =========================================================================
@@ -1655,39 +1717,14 @@ mod tests {
             );
         }
 
-        // Solver A submits with score 5.0
-        let sub_a = make_submission(0xAA, &intents, 5.0, 11);
+        // Solver A submits with score 5.0 (real verifiable NonMembership proof)
+        let sub_a = make_real_submission(0xAA, &intents, 5.0, 11);
         engine.submit_solution(sub_a).unwrap();
 
         assert_eq!(engine.winning_score(), Some(5.0));
 
-        // Solver B submits with score 8.0 (higher)
-        let sub_b = SolverSubmission {
-            solver_id: [0xBB; 32],
-            solution: vec![RingTrade {
-                participants: intents.iter().map(|i| i.id).collect(),
-                settlements: vec![
-                    Settlement {
-                        from: intents[0].creator,
-                        to: intents[1].creator,
-                        asset: [0; 32],
-                        amount: 200,
-                    },
-                    Settlement {
-                        from: intents[1].creator,
-                        to: intents[0].creator,
-                        asset: [1; 32],
-                        amount: 150,
-                    },
-                ],
-                score: 8.0,
-            }],
-            total_score: 8.0,
-            validity_proof: vec![0x01, 0x02],
-            witnessed_predicate: None,
-            bond: DEFAULT_MIN_SOLVER_BOND,
-            submitted_at: 12,
-        };
+        // Solver B submits with score 8.0 (higher) — also a real proof.
+        let sub_b = make_real_submission(0xBB, &intents, 8.0, 12);
         engine.submit_solution(sub_b).unwrap();
 
         assert_eq!(engine.winning_score(), Some(8.0));
@@ -1714,40 +1751,15 @@ mod tests {
         let intents = vec![make_intent(1), make_intent(2)];
         drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        // First solution: score 5.0
-        let sub_a = make_submission(0xAA, &intents, 5.0, 11);
+        // First solution: score 5.0 (real verifiable proof)
+        let sub_a = make_real_submission(0xAA, &intents, 5.0, 11);
         engine.submit_solution(sub_a).unwrap();
         assert_eq!(engine.current_batch.state, BatchState::Challenging);
         assert_eq!(engine.winning_score(), Some(5.0));
 
-        // Challenge with score 10.0 (within window)
+        // Challenge with score 10.0 (within window) — also a real proof.
         engine.advance_height(12);
-        let challenge = SolverSubmission {
-            solver_id: [0xCC; 32],
-            solution: vec![RingTrade {
-                participants: intents.iter().map(|i| i.id).collect(),
-                settlements: vec![
-                    Settlement {
-                        from: intents[0].creator,
-                        to: intents[1].creator,
-                        asset: [0; 32],
-                        amount: 500,
-                    },
-                    Settlement {
-                        from: intents[1].creator,
-                        to: intents[0].creator,
-                        asset: [1; 32],
-                        amount: 400,
-                    },
-                ],
-                score: 10.0,
-            }],
-            total_score: 10.0,
-            validity_proof: vec![0x01],
-            witnessed_predicate: None,
-            bond: DEFAULT_MIN_SOLVER_BOND,
-            submitted_at: 12,
-        };
+        let challenge = make_real_submission(0xCC, &intents, 10.0, 12);
         engine.challenge(challenge).unwrap();
 
         assert_eq!(engine.winning_score(), Some(10.0));
@@ -1774,23 +1786,13 @@ mod tests {
         let intents = vec![make_intent(1)];
         drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        // Winner with score 10.0
-        let sub = SolverSubmission {
-            solver_id: [0xAA; 32],
-            solution: vec![RingTrade {
-                participants: vec![intents[0].id],
-                settlements: vec![],
-                score: 10.0,
-            }],
-            total_score: 10.0,
-            validity_proof: vec![0x01],
-            witnessed_predicate: None,
-            bond: DEFAULT_MIN_SOLVER_BOND,
-            submitted_at: 11,
-        };
+        // Winner with score 10.0 (real verifiable proof)
+        let sub = make_real_submission(0xAA, &intents, 10.0, 11);
         engine.submit_solution(sub).unwrap();
 
-        // Challenge with lower score (3.0 < 10.0)
+        // Challenge with lower score (3.0 < 10.0). Rejected on the
+        // ScoreNotHigher gate, which fires before the proof verifier, so a
+        // predicate-less submission is fine here.
         let bad_challenge = SolverSubmission {
             solver_id: [0xBB; 32],
             solution: vec![RingTrade {
@@ -1939,7 +1941,7 @@ mod tests {
         let intents = vec![make_intent(1), make_intent(2)];
         drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        let sub = make_submission(0xAA, &intents, 7.0, 11);
+        let sub = make_real_submission(0xAA, &intents, 7.0, 11);
         engine.submit_solution(sub).unwrap();
         assert_eq!(engine.current_batch.state, BatchState::Challenging);
 
@@ -1976,19 +1978,7 @@ mod tests {
         let intents = vec![make_intent(1)];
         drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        let sub = SolverSubmission {
-            solver_id: [0xAA; 32],
-            solution: vec![RingTrade {
-                participants: vec![intents[0].id],
-                settlements: vec![],
-                score: 5.0,
-            }],
-            total_score: 5.0,
-            validity_proof: vec![0x01],
-            witnessed_predicate: None,
-            bond: DEFAULT_MIN_SOLVER_BOND,
-            submitted_at: 11,
-        };
+        let sub = make_real_submission(0xAA, &intents, 5.0, 11);
         engine.submit_solution(sub).unwrap();
         assert_eq!(engine.current_batch.state, BatchState::Challenging);
 
@@ -2103,7 +2093,7 @@ mod tests {
 
         // Layer 4+5: Solve + Prove
         engine.advance_height(10);
-        let sub = make_submission(0xAA, &intents, 9.0, 10);
+        let sub = make_real_submission(0xAA, &intents, 9.0, 10);
         engine.submit_solution(sub).unwrap();
         assert_eq!(engine.batch_state(), BatchState::Challenging);
 
@@ -2160,24 +2150,14 @@ mod tests {
         let intents = vec![make_intent(1)];
         drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        let sub = SolverSubmission {
-            solver_id: [0xAA; 32],
-            solution: vec![RingTrade {
-                participants: vec![intents[0].id],
-                settlements: vec![],
-                score: 5.0,
-            }],
-            total_score: 5.0,
-            validity_proof: vec![0x01],
-            witnessed_predicate: None,
-            bond: DEFAULT_MIN_SOLVER_BOND,
-            submitted_at: 11,
-        };
+        let sub = make_real_submission(0xAA, &intents, 5.0, 11);
         engine.submit_solution(sub).unwrap();
 
         engine.advance_height(16);
         assert!(engine.is_challenge_window_expired());
 
+        // Late challenge rejected by the window gate (before the verifier),
+        // so a predicate-less submission is fine here.
         let late_challenge = SolverSubmission {
             solver_id: [0xBB; 32],
             solution: vec![RingTrade {
@@ -2402,42 +2382,43 @@ mod tests {
         }
     }
 
-    /// KNOWN SOUNDNESS HOLE (SILVER-DEBT T1.2): the non-strict `new()` default
-    /// accepts a submission that omits `witnessed_predicate` on the STRUCTURAL
-    /// check alone — the `validity_proof` bytes are never cryptographically
-    /// verified. This test PINS that behavior so that any future flip of the
-    /// default to `strict()` (which is the correct fail-closed posture) is
-    /// surfaced here as a deliberate, reviewed change rather than an accidental
-    /// regression. See the `// SECURITY (... fail-OPEN)` block in
-    /// `WitnessedProofVerifier::verify_submission`.
+    /// HOLE CLOSED (SILVER-DEBT T1.2): the production default
+    /// `TrustlessIntentEngine::new` installs the STRICT verifier, so a
+    /// submission that omits `witnessed_predicate` is REJECTED — its
+    /// `validity_proof` is never accepted on the structural check alone. This
+    /// test pins the fail-CLOSED posture so any accidental regression back to
+    /// the permissive default surfaces here.
     ///
-    /// If you are here because this test failed: that is GOOD — it means the
-    /// default became fail-closed. Replace the `unwrap()` below with an
-    /// assertion that the predicate-less submission is now REJECTED, and update
-    /// the SECURITY comment to record the hole as closed.
+    /// (Previously `nonstrict_default_accepts_predicateless_submission_known_hole`,
+    /// which pinned the now-closed fail-OPEN behavior.)
     #[test]
-    fn nonstrict_default_accepts_predicateless_submission_known_hole() {
+    fn predicateless_submission_is_rejected_hole_closed() {
         let (key, key_shares) = make_test_keys(2, 3);
         let mut engine = TrustlessIntentEngine::new(2, 3);
         let intents = vec![make_intent(1), make_intent(2)];
         drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
 
-        // A submission with NO witnessed predicate and an arbitrary, never-
-        // verified `validity_proof`. Under the non-strict default this is
-        // accepted on the structural check alone.
+        // A submission with NO witnessed predicate and an arbitrary,
+        // never-verified `validity_proof`. The strict production default must
+        // REJECT it rather than wave the proof bytes through.
         let sub = make_submission(0xAA, &intents, 5.0, 11);
         assert!(
             sub.witnessed_predicate.is_none(),
-            "this test exercises the predicate-less bypass path"
+            "this test exercises the (now-closed) predicate-less bypass path"
         );
         let result = engine.submit_solution(sub);
-        assert!(
-            result.is_ok(),
-            "KNOWN HOLE: non-strict default accepts predicate-less submissions \
-             on structural check alone (proof bytes never verified). If this \
-             now rejects, the default became fail-closed — update the test and \
-             the SECURITY comment. Got: {result:?}"
-        );
+        match result {
+            Err(EngineError::InvalidProof { reason }) => {
+                assert!(
+                    reason.contains("requires a witnessed_predicate"),
+                    "expected strict-mode predicate-required rejection, got: {reason}"
+                );
+            }
+            other => panic!(
+                "HOLE: production default must REJECT a predicate-less submission \
+                 (proof bytes never verified otherwise). Got: {other:?}"
+            ),
+        }
     }
 
     /// Companion to the known-hole test: a `strict` verifier (the correct

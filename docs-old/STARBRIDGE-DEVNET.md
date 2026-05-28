@@ -100,11 +100,11 @@ checkout without an actual instance and real credentials.
 
 2. ~~Fresh setup bootstraps from a stale GitHub repo identity.~~ **RESOLVED.**
    All `deploy/aws/*` repo references now use the canonical upstream remote
-   `git@github.com:emberian/pyana.git` (the actual `origin` of this checkout).
+   `git@github.com:emberian/dregg.git` (the actual `origin` of this checkout).
    `setup.sh` clones from `DREGG_REPO_URL` (default that URL) into `REPO_DIR`
    (default `/opt/dregg`) on `BRANCH` (default `main`), and all subsequent paths
    are derived from `$REPO_DIR`. `deploy/aws/README.md` curl/clone snippets use
-   `emberian/pyana` and document the override env var. `update.sh` already
+   `emberian/dregg` and document the override env var. `update.sh` already
    parameterizes `REPO_DIR`/`REMOTE`/`BRANCH` and uses the `origin` the clone
    created.
 
