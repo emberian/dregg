@@ -5,7 +5,7 @@
   <base href="/explorer/">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Explorer — dregg</title>
-  <meta name="description" content="Chain explorer for dregg federation state: blocks, turns, receipts, cells, capabilities, proofs, intents, federation, notes, and apps.">
+  <meta name="description" content="Live read-only viewport onto a dregg federation node — cells, blocks, receipts, capabilities, intents, and federations rendered through the same platform inspectors as the Studio.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="../_includes/vizzer.css">
@@ -22,24 +22,20 @@
       <div class="ex-search">
         <span class="ex-search__icon">&#9906;</span>
         <input type="text" class="ex-search__input" id="search-input"
-               placeholder="Search by cell ID, turn hash, receipt hash, or block height..."
+               placeholder="Search by cell id, receipt hash, block height, or dregg:// URI…"
                autocomplete="off" spellcheck="false">
         <kbd class="ex-search__kbd">/</kbd>
       </div>
+      <div class="ex-search__error" id="search-error" hidden></div>
     </div>
     <div class="ex-header__right">
       <div class="ex-connection" id="connection-status">
         <span class="ex-connection__dot"></span>
-        <span class="ex-connection__label">connecting...</span>
+        <span class="ex-connection__label">connecting…</span>
       </div>
-      <button class="ex-header__link" id="admin-token-clear" hidden title="Clear stored admin bearer token">Clear admin token</button>
       <button class="ex-header__settings-btn" id="settings-btn" title="Node settings">&#9881;</button>
       <a class="ex-header__link" href="../index.html">Home</a>
-      <a class="ex-header__link" href="../apps.html">Apps</a>
       <a class="ex-header__link" href="../starbridge/">Starbridge</a>
-      <a class="ex-header__link" href="../learn.html">Learn</a>
-      <a class="ex-header__link" href="../paper.html">Paper</a>
-      <a class="ex-header__link" href="../demo.html">Demo</a>
       <a class="ex-header__link" href="../playground/">Playground</a>
       <a class="ex-header__link" href="https://github.com/emberian/dregg">GitHub</a>
     </div>
@@ -57,27 +53,11 @@
       <div class="ex-modal__field">
         <label class="ex-modal__checkbox-label">
           <input type="checkbox" id="auto-refresh-toggle" checked>
-          Auto-refresh (every 5s)
+          Poll liveness (every 5s)
         </label>
       </div>
       <div class="node-diagnostics" id="node-diagnostics">
-        <div class="node-diagnostics__row">
-          <span>Endpoint</span>
-          <strong id="diag-endpoint">/status</strong>
-        </div>
-        <div class="node-diagnostics__row">
-          <span>HTTP</span>
-          <strong id="diag-http">not checked</strong>
-        </div>
-        <div class="node-diagnostics__row">
-          <span>CORS</span>
-          <strong id="diag-cors">--</strong>
-        </div>
-        <div class="node-diagnostics__row">
-          <span>Latency</span>
-          <strong id="diag-latency">--</strong>
-        </div>
-        <div class="node-diagnostics__message" id="diag-message">Open settings or refresh to probe the configured node.</div>
+        <div class="node-diagnostics__message" id="diag-message">Run a local node: <code>cargo run -p dregg-node -- run --port 8420 --federation-size 1</code>. Remote nodes only allow localhost/extension origins by default (CORS).</div>
       </div>
       <div class="ex-modal__actions">
         <button class="btn btn-secondary" id="settings-test">Test</button>
@@ -87,74 +67,39 @@
     </div>
   </div>
 
-  <!-- Main layout -->
+  <!-- Main layout. The whole app is one <dregg-app>: every object view is a
+       platform <dregg-*> inspector resolving through the live RemoteRuntime. -->
+  <dregg-app id="explorer-app">
   <div class="ex-layout">
     <!-- Left sidebar navigation -->
     <nav class="ex-nav" id="ex-nav">
       <div class="ex-nav__section">
         <button class="ex-nav__item active" data-page="overview">
-          <span class="ex-nav__icon">&#9670;</span>
-          <span class="ex-nav__label">Overview</span>
+          <span class="ex-nav__icon">&#9670;</span><span class="ex-nav__label">Overview</span>
         </button>
         <button class="ex-nav__item" data-page="blocks">
-          <span class="ex-nav__icon">&#9632;</span>
-          <span class="ex-nav__label">Blocks</span>
-        </button>
-        <button class="ex-nav__item" data-page="blocklace">
-          <span class="ex-nav__icon">&#9783;</span>
-          <span class="ex-nav__label">Blocklace</span>
+          <span class="ex-nav__icon">&#9632;</span><span class="ex-nav__label">Blocks</span>
         </button>
         <button class="ex-nav__item" data-page="cells">
-          <span class="ex-nav__icon">&#9673;</span>
-          <span class="ex-nav__label">Cells</span>
+          <span class="ex-nav__icon">&#9673;</span><span class="ex-nav__label">Cells</span>
         </button>
         <button class="ex-nav__item" data-page="turns">
-          <span class="ex-nav__icon">&#8634;</span>
-          <span class="ex-nav__label">Turns</span>
+          <span class="ex-nav__icon">&#8634;</span><span class="ex-nav__label">Turns</span>
         </button>
         <button class="ex-nav__item" data-page="receipts">
-          <span class="ex-nav__icon">&#9830;</span>
-          <span class="ex-nav__label">Receipts</span>
+          <span class="ex-nav__icon">&#9830;</span><span class="ex-nav__label">Receipts</span>
         </button>
         <button class="ex-nav__item" data-page="capabilities">
-          <span class="ex-nav__icon">&#8669;</span>
-          <span class="ex-nav__label">Capabilities</span>
-        </button>
-        <button class="ex-nav__item" data-page="proofs">
-          <span class="ex-nav__icon">&#9651;</span>
-          <span class="ex-nav__label">Proofs</span>
-        </button>
-        <button class="ex-nav__item" data-page="effects">
-          <span class="ex-nav__icon">&#9656;</span>
-          <span class="ex-nav__label">Effects</span>
+          <span class="ex-nav__icon">&#8669;</span><span class="ex-nav__label">Capabilities</span>
         </button>
         <button class="ex-nav__item" data-page="intents">
-          <span class="ex-nav__icon">&#9733;</span>
-          <span class="ex-nav__label">Intents</span>
+          <span class="ex-nav__icon">&#9733;</span><span class="ex-nav__label">Intents</span>
         </button>
         <button class="ex-nav__item" data-page="federation">
-          <span class="ex-nav__icon">&#9678;</span>
-          <span class="ex-nav__label">Federation</span>
+          <span class="ex-nav__icon">&#9678;</span><span class="ex-nav__label">Federation</span>
         </button>
-        <button class="ex-nav__item" data-page="notes">
-          <span class="ex-nav__icon">&#9838;</span>
-          <span class="ex-nav__label">Notes</span>
-        </button>
-        <button class="ex-nav__item" data-page="apps">
-          <span class="ex-nav__icon">&#9881;</span>
-          <span class="ex-nav__label">Apps</span>
-        </button>
-        <button class="ex-nav__item" data-page="queues">
-          <span class="ex-nav__icon">&#9776;</span>
-          <span class="ex-nav__label">Queues</span>
-        </button>
-        <button class="ex-nav__item" data-page="names">
-          <span class="ex-nav__icon">&#9674;</span>
-          <span class="ex-nav__label">Names</span>
-        </button>
-        <button class="ex-nav__item" data-page="delegations">
-          <span class="ex-nav__icon">&#8669;</span>
-          <span class="ex-nav__label">Delegations</span>
+        <button class="ex-nav__item" data-page="activity">
+          <span class="ex-nav__icon">&#9656;</span><span class="ex-nav__label">Activity</span>
         </button>
       </div>
       <div class="ex-nav__footer">
@@ -167,491 +112,111 @@
 
     <!-- Main content area -->
     <main class="ex-main" id="ex-main">
-      <!-- Overview page -->
+      <!-- Overview -->
       <section class="ex-page active" id="page-overview">
         <div class="ex-page__header">
           <h2>Federation Overview</h2>
-          <p>Real-time state of the connected dregg node and its federation.</p>
+          <p>Live read-only viewport onto the connected dregg node. Every panel below is a platform inspector resolving real node data through the RemoteRuntime — the same components the Studio and Playground use.</p>
         </div>
-
         <div class="devnet-brief" id="devnet-brief">
           <div class="devnet-brief__main">
             <div class="devnet-brief__eyebrow">Connected node</div>
             <div class="devnet-brief__title" id="devnet-node-url">--</div>
-            <div class="devnet-brief__meta" id="devnet-node-meta">Waiting for status...</div>
-          </div>
-          <div class="devnet-brief__facts" id="devnet-facts">
-            <div class="devnet-fact">
-              <span class="devnet-fact__label">Height</span>
-              <span class="devnet-fact__value" id="devnet-fact-height">--</span>
-            </div>
-            <div class="devnet-fact">
-              <span class="devnet-fact__label">Latest root</span>
-              <span class="devnet-fact__value devnet-fact__value--hash" id="devnet-fact-root">--</span>
-            </div>
-            <div class="devnet-fact">
-              <span class="devnet-fact__label">Checkpoint</span>
-              <span class="devnet-fact__value" id="devnet-fact-checkpoint">--</span>
-            </div>
+            <div class="devnet-brief__meta" id="devnet-node-meta">connecting…</div>
           </div>
         </div>
-
-        <div class="object-map" id="starbridge-object-map" aria-label="Starbridge object map">
-          <button class="object-map__item" type="button" data-map-page="blocks">
-            <span class="object-map__label">Blocks</span>
-            <span class="object-map__value" id="map-blocks-value">--</span>
-            <span class="object-map__desc">attested roots</span>
-          </button>
-          <button class="object-map__item" type="button" data-map-page="cells">
-            <span class="object-map__label">Cells</span>
-            <span class="object-map__value" id="map-cells-value">ledger agents</span>
-            <span class="object-map__desc">state holders</span>
-          </button>
-          <button class="object-map__item" type="button" data-map-page="turns">
-            <span class="object-map__label">Turns</span>
-            <span class="object-map__value" id="map-turns-value">receipts</span>
-            <span class="object-map__desc">execution input</span>
-          </button>
-          <button class="object-map__item" type="button" data-map-page="receipts">
-            <span class="object-map__label">Receipts</span>
-            <span class="object-map__value" id="map-receipts-value">proof chain</span>
-            <span class="object-map__desc">execution output</span>
-          </button>
-          <button class="object-map__item" type="button" data-map-page="names">
-            <span class="object-map__label">Names</span>
-            <span class="object-map__value" id="map-names-value">dregg://</span>
-            <span class="object-map__desc">routing names</span>
-          </button>
-          <button class="object-map__item" type="button" data-map-page="queues">
-            <span class="object-map__label">Queues</span>
-            <span class="object-map__value" id="map-queues-value">services</span>
-            <span class="object-map__desc">app ingress</span>
-          </button>
-          <button class="object-map__item" type="button" data-map-page="delegations">
-            <span class="object-map__label">Delegations</span>
-            <span class="object-map__value" id="map-delegations-value">authority</span>
-            <span class="object-map__desc">capability flow</span>
-          </button>
-        </div>
-
-        <div class="overview-stats" id="overview-stats">
-          <div class="stat-card">
-            <div class="stat-card__label">Block Height</div>
-            <div class="stat-card__value" id="stat-height">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Peers</div>
-            <div class="stat-card__value" id="stat-peers">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Revocations</div>
-            <div class="stat-card__value" id="stat-revocations">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Notes</div>
-            <div class="stat-card__value" id="stat-notes">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Intent Pool</div>
-            <div class="stat-card__value" id="stat-intents">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Pending Conditionals</div>
-            <div class="stat-card__value" id="stat-conditionals">--</div>
-          </div>
-        </div>
-
-        <div class="overview-sections">
-          <div class="overview-panel">
-            <div class="overview-panel__header">
-              <h3>Checkpoint</h3>
-              <span class="overview-panel__badge" id="checkpoint-badge">--</span>
-            </div>
-            <div class="overview-panel__body" id="checkpoint-info">
-              <div class="loading-placeholder">Connecting to node...</div>
-            </div>
-          </div>
-
-          <div class="overview-panel">
-            <div class="overview-panel__header">
-              <h3>Recent Attested Roots</h3>
-            </div>
-            <div class="overview-panel__body" id="recent-roots">
-              <div class="loading-placeholder">Connecting to node...</div>
-            </div>
-          </div>
-        </div>
+        <div class="overview-sections" id="overview-inspectors"></div>
       </section>
 
-      <!-- Blocks page -->
+      <!-- Blocks -->
       <section class="ex-page" id="page-blocks">
         <div class="ex-page__header">
           <h2>Blocks</h2>
-          <p>Attested roots from the federation consensus. Each root represents a committed state transition.</p>
+          <p>Attested roots from federation consensus, rendered via <code>&lt;dregg-block&gt;</code>. Search a height or click a federation to open its block.</p>
         </div>
-        <div class="ex-table-container" id="blocks-table">
-          <div class="loading-placeholder">Loading blocks...</div>
-        </div>
-        <div class="ex-detail-panel" id="block-detail" hidden>
-          <button class="ex-detail-panel__close" id="block-detail-close">&times;</button>
-          <div class="ex-detail-panel__content" id="block-detail-content"></div>
-        </div>
+        <div id="mount-blocks"></div>
+        <div id="detail-blocks" class="ex-detail-slot"></div>
       </section>
 
-      <!-- Blocklace page -->
-      <section class="ex-page" id="page-blocklace">
-        <div class="ex-page__header">
-          <h2>Blocklace</h2>
-          <p>Interactive DAG visualization of the Cordial Miners consensus protocol. Blocks as nodes, predecessor pointers as edges. Click any block to inspect.</p>
-        </div>
-        <div class="blocklace-content"></div>
-      </section>
-
-      <!-- Cells page -->
+      <!-- Cells -->
       <section class="ex-page" id="page-cells">
         <div class="ex-page__header">
           <h2>Cells</h2>
-          <p>Agents in the federation ledger. Hosted cells have full state on-chain; sovereign cells store only a commitment. Factory cells derive provenance from a parent VK.</p>
+          <p>Agents in the federation ledger, via <code>&lt;dregg-cell-list&gt;</code> / <code>&lt;dregg-cell&gt;</code>.</p>
         </div>
-        <div class="ex-table-container" id="cells-table">
-          <div class="loading-placeholder">Loading cells...</div>
-        </div>
-        <div class="ex-detail-panel" id="cell-detail" hidden>
-          <button class="ex-detail-panel__close" id="cell-detail-close">&times;</button>
-          <div class="ex-detail-panel__content" id="cell-detail-content"></div>
-        </div>
+        <div id="mount-cells"></div>
+        <div id="detail-cells" class="ex-detail-slot"></div>
       </section>
 
-      <!-- Turns page -->
+      <!-- Turns -->
       <section class="ex-page" id="page-turns">
         <div class="ex-page__header">
           <h2>Turns</h2>
-          <p>Submitted turns with their call forests, effects, and execution results. Supports bearer auth, proof-carrying sovereign turns, and multi-party atomic turns.</p>
+          <p>Committed turns share their hash with receipts; <code>&lt;dregg-turn&gt;</code> renders a turn's actions and authorization.</p>
         </div>
-        <div class="ex-table-container" id="turns-table">
-          <div class="loading-placeholder">Loading turns...</div>
-        </div>
-        <div class="ex-detail-panel" id="turn-detail" hidden>
-          <button class="ex-detail-panel__close" id="turn-detail-close">&times;</button>
-          <div class="ex-detail-panel__content" id="turn-detail-content"></div>
-        </div>
+        <div id="mount-turns"></div>
+        <div id="detail-turns" class="ex-detail-slot"></div>
       </section>
 
-      <!-- Receipts page -->
+      <!-- Receipts -->
       <section class="ex-page" id="page-receipts">
         <div class="ex-page__header">
           <h2>Receipts</h2>
-          <p>The local receipt chain — cryptographic proof of turn execution ordered by time.</p>
+          <p>The receipt chain via <code>&lt;dregg-receipt-list&gt;</code>; open one for <code>&lt;dregg-receipt&gt;</code> + <code>&lt;dregg-witnessed-receipt&gt;</code> with its trust-tier proof view.</p>
         </div>
-        <div class="ex-receipt-chain" id="receipts-chain">
-          <div class="loading-placeholder">Loading receipts...</div>
-        </div>
+        <div id="mount-receipts"></div>
+        <div id="detail-receipts" class="ex-detail-slot"></div>
       </section>
 
-      <!-- Capabilities page -->
+      <!-- Capabilities -->
       <section class="ex-page" id="page-capabilities">
         <div class="ex-page__header">
           <h2>Capabilities</h2>
-          <p>Capability tokens held by the local cipherclerk. Attenuation chains, delegation graphs, and revocation status.</p>
+          <p>Capability tokens held by the node cipherclerk, via <code>&lt;dregg-capability-list&gt;</code>.</p>
         </div>
-        <div class="ex-capabilities-list" id="capabilities-list">
-          <div class="loading-placeholder">Loading capabilities...</div>
-        </div>
+        <div id="mount-capabilities"></div>
+        <div id="detail-capabilities" class="ex-detail-slot"></div>
       </section>
 
-      <!-- Proofs page -->
-      <section class="ex-page" id="page-proofs">
-        <div class="ex-page__header">
-          <h2>Proofs</h2>
-          <p>Proof system backends: STARK (BabyBear/Poseidon2), Kimchi (Pasta), and composed multi-proof bindings.</p>
-        </div>
-        <div class="ex-proofs-list" id="proofs-list">
-          <div class="loading-placeholder">Loading proofs...</div>
-        </div>
-      </section>
-
-      <!-- Effects page -->
-      <section class="ex-page" id="page-effects">
-        <div class="ex-page__header">
-          <h2>Effect VM</h2>
-          <p>Visualize the Effect VM execution trace. Build effect sequences, watch state columns change, and tweak values to test constraint satisfaction.</p>
-        </div>
-        <div class="effects-content"></div>
-      </section>
-
-      <!-- Intents page -->
+      <!-- Intents -->
       <section class="ex-page" id="page-intents">
         <div class="ex-page__header">
           <h2>Intents</h2>
-          <p>Active intents in the node's pool. Supports encrypted SSE intents, delay pool, and commit-reveal fulfillment.</p>
+          <p>The node's intent pool. Select one to open the platform <code>&lt;dregg-intent&gt;</code> inspector.</p>
         </div>
-        <div class="ex-intents-sections">
-          <div class="overview-panel">
-            <div class="overview-panel__header">
-              <h3>Active Intents</h3>
-              <span class="overview-panel__badge" id="intents-count-badge">0</span>
-            </div>
-            <div class="overview-panel__body" id="intents-active">
-              <div class="loading-placeholder">Loading intents...</div>
-            </div>
-          </div>
-          <div class="overview-panel">
-            <div class="overview-panel__header">
-              <h3>Pending Conditionals</h3>
-              <span class="overview-panel__badge" id="conditionals-count-badge">0</span>
-            </div>
-            <div class="overview-panel__body" id="intents-conditionals">
-              <div class="loading-placeholder">Loading conditionals...</div>
-            </div>
-          </div>
-        </div>
+        <div id="mount-intents"></div>
+        <div id="detail-intents" class="ex-detail-slot"></div>
       </section>
 
-      <!-- Federation page -->
+      <!-- Federation -->
       <section class="ex-page" id="page-federation">
         <div class="ex-page__header">
           <h2>Federation</h2>
-          <p>3-node Blocklace consensus (Cordial Miners): node health, block height, attested roots, and DAG state.</p>
+          <p>Known federations + committee via <code>&lt;dregg-federation-list&gt;</code> / <code>&lt;dregg-federation&gt;</code>.</p>
         </div>
-        <div class="overview-stats" id="federation-stats">
-          <div class="stat-card">
-            <div class="stat-card__label">Nodes</div>
-            <div class="stat-card__value" id="fed-stat-nodes">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Block Height</div>
-            <div class="stat-card__value" id="fed-stat-height">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Latest Root</div>
-            <div class="stat-card__value stat-card__value--hash" id="fed-stat-root">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Health</div>
-            <div class="stat-card__value" id="fed-stat-health">--</div>
-          </div>
-        </div>
-        <div class="overview-sections">
-          <div class="overview-panel">
-            <div class="overview-panel__header">
-              <h3>Node Status</h3>
-            </div>
-            <div class="overview-panel__body" id="federation-nodes">
-              <div class="loading-placeholder">Loading federation nodes...</div>
-            </div>
-          </div>
-          <div class="overview-panel">
-            <div class="overview-panel__header">
-              <h3>Root History</h3>
-            </div>
-            <div class="overview-panel__body" id="federation-root-history">
-              <div class="loading-placeholder">Loading root history...</div>
-            </div>
-          </div>
-        </div>
+        <div id="mount-federation"></div>
+        <div id="detail-federation" class="ex-detail-slot"></div>
       </section>
 
-      <!-- Notes page -->
-      <section class="ex-page" id="page-notes">
+      <!-- Activity -->
+      <section class="ex-page" id="page-activity">
         <div class="ex-page__header">
-          <h2>Notes</h2>
-          <p>Note tree state: commitments, nullifiers, hidden asset types, and root history.</p>
+          <h2>Activity</h2>
+          <p>Live observability feed via <code>&lt;dregg-activity&gt;</code> (node <code>/observability/stream</code> SSE).</p>
         </div>
-        <div class="overview-stats" id="notes-stats">
-          <div class="stat-card">
-            <div class="stat-card__label">Total Notes</div>
-            <div class="stat-card__value" id="notes-stat-count">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Nullifier Set Root</div>
-            <div class="stat-card__value stat-card__value--hash" id="notes-stat-nullifier-root">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Note Tree Root</div>
-            <div class="stat-card__value stat-card__value--hash" id="notes-stat-tree-root">--</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-card__label">Revocations</div>
-            <div class="stat-card__value" id="notes-stat-revocations">--</div>
-          </div>
-        </div>
-        <div class="overview-sections">
-          <div class="overview-panel">
-            <div class="overview-panel__header">
-              <h3>Recent Root History</h3>
-            </div>
-            <div class="overview-panel__body" id="notes-root-history">
-              <div class="loading-placeholder">Loading note tree roots...</div>
-            </div>
-          </div>
-          <div class="overview-panel">
-            <div class="overview-panel__header">
-              <h3>Checkpoint State</h3>
-            </div>
-            <div class="overview-panel__body" id="notes-checkpoint-state">
-              <div class="loading-placeholder">Loading checkpoint state...</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Apps page -->
-      <section class="ex-page" id="page-apps">
-        <div class="ex-page__header">
-          <h2>Apps</h2>
-          <p>Application-specific data: gallery auctions, AMM pools, orderbook, lending positions, CDPs, and credentials.</p>
-        </div>
-        <div class="ex-apps-grid" id="apps-grid">
-          <div class="app-card" data-app="gallery">
-            <div class="app-card__icon">&#9670;</div>
-            <div class="app-card__name">Gallery</div>
-            <div class="app-card__desc">NFT auctions with ZK ownership proofs</div>
-            <div class="app-card__status" id="app-gallery-status">--</div>
-          </div>
-          <div class="app-card" data-app="amm">
-            <div class="app-card__icon">&#9883;</div>
-            <div class="app-card__name">AMM Pools</div>
-            <div class="app-card__desc">Constant-product liquidity pools</div>
-            <div class="app-card__status" id="app-amm-status">--</div>
-          </div>
-          <div class="app-card" data-app="orderbook">
-            <div class="app-card__icon">&#9776;</div>
-            <div class="app-card__name">Orderbook</div>
-            <div class="app-card__desc">On-chain limit orders and matching</div>
-            <div class="app-card__status" id="app-orderbook-status">--</div>
-          </div>
-          <div class="app-card" data-app="lending">
-            <div class="app-card__icon">&#9733;</div>
-            <div class="app-card__name">Lending</div>
-            <div class="app-card__desc">CDP positions and collateral health</div>
-            <div class="app-card__status" id="app-lending-status">--</div>
-          </div>
-          <div class="app-card" data-app="stablecoin">
-            <div class="app-card__icon">&#8373;</div>
-            <div class="app-card__name">Stablecoin</div>
-            <div class="app-card__desc">Algorithmic stablecoin CDPs</div>
-            <div class="app-card__status" id="app-stablecoin-status">--</div>
-          </div>
-          <div class="app-card" data-app="identity">
-            <div class="app-card__icon">&#9906;</div>
-            <div class="app-card__name">Credentials</div>
-            <div class="app-card__desc">Anonymous credentials with RBAC</div>
-            <div class="app-card__status" id="app-identity-status">--</div>
-          </div>
-          <div class="app-card" data-app="governed-namespace">
-            <div class="app-card__icon">&#9784;</div>
-            <div class="app-card__name">Governed Namespace</div>
-            <div class="app-card__desc">DAO-controlled DFA-routed file hosting</div>
-            <div class="app-card__status" id="app-governed-namespace-status">--</div>
-          </div>
-        </div>
-        <div class="ex-detail-panel" id="app-detail" hidden>
-          <button class="ex-detail-panel__close" id="app-detail-close">&times;</button>
-          <div class="ex-detail-panel__content" id="app-detail-content"></div>
-        </div>
-      </section>
-
-      <!-- Queues page -->
-      <section class="ex-page" id="page-queues">
-        <div class="ex-page__header">
-          <h2>Queues</h2>
-          <p>Programmable, blinded, and inbox queues across registered services. Anonymous reads show summaries (depth, root, vk_hash); entry listings require an admin token.</p>
-        </div>
-        <div class="ex-subtabs" role="tablist" aria-label="Queue family">
-          <button class="ex-subtab active" data-subtab="programmable" role="tab" aria-selected="true">Programmable</button>
-          <button class="ex-subtab" data-subtab="blinded" role="tab" aria-selected="false">Blinded</button>
-          <button class="ex-subtab" data-subtab="inbox" role="tab" aria-selected="false">Inbox</button>
-        </div>
-        <div id="queues-content">
-          <div class="loading-placeholder">Loading queues...</div>
-        </div>
-        <div class="ex-detail-panel" id="queue-detail" hidden>
-          <button class="ex-detail-panel__close" id="queue-detail-close">&times;</button>
-          <div class="ex-detail-panel__content" id="queue-detail-content"></div>
-        </div>
-      </section>
-
-      <!-- Names page -->
-      <section class="ex-page" id="page-names">
-        <div class="ex-page__header">
-          <h2>Names</h2>
-          <p>Nameservice registrations. Resolve a name to its dregg:// URI, inspect ownership, expiry, and tags.</p>
-        </div>
-        <div class="ex-filters">
-          <input type="text" id="names-search" placeholder="Prefix filter (e.g. alice)" class="ex-search__input" spellcheck="false" autocomplete="off">
-          <select id="names-filter" class="ex-select">
-            <option value="">All statuses</option>
-            <option value="active">Active</option>
-            <option value="grace">Grace</option>
-            <option value="expired">Expired</option>
-            <option value="disputed">Disputed</option>
-          </select>
-          <select id="names-sort" class="ex-select">
-            <option value="name">Sort: name</option>
-            <option value="expiry">Sort: expiry</option>
-            <option value="recent">Sort: most recent</option>
-          </select>
-        </div>
-        <div id="names-content">
-          <div class="loading-placeholder">Loading names...</div>
-        </div>
-        <div class="ex-detail-panel" id="name-detail" hidden>
-          <button class="ex-detail-panel__close" id="name-detail-close">&times;</button>
-          <div class="ex-detail-panel__content" id="name-detail-content"></div>
-        </div>
-      </section>
-
-      <!-- Delegations page -->
-      <section class="ex-page" id="page-delegations">
-        <div class="ex-page__header">
-          <h2>Delegations</h2>
-          <p>Known signed-delegation chains. Each row shows delegator → delegatee, caveats, and the authority policy.</p>
-        </div>
-        <div class="ex-filters">
-          <input type="text" id="delegations-search" placeholder="Search delegator / delegatee / cap_id" class="ex-search__input" spellcheck="false" autocomplete="off">
-        </div>
-        <div id="delegations-content">
-          <div class="loading-placeholder">Loading delegations...</div>
-        </div>
-        <div class="ex-detail-panel" id="delegation-detail" hidden>
-          <button class="ex-detail-panel__close" id="delegation-detail-close">&times;</button>
-          <div class="ex-detail-panel__content" id="delegation-detail-content"></div>
-        </div>
+        <div id="mount-activity"></div>
       </section>
     </main>
   </div>
-
-  <!-- Admin auth dialog (opened on demand by views that hit auth-required endpoints) -->
-  <dialog id="auth-dialog" class="ex-dialog">
-    <form method="dialog" class="ex-dialog__form">
-      <h3 class="ex-dialog__title">Admin token required</h3>
-      <p class="ex-dialog__desc" id="auth-dialog-desc">
-        This view calls an authenticated endpoint. Paste an admin bearer token to continue.
-        The token is held only in sessionStorage and is wiped when this tab closes.
-      </p>
-      <input type="password" id="auth-dialog-input" class="ex-dialog__input"
-             placeholder="Bearer token" autocomplete="off" spellcheck="false">
-      <div class="ex-dialog__actions">
-        <button type="button" class="btn btn-secondary" id="auth-dialog-cancel">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="auth-dialog-submit">Save &amp; retry</button>
-      </div>
-    </form>
-  </dialog>
-
-  <!-- Visualizer modules used by queues / names / delegations views. Each
-       module self-registers via defineVisualizer once runtime-bootstrap fires
-       dreggUi:ready, so order doesn't matter and missing modules degrade to
-       per-element fallback content. -->
-  <script type="module" src="../playground/visualizers/programmable-queue.js"></script>
-  <script type="module" src="../playground/visualizers/blinded-queue.js"></script>
-  <script type="module" src="../playground/visualizers/inbox-lifecycle.js"></script>
-  <script type="module" src="../playground/visualizers/nameservice-registration.js"></script>
-  <script type="module" src="../playground/visualizers/delegation-envelope-v2.js"></script>
+  </dregg-app>
 
   <script type="module">
-    // Boot the modular explorer app
     import { boot } from './app.js';
-    document.addEventListener('DOMContentLoaded', boot);
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot);
+    } else {
+      boot();
+    }
   </script>
 </body>
 </html>

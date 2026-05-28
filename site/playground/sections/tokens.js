@@ -1,14 +1,14 @@
 // Tokens section — mint, attenuate, verify
 
 import { state, notifyStateChange, navigateTo } from '../playground.js';
+import { deepLinkBanner } from '../studio-embed.js';
 
 export function initTokens(wasm) {
   const container = document.getElementById('section-tokens');
   container.innerHTML = `
     <div class="section-header">
       <h2>Tokens</h2>
-      <!-- Tier 1 playground migration (§4.9 COMPLETE FOLLOWUP-05): deep-link to Starbridge (coexist during transition) -->
-      <a href="/starbridge/?at=dregg://attenuated-token/demo" target="_blank" style="font-size:0.8em;float:right;">Inspect tokens in Starbridge (attenuated token deep link) →</a>
+      ${deepLinkBanner([{ label: '<dregg-capability>', uri: 'dregg://attenuated-token/demo' }])}
       <p>
         Dragon's Egg tokens are macaroon-style bearer credentials. A root token is minted from a secret key,
         then attenuated by appending caveats that cryptographically restrict scope. Attenuation is

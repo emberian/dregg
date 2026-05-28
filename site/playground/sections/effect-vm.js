@@ -9,6 +9,7 @@
  */
 
 import { state, notifyStateChange, getWasm } from '../playground.js';
+import { deepLinkBanner, inspectorEmbed, onSeedReady } from '../studio-embed.js';
 
 const EFFECT_TYPES = [
   { id: 'credit', label: 'Credit', desc: 'Add tokens to a cell', cols: ['target_bal', 'amount', 'total_supply'] },
@@ -27,16 +28,22 @@ export function initEffectVm(wasm) {
   const section = document.getElementById('section-effect-vm');
   if (!section) return;
 
-  // §4.9 Tier 2 migration note (FOLLOWUP-05) injected at init (after full read)
-  const migrationNote = `
-    <div style="background:#fff8e6;border:1px solid #f0d080;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
-      <strong>§4.9 Migration:</strong> Superseded by platform <code>&lt;dregg-turn-debugger&gt;</code> (AIR trace table, step-by-step). Educational content preserved (learn carve-out per plan).
-      <a href="/starbridge/?at=dregg://turn/demo" target="_blank">Deep-link to Starbridge now →</a>
-    </div>`;
-  section.innerHTML = migrationNote + `
+  // Tier 2 (STARBRIDGE-PLAN §4.9): the canonical turn trace is the platform
+  // <dregg-turn-debugger> inspector — it reads the real get_turn_trace(handle,
+  // turn_hash) over the seeded committed turn (step-by-step AIR trace table).
+  // The interactive effect builder below is preserved as the learn carve-out.
+  section.innerHTML = `
     <div class="pg-section__header">
       <h2>Effect VM</h2>
+      ${deepLinkBanner(
+        [{ label: '<dregg-turn-debugger>', uri: 'dregg://turn/feed' }],
+        'real get_turn_trace step-by-step AIR trace',
+      )}
       <p>Build an effect sequence, watch the execution trace form, check constraints, and prove it.</p>
+      ${inspectorEmbed(
+        `<dregg-turn-debugger id="evm-inspector" uri="dregg://turn/seed"></dregg-turn-debugger>`,
+        'Canonical turn debugger (real seeded turn)',
+      )}
     </div>
 
     <div class="effect-vm-layout">
@@ -82,6 +89,15 @@ export function initEffectVm(wasm) {
       </div>
     </div>
   `;
+
+  // Point the embedded <dregg-turn-debugger> at the real seeded turn.
+  onSeedReady((s) => {
+    if (!s.turnHash) return;
+    const uri = `dregg://turn/${s.turnHash}`;
+    section.querySelector('#evm-inspector')?.setAttribute('uri', uri);
+    const link = section.querySelector('.pg-sb-link');
+    if (link) link.href = `/starbridge/?at=${encodeURIComponent(uri)}`;
+  });
 
   // Wire controls
   document.getElementById('evm-add-btn').addEventListener('click', () => {

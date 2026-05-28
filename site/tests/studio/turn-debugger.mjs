@@ -53,19 +53,19 @@ async function run() {
   // We call the runtime API directly (not via button clicks) so the test is
   // not coupled to the page's button wiring. createAgent → mintToken produces
   // a receipt in the sim.
-  const turnHash = await page.evaluate(() => {
+  const turnHash = await page.evaluate(async () => {
     const app = document.getElementById('app');
     const rt = app.runtime;
 
     // Create alice with initial balance
-    const alice = rt.createAgent('alice', 5000n);
+    const alice = await rt.createAgent('alice', 5000n);
     if (!alice || alice.agent_index == null) {
       return { error: 'createAgent failed: ' + JSON.stringify(alice) };
     }
 
     // executeTurn generates a committed turn + receipt (even with empty actions)
     // fee must cover computrons; 1000 is sufficient for an empty turn
-    const turnResult = rt.executeTurn(alice.agent_index, [], 1000);
+    const turnResult = await rt.executeTurn(alice.agent_index, [], 1000);
     if (!turnResult) return { error: 'executeTurn returned null' };
     if (turnResult.status !== 'committed') {
       return { error: 'executeTurn not committed: ' + JSON.stringify(turnResult) };

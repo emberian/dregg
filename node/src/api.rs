@@ -1132,6 +1132,8 @@ pub fn router(
         .route("/checkpoint/latest", get(get_checkpoint_latest))
         .route("/checkpoint/{height}", get(get_checkpoint_at_height))
         .route("/api/blocklace/checkpoint", get(get_blocklace_checkpoint))
+        .route("/api/blocklace/blocks", get(get_blocklace_blocks))
+        .route("/api/block/{height}", get(get_block_by_height))
         .route("/pir/info", get(get_pir_info))
         .route("/pir/query", post(post_pir_query))
         .route(
@@ -3273,6 +3275,42 @@ async fn get_federation_roots(State(state): State<NodeState>) -> Json<Vec<Attest
 async fn get_federations(State(state): State<NodeState>) -> Json<Vec<FederationInfo>> {
     let s = state.read().await;
     Json(federation_infos(&s))
+}
+
+/// GET /api/blocklace/blocks — list the live blocklace DAG.
+///
+/// Returns every block in the local blocklace, height-sorted, with REAL block
+/// hashes and REAL parent (`prev_hash` / `predecessors`) links. This is the
+/// live analog of the wasm `list_federation_blocks` + `get_federation_block`
+/// surface, so the `<dregg-block-dag>` inspector renders node data with the same
+/// component it uses for the in-browser sim.
+///
+/// Empty list when consensus is not yet running (e.g. the handle hasn't been
+/// installed at startup); never a 404, so the explorer can poll safely.
+async fn get_blocklace_blocks(
+    State(state): State<NodeState>,
+) -> Json<Vec<crate::blocklace_sync::BlockView>> {
+    match state.blocklace().await {
+        Some(handle) => Json(handle.block_views().await),
+        None => Json(Vec::new()),
+    }
+}
+
+/// GET /api/block/{height} — fetch one blocklace block by height (creator seq).
+///
+/// `height` is the block's sequence number within its creator's chain (the same
+/// value surfaced as `height` in the block list). The response carries the
+/// block's REAL `prev_hash` (its first predecessor) and full `predecessors`
+/// set. Returns 404 when no block exists at that height.
+async fn get_block_by_height(
+    State(state): State<NodeState>,
+    AxumPath(height): AxumPath<u64>,
+) -> Result<Json<crate::blocklace_sync::BlockView>, StatusCode> {
+    let handle = state.blocklace().await.ok_or(StatusCode::NOT_FOUND)?;
+    match handle.block_view_at_height(height).await {
+        Some(view) => Ok(Json(view)),
+        None => Err(StatusCode::NOT_FOUND),
+    }
 }
 
 fn federation_infos(s: &crate::state::NodeStateInner) -> Vec<FederationInfo> {

@@ -1,17 +1,31 @@
 // Merkle section — build trees, prove membership, prove absence
 
 import { state, notifyStateChange, navigateTo } from '../playground.js';
+import { deepLinkBanner, inspectorEmbed } from '../studio-embed.js';
 
 export function initMerkle(wasm) {
   const container = document.getElementById('section-merkle');
+  // Tier 2 (STARBRIDGE-PLAN §4.9): the canonical tree view is the platform
+  // <dregg-merkle-tree> inspector — a 4-ary BLAKE3 SVG with membership/absence
+  // path highlighting, driven entirely by the real wasm merkle helpers
+  // (compute_merkle_root / merkle_membership_proof / merkle_non_membership_proof).
+  const defaultLeaves = JSON.stringify(['alice', 'bob', 'carol', 'dave']);
   container.innerHTML = `
     <div class="section-header">
       <h2>Merkle Trees</h2>
+      ${deepLinkBanner(
+        [{ label: '<dregg-merkle-tree>', uri: 'dregg://merkle-tree/demo' }],
+        'real 4-ary BLAKE3 tree + membership / absence paths',
+      )}
       <p>
         Dragon's Egg uses 4-ary BLAKE3 Merkle trees for state commitments. A single root hash
         commits to all leaves. You can prove that a specific leaf is in the tree (membership)
         or that a leaf is NOT in the tree (absence) — both with logarithmic-sized proofs.
       </p>
+      ${inspectorEmbed(
+        `<dregg-merkle-tree leaves='${defaultLeaves}' data='${JSON.stringify({ leaves: ['alice', 'bob', 'carol', 'dave'], focus_leaf: 'alice', prove: 'member' })}'></dregg-merkle-tree>`,
+        'Canonical Merkle tree view (real wasm crypto)',
+      )}
       <span class="next-hint" data-next="datalog">Next: write Datalog policies &#8594;</span>
     </div>
 

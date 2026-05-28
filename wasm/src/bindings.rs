@@ -683,6 +683,141 @@ pub fn get_capability_tree(handle: usize, agent_index: usize) -> Result<JsValue,
 }
 
 // ============================================================================
+// Agent-scoped cipherclerk getters (STARBRIDGE-PLAN §4.5 <dregg-cipherclerk> #36)
+//
+// Surface the real `AgentCipherclerk` state — macaroon-backed `HeldToken`s, the
+// receipt chain filtered to the agent, and the stealth PUBLIC keys — replacing
+// the "awaiting wasm32 support" / "TODO" placeholders in the cipherclerk
+// inspector. No private key material is ever surfaced (stealth getter returns
+// view+spend PUBKEYS only; spend/view private keys stay inside the cipherclerk).
+// ============================================================================
+
+/// List the macaroon-backed `HeldToken`s held by an agent's cipherclerk
+/// (`AgentCipherclerk::tokens()`). Distinct from the intent-matcher
+/// `HeldCapability` list surfaced by `get_capability_tree`.
+///
+/// Returns a JSON array of token summaries. No `root_key` / `issuer_key` is
+/// surfaced (those are `#[serde(skip)]` and zeroed on drop in the SDK); only the
+/// public-facing macaroon fields plus the capability flags (`can_mint`,
+/// `can_prove`, `verified`) are exposed.
+#[wasm_bindgen]
+pub fn get_agent_tokens(handle: usize, agent_index: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        if agent_index >= rt.agents.len() {
+            return Err("invalid agent index".to_string());
+        }
+        let cclerk = &rt.agents[agent_index].cclerk;
+
+        #[derive(Serialize)]
+        struct HeldTokenView {
+            id: String,
+            label: String,
+            service: String,
+            encoded: String,
+            verified: bool,
+            can_mint: bool,
+            can_prove: bool,
+            caveat_chain_hash: Option<String>,
+        }
+
+        let tokens: Vec<HeldTokenView> = cclerk
+            .tokens()
+            .iter()
+            .map(|t| HeldTokenView {
+                id: t.id().to_string(),
+                label: t.label().to_string(),
+                service: t.service().to_string(),
+                encoded: t.encoded().to_string(),
+                verified: t.is_verified(),
+                can_mint: t.can_mint(),
+                can_prove: t.can_prove(),
+                caveat_chain_hash: t.caveat_chain_hash().map(|h| hex_encode(&h)),
+            })
+            .collect();
+
+        serde_wasm_bindgen::to_value(&tokens).map_err(|e| e.to_string())
+    })
+}
+
+/// Get the receipt chain filtered to a single agent.
+///
+/// The wasm sim runtime applies turns through one shared `TurnExecutor` and
+/// records receipts in `DreggRuntime::receipts` (the cipherclerk's own
+/// `receipt_chain()` is not threaded in the sim path). Each `TurnReceipt`
+/// carries its `agent: CellId`, so we filter the global chain by the agent's
+/// cell id — the honest per-agent view. Same `ReceiptView` shape as
+/// `get_receipt_chain`, minus the per-action/proof expansion (the inspector
+/// drills into individual receipts via `<dregg-receipt uri="...">`).
+#[wasm_bindgen]
+pub fn get_agent_receipts(handle: usize, agent_index: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        if agent_index >= rt.agents.len() {
+            return Err("invalid agent index".to_string());
+        }
+        let cell_id = rt.agents[agent_index].cell_id;
+
+        #[derive(Serialize)]
+        struct AgentReceiptView {
+            turn_hash: String,
+            pre_state_hash: String,
+            post_state_hash: String,
+            effects_hash: String,
+            timestamp: i64,
+            computrons_used: u64,
+            action_count: usize,
+            previous_receipt_hash: Option<String>,
+        }
+
+        let chain: Vec<AgentReceiptView> = rt
+            .receipts
+            .iter()
+            .filter(|r| r.agent == cell_id)
+            .map(|r| AgentReceiptView {
+                turn_hash: hex_encode(&r.turn_hash),
+                pre_state_hash: hex_encode(&r.pre_state_hash),
+                post_state_hash: hex_encode(&r.post_state_hash),
+                effects_hash: hex_encode(&r.effects_hash),
+                timestamp: r.timestamp,
+                computrons_used: r.computrons_used,
+                action_count: r.action_count,
+                previous_receipt_hash: r.previous_receipt_hash.map(|h| hex_encode(&h)),
+            })
+            .collect();
+
+        serde_wasm_bindgen::to_value(&chain).map_err(|e| e.to_string())
+    })
+}
+
+/// Get an agent's stealth meta-address — the view and spend PUBLIC keys only.
+///
+/// Sourced from `AgentCipherclerk::stealth_meta_address()`
+/// (`StealthMetaAddress { spend_pubkey, view_pubkey }`). The corresponding
+/// PRIVATE keys (`view_private_key` / `spend_private_key`) are NEVER surfaced —
+/// they stay inside the cipherclerk's `StealthKeys`. Publishing the meta-address
+/// is the intended use: senders derive unlinkable one-time addresses from it.
+#[wasm_bindgen]
+pub fn get_agent_stealth_keys(handle: usize, agent_index: usize) -> Result<JsValue, JsError> {
+    with_runtime_ref(handle, |rt| {
+        if agent_index >= rt.agents.len() {
+            return Err("invalid agent index".to_string());
+        }
+        let meta = rt.agents[agent_index].cclerk.stealth_meta_address();
+
+        #[derive(Serialize)]
+        struct StealthKeysView {
+            spend_pubkey: String,
+            view_pubkey: String,
+        }
+
+        let result = StealthKeysView {
+            spend_pubkey: hex_encode(&meta.spend_pubkey),
+            view_pubkey: hex_encode(&meta.view_pubkey),
+        };
+        serde_wasm_bindgen::to_value(&result).map_err(|e| e.to_string())
+    })
+}
+
+// ============================================================================
 // Notes & Bridge
 // ============================================================================
 
@@ -1044,7 +1179,12 @@ pub fn get_federation_block(
             view: block.view,
             proposer: 0,
             block_hash: hex_encode(&block.block_hash),
-            prev_hash: hex_encode(&[0u8; 32]),
+            // Real predecessor hash — the height-(N-1) block's hash, folded into
+            // this block's `block_hash` at finalization (see FinalizedBlock /
+            // propose_block). Genesis-most block links to all-zeros. This gives
+            // <dregg-block-dag> real edges. (pre/post state roots remain [0u8;32]
+            // until the wasm sim tracks per-block state Merkle roots — honest gap.)
+            prev_hash: hex_encode(&block.prev_hash),
             pre_state_root: hex_encode(&[0u8; 32]),
             post_state_root: hex_encode(&[0u8; 32]),
             events: block.revoked_token_ids.clone(),
@@ -1072,6 +1212,9 @@ pub fn list_federation_blocks(handle: usize, fed_index: usize) -> Result<JsValue
             height: u64,
             view: u64,
             block_hash: String,
+            /// Real predecessor hash — lets <dregg-block-dag> draw edges from
+            /// the summary list alone (no per-block get_federation_block call).
+            prev_hash: String,
             num_events: usize,
         }
         let blocks: Vec<BlockSummary> = fed
@@ -1082,6 +1225,7 @@ pub fn list_federation_blocks(handle: usize, fed_index: usize) -> Result<JsValue
                 height: b.height,
                 view: b.view,
                 block_hash: hex_encode(&b.block_hash),
+                prev_hash: hex_encode(&b.prev_hash),
                 num_events: b.revoked_token_ids.len(),
             })
             .collect();

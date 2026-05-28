@@ -534,6 +534,27 @@ export interface DreggWasm {
   // Turn building / signing
   build_turn(params: string): { turn_id: string; turn_bytes: Uint8Array; signature?: Uint8Array };
   sign_message(privkey: Uint8Array, message: Uint8Array): Uint8Array;
+  /**
+   * Sign a pre-built postcard-encoded Turn via the canonical v3 path
+   * (`AgentCipherclerk::sign_action`). Replaces every Unchecked action's
+   * authorization with a real Ed25519 signature; re-encodes to postcard bytes.
+   */
+  sign_turn_v3(
+    turnBytes: Uint8Array,
+    senderPrivkey: Uint8Array,
+    federationId: Uint8Array,
+  ): { turn_id: string; turn_bytes: Uint8Array; signer_pubkey: string };
+  /**
+   * Build a canonical `Authorization::CapTpDelivered` envelope (postcard bytes).
+   * `handoffCertB58` is the compact `dregg-handoff:<base58>` or bare base58 of
+   * the cert; the three key/sig args are hex.
+   */
+  create_captp_delivered_auth(
+    handoffCertB58: string,
+    introducerPkHex: string,
+    senderPkHex: string,
+    senderSigHex: string,
+  ): { auth_bytes: Uint8Array; recipient_pk: string; introducer_federation: string };
 
   // Bearer capabilities
   create_bearer_cap(delegatorKeyHex: string, targetCellHex: string, action: string, expiry: number): { bearerTokenHex: string; targetCell: string; action: string };

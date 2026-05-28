@@ -139,6 +139,50 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     });
   }
 
+  // --- Agent-scoped cipherclerk state (#36) --------------------------------
+  // Real AgentCipherclerk state via the new wasm getters: macaroon-backed
+  // HeldTokens, the agent-filtered receipt chain, and stealth PUBLIC keys.
+  // Replaces the "awaiting wasm32 support" / TODO placeholders in
+  // <dregg-cipherclerk>. All signal-cached, keyed by agent index; bump on
+  // `version`. No private key material crosses the boundary (stealth getter is
+  // pubkeys only).
+  const agentTokensCache = new Map();
+  function getAgentTokens(agentIdx) {
+    const key = String(agentIdx);
+    if (!agentTokensCache.has(key)) {
+      agentTokensCache.set(key, computed(() => {
+        version.value;
+        try { return wasm.get_agent_tokens(handle, Number(agentIdx)) || []; }
+        catch { return []; }
+      }));
+    }
+    return agentTokensCache.get(key);
+  }
+  const agentReceiptsCache = new Map();
+  function getAgentReceipts(agentIdx) {
+    const key = String(agentIdx);
+    if (!agentReceiptsCache.has(key)) {
+      agentReceiptsCache.set(key, computed(() => {
+        version.value;
+        try { return wasm.get_agent_receipts(handle, Number(agentIdx)) || []; }
+        catch { return []; }
+      }));
+    }
+    return agentReceiptsCache.get(key);
+  }
+  const agentStealthCache = new Map();
+  function getAgentStealthKeys(agentIdx) {
+    const key = String(agentIdx);
+    if (!agentStealthCache.has(key)) {
+      agentStealthCache.set(key, computed(() => {
+        version.value;
+        try { return wasm.get_agent_stealth_keys(handle, Number(agentIdx)) || null; }
+        catch { return null; }
+      }));
+    }
+    return agentStealthCache.get(key);
+  }
+
   // --- Intents --------------------------------------------------------------
   // wasm has no `get_intent(idx)` getter and no `list_intents`. The runtime
   // tracks intent creation in JS-side state populated by createIntent().
@@ -606,6 +650,9 @@ export async function createInMemoryRuntime({ wasm, signals }) {
     listReceipts,
     getCapability,
     listCapabilities,
+    getAgentTokens,
+    getAgentReceipts,
+    getAgentStealthKeys,
     getIntent,
     listIntents,
     matchIntent,

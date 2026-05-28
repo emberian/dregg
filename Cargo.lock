@@ -3551,7 +3551,9 @@ name = "dregg-wasm"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "bs58",
  "clear_on_drop",
+ "dregg-captp",
  "dregg-cell",
  "dregg-circuit",
  "dregg-commit",

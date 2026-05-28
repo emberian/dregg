@@ -1,23 +1,31 @@
 // Notes section — private value transfer, double-spend prevention
 
 import { state, notifyStateChange, navigateTo } from '../playground.js';
+import { deepLinkBanner, inspectorEmbed, onSeedReady } from '../studio-embed.js';
 
 export function initNotes(wasm) {
   const container = document.getElementById('section-notes');
+  // Tier 2 (STARBRIDGE-PLAN §4.9): the canonical note view is the platform
+  // <dregg-note> inspector (commitment + nullifier UTXO lifecycle). It reads
+  // the real seeded note from the shared runtime's note index. The legacy
+  // mint/spend demo below is preserved as the educational walkthrough.
   container.innerHTML = `
     <div class="section-header">
       <h2>Private Notes</h2>
-      <!-- §4.9 tiered migration (FOLLOWUP-05): Tier 2 deprecation to <dregg-note> (preserve core demo) -->
-      <div style="background:#fff8e6;border:1px solid #f0d080;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
-        <strong>§4.9 Migration:</strong> Superseded by platform <code>&lt;dregg-note&gt;</code> inspector (UTXO lifecycle, nullifiers). Core demo preserved (learn carve-out). 
-        <a href="/starbridge/?at=dregg://note/demo" target="_blank">Deep-link to Starbridge now →</a>
-      </div>
+      ${deepLinkBanner(
+        [{ label: '<dregg-note>', uri: 'dregg://note/feed' }],
+        'real commitment + nullifier UTXO lifecycle',
+      )}
       <p>
         Notes are dregg's UTXO-style private value transfer primitive. When you mint a note,
         a cryptographic commitment hides the amount. When you spend it, a nullifier is published
         that prevents double-spending — but reveals nothing about the note's contents.
         Transfers create new notes and consume old ones atomically.
       </p>
+      ${inspectorEmbed(
+        `<dregg-note id="nt-inspector" uri="dregg://note/seed" agent-index="0"></dregg-note>`,
+        'Canonical note view (real seeded note)',
+      )}
       <span class="next-hint" data-next="capabilities">Next: capability delegation &#8594;</span>
     </div>
 
@@ -49,6 +57,15 @@ export function initNotes(wasm) {
     <div id="nt-timeline"></div>
     <div id="nt-explainer"></div>
   `;
+
+  // Point the embedded <dregg-note> at the real seeded note commitment.
+  onSeedReady((s) => {
+    if (!s.noteCommitment) return;
+    const uri = `dregg://note/${s.noteCommitment}`;
+    container.querySelector('#nt-inspector')?.setAttribute('uri', uri);
+    const link = container.querySelector('.pg-sb-link');
+    if (link) link.href = `/starbridge/?at=${encodeURIComponent(uri)}`;
+  });
 
   if (!wasm) return;
 

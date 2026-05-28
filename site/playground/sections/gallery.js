@@ -1,5 +1,9 @@
-// Gallery section — composite demos: sealed-bid auction + AMM swap
+// Gallery section — composite demo: sealed-bid auction.
 // Demonstrates how multiple primitives compose into real applications.
+//
+// The AMM-swap tab was retired (STARBRIDGE-PLAN §4.9): it referenced a deleted
+// slop app and modeled conservation/composition that the wasm now fails closed
+// on. Real DeFi-style patterns live in starbridge-apps/ (e.g. compute-exchange).
 
 import { state, notifyStateChange, navigateTo, getWasm } from '../playground.js';
 
@@ -14,11 +18,6 @@ export function initGallery(wasm) {
         commitments, and STARK proofs work together.
       </p>
       <span class="next-hint" data-next="sandbox">Next: code sandbox &#8594;</span>
-    </div>
-
-    <div class="gallery-tabs">
-      <button class="gallery-tab active" id="gal-tab-auction">Sealed-Bid Auction</button>
-      <button class="gallery-tab" id="gal-tab-amm">AMM Swap</button>
     </div>
 
     <!-- Auction Demo -->
@@ -38,45 +37,11 @@ export function initGallery(wasm) {
       <div id="gal-auc-display"></div>
       <div id="gal-auc-explainer"></div>
     </div>
-
-    <!-- AMM Swap Demo (retired §4.9 per plan - references deleted slop) -->
-    <div class="gallery-panel" id="gal-panel-amm">
-      <div style="margin-bottom:16px;color:var(--text-dim);font-size:12px;line-height:1.6;background:#ffeeee;padding:0.2rem;">
-        <strong>§4.9 Retire:</strong> AMM tab retired (slop-app ref). Real DeFi patterns now in starbridge-apps (e.g. compute-exchange future). 
-        <a href="/starbridge/" target="_blank">Starbridge →</a>
-      </div>
-      A constant-product AMM (x*y=k). Create a liquidity pool, execute a swap, and verify
-      the invariant is maintained — all with conservation proofs hiding the actual reserves.
-      </div>
-
-      <div class="controls-row">
-        <button class="btn btn-primary" id="gal-amm-create">1. Create Pool</button>
-        <button class="btn btn-primary" id="gal-amm-swap" disabled>2. Execute Swap</button>
-        <button class="btn btn-primary" id="gal-amm-verify" disabled>3. Verify Invariant</button>
-        <button class="btn btn-secondary" id="gal-amm-reset">Reset</button>
-      </div>
-
-      <div id="gal-amm-display"></div>
-      <div id="gal-amm-explainer"></div>
-    </div>
   `;
 
   if (!wasm) return;
 
   container.querySelector('.next-hint').addEventListener('click', () => navigateTo('sandbox'));
-
-  // --- Tab switching ---
-  const tabs = container.querySelectorAll('.gallery-tab');
-  const panels = container.querySelectorAll('.gallery-panel');
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      panels.forEach(p => p.classList.remove('active'));
-      tab.classList.add('active');
-      const panelId = tab.id.replace('tab', 'panel');
-      container.querySelector(`#${panelId}`).classList.add('active');
-    });
-  });
 
   // --- Utility ---
   function randomHex(n) {

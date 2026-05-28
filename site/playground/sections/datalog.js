@@ -1,22 +1,30 @@
 // Datalog section — write policies, evaluate, derivation trace
 
 import { state, notifyStateChange, navigateTo } from '../playground.js';
+import { deepLinkBanner, inspectorEmbed } from '../studio-embed.js';
 
 export function initDatalog(wasm) {
   const container = document.getElementById('section-datalog');
+  // Tier 2 (STARBRIDGE-PLAN §4.9): the canonical policy surface is the platform
+  // <dregg-predicate mode="editor"> inspector — it calls the real wasm
+  // evaluate_datalog(facts, request) and renders the derivation trace. The
+  // legacy split-pane below is preserved as the educational walkthrough.
   container.innerHTML = `
     <div class="section-header">
       <h2>Datalog Policy Engine</h2>
-      <!-- §4.9 tiered migration (FOLLOWUP-05): Tier 2 deprecation to <dregg-predicate> -->
-      <div style="background:#fff8e6;border:1px solid #f0d080;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
-        <strong>§4.9 Migration:</strong> Superseded by platform <code>&lt;dregg-predicate&gt;</code> + <code>&lt;dregg-witnessed-predicate&gt;</code> (derivation trace, Datalog). Core preserved for learn. 
-        <a href="/starbridge/?at=dregg://predicate/demo" target="_blank">Deep-link to Starbridge now →</a>
-      </div>
+      ${deepLinkBanner(
+        [{ label: '<dregg-predicate>', uri: 'dregg://predicate/demo' }],
+        'real evaluate_datalog + derivation trace',
+      )}
       <p>
         Authorization decisions are made by a Datalog evaluator. Facts describe the token's
         permissions, rules define the policy, and the evaluator produces a step-by-step derivation
         trace showing exactly why a request was allowed or denied. Deterministic, auditable, composable.
       </p>
+      ${inspectorEmbed(
+        `<dregg-predicate mode="editor"></dregg-predicate>`,
+        'Canonical predicate evaluator (real wasm Datalog)',
+      )}
       <span class="next-hint" data-next="notes">Next: private value transfer &#8594;</span>
     </div>
 

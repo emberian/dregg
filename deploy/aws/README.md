@@ -25,21 +25,26 @@ Internet
 - Domain `devnet.dregg.fg-goose.online` pointing to the instance's public IP
 - Ports open: 80 (HTTP, for ACME), 443 (HTTPS), 8420 (HTTP API, optional direct), 9420 (QUIC gossip)
 - SSH access configured
-- GitHub deploy key for the dregg repo
+- GitHub deploy key for the source repo (`git@github.com:emberian/pyana.git`, or your `DREGG_REPO_URL`)
 
 ## First-Time Setup
 
+The canonical source repo is `git@github.com:emberian/pyana.git` (the current
+`origin` remote of this checkout). `setup.sh` clones it by default; override with
+`DREGG_REPO_URL` for a fork or mirror.
+
 ```bash
 ssh ubuntu@devnet.dregg.fg-goose.online
-curl -sSL https://raw.githubusercontent.com/emberian/dregg/main/deploy/aws/setup.sh | bash
+curl -sSL https://raw.githubusercontent.com/emberian/pyana/main/deploy/aws/setup.sh | bash
 ```
 
 Or if you prefer to inspect first:
 
 ```bash
 ssh ubuntu@devnet.dregg.fg-goose.online
-git clone git@github.com:emberian/dregg.git /tmp/dregg-setup
+git clone git@github.com:emberian/pyana.git /tmp/dregg-setup
 less /tmp/dregg-setup/deploy/aws/setup.sh
+# DREGG_REPO_URL defaults to the clone source above; override for a fork.
 bash /tmp/dregg-setup/deploy/aws/setup.sh
 ```
 

@@ -20,7 +20,7 @@
 
 import { chromium } from '../../node_modules/playwright/index.mjs';
 
-const BASE = 'http://localhost:4818';
+const BASE = process.env.STUDIO_BASE || 'http://localhost:8080';
 
 async function run() {
   const browser = await chromium.launch({ headless: true });
@@ -48,13 +48,13 @@ async function run() {
   console.log('[test] runtime attached to <dregg-app#app>.');
 
   // ─── Step 1: create agent + execute a turn ──────────────────────────────────
-  const turnHash = await page.evaluate(() => {
+  const turnHash = await page.evaluate(async () => {
     const rt = document.getElementById('app').runtime;
-    const alice = rt.createAgent('alice', 5000n);
+    const alice = await rt.createAgent('alice', 5000n);
     if (!alice || alice.agent_index == null) {
       return { error: 'createAgent failed: ' + JSON.stringify(alice) };
     }
-    const turnResult = rt.executeTurn(alice.agent_index, [], 1000);
+    const turnResult = await rt.executeTurn(alice.agent_index, [], 1000);
     if (!turnResult) return { error: 'executeTurn returned null' };
     if (turnResult.status !== 'committed') {
       return { error: 'executeTurn not committed: ' + JSON.stringify(turnResult) };

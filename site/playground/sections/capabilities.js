@@ -1,14 +1,17 @@
 // Capabilities section — delegation chains, attenuation, revocation
 
 import { state, notifyStateChange, navigateTo } from '../playground.js';
+import { deepLinkBanner } from '../studio-embed.js';
 
 export function initCapabilities(wasm) {
   const container = document.getElementById('section-capabilities');
   container.innerHTML = `
     <div class="section-header">
       <h2>Capabilities</h2>
-      <!-- Tier 1 deep-link (§4.9 COMPLETE FOLLOWUP-05) -->
-      <a href="/starbridge/?at=dregg://capability/demo" target="_blank" style="font-size:0.8em;float:right;">Inspect caps in Starbridge (deep dregg://capability/...) →</a>
+      ${deepLinkBanner([
+        { label: '<dregg-capability>', uri: 'dregg://capability/0/0' },
+        { label: '<dregg-delegation-graph>', uri: 'dregg://delegation-graph/0' },
+      ])}
       <p>
         Capabilities are delegable, attenuable authorization tokens. A root capability grants
         full access; each delegation can only narrow scope (monotonic attenuation). Revocation
@@ -16,7 +19,7 @@ export function initCapabilities(wasm) {
         real-world delegation: "I grant you read access to my DNS, and you can sub-delegate
         read-only to your team."
       </p>
-      <span class="next-hint" data-next="crossfed">Next: cross-federation bridge &#8594;</span>
+      <span class="next-hint" data-next="sovereign">Next: sovereign cells &#8594;</span>
     </div>
 
     <div class="controls-row">

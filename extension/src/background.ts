@@ -1971,14 +1971,49 @@ async function queryBalance(): Promise<{ balance?: number; error?: string }> {
  * starbridge-apps turn-builders produce raw bytes; this is the canonical
  * surface for that path.
  *
- * TODO(wasm): The wasm module does not yet export `sign_turn_v3`. When the
- * export lands, replace the stub error below with:
- *   w.sign_turn_v3(turnBytes)
- * and update the DreggWasm interface in types.ts accordingly.
+ * Wired to the wasm `sign_turn_v3` export, which decodes the postcard Turn,
+ * replaces every `Authorization::Unchecked` action with a real Ed25519
+ * signature via the canonical `AgentCipherclerk::sign_action` path (the same
+ * path `DreggRuntime::execute_turn_for_agent` uses), and re-encodes. The
+ * federation_id is all-zeros for the devnet/sim genesis the extension submits
+ * against. The signed bytes are then submitted via the node /turns/submit
+ * outbox path, mirroring the other turn builders.
  */
-async function signTurnV3(_turnBytes: Uint8Array): Promise<SignTurnResult> {
-  // TODO: wire to w.sign_turn_v3 when the wasm export is available.
-  return { error: "signTurnV3: wasm sign_turn_v3 export not yet available", submitted: false };
+async function signTurnV3(turnBytes: Uint8Array): Promise<SignTurnResult> {
+  requireWasm("signTurnV3");
+  const w = wasm!;
+  const cc = await loadState();
+  if (cc.locked) return { error: "Cipherclerk is locked", submitted: false };
+  if (cc.needsPassphraseSetup) {
+    return { error: "Set a cipherclerk passphrase before signing turns.", submitted: false };
+  }
+  if (!cc.secretKey) return { error: "Cipherclerk secret key not available", submitted: false };
+
+  let signed: { turn_id: string; turn_bytes: Uint8Array; signer_pubkey: string };
+  try {
+    // federation_id = all-zeros (devnet/sim genesis). 32 bytes.
+    const federationId = new Uint8Array(32);
+    signed = w.sign_turn_v3(turnBytes, new Uint8Array(cc.secretKey), federationId);
+  } catch (e: unknown) {
+    const err = e as Error;
+    return { error: err.message || "sign_turn_v3 failed", submitted: false };
+  }
+
+  const submit = await submitNodeJsonWithOutbox<{ turn_id?: string }>({
+    kind: "turn",
+    label: "sign turn (v3)",
+    endpoint: "/turns/submit",
+    turnId: signed.turn_id,
+    body: {
+      turn_id: signed.turn_id,
+      turn_bytes: Array.from(signed.turn_bytes),
+      sender_pubkey: cc.publicKey,
+    },
+    metadata: { action: "signTurnV3" },
+  });
+  if (submit.submitted) return { turnId: submit.data?.turn_id || signed.turn_id, submitted: true };
+  if (submit.queued) return { turnId: signed.turn_id, submitted: false, queued: true, error: `Queued for retry: ${submit.error}` };
+  return { error: `Turn submission failed: ${submit.error}`, submitted: false };
 }
 
 /**
@@ -2006,13 +2041,33 @@ async function listKnownFederations(): Promise<KnownFederation[]> {
  * Build a serialized Authorization::CapTpDelivered envelope for attaching
  * to a turn during a CapTP handoff.
  *
- * TODO(wasm): The wasm module does not yet export `create_captp_delivered_auth`.
- * When the export lands, replace the stub below with the real wasm call and
- * update DreggWasm in types.ts.
+ * Wired to the wasm `create_captp_delivered_auth` export, which decodes the
+ * handoff certificate (compact `dregg-handoff:<base58>` or bare base58),
+ * assembles the canonical `Authorization::CapTpDelivered { handoff_cert,
+ * introducer_pk, sender_pk, sender_signature }`, and postcard-encodes it. The
+ * recipient signature is produced upstream by the recipient cipherclerk over
+ * `captp_delivered_signing_message`; the executor's `verify_captp_delivered`
+ * does the real verification at apply time.
  */
-function createCapTpDeliveredAuth(_handoffCertB58: string, _introducerPk: string, _senderPk: string): { authBytes: number[]; error?: string } {
-  // TODO: wire to w.create_captp_delivered_auth when the wasm export is available.
-  return { authBytes: [], error: "createCapTpDeliveredAuth: wasm export not yet available" };
+function createCapTpDeliveredAuth(
+  handoffCertB58: string,
+  introducerPk: string,
+  senderPk: string,
+  senderSig: string,
+): { authBytes: number[]; recipientPk?: string; introducerFederation?: string; error?: string } {
+  requireWasm("createCapTpDeliveredAuth");
+  const w = wasm!;
+  try {
+    const result = w.create_captp_delivered_auth(handoffCertB58, introducerPk, senderPk, senderSig);
+    return {
+      authBytes: Array.from(result.auth_bytes as Uint8Array),
+      recipientPk: result.recipient_pk as string,
+      introducerFederation: result.introducer_federation as string,
+    };
+  } catch (e: unknown) {
+    const err = e as Error;
+    return { authBytes: [], error: err.message || "create_captp_delivered_auth failed" };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2913,6 +2968,7 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         message.handoffCertB58 as string,
         message.introducerPk as string,
         message.senderPk as string,
+        message.senderSig as string,
       );
       return { id: message.id, result };
     }

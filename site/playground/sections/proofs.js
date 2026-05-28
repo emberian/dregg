@@ -1,24 +1,31 @@
 // Proofs section — STARK proof generation, verification, tamper detection
 
 import { state, notifyStateChange, navigateTo } from '../playground.js';
+import { deepLinkBanner, inspectorEmbed, onSeedReady } from '../studio-embed.js';
 
 export function initProofs(wasm) {
   const container = document.getElementById('section-proofs');
+  // Tier 2 (STARBRIDGE-PLAN §4.9): the canonical proof view is the platform
+  // <dregg-proof> inspector (trust-tier badge + γ.2 bilateral PI over the real
+  // seeded turn). The tamper-and-watch-it-fail demo is preserved below as the
+  // educational carve-out — it drives the real wasm STARK prover/verifier.
   container.innerHTML = `
     <div class="section-header">
       <h2>STARK Proofs</h2>
-      <!-- §4.9 tiered migration (FOLLOWUP-05): Tier 1 deep-link + Tier 2 deprecation banner (preserve tamper demo as educational) -->
-      <a href="/starbridge/?at=dregg://proof/demo" target="_blank" style="font-size:0.8em;float:right;">Open in Starbridge &lt;dregg-proof&gt; (deep link) →</a>
+      ${deepLinkBanner(
+        [{ label: '<dregg-proof>', uri: 'dregg://proof/feed' }],
+        'trust-tier + γ.2 bilateral PI over the seeded turn',
+      )}
       <p>
         Generate real STARK proofs for Merkle membership claims over the BabyBear field
         (p = 2<sup>31</sup> - 2<sup>27</sup> + 1). These are transparent-setup,
         post-quantum secure proofs. Generate one, verify it, then tamper with it to see
         verification fail — demonstrating soundness.
       </p>
-      <div style="background:#fff8e6;border:1px solid #f0d080;padding:0.25rem 0.5rem;font-size:0.75rem;margin:0.3rem 0;">
-        <strong>§4.9 Migration:</strong> Superseded by platform <code>&lt;dregg-proof&gt;</code> inspector (trust-tier, real views). Tamper demo preserved here (learn carve-out). 
-        <a href="/starbridge/?at=dregg://proof/demo" target="_blank">Deep-link to Starbridge now →</a>
-      </div>
+      ${inspectorEmbed(
+        `<dregg-proof id="pf-inspector" uri="dregg://receipt/seed"></dregg-proof>`,
+        'Canonical proof view (real seeded turn)',
+      )}
       <span class="next-hint" data-next="merkle">Next: explore Merkle trees &#8594;</span>
     </div>
 
@@ -62,6 +69,16 @@ export function initProofs(wasm) {
     <div id="pf-result"></div>
     <div id="pf-explainer"></div>
   `;
+
+  // Once the shared runtime has seeded a real committed turn, point the
+  // embedded <dregg-proof> inspector and the Starbridge deeplink at it.
+  onSeedReady((s) => {
+    if (!s.turnHash) return;
+    const uri = `dregg://receipt/${s.turnHash}`;
+    container.querySelector('#pf-inspector')?.setAttribute('uri', uri);
+    const link = container.querySelector('.pg-sb-link');
+    if (link) link.href = `/starbridge/?at=${encodeURIComponent('dregg://proof/' + s.turnHash)}`;
+  });
 
   if (!wasm) return;
 

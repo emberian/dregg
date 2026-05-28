@@ -110,6 +110,97 @@ pub struct BlocklaceHandle {
     pub checkpoint_interval: u64,
 }
 
+/// A read-only view of one blocklace block, shaped to mirror the wasm
+/// `get_federation_block` binding so the SAME `<dregg-block-dag>` inspector
+/// renders both the in-browser sim and live node data.
+///
+/// `height` = the block's `seq` within its creator's chain. `prev_hash` is the
+/// FIRST predecessor (the block's primary parent); `predecessors` carries the
+/// full DAG parent set for inspectors that render the lace structure. All hashes
+/// are real: `block_hash` is `Block::id()` (blake3 over signed content), and the
+/// parent hashes come from the block's actual `predecessors` field.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct BlockView {
+    pub height: u64,
+    pub view: u64,
+    pub proposer: String,
+    pub block_hash: String,
+    pub prev_hash: String,
+    pub predecessors: Vec<String>,
+    pub pre_state_root: String,
+    pub post_state_root: String,
+    pub events: Vec<String>,
+    pub num_votes: usize,
+    pub qc_threshold: usize,
+    /// Payload kind: "turn" | "turn_bundle" | "heartbeat" | "checkpoint" |
+    /// "membership" | "data". Lets the inspector distinguish heartbeats from
+    /// turn-bearing blocks.
+    pub kind: String,
+    /// Finality round (DAG depth) assigned by tau ordering, if ordered.
+    pub finality_round: Option<u64>,
+}
+
+impl BlocklaceHandle {
+    /// Snapshot every block in the local blocklace as a list of [`BlockView`]s,
+    /// sorted by (seq, creator) so the result is a deterministic, height-ordered
+    /// view of the DAG. Each view carries real block/parent hashes.
+    pub async fn block_views(&self) -> Vec<BlockView> {
+        let lace = self.lace.read().await;
+        let quorum = {
+            let c = self.constitution.read().await;
+            c.threshold()
+        };
+        let mut blocks: Vec<(&BlockId, &Block)> = lace.iter().collect();
+        blocks.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
+        blocks
+            .into_iter()
+            .map(|(id, block)| {
+                let predecessors: Vec<String> =
+                    block.predecessors.iter().map(|p| hex_encode(&p.0)).collect();
+                let prev_hash = block
+                    .predecessors
+                    .first()
+                    .map(|p| hex_encode(&p.0))
+                    .unwrap_or_else(|| hex_encode(&[0u8; 32]));
+                let kind = match &block.payload {
+                    Payload::Turn(_) => "turn",
+                    Payload::TurnBundle(_) => "turn_bundle",
+                    Payload::Ack => "heartbeat",
+                    Payload::Checkpoint { .. } => "checkpoint",
+                    Payload::MembershipVote { .. } => "membership",
+                    Payload::Data(_) => "data",
+                }
+                .to_string();
+                BlockView {
+                    height: block.seq,
+                    view: 0,
+                    proposer: hex_encode(&block.creator),
+                    block_hash: hex_encode(&id.0),
+                    prev_hash,
+                    predecessors,
+                    pre_state_root: hex_encode(&[0u8; 32]),
+                    post_state_root: hex_encode(&[0u8; 32]),
+                    events: Vec::new(),
+                    num_votes: 0,
+                    qc_threshold: quorum,
+                    kind,
+                    finality_round: lace.round_of(id),
+                }
+            })
+            .collect()
+    }
+
+    /// Find the block whose creator-seq equals `height`. When several creators
+    /// produced a block at the same seq (multi-node DAG), the lexicographically
+    /// smallest creator wins for determinism. Returns `None` if no such block.
+    pub async fn block_view_at_height(&self, height: u64) -> Option<BlockView> {
+        self.block_views()
+            .await
+            .into_iter()
+            .find(|v| v.height == height)
+    }
+}
+
 /// A finalized block's payload, ready for execution by the finality executor.
 ///
 /// The executor dispatches on this enum to process turns (state transitions),
@@ -162,6 +253,27 @@ impl BlocklaceHandle {
     ) -> (BlockId, FinalityLevel) {
         self.submit_turn_payload(state, Payload::TurnBundle(bundle))
             .await
+    }
+
+    /// Produce an empty heartbeat block (`Payload::Ack`).
+    ///
+    /// A heartbeat is a real, signed block linking to the current tips; it
+    /// carries no turn but advances the DAG (seq + parent links) so the chain
+    /// makes visible progress while idle. Returns the new block id.
+    pub async fn submit_heartbeat(&self, state: &NodeState) -> BlockId {
+        let block = {
+            let mut lace = self.lace.write().await;
+            lace.add_block(Payload::Ack)
+        };
+        let block_id = block.id();
+        Self::persist_block_to_store(state, &block).await;
+
+        // Heartbeats still advance ordering bookkeeping (the finality executor
+        // treats Ack as a no-op for execution but the seq/tip have advanced).
+        self.finality_notify.notify_one();
+        self.push_new_blocks().await;
+        debug!(block_id = %block_id, seq = block.seq, "produced heartbeat block");
+        block_id
     }
 
     async fn submit_turn_payload(
@@ -474,6 +586,7 @@ pub async fn run_blocklace_sync(
     auto_approve_joins: bool,
     blocklace_checkpoint_interval: u64,
     constitution_timeout_ms: u64,
+    block_cadence_ms: u64,
 ) -> Option<BlocklaceHandle> {
     // Blocklace tuning params (from CLI --blocklace-* or safe defaults in main).
     // This is the core of making blocklace easy to configure/enable/disable/tune
@@ -743,6 +856,20 @@ pub async fn run_blocklace_sync(
     // ─── Spawn the Finalized Turn Executor Task ─────────────────────────────
 
     spawn_finality_executor(state.clone(), handle.clone());
+
+    // ─── Spawn the Block Production Cadence Task ─────────────────────────────
+    //
+    // The pure blocklace protocol is quiescent: a block is only produced when a
+    // turn is submitted. For a devnet / explorer we also want the chain to make
+    // visible progress over time even when idle, so (when cadence > 0) this task
+    // drains the consensus queue into real blocks and, if the queue is empty,
+    // produces an empty heartbeat block. Every block links to the current tips
+    // (real parent hashes) and advances the creator's seq (real height).
+    if block_cadence_ms > 0 {
+        spawn_block_cadence(state.clone(), handle.clone(), block_cadence_ms);
+    } else {
+        info!("block cadence disabled (--block-cadence-ms 0): blocks produced only on turn submission");
+    }
 
     // If we're not already a federation participant, propose joining.
     // This enables new nodes to join at runtime via the constitutional amendment
@@ -1061,6 +1188,61 @@ async fn handle_frontier(
         blocks = total_missing,
         "completed chunked frontier sync"
     );
+}
+
+// ─── Block Production Cadence ────────────────────────────────────────────────
+
+/// Spawn a background task that produces blocks on a fixed cadence.
+///
+/// On each tick:
+///   1. Drain any signed turns queued in `consensus_queue` and submit them as
+///      real turn blocks (these flow through the finality executor and update
+///      the ledger + attested roots).
+///   2. If the queue was empty, produce a single empty *heartbeat* block
+///      (`Payload::Ack`). A heartbeat carries no turn but is still a real,
+///      Ed25519-signed block that links to the current tips — so the DAG keeps
+///      advancing (real seq, real block id, real parent links) even when the
+///      node is idle.
+///
+/// This is what makes a solo node "produce blocks over time" rather than only
+/// when a turn happens to arrive. Disabled when `cadence_ms == 0`.
+fn spawn_block_cadence(state: NodeState, handle: BlocklaceHandle, cadence_ms: u64) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_millis(cadence_ms));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Skip the immediate first tick so we don't emit a block at t=0 before
+        // genesis/state has settled.
+        ticker.tick().await;
+        info!(cadence_ms, "block production cadence active");
+        loop {
+            ticker.tick().await;
+
+            // Drain queued turns (if any) into real turn blocks.
+            let queued: Vec<dregg_sdk::SignedTurn> = {
+                let mut s = state.write().await;
+                std::mem::take(&mut s.consensus_queue)
+            };
+
+            if !queued.is_empty() {
+                let n = queued.len();
+                for signed in queued {
+                    match postcard::to_stdvec(&signed) {
+                        Ok(turn_data) => {
+                            handle.submit_turn(&state, turn_data).await;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to encode queued turn for block production");
+                        }
+                    }
+                }
+                debug!(turns = n, "cadence: produced turn block(s) from consensus queue");
+                continue;
+            }
+
+            // Idle: produce an empty heartbeat block so height keeps advancing.
+            handle.submit_heartbeat(&state).await;
+        }
+    });
 }
 
 // ─── Finalized Turn Executor ────────────────────────────────────────────────

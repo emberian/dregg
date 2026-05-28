@@ -1,12 +1,14 @@
 // Bearer Capabilities section — create, grant, verify, exercise bearer caps
 
 import { state, notifyStateChange, navigateTo, getWasm } from '../playground.js';
+import { deepLinkBanner } from '../studio-embed.js';
 
 export function initBearer(wasm) {
   const container = document.getElementById('section-bearer');
   container.innerHTML = `
     <div class="section-header">
       <h2>Bearer Capabilities</h2>
+      ${deepLinkBanner([{ label: '<dregg-bearer-cap>', uri: 'dregg://bearer-cap/demo' }])}
       <p>
         A bearer cap is a proof-carrying authorization token: whoever holds the proof can
         exercise the capability. Unlike delegation chains, bearer caps are transferable without

@@ -32,6 +32,10 @@ dregg-sdk = { path = "../sdk", default-features = false }
 # sdk pulls bulletproofs (via cell crypto) — already covered by the
 # clear_on_drop override below, but listing here for grep-ability.
 dregg-types = { path = "../types" }
+# CapTP — needed to decode `HandoffCertificate` (carried by
+# `Authorization::CapTpDelivered`) for `create_captp_delivered_auth`. Pure
+# types + bs58 + postcard; wasm32-safe (already a transitive dep via dregg-turn).
+dregg-captp = { path = "../captp" }
 # Federation (pure types + consensus orchestration). The `runtime` feature
 # (tokio + crossbeam transport) is non-wasm32, hence default-features = false.
 dregg-federation = { path = "../federation", default-features = false }
@@ -44,6 +48,7 @@ dregg-observability = { path = "../observability", default-features = false }
 dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 
 blake3 = "1"
+bs58 = "0.5"
 postcard = { version = "1", features = ["alloc"] }
 js-sys = "0.3"
 x25519-dalek = { workspace = true }

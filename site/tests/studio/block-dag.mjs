@@ -22,7 +22,7 @@
 
 import { chromium } from '../../node_modules/playwright/index.mjs';
 
-const BASE = 'http://localhost:4818';
+const BASE = process.env.STUDIO_BASE || 'http://localhost:8080';
 
 async function run() {
   const browser = await chromium.launch({ headless: true });

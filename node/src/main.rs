@@ -94,6 +94,15 @@ enum Command {
         #[arg(long, default_value = "10000")]
         blocklace_wave_timeout_ms: u64,
 
+        /// Block production cadence in milliseconds. When > 0, the node produces
+        /// a block on this interval even when no turns have been submitted (an
+        /// empty heartbeat block), so height advances over time and the
+        /// blocklace DAG always has a live tip. Set 0 to disable the heartbeat
+        /// (purely quiescent: blocks are only produced when turns arrive).
+        /// Default 2000ms (devnet-friendly steady cadence).
+        #[arg(long, default_value = "2000")]
+        block_cadence_ms: u64,
+
         /// Enable the faucet endpoint (POST /api/faucet).
         /// Only suitable for devnets. Allows anyone to request computrons from the
         /// genesis faucet cell.
@@ -291,6 +300,7 @@ async fn main() {
             checkpoint_interval,
             blocklace_checkpoint_interval,
             blocklace_wave_timeout_ms,
+            block_cadence_ms,
             enable_faucet,
             federation_mode,
             consensus,
@@ -310,6 +320,7 @@ async fn main() {
                 checkpoint_interval,
                 blocklace_checkpoint_interval,
                 blocklace_wave_timeout_ms,
+                block_cadence_ms,
                 enable_faucet,
                 &federation_mode,
                 &consensus,
@@ -382,6 +393,7 @@ async fn run_node(
     checkpoint_interval: u64,
     blocklace_checkpoint_interval: u64,
     blocklace_wave_timeout_ms: u64,
+    block_cadence_ms: u64,
     enable_faucet: bool,
     federation_mode_str: &str,
     consensus_engine: &str,
@@ -586,30 +598,34 @@ async fn run_node(
     }
 
     // Spawn federation sync background task based on the chosen consensus engine.
-    // In solo mode with no peers, skip gossip entirely regardless of engine.
+    //
+    // The blocklace runs in EVERY configuration, including solo with no peers.
+    // Solo is a committee-of-one: a real `Blocklace` (real Ed25519-signed blocks,
+    // real blake3 block IDs, real parent links to prior tips, real tau ordering
+    // which is trivial at n=1). This is the only way the node produces real
+    // blocks with real parent hashes — the prior `solo_consensus` path only
+    // bumped an in-memory height counter and produced no DAG at all.
     match consensus_engine {
         "blocklace" => {
-            // Blocklace consensus: quiescent, leaderless DAG-based BFT.
-            if !is_solo_mode || has_peers {
-                info!(
-                    consensus = "blocklace",
-                    "using blocklace (Cordial Miners) consensus"
-                );
-                let sync_state = node_state.clone();
-                let gossip_port_copy = gossip_port;
-                let blocklace_handle = blocklace_sync::run_blocklace_sync(
-                    sync_state,
-                    gossip_port_copy,
-                    auto_approve_joins,
-                    blocklace_checkpoint_interval,
-                    blocklace_wave_timeout_ms,
-                )
-                .await;
-                if let Some(handle) = blocklace_handle {
-                    node_state.set_blocklace(handle).await;
-                }
-            } else {
-                info!("solo mode with no peers configured — blocklace sync skipped");
+            info!(
+                consensus = "blocklace",
+                solo = is_solo_mode,
+                has_peers,
+                "using blocklace (Cordial Miners) consensus"
+            );
+            let sync_state = node_state.clone();
+            let gossip_port_copy = gossip_port;
+            let blocklace_handle = blocklace_sync::run_blocklace_sync(
+                sync_state,
+                gossip_port_copy,
+                auto_approve_joins,
+                blocklace_checkpoint_interval,
+                blocklace_wave_timeout_ms,
+                block_cadence_ms,
+            )
+            .await;
+            if let Some(handle) = blocklace_handle {
+                node_state.set_blocklace(handle).await;
             }
         }
         _ => {

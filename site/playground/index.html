@@ -7,6 +7,44 @@
   <meta name="description" content="Unified interactive playground for dregg: tokens, STARK proofs, Merkle trees, Datalog policies, private notes, capabilities, and cross-federation composition.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/playground/style.css">
+  <!-- Studio inspector embedding (STARBRIDGE-PLAN §4.9 Tier 2):
+       runtime-bootstrap exposes window.dreggUi for the platform <dregg-*>
+       inspectors; studio-embed.js attaches a shared seeded in-memory runtime
+       to every <dregg-app> a section renders. -->
+  <script type="module" src="/_includes/runtime-bootstrap.js"></script>
+  <style>
+    /* Tier-1 deeplink banner + Tier-2 embedded inspector chrome. */
+    .pg-sb-banner {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      margin: 0.5rem 0; padding: 6px 10px;
+      border: 1px solid var(--line, #2a3530);
+      border-radius: 6px;
+      background: var(--bg-raised, #141a17);
+      font-size: 0.78rem;
+    }
+    .pg-sb-banner__eyebrow {
+      color: var(--text-dim, #8a958f); text-transform: uppercase;
+      letter-spacing: 0.06em; font-size: 0.66rem; font-weight: 700;
+    }
+    .pg-sb-link {
+      color: var(--accent-bright, #8fddff); text-decoration: none;
+      border: 1px solid var(--line, #2a3530); border-radius: 999px;
+      padding: 2px 10px; white-space: nowrap;
+    }
+    .pg-sb-link:hover { border-color: var(--accent-bright, #8fddff); }
+    .pg-sb-banner__note { color: var(--text-dim, #8a958f); font-size: 0.72rem; }
+    .pg-embed {
+      margin: 0.75rem 0; padding: 10px;
+      border: 1px solid var(--line, #2a3530); border-radius: 8px;
+      background: var(--bg-raised, #11160f);
+    }
+    .pg-embed__label {
+      color: var(--text-dim, #8a958f); text-transform: uppercase;
+      letter-spacing: 0.05em; font-size: 0.66rem; font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .pg-embed dregg-app { display: block; }
+  </style>
 </head>
 <body>
   <!-- Header -->
@@ -65,10 +103,6 @@
           <span class="pg-nav__icon">&#8669;</span>
           <span class="pg-nav__label">Capabilities</span>
         </button>
-        <button class="pg-nav__item" data-section="crossfed">
-          <span class="pg-nav__icon">&#8644;</span>
-          <span class="pg-nav__label">Cross-Federation</span>
-        </button>
         <button class="pg-nav__item" data-section="sovereign">
           <span class="pg-nav__icon">&#9733;</span>
           <span class="pg-nav__label">Sovereign Cells</span>
@@ -108,14 +142,6 @@
         <button class="pg-nav__item" data-section="blocklace-sim">
           <span class="pg-nav__icon">&#9783;</span>
           <span class="pg-nav__label">Blocklace Sim</span>
-        </button>
-        <button class="pg-nav__item" data-section="full-turn-proof">
-          <span class="pg-nav__icon">&#9651;</span>
-          <span class="pg-nav__label">Full Turn Proof</span>
-        </button>
-        <button class="pg-nav__item" data-section="tiered-revocation">
-          <span class="pg-nav__icon">&#9888;</span>
-          <span class="pg-nav__label">Tiered Revocation</span>
         </button>
         <button class="pg-nav__item" data-section="circuit-playground">
           <span class="pg-nav__icon">&#9881;</span>
@@ -169,7 +195,6 @@
       <div class="pg-section" id="section-datalog"></div>
       <div class="pg-section" id="section-notes"></div>
       <div class="pg-section" id="section-capabilities"></div>
-      <div class="pg-section" id="section-crossfed"></div>
       <div class="pg-section" id="section-sovereign"></div>
       <div class="pg-section" id="section-bearer"></div>
       <div class="pg-section" id="section-factories"></div>
@@ -180,8 +205,6 @@
       <div class="pg-section" id="section-marketplace"></div>
       <div class="pg-section" id="section-effect-vm"></div>
       <div class="pg-section" id="section-blocklace-sim"></div>
-      <div class="pg-section" id="section-full-turn-proof"></div>
-      <div class="pg-section" id="section-tiered-revocation"></div>
       <div class="pg-section" id="section-circuit-playground"></div>
       <div class="pg-section" id="section-sandbox"></div>
       <div class="pg-section" id="section-blinded-queues"></div>

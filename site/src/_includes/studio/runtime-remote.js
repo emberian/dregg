@@ -107,14 +107,19 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   let cachedReceipts = null;          // last receipt API response
   let cachedBlocks = null;            // last block/root API response
   let cachedFederations = null;       // explicit or synthesized federation list
+  let cachedIntents = null;           // last /api/intents response
+  let cachedTokens = null;            // last /api/tokens response (capabilities)
   const cellSignals = new Map();      // id -> signal<CellState | null>
   const cellPending = new Map();      // id -> in-flight Promise (dedupe)
   let listSignal = null;              // signal<CellSummary[] | null>
   let receiptListSignal = null;
   let blockListSignal = null;
   let federationListSignal = null;
+  let intentListSignal = null;
+  let capabilityListSignal = null;
   const receiptSignals = new Map();
   const blockSignals = new Map();
+  const intentSignals = new Map();
 
   // One AbortController per runtime instance; aborted on destroy(). Every
   // fetch wires this in so destroy() actually cancels in-flight requests.
@@ -181,12 +186,14 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
   // --- Polling ----------------------------------------------------------
   async function pollOnce() {
     if (destroyed) return;
-    const [status, cells, receipts, blocks, federations] = await Promise.all([
+    const [status, cells, receipts, blocks, federations, intents, tokens] = await Promise.all([
       getJSON('/status'),
       getJSON('/api/cells'),
       getFirstJSON(['/api/starbridge/receipts?limit=100', '/api/receipts', '/api/receipts/recent']),
       getFirstJSON(['/api/blocks', '/federation/roots']),
       getFirstJSON(['/api/federations']),
+      getJSON('/api/intents'),
+      getJSON('/api/tokens'),
     ]);
     if (destroyed) return;
 
@@ -230,6 +237,21 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
       cachedBlocks = normalized;
       if (blockListSignal) blockListSignal.value = normalized;
       for (const [key, sig] of blockSignals) sig.value = findBlock(normalized, key);
+    }
+
+    if (intents) {
+      const normalized = normalizeIntents(intents);
+      if (!sameIdListShape(normalized, cachedIntents, intentIdOf)) changed = true;
+      cachedIntents = normalized;
+      if (intentListSignal) intentListSignal.value = normalized;
+      for (const [id, sig] of intentSignals) sig.value = findIntent(normalized, id);
+    }
+
+    if (tokens) {
+      const normalized = normalizeTokens(tokens);
+      if (!sameIdListShape(normalized, cachedTokens, tokenIdOf)) changed = true;
+      cachedTokens = normalized;
+      if (capabilityListSignal) capabilityListSignal.value = normalized;
     }
 
     const normalizedFederations = normalizeFederations(federations, status, cachedBlocks);
@@ -307,6 +329,58 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     return blockSignals.get(key);
   }
 
+  // A turn and its receipt share the same hash in the node's read surface; the
+  // <dregg-turn> inspector consumes the same receipt shape, so getTurn aliases
+  // getReceipt (matches InMemoryRuntime, which does the same).
+  function getTurn(id) { return getReceipt(id); }
+
+  function listIntents() {
+    if (!intentListSignal) intentListSignal = signal(cachedIntents || []);
+    return intentListSignal;
+  }
+
+  function getIntent(idOrIndex) {
+    const key = String(idOrIndex);
+    if (!intentSignals.has(key)) {
+      intentSignals.set(key, signal(findIntent(cachedIntents, idOrIndex)));
+    }
+    return intentSignals.get(key);
+  }
+
+  // Capabilities/tokens. The node exposes the node cipherclerk's own held tokens
+  // at /api/tokens (a flat list), not per-agent capability trees. We surface the
+  // flat list for <dregg-capability-list> and resolve single tokens by id/slot.
+  function listCapabilities(_agentIdx) {
+    if (!capabilityListSignal) capabilityListSignal = signal(cachedTokens || []);
+    return capabilityListSignal;
+  }
+
+  function getCapability(idOrAgent, slotOrIndex) {
+    const sig = signal(null);
+    const update = () => {
+      const list = cachedTokens || [];
+      const wantId = String(idOrAgent ?? '');
+      const wantSlot = slotOrIndex != null ? String(slotOrIndex) : null;
+      sig.value = list.find((t) =>
+        String(t.id ?? '') === wantId ||
+        (wantSlot != null && String(t.slot ?? '') === wantSlot) ||
+        (wantSlot != null && String(t.id ?? '') === wantSlot)
+      ) || (wantSlot != null ? list[Number(wantSlot)] : null) || null;
+    };
+    update();
+    events.addEventListener('poll', update);
+    return sig;
+  }
+
+  // Outbox is an extension/sim-only concept (pending local submissions). A
+  // read-only remote viewport has none; return an always-empty signal so the
+  // shared <dregg-outbox> inspector renders its honest empty state.
+  let outboxSignal = null;
+  function getOutbox() {
+    if (!outboxSignal) outboxSignal = signal([]);
+    return outboxSignal;
+  }
+
   function listKnownFederations() {
     if (!federationListSignal) federationListSignal = signal(cachedFederations || []);
     return federationListSignal;
@@ -350,6 +424,12 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
     listCells,
     listReceipts,
     getReceipt,
+    getTurn,
+    listIntents,
+    getIntent,
+    listCapabilities,
+    getCapability,
+    getOutbox,
     listKnownFederations,
     getFederation,
     listBlocks,
@@ -514,6 +594,54 @@ function normalizeFederation(f, idx, blocks) {
 
 function federationIdOf(f) {
   return f && (f.fed_index ?? f.id ?? f.federation_id ?? f.name);
+}
+
+function normalizeIntents(intents) {
+  // Node /api/intents returns Vec<{ id, intent }>; tolerate a bare-array form.
+  const list = Array.isArray(intents)
+    ? intents
+    : (Array.isArray(intents?.intents) ? intents.intents : []);
+  return list.map((entry, idx) => {
+    const inner = entry && typeof entry === 'object' && entry.intent ? entry.intent : entry;
+    const id = entry?.id || entry?.intent_id || inner?.id || inner?.intent_id || String(idx);
+    return {
+      ...(inner || {}),
+      ...entry,
+      intent_id: id,
+      id,
+      intent_index: idx,
+      kind: inner?.kind || inner?.type || entry?.kind || 'intent',
+    };
+  });
+}
+
+function intentIdOf(i) {
+  return i && (i.intent_id || i.id);
+}
+
+function findIntent(intents, idOrIndex) {
+  const list = intents || [];
+  const asNum = Number(idOrIndex);
+  if (!Number.isNaN(asNum) && list[asNum]) return list[asNum];
+  const want = String(idOrIndex || '');
+  return list.find((i) => String(i.intent_id || i.id || '') === want) || null;
+}
+
+function normalizeTokens(tokens) {
+  const list = Array.isArray(tokens)
+    ? tokens
+    : (Array.isArray(tokens?.tokens) ? tokens.tokens : []);
+  return list.map((t, idx) => ({
+    ...t,
+    id: t.id || t.token_id || String(idx),
+    label: t.label || t.id || `token ${idx}`,
+    service: t.service || '',
+    slot: t.slot ?? idx,
+  }));
+}
+
+function tokenIdOf(t) {
+  return t && (t.id || t.token_id || t.label);
 }
 
 function shallowEqual(a, b) {

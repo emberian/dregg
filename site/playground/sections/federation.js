@@ -1,12 +1,17 @@
 // Federation Simulator section — interactive multi-node consensus visualization
 
 import { state, notifyStateChange, navigateTo, getWasm } from '../playground.js';
+import { deepLinkBanner, onSeedReady } from '../studio-embed.js';
 
 export function initFederation(wasm) {
   const container = document.getElementById('section-federation');
   container.innerHTML = `
     <div class="section-header">
       <h2>Federation Simulator</h2>
+      ${deepLinkBanner([
+        { label: '<dregg-federation>', uri: 'dregg://federation/0' },
+        { label: '<dregg-block-dag>', uri: 'dregg://block-dag/0' },
+      ])}
       <p>
         Simulate a multi-node federation running consensus. Spawn nodes, propose blocks,
         submit turns, and watch them get ordered. Exit a federation and rejoin another —
@@ -57,6 +62,15 @@ export function initFederation(wasm) {
     <div id="fed-timeline"></div>
     <div id="fed-explainer"></div>
   `;
+
+  // Point the Starbridge federation/block-dag deeplinks at the real seeded
+  // federation once the shared runtime is ready.
+  onSeedReady((s) => {
+    if (s.fedIndex == null) return;
+    const links = container.querySelectorAll('.pg-sb-link');
+    if (links[0]) links[0].href = `/starbridge/?at=${encodeURIComponent('dregg://federation/' + s.fedIndex)}`;
+    if (links[1]) links[1].href = `/starbridge/?at=${encodeURIComponent('dregg://block-dag/' + s.fedIndex)}`;
+  });
 
   // --- Internal state ---
   let federationA = { nodes: [], height: 0, root: '0000000000000000', pending: [] };

@@ -154,6 +154,13 @@ pub struct FinalizedBlock {
     pub height: u64,
     pub view: u64,
     pub block_hash: [u8; 32],
+    /// Hash of the predecessor block (chain integrity). Mirrors the canonical
+    /// `dregg_federation::RevocationBlock::prev_hash`. Populated from the
+    /// previous finalized block's `block_hash` (the linear height-(N-1)
+    /// predecessor); the genesis-most block in this sim has `[0u8; 32]`. Bound
+    /// into `block_hash` so the chain is cryptographically linked, matching
+    /// `RevocationBlock::compute_hash` which folds `prev_hash` into the digest.
+    pub prev_hash: [u8; 32],
     pub revoked_token_ids: Vec<String>,
     pub qc_votes: usize,
     pub qc_threshold: usize,
@@ -395,10 +402,21 @@ impl DreggRuntime {
         fed.view += 1;
         fed.height += 1;
 
-        // Block hash = BLAKE3(height || view || each pending token id in order).
+        // Real predecessor link: the prior finalized block's hash (linear
+        // height-(N-1) predecessor). Genesis-most block links to [0u8; 32].
+        // Folded into the digest below so the chain is cryptographically linked
+        // (mirrors `RevocationBlock::compute_hash`).
+        let prev_hash = fed
+            .finalized_blocks
+            .last()
+            .map(|b| b.block_hash)
+            .unwrap_or([0u8; 32]);
+
+        // Block hash = BLAKE3(height || view || prev_hash || each pending token id).
         let mut hasher = blake3::Hasher::new_derive_key("dregg-wasm-consensus-block-v1");
         hasher.update(&fed.height.to_le_bytes());
         hasher.update(&fed.view.to_le_bytes());
+        hasher.update(&prev_hash);
         for tid in &fed.pending_revocations {
             hasher.update(tid.as_bytes());
         }
@@ -410,6 +428,7 @@ impl DreggRuntime {
             height: fed.height,
             view: fed.view,
             block_hash,
+            prev_hash,
             revoked_token_ids: revoked,
             qc_votes,
             qc_threshold,
@@ -429,9 +448,17 @@ impl DreggRuntime {
         fed.height += 1;
         let num_events = fed.pending_revocations.len();
 
+        // Real predecessor link (see `propose_block`).
+        let prev_hash = fed
+            .finalized_blocks
+            .last()
+            .map(|b| b.block_hash)
+            .unwrap_or([0u8; 32]);
+
         let mut hasher = blake3::Hasher::new_derive_key("dregg-wasm-consensus-block-v1");
         hasher.update(&fed.height.to_le_bytes());
         hasher.update(&fed.view.to_le_bytes());
+        hasher.update(&prev_hash);
         for tid in &fed.pending_revocations {
             hasher.update(tid.as_bytes());
         }
@@ -444,6 +471,7 @@ impl DreggRuntime {
             height: fed.height,
             view: fed.view,
             block_hash,
+            prev_hash,
             revoked_token_ids: revoked,
             qc_votes,
             qc_threshold,
@@ -1308,7 +1336,7 @@ pub struct ConsensusRoundResult {
 /// non-Unchecked authorizations are left intact so callers can pre-sign or
 /// pre-prove specific actions. Uses the SDK's canonical signing path — no
 /// hand-rolled cryptography.
-fn sign_call_forest(turn: &mut Turn, cclerk: &AgentCipherclerk, federation_id: &[u8; 32]) {
+pub(crate) fn sign_call_forest(turn: &mut Turn, cclerk: &AgentCipherclerk, federation_id: &[u8; 32]) {
     for tree in &mut turn.call_forest.roots {
         sign_call_tree(tree, cclerk, federation_id);
     }

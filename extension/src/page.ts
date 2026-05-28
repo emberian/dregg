@@ -217,11 +217,15 @@ export interface DreggAPI {
   getReceiptWitnesses(receiptHash: string): Promise<ReceiptWitnessArtifacts>;
   /**
    * Build a serialized Authorization::CapTpDelivered envelope for attaching
-   * to a turn during a CapTP handoff.
+   * to a turn during a CapTP handoff. Wired to the wasm
+   * `create_captp_delivered_auth` export.
    *
-   * Note: requires the wasm `create_captp_delivered_auth` export (stub until it lands).
+   * - `handoffCertB58`: compact `dregg-handoff:<base58>` or bare base58 cert.
+   * - `introducerPk` / `senderPk`: 32-byte keys (hex).
+   * - `senderSig`: 64-byte recipient Ed25519 signature over the
+   *   captp_delivered_signing_message (hex).
    */
-  createCapTpDeliveredAuth(params: { handoffCertB58: string; introducerPk: string; senderPk: string }): Promise<{ authBytes: number[]; error?: string }>;
+  createCapTpDeliveredAuth(params: { handoffCertB58: string; introducerPk: string; senderPk: string; senderSig: string }): Promise<{ authBytes: number[]; recipientPk?: string; introducerFederation?: string; error?: string }>;
   on(event: DreggEvent, callback: (payload: unknown) => void): void;
   off(event: DreggEvent, callback: (payload: unknown) => void): void;
   // NOTE: extended events above enable Phase 1 passive debugger (see §6).
@@ -393,8 +397,8 @@ const dregg: DreggAPI = {
     return sendMessage("dregg:getReceiptWitnesses", { receiptHash }) as Promise<ReceiptWitnessArtifacts>;
   },
 
-  createCapTpDeliveredAuth({ handoffCertB58, introducerPk, senderPk }) {
-    return sendMessage("dregg:createCapTpDeliveredAuth", { handoffCertB58, introducerPk, senderPk }) as Promise<{ authBytes: number[]; error?: string }>;
+  createCapTpDeliveredAuth({ handoffCertB58, introducerPk, senderPk, senderSig }) {
+    return sendMessage("dregg:createCapTpDeliveredAuth", { handoffCertB58, introducerPk, senderPk, senderSig }) as Promise<{ authBytes: number[]; recipientPk?: string; introducerFederation?: string; error?: string }>;
   },
 
   on(event, callback) {

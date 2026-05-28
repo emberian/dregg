@@ -1835,6 +1835,202 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
 }
 
 // ============================================================================
+// Canonical v3 turn signer (signTurnV3 canonical path)
+// ============================================================================
+
+/// Sign a pre-built, postcard-encoded `Turn` via the canonical v3 signing path.
+///
+/// This is the substrate behind the extension's `dregg.signTurnV3(turnBytes)`
+/// surface (STARBRIDGE-PLAN §4.3 Task #28 item 5). starbridge-apps turn-builders
+/// produce raw postcard `Turn` bytes whose actions carry `Authorization::Unchecked`;
+/// this function walks the call forest and replaces every `Unchecked` action with
+/// a real Ed25519 signature using `AgentCipherclerk::sign_action` — the exact same
+/// canonical path `DreggRuntime::execute_turn_for_agent` uses (`sign_call_forest` →
+/// `cipherclerk.sign_action` → `TurnExecutor::compute_signing_message`). No
+/// hand-rolled cryptography; the v3 signing message format is whatever the SDK's
+/// `compute_signing_message` produces today.
+///
+/// Arguments (all from the extension's cipherclerk context):
+/// - `turn_bytes`: postcard-encoded `Turn` (Unchecked actions to be signed).
+/// - `sender_privkey`: 32-byte Ed25519 seed (the cipherclerk's secret key).
+/// - `federation_id`: 32-byte federation id the signing message binds against
+///   (all-zeros for devnet/sim genesis; the node's `local_federation_id`).
+///
+/// Returns the postcard-encoded *signed* `Turn` bytes (a `Uint8Array`). Actions
+/// already carrying a non-`Unchecked` authorization are left intact (pre-signed /
+/// pre-proven actions are preserved).
+#[wasm_bindgen]
+pub fn sign_turn_v3(
+    turn_bytes: &[u8],
+    sender_privkey: &[u8],
+    federation_id: &[u8],
+) -> Result<JsValue, JsError> {
+    use dregg_sdk::AgentCipherclerk;
+    use dregg_turn::Turn;
+    use zeroize::Zeroizing;
+
+    if sender_privkey.len() != 32 {
+        return Err(JsError::new("sender_privkey must be exactly 32 bytes"));
+    }
+    if federation_id.len() != 32 {
+        return Err(JsError::new("federation_id must be exactly 32 bytes"));
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(sender_privkey);
+    let mut fed_id = [0u8; 32];
+    fed_id.copy_from_slice(federation_id);
+
+    let mut turn: Turn = postcard::from_bytes(turn_bytes)
+        .map_err(|e| JsError::new(&format!("turn decode failed: {e}")))?;
+
+    let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
+
+    // Canonical signing path — identical to execute_turn_for_agent.
+    crate::runtime::sign_call_forest(&mut turn, &cclerk, &fed_id);
+
+    let signed_bytes = postcard::to_allocvec(&turn)
+        .map_err(|e| JsError::new(&format!("turn re-encode failed: {e}")))?;
+    let turn_hash = blake3::hash(&signed_bytes);
+
+    #[derive(Serialize)]
+    struct SignTurnV3Result {
+        turn_id: String,
+        turn_bytes: Vec<u8>,
+        signer_pubkey: String,
+    }
+
+    let result = SignTurnV3Result {
+        turn_id: hex_encode(turn_hash.as_bytes()),
+        turn_bytes: signed_bytes,
+        signer_pubkey: hex_encode(&cclerk.public_key().0),
+    };
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+// ============================================================================
+// Canonical CapTpDelivered authorization constructor (createCapTpDeliveredAuth)
+// ============================================================================
+
+/// Build a canonical `Authorization::CapTpDelivered` envelope, postcard-encode
+/// it, and return the bytes.
+///
+/// This is the substrate behind the extension's
+/// `dregg.createCapTpDeliveredAuth(...)` surface (STARBRIDGE-PLAN §4.3 Task #28
+/// item 7). A starbridge-app performing a three-party CapTP handoff (Alice→Bob→Carol)
+/// builds the recipient-side authorization client-side from:
+/// - `handoff_cert_b58`: the introducer-signed `HandoffCertificate` as either the
+///   compact `dregg-handoff:<base58>` string or a bare base58 of its postcard bytes.
+/// - `introducer_pk_hex`: 32-byte introducer public key (verifies
+///   `handoff_cert.introducer_signature`).
+/// - `sender_pk_hex`: 32-byte recipient/sender public key (must equal
+///   `handoff_cert.recipient_pk`).
+/// - `sender_sig_hex`: 64-byte Ed25519 signature by `sender_pk` over the
+///   `captp_delivered_signing_message`.
+///
+/// The signature itself is produced upstream (by the recipient's cipherclerk over
+/// `Authorization::captp_delivered_signing_message[_for_federation]`); this
+/// constructor only assembles the canonical variant and serializes it. The
+/// executor's `verify_captp_delivered` performs the real verification at apply time.
+///
+/// Returns JSON: `{ "auth_bytes": <Uint8Array>, "recipient_pk": "<hex>",
+/// "introducer_federation": "<hex>" }`.
+#[wasm_bindgen]
+pub fn create_captp_delivered_auth(
+    handoff_cert_b58: &str,
+    introducer_pk_hex: &str,
+    sender_pk_hex: &str,
+    sender_sig_hex: &str,
+) -> Result<JsValue, JsError> {
+    use dregg_captp::HandoffCertificate;
+    use dregg_turn::action::Authorization;
+
+    // Accept either the compact `dregg-handoff:<base58>` form or bare base58.
+    let handoff_cert = if handoff_cert_b58.starts_with("dregg-handoff:") {
+        HandoffCertificate::from_compact_string(handoff_cert_b58)
+            .map_err(|e| JsError::new(&format!("handoff cert decode (compact) failed: {e}")))?
+    } else {
+        let bytes = bs58::decode(handoff_cert_b58)
+            .into_vec()
+            .map_err(|e| JsError::new(&format!("handoff cert base58 decode failed: {e}")))?;
+        HandoffCertificate::from_bytes(&bytes)
+            .map_err(|e| JsError::new(&format!("handoff cert decode failed: {e}")))?
+    };
+
+    let introducer_pk = parse_hex_32(introducer_pk_hex, "introducer_pk")?;
+    let sender_pk = parse_hex_32(sender_pk_hex, "sender_pk")?;
+    let sender_signature = parse_hex_64(sender_sig_hex, "sender_sig")?;
+
+    let recipient_pk_hex = hex_encode(&handoff_cert.recipient_pk);
+    let introducer_federation_hex = hex_encode(&handoff_cert.introducer.0);
+
+    let auth = Authorization::CapTpDelivered {
+        handoff_cert,
+        introducer_pk,
+        sender_pk,
+        sender_signature,
+    };
+
+    let auth_bytes = postcard::to_allocvec(&auth)
+        .map_err(|e| JsError::new(&format!("authorization encode failed: {e}")))?;
+
+    #[derive(Serialize)]
+    struct CapTpAuthResult {
+        auth_bytes: Vec<u8>,
+        recipient_pk: String,
+        introducer_federation: String,
+    }
+
+    let result = CapTpAuthResult {
+        auth_bytes,
+        recipient_pk: recipient_pk_hex,
+        introducer_federation: introducer_federation_hex,
+    };
+    serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Decode exactly 32 bytes from a hex string (helper for the v3/captp signers).
+fn parse_hex_32(hex: &str, field: &str) -> Result<[u8; 32], JsError> {
+    let v = decode_hex_vec(hex).map_err(|e| JsError::new(&format!("{field}: {e}")))?;
+    if v.len() != 32 {
+        return Err(JsError::new(&format!(
+            "{field}: expected 32 bytes, got {}",
+            v.len()
+        )));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&v);
+    Ok(out)
+}
+
+/// Decode exactly 64 bytes from a hex string (helper for the captp signer).
+fn parse_hex_64(hex: &str, field: &str) -> Result<[u8; 64], JsError> {
+    let v = decode_hex_vec(hex).map_err(|e| JsError::new(&format!("{field}: {e}")))?;
+    if v.len() != 64 {
+        return Err(JsError::new(&format!(
+            "{field}: expected 64 bytes, got {}",
+            v.len()
+        )));
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(&v);
+    Ok(out)
+}
+
+/// Decode an arbitrary-length lowercase/uppercase hex string into bytes.
+fn decode_hex_vec(hex: &str) -> Result<Vec<u8>, String> {
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    if hex.len() % 2 != 0 {
+        return Err("odd number of hex digits".to_string());
+    }
+    (0..hex.len() / 2)
+        .map(|i| {
+            u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+                .map_err(|e| format!("invalid hex at byte {i}: {e}"))
+        })
+        .collect()
+}
+
+// ============================================================================
 // Canonical factory-mint turn builder (createFromFactory canonical path)
 // ============================================================================
 

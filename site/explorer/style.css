@@ -1701,3 +1701,42 @@ button { font-family: inherit; cursor: pointer; }
   .ex-nav__icon { font-size: 14px; }
   .overview-stats { grid-template-columns: 1fr 1fr; }
 }
+
+/* ── Inspector-substrate explorer additions ──────────────────────────────── */
+.ex-search__error {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--danger, #d4685c);
+  max-width: 520px;
+}
+.ex-detail-slot { margin-top: 16px; }
+.ex-detail-slot:empty { display: none; }
+.ex-inspector-empty {
+  border: 1px dashed var(--line, #30363d);
+  border-radius: 6px;
+  padding: 16px;
+  color: var(--fg-dim, #9aa0a6);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ex-inspector-empty strong { color: var(--fg, #e8f0e8); }
+.ex-inspector-empty code { font-size: 12px; overflow-wrap: anywhere; }
+.ex-intent-index { display: grid; gap: 6px; }
+.ex-intent-index__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  border: 1px solid var(--line, #30363d);
+  border-radius: 5px;
+  background: var(--bg-raised, #161b22);
+  color: var(--fg, #e8f0e8);
+  font: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.ex-intent-index__row:hover { border-color: var(--accent, #64c8ff); }
+.ex-intent-index__row span { font-size: 12px; text-transform: uppercase; color: var(--fg-dim, #9aa0a6); }
+.ex-intent-index__row code { font-size: 12px; color: var(--fg-dim, #9aa0a6); }

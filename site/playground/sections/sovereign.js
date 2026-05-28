@@ -1,12 +1,14 @@
 // Sovereign Cells section — create cells, make sovereign, peer exchange with STARK proof
 
 import { state, notifyStateChange, navigateTo, getWasm } from '../playground.js';
+import { deepLinkBanner } from '../studio-embed.js';
 
 export function initSovereign(wasm) {
   const container = document.getElementById('section-sovereign');
   container.innerHTML = `
     <div class="section-header">
       <h2>Sovereign Cells</h2>
+      ${deepLinkBanner([{ label: '<dregg-peer-transition>', uri: 'dregg://peer-transition/0' }])}
       <p>
         A sovereign cell owns its own state commitment and can transact peer-to-peer without
         routing through federation consensus. Make a cell sovereign, then execute direct

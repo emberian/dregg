@@ -8,7 +8,6 @@ import { initMerkle } from './sections/merkle.js';
 import { initDatalog } from './sections/datalog.js';
 import { initNotes } from './sections/notes.js';
 import { initCapabilities } from './sections/capabilities.js';
-import { initCrossfed } from './sections/crossfed.js';
 import { initSovereign } from './sections/sovereign.js';
 import { initBearer } from './sections/bearer.js';
 import { initFactories } from './sections/factories.js';
@@ -20,8 +19,6 @@ import { initMarketplace } from './sections/marketplace.js';
 import { initSandbox } from './sections/sandbox.js';
 import { initEffectVm } from './sections/effect-vm.js';
 import { initBlocklaceSim } from './sections/blocklace-sim.js';
-import { initFullTurnProof } from './sections/full-turn-proof.js';
-import { initTieredRevocation } from './sections/tiered-revocation.js';
 import { initCircuitPlayground } from './sections/circuit-playground.js';
 
 // New-world sections
@@ -33,6 +30,10 @@ import { initInboxes } from './sections/inboxes.js';
 import { initBatchExecutor } from './sections/batch-executor.js';
 import { initNameservice } from './sections/nameservice.js';
 import { initDelegationV2 } from './sections/delegation-v2.js';
+
+// Studio inspector embedding (STARBRIDGE-PLAN §4.9 Tier 2). Starts the shared
+// seeded in-memory runtime that backs every <dregg-app> a section renders.
+import { ensureStudioRuntime } from './studio-embed.js';
 
 // ============================================================================
 // Global Shared State
@@ -137,7 +138,7 @@ const PLAYGROUND_SCENARIOS = [
     lede: 'Federated turns, sovereign exits, bearer capabilities, factories, and private transfer flows.',
     starbridgeHref: '/starbridge/?at=dregg://federation/0',
     starbridgeLabel: 'Open federation in Starbridge',
-    sections: ['crossfed', 'sovereign', 'bearer', 'factories', 'private-transfers', 'composition'],
+    sections: ['sovereign', 'bearer', 'factories', 'private-transfers', 'composition'],
   },
   {
     id: 'apps',
@@ -153,7 +154,7 @@ const PLAYGROUND_SCENARIOS = [
     lede: 'Effect traces, blocklace simulation, proof composition, revocation, circuit design, and sandboxing.',
     starbridgeHref: '/starbridge/?at=dregg://turn/demo',
     starbridgeLabel: 'Open turn demo in Starbridge',
-    sections: ['effect-vm', 'blocklace-sim', 'full-turn-proof', 'tiered-revocation', 'circuit-playground', 'sandbox'],
+    sections: ['effect-vm', 'blocklace-sim', 'circuit-playground', 'sandbox'],
   },
   {
     id: 'queues',
@@ -471,7 +472,6 @@ async function main() {
   initDatalog(wasmExports);
   initNotes(wasmExports);
   initCapabilities(wasmExports);
-  initCrossfed(wasmExports);
   initSovereign(wasmExports);
   initBearer(wasmExports);
   initFactories(wasmExports);
@@ -483,8 +483,6 @@ async function main() {
   initSandbox(wasmExports);
   initEffectVm(wasmExports);
   initBlocklaceSim(wasmExports);
-  initFullTurnProof(wasmExports);
-  initTieredRevocation(wasmExports);
   initCircuitPlayground(wasmExports);
   initThemeToggle();
   initBlindedQueues(wasmExports);
@@ -497,6 +495,12 @@ async function main() {
 
   // Initial state render
   notifyStateChange();
+
+  // Boot the shared Studio inspector runtime (Tier 2 embeds). Seeds a real
+  // in-memory runtime and attaches it to every <dregg-app> sections render.
+  ensureStudioRuntime().catch((e) =>
+    console.warn('[playground] studio inspector runtime unavailable:', e),
+  );
 }
 
 main();

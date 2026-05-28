@@ -50,14 +50,14 @@ async function run() {
   console.log('[test] runtime attached.');
 
   // ── Step 1: Create Alice agent ────────────────────────────────────────────
-  const aliceInfo = await page.evaluate(() => {
+  const aliceInfo = await page.evaluate(async () => {
     const rt = document.getElementById('app').runtime;
-    const alice = rt.createAgent('alice', 5000n);
+    const alice = await rt.createAgent('alice', 5000n);
     if (!alice || alice.agent_index == null) {
       return { error: 'createAgent failed: ' + JSON.stringify(alice) };
     }
     // Execute a turn so the receipt chain is non-empty
-    const turn = rt.executeTurn(alice.agent_index, [], 1000);
+    const turn = await rt.executeTurn(alice.agent_index, [], 1000);
     if (!turn || turn.status !== 'committed') {
       return { error: 'executeTurn failed: ' + JSON.stringify(turn) };
     }
