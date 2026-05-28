@@ -27,6 +27,11 @@ dregg-captp = { path = "../captp" }
 dregg-token = { path = "../token" }
 dregg-persist = { path = "../persist" }
 dregg-storage = { path = "../storage" }
+# Starbridge userspace apps — for cross-app composition integration tests.
+dregg-app-framework = { path = "../app-framework" }
+starbridge-identity = { path = "../starbridge-apps/identity" }
+starbridge-subscription = { path = "../starbridge-apps/subscription" }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice" }
 dregg-macaroon = { workspace = true, features = ["crypto"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
