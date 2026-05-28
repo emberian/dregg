@@ -588,7 +588,7 @@ function normalizeFederation(f, idx, blocks) {
     fed_index: f.fed_index ?? f.registered_index ?? idx,
     name: f.name || f.federation_name || f.federation_id || f.silo_id || 'remote federation',
     height,
-    num_nodes: f.num_nodes ?? f.nodes ?? f.federation_members ?? f.peer_count ?? 0,
+    num_nodes: f.num_nodes ?? f.member_count ?? f.nodes ?? f.federation_members ?? f.peer_count ?? 0,
     num_events: f.num_events ?? f.events ?? 0,
     num_finalized_roots: f.num_finalized_roots ?? (blocks || []).length,
     latest_root: f.latest_root || f.merkle_root || f.root || (blocks || [])[blocks.length - 1]?.block_hash || null,

@@ -44,7 +44,7 @@ export function setNodeUrl(url) {
 // ---------------------------------------------------------------------------
 const PAGES = {
   overview:     { kind: 'overview' },
-  blocks:       { tag: 'dregg-block',        uri: () => `dregg://block/0/${latestHeight()}` },
+  blocks:       { tag: 'dregg-block-dag',    uri: () => 'dregg://block-dag/0' },
   cells:        { tag: 'dregg-cell-list',    uri: () => 'dregg://cell-list/all' },
   receipts:     { tag: 'dregg-receipt-list', uri: () => 'dregg://receipt-list/all' },
   turns:        { tag: 'dregg-receipt-list', uri: () => 'dregg://receipt-list/all' },

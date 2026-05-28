@@ -67,6 +67,11 @@ function qcStatus(block) {
   // result, not on the enriched block object — we rely on num_votes here.
   if (!block) return 'unknown';
   if (block.finalized === true) return 'finalized';
+  // Node blocklace surface: a block in /api/blocklace/blocks that carries a
+  // finality_round has been finalized by consensus (solo heartbeat blocks are
+  // final with num_votes 0 — finality there is by the single authority, not a
+  // multi-vote QC). Honor that real signal.
+  if (block.finality_round != null && Number(block.finality_round) >= 0 && block.kind != null) return 'finalized';
   const threshold = Number(block.qc_threshold ?? 0);
   const votes     = Number(block.num_votes ?? block.signature_count ?? block.signatures?.length ?? 0);
   if (threshold > 0 && votes >= threshold) return 'finalized';
@@ -363,17 +368,21 @@ class DreggBlockDag extends InspectorBase {
 
     const fedIdx = Number(parsed.id);
 
-    // Subscribe to federation signal so we re-render on new blocks.
+    // Subscribe to federation signal so we re-render on new blocks. Also grab
+    // the runtime's block-list signal (RemoteRuntime path) so we stay reactive
+    // to new blocks arriving over HTTP polling.
     const fedSig = this._runtime.getFederation(fedIdx);
+    const blocksSig = typeof this._runtime.listBlocks === 'function' ? this._runtime.listBlocks() : null;
 
     this._dispose = effect(() => {
       // Reading fedSig.value registers this effect as a dep.
       const fedState = fedSig.value;
-      this._renderContent(fedIdx, fedState, compact);
+      const blockList = blocksSig ? blocksSig.value : null; // dep for reactivity
+      this._renderContent(fedIdx, fedState, compact, blockList);
     });
   }
 
-  _renderContent(fedIdx, fedState, compact) {
+  _renderContent(fedIdx, fedState, compact, blockList) {
     this.replaceChildren();
 
     if (!fedState) {
@@ -384,29 +393,36 @@ class DreggBlockDag extends InspectorBase {
       return;
     }
 
-    // Fetch the block list directly from wasm (list_federation_blocks returns
-    // compact summaries; we enrich each with get_federation_block for QC data).
-    let rawBlocks = [];
-    try {
-      rawBlocks = this._runtime._wasm.list_federation_blocks(
-        this._runtime._handle, fedIdx
-      ) || [];
-    } catch (e) {
-      this.innerHTML = `<div class="dregg-inspector dregg-inspector--err">list_federation_blocks: ${e.message}</div>`;
-      return;
-    }
-
-    // Enrich blocks with full detail (qc_threshold, signatures, parent_hash, proposer, etc.)
-    const blocks = rawBlocks.map(b => {
+    // Two real sources, no JS simulation either way:
+    //  - in-memory runtime: wasm list_federation_blocks + get_federation_block
+    //    (compact summaries enriched with QC data).
+    //  - RemoteRuntime: the node's /api/blocklace/blocks (already enriched with
+    //    block_hash / prev_hash / proposer / votes), via runtime.listBlocks().
+    let blocks;
+    const hasWasm = this._runtime._wasm && this._runtime._handle != null;
+    if (hasWasm) {
+      let rawBlocks = [];
       try {
-        const full = this._runtime._wasm.get_federation_block(
-          this._runtime._handle, fedIdx, BigInt(b.height)
-        );
-        return full ? { ...b, ...full, fed_index: fedIdx } : { ...b, fed_index: fedIdx };
-      } catch {
-        return { ...b, fed_index: fedIdx };
+        rawBlocks = this._runtime._wasm.list_federation_blocks(this._runtime._handle, fedIdx) || [];
+      } catch (e) {
+        this.innerHTML = `<div class="dregg-inspector dregg-inspector--err">list_federation_blocks: ${e.message}</div>`;
+        return;
       }
-    });
+      blocks = rawBlocks.map(b => {
+        try {
+          const full = this._runtime._wasm.get_federation_block(this._runtime._handle, fedIdx, BigInt(b.height));
+          return full ? { ...b, ...full, fed_index: fedIdx } : { ...b, fed_index: fedIdx };
+        } catch {
+          return { ...b, fed_index: fedIdx };
+        }
+      });
+    } else {
+      // Remote: filter the live block list to this federation (node is fed 0).
+      const all = blockList || [];
+      blocks = all
+        .filter(b => Number(b.fed_index ?? b.federation_index ?? 0) === fedIdx)
+        .map(b => ({ ...b, fed_index: fedIdx }));
+    }
 
     // Sort ascending by height for layout
     blocks.sort((a, b) => Number(a.height) - Number(b.height));
