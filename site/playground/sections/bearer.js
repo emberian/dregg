@@ -166,12 +166,10 @@ export function initBearer(wasm) {
         cap.action, BigInt(cap.expiry), BigInt(currentTime)
       );
     } catch (e) {
-      // Fallback
-      result = {
-        valid: !cap.expired,
-        signature_valid: !cap.expired,
-        expired: cap.expired || (cap.expiry > 0 && currentTime > cap.expiry),
-      };
+      // No fabrication: never fake a verification verdict. The real Ed25519
+      // check is wasm.verify_bearer_cap; surface its failure honestly.
+      showResult(resultDiv, 'error', `verify_bearer_cap failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 

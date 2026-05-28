@@ -108,23 +108,19 @@ export function initMarketplace(wasm) {
   container.querySelector('.next-hint').addEventListener('click', () => navigateTo('sandbox'));
 
   // --- Utility ---
-  function fnvHash(str) {
-    let h = 0x811c9dc5;
-    for (let i = 0; i < str.length; i++) {
-      h ^= str.charCodeAt(i);
-      h = Math.imul(h, 0x01000193);
-    }
-    return (h >>> 0).toString(16).padStart(8, '0');
+  // Commitments come from the canonical wasm BLAKE3 Merkle root — no JS hash
+  // fallback. A failure is surfaced honestly rather than fabricated.
+  function computeCommitment(data) {
+    const result = wasm.compute_merkle_root(JSON.stringify([data]));
+    return result.root_hex.slice(0, 16);
   }
 
-  function computeCommitment(data) {
-    if (wasm && wasm.compute_merkle_root) {
-      try {
-        const result = wasm.compute_merkle_root(JSON.stringify([data]));
-        return result.root_hex.slice(0, 16);
-      } catch { /* fallback */ }
-    }
-    return fnvHash(data) + fnvHash(data + 'salt');
+  // Genuinely-random local identifier (job id, nonce) — crypto.getRandomValues,
+  // not a JS hash. These are arbitrary demo ids, not protocol commitments.
+  function randId() {
+    const b = new Uint8Array(4);
+    crypto.getRandomValues(b);
+    return Array.from(b).map((x) => x.toString(16).padStart(2, '0')).join('');
   }
 
   function delay(ms) {
@@ -211,7 +207,7 @@ export function initMarketplace(wasm) {
     updateUI();
 
     const entries = [];
-    const jobId = fnvHash(`job:${Date.now()}`);
+    const jobId = randId();
     mktState.job = {
       id: jobId,
       description: 'Matrix multiply 1024x1024',
@@ -256,9 +252,9 @@ export function initMarketplace(wasm) {
     const entries = [];
     const bidAmounts = [45, 32, 58]; // P2 will win with lowest bid
     const nonces = [
-      fnvHash(`nonce1:${Date.now()}`),
-      fnvHash(`nonce2:${Date.now()}`),
-      fnvHash(`nonce3:${Date.now()}`),
+      randId(),
+      randId(),
+      randId(),
     ];
 
     mktState.bids = [];
@@ -364,7 +360,7 @@ export function initMarketplace(wasm) {
     await delay(800);
 
     // Commit result
-    const resultData = `result:${Date.now()}:${fnvHash('matrix_output')}`;
+    const resultData = `result:${Date.now()}:${computeCommitment("matrix_output")}`;
     const resultCommitment = computeCommitment(resultData);
     entries.push({ text: `[Provider ${winner.provider}] Result committed: ${resultCommitment.slice(0, 12)}...`, type: 'info' });
     addTimelineEntry(entries);

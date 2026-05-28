@@ -95,7 +95,8 @@ export function initSovereign(wasm) {
     try {
       result = wasm.make_cell_sovereign(cell.id, BigInt(cell.balance));
     } catch (e) {
-      result = { cell_id: cell.id, state_commitment: randomHex(32), mode: 'sovereign' };
+      showResult(resultDiv, 'error', `make_cell_sovereign failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 
@@ -126,7 +127,8 @@ export function initSovereign(wasm) {
     try {
       result = wasm.peer_exchange_with_proof(sender.id, receiver.id, BigInt(amount));
     } catch (e) {
-      result = { exchange_id: randomHex(32), proof_commitment: randomHex(32), sender_cell: sender.id, receiver_cell: receiver.id, amount };
+      showResult(resultDiv, 'error', `peer_exchange_with_proof failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 

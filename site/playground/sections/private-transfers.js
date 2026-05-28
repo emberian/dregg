@@ -93,13 +93,9 @@ export function initPrivateTransfers(wasm) {
     try {
       result = wasm.derive_stealth_keys(mnemonic, passphrase);
     } catch (e) {
-      // Fallback
-      result = {
-        spend_pubkey: Array.from(randomBytes(32)),
-        spend_privkey: Array.from(randomBytes(32)),
-        view_pubkey: Array.from(randomBytes(32)),
-        view_privkey: Array.from(randomBytes(32)),
-      };
+      // No fabrication: stealth keys are real wasm output, not random bytes.
+      addTimelineEntry([{ text: `derive_stealth_keys failed: ${e && e.message || e}`, type: 'error' }]);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 
@@ -139,10 +135,8 @@ export function initPrivateTransfers(wasm) {
     try {
       addrResult = wasm.create_stealth_address(recipientKeys.spendPub, recipientKeys.viewPub);
     } catch (e) {
-      addrResult = {
-        one_time_pubkey: Array.from(randomBytes(32)),
-        ephemeral_pubkey: Array.from(randomBytes(32)),
-      };
+      addTimelineEntry([{ text: `create_stealth_address failed: ${e && e.message || e}`, type: 'error' }]);
+      return;
     }
 
     stealthAddr = {
@@ -156,10 +150,8 @@ export function initPrivateTransfers(wasm) {
     try {
       commitResult = wasm.create_value_commitment(BigInt(transferAmount), blinding);
     } catch (e) {
-      commitResult = {
-        commitment: Array.from(randomBytes(32)),
-        blinding: Array.from(blinding),
-      };
+      addTimelineEntry([{ text: `create_value_commitment failed: ${e && e.message || e}`, type: 'error' }]);
+      return;
     }
     commitment = new Uint8Array(commitResult.commitment);
 
@@ -209,8 +201,9 @@ export function initPrivateTransfers(wasm) {
         JSON.stringify(announcements)
       );
     } catch (e) {
-      // Fallback: match all
-      matchedIndices = announcements.map((_, i) => i);
+      // No fabrication: a scan failure is surfaced, not faked as "match all".
+      addTimelineEntry([{ text: `scan_stealth_announcements failed: ${e && e.message || e}`, type: 'error' }]);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 
@@ -242,16 +235,20 @@ export function initPrivateTransfers(wasm) {
     // Create a "change" commitment to demonstrate conservation
     const changeAmount = 1000 - transferAmount; // Assume 1000 input
     const changeBlinding = randomBytes(32);
-    let changeCommitResult;
+    const inputBlinding = randomBytes(32);
+    let changeCommitResult, inputCommitResult;
     try {
       changeCommitResult = wasm.create_value_commitment(BigInt(changeAmount), changeBlinding);
+      // Real commitment for the "original 1000" input — no fabricated hex.
+      inputCommitResult = wasm.create_value_commitment(BigInt(1000), inputBlinding);
     } catch (e) {
-      changeCommitResult = { commitment: Array.from(randomBytes(32)) };
+      addTimelineEntry([{ text: `create_value_commitment failed: ${e && e.message || e}`, type: 'error' }]);
+      return;
     }
     const changeCommitment = new Uint8Array(changeCommitResult.commitment);
 
     // Verify conservation: input commitment == output commitments sum
-    const inputCommitHex = bytesToHex(randomBytes(32)); // "original 1000" commitment
+    const inputCommitHex = bytesToHex(new Uint8Array(inputCommitResult.commitment));
     const outputCommitHex1 = bytesToHex(commitment);
     const outputCommitHex2 = bytesToHex(changeCommitment);
 
