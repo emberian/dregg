@@ -37,3 +37,7 @@ proptest = { workspace = true }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "predicate_language"
+path = "examples/predicate_language.rs"

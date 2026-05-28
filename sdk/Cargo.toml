@@ -72,5 +72,9 @@ x25519-dalek = { workspace = true }
 name = "agent_demo"
 path = "examples/agent_demo.rs"
 
+[[example]]
+name = "hello_receipt_chain"
+path = "examples/hello_receipt_chain.rs"
+
 [lints]
 workspace = true

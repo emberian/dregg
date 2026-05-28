@@ -4,6 +4,13 @@ Dragon's Egg is my experiment in the metatheory of constructive knowledge, and a
 
 (end-of-human-text)
 
+> **Start here:** [`STATUS.md`](STATUS.md) is the code-verified status (what builds,
+> what runs, what's honest about proofs). Two runnable examples are the fastest on-ramp:
+> `cargo run -p dregg-sdk --example hello_receipt_chain` (the smallest receipt chain) and
+> `cargo run -p dregg-cell --example predicate_language` (the predicate language).
+> The design/audit `*.md` documents formerly at the repo root now live in
+> [`docs-old/`](docs-old/) and are **not** authoritative — trust the code.
+
 ## The Model
 
 `dregg` is a **unified fabric**: a shared blocklace (DAG) where groups form emergently through mutual acknowledgment. There are no fixed federations to join or leave. Nodes participate in strands; reference groups crystallize from repeated interaction. Your phone is a node. A cloud cluster is a node. The sovereignty spectrum is continuous.
