@@ -329,7 +329,9 @@ import './inspectors/activity.js';  // <dregg-activity> live observability feed 
 // --- Full Wave 3 §4.5 integration (STARBRIDGE-FOLLOWUP-02) -----------------
 // All 22 from plan table now have files + barrel registration.
 // (Previous deliveries had files for note/revocation/conditional/handoff/bearer/blocklace but no import here.)
-import './inspectors/blocklace-sim.js';
+// (removed dregg-blocklace-sim: a JS Math.random consensus simulator. The real
+//  consensus view is <dregg-block-dag>, backed by wasm list_federation_blocks /
+//  the node's /api/blocklace/blocks. "Use the wasm or we don't.")
 import './inspectors/note.js';
 import './inspectors/revocation-channel.js';
 import './inspectors/conditional-turn.js';
