@@ -591,8 +591,27 @@ impl ProofVerifier for WitnessedProofVerifier {
                     "strict verifier requires a witnessed_predicate on the submission".into(),
                 );
             }
-            // Permissive mode: structural check is all we run. Real
-            // deployments should always carry a predicate.
+            // SECURITY (SILVER-DEBT T1.2 — KNOWN SOUNDNESS HOLE, fail-OPEN):
+            // In non-strict mode (the current `TrustlessIntentEngine::new`
+            // default, also used by the live node at node/src/state.rs), a
+            // submission that omits `witnessed_predicate` entirely is accepted
+            // on the STRUCTURAL check alone. The `validity_proof` bytes are
+            // NEVER cryptographically verified on this branch — a malicious
+            // solver can bypass all proof verification simply by not attaching
+            // a predicate. This is the inverse of the strict-mode posture and
+            // is an intentional-but-unsound interim: closing it requires either
+            //   (a) flipping `new()` to `strict()` (breaks ~12 predicate-less
+            //       in-crate tests + the node REST path that does not yet force
+            //       a predicate onto submissions), or
+            //   (b) the real STARK/registry wiring per SILVER-DEBT T1.2 / T2.8,
+            //       which the in-tree note at `Self::new` records as BLOCKED ON
+            //       HUMAN.
+            // Until one of those lands, ANY production deployment MUST construct
+            // the engine with `WitnessedProofVerifier::strict(..)` via
+            // `TrustlessIntentEngine::with_verifier`, OR reject predicate-less
+            // submissions at the ingress layer. The adversarial test
+            // `nonstrict_default_accepts_predicateless_submission_KNOWN_HOLE`
+            // pins this behavior so any future flip to strict surfaces here.
             return Ok(());
         };
 
@@ -2379,6 +2398,76 @@ mod tests {
             }
             other => panic!(
                 "default engine must NOT silently accept a not-yet-wired witnessed predicate, got: {other:?}"
+            ),
+        }
+    }
+
+    /// KNOWN SOUNDNESS HOLE (SILVER-DEBT T1.2): the non-strict `new()` default
+    /// accepts a submission that omits `witnessed_predicate` on the STRUCTURAL
+    /// check alone — the `validity_proof` bytes are never cryptographically
+    /// verified. This test PINS that behavior so that any future flip of the
+    /// default to `strict()` (which is the correct fail-closed posture) is
+    /// surfaced here as a deliberate, reviewed change rather than an accidental
+    /// regression. See the `// SECURITY (... fail-OPEN)` block in
+    /// `WitnessedProofVerifier::verify_submission`.
+    ///
+    /// If you are here because this test failed: that is GOOD — it means the
+    /// default became fail-closed. Replace the `unwrap()` below with an
+    /// assertion that the predicate-less submission is now REJECTED, and update
+    /// the SECURITY comment to record the hole as closed.
+    #[test]
+    fn nonstrict_default_accepts_predicateless_submission_known_hole() {
+        let (key, key_shares) = make_test_keys(2, 3);
+        let mut engine = TrustlessIntentEngine::new(2, 3);
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        // A submission with NO witnessed predicate and an arbitrary, never-
+        // verified `validity_proof`. Under the non-strict default this is
+        // accepted on the structural check alone.
+        let sub = make_submission(0xAA, &intents, 5.0, 11);
+        assert!(
+            sub.witnessed_predicate.is_none(),
+            "this test exercises the predicate-less bypass path"
+        );
+        let result = engine.submit_solution(sub);
+        assert!(
+            result.is_ok(),
+            "KNOWN HOLE: non-strict default accepts predicate-less submissions \
+             on structural check alone (proof bytes never verified). If this \
+             now rejects, the default became fail-closed — update the test and \
+             the SECURITY comment. Got: {result:?}"
+        );
+    }
+
+    /// Companion to the known-hole test: a `strict` verifier (the correct
+    /// production posture) DOES reject the same predicate-less submission. This
+    /// proves the fix is one constructor swap away — `new()` only needs to call
+    /// `WitnessedProofVerifier::strict(..)` instead of `::new(..)` once the
+    /// node + predicate-less tests are migrated.
+    #[test]
+    fn strict_verifier_rejects_predicateless_submission() {
+        let (key, key_shares) = make_test_keys(2, 3);
+        let registry = WitnessedPredicateRegistry::default_builtins();
+        let mut engine = TrustlessIntentEngine::with_verifier(
+            2,
+            3,
+            Box::new(WitnessedProofVerifier::strict(registry)),
+        );
+        let intents = vec![make_intent(1), make_intent(2)];
+        drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
+
+        let sub = make_submission(0xAA, &intents, 5.0, 11);
+        let result = engine.submit_solution(sub);
+        match result {
+            Err(EngineError::InvalidProof { reason }) => {
+                assert!(
+                    reason.contains("requires a witnessed_predicate"),
+                    "expected strict-mode predicate-required rejection, got: {reason}"
+                );
+            }
+            other => panic!(
+                "strict verifier MUST reject a predicate-less submission, got: {other:?}"
             ),
         }
     }

@@ -142,6 +142,10 @@ fn build_ordering_blocklace(
             .collect();
         let payload = match &block.payload {
             Payload::Turn(data) => data.clone(),
+            // A TurnBundle carries node-encoded SignedTurn bytes (plus optional
+            // receipt/witnessed artifacts); for ordering we use the signed-turn
+            // bytes, mirroring the plain Turn arm.
+            Payload::TurnBundle(bundle) => bundle.signed_turn.clone(),
             Payload::Ack => vec![],
             Payload::Checkpoint { root, height } => {
                 let mut buf = Vec::with_capacity(40);

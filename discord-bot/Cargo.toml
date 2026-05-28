@@ -45,6 +45,12 @@ dregg-dfa = { path = "../dfa" }
 # CapTP integration — the bot is a dregg capability peer.
 dregg-captp = { path = "../captp" }
 dregg-storage = { path = "../storage" }
+# Canonical types/cell surface — needed to build *real* signed CapTP
+# HandoffCertificates (SigningKey, CellId, AuthRequired/EffectMask) rather
+# than bot-local placeholder BLAKE3-MAC records.
+dregg-types = { path = "../types" }
+dregg-cell = { path = "../cell" }
+bs58 = "0.5"
 zeroize = { workspace = true }
 
 [lints]

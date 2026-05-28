@@ -190,7 +190,10 @@ export async function createRemoteRuntime({ signals, baseUrl }) {
       getJSON('/status'),
       getJSON('/api/cells'),
       getFirstJSON(['/api/starbridge/receipts?limit=100', '/api/receipts', '/api/receipts/recent']),
-      getFirstJSON(['/api/blocks', '/federation/roots']),
+      // Prefer the real blocklace DAG (lane: node consensus) — height-sorted
+      // BlockView with real prev_hash/predecessors. Fall back to the legacy
+      // attested-roots alias for older nodes that lack the DAG route.
+      getFirstJSON(['/api/blocklace/blocks', '/api/blocks', '/federation/roots']),
       getFirstJSON(['/api/federations']),
       getJSON('/api/intents'),
       getJSON('/api/tokens'),

@@ -129,6 +129,27 @@ pub struct SimAgent {
     /// no JS-side or wasm-side reimplementation. Mutated by `register_peer`,
     /// `create_transition`, and `verify_transition`.
     pub peer_exchange: PeerExchange,
+    /// Notes this agent has minted via `create_note`, in mint order. Each entry
+    /// carries the canonical `Note` (so the commitment / nullifier are recomputed
+    /// from real `dregg_cell::Note` math, not stored separately) plus the spent
+    /// nullifier once `spend_note` reveals it. This is the note index that
+    /// `get_notes` and `dregg://note/*` URI lookups read — closing #45, where
+    /// minted notes were not tracked so `get_notes` always returned `[]`.
+    pub held_notes: Vec<HeldNote>,
+}
+
+/// A note minted by a [`SimAgent`] via [`DreggRuntime::create_note`]. Holds the
+/// canonical `dregg_cell::Note` so the commitment/value/asset_type all come from
+/// the real note math; `nullifier` is `Some` once the note has been spent
+/// (`spend_note` reveals it into the `NullifierSet`).
+#[derive(Clone, Debug)]
+pub struct HeldNote {
+    /// The canonical note. `commitment()` / `value()` / `asset_type()` are
+    /// derived from this — no shadow copies that could drift.
+    pub note: Note,
+    /// The revealed nullifier, present iff the note has been spent. Derived from
+    /// the same deterministic spending key `spend_note` uses.
+    pub nullifier: Option<Nullifier>,
 }
 
 // Federation is wired via the canonical `dregg_federation::Federation`
@@ -164,6 +185,17 @@ pub struct FinalizedBlock {
     pub revoked_token_ids: Vec<String>,
     pub qc_votes: usize,
     pub qc_threshold: usize,
+    /// Ledger state Merkle root captured immediately before this consensus round
+    /// finalized. Real value from `Ledger::root()` (canonical binary-BLAKE3
+    /// state tree) — not a placeholder. In the wasm sim a federation consensus
+    /// round only finalizes *revocations* (it does not apply turns to the
+    /// ledger), so `pre_state_root == post_state_root` for any given round; both
+    /// are nonetheless the ledger's genuine root at block time, giving
+    /// `<dregg-block>` a real anchor instead of all-zeros.
+    pub pre_state_root: [u8; 32],
+    /// Ledger state Merkle root captured immediately after this consensus round
+    /// finalized. See `pre_state_root`.
+    pub post_state_root: [u8; 32],
 }
 
 /// A named in-browser federation. The handle the JS UI uses to address a
@@ -390,6 +422,11 @@ impl DreggRuntime {
     /// carries the real `federation_id` and `threshold` from the canonical
     /// `Federation` committee.
     pub fn propose_block(&mut self, fed_index: usize, token_ids: Vec<String>) -> Option<[u8; 32]> {
+        // Capture the ledger's real Merkle root before taking the mutable
+        // federation borrow. A consensus round finalizes revocations only (no
+        // ledger turns), so this root is both the pre- and post-state root for
+        // the block — a genuine value, not [0u8; 32].
+        let state_root = self.ledger.root();
         let fed = self.federations.get_mut(fed_index)?;
         if token_ids.is_empty() {
             return None;
@@ -432,6 +469,8 @@ impl DreggRuntime {
             revoked_token_ids: revoked,
             qc_votes,
             qc_threshold,
+            pre_state_root: state_root,
+            post_state_root: state_root,
         });
         Some(block_hash)
     }
@@ -440,6 +479,8 @@ impl DreggRuntime {
     /// submitted out-of-band). Returns the finalized block hash + height +
     /// view + event count, or `None` if there are no pending revocations.
     pub fn simulate_consensus_round(&mut self, fed_index: usize) -> Option<ConsensusRoundResult> {
+        // Real ledger Merkle root at block time (see `propose_block`).
+        let state_root = self.ledger.root();
         let fed = self.federations.get_mut(fed_index)?;
         if fed.pending_revocations.is_empty() {
             return None;
@@ -475,6 +516,8 @@ impl DreggRuntime {
             revoked_token_ids: revoked,
             qc_votes,
             qc_threshold,
+            pre_state_root: state_root,
+            post_state_root: state_root,
         });
         Some(ConsensusRoundResult {
             block_hash: hex_encode_bytes(&block_hash),
@@ -648,6 +691,7 @@ impl DreggRuntime {
             commitment_id,
             token_counter: 0,
             peer_exchange,
+            held_notes: Vec::new(),
         };
 
         self.agent_names.insert(name.to_string(), idx);
@@ -748,7 +792,7 @@ impl DreggRuntime {
         let token_id = format!("tok_{}_{}", agent.name, agent.token_counter);
 
         let held = HeldCapability {
-            token_id,
+            token_id: token_id.clone(),
             actions: actions.to_vec(),
             resource: resource.to_string(),
             app_id: None,
@@ -763,6 +807,20 @@ impl DreggRuntime {
 
         let idx = agent.held_tokens.len();
         agent.held_tokens.push(held);
+
+        // Also mint a REAL macaroon-backed `HeldToken` into the cipherclerk so
+        // the canonical `AgentCipherclerk::tokens()` surface (what
+        // `get_agent_tokens` / `<dregg-cipherclerk>` #36 reads) reflects this
+        // grant — not just the intent-matcher `HeldCapability` shape. The root
+        // key is derived deterministically from the cipherclerk's signing key
+        // (no random material, reproducible) via the same `derive_symmetric_key`
+        // path `create_note` uses. The `resource` is used as the macaroon
+        // service name so the two views correlate.
+        let root_key = agent
+            .cclerk
+            .derive_symmetric_key(&format!("dregg-wasm-token-root-{token_id}"));
+        let _ = agent.cclerk.mint_token(&root_key, resource);
+
         idx
     }
 
@@ -895,7 +953,7 @@ impl DreggRuntime {
     /// for reproducibility), via `AgentCipherclerk::derive_symmetric_key` rather
     /// than exposing raw signing material.
     pub fn create_note(&mut self, agent_idx: usize, value: u64, asset_type: u64) -> NoteCommitment {
-        let agent = &self.agents[agent_idx];
+        let agent = &mut self.agents[agent_idx];
         let mut fields = [0u64; 8];
         fields[0] = asset_type;
         fields[1] = value;
@@ -903,7 +961,18 @@ impl DreggRuntime {
             .cclerk
             .derive_symmetric_key("dregg-wasm-note-randomness");
         let note = Note::with_randomness(agent.public_key, fields, randomness);
-        note.commitment()
+        let commitment = note.commitment();
+        // Index the minted note so `get_notes` (and `dregg://note/*` lookups)
+        // resolve it. We dedupe by commitment because `create_note` is
+        // deterministic (same agent + value + asset_type ⇒ same note), so a
+        // repeated lab-mode "create" must not stack duplicate entries.
+        if !agent.held_notes.iter().any(|hn| hn.note.commitment() == commitment) {
+            agent.held_notes.push(HeldNote {
+                note,
+                nullifier: None,
+            });
+        }
+        commitment
     }
 
     /// Spend a note (reveal nullifier). Spending key derived from the cipherclerk
@@ -915,7 +984,7 @@ impl DreggRuntime {
         value: u64,
         asset_type: u64,
     ) -> Result<Nullifier, String> {
-        let agent = &self.agents[agent_idx];
+        let agent = &mut self.agents[agent_idx];
         let mut fields = [0u64; 8];
         fields[0] = asset_type;
         fields[1] = value;
@@ -926,10 +995,26 @@ impl DreggRuntime {
             .cclerk
             .derive_symmetric_key("dregg-wasm-note-spending");
         let note = Note::with_randomness(agent.public_key, fields, randomness);
+        let commitment = note.commitment();
         let nullifier = note.nullifier(&spending);
         self.nullifier_set
             .insert(nullifier)
             .map_err(|e| e.to_string())?;
+        // Reflect the spend in the agent's note index so `get_notes` reports the
+        // note as spent (with its revealed nullifier). If the note was never
+        // surfaced via `create_note` (spend-without-prior-create in the sim),
+        // index it now so the spent note is still visible to the inspector.
+        match agent
+            .held_notes
+            .iter_mut()
+            .find(|hn| hn.note.commitment() == commitment)
+        {
+            Some(hn) => hn.nullifier = Some(nullifier),
+            None => agent.held_notes.push(HeldNote {
+                note,
+                nullifier: Some(nullifier),
+            }),
+        }
         Ok(nullifier)
     }
 

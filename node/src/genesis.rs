@@ -141,7 +141,46 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     let federation_id = hex_encode(&federation_id_bytes);
 
     // Build genesis config.
+    //
+    // Seed a non-empty ledger so a freshly-deployed devnet boots with real
+    // cells (the explorer / `/api/cells` is not empty on first run). Every
+    // cell here is a REAL canonical hosted cell: its `id` is the
+    // content-addressed `CellId::derive_raw(public_key, token_id)` that the
+    // executor will recompute and accept, not a label. The faucet cell holds
+    // the genesis supply; the demo agent cells are backed by real Ed25519
+    // keypairs (written to `agent-<name>.key`) so they are actually spendable
+    // for demos, not just display rows.
     let default_token_id = [0u8; 32];
+
+    // The faucet cell. Its key is deterministic so the running node / faucet
+    // endpoint can locate it, but it is still a real derived CellId.
+    let faucet_secret = blake3::derive_key("dregg-devnet-faucet-key-v1", b"genesis");
+    let faucet_signing = ed25519_dalek::SigningKey::from_bytes(&faucet_secret);
+    let faucet_pubkey = faucet_signing.verifying_key().to_bytes();
+    write_key_file(output, "faucet.key", &faucet_secret);
+
+    let mut initial_cells = vec![GenesisCell {
+        id: derive_cell_id(&faucet_pubkey, &default_token_id),
+        public_key: hex_encode(&faucet_pubkey),
+        token_id: hex_encode(&default_token_id),
+        balance: 1_000_000,
+    }];
+
+    // A handful of demo agent cells with starting balances.
+    for (name, balance) in [("alice", 50_000u64), ("bob", 25_000u64), ("carol", 10_000u64)] {
+        let mut key_bytes = [0u8; 32];
+        getrandom::fill(&mut key_bytes).expect("getrandom failed");
+        let signing = ed25519_dalek::SigningKey::from_bytes(&key_bytes);
+        let pubkey = signing.verifying_key().to_bytes();
+        write_key_file(output, &format!("agent-{name}.key"), &key_bytes);
+        initial_cells.push(GenesisCell {
+            id: derive_cell_id(&pubkey, &default_token_id),
+            public_key: hex_encode(&pubkey),
+            token_id: hex_encode(&default_token_id),
+            balance,
+        });
+    }
+
     let genesis = GenesisConfig {
         federation_id,
         committee_epoch,
@@ -149,20 +188,7 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
         checkpoint_interval,
         validators: genesis_validators,
         threshold,
-        initial_cells: vec![
-            GenesisCell {
-                id: "treasury".to_string(),
-                public_key: hex_encode(&[0x02; 32]),
-                token_id: hex_encode(&default_token_id),
-                balance: 1_000_000,
-            },
-            GenesisCell {
-                id: "faucet".to_string(),
-                public_key: hex_encode(&[0x01; 32]),
-                token_id: hex_encode(&default_token_id),
-                balance: 100_000,
-            },
-        ],
+        initial_cells,
     };
 
     // Write genesis.json.
@@ -207,4 +233,36 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Derive the canonical content-addressed `CellId` for a hosted cell, using the
+/// exact same path the runtime (`materialize_genesis_cells`) recomputes:
+/// `dregg_cell::Cell::with_balance(pk, token, _).id()`. This guarantees the
+/// `id` written into genesis.json matches the executor's derivation, so the
+/// cell materializes instead of being rejected as a mismatched id.
+fn derive_cell_id(public_key: &[u8; 32], token_id: &[u8; 32]) -> String {
+    let cell = dregg_cell::Cell::with_balance(*public_key, *token_id, 0);
+    hex_encode(&cell.id().0)
+}
+
+/// Write a raw 32-byte key file with owner-only (0o600) permissions.
+fn write_key_file(output: &Path, name: &str, key_bytes: &[u8; 32]) {
+    let key_path = output.join(name);
+    std::fs::write(&key_path, key_bytes).unwrap_or_else(|e| {
+        eprintln!("error: failed to write {}: {e}", key_path.display());
+        std::process::exit(1);
+    });
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap_or_else(
+            |e| {
+                eprintln!(
+                    "error: failed to set permissions on {}: {e}",
+                    key_path.display()
+                );
+                std::process::exit(1);
+            },
+        );
+    }
 }

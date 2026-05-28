@@ -342,9 +342,17 @@ class DreggCipherclerk extends InspectorBase {
     // everything).
     const capTreeSig = this._runtime.listCapabilities(agentIdx);
     const receiptsSig = this._runtime.listReceipts(agentIdx);
-    // The runtime has no first-class getAgentTokens(); we surface what we can
-    // via the capability tree. Macaroon-backed HeldToken from cclerk.tokens()
-    // is not yet a wasm export — noted as TODO below.
+    // Agent-scoped cipherclerk state (wired via wasm getters added in the
+    // substrate lane): macaroon-backed HeldTokens, the agent-filtered receipt
+    // chain, and stealth PUBLIC keys. Feature-detected so a runtime that lacks
+    // them (e.g. read-only RemoteRuntime) degrades to an honest empty state
+    // rather than throwing.
+    const tokensSig = typeof this._runtime.getAgentTokens === 'function'
+      ? this._runtime.getAgentTokens(agentIdx) : null;
+    const agentReceiptsSig = typeof this._runtime.getAgentReceipts === 'function'
+      ? this._runtime.getAgentReceipts(agentIdx) : null;
+    const stealthSig = typeof this._runtime.getAgentStealthKeys === 'function'
+      ? this._runtime.getAgentStealthKeys(agentIdx) : null;
 
     // Active tab stored as a Preact signal so tab clicks trigger re-render.
     const activeTab = signal(this._activeTab);
@@ -354,17 +362,23 @@ class DreggCipherclerk extends InspectorBase {
 
     const Component = () => {
       const capTree = capTreeSig.value;
-      const receipts = receiptsSig.value || [];
+      // Prefer the agent-filtered receipt chain when the runtime exposes it;
+      // fall back to the global chain otherwise.
+      const agentReceipts = agentReceiptsSig ? agentReceiptsSig.value : null;
+      const receipts = (agentReceipts != null ? agentReceipts : (receiptsSig.value || [])) || [];
+      const tokens = tokensSig ? (tokensSig.value || []) : null;
+      const stealth = stealthSig ? stealthSig.value : null;
 
       // Derive counts.
       const caps = capTree ? (capTree.capabilities || []) : null;
       const capsCount = caps ? caps.length : null;
       const receiptCount = receipts.length;
+      const tokenCount = tokens != null ? tokens.length : null;
 
       // --- compact mode --------------------------------------------------
       if (mode === 'compact') {
         const name = capTree ? (capTree.agent_name || `#${agentIdx}`) : `#${agentIdx}`;
-        const tokPart = '? tokens'; // TODO: token count not yet exported
+        const tokPart = tokenCount != null ? `${tokenCount} token${tokenCount === 1 ? '' : 's'}` : '? tokens';
         const capPart = capsCount != null ? `${capsCount} cap${capsCount === 1 ? '' : 's'}` : '? caps';
         const rcptPart = `${receiptCount} receipt${receiptCount === 1 ? '' : 's'}`;
         return html`
@@ -423,9 +437,7 @@ class DreggCipherclerk extends InspectorBase {
               : html`<span style="color:var(--fg-dim);">—</span>`}
           </dd>
           <dt>token count</dt>
-          <dd>
-            <span style="color:var(--fg-dim);font-style:italic;font-size:0.78rem;">TODO: tokens listing not yet exposed via wasm</span>
-          </dd>
+          <dd>${tokenCount != null ? String(tokenCount) : html`<span style="color:var(--fg-dim);font-style:italic;font-size:0.78rem;">— (runtime exposes no token surface)</span>`}</dd>
           <dt>capabilities</dt>
           <dd>${capsCount != null ? String(capsCount) : '—'}</dd>
           <dt>receipt chain</dt>
@@ -520,16 +532,34 @@ class DreggCipherclerk extends InspectorBase {
             )}
           </ul>`;
       }
+      // Macaroon-backed HeldToken list from the real cclerk.tokens() surface
+      // (wasm get_agent_tokens). Distinct from the capability tree above.
+      let tokensContent;
+      if (tokens == null) {
+        tokensContent = html`<div class="pcc__empty">this runtime exposes no token surface</div>`;
+      } else if (tokens.length === 0) {
+        tokensContent = html`<div class="pcc__empty">no tokens held (mint one to populate)</div>`;
+      } else {
+        tokensContent = html`
+          <ul class="pcc__token-list" data-testid="pcc-token-list">
+            ${tokens.map((t, i) => html`
+              <li class="pcc__token-row" data-testid=${`pcc-token-row-${i}`}>
+                <span class="pcc__token-label">${_esc(t.label || t.id || `token ${i}`)}</span>
+                <span class="pcc__token-resource">${_esc(t.service || '—')}</span>
+                ${t.verified ? html`<span class="pcc__token-flag" title="signature verified">✓</span>` : null}
+                ${t.can_mint ? html`<span class="pcc__token-flag" title="can mint children">mint</span>` : null}
+                ${t.can_prove ? html`<span class="pcc__token-flag" title="can present ZK proof">prove</span>` : null}
+                ${t.id ? html`<span class="pcc__token-id" title=${t.id}><code>${_esc(shortHex(t.id, 16))}</code></span>` : null}
+              </li>`
+            )}
+          </ul>`;
+      }
       const tabHoldings = html`
         <div class="pcc__tab-panel" role="tabpanel" data-testid="pcc-panel-holdings">
-          <div class="pcc__section-label">Capabilities (CDT)</div>
+          <div class="pcc__section-label">Tokens (macaroon-backed HeldToken)</div>
+          ${tokensContent}
+          <div class="pcc__section-label" style="margin-top:var(--s3,10px);">Capabilities (c-list / CDT)</div>
           ${holdingsContent}
-          <div class="pcc__todo" data-testid="pcc-tokens-todo">
-            TODO: macaroon-backed HeldToken list (cclerk.tokens()) is not yet exposed via a
-            wasm binding. Once <code>get_agent_tokens(handle, agent_index)</code> lands in
-            wasm/src/bindings.rs, this panel will show the full token chain per
-            STARBRIDGE-PLAN § 4.5 (&lt;dregg-attenuated-token&gt;).
-          </div>
         </div>`;
 
       // ── Tab: History ─────────────────────────────────────────────────────
@@ -547,7 +577,7 @@ class DreggCipherclerk extends InspectorBase {
             <dregg-receipt uri=${`dregg://receipt/${head.turn_hash}`} mode="default"></dregg-receipt>
           </div>
           <div>
-            <div class="pcc__section-label">Full chain (${receiptCount} receipt${receiptCount === 1 ? '' : 's'}) — note: chain is currently global (per-agent filter awaiting wasm support)</div>
+            <div class="pcc__section-label">Full chain (${receiptCount} receipt${receiptCount === 1 ? '' : 's'})${agentReceipts != null ? '' : ' — note: global chain (runtime exposes no per-agent filter)'}</div>
             <ul class="pcc__token-list" data-testid="pcc-history-list">
               ${receipts.slice().reverse().map((r, i) => html`
                 <li class="pcc__chain-row" data-testid=${`pcc-receipt-row-${i}`}>
@@ -564,31 +594,34 @@ class DreggCipherclerk extends InspectorBase {
         </div>`;
 
       // ── Tab: Stealth ─────────────────────────────────────────────────────
-      // Stealth keypair (view + spend) and stealth notes are not yet exposed
-      // by the wasm runtime. Placeholder per the Substrate rule.
+      // Real view+spend PUBLIC keys via the wasm get_agent_stealth_keys getter
+      // (pubkeys only — no private material crosses the boundary). Stealth-note
+      // scanning still needs a dedicated getter; that one stays an honest note.
+      const viewPk = stealth ? (stealth.view_pubkey || stealth.viewPubkey) : null;
+      const spendPk = stealth ? (stealth.spend_pubkey || stealth.spendPubkey) : null;
+      const stealthUnavailable = stealth == null;
+      const stealthKeyVal = (pk) => stealthUnavailable
+        ? html`<span class="pcc__key-value" style="color:var(--fg-dim);font-style:italic;">runtime exposes no stealth surface</span>`
+        : (pk
+            ? html`<code class="pcc__key-value" title=${pk}>${_esc(shortHex(pk, 24))}</code>`
+            : html`<span class="pcc__key-value" style="color:var(--fg-dim);">—</span>`);
       const tabStealth = html`
         <div class="pcc__tab-panel" role="tabpanel" data-testid="pcc-panel-stealth">
-          <div class="pcc__section-label">Stealth Keys</div>
+          <div class="pcc__section-label">Stealth Keys (public)</div>
           <div class="pcc__key-row">
             <span class="pcc__key-label">View pubkey</span>
-            <span class="pcc__key-value" style="color:var(--fg-dim);font-style:italic;">awaiting wasm32 support for stealth key export</span>
+            ${stealthKeyVal(viewPk)}
           </div>
           <div class="pcc__key-row">
             <span class="pcc__key-label">Spend pubkey</span>
-            <span class="pcc__key-value" style="color:var(--fg-dim);font-style:italic;">awaiting wasm32 support for stealth key export</span>
-          </div>
-          <div class="pcc__key-row">
-            <span class="pcc__key-label">Meta-address</span>
-            ${stealthMetaAddress
-              ? html`<code class="pcc__key-value" title=${stealthMetaAddress}>${_esc(shortHex(stealthMetaAddress, 32))}</code>`
-              : html`<span class="pcc__key-value" style="color:var(--fg-dim);font-style:italic;">awaiting wasm32 support</span>`}
+            ${stealthKeyVal(spendPk)}
           </div>
           <div style="margin-top:var(--s3,10px);">
             <div class="pcc__section-label">Recent Stealth Notes Received</div>
             <div class="pcc__todo" data-testid="pcc-stealth-notes-todo">
-              TODO: stealth notes require <code>get_stealth_notes(handle, agent_index)</code>
-              wasm binding. See STARBRIDGE-PLAN § 4.3 (extension bugfix #1: wire
-              note_announcement WS handler to call check_stealth_ownership).
+              Stealth-note scanning needs a dedicated <code>get_stealth_notes(handle, agent_index)</code>
+              getter (it must run <code>check_stealth_ownership</code> over announcements). The view/spend
+              keys above are real; the received-note feed is the remaining gap.
             </div>
           </div>
         </div>`;

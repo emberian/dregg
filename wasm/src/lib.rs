@@ -1812,6 +1812,12 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
     let turn = cclerk.make_turn_for("default", action);
     let turn_bytes = postcard::to_allocvec(&turn)
         .map_err(|e| JsError::new(&format!("postcard serialization failed: {e}")))?;
+    // Also emit a self-describing JSON encoding. `Turn` carries
+    // `skip_serializing_if` fields, so postcard does NOT round-trip it; JSON
+    // does. `sign_turn_v3` accepts either, so callers that need to re-decode the
+    // built turn (e.g. to sign it) should pass `turn_bytes_json`.
+    let turn_bytes_json = serde_json::to_vec(&turn)
+        .map_err(|e| JsError::new(&format!("json serialization failed: {e}")))?;
 
     // Turn ID = BLAKE3 of the serialized bytes — deterministic and unique per turn.
     let turn_hash = blake3::hash(&turn_bytes);
@@ -1821,6 +1827,7 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
     struct BuildTurnResult {
         turn_id: String,
         turn_bytes: Vec<u8>,
+        turn_bytes_json: Vec<u8>,
         agent_cell_id: String,
         action: String,
     }
@@ -1828,6 +1835,7 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
     let result = BuildTurnResult {
         turn_id,
         turn_bytes,
+        turn_bytes_json,
         agent_cell_id: hex_encode(&cell_id.0),
         action: spec.action,
     };
@@ -1838,27 +1846,41 @@ pub fn build_turn(spec_json: &str) -> Result<JsValue, JsError> {
 // Canonical v3 turn signer (signTurnV3 canonical path)
 // ============================================================================
 
-/// Sign a pre-built, postcard-encoded `Turn` via the canonical v3 signing path.
+/// Sign a pre-built, encoded `Turn` via the canonical v3 signing path.
 ///
 /// This is the substrate behind the extension's `dregg.signTurnV3(turnBytes)`
 /// surface (STARBRIDGE-PLAN §4.3 Task #28 item 5). starbridge-apps turn-builders
-/// produce raw postcard `Turn` bytes whose actions carry `Authorization::Unchecked`;
-/// this function walks the call forest and replaces every `Unchecked` action with
-/// a real Ed25519 signature using `AgentCipherclerk::sign_action` — the exact same
-/// canonical path `DreggRuntime::execute_turn_for_agent` uses (`sign_call_forest` →
-/// `cipherclerk.sign_action` → `TurnExecutor::compute_signing_message`). No
+/// produce raw `Turn` bytes whose actions carry `Authorization::Unchecked`; this
+/// function walks the call forest and replaces every `Unchecked` action with a
+/// real Ed25519 signature using `AgentCipherclerk::sign_action` — the exact same
+/// canonical path `DreggRuntime::execute_turn_for_agent` uses (`sign_call_forest`
+/// → `cipherclerk.sign_action` → `TurnExecutor::compute_signing_message`). No
 /// hand-rolled cryptography; the v3 signing message format is whatever the SDK's
 /// `compute_signing_message` produces today.
 ///
+/// # Encoding contract (honest substrate note)
+///
+/// The task spec named postcard, but `dregg_turn::Turn` carries
+/// `#[serde(skip_serializing_if = ...)]` fields and postcard is NOT
+/// self-describing, so `postcard::to_allocvec(&turn)` → `postcard::from_bytes::<Turn>`
+/// does NOT round-trip (it fails "Hit the end of buffer"). This is a pre-existing
+/// substrate asymmetry, verified directly against the `turn` crate. To stay usable
+/// without faking anything, this signer accepts the turn bytes as **either**
+/// postcard or self-describing JSON, tries postcard first and falls back to JSON,
+/// and returns the signed turn in **both** encodings so the caller can pick the
+/// one its downstream consumer accepts. JSON is the reliable round-trip form until
+/// the substrate adds a postcard-safe wire encoding for `Turn`.
+///
 /// Arguments (all from the extension's cipherclerk context):
-/// - `turn_bytes`: postcard-encoded `Turn` (Unchecked actions to be signed).
+/// - `turn_bytes`: encoded `Turn` (postcard or JSON) with Unchecked actions.
 /// - `sender_privkey`: 32-byte Ed25519 seed (the cipherclerk's secret key).
 /// - `federation_id`: 32-byte federation id the signing message binds against
 ///   (all-zeros for devnet/sim genesis; the node's `local_federation_id`).
 ///
-/// Returns the postcard-encoded *signed* `Turn` bytes (a `Uint8Array`). Actions
-/// already carrying a non-`Unchecked` authorization are left intact (pre-signed /
-/// pre-proven actions are preserved).
+/// Returns JSON: `{ turn_id, turn_bytes (postcard), turn_bytes_json (JSON),
+/// encoding ("postcard"|"json"; the encoding the INPUT was decoded as),
+/// signer_pubkey }`. Actions already carrying a non-`Unchecked` authorization are
+/// left intact (pre-signed / pre-proven actions are preserved).
 #[wasm_bindgen]
 pub fn sign_turn_v3(
     turn_bytes: &[u8],
@@ -1880,28 +1902,46 @@ pub fn sign_turn_v3(
     let mut fed_id = [0u8; 32];
     fed_id.copy_from_slice(federation_id);
 
-    let mut turn: Turn = postcard::from_bytes(turn_bytes)
-        .map_err(|e| JsError::new(&format!("turn decode failed: {e}")))?;
+    // Try postcard first (named in the task), fall back to self-describing JSON
+    // (the form that actually round-trips Turn — see encoding contract above).
+    let (mut turn, input_encoding): (Turn, &str) = match postcard::from_bytes::<Turn>(turn_bytes) {
+        Ok(t) => (t, "postcard"),
+        Err(pc_err) => match serde_json::from_slice::<Turn>(turn_bytes) {
+            Ok(t) => (t, "json"),
+            Err(json_err) => {
+                return Err(JsError::new(&format!(
+                    "turn decode failed as postcard ({pc_err}) and as JSON ({json_err})"
+                )));
+            }
+        },
+    };
 
     let cclerk = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
 
     // Canonical signing path — identical to execute_turn_for_agent.
     crate::runtime::sign_call_forest(&mut turn, &cclerk, &fed_id);
 
-    let signed_bytes = postcard::to_allocvec(&turn)
-        .map_err(|e| JsError::new(&format!("turn re-encode failed: {e}")))?;
-    let turn_hash = blake3::hash(&signed_bytes);
+    let signed_postcard = postcard::to_allocvec(&turn)
+        .map_err(|e| JsError::new(&format!("postcard re-encode failed: {e}")))?;
+    let signed_json = serde_json::to_vec(&turn)
+        .map_err(|e| JsError::new(&format!("json re-encode failed: {e}")))?;
+    // turn_id is the canonical Turn::hash (v3), independent of wire encoding.
+    let turn_hash = turn.hash();
 
     #[derive(Serialize)]
     struct SignTurnV3Result {
         turn_id: String,
         turn_bytes: Vec<u8>,
+        turn_bytes_json: Vec<u8>,
+        encoding: String,
         signer_pubkey: String,
     }
 
     let result = SignTurnV3Result {
-        turn_id: hex_encode(turn_hash.as_bytes()),
-        turn_bytes: signed_bytes,
+        turn_id: hex_encode(&turn_hash),
+        turn_bytes: signed_postcard,
+        turn_bytes_json: signed_json,
+        encoding: input_encoding.to_string(),
         signer_pubkey: hex_encode(&cclerk.public_key().0),
     };
     serde_wasm_bindgen::to_value(&result).map_err(|e| JsError::new(&e.to_string()))

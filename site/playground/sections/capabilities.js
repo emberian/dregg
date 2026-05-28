@@ -60,7 +60,7 @@ export function initCapabilities(wasm) {
   const delegateBtn = container.querySelector('#cap-delegate');
   const revokeBtn = container.querySelector('#cap-revoke');
 
-  container.querySelector('.next-hint').addEventListener('click', () => navigateTo('crossfed'));
+  container.querySelector('.next-hint').addEventListener('click', () => navigateTo('sovereign'));
 
   function renderChain() {
     if (state.capChain.length === 0) {

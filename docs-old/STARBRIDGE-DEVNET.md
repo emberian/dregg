@@ -3,6 +3,60 @@
 Scope: fresh commonquant-ember AWS devnet deploy from the current checkout. No SSH
 or deploy was performed.
 
+## Devnet experience fixes (2026-05-28)
+
+Three concrete "deployed devnet feels broken" gaps, all fixed and verified
+against a live local node.
+
+1. **Genesis seeds a non-empty ledger.** `dregg-node genesis`
+   (`node/src/genesis.rs`) now writes four REAL canonical cells into
+   `genesis.json` `initial_cells`: a faucet cell (balance 1,000,000) plus three
+   demo agent cells `alice` (50,000), `bob` (25,000), `carol` (10,000). Each
+   `id` is the content-addressed `CellId::derive_raw(public_key, token_id)` that
+   the executor recomputes in `materialize_genesis_cells`
+   (`node/src/main.rs`), so they materialize instead of being rejected. The
+   demo agents are backed by real Ed25519 keypairs written as
+   `agent-<name>.key` (and `faucet.key`), so they are spendable, not display
+   rows. The deployed `deploy/genesis/genesis.json` was regenerated. On a fresh
+   `genesis` + `run`, `GET /api/cells` returns 4 cells.
+
+2. **Honest `/status` health.** `healthy` now reflects real consensus liveness
+   (blocklace handle attached AND the DAG has produced at least one block),
+   NOT the attested-root height. New fields on `/status`:
+   - `dag_height` — real blocklace DAG tip (max block `seq`); advances on every
+     block including idle heartbeats. This is the honest "chain height N".
+   - `block_count` — number of blocks in the local lace.
+   - `consensus_live` — whether the consensus task is running.
+   - `latest_height` — kept as the attested-root / turn height; only advances on
+     turn-bearing finality, so it can legitimately be 0 on a fresh, healthy node
+     whose DAG is already tall. Use `dag_height` for "how tall is the chain".
+
+3. **CORS for the deployed devnet (#43).** `dregg-node run` gained a
+   `--cors-origin <origin>` flag (repeatable / comma-separated) and reads the
+   `DREGG_CORS_ORIGINS` env var (comma-separated); the two are unioned. These
+   exact origins are allowed cross-origin IN ADDITION to the always-allowed
+   localhost / 127.0.0.1 / [::1] and browser-extension origins. **Default is
+   empty (locked down).** Wired through `node/src/main.rs` →
+   `api::router_with_cors` → `cors_middleware` / `is_origin_allowed`.
+   `deploy/aws/caddy/Caddyfile`: `X-Frame-Options` changed `DENY` →
+   `SAMEORIGIN` and `Content-Security-Policy "frame-ancestors 'self'"` added so
+   the deployed site can embed its own app iframes (explorer / playground /
+   starbridge shells). The Caddyfile already serves the site and proxies the
+   node API on the SAME origin, so the recommended path is CORS-free
+   (same-origin needs no `--cors-origin`); the flag/env is only for clients that
+   hit the node on a different origin.
+
+### Verification (live local node)
+
+```
+healthy: true   dag_height: 34   latest_height: 0   block_count: 34
+/api/cells: 4 cells (faucet 1,000,000 + alice/bob/carol)
+Origin: https://devnet.example.com  → access-control-allow-origin echoed (when configured)
+Origin: http://localhost:3000       → echoed (always)
+Origin: https://evil.example.com    → no ACAO header (denied)
+DREGG_CORS_ORIGINS env var path     → echoed; unconfigured node denies
+```
+
 ## Remaining blockers (require live AWS / real secrets to verify)
 
 These are no longer source-of-truth bugs in the deploy scripts. They are

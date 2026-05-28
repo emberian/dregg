@@ -80,9 +80,9 @@ export function initOverview() {
         <div class="overview-cap__title">Capabilities</div>
         <div class="overview-cap__desc">Delegation chains with cryptographic attenuation. Grant, narrow, revoke — monotonically reducing scope.</div>
       </div>
-      <div class="overview-cap" data-nav="crossfed">
-        <div class="overview-cap__title">Cross-Federation</div>
-        <div class="overview-cap__desc">Bridge notes and tokens across federation boundaries with conditional turns and intent matching.</div>
+      <div class="overview-cap" data-nav="federation">
+        <div class="overview-cap__title">Federation</div>
+        <div class="overview-cap__desc">Multi-node consensus, block DAGs, and sovereign exits — inspect the real federation and block-dag views in Starbridge.</div>
       </div>
       <div class="overview-cap" data-nav="sovereign">
         <div class="overview-cap__title">Sovereign Cells</div>

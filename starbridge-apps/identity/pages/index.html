@@ -99,6 +99,11 @@
     <script type="module" src="/starbridge-apps/shared/inspectors/index.js"></script>
     <script type="module" src="./inspectors.js"></script>
     <script type="module" src="./turn-builders.js"></script>
+    <!-- Real local-preview runtime: creates a real issuer cell, binds the
+         placeholder URI to it, installs a real window.dregg.signTurn routed
+         through the canonical TurnExecutor. The ZK credential surface
+         (window.dregg.credentials.*) remains extension-only. -->
+    <script type="module" src="/starbridge-apps/shared/app-runtime-ready.js"></script>
     <script type="module">
       // Minimal tab-switcher (keeps the panels thin; logic stays in the
       // web components themselves).

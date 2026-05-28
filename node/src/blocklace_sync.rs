@@ -190,6 +190,23 @@ impl BlocklaceHandle {
             .collect()
     }
 
+    /// The real blocklace DAG tip height: the maximum block `seq` across all
+    /// creators in the local lace. This is the honest "how tall is the chain"
+    /// number — it advances on every block (turns AND heartbeats), unlike the
+    /// attested-root height which only moves on turn-bearing finality.
+    ///
+    /// Returns 0 for an empty lace (e.g. genesis-only before the first block).
+    pub async fn dag_height(&self) -> u64 {
+        let lace = self.lace.read().await;
+        lace.iter().map(|(_, block)| block.seq).max().unwrap_or(0)
+    }
+
+    /// Number of blocks in the local blocklace DAG.
+    pub async fn block_count(&self) -> usize {
+        let lace = self.lace.read().await;
+        lace.len()
+    }
+
     /// Find the block whose creator-seq equals `height`. When several creators
     /// produced a block at the same seq (multi-node DAG), the lexicographically
     /// smallest creator wins for determinism. Returns `None` if no such block.

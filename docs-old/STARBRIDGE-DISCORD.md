@@ -231,3 +231,67 @@ Only replace the running commonquant-ember bot/devnet after all of these are tru
 - Fresh genesis has been generated and reviewed.
 - A dry-run deploy on a disposable host passes health checks.
 
+## Update 2026-05-28: bot-as-third-dregg-peer, real signed artifacts
+
+Lane: "discord bot as a third dregg peer" (§4.7). The earlier review (above) found
+intent/handoff were placeholders. They are now backed by **real canonical
+artifacts**, with the artifact-producing logic factored into Discord-independent,
+unit-tested modules.
+
+### Capability handoff — REAL (redeem-grant is soft-federation-local)
+
+- New `discord-bot/src/handoff_flow.rs`: `HandoffBroker` mints a genuine
+  `dregg_captp::handoff::HandoffCertificate` signed (Ed25519) by the introducer
+  (the hosted user's derived key), exported through a canonical
+  `dregg_captp::sturdy::SwissTable`, encoded as the canonical
+  `dregg-handoff:<base58>` compact form. Redemption builds a real
+  `HandoffPresentation` and runs the canonical `validate_handoff`
+  (introducer-sig + recipient-sig + known-federation + swiss-enliven).
+- New `/handoff <cell-id> <@user>` posts the compact cert + introducer pubkey to
+  the channel; `/handoff-redeem <cert> <introducer-pk>` redeems it. Holder-right
+  checked (invoker must own the hosted cell; recipient must be hosted so the bot
+  can derive their canonical recipient pubkey).
+- The resulting `HandoffAcceptance.routing_token` is a real grant **within the
+  bot's soft-federation** (the bot is the target federation / swiss host).
+- NAMED GAP: promoting that routing token into a live CapTP session on the
+  canonical `dregg-node` needs a node `/captp/enliven`-style endpoint, which the
+  node does not yet expose (see `captp_client.rs` module docs). Everything up to
+  and including a verified `HandoffAcceptance` is genuine and headless-tested.
+- The legacy BLAKE3-MAC `/cap-delegate` path (`captp_client.rs`) is left intact
+  but is now superseded by `/handoff`; it should be retired once consumers move.
+
+### Signed intents — REAL (post + verify); multi-party turn is follow-up
+
+- New `discord-bot/src/intent_flow.rs`: `build_signed_intent` produces a
+  canonical `dregg_turn::action::Action` (method `intent.post`, spec bound by
+  BLAKE3 hash in `args`) carrying a real `Authorization::Signature` over
+  `TurnExecutor::compute_signing_message`. `verify_signed_intent` verifies it via
+  `dregg_types::PublicKey::verify` (verify_strict). NOT the `dregg-intent`
+  anonymous-commitment primitive — that needs circuit/commit deps the bot does
+  not carry; publishing anonymous solver-network intents is a separate follow-up.
+- New `/intent post <spec>` posts the signed card + poster pubkey + spec-hash and
+  seeds a fulfillment reaction.
+- NAMED GAP: reaction-to-fulfill → multi-party `dregg_turn::composer::TurnComposer`
+  settlement is not wired. Scoped down to "bot posts real signed intents; reactions
+  signal interest." Follow-up: collect fulfiller `SignedFragment`s on reaction and
+  `TurnComposer::compose()` a multi-party turn for node submission.
+
+### Soft-federation (§4.7 task 4) — scoped to "real peer that orders handoffs"
+
+- `BotState.handoff_broker` IS the tiny federation: it holds the canonical target
+  `SwissTable` and the trusted-introducer set, and orders/validates handoff
+  redemptions among clique members under a single Ed25519 trust root (the
+  configured `FEDERATION_ID`). The pre-existing `nullifier_set` field is the
+  hook for note-spend ordering; wiring real `NullifierSet` note-spend ordering
+  from channel members is the named follow-up (needs the node note-spend read
+  surface). The bot is a real peer relaying/ordering real signed artifacts today.
+
+### Headless tests (no Discord needed)
+
+`cargo test -p dregg-discord-bot` → 32 passing. New:
+- `handoff_flow`: mint-verifies, tamper-fails, named-recipient-redeems-real-acceptance,
+  wrong-recipient-rejected, untrusted-introducer-rejected.
+- `intent_flow`: build-verifies, tampered-spec-fails, wrong-pubkey-fails.
+- The command registration/router parity test now also covers `/handoff`,
+  `/handoff-redeem`, `/intent`.
+

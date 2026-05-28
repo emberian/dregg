@@ -129,6 +129,7 @@ async function register_name(registryUri, { name, owner, expiry }) {
   return submit({
     target: registryUri,
     method: 'register_name',
+    name,
     effects: [
       { kind: 'SetField',  cell: registryUri, index: NAME_HASH_SLOT,  value: nh },
       { kind: 'SetField',  cell: registryUri, index: OWNER_HASH_SLOT, value: oh },

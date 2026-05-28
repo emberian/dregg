@@ -137,12 +137,23 @@ async function run() {
     const el = document.getElementById('test-cc');
     return el ? !!el.querySelector('[data-testid="pcc-panel-holdings"]') : false;
   }, { timeout: 3000 });
-  const holdingsTodo = await page.evaluate(() => {
+  // Holdings now renders the REAL macaroon HeldToken list (or an honest empty
+  // state) plus the capability c-list — no placeholder TODO. Assert the real
+  // token surface is present (token-list when tokens exist, else the empty note).
+  const holdingsReal = await page.evaluate(() => {
     const el = document.getElementById('test-cc');
-    return el ? !!el.querySelector('[data-testid="pcc-tokens-todo"]') : false;
+    if (!el) return false;
+    const panel = el.querySelector('[data-testid="pcc-panel-holdings"]');
+    if (!panel) return false;
+    // Real surface: either a populated token list, or an honest empty state —
+    // and crucially NOT the old "awaiting wasm" TODO.
+    const hasTokenSurface = !!panel.querySelector('[data-testid="pcc-token-list"]')
+      || /no tokens held|no token surface/i.test(panel.textContent || '');
+    const noStalePlaceholder = !/awaiting wasm|not yet exposed/i.test(panel.textContent || '');
+    return hasTokenSurface && noStalePlaceholder;
   });
-  if (!holdingsTodo) throw new Error('TEST 5 FAILED: Holdings panel or token-TODO not found');
-  console.log('[test 5] PASS: Holdings tab panel renders with TODO note.');
+  if (!holdingsReal) throw new Error('TEST 5 FAILED: Holdings panel did not render the real token surface');
+  console.log('[test 5] PASS: Holdings tab renders real token surface (no placeholder).');
 
   // ── Test 6: Click History tab → History panel renders ────────────────────
   await page.click('#test-cc [data-testid="pcc-tab-history"]');

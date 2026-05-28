@@ -46,6 +46,16 @@ function u64BE(n) {
   return Array.from(view);
 }
 
+function hexToBig(h) {
+  if (h == null) return 0n;
+  if (typeof h === 'number' || typeof h === 'bigint') return BigInt(h);
+  if (Array.isArray(h) || h instanceof Uint8Array) {
+    return BigInt('0x' + (Array.from(h).map((b) => (b & 0xff).toString(16).padStart(2, '0')).join('') || '0'));
+  }
+  const s = String(h).replace(/^0x/, '');
+  try { return BigInt('0x' + (s || '0')); } catch { return 0n; }
+}
+
 function bool32(b) {
   const view = new Uint8Array(32);
   view[31] = b ? 1 : 0;
@@ -63,6 +73,33 @@ async function blake3Bytes(s) {
 // ─── builders ────────────────────────────────────────────────────────────
 
 async function issue_credential(issuerCellHex, schemaName, subjectHex, claims) {
+  // Local-preview honest path: the ZK credential blob (MacaroonToken mint +
+  // attenuation) is produced by the Cipherclerk EXTENSION's
+  // `window.dregg.credentials.*` surface, which is absent in the static
+  // site preview. When it is absent, we still drive the REAL,
+  // runtime-realizable part of issuance: advance the issuer cell's
+  // ISSUANCE_COUNTER (a real signed turn through the canonical executor,
+  // enforced by the cell's MonotonicSequence caveat). We return a receipt
+  // that is explicit about what happened so the UI does not fake a ZK
+  // credential it did not mint.
+  if (!window.dregg?.credentials?.issue) {
+    const oldCounter = await window.dregg.cell.readField(issuerCellHex, ISSUANCE_COUNTER_SLOT);
+    const newCounter = (BigInt(hexToBig(oldCounter)) + 1n).toString();
+    const receipt = await window.dregg.signTurn({
+      target: issuerCellHex,
+      method: 'issue_credential',
+      effects: [
+        { kind: 'SetField', cell: issuerCellHex, index: ISSUANCE_COUNTER_SLOT, value: u64BE(newCounter) },
+      ],
+    });
+    return {
+      ...(receipt || {}),
+      preview: true,
+      note: 'preview: ZK credential blob requires the Cipherclerk extension; '
+        + 'issuer ISSUANCE_COUNTER advanced on-ledger via a real signed turn',
+      credential: { schema: schemaName, holder_id: subjectHex, counter: newCounter },
+    };
+  }
   // Step 1: invoke dregg-credentials' issue() through wasm to mint the
   // signed credential. The wasm binding is responsible for hashing the
   // schema, calling MacaroonToken::mint, applying the attenuation, and

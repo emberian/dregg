@@ -58,13 +58,21 @@ export function initNotes(wasm) {
     <div id="nt-explainer"></div>
   `;
 
-  // Point the embedded <dregg-note> at the real seeded note commitment.
+  // Point the embedded <dregg-note> at the real seeded note. The wasm note
+  // index (get_notes) does not yet surface minted notes, so we feed the
+  // canonical note object via data= (the inspector's supported alternate path)
+  // rather than relying on uri lookup — no JS-synthesized data.
   onSeedReady((s) => {
-    if (!s.noteCommitment) return;
-    const uri = `dregg://note/${s.noteCommitment}`;
-    container.querySelector('#nt-inspector')?.setAttribute('uri', uri);
-    const link = container.querySelector('.pg-sb-link');
-    if (link) link.href = `/starbridge/?at=${encodeURIComponent(uri)}`;
+    const el = container.querySelector('#nt-inspector');
+    if (el && s.note) {
+      el.setAttribute('data', JSON.stringify(s.note));
+    }
+    if (s.noteCommitment) {
+      const uri = `dregg://note/${s.noteCommitment}`;
+      el?.setAttribute('uri', uri);
+      const link = container.querySelector('.pg-sb-link');
+      if (link) link.href = `/starbridge/?at=${encodeURIComponent(uri)}`;
+    }
   });
 
   if (!wasm) return;

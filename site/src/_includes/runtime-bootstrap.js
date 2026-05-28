@@ -18,6 +18,7 @@
 
 const CDN = 'https://esm.sh';
 const PREACT = `${CDN}/preact@10.22.0`;
+const PREACT_HOOKS = `${CDN}/preact@10.22.0/hooks`;
 const SIGNALS = `${CDN}/@preact/signals-core@1.7.0`;
 const HTM = `${CDN}/htm@3.1.1`;
 
@@ -39,16 +40,17 @@ function failSoft(err) {
 }
 
 async function loadModules() {
-  const [preact, signals, htmMod] = await Promise.all([
+  const [preact, hooks, signals, htmMod] = await Promise.all([
     import(PREACT),
+    import(PREACT_HOOKS),
     import(SIGNALS),
     import(HTM),
   ]);
   const html = htmMod.default.bind(preact.h);
-  return { preact, signals, html };
+  return { preact, hooks, signals, html };
 }
 
-function makeApi({ preact, signals, html }) {
+function makeApi({ preact, hooks, signals, html }) {
   const reducedMotion = () =>
     window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -158,6 +160,33 @@ function makeApi({ preact, signals, html }) {
     });
   }
 
+  // reactive(renderFn) → a Preact COMPONENT (function) that re-renders whenever
+  // any signal read inside renderFn changes. Used by the playground's new-world
+  // sections (sections/_newworld.js factories), which do:
+  //     const App = api.reactive(() => html`…`);
+  //     return html`<${App} />`;
+  // so the return value must be a component, not a VNode. Reactivity is driven
+  // by a signals `effect` that recomputes the tree and forces a Preact update.
+  function reactive(renderFn) {
+    return function ReactiveComponent() {
+      // Own a host element and (re)render the inner tree into it via a signals
+      // `effect`, the same pattern the <dregg-*> inspectors use in
+      // _includes/studio/inspectors/_base.js. This re-runs renderFn whenever any
+      // signal it reads changes — without relying on Preact's hook scheduler to
+      // observe signal writes (which the core signals package does not wire up).
+      const hostRef = hooks.useRef(null);
+      hooks.useEffect(() => {
+        const host = hostRef.current;
+        if (!host) return undefined;
+        const dispose = signals.effect(() => {
+          preact.render(renderFn(), host);
+        });
+        return () => { dispose(); preact.render(null, host); };
+      }, []);
+      return preact.h('div', { ref: hostRef, style: 'display:contents;' });
+    };
+  }
+
   const api = {
     // Preact + htm
     h: preact.h,
@@ -169,6 +198,7 @@ function makeApi({ preact, signals, html }) {
     computed: signals.computed,
     effect: signals.effect,
     batch: signals.batch,
+    reactive,
     // helpers
     register,
     mount,

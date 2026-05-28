@@ -107,7 +107,7 @@ function postHostMessage(type, detail) {
   }
 }
 
-function installHostBridge(manifest, appEl, runtime) {
+function installHostBridge(manifest, appEl, runtime, { embedded = false } = {}) {
   const api = {
     manifest,
     appId: manifest?.id || appIdFromPath(),
@@ -136,7 +136,9 @@ function installHostBridge(manifest, appEl, runtime) {
     inspectors: api.inspectors,
     controls: api.controls,
     registryUri: appEl?.getAttribute('registry-uri') || appEl?.getAttribute('uri') || '',
-    runtime: runtime ? 'host-attached' : 'local-preview',
+    // Each frame owns an in-frame runtime; embedded frames additionally have a
+    // postMessage link to the Starbridge host. 'standalone' = opened directly.
+    runtime: !runtime ? 'none' : embedded ? 'in-frame+host-link' : 'standalone',
   });
   return api;
 }
@@ -238,25 +240,20 @@ async function boot() {
   const embedded = params.get('embedded') === '1';
   const manifest = await loadAppManifest();
   if (embedded) installEmbeddedChromeReset();
-  let hostRuntime = null;
-  if (embedded && window.parent && window.parent !== window) {
-    try {
-      hostRuntime = window.parent.__starbridge?.runtime || null;
-    } catch {
-      hostRuntime = null;
-    }
-  }
 
+  // Embedded frames are SAME-ORIGIN with the Starbridge host, but they are a
+  // separate JS realm. We deliberately do NOT borrow the host's runtime object
+  // across the frame boundary: its @preact/signals instances belong to the
+  // parent realm, so an in-frame `effect()` would read `.value` once but never
+  // subscribe — inspectors would render empty and never live-update. Instead
+  // each frame builds its OWN in-frame runtime (same-realm signals, self-seeded
+  // cells), and talks to the host purely over the postMessage channel wired by
+  // installHostBridge() (navigate / inspect / action). The host link is a
+  // message bus, not a shared object graph.
   const runtimes = new Map();
   const apps = Array.from(document.querySelectorAll('dregg-app'));
   for (const appEl of apps) {
     const runtimeKind = appEl.getAttribute('runtime') || 'in-memory';
-    if (hostRuntime) {
-      appEl.runtime = hostRuntime;
-      runtimes.set(appEl, hostRuntime);
-      installPreviewBridge(hostRuntime, wasm);
-      continue;
-    }
     if (runtimeKind !== 'in-memory') {
       console.warn(`[starbridge-app] runtime "${runtimeKind}" awaits app-boot support; using in-memory`);
     }
@@ -268,7 +265,7 @@ async function boot() {
 
   const first = apps[0];
   if (first) installDevtoolsLink(first);
-  if (first) installHostBridge(manifest, first, runtimes.get(first));
+  if (first) installHostBridge(manifest, first, runtimes.get(first), { embedded });
 
   window.__starbridgeApp = {
     apps,

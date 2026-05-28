@@ -1,274 +1,50 @@
 {
-  "version": 1,
-  "federation_id": "devnet-00000000000000000000000000000001",
-  "created_at": "2026-05-23T00:00:00Z",
-
-  "constitution": {
-    "validators": [
-      {
-        "name": "node-0",
-        "public_key": "aabb000000000000000000000000000000000000000000000000000000000001",
-        "xmss_root": "cc00000000000000000000000000000000000000000000000000000000000001",
-        "endpoint": "devnet.dregg.fg-goose.online:9420"
-      },
-      {
-        "name": "node-1",
-        "public_key": "aabb000000000000000000000000000000000000000000000000000000000002",
-        "xmss_root": "cc00000000000000000000000000000000000000000000000000000000000002",
-        "endpoint": "node-1.devnet.dregg.internal:9420"
-      },
-      {
-        "name": "node-2",
-        "public_key": "aabb000000000000000000000000000000000000000000000000000000000003",
-        "xmss_root": "cc00000000000000000000000000000000000000000000000000000000000003",
-        "endpoint": "node-2.devnet.dregg.internal:9420"
-      }
-    ],
-    "threshold": 2,
-    "timeout_waves": 10,
-    "epoch_length": 100,
-    "checkpoint_interval": 10,
-    "routes_commitment": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  },
-
-  "accounts": {
-    "alice": {
-      "public_key": "aa01000000000000000000000000000000000000000000000000000000000001",
-      "balance": 10000000,
-      "nonce": 0
+  "federation_id": "a17b9247c69e5a116b9dfaa29f71623a4890a16bb2ac60cb49a580c7f5db2593",
+  "committee_epoch": 0,
+  "epoch_length": 100,
+  "checkpoint_interval": 10,
+  "validators": [
+    {
+      "name": "node-0",
+      "public_key": "322357f7b914705168787aeb2ab3eb439877ea73dfdfda5105a0795c06d417d0",
+      "xmss_root": "d55ac1c085d4cadd36c608f9f7700dddf6d39ce94f656d587b334a6bd3350946"
     },
-    "bob": {
-      "public_key": "aa02000000000000000000000000000000000000000000000000000000000002",
-      "balance": 5000000,
-      "nonce": 0
+    {
+      "name": "node-1",
+      "public_key": "b7bd9b6d76f667c075f2fd06d8bdbc8c51cc732cb0796bb6e393bfe9ec41e16c",
+      "xmss_root": "9198e50f731fe312ad9f87f9de95bca01f9ca35993df705477e35b8cf0300cf0"
     },
-    "carol": {
-      "public_key": "aa03000000000000000000000000000000000000000000000000000000000003",
-      "balance": 1000000,
-      "nonce": 0
-    },
-    "dave": {
-      "public_key": "aa04000000000000000000000000000000000000000000000000000000000004",
-      "balance": 500000,
-      "nonce": 0
-    },
-    "eve": {
-      "public_key": "aa05000000000000000000000000000000000000000000000000000000000005",
-      "balance": 2000000,
-      "nonce": 0
-    },
-    "faucet": {
-      "public_key": "aa06000000000000000000000000000000000000000000000000000000000006",
-      "balance": 100000000,
-      "nonce": 0
-    },
-    "treasury": {
-      "public_key": "aa07000000000000000000000000000000000000000000000000000000000007",
-      "balance": 50000000,
-      "nonce": 0
-    },
-    "relay": {
-      "public_key": "aa08000000000000000000000000000000000000000000000000000000000008",
-      "balance": 10000000,
-      "nonce": 0
-    },
-    "nameservice": {
-      "public_key": "aa09000000000000000000000000000000000000000000000000000000000009",
-      "balance": 5000000,
-      "nonce": 0
-    },
-    "bridge-operator": {
-      "public_key": "aa0a00000000000000000000000000000000000000000000000000000000000a",
-      "balance": 10000000,
-      "nonce": 0
+    {
+      "name": "node-2",
+      "public_key": "31d4e75ce65bfb4c99f32a0bc54a0f582acc35b7711d55fdc19ed45532188ec6",
+      "xmss_root": "ff25fc2e56d84f1fd17ec51e278f375d983707a747f52cc1f76a0344c283d9ce"
     }
-  },
-
-  "routes": [
-    { "pattern": "/public/*", "target": "anonymous" },
-    { "pattern": "/services/*", "target": "members" },
-    { "pattern": "/admin/*", "target": "admin" },
-    { "pattern": "/bridges/*", "target": "bridge-operator" },
-    { "pattern": "/names/*", "target": "nameservice" }
   ],
-
-  "cells": {
-    "stablecoin-cdp": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000001",
-      "owner": "treasury",
-      "program": "stablecoin_cdp_v1",
-      "state": {
-        "collateral_ratio_bps": 15000,
-        "liquidation_ratio_bps": 12000,
-        "stability_fee_bps": 50,
-        "total_supply": 500,
-        "positions": {
-          "alice": {
-            "collateral_eth_equiv": 1000,
-            "debt_stablecoin": 500,
-            "last_fee_wave": 0
-          }
-        }
-      }
+  "threshold": 2,
+  "initial_cells": [
+    {
+      "id": "4a8882bb17c23b3e2486da9f8d4cc43bb6651c2adf8e1d90536d25741a981e47",
+      "public_key": "2e79278aa1a5ac24eaff80a0b0fa088b1f0c4ed186a416771a70d68ce765cb31",
+      "token_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "balance": 1000000
     },
-    "stablecoin-oracle": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000002",
-      "owner": "treasury",
-      "program": "price_oracle_v1",
-      "state": {
-        "prices": {
-          "ETH/USD": { "value": 2500, "decimals": 2, "updated_wave": 0 },
-          "BTC/USD": { "value": 67000, "decimals": 2, "updated_wave": 0 }
-        },
-        "authorized_feeders": ["relay", "bridge-operator"]
-      }
+    {
+      "id": "7e457e690075008b66baff6f81cd7ef28fa6c724be80e1d5aecc04e6d2eadcbf",
+      "public_key": "53de5a1a606e7a465b3790f436ad22ae0c5b16a628bd2f0c1e64d3788b1d5f4f",
+      "token_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "balance": 50000
     },
-    "amm-eth-usdc": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000003",
-      "owner": "treasury",
-      "program": "amm_pool_v1",
-      "state": {
-        "token_a": "ETH",
-        "token_b": "USDC",
-        "reserve_a": 1000,
-        "reserve_b": 2500000,
-        "total_lp_shares": 50000,
-        "fee_bps": 30,
-        "lp_positions": {
-          "alice": { "shares": 25000 },
-          "treasury": { "shares": 25000 }
-        }
-      }
+    {
+      "id": "7daed10067be96b545719b913d76060844a70c2e2873a189c05d0bac7aa5b02f",
+      "public_key": "9d5eeaf25483068826a1cf1638b97f0ae2fe51a0cf70e112805a6044c424fd2b",
+      "token_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "balance": 25000
     },
-    "amm-btc-usdc": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000004",
-      "owner": "treasury",
-      "program": "amm_pool_v1",
-      "state": {
-        "token_a": "BTC",
-        "token_b": "USDC",
-        "reserve_a": 100,
-        "reserve_b": 6700000,
-        "total_lp_shares": 10000,
-        "fee_bps": 30,
-        "lp_positions": {
-          "alice": { "shares": 5000 },
-          "treasury": { "shares": 5000 }
-        }
-      }
-    },
-    "orderbook": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000005",
-      "owner": "treasury",
-      "program": "orderbook_v1",
-      "state": {
-        "market": "TOKEN/USDC",
-        "tick_size": 1,
-        "bids": [
-          { "owner": "bob", "price": 95, "quantity": 10, "order_id": "ord-001" }
-        ],
-        "asks": [
-          { "owner": "bob", "price": 105, "quantity": 5, "order_id": "ord-002" }
-        ],
-        "next_order_id": 3
-      }
-    },
-    "gallery": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000006",
-      "owner": "treasury",
-      "program": "gallery_auction_v1",
-      "state": {
-        "listings": [
-          {
-            "nft_id": "nft-001",
-            "owner": "eve",
-            "title": "Generative Landscape #42",
-            "min_bid": 500,
-            "current_bid": null,
-            "auction_end_wave": 1000
-          },
-          {
-            "nft_id": "nft-002",
-            "owner": "eve",
-            "title": "Abstract Composition #7",
-            "min_bid": 250,
-            "current_bid": null,
-            "auction_end_wave": 1000
-          }
-        ],
-        "completed_auctions": []
-      }
-    },
-    "nameservice": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000007",
-      "owner": "nameservice",
-      "program": "name_registry_v1",
-      "state": {
-        "registrations": {
-          "stablecoin": "dregg://devnet-00000000000000000000000000000001/ce11000000000000000000000000000000000000000000000000000000000001/7a9f2c",
-          "amm": "dregg://devnet-00000000000000000000000000000001/ce11000000000000000000000000000000000000000000000000000000000003/3b8e1d",
-          "orderbook": "dregg://devnet-00000000000000000000000000000001/ce11000000000000000000000000000000000000000000000000000000000005/c4d5e6",
-          "gallery": "dregg://devnet-00000000000000000000000000000001/ce11000000000000000000000000000000000000000000000000000000000006/f1a2b3",
-          "faucet": "dregg://devnet-00000000000000000000000000000001/aa06000000000000000000000000000000000000000000000000000000000006/e7f8g9"
-        },
-        "ttl_waves": 10000,
-        "registration_fee": 100
-      }
-    },
-    "governed-namespace": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000008",
-      "owner": "treasury",
-      "program": "governed_namespace_v1",
-      "state": {
-        "root_authority": "treasury",
-        "delegations": {
-          "/public": "anonymous",
-          "/services": "treasury",
-          "/admin": "treasury",
-          "/bridges": "bridge-operator",
-          "/names": "nameservice"
-        }
-      }
-    },
-    "identity-registry": {
-      "id": "ce11000000000000000000000000000000000000000000000000000000000009",
-      "owner": "nameservice",
-      "program": "identity_registry_v1",
-      "state": {
-        "credentials": {
-          "carol": [
-            {
-              "type": "age-verified",
-              "issuer": "nameservice",
-              "issued_wave": 0,
-              "expires_wave": 100000,
-              "claim_hash": "d4e5f6a7b8c9000000000000000000000000000000000000000000000000cafe"
-            },
-            {
-              "type": "country-verified",
-              "issuer": "nameservice",
-              "issued_wave": 0,
-              "expires_wave": 100000,
-              "claim_hash": "a1b2c3d4e5f6000000000000000000000000000000000000000000000000beef"
-            },
-            {
-              "type": "org-membership",
-              "issuer": "treasury",
-              "issued_wave": 0,
-              "expires_wave": 50000,
-              "claim_hash": "f0e1d2c3b4a5000000000000000000000000000000000000000000000000dead"
-            }
-          ]
-        }
-      }
+    {
+      "id": "b66570a6f06df77d51c0fc1ba5940341713e47f1ba379a1b209d2eed4ef66d61",
+      "public_key": "8f2e8f4e5822c8f7cbc06024c9ac76227c02365a5ecf356b08cb045868148373",
+      "token_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "balance": 10000
     }
-  },
-
-  "name_registrations": {
-    "stablecoin": "dregg://devnet-00000000000000000000000000000001/ce11000000000000000000000000000000000000000000000000000000000001/7a9f2c",
-    "amm": "dregg://devnet-00000000000000000000000000000001/ce11000000000000000000000000000000000000000000000000000000000003/3b8e1d",
-    "orderbook": "dregg://devnet-00000000000000000000000000000001/ce11000000000000000000000000000000000000000000000000000000000005/c4d5e6",
-    "gallery": "dregg://devnet-00000000000000000000000000000001/ce11000000000000000000000000000000000000000000000000000000000006/f1a2b3",
-    "faucet": "dregg://devnet-00000000000000000000000000000001/aa06000000000000000000000000000000000000000000000000000000000006/e7f8g9"
-  }
+  ]
 }

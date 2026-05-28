@@ -1014,6 +1014,13 @@ impl DevnetClient {
         Ok(resp.json().await?)
     }
 
+    /// The node's current block height (used as the validity-window reference
+    /// for CapTP handoff certificates). Returns the node's reported
+    /// `latest_height`; the caller decides how to handle the error.
+    pub async fn current_height(&self) -> Result<u64, DevnetError> {
+        Ok(self.node_status().await?.latest_height)
+    }
+
     /// Verify a STARK proof on-chain.
     pub async fn verify_proof(&self, _proof_hex: &str) -> Result<ProofVerifyResult, DevnetError> {
         Err(DevnetError::Unsupported(

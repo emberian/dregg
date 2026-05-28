@@ -44,9 +44,30 @@ use crate::ws::handle_ws;
 
 #[derive(Serialize)]
 pub struct StatusResponse {
+    /// True when the node is up AND consensus is live (a blocklace handle is
+    /// present and the DAG has a tip / is producing blocks). This reflects
+    /// real liveness, NOT the attested-root height — so a healthy devnet that
+    /// is producing heartbeat blocks reports `healthy: true` even before the
+    /// first turn advances the attested root. See `dag_height` vs
+    /// `latest_height` below.
     pub healthy: bool,
     pub peer_count: usize,
+    /// Attested-root / turn height: the height of the latest finalized
+    /// AttestedRoot. This advances only on turn-bearing finality, NOT on idle
+    /// heartbeat blocks, so it can legitimately be 0 on a fresh node whose DAG
+    /// is already tall. Kept for backward compatibility; use `dag_height` for
+    /// "how tall is the chain".
     pub latest_height: u64,
+    /// Real blocklace DAG tip height: the max block `seq` in the local lace.
+    /// This advances on EVERY block (turns and heartbeats), so it is the
+    /// honest public "the chain is at height N" signal. 0 if consensus has not
+    /// produced a block yet (or no blocklace handle is attached).
+    pub dag_height: u64,
+    /// Number of blocks currently in the local blocklace DAG.
+    pub block_count: usize,
+    /// Whether a blocklace consensus handle is attached (consensus task is
+    /// running). One of the inputs to `healthy`.
+    pub consensus_live: bool,
     pub revocation_count: u64,
     pub note_count: u64,
     pub federation_mode: String,
@@ -975,8 +996,22 @@ async fn require_auth(
 // CORS Middleware (P2 Fix 7)
 // =============================================================================
 
+/// Configured CORS allowlist: extra exact origins (e.g. the deployed devnet
+/// site origin `https://devnet.example.com`) that are permitted in addition to
+/// the always-allowed localhost / browser-extension origins. Wrapped in an
+/// `Arc` so it can be cloned cheaply into the per-request middleware closure.
+///
+/// The default is empty (locked down to localhost + extensions). Operators
+/// widen it via `--cors-origin` flags or the `DREGG_CORS_ORIGINS` env var
+/// (comma-separated), wired in `main.rs`.
+pub type CorsAllowlist = Arc<HashSet<String>>;
+
 /// Middleware that adds CORS headers to every response.
-async fn cors_middleware(req: Request<axum::body::Body>, next: middleware::Next) -> Response {
+async fn cors_middleware(
+    State(allowlist): State<CorsAllowlist>,
+    req: Request<axum::body::Body>,
+    next: middleware::Next,
+) -> Response {
     let origin = req
         .headers()
         .get(header::ORIGIN)
@@ -997,7 +1032,7 @@ async fn cors_middleware(req: Request<axum::body::Body>, next: middleware::Next)
     };
 
     // Check if origin is allowed.
-    let allowed = is_origin_allowed(&origin);
+    let allowed = is_origin_allowed(&origin, &allowlist);
     if allowed {
         let headers = response.headers_mut();
         headers.insert(
@@ -1024,9 +1059,22 @@ async fn cors_middleware(req: Request<axum::body::Body>, next: middleware::Next)
 /// Check whether an origin is allowed by our CORS policy.
 ///
 /// Uses proper URL parsing to prevent bypass via domains like `localhost.evil.com`.
-fn is_origin_allowed(origin: &str) -> bool {
+///
+/// Always allows localhost / `127.0.0.1` / `[::1]` over http(s) and browser
+/// extension origins. In addition, any exact origin in `allowlist` (configured
+/// via `--cors-origin` / `DREGG_CORS_ORIGINS`) is permitted — this is how a
+/// deployed devnet site origin (e.g. `https://devnet.example.com`) reaches the
+/// node cross-origin. The default allowlist is empty (locked down).
+fn is_origin_allowed(origin: &str, allowlist: &HashSet<String>) -> bool {
     // Allow browser extension origins (not parseable as URLs).
     if origin.starts_with("chrome-extension://") || origin.starts_with("moz-extension://") {
+        return true;
+    }
+
+    // Configured exact-origin allowlist (deployed site origin, etc.). Matched
+    // case-insensitively on the normalized origin string so trivial case
+    // differences don't slip through or block a legitimate origin.
+    if !origin.is_empty() && allowlist.contains(&origin.to_lowercase()) {
         return true;
     }
 
@@ -1089,6 +1137,25 @@ pub fn router(
     enable_faucet: bool,
     metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
 ) -> Router {
+    router_with_cors(state, enable_faucet, metrics_handle, HashSet::new())
+}
+
+/// Build the router with an explicit extra CORS origin allowlist.
+///
+/// `cors_origins` is a set of exact origin strings (e.g.
+/// `https://devnet.example.com`) that are permitted cross-origin *in addition*
+/// to the always-allowed localhost / extension origins. An empty set keeps the
+/// historical locked-down behavior. `main.rs` populates this from the
+/// `--cors-origin` flags and the `DREGG_CORS_ORIGINS` env var.
+pub fn router_with_cors(
+    state: NodeState,
+    enable_faucet: bool,
+    metrics_handle: metrics_exporter_prometheus::PrometheusHandle,
+    cors_origins: HashSet<String>,
+) -> Router {
+    // Normalize configured origins to lowercase so matching is case-insensitive.
+    let cors_allowlist: CorsAllowlist =
+        Arc::new(cors_origins.into_iter().map(|o| o.to_lowercase()).collect());
     // Rate limiter for passphrase/unlock endpoints: 5 attempts per 60 seconds.
     let passphrase_limiter = RateLimiter::new(5, 60);
 
@@ -1297,7 +1364,10 @@ pub fn router(
         .merge(path_aliases)
         .merge(metrics_route)
         .layer(DefaultBodyLimit::max(MAX_BODY_SIZE))
-        .layer(middleware::from_fn(cors_middleware))
+        .layer(middleware::from_fn_with_state(
+            cors_allowlist,
+            cors_middleware,
+        ))
         .with_state(state)
 }
 
@@ -1305,14 +1375,31 @@ pub fn router(
 // Handlers
 // =============================================================================
 
-/// P2 Fix 9: Status checks store accessibility and cipherclerk initialization.
+/// `/status` — honest liveness for the deployed devnet.
+///
+/// `healthy` reflects "the node is up and consensus is live and producing
+/// blocks," NOT the attested-root height. The prior implementation tied
+/// `healthy` to store + cipherclerk init, which made a perfectly live devnet
+/// (DAG at height 85, producing heartbeat blocks) report `healthy: false`
+/// while `latest_height: 0` — a terrible public signal.
+///
+/// Now we derive liveness from real consensus state: a blocklace handle must
+/// be attached (the consensus task is running) and the DAG must have a tip
+/// (at least one real signed block produced). We surface `dag_height`
+/// (real blocklace tip) alongside `latest_height` (attested-root / turn height)
+/// so the distinction is explicit on the wire.
 async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
+    // Read the real blocklace DAG state first (separate lock).
+    let blocklace = state.blocklace().await;
+    let (dag_height, block_count, consensus_live) = match &blocklace {
+        Some(handle) => (handle.dag_height().await, handle.block_count().await, true),
+        None => (0, 0, false),
+    };
+
     let s = state.read().await;
 
     // Check store accessibility.
     let store_ok = s.store.latest_attested_root().is_ok();
-    // Check cipherclerk is initialized (has a passphrase set or is unlocked).
-    let cclerk_ok = s.unlocked || s.passphrase_hash.is_some();
 
     let latest_height = s
         .store
@@ -1331,10 +1418,18 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         "full".to_string()
     };
 
+    // Liveness: store reachable + consensus task running + DAG has produced at
+    // least one real block. block_count > 0 (rather than dag_height > 0) so a
+    // single genesis block at seq 0 still counts as "producing".
+    let healthy = store_ok && consensus_live && block_count > 0;
+
     Json(StatusResponse {
-        healthy: store_ok && cclerk_ok,
+        healthy,
         peer_count,
         latest_height,
+        dag_height,
+        block_count,
+        consensus_live,
         revocation_count,
         note_count,
         federation_mode,

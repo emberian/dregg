@@ -877,12 +877,18 @@ pub fn spend_note(
     })
 }
 
-/// List notes (commitments) for an agent. Returns array of {commitment, value, asset_type, spent}.
-/// Stub for now (always []); real tracking of held notes across create/spend awaits
-/// SimAgent.held_notes field + updates in runtime.rs (Wave 3 note inspector + §5.1 gaps).
+/// List notes for an agent. Returns array of
+/// `{commitment, value, asset_type, spent, nullifier}`.
+///
+/// Reads the agent's real `held_notes` index (#45): every note minted via
+/// `create_note` is recorded there (and marked spent — with its revealed
+/// nullifier — once `spend_note` runs). `commitment` / `value` / `asset_type`
+/// are derived from the canonical `dregg_cell::Note`, so the `<dregg-note>`
+/// inspector and `dregg://note/<commitment>` URI lookups resolve real data
+/// rather than the prior always-empty stub. `nullifier` is `null` until spent.
 #[wasm_bindgen]
 pub fn get_notes(handle: usize, agent_index: usize) -> Result<JsValue, JsError> {
-    with_runtime(handle, |rt| {
+    with_runtime_ref(handle, |rt| {
         if agent_index >= rt.agents.len() {
             return Err("invalid agent index".to_string());
         }
@@ -892,8 +898,19 @@ pub fn get_notes(handle: usize, agent_index: usize) -> Result<JsValue, JsError> 
             value: u64,
             asset_type: u64,
             spent: bool,
+            nullifier: Option<String>,
         }
-        let notes: Vec<NoteItem> = vec![];
+        let notes: Vec<NoteItem> = rt.agents[agent_index]
+            .held_notes
+            .iter()
+            .map(|hn| NoteItem {
+                commitment: hex_encode(&hn.note.commitment().0),
+                value: hn.note.value(),
+                asset_type: hn.note.asset_type(),
+                spent: hn.nullifier.is_some(),
+                nullifier: hn.nullifier.map(|n| hex_encode(&n.0)),
+            })
+            .collect();
         serde_wasm_bindgen::to_value(&notes).map_err(|e| e.to_string())
     })
 }
@@ -1182,11 +1199,15 @@ pub fn get_federation_block(
             // Real predecessor hash — the height-(N-1) block's hash, folded into
             // this block's `block_hash` at finalization (see FinalizedBlock /
             // propose_block). Genesis-most block links to all-zeros. This gives
-            // <dregg-block-dag> real edges. (pre/post state roots remain [0u8;32]
-            // until the wasm sim tracks per-block state Merkle roots — honest gap.)
+            // <dregg-block-dag> real edges.
             prev_hash: hex_encode(&block.prev_hash),
-            pre_state_root: hex_encode(&[0u8; 32]),
-            post_state_root: hex_encode(&[0u8; 32]),
+            // Real ledger Merkle root captured at block time (Ledger::root()).
+            // A wasm-sim consensus round finalizes revocations only — it does
+            // not apply ledger turns — so pre == post for any single block, but
+            // both are the ledger's genuine root, not all-zeros. Gives
+            // <dregg-block> a real state anchor.
+            pre_state_root: hex_encode(&block.pre_state_root),
+            post_state_root: hex_encode(&block.post_state_root),
             events: block.revoked_token_ids.clone(),
             num_votes: block.qc_votes,
             qc_threshold: block.qc_threshold,
@@ -1252,25 +1273,52 @@ pub fn list_federation_blocks(handle: usize, fed_index: usize) -> Result<JsValue
 //  This resolves conflicting entrypoints in the wasm surface visible to Starbridge federation inspectors
 //  and extension registerFederation calls.)
 
-/// Stub for factory descriptor listing (deploy already exists; this closes the read path for <dregg-factory-descriptor>).
-/// Returns the Vks + basic metadata of deployed factories in the executor.
+/// List every factory deployed in the runtime's executor (read path for
+/// `<dregg-factory-descriptor>`).
+///
+/// Walks the canonical `executor.factory_registry` (`FactoryRegistry::descriptors`)
+/// and surfaces each deployed `FactoryDescriptor`'s real metadata: its VK, the
+/// counts of state/field constraints and allowed capability templates, default
+/// cell mode, optional child program VK, and creation budget. The runtime's
+/// default test-cipherclerk factory is flagged so the inspector can distinguish
+/// it. This replaces the prior coarse stub that hardcoded `has_state_constraints:
+/// false` and only ever returned the default VK.
 #[wasm_bindgen]
 pub fn list_deployed_factories(handle: usize) -> Result<JsValue, JsError> {
     with_runtime_ref(handle, |rt| {
-        // Executor holds the registry internally; for v0 we expose the default + any deployed via a coarse view.
-        // Real impl would walk rt.executor.factory_registry.
         #[derive(Serialize)]
         struct FactorySummary {
             vk: String,
+            is_default: bool,
+            default_mode: String,
+            num_state_constraints: usize,
+            num_field_constraints: usize,
+            num_allowed_cap_templates: usize,
             has_state_constraints: bool,
+            child_program_vk: Option<String>,
+            creation_budget: Option<u64>,
         }
-        let mut out = vec![];
-        // Default is always present
-        out.push(FactorySummary {
-            vk: hex_encode(&rt.default_factory_vk()),
-            has_state_constraints: false,
-        });
-        // TODO: when executor exposes pub deployed: HashMap<...>, walk it here.
+
+        let default_vk = rt.default_factory_vk();
+        let registry = rt.executor.factory_registry.borrow();
+        let mut out: Vec<FactorySummary> = registry
+            .descriptors
+            .iter()
+            .map(|(vk, d)| FactorySummary {
+                vk: hex_encode(vk),
+                is_default: *vk == default_vk,
+                default_mode: format!("{:?}", d.default_mode),
+                num_state_constraints: d.state_constraints.len(),
+                num_field_constraints: d.field_constraints.len(),
+                num_allowed_cap_templates: d.allowed_cap_templates.len(),
+                has_state_constraints: !d.state_constraints.is_empty(),
+                child_program_vk: d.child_program_vk.as_ref().map(|v| hex_encode(v)),
+                creation_budget: d.creation_budget,
+            })
+            .collect();
+        // Deterministic order for stable inspector rendering (HashMap iteration
+        // order is nondeterministic); default factory first, then by VK.
+        out.sort_by(|a, b| b.is_default.cmp(&a.is_default).then(a.vk.cmp(&b.vk)));
         serde_wasm_bindgen::to_value(&out).map_err(|e| e.to_string())
     })
 }

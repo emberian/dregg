@@ -17,6 +17,12 @@ mod activity_feed;
 pub mod captp_client;
 mod cipherclerk;
 mod commands;
+// §4.7 canonical, Discord-independent capability-handoff flow: produces and
+// validates *real* `dregg_captp::handoff::HandoffCertificate` artifacts.
+pub mod handoff_flow;
+// §4.7 canonical, Discord-independent signed-intent flow: produces and verifies
+// *real* signed `dregg_turn::action::Action` intents (Authorization::Signature).
+pub mod intent_flow;
 mod config;
 mod credential_issue;
 mod db;
@@ -81,6 +87,9 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "setup-federation",
     "link-cipherclerk",
     "unlink-cipherclerk",
+    "handoff",
+    "handoff-redeem",
+    "intent",
 ];
 
 #[cfg(test)]
@@ -106,6 +115,11 @@ pub struct BotState {
     /// order note-spends among trusted peers. Single Ed25519 root; defers to
     /// real federation when present. (Populated from captp_client state.)
     pub nullifier_set: Mutex<Vec<[u8; 32]>>, // minimal in-memory set for demo
+    /// §4.7 canonical capability-handoff broker — the bot as the tiny
+    /// federation that mints and validates *real* signed
+    /// `dregg_captp::handoff::HandoffCertificate` artifacts (target swiss
+    /// table + trusted introducer set). See `handoff_flow.rs`.
+    pub handoff_broker: Mutex<handoff_flow::HandoffBroker>,
 }
 
 /// The main event handler for Discord gateway events.
@@ -165,6 +179,10 @@ impl EventHandler for Handler {
             commands::federation::register_setup(),
             commands::federation::register_link(),
             commands::federation::register_unlink(),
+            // ─── Canonical CapTP handoff (§4.7) ─────────────────────────────
+            commands::handoff::register(),
+            commands::handoff::register_redeem(),
+            commands::intent::register(),
         ];
         debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
@@ -245,6 +263,12 @@ impl EventHandler for Handler {
                 "unlink-cipherclerk" => {
                     commands::federation::handle_unlink(&ctx, &command, &self.state).await
                 }
+                // ─── Canonical CapTP handoff (§4.7) ─────────────────────────
+                "handoff" => commands::handoff::handle(&ctx, &command, &self.state).await,
+                "handoff-redeem" => {
+                    commands::handoff::handle_redeem(&ctx, &command, &self.state).await
+                }
+                "intent" => commands::intent::handle(&ctx, &command, &self.state).await,
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
@@ -386,6 +410,9 @@ async fn main() {
         event_bridge,
         federation_id_bytes,
         nullifier_set: Mutex::new(Vec::new()), // §4.7 friend-clique soft-federation
+        handoff_broker: Mutex::new(handoff_flow::HandoffBroker::new(
+            dregg_captp::FederationId(federation_id_bytes),
+        )),
     });
 
     // §4.7 Production HTTP read surface (Starbridge RemoteRuntime + humans).

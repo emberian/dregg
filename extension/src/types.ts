@@ -543,7 +543,16 @@ export interface DreggWasm {
     turnBytes: Uint8Array,
     senderPrivkey: Uint8Array,
     federationId: Uint8Array,
-  ): { turn_id: string; turn_bytes: Uint8Array; signer_pubkey: string };
+  ): {
+    turn_id: string;
+    /** Signed turn, postcard-encoded. */
+    turn_bytes: Uint8Array;
+    /** Signed turn, JSON-encoded (round-trippable; postcard Turn is not — see wasm doc). */
+    turn_bytes_json: Uint8Array;
+    /** Encoding the INPUT was decoded as: "postcard" | "json". */
+    encoding: string;
+    signer_pubkey: string;
+  };
   /**
    * Build a canonical `Authorization::CapTpDelivered` envelope (postcard bytes).
    * `handoffCertB58` is the compact `dregg-handoff:<base58>` or bare base58 of

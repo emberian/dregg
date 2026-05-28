@@ -30,6 +30,7 @@ export const seed = {
   aliceCell: null,    // hex64 — alice's cell id (cell/capability/peer inspectors)
   bobCell: null,      // hex64 — bob's cell id
   noteCommitment: null, // hex — a real note commitment (note inspector)
+  note: null,         // { commitment, value, asset_type } — full canonical note
   fedIndex: null,     // number — a real federation index (federation/block-dag)
 };
 
@@ -70,22 +71,41 @@ async function seedRuntime(runtime, wasm) {
   seed.bobCell = bob?.cell_id || bob?.cellId || null;
 
   try {
+    // Mirror the Starbridge lab transfer flow exactly: alice (balance 5000)
+    // sends 100 to bob, declaring the remaining 500 as conservation excess /
+    // fee burn (the genesis mint already debited per-agent fees).
     const result = await runtime.executeTurn(
       Number(alice?.agent_index ?? 0),
-      [{ type: 'transfer', to: bob.cell_id, amount: 100, excess: 4900 }],
-      4900,
+      [{ type: 'transfer', to: bob.cell_id, amount: 100, excess: 500 }],
+      500,
     );
     seed.turnHash = result?.turn_hash || result?.receipt_hash || result?.hash || null;
   } catch (e) {
     console.warn('[playground] seed transfer turn failed', e);
   }
+  // If the receipt chain is the authoritative source, fall back to its head.
+  if (!seed.turnHash) {
+    try {
+      const receipts = runtime.listReceipts?.()?.value || [];
+      const last = receipts[receipts.length - 1];
+      seed.turnHash = last?.turn_hash || last?.receipt_hash || last?.hash || null;
+    } catch {}
+  }
 
   // A real note (commitment + nullifier lifecycle) via canonical wasm.
   try {
     if (wasm.create_note && runtime._handle != null) {
-      const note = wasm.create_note(runtime._handle, Number(alice?.agent_index ?? 0), 100, 0);
-      seed.noteCommitment =
-        note?.commitment || (Array.isArray(note) ? note[0]?.commitment : null) || null;
+      const note = wasm.create_note(runtime._handle, Number(alice?.agent_index ?? 0), BigInt(100), BigInt(0));
+      // create_note returns the canonical { commitment, value, asset_type }.
+      // The wasm note index (get_notes) does not yet surface minted notes
+      // (capability gap), so we keep the full object to feed <dregg-note data=>.
+      const n = note && typeof note === 'object' && !Array.isArray(note)
+        ? note
+        : (Array.isArray(note) ? note[0] : null);
+      seed.note = n
+        ? { commitment: n.commitment, value: Number(n.value), asset_type: Number(n.asset_type) }
+        : null;
+      seed.noteCommitment = seed.note?.commitment || null;
       // Refresh signal-cached getNotes consumers.
       if (runtime.version) runtime.version.value++;
     }

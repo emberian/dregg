@@ -139,6 +139,18 @@ enum Command {
         /// enables this.
         #[arg(long)]
         auto_approve_joins: bool,
+
+        /// Extra CORS origins to allow cross-origin browser access, e.g.
+        /// `https://devnet.example.com`. Repeat the flag or pass a
+        /// comma-separated list. localhost / 127.0.0.1 / [::1] and browser
+        /// extensions are ALWAYS allowed; this only widens the allowlist for a
+        /// deployed site origin. Also reads `DREGG_CORS_ORIGINS` (comma-
+        /// separated) and unions it with these flags. Default: empty
+        /// (locked down to localhost + extensions). Not needed when the site
+        /// and node are served same-origin behind one reverse proxy (see
+        /// deploy/aws/caddy/Caddyfile).
+        #[arg(long = "cors-origin", value_delimiter = ',')]
+        cors_origins: Vec<String>,
     },
 
     /// Initialize the data directory and generate a node keypair.
@@ -306,6 +318,7 @@ async fn main() {
             consensus,
             groups,
             auto_approve_joins,
+            cors_origins,
         } => {
             run_node(
                 port,
@@ -326,6 +339,7 @@ async fn main() {
                 &consensus,
                 groups,
                 auto_approve_joins,
+                cors_origins,
             )
             .await
         }
@@ -399,6 +413,7 @@ async fn run_node(
     consensus_engine: &str,
     groups: Vec<String>,
     auto_approve_joins_flag: bool,
+    cors_origins_flag: Vec<String>,
 ) {
     let data_path = expand_path(data_dir);
 
@@ -637,9 +652,33 @@ async fn run_node(
         }
     }
 
+    // Assemble the CORS allowlist: union of --cors-origin flags and the
+    // DREGG_CORS_ORIGINS env var (comma-separated). Empty by default →
+    // locked down to localhost + browser extensions.
+    let mut cors_origins: std::collections::HashSet<String> =
+        cors_origins_flag.into_iter().collect();
+    if let Ok(env_origins) = std::env::var("DREGG_CORS_ORIGINS") {
+        for o in env_origins.split(',') {
+            let o = o.trim();
+            if !o.is_empty() {
+                cors_origins.insert(o.to_string());
+            }
+        }
+    }
+    if !cors_origins.is_empty() {
+        let mut sorted: Vec<&String> = cors_origins.iter().collect();
+        sorted.sort();
+        info!(origins = ?sorted, "CORS: allowing extra cross-origin origins (plus localhost/extensions)");
+    }
+
     // Build and serve the HTTP API.
-    let app = api::router(node_state.clone(), enable_faucet, metrics_handle)
-        .into_make_service_with_connect_info::<SocketAddr>();
+    let app = api::router_with_cors(
+        node_state.clone(),
+        enable_faucet,
+        metrics_handle,
+        cors_origins,
+    )
+    .into_make_service_with_connect_info::<SocketAddr>();
     let bind_addr: std::net::IpAddr = bind.parse().unwrap_or_else(|_| {
         error!("invalid --bind address: {bind}, falling back to 127.0.0.1");
         Ipv4Addr::LOCALHOST.into()

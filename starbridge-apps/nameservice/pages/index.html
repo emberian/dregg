@@ -97,5 +97,10 @@
     <script type="module" src="/starbridge-apps/shared/inspectors/index.js"></script>
     <script type="module" src="./inspectors.js"></script>
     <script type="module" src="./turn-builders.js"></script>
+    <!-- Makes the core flow REAL in local preview: creates a real registry
+         cell in the in-memory runtime, rewrites the placeholder URI to it,
+         and installs a real window.dregg.signTurn routed through the
+         canonical TurnExecutor (see shared/runtime-submit.js). -->
+    <script type="module" src="/starbridge-apps/shared/app-runtime-ready.js"></script>
   </body>
 </html>

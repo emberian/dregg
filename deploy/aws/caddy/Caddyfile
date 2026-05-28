@@ -92,13 +92,29 @@ devnet.dregg.fg-goose.online, dregg.fg-goose.online {
         file_server
     }
 
-    # CORS headers for browser clients
+    # CORS headers for browser clients.
+    #
+    # RECOMMENDED (CORS-free) path: this Caddyfile already reverse-proxies the
+    # node API (/api/*, /status, /ws, /federation/*, ...) AND serves the built
+    # site (/explorer, /playground, /starbridge, /) from the SAME origin
+    # (devnet.dregg.fg-goose.online). Same-origin requests are not subject to
+    # CORS at all, so a browser on the deployed site talks to the node without
+    # any Access-Control-* negotiation. The headers below remain for any
+    # genuinely cross-origin client. If you instead point the browser directly
+    # at the node on another origin, set DREGG_CORS_ORIGINS (or --cors-origin)
+    # on dregg-node to that site origin so the node echoes it back.
     header Access-Control-Allow-Origin "*"
     header Access-Control-Allow-Methods "GET, POST, OPTIONS"
     header Access-Control-Allow-Headers "Content-Type, Authorization"
 
     # Security headers
     header X-Content-Type-Options "nosniff"
-    header X-Frame-Options "DENY"
+    # SAMEORIGIN (not DENY) so the deployed site can embed its OWN app iframes
+    # (the chain explorer / playground / starbridge shells are framed by the
+    # site shell). CSP frame-ancestors 'self' is the modern equivalent and
+    # supersedes X-Frame-Options in browsers that honor it; both are set so
+    # older and newer browsers agree on "self may frame, others may not."
+    header X-Frame-Options "SAMEORIGIN"
+    header Content-Security-Policy "frame-ancestors 'self'"
     header Referrer-Policy "strict-origin-when-cross-origin"
 }
