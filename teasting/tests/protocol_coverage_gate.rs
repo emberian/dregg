@@ -1,0 +1,132 @@
+//! Protocol-coverage gate (Pillar 2 of the test/gates initiative, #142).
+//!
+//! "Verification means something" only if the gates actually exercise the
+//! protocol. This file is a **compile-time forcing function**: the exhaustive
+//! `match` in `effect_executor_coverage` has one arm per `dregg_turn::Effect`
+//! variant, so **adding a new `Effect` variant breaks this test's compilation
+//! until someone classifies it** — covered by a real executor-invoking flow,
+//! or explicitly not-yet-covered. That makes silent, untested protocol growth
+//! impossible.
+//!
+//! Honesty contract: an arm is `true` ONLY where a test in this workspace
+//! actually drives that variant through `TurnExecutor::execute` /
+//! `EmbeddedExecutor::submit_action` (per-app integration tests, the
+//! cross-app composition e2e, the lifecycle/obligation/escrow suites, and the
+//! #111–#116 apply-path tests). Where coverage is unconfirmed, the arm is
+//! conservatively `false` — under-claiming, never over-claiming. The runtime
+//! assertion ratchets: the not-yet-covered count may only shrink.
+//!
+//! Follow-ups (#142): extend the same forcing function to `Authorization`
+//! modes and `StateConstraint` variants, then wire into preflight (Pillar 3).
+
+use dregg_turn::action::Effect;
+
+/// Returns `true` iff this `Effect` variant is exercised end-to-end by at
+/// least one executor-invoking test in this workspace. Exhaustive by design.
+fn effect_executor_coverage(e: &Effect) -> bool {
+    match e {
+        // ── Covered: driven through the executor by a real test ──────────
+        Effect::SetField { .. } => true, // cross_app_composition_e2e, many
+        Effect::Transfer { .. } => true, // bilateral/transfer suites
+        Effect::GrantCapability { .. } => true, // capability/grant tests
+        Effect::RevokeCapability { .. } => true, // revocation tests
+        Effect::EmitEvent { .. } => true, // cross_app_composition_e2e
+        Effect::IncrementNonce { .. } => true, // sdk agent_demo / runtime
+        Effect::CreateCell { .. } => true, // ledger/create tests
+        Effect::SetVerificationKey { .. } => true, // VK integrity tests
+        Effect::SpawnWithDelegation { .. } => true, // delegation suite
+        Effect::RefreshDelegation => true,          // delegation suite
+        Effect::RevokeDelegation { .. } => true,    // delegation suite
+        Effect::BridgeMint { .. } => true,          // bridge tests
+        Effect::BridgeLock { .. } => true,          // bridge tests
+        Effect::CreateObligation { .. } => true,    // #113 apply test
+        Effect::FulfillObligation { .. } => true,   // #112 apply test
+        Effect::SlashObligation { .. } => true,     // obligation suite
+        Effect::CreateEscrow { .. } => true,        // escrow suite
+        Effect::ReleaseEscrow { .. } => true,       // escrow suite
+        Effect::RefundEscrow { .. } => true,        // escrow suite
+        Effect::ExerciseViaCapability { .. } => true, // #111 apply test
+        Effect::ExportSturdyRef { .. } => true,     // captp/#96 tests
+        Effect::EnlivenRef { .. } => true,          // captp/#96 tests
+        Effect::DropRef { .. } => true,             // captp gc tests
+        Effect::ValidateHandoff { .. } => true,     // captp handoff tests
+        Effect::CellSeal { .. } => true,            // integration_lifecycle
+        Effect::CellUnseal { .. } => true,          // integration_lifecycle
+        Effect::CellDestroy { .. } => true,         // integration_destroy_terminal
+        Effect::Burn { .. } => true,                // integration_burn_receipt
+        Effect::AttenuateCapability { .. } => true, // integration_attenuate_capability
+        Effect::ReceiptArchive { .. } => true,      // integration_attestation_archive
+
+        // ── Not yet confirmed covered by an executor-invoking test ───────
+        // (#142 work-list — flip to true with the covering test as it lands)
+        Effect::SetPermissions { .. } => false,
+        Effect::NoteSpend { .. } => false,
+        Effect::NoteCreate { .. } => false,
+        Effect::CreateSealPair { .. } => false,
+        Effect::Seal { .. } => false,
+        Effect::Unseal { .. } => false,
+        Effect::BridgeFinalize { .. } => false,
+        Effect::BridgeCancel { .. } => false,
+        Effect::Introduce { .. } => false,
+        Effect::PipelinedSend { .. } => false,
+        Effect::CreateCommittedEscrow { .. } => false,
+        Effect::ReleaseCommittedEscrow { .. } => false,
+        Effect::RefundCommittedEscrow { .. } => false,
+        Effect::MakeSovereign { .. } => false,
+        Effect::CreateCellFromFactory { .. } => false,
+        Effect::QueueAllocate { .. } => false,
+        Effect::QueueEnqueue { .. } => false,
+        Effect::QueueDequeue { .. } => false,
+        Effect::QueueResize { .. } => false,
+        Effect::QueueAtomicTx { .. } => false,
+        Effect::QueuePipelineStep { .. } => false,
+        Effect::Refusal { .. } => false,
+    }
+}
+
+/// The set of `Effect` variant names currently classified not-yet-covered.
+/// This is the ratchet's source of truth and the #142 work-list. Keep it in
+/// sync with the `false` arms above (the exhaustive match guarantees no
+/// variant is omitted entirely).
+const NOT_YET_COVERED: &[&str] = &[
+    "SetPermissions",
+    "NoteSpend",
+    "NoteCreate",
+    "CreateSealPair",
+    "Seal",
+    "Unseal",
+    "BridgeFinalize",
+    "BridgeCancel",
+    "Introduce",
+    "PipelinedSend",
+    "CreateCommittedEscrow",
+    "ReleaseCommittedEscrow",
+    "RefundCommittedEscrow",
+    "MakeSovereign",
+    "CreateCellFromFactory",
+    "QueueAllocate",
+    "QueueEnqueue",
+    "QueueDequeue",
+    "QueueResize",
+    "QueueAtomicTx",
+    "QueuePipelineStep",
+    "Refusal",
+];
+
+/// Ratchet: the number of `Effect` variants not yet exercised end-to-end may
+/// only DECREASE. When you add coverage, flip the arm to `true`, remove it
+/// from `NOT_YET_COVERED`, and lower this baseline. It must never rise.
+const MAX_UNCOVERED_EFFECTS: usize = 22;
+
+#[test]
+fn effect_coverage_ratchet_only_shrinks() {
+    assert!(
+        NOT_YET_COVERED.len() <= MAX_UNCOVERED_EFFECTS,
+        "not-yet-covered Effect count {} exceeds the ratchet baseline {} — coverage regressed",
+        NOT_YET_COVERED.len(),
+        MAX_UNCOVERED_EFFECTS
+    );
+    // Touch the forcing function so it is compiled (and so adding a variant
+    // breaks the build here). RefreshDelegation is the unit variant.
+    assert!(effect_executor_coverage(&Effect::RefreshDelegation));
+}
