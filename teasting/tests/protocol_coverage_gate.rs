@@ -19,7 +19,7 @@
 //! Follow-ups (#142): extend the same forcing function to `Authorization`
 //! modes and `StateConstraint` variants, then wire into preflight (Pillar 3).
 
-use dregg_turn::action::Effect;
+use dregg_turn::action::{Authorization, Effect};
 
 /// Returns `true` iff this `Effect` variant is exercised end-to-end by at
 /// least one executor-invoking test in this workspace. Exhaustive by design.
@@ -129,4 +129,42 @@ fn effect_coverage_ratchet_only_shrinks() {
     // Touch the forcing function so it is compiled (and so adding a variant
     // breaks the build here). RefreshDelegation is the unit variant.
     assert!(effect_executor_coverage(&Effect::RefreshDelegation));
+}
+
+// ============================================================================
+// Authorization modes
+// ============================================================================
+
+/// Returns `true` iff this `Authorization` mode is exercised end-to-end by at
+/// least one executor-invoking test. Exhaustive by design — adding an auth
+/// mode breaks compilation until classified. Same honesty contract as above.
+fn authorization_executor_coverage(a: &Authorization) -> bool {
+    match a {
+        // Covered.
+        Authorization::Signature(..) => true, // every signed turn (composition, app tests)
+        Authorization::Unchecked => true,     // bare_turn helpers across suites
+        Authorization::Bearer(..) => true,    // bearer-cap exercise tests
+        Authorization::CapTpDelivered { .. } => true, // wire captp_delivery_tests + #122
+        // Not yet confirmed covered by an executor-invoking test (#142 work-list).
+        Authorization::Proof { .. } => false,
+        Authorization::Breadstuff(..) => false,
+        Authorization::Custom { .. } => false,
+        Authorization::OneOf { .. } => false,
+    }
+}
+
+const NOT_YET_COVERED_AUTH: &[&str] = &["Proof", "Breadstuff", "Custom", "OneOf"];
+
+/// Ratchet for Authorization-mode coverage — may only shrink.
+const MAX_UNCOVERED_AUTH: usize = 4;
+
+#[test]
+fn authorization_coverage_ratchet_only_shrinks() {
+    assert!(
+        NOT_YET_COVERED_AUTH.len() <= MAX_UNCOVERED_AUTH,
+        "not-yet-covered Authorization count {} exceeds baseline {} — coverage regressed",
+        NOT_YET_COVERED_AUTH.len(),
+        MAX_UNCOVERED_AUTH
+    );
+    assert!(authorization_executor_coverage(&Authorization::Unchecked));
 }
