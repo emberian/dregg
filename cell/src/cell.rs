@@ -48,9 +48,7 @@ impl VerificationKey {
     /// unless the call site is genuinely opaque-fixture only.
     ///
     /// See `docs-old/VK-NEW-CALLER-AUDIT.md` §2 Option A for the full rationale.
-    #[deprecated(
-        note = "use from_components for canonical vk_v2 hashing; see VK-NEW-CALLER-AUDIT"
-    )]
+    #[deprecated(note = "use from_components for canonical vk_v2 hashing; see VK-NEW-CALLER-AUDIT")]
     pub fn new(data: Vec<u8>) -> Self {
         let hash = *blake3::hash(&data).as_bytes();
         VerificationKey { hash, data }

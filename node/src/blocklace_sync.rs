@@ -155,8 +155,11 @@ impl BlocklaceHandle {
         blocks
             .into_iter()
             .map(|(id, block)| {
-                let predecessors: Vec<String> =
-                    block.predecessors.iter().map(|p| hex_encode(&p.0)).collect();
+                let predecessors: Vec<String> = block
+                    .predecessors
+                    .iter()
+                    .map(|p| hex_encode(&p.0))
+                    .collect();
                 let prev_hash = block
                     .predecessors
                     .first()
@@ -885,7 +888,9 @@ pub async fn run_blocklace_sync(
     if block_cadence_ms > 0 {
         spawn_block_cadence(state.clone(), handle.clone(), block_cadence_ms);
     } else {
-        info!("block cadence disabled (--block-cadence-ms 0): blocks produced only on turn submission");
+        info!(
+            "block cadence disabled (--block-cadence-ms 0): blocks produced only on turn submission"
+        );
     }
 
     // If we're not already a federation participant, propose joining.
@@ -1252,7 +1257,10 @@ fn spawn_block_cadence(state: NodeState, handle: BlocklaceHandle, cadence_ms: u6
                         }
                     }
                 }
-                debug!(turns = n, "cadence: produced turn block(s) from consensus queue");
+                debug!(
+                    turns = n,
+                    "cadence: produced turn block(s) from consensus queue"
+                );
                 continue;
             }
 
@@ -1946,6 +1954,212 @@ mod tests {
             .expect("ordering block exists");
 
         assert_eq!(ordering_block.payload, bundle.signed_turn);
+    }
+
+    // ── Distributed witness path: gossip → materialize → aggregate + verify ──
+
+    /// Build a real two-cell transfer Turn (alice → bob).
+    fn aggregate_test_turn(
+        alice: dregg_types::CellId,
+        bob: dregg_types::CellId,
+        amount: u64,
+        nonce: u64,
+    ) -> dregg_turn::Turn {
+        let mut builder = dregg_turn::TurnBuilder::new(alice, nonce);
+        let action = dregg_turn::ActionBuilder::new_unchecked_for_tests(alice, "transfer", alice)
+            .effect_transfer(alice, bob, amount)
+            .build();
+        builder.add_action(action);
+        builder.fee(0).build()
+    }
+
+    /// Fabricate a per-cell scope-2 WitnessedReceipt whose PI is projected from
+    /// the canonical Turn's bilateral schedule, bound to a SHARED committed
+    /// receipt (so `materialize_blocklace_artifacts` accepts it via
+    /// receipt-hash binding). Mirrors the executor's `populate_pi` discipline
+    /// and the aggregate prover's own `fabricate_wr` test helper.
+    fn aggregate_test_wr(
+        turn: &dregg_turn::Turn,
+        cell_id: &dregg_types::CellId,
+        receipt: &dregg_turn::TurnReceipt,
+    ) -> dregg_turn::WitnessedReceipt {
+        use dregg_circuit::effect_vm::pi as p;
+        use dregg_turn::bilateral_schedule::{ExpectedBilateral, project_into_pi};
+
+        let sched = ExpectedBilateral::from_turn(turn);
+        let counts = sched.counts_for(cell_id);
+        let roots = sched.roots_for(cell_id, turn.nonce);
+
+        let mut pi_bb = vec![BabyBear::ZERO; p::BASE_COUNT];
+        let (th, eg, _, prev) = dregg_turn::TurnExecutor::compute_turn_identity_pi(turn);
+        for i in 0..p::TURN_HASH_LEN {
+            pi_bb[p::TURN_HASH_BASE + i] = th[i];
+        }
+        for i in 0..p::EFFECTS_HASH_GLOBAL_LEN {
+            pi_bb[p::EFFECTS_HASH_GLOBAL_BASE + i] = eg[i];
+        }
+        for i in 0..p::PREVIOUS_RECEIPT_HASH_LEN {
+            pi_bb[p::PREVIOUS_RECEIPT_HASH_BASE + i] = prev[i];
+        }
+        pi_bb[p::ACTOR_NONCE] = BabyBear::new((turn.nonce & 0x7FFF_FFFF) as u32);
+        project_into_pi(&mut pi_bb, &counts, &roots);
+        pi_bb[p::IS_AGENT_CELL] = if cell_id == &turn.agent {
+            BabyBear::new(1)
+        } else {
+            BabyBear::ZERO
+        };
+        let pi_u32: Vec<u32> = pi_bb.iter().map(|x| x.as_u32()).collect();
+        let trace = vec![vec![
+            BabyBear::ZERO;
+            dregg_circuit::effect_vm::EFFECT_VM_WIDTH
+        ]];
+        dregg_turn::WitnessedReceipt::from_components(
+            receipt.clone(),
+            Vec::new(),
+            pi_u32,
+            Some(&trace),
+        )
+    }
+
+    /// End-to-end distributed witness path:
+    ///   1. Two per-cell WitnessedReceipts are produced INDEPENDENTLY (one per
+    ///      cell), each encoded to wire artifact bytes and wrapped in a
+    ///      `TurnArtifactBundle` — the exact shape the production submit path
+    ///      now gossips via `submit_turn_bundle`.
+    ///   2. Each bundle is fed through `materialize_blocklace_artifacts` — the
+    ///      gossip-RECEIVE path — which validates receipt-hash binding +
+    ///      scope-2 witness requirement and stores the WR. Decoding from
+    ///      artifact bytes is what makes these genuinely cross-sourced (not the
+    ///      single-call self-prove the MCP tool does).
+    ///   3. The two materialized WRs are pulled back out of node state and run
+    ///      through the REAL aggregate (`prove_aggregated_bundle` +
+    ///      `verify_aggregated_bundle`).
+    ///
+    /// Honest residual: a true multi-node gossip exchange needs >= 2 live
+    /// nodes, which this single-process test cannot spin up; per the brief we
+    /// exercise the materialize + aggregate steps directly with two
+    /// independently-built, artifact-byte-roundtripped WitnessedReceipts.
+    #[tokio::test]
+    async fn distributed_witness_path_gossip_materialize_aggregate_verify() {
+        use dregg_types::CellId;
+
+        let alice = CellId::from_bytes([0xA1; 32]);
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let turn = aggregate_test_turn(alice, bob, 100, 1);
+
+        // Shared committed receipt: both per-cell WRs cover the SAME receipt,
+        // and the receiving node re-executes to this same receipt locally.
+        let receipt = sample_receipt(42);
+        let receipt_hash = receipt.receipt_hash();
+
+        // ── Source A: alice-side WR, independently produced + serialized. ──
+        let alice_wr = aggregate_test_wr(&turn, &alice, &receipt);
+        let alice_artifact = alice_wr
+            .to_artifact_bytes()
+            .expect("alice WR artifact encodes");
+        let bundle_a = TurnArtifactBundle::with_committed(
+            b"signed-turn".to_vec(),
+            Some(serde_json::to_vec(&receipt).expect("receipt encodes")),
+            vec![alice_artifact.clone()],
+        );
+
+        // ── Source B: bob-side WR, INDEPENDENTLY produced + serialized. ──
+        let bob_wr = aggregate_test_wr(&turn, &bob, &receipt);
+        let bob_artifact = bob_wr.to_artifact_bytes().expect("bob WR artifact encodes");
+        let bundle_b = TurnArtifactBundle::with_committed(
+            b"signed-turn".to_vec(),
+            Some(serde_json::to_vec(&receipt).expect("receipt encodes")),
+            vec![bob_artifact.clone()],
+        );
+
+        // Confirm the two sources are genuinely distinct artifacts (different
+        // cells → different bilateral-schedule PI) — NOT the same object reused
+        // (which is what the MCP single-call self-prove would produce). The
+        // witness_hash binds only the trace bundle (identical empty trace here),
+        // so cross-sourcing is established by the per-cell public_inputs, which
+        // carry the distinct IS_AGENT_CELL flag and bilateral root projection.
+        assert_ne!(
+            alice_artifact, bob_artifact,
+            "the two per-cell WR artifacts must be independently sourced"
+        );
+        assert_ne!(
+            alice_wr.public_inputs, bob_wr.public_inputs,
+            "the two per-cell WRs must carry distinct bilateral PI (cross-sourced)"
+        );
+        let is_agent_idx = dregg_circuit::effect_vm::pi::IS_AGENT_CELL;
+        assert_eq!(
+            alice_wr.public_inputs.get(is_agent_idx).copied(),
+            Some(1),
+            "alice is the agent side"
+        );
+        assert_eq!(
+            bob_wr.public_inputs.get(is_agent_idx).copied(),
+            Some(0),
+            "bob is the counterparty side"
+        );
+
+        // ── Receive path: materialize each gossiped bundle on the node. ──
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+        let mut guard = state.write().await;
+
+        let ev_a =
+            materialize_blocklace_artifacts(&mut guard, BlockId([1u8; 32]), &receipt, &bundle_a);
+        assert!(
+            ev_a.is_empty(),
+            "alice bundle must materialize cleanly: {ev_a:?}"
+        );
+        let ev_b =
+            materialize_blocklace_artifacts(&mut guard, BlockId([2u8; 32]), &receipt, &bundle_b);
+        assert!(
+            ev_b.is_empty(),
+            "bob bundle must materialize cleanly: {ev_b:?}"
+        );
+
+        // Both independently-gossiped WRs are now stored under the receipt.
+        let stored = guard
+            .witnessed_receipts
+            .get(&receipt_hash)
+            .expect("witnesses materialized")
+            .clone();
+        assert_eq!(stored.len(), 2, "both cross-sourced WRs materialized");
+        drop(guard);
+
+        // The materialized WRs round-tripped through artifact-byte decode: the
+        // stored per-cell public_inputs must equal the original per-source PIs
+        // (i.e. the gossip-receive path faithfully reconstructed both
+        // independently-sourced witnesses, not one duplicated).
+        let mut stored_pis: Vec<Vec<u32>> =
+            stored.iter().map(|w| w.public_inputs.clone()).collect();
+        stored_pis.sort();
+        let mut source_pis = vec![alice_wr.public_inputs.clone(), bob_wr.public_inputs.clone()];
+        source_pis.sort();
+        assert_eq!(
+            stored_pis, source_pis,
+            "materialized WRs are exactly the two independently-sourced ones"
+        );
+
+        // ── Aggregate: REAL cross-node aggregate over the gossiped WRs. ──
+        // Recover each materialized WR by cell (IS_AGENT_CELL slot distinguishes
+        // the agent/alice side from bob).
+        let materialized_alice = stored
+            .iter()
+            .find(|w| w.public_inputs.get(is_agent_idx).copied() == Some(1))
+            .expect("agent-side WR present")
+            .clone();
+        let materialized_bob = stored
+            .iter()
+            .find(|w| w.public_inputs.get(is_agent_idx).copied() == Some(0))
+            .expect("counterparty WR present")
+            .clone();
+
+        let entries = vec![(alice, materialized_alice), (bob, materialized_bob)];
+        let bundle =
+            dregg_turn::aggregate_bilateral_prover::prove_aggregated_bundle(&turn, &entries)
+                .expect("cross-sourced WRs must aggregate");
+        assert_eq!(bundle.participating_cells.len(), 2);
+        dregg_turn::aggregate_bilateral_prover::verify_aggregated_bundle(&bundle)
+            .expect("aggregated bundle of gossiped WRs must verify");
     }
 }
 

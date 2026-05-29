@@ -570,10 +570,7 @@ pub fn prove_note_spend_dsl(witness: &NoteSpendingWitness) -> StarkProof {
 /// `value_hi` is the upper-34-bit limb of the note's u64 amount; the witness's
 /// `value` field supplies the low-30 limb that participates in the commitment.
 /// Pair with [`verify_note_spend_dsl_full`].
-pub fn prove_note_spend_dsl_full(
-    witness: &NoteSpendingWitness,
-    value_hi: BabyBear,
-) -> StarkProof {
+pub fn prove_note_spend_dsl_full(witness: &NoteSpendingWitness, value_hi: BabyBear) -> StarkProof {
     let circuit = note_spending_dsl_circuit();
     let (trace, public_inputs) = generate_note_spending_trace_with_value_hi(witness, value_hi);
     stark::prove(&circuit, &trace, &public_inputs)

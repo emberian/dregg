@@ -167,7 +167,11 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
     }];
 
     // A handful of demo agent cells with starting balances.
-    for (name, balance) in [("alice", 50_000u64), ("bob", 25_000u64), ("carol", 10_000u64)] {
+    for (name, balance) in [
+        ("alice", 50_000u64),
+        ("bob", 25_000u64),
+        ("carol", 10_000u64),
+    ] {
         let mut key_bytes = [0u8; 32];
         getrandom::fill(&mut key_bytes).expect("getrandom failed");
         let signing = ed25519_dalek::SigningKey::from_bytes(&key_bytes);

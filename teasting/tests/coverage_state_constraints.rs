@@ -165,8 +165,16 @@ fn field_lte_field_accept_and_reject() {
     let accept_action = cc.make_self_action(
         "set-both",
         vec![
-            Effect::SetField { cell, index: 0, value: field_from_u64(10) },
-            Effect::SetField { cell, index: 1, value: field_from_u64(20) },
+            Effect::SetField {
+                cell,
+                index: 0,
+                value: field_from_u64(10),
+            },
+            Effect::SetField {
+                cell,
+                index: 1,
+                value: field_from_u64(20),
+            },
         ],
     );
     let ok = ex.submit_action(&cc, accept_action);
@@ -176,7 +184,11 @@ fn field_lte_field_accept_and_reject() {
     // We only need to set slot[0] because slot[1]=20 from the previous turn.
     let reject_action = cc.make_self_action(
         "set-left",
-        vec![Effect::SetField { cell, index: 0, value: field_from_u64(30) }],
+        vec![Effect::SetField {
+            cell,
+            index: 0,
+            value: field_from_u64(30),
+        }],
     );
     let err = ex.submit_action(&cc, reject_action);
     assert!(err.is_err(), "FieldLteField did not reject left > right");
@@ -226,10 +238,17 @@ fn immutable_accept_and_reject() {
         &cc,
         cc.make_self_action(
             "touch-slot1",
-            vec![Effect::SetField { cell, index: 1, value: field_from_u64(1) }],
+            vec![Effect::SetField {
+                cell,
+                index: 1,
+                value: field_from_u64(1),
+            }],
         ),
     );
-    assert!(ok.is_ok(), "Immutable accept (no change to slot[0]) failed: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "Immutable accept (no change to slot[0]) failed: {ok:?}"
+    );
 
     // Reject: attempt to change slot[0].
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(99)));
@@ -256,7 +275,10 @@ fn strict_monotonic_accept_and_reject() {
 
     // Reject: 5 → 3 (decreases).
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(3)));
-    assert!(err.is_err(), "StrictMonotonic did not reject decrease (5→3)");
+    assert!(
+        err.is_err(),
+        "StrictMonotonic did not reject decrease (5→3)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -282,7 +304,10 @@ fn field_delta_accept_and_reject() {
 
     // Reject: 10 → 25 (delta = 15 ≠ 10).
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(25)));
-    assert!(err.is_err(), "FieldDelta did not reject wrong delta (10→25 != +10)");
+    assert!(
+        err.is_err(),
+        "FieldDelta did not reject wrong delta (10→25 != +10)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -305,11 +330,17 @@ fn field_delta_in_range_accept_and_reject() {
 
     // Accept: 0 → 10 (delta=10, in [5,15]).
     let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(10)));
-    assert!(ok.is_ok(), "FieldDeltaInRange accept (delta=10) failed: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "FieldDeltaInRange accept (delta=10) failed: {ok:?}"
+    );
 
     // Reject: 10 → 12 (delta=2, below min_delta=5).
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(12)));
-    assert!(err.is_err(), "FieldDeltaInRange did not reject delta below minimum (delta=2)");
+    assert!(
+        err.is_err(),
+        "FieldDeltaInRange did not reject delta below minimum (delta=2)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,9 +368,14 @@ fn bounded_by_accept_and_reject() {
     // only fires when slot[0] *changes*, so this action is fine regardless.
     let arm = cc.make_self_action(
         "arm",
-        vec![Effect::SetField { cell, index: 1, value: field_from_u64(1) }],
+        vec![Effect::SetField {
+            cell,
+            index: 1,
+            value: field_from_u64(1),
+        }],
     );
-    ex.submit_action(&cc, arm).expect("arming guard slot must succeed");
+    ex.submit_action(&cc, arm)
+        .expect("arming guard slot must succeed");
 
     // Accept: slot[1]=1 (armed), change slot[0]=99 → guard is non-zero → ok.
     let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(99)));
@@ -348,13 +384,21 @@ fn bounded_by_accept_and_reject() {
     // Disarm the guard: set slot[1]=0. Slot[0] is unchanged → ok.
     let disarm = cc.make_self_action(
         "disarm",
-        vec![Effect::SetField { cell, index: 1, value: field_from_u64(0) }],
+        vec![Effect::SetField {
+            cell,
+            index: 1,
+            value: field_from_u64(0),
+        }],
     );
-    ex.submit_action(&cc, disarm).expect("disarming guard slot must succeed");
+    ex.submit_action(&cc, disarm)
+        .expect("disarming guard slot must succeed");
 
     // Reject: slot[1]=0 (disarmed), try to change slot[0] → rejected.
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(77)));
-    assert!(err.is_err(), "BoundedBy did not reject change when guard is zero");
+    assert!(
+        err.is_err(),
+        "BoundedBy did not reject change when guard is zero"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -381,8 +425,16 @@ fn sum_equals_accept_and_reject() {
         cc.make_self_action(
             "set-sum",
             vec![
-                Effect::SetField { cell, index: 0, value: field_from_u64(60) },
-                Effect::SetField { cell, index: 1, value: field_from_u64(40) },
+                Effect::SetField {
+                    cell,
+                    index: 0,
+                    value: field_from_u64(60),
+                },
+                Effect::SetField {
+                    cell,
+                    index: 1,
+                    value: field_from_u64(40),
+                },
             ],
         ),
     );
@@ -390,7 +442,10 @@ fn sum_equals_accept_and_reject() {
 
     // Reject: slot[0]=60 (unchanged), slot[1]=50 → sum=110 ≠ 100.
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 1, field_from_u64(50)));
-    assert!(err.is_err(), "SumEquals did not reject wrong sum (110 ≠ 100)");
+    assert!(
+        err.is_err(),
+        "SumEquals did not reject wrong sum (110 ≠ 100)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -436,12 +491,23 @@ fn sum_equals_across_accept_and_reject() {
         cc.make_self_action(
             "conserve",
             vec![
-                Effect::SetField { cell, index: 0, value: field_from_u64(20) },
-                Effect::SetField { cell, index: 1, value: field_from_u64(20) },
+                Effect::SetField {
+                    cell,
+                    index: 0,
+                    value: field_from_u64(20),
+                },
+                Effect::SetField {
+                    cell,
+                    index: 1,
+                    value: field_from_u64(20),
+                },
             ],
         ),
     );
-    assert!(ok.is_ok(), "SumEqualsAcross accept (20==0+20) failed: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "SumEqualsAcross accept (20==0+20) failed: {ok:?}"
+    );
 
     // Reject: new[0]=50, new[1]=20 → 50 ≠ old[0](20)+new[1](20) = 40.
     let err = ex.submit_action(
@@ -449,12 +515,23 @@ fn sum_equals_across_accept_and_reject() {
         cc.make_self_action(
             "conserve-bad",
             vec![
-                Effect::SetField { cell, index: 0, value: field_from_u64(50) },
-                Effect::SetField { cell, index: 1, value: field_from_u64(20) },
+                Effect::SetField {
+                    cell,
+                    index: 0,
+                    value: field_from_u64(50),
+                },
+                Effect::SetField {
+                    cell,
+                    index: 1,
+                    value: field_from_u64(20),
+                },
             ],
         ),
     );
-    assert!(err.is_err(), "SumEqualsAcross did not reject conservation violation (50≠40)");
+    assert!(
+        err.is_err(),
+        "SumEqualsAcross did not reject conservation violation (50≠40)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -508,7 +585,10 @@ fn temporal_gate_accept_and_reject() {
             }]),
         );
         let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(1)));
-        assert!(ok.is_ok(), "TemporalGate accept (height=0, not_after=1000) failed: {ok:?}");
+        assert!(
+            ok.is_ok(),
+            "TemporalGate accept (height=0, not_after=1000) failed: {ok:?}"
+        );
     }
 
     // Reject test: gate requires not_before=500 but height=0 → too early.
@@ -522,7 +602,10 @@ fn temporal_gate_accept_and_reject() {
             }]),
         );
         let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(1)));
-        assert!(err.is_err(), "TemporalGate did not reject when height=0 < not_before=500");
+        assert!(
+            err.is_err(),
+            "TemporalGate did not reject when height=0 < not_before=500"
+        );
     }
 }
 
@@ -548,11 +631,17 @@ fn rate_limit_accept_and_reject() {
 
     // Accept: first mutation this epoch (counter=0 < 1).
     let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(1)));
-    assert!(ok.is_ok(), "RateLimit accept (first mutation) failed: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "RateLimit accept (first mutation) failed: {ok:?}"
+    );
 
     // Reject: second mutation this epoch (counter=1 >= 1).
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(2)));
-    assert!(err.is_err(), "RateLimit did not reject second mutation in same epoch");
+    assert!(
+        err.is_err(),
+        "RateLimit did not reject second mutation in same epoch"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -578,11 +667,17 @@ fn rate_limit_by_sum_accept_and_reject() {
 
     // Accept: delta=60, window_sum=0+60=60 ≤ 100.
     let ok = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(60)));
-    assert!(ok.is_ok(), "RateLimitBySum accept (delta=60) failed: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "RateLimitBySum accept (delta=60) failed: {ok:?}"
+    );
 
     // Reject: delta=60 again, window_sum=60+60=120 > 100.
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(120)));
-    assert!(err.is_err(), "RateLimitBySum did not reject when window_sum would exceed 100");
+    assert!(
+        err.is_err(),
+        "RateLimitBySum did not reject when window_sum would exceed 100"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -603,7 +698,8 @@ fn preimage_gate_accept_and_reject() {
     // Step 1: seed slot[0] = commitment with no program installed yet.
     let (ex, cc) = fresh(18);
     let seed_action = set_field(&ex, &cc, 0, commitment);
-    ex.submit_action(&cc, seed_action).expect("seeding commitment must succeed (no program yet)");
+    ex.submit_action(&cc, seed_action)
+        .expect("seeding commitment must succeed (no program yet)");
 
     // Step 2: install the PreimageGate program.
     use dregg_cell::program::HashKind;
@@ -622,7 +718,10 @@ fn preimage_gate_accept_and_reject() {
         &cc,
         set_field_with_preimage(&ex, &cc, 1, field_from_u64(1), secret),
     );
-    assert!(ok.is_ok(), "PreimageGate accept (correct preimage) failed: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "PreimageGate accept (correct preimage) failed: {ok:?}"
+    );
 
     // Reject: carry a wrong preimage.
     let wrong: [u8; 32] = [0xCDu8; 32];
@@ -665,7 +764,10 @@ fn any_of_accept_and_reject() {
 
     // Reject: 99 matches neither branch.
     let err = ex.submit_action(&cc, set_field(&ex, &cc, 0, field_from_u64(99)));
-    assert!(err.is_err(), "AnyOf did not reject value matching no branch");
+    assert!(
+        err.is_err(),
+        "AnyOf did not reject value matching no branch"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

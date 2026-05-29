@@ -486,12 +486,8 @@ fn test_stage3_multi_variant_compose() {
     let state = make_initial_state(10_000);
     let effects = vec![
         // Cap-root transition variants:
-        Effect::GrantCapability {
-            cap_entry: w8(1),
-        },
-        Effect::RevokeCapability {
-            slot_hash: w8(2),
-        },
+        Effect::GrantCapability { cap_entry: w8(1) },
+        Effect::RevokeCapability { slot_hash: w8(2) },
         // Stateless side-effects (passthrough):
         Effect::EmitEvent {
             topic_hash: {
@@ -504,9 +500,7 @@ fn test_stage3_multi_variant_compose() {
         Effect::SetPermissions {
             permissions_hash: w8(0xE2),
         },
-        Effect::SetVerificationKey {
-            vk_hash: w8(0xE3),
-        },
+        Effect::SetVerificationKey { vk_hash: w8(0xE3) },
         Effect::CreateSealPair {
             pair_hash: w8(0xE4),
         },

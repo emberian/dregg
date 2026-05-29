@@ -122,8 +122,15 @@ fn grant_capability_effects_hash_binds_full_32_bytes() {
     // 28 bytes binding.
     let la = dregg_circuit::effect_vm::bytes32_to_8_limbs(&a);
     let lb = dregg_circuit::effect_vm::bytes32_to_8_limbs(&b);
-    assert_eq!(la[0], lb[0], "limb[0] (cap_root anchor) agrees — low 4 bytes identical");
-    assert_ne!(&la[1..], &lb[1..], "upper limbs differ — the new binding the single felt lacked");
+    assert_eq!(
+        la[0], lb[0],
+        "limb[0] (cap_root anchor) agrees — low 4 bytes identical"
+    );
+    assert_ne!(
+        &la[1..],
+        &lb[1..],
+        "upper limbs differ — the new binding the single felt lacked"
+    );
     // The old single-felt fold of limb[0]-only inputs would collapse:
     let mut a_lo = [0u8; 32];
     let mut b_lo = [0u8; 32];

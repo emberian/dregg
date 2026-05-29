@@ -23,8 +23,7 @@ pub struct ConservationProofWasm;
 
 impl Invariant for ConservationProofWasm {
     const NAME: &'static str = "conservation_proof_wasm";
-    const DESCRIPTION: &'static str =
-        "the WASM verify_conservation_proof binding accepts a balanced Pedersen \
+    const DESCRIPTION: &'static str = "the WASM verify_conservation_proof binding accepts a balanced Pedersen \
          transaction and rejects an unbalanced one (real Schnorr excess check)";
 }
 

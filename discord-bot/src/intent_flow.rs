@@ -113,8 +113,14 @@ mod tests {
             verify_signed_intent(&intent),
             "signed intent must carry a valid Ed25519 authorization"
         );
-        assert!(matches!(intent.action.authorization, Authorization::Signature(_, _)));
-        assert_eq!(intent.action.args, vec![*blake3::hash(intent.spec.as_bytes()).as_bytes()]);
+        assert!(matches!(
+            intent.action.authorization,
+            Authorization::Signature(_, _)
+        ));
+        assert_eq!(
+            intent.action.args,
+            vec![*blake3::hash(intent.spec.as_bytes()).as_bytes()]
+        );
         assert_eq!(intent.poster_pk, cclerk.public_key().0);
     }
 

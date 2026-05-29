@@ -22,10 +22,15 @@
 //!   accepted-under-negation).
 //! - no registry in bundle → `SenderMembershipWitnessMissing`.
 
+use std::sync::Arc;
+
 use dregg_cell::{
     CellProgram, CellState, StateConstraint,
     preconditions::EvalContext,
-    predicate::{NonMembershipNeighborProof, WitnessedPredicateRegistry},
+    predicate::{
+        CredentialSetMembershipVerifier, NeighborAdjacencyVerifier, NonMembershipNeighborProof,
+        NonMembershipProofV2, SortedNeighborNonMembershipVerifier, WitnessedPredicateRegistry,
+    },
     program::{RenouncedSet, TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag},
 };
 
@@ -50,14 +55,28 @@ fn eval_with_default_registry(
     sender: [u8; 32],
     proof_bytes: &[u8],
 ) -> Result<(), dregg_cell::ProgramError> {
-    let registry = WitnessedPredicateRegistry::default_builtins();
+    eval_with_registry(
+        &WitnessedPredicateRegistry::default_builtins(),
+        program,
+        sender,
+        proof_bytes,
+    )
+}
+
+/// Evaluate a Renounced program against an arbitrary registry.
+fn eval_with_registry(
+    registry: &WitnessedPredicateRegistry,
+    program: &CellProgram,
+    sender: [u8; 32],
+    proof_bytes: &[u8],
+) -> Result<(), dregg_cell::ProgramError> {
     let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
         kind: WitnessKindTag::ProofBytes,
         bytes: proof_bytes,
     }];
     let bundle = WitnessBundle {
         blobs: &blobs,
-        registry: Some(&registry),
+        registry: Some(registry),
     };
     let state = CellState::new(0);
     let ctx = ctx_with_sender(sender);
@@ -70,6 +89,54 @@ fn eval_with_default_registry(
     )
 }
 
+/// Mock Merkle-adjacency verifier. The REAL adjacency STARK lives in
+/// `dregg-circuit`/`dregg-turn` (which `dregg-cell` cannot depend on); it is
+/// exercised end-to-end by `dregg_turn::executor::membership_verifier`'s
+/// `e2e_consecutive_non_membership_accepts`. Here we only verify that the cell's
+/// renunciation plumbing accepts a genuine `NonMembershipProofV2` once a
+/// registry HAS an adjacency verifier installed (post-hardening positive path).
+struct MockAdjacency;
+impl NeighborAdjacencyVerifier for MockAdjacency {
+    fn verify_adjacency(
+        &self,
+        _root: &[u8; 32],
+        lower: &[u8; 32],
+        upper: &[u8; 32],
+        adjacency_proof: &[u8],
+    ) -> Result<(), String> {
+        if adjacency_proof != b"ADJ-OK" {
+            return Err("mock: missing/invalid adjacency proof".into());
+        }
+        if lower >= upper {
+            return Err("mock: lower !< upper".into());
+        }
+        Ok(())
+    }
+}
+
+/// A registry with the mock adjacency verifier installed — mirrors the
+/// production turn-layer `registry_with_real_verifiers` wiring.
+fn registry_with_mock_adjacency() -> WitnessedPredicateRegistry {
+    let mut r = WitnessedPredicateRegistry::with_stubs();
+    let adj: Arc<dyn NeighborAdjacencyVerifier> = Arc::new(MockAdjacency);
+    r.register_builtin(Arc::new(
+        SortedNeighborNonMembershipVerifier::with_adjacency(adj.clone()),
+    ));
+    r.register_builtin(Arc::new(CredentialSetMembershipVerifier::with_adjacency(
+        adj,
+    )));
+    r
+}
+
+/// Build a `NonMembershipProofV2` carrying the mock-accepted adjacency blob.
+fn honest_renunciation_v2(commitment: &[u8; 32], lower: [u8; 32], upper: [u8; 32]) -> Vec<u8> {
+    NonMembershipProofV2 {
+        neighbor: NonMembershipNeighborProof::new(commitment, lower, upper),
+        adjacency_proof: b"ADJ-OK".to_vec(),
+    }
+    .to_bytes()
+}
+
 // ─── Positive case ────────────────────────────────────────────────────────────
 
 /// A sender that is NOT in the set → Renounced accepts.
@@ -80,12 +147,21 @@ fn eval_with_default_registry(
 fn renounced_valid_non_membership_accepted() {
     let commitment = [0xAB; 32];
     let candidate = [0x05u8; 32];
-    let proof = NonMembershipNeighborProof::new(&commitment, [0x04u8; 32], [0x06u8; 32]);
-    let proof_bytes = proof.to_bytes();
+    // Post-hardening: the bare 96-byte neighbor proof is rejected (wide-bracket
+    // forge closed). The positive path ships a NonMembershipProofV2 with a real
+    // Merkle-adjacency proof (mocked here; the production STARK is exercised
+    // end-to-end in dregg-turn), verified against a registry that has the
+    // adjacency verifier installed.
+    let proof_bytes = honest_renunciation_v2(&commitment, [0x04u8; 32], [0x06u8; 32]);
 
     let program = renounced_blinded(commitment);
-    eval_with_default_registry(&program, candidate, &proof_bytes)
-        .expect("valid non-membership proof must be accepted");
+    eval_with_registry(
+        &registry_with_mock_adjacency(),
+        &program,
+        candidate,
+        &proof_bytes,
+    )
+    .expect("valid non-membership proof must be accepted");
 }
 
 // ─── Adversarial cases ────────────────────────────────────────────────────────
@@ -346,10 +422,12 @@ fn renounced_no_registry_returns_sentinel() {
 fn renounced_public_root_reads_commitment_from_slot() {
     let commitment = [0xCC; 32];
     let candidate = [0x05u8; 32];
-    let proof = NonMembershipNeighborProof::new(&commitment, [0x04u8; 32], [0x06u8; 32]);
-    let proof_bytes = proof.to_bytes();
+    // Post-hardening positive path: NonMembershipProofV2 with a real adjacency
+    // proof (mocked here), verified against a registry that has the adjacency
+    // verifier installed.
+    let proof_bytes = honest_renunciation_v2(&commitment, [0x04u8; 32], [0x06u8; 32]);
 
-    let registry = WitnessedPredicateRegistry::default_builtins();
+    let registry = registry_with_mock_adjacency();
     let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
         kind: WitnessKindTag::ProofBytes,
         bytes: &proof_bytes,

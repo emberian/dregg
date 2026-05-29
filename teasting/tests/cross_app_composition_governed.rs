@@ -46,9 +46,8 @@ use starbridge_nameservice::{build_register_action, name_cell_program};
 use starbridge_governed_namespace::{
     DISPUTE_WINDOW_HEIGHT_SLOT, GOVERNANCE_COMMITTEE_ROOT_SLOT, PENDING_PROPOSAL_ROOT_SLOT,
     ROUTE_TABLE_ROOT_SLOT, THRESHOLD_SLOT, VERSION_SLOT, VoteKind, blake3_field,
-    build_propose_table_update_action, build_register_service_action,
-    build_route_table, build_vote_on_proposal_action, governance_program,
-    route_table_commitment, u64_field,
+    build_propose_table_update_action, build_register_service_action, build_route_table,
+    build_vote_on_proposal_action, governance_program, route_table_commitment, u64_field,
 };
 
 use dregg_dfa::RouteTarget;
@@ -61,8 +60,8 @@ fn issuer_keys() -> IssuerKeys {
     IssuerKeys::new(
         [100u8; 32],
         [
-            3, 154, 242, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0,
+            3, 154, 242, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
         ],
         b"composition-governed-test",
         "starbridge-identity",
@@ -129,14 +128,22 @@ fn fresh_env(seed: u8) -> Env {
     );
 
     // nameservice cell.
-    let ns_obj = Cell::with_balance(owner_pk, *blake3::hash(b"nameservice-gov").as_bytes(), 1_000_000);
+    let ns_obj = Cell::with_balance(
+        owner_pk,
+        *blake3::hash(b"nameservice-gov").as_bytes(),
+        1_000_000,
+    );
     let ns_cell = ns_obj.id();
     executor.ensure_cell(ns_obj).expect("ns cell inserts");
     executor.install_program(ns_cell, shape(name_cell_program()));
 
     // governed-namespace cell: initialised with constitutional state exactly
     // as `init_namespace_cell` does in `integration_propose_vote_commit.rs`.
-    let gov_obj = Cell::with_balance(owner_pk, *blake3::hash(b"governed-namespace").as_bytes(), 1_000_000);
+    let gov_obj = Cell::with_balance(
+        owner_pk,
+        *blake3::hash(b"governed-namespace").as_bytes(),
+        1_000_000,
+    );
     let gov_cell = gov_obj.id();
     executor.ensure_cell(gov_obj).expect("gov cell inserts");
 
@@ -178,7 +185,14 @@ fn fresh_env(seed: u8) -> Env {
         }
     });
 
-    Env { executor, cipherclerk, identity_cell, ns_cell, gov_cell, owner_pk }
+    Env {
+        executor,
+        cipherclerk,
+        identity_cell,
+        ns_cell,
+        gov_cell,
+        owner_pk,
+    }
 }
 
 /// Build the ordered composition actions.
@@ -210,7 +224,10 @@ fn build_actions(env: &Env) -> Vec<Action> {
 
     let opts = PresentationOptions::new()
         .disclose("verification_level")
-        .predicate(PredicateRequest::new("verification_level", Predicate::Gte(1)));
+        .predicate(PredicateRequest::new(
+            "verification_level",
+            Predicate::Gte(1),
+        ));
     let presentation = present(
         &credential,
         &dregg_token::AuthRequest {
@@ -225,13 +242,15 @@ fn build_actions(env: &Env) -> Vec<Action> {
         &opts,
     )
     .expect("presentation builds");
-    let present_action =
-        build_present_credential_action(cc, env.identity_cell, &presentation);
+    let present_action = build_present_credential_action(cc, env.identity_cell, &presentation);
 
     let verify_opts = VerificationOptions {
         expected_schema: Some(schema),
         expected_disclosure: vec!["verification_level".into()],
-        expected_predicates: vec![PredicateRequest::new("verification_level", Predicate::Gte(1))],
+        expected_predicates: vec![PredicateRequest::new(
+            "verification_level",
+            Predicate::Gte(1),
+        )],
         ..Default::default()
     };
     let verify_action =
@@ -283,13 +302,8 @@ fn build_actions(env: &Env) -> Vec<Action> {
     );
 
     // First vote: proposer votes approve against the initial proposal_root.
-    let vote_a_action = build_vote_on_proposal_action(
-        cc,
-        env.gov_cell,
-        proposal_root,
-        VoteKind::Approve,
-        1,
-    );
+    let vote_a_action =
+        build_vote_on_proposal_action(cc, env.gov_cell, proposal_root, VoteKind::Approve, 1);
 
     // Second vote: proposer votes again (using the updated proposal_root that
     // vote_a produces). Mirrors the pattern in `integration_propose_vote_commit.rs`.
@@ -299,13 +313,8 @@ fn build_actions(env: &Env) -> Vec<Action> {
         VoteKind::Approve,
         1,
     );
-    let vote_b_action = build_vote_on_proposal_action(
-        cc,
-        env.gov_cell,
-        after_vote_a_root,
-        VoteKind::Approve,
-        1,
-    );
+    let vote_b_action =
+        build_vote_on_proposal_action(cc, env.gov_cell, after_vote_a_root, VoteKind::Approve, 1);
 
     // register_service: pure-event; no governance-slot mutation needed.
     let target_cell = CellId::from_bytes([0xCCu8; 32]);
@@ -349,14 +358,19 @@ fn cross_app_composition_governed_chains_one_receipt_chain_and_emits_events() {
     );
 
     for (i, r) in receipts.iter().enumerate() {
-        assert!(!r.emitted_events.is_empty(), "turn {i} must emit at least one event");
-        assert_eq!(r.action_count, 1, "each composition turn carries one action");
+        assert!(
+            !r.emitted_events.is_empty(),
+            "turn {i} must emit at least one event"
+        );
+        assert_eq!(
+            r.action_count, 1,
+            "each composition turn carries one action"
+        );
     }
 
     // identity verify (turn 2) accepted the presentation.
     assert_eq!(
-        receipts[2].emitted_events[0].data[1][31],
-        1,
+        receipts[2].emitted_events[0].data[1][31], 1,
         "presentation must verify as accepted"
     );
 
@@ -368,8 +382,7 @@ fn cross_app_composition_governed_chains_one_receipt_chain_and_emits_events() {
     ]);
     let expected_proposed_root = route_table_commitment(&new_table);
     assert_eq!(
-        receipts[4].emitted_events[0].data[1],
-        expected_proposed_root,
+        receipts[4].emitted_events[0].data[1], expected_proposed_root,
         "proposal-opened event must carry the proposed route-table commitment"
     );
 
@@ -377,14 +390,16 @@ fn cross_app_composition_governed_chains_one_receipt_chain_and_emits_events() {
     // with the canonical /treasury/main path hash.
     let expected_path_hash = blake3_field(b"/treasury/main");
     assert_eq!(
-        receipts[7].emitted_events[0].data[0],
-        expected_path_hash,
+        receipts[7].emitted_events[0].data[0], expected_path_hash,
         "service-registered event must carry canonical path hash"
     );
 
     // THE composition property: all eight turns — across identity, nameservice,
     // and governed-namespace — form ONE causal receipt chain.
-    assert_eq!(receipts[0].previous_receipt_hash, None, "first turn is genesis");
+    assert_eq!(
+        receipts[0].previous_receipt_hash, None,
+        "first turn is genesis"
+    );
     for i in 1..receipts.len() {
         assert_eq!(
             receipts[i].previous_receipt_hash,
@@ -407,7 +422,10 @@ fn cross_app_composition_governed_state_transitions_are_deterministic_on_replay(
 
     assert_eq!(first.len(), second.len());
     for (i, (a, b)) in first.iter().zip(second.iter()).enumerate() {
-        assert_eq!(a.turn_hash, b.turn_hash, "turn_hash deterministic (turn {i})");
+        assert_eq!(
+            a.turn_hash, b.turn_hash,
+            "turn_hash deterministic (turn {i})"
+        );
         assert_eq!(
             a.pre_state_hash, b.pre_state_hash,
             "pre_state deterministic (turn {i})"

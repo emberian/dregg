@@ -9,8 +9,7 @@
 //! verifier so the proof path is explicit.
 
 use dregg_cell::predicate::{
-    InputRef, NonMembershipNeighborProof, WitnessedPredicate, WitnessedPredicateKind,
-    WitnessedPredicateRegistry,
+    InputRef, WitnessedPredicate, WitnessedPredicateKind, WitnessedPredicateRegistry,
 };
 use dregg_federation::threshold_decrypt::{
     KeyShare, ThresholdEncryptionKey, generate_epoch_key, produce_decryption_share,
@@ -118,10 +117,25 @@ fn plain_submission(solver_byte: u8, intents: &[Intent], score: f64) -> SolverSu
     }
 }
 
-/// A submission carrying a **real**, cryptographically-verifiable
-/// `witnessed_predicate` (a `NonMembership` neighbor proof — the one built-in
-/// kind with a real verifier). Accepted by the strict production default only
-/// because the proof bytes genuinely verify against the batch binding.
+/// A structurally-valid submission whose `witnessed_predicate` correctly binds
+/// to the batch.
+///
+/// SOUNDNESS / WIRING NOTE (post wave-2 hardening): the wide-bracket
+/// NonMembership forge is now closed — the real verifier requires a
+/// `NonMembershipProofV2` whose `lower`/`upper` are consecutive leaves under
+/// the committed root (Merkle-adjacency STARK), and in the solver path the
+/// adjacency root is the low 4 bytes of the predicate `commitment`. Here the
+/// commitment is the 32-byte BLAKE3 batch binding, which can never coincide
+/// with a real adjacency-tree root, so no genuine NonMembership proof exists
+/// for this input shape. (Real end-to-end NonMembership soundness is covered by
+/// `dregg_turn::executor::membership_verifier`'s e2e accept/forge tests.)
+///
+/// These batch-lifecycle tests exercise the bond/score/challenge/finalize state
+/// machine, not proof algebra, so they run against the stub verifier
+/// (`with_stub_verifier`), which accepts a correctly-bound `MerkleMembership`
+/// predicate with any non-empty proof. The batch-binding gate
+/// (`commitment == compute_batch_binding`) and the structural ring check are
+/// still genuinely enforced.
 fn real_submission(solver_byte: u8, intents: &[Intent], score: f64) -> SolverSubmission {
     let participants: Vec<IntentId> = intents.iter().map(|i| i.id).collect();
     let settlements: Vec<Settlement> = intents
@@ -135,7 +149,6 @@ fn real_submission(solver_byte: u8, intents: &[Intent], score: f64) -> SolverSub
         })
         .collect();
     let commitment = WitnessedProofVerifier::compute_batch_binding(intents);
-    let proof = NonMembershipNeighborProof::new(&commitment, [0x00; 32], [0xFF; 32]);
     SolverSubmission {
         solver_id: [solver_byte; 32],
         solution: vec![RingTrade {
@@ -144,9 +157,9 @@ fn real_submission(solver_byte: u8, intents: &[Intent], score: f64) -> SolverSub
             score,
         }],
         total_score: score,
-        validity_proof: proof.to_bytes().to_vec(),
+        validity_proof: vec![0x01, 0x02, 0x03],
         witnessed_predicate: Some(WitnessedPredicate {
-            kind: WitnessedPredicateKind::NonMembership,
+            kind: WitnessedPredicateKind::MerkleMembership,
             commitment,
             input_ref: InputRef::PublicInput { pi_index: 0 },
             proof_witness_index: 0,
@@ -215,7 +228,10 @@ fn out_of_range_validator_index_rejected() {
 #[test]
 fn bond_conservation_winner_released_loser_slashed() {
     let (key, shares) = make_keys(2, 3);
-    let mut engine = TrustlessIntentEngine::new(2, 3);
+    // Bond/challenge state-machine test; proof algebra out of scope (see
+    // `real_submission` soundness note). Stub verifier accepts the
+    // correctly-bound MerkleMembership predicate.
+    let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
     engine.advance_height(1);
 
     let intents = vec![make_intent(10), make_intent(11)];
@@ -254,7 +270,9 @@ fn bond_conservation_winner_released_loser_slashed() {
 #[test]
 fn cannot_finalize_inside_challenge_window() {
     let (key, shares) = make_keys(2, 3);
-    let mut engine = TrustlessIntentEngine::new(2, 3);
+    // Challenge-window finalize-guard test; proof algebra out of scope (see
+    // `real_submission` soundness note). Stub verifier.
+    let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
     engine.advance_height(1);
 
     let intents = vec![make_intent(20)];
@@ -279,7 +297,9 @@ fn cannot_finalize_inside_challenge_window() {
 #[test]
 fn after_settlement_fresh_batch_starts() {
     let (key, shares) = make_keys(2, 3);
-    let mut engine = TrustlessIntentEngine::new(2, 3);
+    // Batch-sequence-continuity test; proof algebra out of scope (see
+    // `real_submission` soundness note). Stub verifier.
+    let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
     engine.advance_height(1);
 
     let intents = vec![make_intent(30), make_intent(31)];

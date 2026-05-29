@@ -345,8 +345,8 @@ pub fn prove_conservation(
         blinding_hex: String,
     }
 
-    let inputs_raw: Vec<Note> =
-        serde_json::from_str(inputs_json).map_err(|e| JsError::new(&format!("inputs_json: {e}")))?;
+    let inputs_raw: Vec<Note> = serde_json::from_str(inputs_json)
+        .map_err(|e| JsError::new(&format!("inputs_json: {e}")))?;
     let outputs_raw: Vec<Note> = serde_json::from_str(outputs_json)
         .map_err(|e| JsError::new(&format!("outputs_json: {e}")))?;
 
@@ -395,7 +395,11 @@ pub fn prove_conservation(
     }
 
     let result = ProveConservationResult {
-        input_commitments: out.input_commitments.iter().map(|b| hex_encode(b)).collect(),
+        input_commitments: out
+            .input_commitments
+            .iter()
+            .map(|b| hex_encode(b))
+            .collect(),
         output_commitments: out
             .output_commitments
             .iter()
@@ -508,9 +512,7 @@ pub fn verify_conservation_proof(
 
     // Helper: decode a hex commitment into a real Ristretto ValueCommitment.
     // Fails closed (returns Err) on any malformed / non-canonical point.
-    fn decode_commitments(
-        list: &[String],
-    ) -> Result<Vec<ValueCommitment>, String> {
+    fn decode_commitments(list: &[String]) -> Result<Vec<ValueCommitment>, String> {
         let mut out = Vec::with_capacity(list.len());
         for (i, h) in list.iter().enumerate() {
             let bytes = decode_hex_32(h).map_err(|e| format!("commitment[{i}]: {e}"))?;
@@ -557,15 +559,11 @@ pub fn verify_conservation_proof(
                 let range_proofs: Vec<Vec<u8>> = rp_hex
                     .iter()
                     .enumerate()
-                    .map(|(i, h)| {
-                        decode_hex_vec(h).map_err(|e| format!("range_proof[{i}]: {e}"))
-                    })
+                    .map(|(i, h)| decode_hex_vec(h).map_err(|e| format!("range_proof[{i}]: {e}")))
                     .collect::<Result<_, _>>()?;
                 // Re-encode commitments to the byte form the cell helper expects.
-                let in_bytes: Vec<[u8; 32]> =
-                    inputs.iter().map(|c| c.to_bytes().0).collect();
-                let out_bytes: Vec<[u8; 32]> =
-                    outputs.iter().map(|c| c.to_bytes().0).collect();
+                let in_bytes: Vec<[u8; 32]> = inputs.iter().map(|c| c.to_bytes().0).collect();
+                let out_bytes: Vec<[u8; 32]> = outputs.iter().map(|c| c.to_bytes().0).collect();
                 verify_full_conservation_bytes(
                     &in_bytes,
                     &out_bytes,
@@ -735,7 +733,10 @@ pub fn verify_range_proof(commitment: &[u8], range_proof: &[u8]) -> Result<JsVal
     if commitment.len() != 32 {
         let r = VerifyRangeResult {
             valid: false,
-            error: Some(format!("commitment must be 32 bytes, got {}", commitment.len())),
+            error: Some(format!(
+                "commitment must be 32 bytes, got {}",
+                commitment.len()
+            )),
         };
         return Ok(serde_wasm_bindgen::to_value(&r)?);
     }

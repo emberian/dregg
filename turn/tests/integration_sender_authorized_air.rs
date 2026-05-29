@@ -14,14 +14,12 @@
 //! These exercise both the verifier directly and the full
 //! `StateConstraint::SenderAuthorized` evaluation path.
 
-use dregg_cell::predicate::{
-    PredicateInput, WitnessedPredicateKind, WitnessedPredicateVerifier,
-};
+use dregg_cell::preconditions::EvalContext;
+use dregg_cell::predicate::{PredicateInput, WitnessedPredicateKind, WitnessedPredicateVerifier};
 use dregg_cell::program::{
     AuthorizedSet, CellProgram, StateConstraint, TransitionMeta, WitnessBlobView, WitnessBundle,
     WitnessKindTag,
 };
-use dregg_cell::preconditions::EvalContext;
 use dregg_cell::state::CellState;
 use dregg_circuit::BabyBear;
 use dregg_circuit::dsl::membership::create_test_witness;
@@ -88,7 +86,11 @@ fn intruder_cannot_reuse_members_proof() {
 
     let intruder = [0x99u8; 32];
     let v = MerkleMembershipStarkVerifier;
-    let res = v.verify(&root_bytes, &PredicateInput::Sender(&intruder), &members_proof);
+    let res = v.verify(
+        &root_bytes,
+        &PredicateInput::Sender(&intruder),
+        &members_proof,
+    );
     assert!(
         res.is_err(),
         "a stolen membership proof must not verify under a different sender identity"
@@ -150,8 +152,13 @@ fn sender_authorized_constraint_accepts_member() {
         set: AuthorizedSet::PublicRoot { set_root_index: 4 },
     }]);
     let ctx = ctx_sender(sender);
-    let res =
-        program.evaluate_full(&state, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle);
+    let res = program.evaluate_full(
+        &state,
+        None,
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &bundle,
+    );
     assert!(res.is_ok(), "member must pass SenderAuthorized: {res:?}");
 }
 
@@ -183,8 +190,13 @@ fn sender_authorized_constraint_rejects_non_member() {
         set: AuthorizedSet::PublicRoot { set_root_index: 4 },
     }]);
     let ctx = ctx_sender(intruder);
-    let res =
-        program.evaluate_full(&state, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle);
+    let res = program.evaluate_full(
+        &state,
+        None,
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &bundle,
+    );
     assert!(
         res.is_err(),
         "non-member must be rejected by SenderAuthorized at the circuit level"

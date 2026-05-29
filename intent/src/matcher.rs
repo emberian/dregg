@@ -279,7 +279,38 @@ fn generate_offer_match_proof(intent: &Intent, mode: VerificationMode) -> Option
 /// 2. Resource pattern (does the token's resource match the pattern?)
 /// 3. Constraints (app, service, user, expiry, features, etc.)
 /// 4. Budget requirements
+/// 5. Predicate requirements (cross-party `gte`/`lte`/… proofs)
+///
+/// # Predicate requirements FAIL CLOSED (SILVER hole #1)
+///
+/// `MatchSpec.predicate_requirements` are *cross-party* obligations: the
+/// fulfiller must produce a cryptographic [`PredicateProof`](crate::fulfillment)
+/// (e.g. "balance >= 1000") that the LOCAL matcher cannot evaluate — a
+/// [`HeldCapability`] carries no attribute values, only capability shape.
+///
+/// Previously `satisfies_spec` IGNORED `predicate_requirements` entirely, so an
+/// intent demanding "balance >= 1000" matched a token unconditionally. That is a
+/// soundness hole: the intent would be promoted to a [`Match`] / settled even
+/// though its predicate was never satisfied.
+///
+/// The fix: this entry point **fails closed** when the spec carries any
+/// predicate requirement — it has no proof to evaluate, so it cannot honestly
+/// claim a match. Callers that DO hold predicate proofs must route through
+/// [`satisfies_spec_with_predicates`], which evaluates them against the
+/// fulfiller's attributes, or verify them at fulfillment time via
+/// [`crate::fulfillment::verify_fulfillment_with_predicates`].
 pub fn satisfies_spec(token: &HeldCapability, spec: &MatchSpec, now: u64) -> bool {
+    satisfies_spec_inner(token, spec, now)
+        // A spec with predicate requirements cannot be honestly matched
+        // locally — no proof, no attributes. FAIL CLOSED.
+        && spec.predicate_requirements.is_empty()
+}
+
+/// The capability-shape portion of [`satisfies_spec`] — actions, resource,
+/// constraints, budget. Does NOT evaluate `predicate_requirements`; callers
+/// that want predicate-aware matching use [`satisfies_spec`] (fail-closed) or
+/// [`satisfies_spec_with_predicates`].
+fn satisfies_spec_inner(token: &HeldCapability, spec: &MatchSpec, now: u64) -> bool {
     // Check action patterns
     if !spec.actions.is_empty() && !actions_match(token, &spec.actions) {
         return false;
@@ -321,6 +352,94 @@ pub fn satisfies_spec(token: &HeldCapability, spec: &MatchSpec, now: u64) -> boo
     }
 
     true
+}
+
+/// Attribute values the fulfiller asserts about itself, used to evaluate a
+/// `MatchSpec`'s `predicate_requirements` during predicate-aware matching.
+///
+/// Maps attribute name (e.g. `"balance"`, `"reputation"`) to the fulfiller's
+/// value. A requirement whose `attribute` is ABSENT from this map cannot be
+/// satisfied and the match **fails closed**: an unknown attribute is treated as
+/// "the fulfiller has not proven this attribute", never as "vacuously true".
+///
+/// This is the matcher-side counterpart to the fulfillment-time
+/// [`PredicateProof`](crate::fulfillment) flow: at match time the cclerk knows
+/// its own attribute values and can decide whether it could satisfy the
+/// requirement; the cryptographic proof is produced later at fulfillment.
+#[derive(Clone, Debug, Default)]
+pub struct FulfillerAttributes {
+    values: std::collections::HashMap<String, u64>,
+}
+
+impl FulfillerAttributes {
+    /// Create an empty attribute set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Assert an attribute value about the fulfiller.
+    pub fn set(&mut self, attribute: impl Into<String>, value: u64) -> &mut Self {
+        self.values.insert(attribute.into(), value);
+        self
+    }
+
+    /// Look up an attribute value, if asserted.
+    pub fn get(&self, attribute: &str) -> Option<u64> {
+        self.values.get(attribute).copied()
+    }
+
+    /// Evaluate a single [`PredicateRequirement`] against the asserted
+    /// attributes. Returns `true` only if the attribute is present AND the
+    /// comparison holds. An absent attribute or an unrecognized predicate type
+    /// returns `false` (FAIL CLOSED).
+    pub fn satisfies(&self, req: &crate::PredicateRequirement) -> bool {
+        let Some(value) = self.get(&req.attribute) else {
+            // Attribute not asserted — cannot satisfy. FAIL CLOSED.
+            return false;
+        };
+        match req.predicate_type.as_str() {
+            "gte" => value >= req.threshold,
+            "gt" => value > req.threshold,
+            "lte" => value <= req.threshold,
+            "lt" => value < req.threshold,
+            "neq" => value != req.threshold,
+            "in_range" => match req.upper_bound {
+                Some(upper) => value >= req.threshold && value <= upper,
+                // in_range without an upper bound is malformed — reject.
+                None => false,
+            },
+            // Unknown predicate type — never silently accept.
+            _ => false,
+        }
+    }
+}
+
+/// Predicate-aware variant of [`satisfies_spec`].
+///
+/// Evaluates the capability shape (actions / resource / constraints / budget)
+/// AND every `predicate_requirement` against the supplied
+/// [`FulfillerAttributes`]. A spec matches only if the token covers the
+/// capability shape and EVERY predicate requirement holds.
+///
+/// This is the entry point a cclerk uses when it knows its own attribute values
+/// and wants to decide "could I satisfy this intent, predicates included?".
+/// Unlike the plain [`satisfies_spec`] (which fails closed on any predicate
+/// requirement because it has nothing to evaluate them with), this function
+/// honestly evaluates the requirements — but still FAILS CLOSED on any
+/// requirement whose attribute is unknown or whose type is unrecognized.
+pub fn satisfies_spec_with_predicates(
+    token: &HeldCapability,
+    spec: &MatchSpec,
+    now: u64,
+    attributes: &FulfillerAttributes,
+) -> bool {
+    if !satisfies_spec_inner(token, spec, now) {
+        return false;
+    }
+    // Every predicate requirement must hold (fail-closed on unknowns).
+    spec.predicate_requirements
+        .iter()
+        .all(|req| attributes.satisfies(req))
 }
 
 /// Registry for custom constraint evaluators.
@@ -368,12 +487,22 @@ impl Default for CustomConstraintEvaluators {
 ///
 /// This is the variant of `satisfies_spec` that supports custom constraints via
 /// the provided evaluator registry. Use this when intents may contain `Constraint::Custom`.
+///
+/// Like [`satisfies_spec`], this FAILS CLOSED on any `predicate_requirement`: the
+/// custom-constraint registry evaluates `Constraint::Custom` but NOT cross-party
+/// `predicate_requirements`, which need a fulfiller-side proof. A spec carrying a
+/// predicate requirement cannot be matched through this path.
 pub fn satisfies_spec_with_custom(
     token: &HeldCapability,
     spec: &MatchSpec,
     now: u64,
     custom_evaluators: &CustomConstraintEvaluators,
 ) -> bool {
+    // Predicate requirements cannot be evaluated here — FAIL CLOSED.
+    if !spec.predicate_requirements.is_empty() {
+        return false;
+    }
+
     // Check action patterns
     if !spec.actions.is_empty() && !actions_match(token, &spec.actions) {
         return false;
@@ -1468,6 +1597,184 @@ mod tests {
             !satisfies_spec_with_custom(&token, &spec, 100, &evaluators),
             "unregistered predicate must fail closed even with other evaluators registered"
         );
+    }
+
+    // =========================================================================
+    // SECURITY: predicate_requirements enforcement (SILVER hole #1)
+    // =========================================================================
+
+    fn spec_with_predicate(req: crate::PredicateRequirement) -> MatchSpec {
+        MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![req],
+            strict_resource_matching: false,
+        }
+    }
+
+    #[test]
+    fn test_predicate_requirement_fails_closed_in_satisfies_spec() {
+        // ADVERSARIAL: an intent demanding "balance >= 1000". A wildcard token
+        // covers the capability shape, but the LOCAL matcher cannot evaluate the
+        // cross-party predicate, so satisfies_spec must FAIL CLOSED.
+        let token = make_token(&["read", "write", "admin"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        assert!(
+            !satisfies_spec(&token, &spec, 100),
+            "an intent with an unsatisfied predicate_requirement must NOT match"
+        );
+    }
+
+    #[test]
+    fn test_predicate_requirement_intent_not_matched() {
+        // The same hole at the match_intent level: no MatchResult::Matched.
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "reputation".into(),
+            predicate_type: "gte".into(),
+            threshold: 50,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        assert!(
+            matches!(result, MatchResult::NoMatch),
+            "intent with predicate_requirement must not produce a Match without proof"
+        );
+    }
+
+    #[test]
+    fn test_predicate_requirement_custom_path_also_fails_closed() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let evaluators = CustomConstraintEvaluators::new();
+        assert!(
+            !satisfies_spec_with_custom(&token, &spec, 100, &evaluators),
+            "satisfies_spec_with_custom must also fail closed on predicate requirements"
+        );
+    }
+
+    #[test]
+    fn test_predicate_aware_match_accepts_when_attribute_satisfies() {
+        // With attributes asserting balance=1500 >= 1000, the predicate holds.
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let mut attrs = FulfillerAttributes::new();
+        attrs.set("balance", 1500);
+        assert!(
+            satisfies_spec_with_predicates(&token, &spec, 100, &attrs),
+            "predicate-aware match should accept when balance >= threshold"
+        );
+    }
+
+    #[test]
+    fn test_predicate_aware_match_rejects_when_attribute_below_threshold() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let mut attrs = FulfillerAttributes::new();
+        attrs.set("balance", 500); // below threshold
+        assert!(
+            !satisfies_spec_with_predicates(&token, &spec, 100, &attrs),
+            "predicate-aware match must reject when balance < threshold"
+        );
+    }
+
+    #[test]
+    fn test_predicate_aware_match_rejects_unknown_attribute() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        // Attributes assert a DIFFERENT attribute; "balance" is unknown.
+        let mut attrs = FulfillerAttributes::new();
+        attrs.set("reputation", 9999);
+        assert!(
+            !satisfies_spec_with_predicates(&token, &spec, 100, &attrs),
+            "an unproven attribute must fail closed, not be treated as vacuously true"
+        );
+    }
+
+    #[test]
+    fn test_predicate_aware_match_unknown_predicate_type_fails_closed() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "bogus_op".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let mut attrs = FulfillerAttributes::new();
+        attrs.set("balance", 5000);
+        assert!(
+            !satisfies_spec_with_predicates(&token, &spec, 100, &attrs),
+            "unrecognized predicate type must fail closed"
+        );
+    }
+
+    #[test]
+    fn test_predicate_in_range_evaluates_bounds() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "age".into(),
+            predicate_type: "in_range".into(),
+            threshold: 18,
+            upper_bound: Some(65),
+            state_root_freshness: 100,
+        });
+        let mut inside = FulfillerAttributes::new();
+        inside.set("age", 30);
+        assert!(satisfies_spec_with_predicates(&token, &spec, 100, &inside));
+
+        let mut below = FulfillerAttributes::new();
+        below.set("age", 10);
+        assert!(!satisfies_spec_with_predicates(&token, &spec, 100, &below));
+
+        let mut above = FulfillerAttributes::new();
+        above.set("age", 80);
+        assert!(!satisfies_spec_with_predicates(&token, &spec, 100, &above));
     }
 
     #[test]

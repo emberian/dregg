@@ -822,11 +822,7 @@ pub fn grant_reach_capability(
 
 /// Read a single 32-byte cell slot as lowercase hex (or `null` if absent).
 #[wasm_bindgen]
-pub fn read_cell_field(
-    handle: usize,
-    cell_id_hex: &str,
-    index: usize,
-) -> Result<JsValue, JsError> {
+pub fn read_cell_field(handle: usize, cell_id_hex: &str, index: usize) -> Result<JsValue, JsError> {
     with_runtime_ref(handle, |rt| {
         let cell_id = parse_cell_id(cell_id_hex)?;
         let val = rt.cell_field(&cell_id, index).map(|f| hex_encode(&f));
@@ -2812,9 +2808,7 @@ pub struct BilateralPiView {
 /// executor-trusted at this stage), so for sim-runtime proofs this is `None`
 /// — which `<dregg-proof>` honestly classifies as Silver (a real proof with
 /// executor-trusted cross-cell boundaries), never Golden.
-fn proof_view_from_record(
-    record: Option<&crate::runtime::TurnProofRecord>,
-) -> Option<ProofView> {
+fn proof_view_from_record(record: Option<&crate::runtime::TurnProofRecord>) -> Option<ProofView> {
     use dregg_circuit::effect_vm::pi;
 
     let record = record?;

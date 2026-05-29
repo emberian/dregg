@@ -13,8 +13,8 @@
 //!  3. Genuinely-too-high-degree circuits are STILL rejected (validation stays sound).
 
 use dregg_circuit::dsl::circuit::{
-    CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm, ProgramValidationError,
-    MAX_CONSTRAINT_DEGREE,
+    CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, MAX_CONSTRAINT_DEGREE, PolyTerm,
+    ProgramValidationError,
 };
 use dregg_circuit::field::BabyBear;
 

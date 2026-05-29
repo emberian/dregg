@@ -247,12 +247,12 @@ pub fn prove_conservation_bytes(
         .collect();
 
     // excess_blinding = Σ input_blindings − Σ output_blindings.
-    let sum_in = inputs
-        .iter()
-        .fold(Scalar::ZERO, |acc, (_, b)| acc + scalar_from_blinding_bytes(b));
-    let sum_out = outputs
-        .iter()
-        .fold(Scalar::ZERO, |acc, (_, b)| acc + scalar_from_blinding_bytes(b));
+    let sum_in = inputs.iter().fold(Scalar::ZERO, |acc, (_, b)| {
+        acc + scalar_from_blinding_bytes(b)
+    });
+    let sum_out = outputs.iter().fold(Scalar::ZERO, |acc, (_, b)| {
+        acc + scalar_from_blinding_bytes(b)
+    });
     let excess_blinding = sum_in - sum_out;
 
     let proof = prove_conservation(
@@ -313,12 +313,12 @@ pub fn prove_conservation_with_range_bytes(
         .map(|(v, b)| ValueCommitment::commit(*v, &scalar_from_blinding_bytes(b)))
         .collect();
 
-    let sum_in = inputs
-        .iter()
-        .fold(Scalar::ZERO, |acc, (_, b)| acc + scalar_from_blinding_bytes(b));
-    let sum_out = outputs
-        .iter()
-        .fold(Scalar::ZERO, |acc, (_, b)| acc + scalar_from_blinding_bytes(b));
+    let sum_in = inputs.iter().fold(Scalar::ZERO, |acc, (_, b)| {
+        acc + scalar_from_blinding_bytes(b)
+    });
+    let sum_out = outputs.iter().fold(Scalar::ZERO, |acc, (_, b)| {
+        acc + scalar_from_blinding_bytes(b)
+    });
     let excess_blinding = sum_in - sum_out;
 
     let output_values: Vec<u64> = outputs.iter().map(|(v, _)| *v).collect();
@@ -1691,7 +1691,11 @@ mod tests {
         assert_eq!(out.output_range_proofs.len(), 2);
         // Each range proof should be a non-trivial Bulletproof (~672 bytes).
         for rp in &out.output_range_proofs {
-            assert!(rp.len() > 100, "range proof unexpectedly small: {}", rp.len());
+            assert!(
+                rp.len() > 100,
+                "range proof unexpectedly small: {}",
+                rp.len()
+            );
         }
 
         assert!(
@@ -1735,8 +1739,12 @@ mod tests {
         let out_bytes = vec![output_legit.to_bytes().0, output_attack.to_bytes().0];
 
         let excess_blinding = r_in - (r_out_legit + r_out_attack);
-        let conservation =
-            prove_conservation(&inputs, &[output_legit.clone(), output_attack.clone()], &excess_blinding, b"attack-bytes");
+        let conservation = prove_conservation(
+            &inputs,
+            &[output_legit.clone(), output_attack.clone()],
+            &excess_blinding,
+            b"attack-bytes",
+        );
 
         // Attacker's best range proofs: a real one for the legit output, and
         // (necessarily) a bogus one for the attack output — we reuse the legit
@@ -1756,7 +1764,9 @@ mod tests {
             "negative-value attack must be rejected by range proofs"
         );
         match result {
-            Err(FullConservationError::RangeProofFailed { output_index: 1, .. }) => {}
+            Err(FullConservationError::RangeProofFailed {
+                output_index: 1, ..
+            }) => {}
             other => panic!("expected RangeProofFailed at output 1, got {:?}", other),
         }
     }

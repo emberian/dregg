@@ -1287,6 +1287,7 @@ pub fn router_with_cors(
                 }
             }),
         )
+        .route("/turns/aggregate", post(post_aggregate_bundle))
         .route("/turns/encryption-key", get(get_turn_encryption_key))
         .route("/turn/submit-conditional", post(post_submit_conditional))
         .route("/turn/resolve-conditional", post(post_resolve_conditional))
@@ -1935,9 +1936,20 @@ async fn post_submit_turn(
                 }));
             }
             let receipt_hash = receipt.receipt_hash();
+            // Capture the per-cell WitnessedReceipt artifact bytes BEFORE the
+            // WR is moved into local state, so we can gossip them in the
+            // TurnArtifactBundle (real distributed witness path). Encoding the
+            // receipt + WRs here is what lets a peer's
+            // `materialize_blocklace_artifacts` receive genuine witnesses
+            // instead of the raw `Payload::Turn` bytes that left this path dead.
+            let mut bundle_witnessed: Vec<Vec<u8>> = Vec::new();
             if let HttpWitnessOutcome::Proved(witnessed) = witness_outcome {
+                if let Ok(artifact) = witnessed.to_artifact_bytes() {
+                    bundle_witnessed.push(artifact);
+                }
                 s.push_witnessed_receipt(receipt_hash, witnessed);
             }
+            let receipt_artifact = postcard::to_stdvec(&receipt).ok();
             let witness_count = s.witnessed_receipt_count(&receipt_hash);
 
             push_committed_event(
@@ -1967,11 +1979,25 @@ async fn post_submit_turn(
                 });
             }
 
-            // Submit the turn to the blocklace for consensus ordering.
+            // Submit the turn to the blocklace for consensus ordering. When we
+            // produced witness material, gossip the full TurnArtifactBundle
+            // (signed turn + receipt + per-cell WitnessedReceipts) so peers
+            // materialize real WRs; otherwise fall back to the raw turn block.
             if let Some(blocklace) = state.blocklace().await {
                 let state_for_blocklace = state.clone();
                 tokio::spawn(async move {
-                    blocklace.submit_turn(&state_for_blocklace, turn_data).await;
+                    if bundle_witnessed.is_empty() {
+                        blocklace.submit_turn(&state_for_blocklace, turn_data).await;
+                    } else {
+                        let bundle = dregg_blocklace::finality::TurnArtifactBundle::with_committed(
+                            turn_data,
+                            receipt_artifact,
+                            bundle_witnessed,
+                        );
+                        blocklace
+                            .submit_turn_bundle(&state_for_blocklace, bundle)
+                            .await;
+                    }
                 });
             }
 
@@ -2153,9 +2179,16 @@ async fn post_submit_signed_turn(
                 }));
             }
             let receipt_hash = receipt.receipt_hash();
+            // Capture WitnessedReceipt artifact bytes for the distributed
+            // witness path before the WR is moved into local state.
+            let mut bundle_witnessed: Vec<Vec<u8>> = Vec::new();
             if let HttpWitnessOutcome::Proved(witnessed) = witness_outcome {
+                if let Ok(artifact) = witnessed.to_artifact_bytes() {
+                    bundle_witnessed.push(artifact);
+                }
                 s.push_witnessed_receipt(receipt_hash, witnessed);
             }
+            let receipt_artifact = postcard::to_stdvec(&receipt).ok();
             let witness_count = s.witnessed_receipt_count(&receipt_hash);
 
             push_committed_event(
@@ -2183,10 +2216,23 @@ async fn post_submit_signed_turn(
                 });
             }
 
+            // Gossip the full TurnArtifactBundle (with per-cell WitnessedReceipts)
+            // when witness material was produced; raw turn block otherwise.
             if let Some(blocklace) = state.blocklace().await {
                 let state_for_blocklace = state.clone();
                 tokio::spawn(async move {
-                    blocklace.submit_turn(&state_for_blocklace, turn_data).await;
+                    if bundle_witnessed.is_empty() {
+                        blocklace.submit_turn(&state_for_blocklace, turn_data).await;
+                    } else {
+                        let bundle = dregg_blocklace::finality::TurnArtifactBundle::with_committed(
+                            turn_data,
+                            receipt_artifact,
+                            bundle_witnessed,
+                        );
+                        blocklace
+                            .submit_turn_bundle(&state_for_blocklace, bundle)
+                            .await;
+                    }
                 });
             }
 
@@ -2230,6 +2276,150 @@ async fn post_submit_signed_turn(
                 error: Some("turn did not commit".to_string()),
             }))
         }
+    }
+}
+
+/// One independently-sourced per-cell WitnessedReceipt for the cross-node
+/// aggregate route. `cell_id` is the 32-byte cell hex; `witnessed_receipt` is
+/// the hex-encoded `dregg_turn::WitnessedReceipt` artifact (DWR1 or legacy
+/// JSON/postcard) — the SAME bytes a peer gossips in a `TurnArtifactBundle`
+/// and materializes via `materialize_blocklace_artifacts`.
+#[derive(Debug, serde::Deserialize)]
+pub struct AggregateWitnessEntry {
+    pub cell_id: String,
+    pub witnessed_receipt: String,
+}
+
+/// POST /turns/aggregate request: the canonical SignedTurn (hex postcard) plus
+/// two-or-more independently-produced per-cell WitnessedReceipts.
+#[derive(Debug, serde::Deserialize)]
+pub struct AggregateBundleRequest {
+    /// Hex-encoded `postcard::to_stdvec(&dregg_sdk::SignedTurn)` — the canonical
+    /// Turn the aggregator re-derives every bilateral schedule field from.
+    pub signed_turn: String,
+    /// Per-cell witnessed receipts, gathered from independent sources (e.g.
+    /// gossiped + materialized from different nodes). Must be >= 2 to exercise
+    /// a genuine cross-cell aggregation.
+    pub entries: Vec<AggregateWitnessEntry>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct AggregateBundleResponse {
+    pub aggregated: bool,
+    pub n_cells: usize,
+    /// The verified `AggregatedBundle` (real outer STARK proof) on success.
+    pub aggregated_bundle: Option<serde_json::Value>,
+    pub error: Option<String>,
+}
+
+/// POST /turns/aggregate — run the REAL cross-node bilateral aggregate over
+/// independently-sourced per-cell WitnessedReceipts.
+///
+/// Unlike the MCP `dregg_bilateral_action` tool (which self-proves BOTH sides
+/// inside a single node in one call), this endpoint accepts WitnessedReceipt
+/// artifacts that were produced elsewhere — gossiped through the blocklace and
+/// materialized by `materialize_blocklace_artifacts`, or otherwise gathered
+/// independently. It decodes each WR (the same DWR1 artifact format used on the
+/// wire), runs `prove_aggregated_bundle` to produce a real outer STARK proof,
+/// then `verify_aggregated_bundle` to confirm it before returning the bundle.
+///
+/// Soundness gates run inside the aggregator: `require_scope2_witness` per WR
+/// and `WitnessedReceipt::verify_bilateral_chain` over the full set against the
+/// canonical Turn (rejecting tampered PI, mismatched sender/receiver, etc.).
+async fn post_aggregate_bundle(
+    State(state): State<NodeState>,
+    Json(req): Json<AggregateBundleRequest>,
+) -> Result<Json<AggregateBundleResponse>, StatusCode> {
+    {
+        let s = state.read().await;
+        if !s.unlocked {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+
+    let signed_turn_bytes =
+        hex_decode_var(&req.signed_turn).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let signed: SignedTurn =
+        postcard::from_bytes(&signed_turn_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let turn = signed.turn;
+
+    if req.entries.len() < 2 {
+        return Ok(Json(AggregateBundleResponse {
+            aggregated: false,
+            n_cells: req.entries.len(),
+            aggregated_bundle: None,
+            error: Some(
+                "cross-node aggregate requires >= 2 independently-sourced WitnessedReceipts".into(),
+            ),
+        }));
+    }
+
+    let mut per_cell: Vec<(CellId, dregg_turn::WitnessedReceipt)> =
+        Vec::with_capacity(req.entries.len());
+    for (idx, entry) in req.entries.iter().enumerate() {
+        let cell_bytes = match hex_decode(&entry.cell_id) {
+            Ok(b) => b,
+            Err(_) => {
+                return Ok(Json(AggregateBundleResponse {
+                    aggregated: false,
+                    n_cells: req.entries.len(),
+                    aggregated_bundle: None,
+                    error: Some(format!("entries[{idx}]: invalid cell_id hex")),
+                }));
+            }
+        };
+        let wr_bytes = match hex_decode_var(&entry.witnessed_receipt) {
+            Ok(b) => b,
+            Err(_) => {
+                return Ok(Json(AggregateBundleResponse {
+                    aggregated: false,
+                    n_cells: req.entries.len(),
+                    aggregated_bundle: None,
+                    error: Some(format!("entries[{idx}]: invalid witnessed_receipt hex")),
+                }));
+            }
+        };
+        let wr = match dregg_turn::WitnessedReceipt::from_artifact_bytes(&wr_bytes) {
+            Ok(wr) => wr,
+            Err(e) => {
+                return Ok(Json(AggregateBundleResponse {
+                    aggregated: false,
+                    n_cells: req.entries.len(),
+                    aggregated_bundle: None,
+                    error: Some(format!("entries[{idx}]: malformed WitnessedReceipt: {e}")),
+                }));
+            }
+        };
+        per_cell.push((CellId(cell_bytes), wr));
+    }
+    let n_cells = per_cell.len();
+
+    // Real outer STARK proof over the independently-sourced per-cell WRs.
+    match dregg_turn::aggregate_bilateral_prover::prove_aggregated_bundle(&turn, &per_cell) {
+        Ok(bundle) => {
+            match dregg_turn::aggregate_bilateral_prover::verify_aggregated_bundle(&bundle) {
+                Ok(()) => Ok(Json(AggregateBundleResponse {
+                    aggregated: true,
+                    n_cells,
+                    aggregated_bundle: Some(
+                        serde_json::to_value(&bundle).unwrap_or(serde_json::Value::Null),
+                    ),
+                    error: None,
+                })),
+                Err(e) => Ok(Json(AggregateBundleResponse {
+                    aggregated: false,
+                    n_cells,
+                    aggregated_bundle: None,
+                    error: Some(format!("aggregation_verify_failed: {e}")),
+                })),
+            }
+        }
+        Err(e) => Ok(Json(AggregateBundleResponse {
+            aggregated: false,
+            n_cells,
+            aggregated_bundle: None,
+            error: Some(format!("aggregation_prove_failed: {e}")),
+        })),
     }
 }
 

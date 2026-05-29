@@ -134,33 +134,82 @@ impl RingSolver {
         }
     }
 
-    /// Filter a ring's participants through a `WitnessedPredicate`
-    /// registry. Each `(participant_index, predicate, input, proof)`
-    /// requirement is verified before the ring is considered valid.
-    /// Returns `Ok(ring)` if every requirement verifies, otherwise
-    /// `Err((index, reason))` naming the failing requirement.
+    /// Verify the witnessed-predicate requirements attached to a ring's
+    /// participating intents.
     ///
-    /// This is the "predicate-attested intent matching" entry point —
-    /// solvers reject counterparties whose attached predicates don't
-    /// verify. Used by the trustless engine before promoting a ring
-    /// to a `SolverSubmission` (composes with the proof verifier,
-    /// which is separately enforced).
+    /// # What this enforces (SILVER hole #3 — wired)
+    ///
+    /// A ring trade is only sound if every participating intent's caveats
+    /// hold. This entry point derives the set of requirements **from the
+    /// ring's own intents** (`intents`, looked up by the ring's
+    /// `participants`), pairs each declared [`crate::PredicateRequirement`]
+    /// with a caller-supplied proof, and verifies them through the canonical
+    /// registry. A ring whose participant carries a predicate requirement
+    /// for which NO proof is supplied is rejected (`Missing`); a ring whose
+    /// proof fails to verify is rejected (`Failed`).
+    ///
+    /// Previously this method discarded the ring (`let _ = ring;`) and was
+    /// DEAD CODE (zero callers). It is now invoked from the trustless engine's
+    /// submit path via [`crate::trustless`], so a solver cannot promote a ring
+    /// whose intents' predicates are unmet.
+    ///
+    /// `proofs` is a slice parallel to the predicate requirements declared by
+    /// the ring's participants, in the order encountered while walking
+    /// `ring.participants` and, within each intent, its
+    /// `matcher.predicate_requirements`. Each entry is
+    /// `(witnessed_predicate, input, proof_bytes)`.
+    ///
+    /// Errors:
+    /// - `Missing { index }` if a declared requirement has no corresponding
+    ///   proof (the ring declares more requirements than `proofs` supplies), or
+    ///   if proofs are supplied against an empty/unknown ring.
+    /// - `Failed { index, .. }` if a supplied proof fails registry verification.
     pub fn validate_predicates(
         ring: &RingTrade,
+        intents: &[crate::Intent],
         verifier: &crate::predicate::IntentPredicateVerifier,
-        requirements: &[(
+        proofs: &[(
             crate::predicate::WitnessedPredicate,
             crate::predicate::PredicateInput<'_>,
             Vec<u8>,
         )],
     ) -> Result<(), crate::predicate::IntentPredicateError> {
-        let _ = ring;
-        // Collect proof references for verify_all.
+        // The ring is no longer discarded. Derive the number of predicate
+        // requirements the ring's participants actually declare by looking each
+        // participant up in `intents` (by IntentId) and summing its
+        // `predicate_requirements`.
+        let by_id: std::collections::HashMap<crate::IntentId, &crate::Intent> =
+            intents.iter().map(|i| (i.id, i)).collect();
+        let mut declared = 0usize;
+        for participant in &ring.participants {
+            if let Some(intent) = by_id.get(participant) {
+                declared += intent.matcher.predicate_requirements.len();
+            }
+        }
+
+        // A ring that declares N requirements needs at least N proofs. Fewer
+        // proofs than declared requirements ⇒ an unmet caveat ⇒ Missing.
+        if proofs.len() < declared {
+            return Err(crate::predicate::IntentPredicateError::Missing {
+                index: proofs.len(),
+            });
+        }
+
+        // Conversely, supplying proofs against a ring that declares none (or an
+        // empty ring) is spurious; reject so a solver can't smuggle proofs.
+        if declared == 0 {
+            if proofs.is_empty() {
+                return Ok(());
+            }
+            return Err(crate::predicate::IntentPredicateError::Missing { index: 0 });
+        }
+
+        // Verify every supplied proof through the canonical registry.
         let refs: Vec<(
             crate::predicate::WitnessedPredicate,
             crate::predicate::PredicateInput<'_>,
             &[u8],
-        )> = requirements
+        )> = proofs
             .iter()
             .map(|(wp, input, proof)| (wp.clone(), input.clone(), proof.as_slice()))
             .collect();
@@ -1133,6 +1182,94 @@ mod tests {
         let solver = RingSolver::new(5);
         let result = solver.validate_ring(&ring_nodes, 100);
         assert_eq!(result.unwrap_err(), SolverError::TooSmall);
+    }
+
+    // =========================================================================
+    // SILVER hole #3: validate_predicates is ring-aware and live.
+    // =========================================================================
+
+    fn intent_with_preds(seed: u8, preds: Vec<crate::PredicateRequirement>) -> crate::Intent {
+        let spec = crate::MatchSpec {
+            actions: vec![],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: preds,
+            strict_resource_matching: false,
+        };
+        crate::Intent::new(
+            crate::IntentKind::Offer,
+            spec,
+            CommitmentId([seed; 32]),
+            9999,
+            None,
+        )
+    }
+
+    fn ring_over(intents: &[crate::Intent], score: f64) -> RingTrade {
+        RingTrade {
+            participants: intents.iter().map(|i| i.id).collect(),
+            settlements: vec![],
+            score,
+        }
+    }
+
+    #[test]
+    fn test_validate_predicates_no_requirements_ok_with_no_proofs() {
+        let intents = vec![intent_with_preds(1, vec![]), intent_with_preds(2, vec![])];
+        let ring = ring_over(&intents, 2.0);
+        let verifier = crate::predicate::IntentPredicateVerifier::with_stub_registry();
+        assert!(
+            RingSolver::validate_predicates(&ring, &intents, &verifier, &[]).is_ok(),
+            "a ring whose intents declare no predicate requirements must pass with no proofs"
+        );
+    }
+
+    #[test]
+    fn test_validate_predicates_declared_requirement_missing_proof_rejected() {
+        // ADVERSARIAL: a participant declares a requirement but no proof is
+        // supplied. validate_predicates derives the requirement FROM THE RING'S
+        // INTENT and rejects with Missing (fail closed).
+        let pred = crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        };
+        let intents = vec![
+            intent_with_preds(1, vec![]),
+            intent_with_preds(2, vec![pred]),
+        ];
+        let ring = ring_over(&intents, 2.0);
+        let verifier = crate::predicate::IntentPredicateVerifier::with_stub_registry();
+        let err = RingSolver::validate_predicates(&ring, &intents, &verifier, &[])
+            .expect_err("declared-but-unproven requirement must reject");
+        match err {
+            crate::predicate::IntentPredicateError::Missing { .. } => {}
+            other => panic!("expected Missing, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_predicates_spurious_proof_on_empty_requirements_rejected() {
+        // A ring whose intents declare NO requirements but the solver attaches
+        // a proof anyway — spurious, rejected.
+        let intents = vec![intent_with_preds(1, vec![]), intent_with_preds(2, vec![])];
+        let ring = ring_over(&intents, 2.0);
+        let verifier = crate::predicate::IntentPredicateVerifier::with_stub_registry();
+        let dfa = crate::predicate::ResourceDfa::new([0x11; 32], vec![0xAB]);
+        let wp = dfa.as_witnessed_predicate();
+        let proofs = vec![(
+            wp,
+            crate::predicate::PredicateInput::Bytes(b"x"),
+            dfa.proof_bytes.clone(),
+        )];
+        assert!(
+            RingSolver::validate_predicates(&ring, &intents, &verifier, &proofs).is_err(),
+            "spurious proofs against a no-requirement ring must be rejected"
+        );
     }
 
     // =========================================================================

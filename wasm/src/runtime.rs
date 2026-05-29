@@ -564,7 +564,10 @@ impl DreggRuntime {
             let pi_u32: Vec<u32> = pi_bb.iter().map(|x| x.as_u32()).collect();
             // Minimal scope-2 witness trace so the WR is a full scope-(2)
             // artifact (the aggregator requires scope-2 inputs).
-            let trace = vec![vec![BabyBear::ZERO; dregg_circuit::effect_vm::EFFECT_VM_WIDTH]];
+            let trace = vec![vec![
+                BabyBear::ZERO;
+                dregg_circuit::effect_vm::EFFECT_VM_WIDTH
+            ]];
             WitnessedReceipt::from_components(
                 bilateral_demo_receipt(turn.agent),
                 vec![],
@@ -603,8 +606,12 @@ impl DreggRuntime {
         let (outgoing, out_nz) = root_hex(&bundle.outer_trace[0], pi_out_base);
         let (incoming, in_nz) = root_hex(&bundle.outer_trace[1], pi_in_base);
 
-        let consistent =
-            bundle.outer_pi.get(ag::OUTER_BILATERAL_CONSISTENT).copied().unwrap_or(0) == 1;
+        let consistent = bundle
+            .outer_pi
+            .get(ag::OUTER_BILATERAL_CONSISTENT)
+            .copied()
+            .unwrap_or(0)
+            == 1;
 
         // The shared transfer_id both sides fold over. The outgoing/incoming
         // accumulators are domain-separated (distinct salts) and absorb distinct
@@ -617,8 +624,10 @@ impl DreggRuntime {
             .first()
             .map(|t| t.id(turn.nonce))
             .unwrap_or([BabyBear::ZERO; 4]);
-        let shared_transfer_id: String =
-            transfer_id.iter().map(|f| format!("{:08x}", f.as_u32())).collect();
+        let shared_transfer_id: String = transfer_id
+            .iter()
+            .map(|f| format!("{:08x}", f.as_u32()))
+            .collect();
 
         // Honest GOLDEN signal: verified aggregate + both sides present.
         let roots_matched = consistent && out_nz && in_nz;
@@ -1361,7 +1370,11 @@ impl DreggRuntime {
         // resolve it. We dedupe by commitment because `create_note` is
         // deterministic (same agent + value + asset_type ⇒ same note), so a
         // repeated lab-mode "create" must not stack duplicate entries.
-        if !agent.held_notes.iter().any(|hn| hn.note.commitment() == commitment) {
+        if !agent
+            .held_notes
+            .iter()
+            .any(|hn| hn.note.commitment() == commitment)
+        {
             agent.held_notes.push(HeldNote {
                 note,
                 nullifier: None,
@@ -2198,8 +2211,12 @@ pub mod app_programs {
             TransitionCase {
                 guard: TransitionGuard::Always,
                 constraints: vec![
-                    StateConstraint::Immutable { index: SUB_CAPACITY_SLOT },
-                    StateConstraint::Immutable { index: SUB_OWNER_PK_HASH_SLOT },
+                    StateConstraint::Immutable {
+                        index: SUB_CAPACITY_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_OWNER_PK_HASH_SLOT,
+                    },
                     StateConstraint::FieldLteField {
                         left_index: SUB_SEQ_TAIL_SLOT,
                         right_index: SUB_SEQ_HEAD_SLOT,
@@ -2207,49 +2224,106 @@ pub mod app_programs {
                 ],
             },
             TransitionCase {
-                guard: TransitionGuard::MethodIs { method: symbol("publish") },
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("publish"),
+                },
                 constraints: vec![
-                    StateConstraint::MonotonicSequence { seq_index: SUB_SEQ_HEAD_SLOT },
-                    StateConstraint::Immutable { index: SUB_SEQ_TAIL_SLOT },
-                    StateConstraint::Immutable { index: SUB_PUBLISHERS_ROOT_SLOT },
-                    StateConstraint::Immutable { index: SUB_CONSUMERS_ROOT_SLOT },
+                    StateConstraint::MonotonicSequence {
+                        seq_index: SUB_SEQ_HEAD_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_SEQ_TAIL_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_PUBLISHERS_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_CONSUMERS_ROOT_SLOT,
+                    },
                     slot_changed(SUB_MESSAGE_ROOT_SLOT),
-                    StateConstraint::FieldGte { index: SUB_MESSAGE_ROOT_SLOT, value: u64_field(1) },
+                    StateConstraint::FieldGte {
+                        index: SUB_MESSAGE_ROOT_SLOT,
+                        value: u64_field(1),
+                    },
                 ],
             },
             TransitionCase {
-                guard: TransitionGuard::MethodIs { method: symbol("consume") },
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("consume"),
+                },
                 constraints: vec![
-                    StateConstraint::MonotonicSequence { seq_index: SUB_SEQ_TAIL_SLOT },
-                    StateConstraint::Immutable { index: SUB_SEQ_HEAD_SLOT },
-                    StateConstraint::Immutable { index: SUB_MESSAGE_ROOT_SLOT },
-                    StateConstraint::Immutable { index: SUB_LATEST_PAYLOAD_SLOT },
-                    StateConstraint::Immutable { index: SUB_PUBLISHERS_ROOT_SLOT },
-                    StateConstraint::Immutable { index: SUB_CONSUMERS_ROOT_SLOT },
+                    StateConstraint::MonotonicSequence {
+                        seq_index: SUB_SEQ_TAIL_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_SEQ_HEAD_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_MESSAGE_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_LATEST_PAYLOAD_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_PUBLISHERS_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_CONSUMERS_ROOT_SLOT,
+                    },
                 ],
             },
             TransitionCase {
-                guard: TransitionGuard::MethodIs { method: symbol("grant_publisher") },
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("grant_publisher"),
+                },
                 constraints: vec![
                     slot_changed(SUB_PUBLISHERS_ROOT_SLOT),
-                    StateConstraint::FieldGte { index: SUB_PUBLISHERS_ROOT_SLOT, value: u64_field(1) },
-                    StateConstraint::Immutable { index: SUB_SEQ_HEAD_SLOT },
-                    StateConstraint::Immutable { index: SUB_SEQ_TAIL_SLOT },
-                    StateConstraint::Immutable { index: SUB_CONSUMERS_ROOT_SLOT },
-                    StateConstraint::Immutable { index: SUB_MESSAGE_ROOT_SLOT },
-                    StateConstraint::Immutable { index: SUB_LATEST_PAYLOAD_SLOT },
+                    StateConstraint::FieldGte {
+                        index: SUB_PUBLISHERS_ROOT_SLOT,
+                        value: u64_field(1),
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_SEQ_HEAD_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_SEQ_TAIL_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_CONSUMERS_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_MESSAGE_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_LATEST_PAYLOAD_SLOT,
+                    },
                 ],
             },
             TransitionCase {
-                guard: TransitionGuard::MethodIs { method: symbol("grant_consumer") },
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("grant_consumer"),
+                },
                 constraints: vec![
                     slot_changed(SUB_CONSUMERS_ROOT_SLOT),
-                    StateConstraint::FieldGte { index: SUB_CONSUMERS_ROOT_SLOT, value: u64_field(1) },
-                    StateConstraint::Immutable { index: SUB_SEQ_HEAD_SLOT },
-                    StateConstraint::Immutable { index: SUB_SEQ_TAIL_SLOT },
-                    StateConstraint::Immutable { index: SUB_PUBLISHERS_ROOT_SLOT },
-                    StateConstraint::Immutable { index: SUB_MESSAGE_ROOT_SLOT },
-                    StateConstraint::Immutable { index: SUB_LATEST_PAYLOAD_SLOT },
+                    StateConstraint::FieldGte {
+                        index: SUB_CONSUMERS_ROOT_SLOT,
+                        value: u64_field(1),
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_SEQ_HEAD_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_SEQ_TAIL_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_PUBLISHERS_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_MESSAGE_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: SUB_LATEST_PAYLOAD_SLOT,
+                    },
                 ],
             },
         ])
@@ -2271,45 +2345,91 @@ pub mod app_programs {
             TransitionCase {
                 guard: TransitionGuard::Always,
                 constraints: vec![
-                    StateConstraint::Immutable { index: GOV_COMMITTEE_ROOT_SLOT },
-                    StateConstraint::Immutable { index: GOV_THRESHOLD_SLOT },
-                    StateConstraint::Monotonic { index: GOV_VERSION_SLOT },
-                    StateConstraint::Monotonic { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
-                    StateConstraint::Immutable { index: GOV_RESERVED_SLOT_6 },
-                    StateConstraint::Immutable { index: GOV_RESERVED_SLOT_7 },
+                    StateConstraint::Immutable {
+                        index: GOV_COMMITTEE_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_THRESHOLD_SLOT,
+                    },
+                    StateConstraint::Monotonic {
+                        index: GOV_VERSION_SLOT,
+                    },
+                    StateConstraint::Monotonic {
+                        index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_RESERVED_SLOT_6,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_RESERVED_SLOT_7,
+                    },
                 ],
             },
             TransitionCase {
-                guard: TransitionGuard::MethodIs { method: symbol("propose_table_update") },
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("propose_table_update"),
+                },
                 constraints: vec![
-                    StateConstraint::Immutable { index: GOV_ROUTE_TABLE_ROOT_SLOT },
-                    StateConstraint::Immutable { index: GOV_VERSION_SLOT },
-                    StateConstraint::Monotonic { index: GOV_PENDING_PROPOSAL_ROOT_SLOT },
-                    StateConstraint::Monotonic { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                    StateConstraint::Immutable {
+                        index: GOV_ROUTE_TABLE_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_VERSION_SLOT,
+                    },
+                    StateConstraint::Monotonic {
+                        index: GOV_PENDING_PROPOSAL_ROOT_SLOT,
+                    },
+                    StateConstraint::Monotonic {
+                        index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT,
+                    },
                 ],
             },
             TransitionCase {
-                guard: TransitionGuard::MethodIs { method: symbol("vote_on_proposal") },
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("vote_on_proposal"),
+                },
                 constraints: vec![
-                    StateConstraint::Immutable { index: GOV_ROUTE_TABLE_ROOT_SLOT },
-                    StateConstraint::Immutable { index: GOV_VERSION_SLOT },
-                    StateConstraint::Immutable { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                    StateConstraint::Immutable {
+                        index: GOV_ROUTE_TABLE_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_VERSION_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT,
+                    },
                 ],
             },
             TransitionCase {
-                guard: TransitionGuard::MethodIs { method: symbol("commit_table_update") },
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("commit_table_update"),
+                },
                 constraints: vec![
-                    StateConstraint::MonotonicSequence { seq_index: GOV_VERSION_SLOT },
-                    StateConstraint::Immutable { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                    StateConstraint::MonotonicSequence {
+                        seq_index: GOV_VERSION_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT,
+                    },
                 ],
             },
             TransitionCase {
-                guard: TransitionGuard::MethodIs { method: symbol("register_service") },
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("register_service"),
+                },
                 constraints: vec![
-                    StateConstraint::Immutable { index: GOV_ROUTE_TABLE_ROOT_SLOT },
-                    StateConstraint::Immutable { index: GOV_VERSION_SLOT },
-                    StateConstraint::Immutable { index: GOV_PENDING_PROPOSAL_ROOT_SLOT },
-                    StateConstraint::Immutable { index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT },
+                    StateConstraint::Immutable {
+                        index: GOV_ROUTE_TABLE_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_VERSION_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_PENDING_PROPOSAL_ROOT_SLOT,
+                    },
+                    StateConstraint::Immutable {
+                        index: GOV_DISPUTE_WINDOW_HEIGHT_SLOT,
+                    },
                 ],
             },
         ])
@@ -2483,7 +2603,11 @@ pub struct ConsensusRoundResult {
 /// non-Unchecked authorizations are left intact so callers can pre-sign or
 /// pre-prove specific actions. Uses the SDK's canonical signing path — no
 /// hand-rolled cryptography.
-pub(crate) fn sign_call_forest(turn: &mut Turn, cclerk: &AgentCipherclerk, federation_id: &[u8; 32]) {
+pub(crate) fn sign_call_forest(
+    turn: &mut Turn,
+    cclerk: &AgentCipherclerk,
+    federation_id: &[u8; 32],
+) {
     for tree in &mut turn.call_forest.roots {
         sign_call_tree(tree, cclerk, federation_id);
     }

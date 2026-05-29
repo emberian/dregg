@@ -192,6 +192,12 @@ pub mod bilateral_aggregation_air;
 #[cfg(feature = "recursion")]
 pub mod effect_vm_p3_air;
 
+/// Sorted-set neighbor-adjacency STARK: proves two leaves are *consecutive*
+/// under a committed binary Merkle root, closing the Silver non-membership
+/// wide-bracket forge. See module docs and `dregg_cell::predicate`'s
+/// `SortedNeighborNonMembershipVerifier` / `CredentialSetMembershipVerifier`.
+pub mod membership_adjacency_air;
+
 pub mod backends;
 pub mod proof_tier;
 

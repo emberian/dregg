@@ -62,14 +62,16 @@ fn eight_limb_encoding_carries_upper_28_bytes_verbatim() {
     let limbs = bytes32_to_8_limbs(&a);
 
     // Low limb == low 4 bytes.
-    assert_eq!(limbs[0], BabyBear::new(u32::from_le_bytes([a[0], a[1], a[2], a[3]])));
+    assert_eq!(
+        limbs[0],
+        BabyBear::new(u32::from_le_bytes([a[0], a[1], a[2], a[3]]))
+    );
     // Upper limbs carry the upper bytes verbatim — these are LOST when a 32-byte
     // value is folded into a single felt.
     for i in 1..8 {
         let off = i * 4;
-        let expect =
-            u32::from_le_bytes([a[off], a[off + 1], a[off + 2], a[off + 3]])
-                % dregg_circuit::field::BABYBEAR_P;
+        let expect = u32::from_le_bytes([a[off], a[off + 1], a[off + 2], a[off + 3]])
+            % dregg_circuit::field::BABYBEAR_P;
         assert_eq!(
             limbs[i],
             BabyBear::new(expect),
@@ -110,7 +112,11 @@ fn cell_seal_widened_target_yields_distinct_effects_hash() {
     let la = bytes32_to_8_limbs(&a);
     let lb = bytes32_to_8_limbs(&b);
     assert_eq!(la[0], lb[0], "low limb agrees (low 4 bytes identical)");
-    assert_ne!(&la[1..], &lb[1..], "upper limbs differ (upper 28 bytes differ)");
+    assert_ne!(
+        &la[1..],
+        &lb[1..],
+        "upper limbs differ (upper 28 bytes differ)"
+    );
 
     // compute_effects_hash now absorbs all 8 limbs, so the digests differ.
     let (lo_a, _) = compute_effects_hash(&eff_a);

@@ -122,6 +122,18 @@ pub enum EngineError {
     DuplicateIntentUsage { intent_id: IntentId },
     /// Settlement generation failed.
     SettlementFailed { reason: String },
+    /// A participating intent has expired at the current height/time.
+    ExpiredIntent {
+        intent_id: IntentId,
+        expiry: u64,
+        now: u64,
+    },
+    /// A ring's settlements do not conserve value (a node's inflow and
+    /// outflow per asset do not balance, or a transfer has zero amount).
+    NonConservingSettlement { reason: String },
+    /// A participating intent declares a predicate requirement that the
+    /// submission does not satisfy (missing or failing proof).
+    PredicateRequirementUnmet { intent_id: IntentId, reason: String },
 }
 
 impl std::fmt::Display for EngineError {
@@ -176,6 +188,23 @@ impl std::fmt::Display for EngineError {
             Self::SettlementFailed { reason } => {
                 write!(f, "settlement failed: {}", reason)
             }
+            Self::ExpiredIntent {
+                intent_id,
+                expiry,
+                now,
+            } => write!(
+                f,
+                "intent {:02x}{:02x}... expired at {} (now {})",
+                intent_id[0], intent_id[1], expiry, now
+            ),
+            Self::NonConservingSettlement { reason } => {
+                write!(f, "non-conserving settlement: {}", reason)
+            }
+            Self::PredicateRequirementUnmet { intent_id, reason } => write!(
+                f,
+                "intent {:02x}{:02x}... predicate requirement unmet: {}",
+                intent_id[0], intent_id[1], reason
+            ),
         }
     }
 }
@@ -532,22 +561,149 @@ impl WitnessedProofVerifier {
     }
 
     /// Compute the canonical "batch binding" commitment for an intent
-    /// set. The binding is BLAKE3-derived over the sorted intent IDs,
-    /// so it's deterministic and order-independent.
+    /// set. The binding is BLAKE3-derived over the sorted intents — each
+    /// intent contributes its ID **and its caveats** (the full `matcher`
+    /// MatchSpec, which carries `constraints` and `predicate_requirements`,
+    /// plus the `expiry`). It is deterministic and order-independent.
     ///
     /// A solver's `witnessed_predicate.commitment` must equal this
     /// value; otherwise the proof was generated against a different
     /// intent set and is rejected.
+    ///
+    /// # Caveat binding (SILVER hole #2 — closed)
+    ///
+    /// The binding previously folded ONLY the intent-ID set, so the proof
+    /// attested merely "these IDs were batched" — a solver could swap an
+    /// intent's caveats (e.g. drop a `predicate_requirement` or relax a
+    /// `Constraint`) without changing the binding, defeating the proof's
+    /// purpose. By folding each intent's serialized `matcher` and `expiry`
+    /// into the hash, the binding now changes if ANY intent's caveats or
+    /// expiry change, so the proof attests to the actual caveat set the
+    /// solver claims to have satisfied. Because `IntentId` is itself the
+    /// content hash of the matcher (`Intent::compute_id`), the ID already
+    /// covers the matcher; folding it explicitly makes the binding's intent
+    /// robust to any future ID-derivation change and self-documenting.
     pub fn compute_batch_binding(decrypted_intents: &[Intent]) -> [u8; 32] {
-        let mut ids: Vec<IntentId> = decrypted_intents.iter().map(|i| i.id).collect();
-        ids.sort();
-        let mut hasher = blake3::Hasher::new_derive_key("dregg-trustless-batch-binding-v1");
-        hasher.update(&(ids.len() as u64).to_le_bytes());
-        for id in &ids {
+        // Sort by ID for order-independence, carrying each intent's caveats.
+        let mut entries: Vec<(IntentId, Vec<u8>, u64)> = decrypted_intents
+            .iter()
+            .map(|i| {
+                // postcard is the canonical serialization used for the intent
+                // ID itself, so the matcher bytes are deterministic.
+                let matcher_bytes = postcard::to_allocvec(&i.matcher).unwrap_or_default();
+                (i.id, matcher_bytes, i.expiry)
+            })
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut hasher = blake3::Hasher::new_derive_key("dregg-trustless-batch-binding-v2");
+        hasher.update(&(entries.len() as u64).to_le_bytes());
+        for (id, matcher_bytes, expiry) in &entries {
             hasher.update(id);
+            hasher.update(&(matcher_bytes.len() as u64).to_le_bytes());
+            hasher.update(matcher_bytes);
+            hasher.update(&expiry.to_le_bytes());
         }
         *hasher.finalize().as_bytes()
     }
+}
+
+/// Verify that a slice of ring trades conserves value.
+///
+/// A ring trade is a **cycle** of transfers. Soundly enforceable structural
+/// invariants (no circuits required):
+///
+/// 1. **No phantom value.** Every transfer has a non-zero `amount` (a
+///    zero-amount leg is a no-op masquerading as a settlement).
+/// 2. **Per-asset global balance.** For each asset, the total amount sent
+///    equals the total amount received across the ring. (Each `Settlement`
+///    credits its `to` exactly what it debits its `from`, so a *single* leg is
+///    always balanced; this check catches a solver that fabricates an extra
+///    credit leg with no matching debit, or vice versa.)
+/// 3. **Cycle closure per node.** Every commitment that RECEIVES in the ring
+///    must also SEND, and every commitment that SENDS must also RECEIVE. A node
+///    that only receives is minting free value into the ring; a node that only
+///    sends is having value burned. Either breaks the atomic-swap contract.
+///
+/// # Why structural conservation (SILVER hole #4)
+///
+/// The trustless engine operates on [`RingTrade`]s referencing decrypted
+/// [`Intent`]s by ID; the per-intent exchange amounts (the
+/// [`crate::solver::ExchangeSpec`]) are not carried on the trustless `Intent`,
+/// so we cannot re-derive "did the offerer have enough for the next party".
+/// What we CAN enforce is the closed accounting shape above.
+///
+/// Residual: the *rate* relationship between distinct assets (whether A's 100
+/// of X is a fair exchange for B's 50 of Y) cannot be checked structurally —
+/// that needs the per-intent `ExchangeSpec` and ultimately the validity
+/// circuit. See [`crate::solver::RingSolver::validate_ring`] for the
+/// amount/rate checks applied when the engine builds rings from `IntentNode`s
+/// directly. This function rejects the *grossest* inflation (free mint / burn /
+/// unmatched leg) but does not certify exchange-rate fairness.
+fn check_settlement_conservation(solution: &[RingTrade]) -> Result<(), EngineError> {
+    use std::collections::{HashMap, HashSet};
+
+    for ring in solution {
+        // Per-asset global sent/received totals.
+        let mut sent_per_asset: HashMap<[u8; 32], i128> = HashMap::new();
+        let mut recv_per_asset: HashMap<[u8; 32], i128> = HashMap::new();
+        // Track which nodes send and which receive (cycle closure).
+        let mut senders: HashSet<CommitmentId> = HashSet::new();
+        let mut receivers: HashSet<CommitmentId> = HashSet::new();
+
+        for s in &ring.settlements {
+            if s.amount == 0 {
+                return Err(EngineError::NonConservingSettlement {
+                    reason: format!(
+                        "zero-amount transfer from {:02x}{:02x}... to {:02x}{:02x}...",
+                        s.from.0[0], s.from.0[1], s.to.0[0], s.to.0[1]
+                    ),
+                });
+            }
+            *sent_per_asset.entry(s.asset).or_insert(0) += s.amount as i128;
+            *recv_per_asset.entry(s.asset).or_insert(0) += s.amount as i128;
+            senders.insert(s.from);
+            receivers.insert(s.to);
+        }
+
+        // Per-asset global balance: sent must equal received for each asset.
+        // (Holds by construction for legs added as from/to pairs; this guards
+        // against any future shape that decouples them.)
+        for (asset, sent) in &sent_per_asset {
+            let recv = recv_per_asset.get(asset).copied().unwrap_or(0);
+            if *sent != recv {
+                return Err(EngineError::NonConservingSettlement {
+                    reason: format!(
+                        "asset {:02x}{:02x}...: {} sent but {} received",
+                        asset[0], asset[1], sent, recv
+                    ),
+                });
+            }
+        }
+
+        // Cycle closure: a node that receives must also send, and vice versa.
+        for node in &receivers {
+            if !senders.contains(node) {
+                return Err(EngineError::NonConservingSettlement {
+                    reason: format!(
+                        "node {:02x}{:02x}... receives but never sends (free mint)",
+                        node.0[0], node.0[1]
+                    ),
+                });
+            }
+        }
+        for node in &senders {
+            if !receivers.contains(node) {
+                return Err(EngineError::NonConservingSettlement {
+                    reason: format!(
+                        "node {:02x}{:02x}... sends but never receives (value burned)",
+                        node.0[0], node.0[1]
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 impl ProofVerifier for WitnessedProofVerifier {
@@ -751,6 +907,11 @@ pub struct TrustlessIntentEngine {
     /// solver balances via [`Self::deposit_bond`] (or the cell-program
     /// migration's slot updates) so solvers can actually post bonds.
     pub bond_escrow: BondEscrow,
+    /// Verifier for per-intent witnessed-predicate caveats declared on the
+    /// ring's participating intents (SILVER hole #3). Defaults to the
+    /// fail-closed `default_builtins` registry. Used at submit time via
+    /// [`crate::solver::RingSolver::validate_predicates`].
+    predicate_verifier: crate::predicate::IntentPredicateVerifier,
 }
 
 impl TrustlessIntentEngine {
@@ -810,6 +971,7 @@ impl TrustlessIntentEngine {
             next_batch_id: 1,
             settled_batches: HashMap::new(),
             bond_escrow: BondEscrow::new(),
+            predicate_verifier: crate::predicate::IntentPredicateVerifier::default(),
         }
     }
 
@@ -833,6 +995,7 @@ impl TrustlessIntentEngine {
             next_batch_id: 1,
             settled_batches: HashMap::new(),
             bond_escrow: BondEscrow::new(),
+            predicate_verifier: crate::predicate::IntentPredicateVerifier::default(),
         }
     }
 
@@ -854,6 +1017,7 @@ impl TrustlessIntentEngine {
             next_batch_id: 1,
             settled_batches: HashMap::new(),
             bond_escrow: BondEscrow::new(),
+            predicate_verifier: crate::predicate::IntentPredicateVerifier::default(),
         }
     }
 
@@ -1113,6 +1277,89 @@ impl TrustlessIntentEngine {
         self.verifier
             .verify_submission(&submission, decrypted)
             .map_err(|reason| EngineError::InvalidProof { reason })?;
+
+        // --- SILVER hole #4: real ring validation at submit ---
+        //
+        // The proof verifier above attests the proof binds to this batch's
+        // caveat set; it does NOT (under the not-yet-installed circuits) check
+        // expiry, conservation, or per-intent predicates. Enforce the soundly
+        // checkable invariants here, fail-closed, BEFORE the bond is locked so
+        // an invalid submission never holds escrow.
+        //
+        // Build an IntentId -> &Intent index for the decrypted set.
+        let by_id: HashMap<IntentId, &Intent> = decrypted.iter().map(|i| (i.id, i)).collect();
+
+        // (a) Expiry: reject if ANY participating intent is expired at the
+        //     current height. `Intent::is_expired` was dead on this path.
+        let now = self.current_height;
+        for ring in &submission.solution {
+            for intent_id in &ring.participants {
+                if let Some(intent) = by_id.get(intent_id) {
+                    if intent.is_expired(now) {
+                        return Err(EngineError::ExpiredIntent {
+                            intent_id: *intent_id,
+                            expiry: intent.expiry,
+                            now,
+                        });
+                    }
+                }
+                // Intents not in the batch were already rejected by the
+                // structural check inside verify_submission.
+            }
+        }
+
+        // (b) Conservation: reject non-conserving / zero-amount settlements.
+        check_settlement_conservation(&submission.solution)?;
+
+        // (c) Per-intent predicate requirements (SILVER hole #3 — wired).
+        //     A participating intent whose MatchSpec carries
+        //     `predicate_requirements` imposes a caveat the solver must prove.
+        //     This routes through the now-live
+        //     `RingSolver::validate_predicates`, which derives the required
+        //     count from the ring's own intents and verifies each supplied
+        //     proof through the canonical registry.
+        //
+        //     The current `SolverSubmission` wire format carries only a single
+        //     batch-level `witnessed_predicate` and has NO channel for
+        //     per-intent predicate proofs, so we pass an EMPTY proof slice. A
+        //     ring whose intents declare any requirement therefore fails closed
+        //     (`Missing`) — rejected rather than settled with the predicate
+        //     unproven. A ring whose intents declare none passes.
+        //
+        //     RESIDUAL: accepting *valid* predicate-bearing rings requires
+        //     extending `SolverSubmission` with per-intent witnessed-predicate
+        //     proofs and threading them into the `proofs` slice below. That
+        //     wire-format change is out of scope for this lane; the fail-closed
+        //     rejection here is the sound interim posture.
+        let no_proofs: &[(
+            crate::predicate::WitnessedPredicate,
+            crate::predicate::PredicateInput<'_>,
+            Vec<u8>,
+        )] = &[];
+        for ring in &submission.solution {
+            if let Err(e) = crate::solver::RingSolver::validate_predicates(
+                ring,
+                decrypted,
+                &self.predicate_verifier,
+                no_proofs,
+            ) {
+                let offending = ring
+                    .participants
+                    .iter()
+                    .find(|id| {
+                        by_id
+                            .get(*id)
+                            .map(|i| !i.matcher.predicate_requirements.is_empty())
+                            .unwrap_or(false)
+                    })
+                    .copied()
+                    .unwrap_or([0u8; 32]);
+                return Err(EngineError::PredicateRequirementUnmet {
+                    intent_id: offending,
+                    reason: format!("ring predicate validation failed: {e}"),
+                });
+            }
+        }
 
         // Lock the bond in escrow. The bond stays locked until either
         // finalize (release) or a successful challenge (slash). If the
@@ -1524,28 +1771,36 @@ mod tests {
         }
     }
 
-    /// Helper: build a solver submission that carries a **real**,
-    /// cryptographically-verifiable `witnessed_predicate` — a
-    /// `NonMembership` neighbor proof. This is the only built-in kind that
-    /// ships a real (non-`NotYetWired`) verifier
-    /// (`SortedNeighborNonMembershipVerifier` in the cell crate), so a
-    /// submission built this way is accepted by the STRICT default verifier
-    /// only because the proof bytes genuinely verify against the batch
-    /// binding — not because the predicate is absent.
+    /// Helper: build a structurally-valid solver submission carrying a
+    /// `witnessed_predicate` whose `commitment` correctly binds to the batch.
     ///
-    /// Construction: the verifier feeds `PredicateInput::Bytes(commitment)`
-    /// (the batch binding) as the candidate, requiring `lower < candidate <
-    /// upper` plus a commitment-keyed adjacency tag. We pick `lower =
-    /// [0x00; 32]` and `upper = [0xFF; 32]` so any candidate is strictly
-    /// inside the interval, and compute the honest adjacency tag.
+    /// SOUNDNESS / WIRING NOTE (post wave-2 hardening): the wide-bracket
+    /// NonMembership forge is now closed — the real
+    /// `SortedNeighborNonMembershipVerifier` requires a `NonMembershipProofV2`
+    /// whose `lower`/`upper` are *consecutive leaves under the committed root*,
+    /// proven by a Merkle-adjacency STARK. In the solver path the verifier
+    /// feeds `PredicateInput::Bytes(commitment)` as the candidate, and the
+    /// adjacency root is `root_felt_from_slot(commitment)` (the low 4 bytes of
+    /// the commitment). The commitment here is the 32-byte BLAKE3 *batch
+    /// binding* — it can never coincide with a real adjacency-tree root, so no
+    /// genuine NonMembership proof exists for this input shape. (Real
+    /// end-to-end NonMembership soundness is exercised by
+    /// `dregg_turn::executor::membership_verifier`'s
+    /// `e2e_consecutive_non_membership_accepts` /
+    /// `e2e_wide_bracket_forge_rejected`.)
+    ///
+    /// These protocol-mechanics tests therefore run against the **stub**
+    /// verifier (`TrustlessIntentEngine::with_stub_verifier`), which accepts a
+    /// correctly-bound `MerkleMembership` predicate with any non-empty proof.
+    /// What the submission still genuinely exercises: the batch-binding gate
+    /// (`wp.commitment == compute_batch_binding(intents)`), the structural
+    /// ring/score check, and the bond/score/challenge state machine.
     fn make_real_submission(
         solver_byte: u8,
         intents: &[Intent],
         score: f64,
         height: u64,
     ) -> SolverSubmission {
-        use dregg_cell::predicate::NonMembershipNeighborProof;
-
         let participants: Vec<IntentId> = intents.iter().map(|i| i.id).collect();
         let mut settlements = Vec::new();
         for i in 0..intents.len() {
@@ -1563,11 +1818,11 @@ mod tests {
             score,
         };
 
+        // Correct audience binding: the predicate commits to the canonical
+        // batch binding so the verifier's batch-binding gate passes.
         let commitment = WitnessedProofVerifier::compute_batch_binding(intents);
-        // Honest neighbor proof: lower < candidate(=commitment) < upper.
-        let proof = NonMembershipNeighborProof::new(&commitment, [0x00; 32], [0xFF; 32]);
         let wp = WitnessedPredicate {
-            kind: WitnessedPredicateKind::NonMembership,
+            kind: WitnessedPredicateKind::MerkleMembership,
             commitment,
             input_ref: InputRef::PublicInput { pi_index: 0 },
             proof_witness_index: 0,
@@ -1577,7 +1832,9 @@ mod tests {
             solver_id: [solver_byte; 32],
             solution: vec![ring],
             total_score: score,
-            validity_proof: proof.to_bytes().to_vec(),
+            // Non-empty proof; the stub MerkleMembership verifier accepts any
+            // non-empty bytes once the commitment binds to the batch.
+            validity_proof: vec![0x01, 0x02, 0x03],
             witnessed_predicate: Some(wp),
             bond: DEFAULT_MIN_SOLVER_BOND,
             submitted_at: height,
@@ -1695,7 +1952,16 @@ mod tests {
     #[test]
     fn test_higher_score_wins() {
         let (key, key_shares) = make_test_keys(2, 3);
-        let mut engine = TrustlessIntentEngine::new(2, 3);
+        // Protocol-mechanics test (scoring/winner selection). Proof algebra is
+        // out of scope here: with the strict default registry, the only real
+        // built-in verifier is NonMembership, whose candidate is forced to the
+        // 32-byte batch-binding hash — which can never equal an adjacency-tree
+        // root (root_felt_from_slot reads only the low 4 bytes), so no genuine
+        // proof exists for this input shape. Use the stub verifier (its
+        // documented purpose: plumbing-coverage tests where proof soundness is
+        // exercised elsewhere — see the e2e adversarial tests in dregg-turn and
+        // the closed-hole tests below). Assertions are unchanged.
+        let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
 
         let intents = vec![make_intent(1), make_intent(2)];
         drive_to_solving(&mut engine, &key, &key_shares, &intents, 10);
@@ -1745,7 +2011,11 @@ mod tests {
     #[test]
     fn test_challenge_replaces_winner() {
         let (key, key_shares) = make_test_keys(2, 3);
-        let mut engine = TrustlessIntentEngine::new(2, 3);
+        // Protocol-mechanics test (challenge/replace). Stub verifier: the
+        // batch-binding candidate cannot equal an adjacency-tree root, so no
+        // real NonMembership proof exists for this path; soundness is covered
+        // by the dedicated adversarial tests. Assertions unchanged.
+        let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
         engine.advance_height(10);
 
         let intents = vec![make_intent(1), make_intent(2)];
@@ -1780,7 +2050,11 @@ mod tests {
     #[test]
     fn test_challenge_lower_score_rejected() {
         let (key, key_shares) = make_test_keys(2, 3);
-        let mut engine = TrustlessIntentEngine::new(2, 3);
+        // Protocol-mechanics test (ScoreNotHigher gate). The winner is seeded
+        // via a real-shaped submission; the stub verifier accepts it so the
+        // test can exercise the score-comparison logic. Soundness covered
+        // elsewhere. Assertions unchanged.
+        let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
         engine.advance_height(10);
 
         let intents = vec![make_intent(1)];
@@ -1935,7 +2209,10 @@ mod tests {
     #[test]
     fn test_settlement_atomic() {
         let (key, key_shares) = make_test_keys(2, 3);
-        let mut engine = TrustlessIntentEngine::new(2, 3);
+        // Protocol-mechanics test (atomic finalize). Stub verifier: no real
+        // NonMembership proof exists for the batch-binding candidate; soundness
+        // covered by the dedicated adversarial tests. Assertions unchanged.
+        let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
         engine.advance_height(10);
 
         let intents = vec![make_intent(1), make_intent(2)];
@@ -1972,7 +2249,10 @@ mod tests {
     #[test]
     fn test_cannot_finalize_during_challenge() {
         let (key, key_shares) = make_test_keys(2, 3);
-        let mut engine = TrustlessIntentEngine::new(2, 3);
+        // Protocol-mechanics test (challenge-window finalize guard). Stub
+        // verifier: no real NonMembership proof exists for the batch-binding
+        // candidate; soundness covered elsewhere. Assertions unchanged.
+        let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
         engine.advance_height(10);
 
         let intents = vec![make_intent(1)];
@@ -2041,7 +2321,11 @@ mod tests {
     #[test]
     fn test_full_protocol_flow() {
         let (key, key_shares) = make_test_keys(2, 3);
-        let mut engine = TrustlessIntentEngine::new(2, 3);
+        // End-to-end protocol-flow test (submit→challenge→finalize). Stub
+        // verifier: no real NonMembership proof exists for the batch-binding
+        // candidate; proof soundness is covered by the dedicated adversarial
+        // tests. Assertions unchanged.
+        let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
         // Pre-fund the byte-prefix solver IDs for the bond escrow.
         for b in 0..=255u8 {
             engine.deposit_bond(&[b; 32], DEFAULT_MIN_SOLVER_BOND * 10);
@@ -2144,7 +2428,10 @@ mod tests {
     #[test]
     fn test_challenge_window_expiry() {
         let (key, key_shares) = make_test_keys(2, 3);
-        let mut engine = TrustlessIntentEngine::new(2, 3);
+        // Protocol-mechanics test (challenge-window expiry). Stub verifier: no
+        // real NonMembership proof exists for the batch-binding candidate;
+        // soundness covered elsewhere. Assertions unchanged.
+        let mut engine = TrustlessIntentEngine::with_stub_verifier(2, 3);
         engine.advance_height(10);
 
         let intents = vec![make_intent(1)];
@@ -2447,9 +2734,9 @@ mod tests {
                     "expected strict-mode predicate-required rejection, got: {reason}"
                 );
             }
-            other => panic!(
-                "strict verifier MUST reject a predicate-less submission, got: {other:?}"
-            ),
+            other => {
+                panic!("strict verifier MUST reject a predicate-less submission, got: {other:?}")
+            }
         }
     }
 

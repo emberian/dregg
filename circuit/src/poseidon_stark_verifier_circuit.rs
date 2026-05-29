@@ -360,10 +360,8 @@ impl PoseidonStarkVerifierCircuit {
             // We record the cell coordinates needed for the permutation wiring and
             // install the cycles after the gate vector is complete.
             let mut fri_leaf_value_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
-            let mut fri_fold_output_cells: Vec<(usize, usize)> =
-                Vec::with_capacity(num_fri_layers);
-            let mut fri_beta_input_cells: Vec<(usize, usize)> =
-                Vec::with_capacity(num_fri_layers);
+            let mut fri_fold_output_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
+            let mut fri_beta_input_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
             for li in 0..num_fri_layers {
                 // FRI leaf hash. The single BabyBear layer value is embedded at
                 // input[1] of the Poseidon gadget => witness cell (leaf_row, 1).
@@ -434,8 +432,7 @@ impl PoseidonStarkVerifierCircuit {
             // has no successor in-circuit (its fold maps to the public final
             // polynomial, still checked by the standalone verifier — see residual).
             for li in 0..num_fri_layers.saturating_sub(1) {
-                fri_fold_bind_pairs
-                    .push((fri_fold_output_cells[li], fri_leaf_value_cells[li + 1]));
+                fri_fold_bind_pairs.push((fri_fold_output_cells[li], fri_leaf_value_cells[li + 1]));
                 // beta for the li -> li+1 fold is fri_betas[li+1].
                 Self::wire_pair(
                     &mut gates,
@@ -1750,9 +1747,8 @@ mod tests {
         //   - in debug builds, Kimchi's pre-proof witness check panics, or
         //   - prove() succeeds but verify() fails / returns false.
         // All three are acceptable; a verifying proof is NOT.
-        let tampered_attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tampered_circuit.prove()
-        }));
+        let tampered_attempt =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tampered_circuit.prove()));
         match tampered_attempt {
             Err(_panic) => { /* rejected by Kimchi witness check — expected */ }
             Ok(Err(_)) => { /* rejected at prove() — expected */ }
@@ -1884,9 +1880,8 @@ mod tests {
         // debug builds, as a panic from Kimchi's pre-proof `index.verify()` check.
         // Both outcomes mean "rejected"; only a successfully produced proof would
         // signal an escape path.
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            forged_circuit.prove()
-        }));
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| forged_circuit.prove()));
 
         match result {
             Err(_panic) => {
@@ -2064,8 +2059,7 @@ mod tests {
             Ok(Ok(kimchi_proof)) => {
                 // If prove somehow succeeded, verification with the TRUE public
                 // input must still fail.  If even that passes, the escape is open.
-                let verify_result =
-                    PoseidonStarkVerifierCircuit::verify(&kimchi_proof);
+                let verify_result = PoseidonStarkVerifierCircuit::verify(&kimchi_proof);
                 assert!(
                     verify_result.is_err() || verify_result.unwrap() == false,
                     "ESCAPE PATH OPEN (#135): forged w[1] (decoupled from the public \

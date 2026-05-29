@@ -201,7 +201,7 @@ fn test_verify_multi_effect_turn_accepted() {
                 value: BabyBear::new(42),
             },
             Effect::GrantCapability {
-                cap_entry: BabyBear::new(0xCAFE),
+                cap_entry: [BabyBear::new(0xCAFE); 8],
             },
         ],
     );

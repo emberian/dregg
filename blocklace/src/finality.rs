@@ -85,6 +85,28 @@ impl TurnArtifactBundle {
             witnessed_receipts: Vec::new(),
         }
     }
+
+    /// Build the full artifact bundle for a *committed* turn.
+    ///
+    /// `signed_turn` is the node-encoded `dregg_sdk::SignedTurn`, `receipt` is
+    /// the node-encoded committed `dregg_turn::TurnReceipt`, and
+    /// `witnessed_receipts` carries one node-encoded
+    /// `dregg_turn::WitnessedReceipt` artifact per cell that produced witness
+    /// material at commit time. This is the production constructor that wires
+    /// per-cell WitnessedReceipts into gossip so a peer's
+    /// `materialize_blocklace_artifacts` receives real witnesses (rather than
+    /// the empty `new()` vector that left the distributed witness path dead).
+    pub fn with_committed(
+        signed_turn: Vec<u8>,
+        receipt: Option<Vec<u8>>,
+        witnessed_receipts: Vec<Vec<u8>>,
+    ) -> Self {
+        Self {
+            signed_turn,
+            receipt,
+            witnessed_receipts,
+        }
+    }
 }
 
 /// Membership actions for federation changes.

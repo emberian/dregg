@@ -36,27 +36,27 @@ fn effect_executor_coverage(e: &Effect) -> bool {
         Effect::CreateCell { .. } => true, // ledger/create tests
         Effect::SetVerificationKey { .. } => true, // VK integrity tests
         Effect::SpawnWithDelegation { .. } => true, // delegation suite
-        Effect::RefreshDelegation => true,          // delegation suite
-        Effect::RevokeDelegation { .. } => true,    // delegation suite
-        Effect::BridgeMint { .. } => true,          // bridge tests
-        Effect::BridgeLock { .. } => true,          // bridge tests
-        Effect::CreateObligation { .. } => true,    // #113 apply test
-        Effect::FulfillObligation { .. } => true,   // #112 apply test
-        Effect::SlashObligation { .. } => true,     // obligation suite
-        Effect::CreateEscrow { .. } => true,        // escrow suite
-        Effect::ReleaseEscrow { .. } => true,       // escrow suite
-        Effect::RefundEscrow { .. } => true,        // escrow suite
+        Effect::RefreshDelegation => true, // delegation suite
+        Effect::RevokeDelegation { .. } => true, // delegation suite
+        Effect::BridgeMint { .. } => true, // bridge tests
+        Effect::BridgeLock { .. } => true, // bridge tests
+        Effect::CreateObligation { .. } => true, // #113 apply test
+        Effect::FulfillObligation { .. } => true, // #112 apply test
+        Effect::SlashObligation { .. } => true, // obligation suite
+        Effect::CreateEscrow { .. } => true, // escrow suite
+        Effect::ReleaseEscrow { .. } => true, // escrow suite
+        Effect::RefundEscrow { .. } => true, // escrow suite
         Effect::ExerciseViaCapability { .. } => true, // #111 apply test
-        Effect::ExportSturdyRef { .. } => true,     // captp/#96 tests
-        Effect::EnlivenRef { .. } => true,          // captp/#96 tests
-        Effect::DropRef { .. } => true,             // captp gc tests
-        Effect::ValidateHandoff { .. } => true,     // captp handoff tests
-        Effect::CellSeal { .. } => true,            // integration_lifecycle
-        Effect::CellUnseal { .. } => true,          // integration_lifecycle
-        Effect::CellDestroy { .. } => true,         // integration_destroy_terminal
-        Effect::Burn { .. } => true,                // integration_burn_receipt
+        Effect::ExportSturdyRef { .. } => true, // captp/#96 tests
+        Effect::EnlivenRef { .. } => true, // captp/#96 tests
+        Effect::DropRef { .. } => true,  // captp gc tests
+        Effect::ValidateHandoff { .. } => true, // captp handoff tests
+        Effect::CellSeal { .. } => true, // integration_lifecycle
+        Effect::CellUnseal { .. } => true, // integration_lifecycle
+        Effect::CellDestroy { .. } => true, // integration_destroy_terminal
+        Effect::Burn { .. } => true,     // integration_burn_receipt
         Effect::AttenuateCapability { .. } => true, // integration_attenuate_capability
-        Effect::ReceiptArchive { .. } => true,      // integration_attestation_archive
+        Effect::ReceiptArchive { .. } => true, // integration_attestation_archive
         // coverage_queue_effects.rs:
         Effect::QueueAllocate { .. } => true,
         Effect::QueueEnqueue { .. } => true,
@@ -82,7 +82,7 @@ fn effect_executor_coverage(e: &Effect) -> bool {
         Effect::Unseal { .. } => true, // coverage_misc_effects Seal->Unseal round-trip (#144 fixed)
 
         // ── Not yet covered: documented blockers (#142 work-list) ────────
-        Effect::NoteSpend { .. } => false,    // needs the real ZK spending-proof stack
+        Effect::NoteSpend { .. } => false, // needs the real ZK spending-proof stack
         Effect::PipelinedSend { .. } => false, // only valid inside a pipeline resolution pass
     }
 }
@@ -181,10 +181,10 @@ fn state_constraint_executor_coverage(c: &StateConstraint) -> bool {
         StateConstraint::SenderAuthorized { .. } => false, // needs witness registry verifier
         StateConstraint::CapabilityUniqueness { .. } => false, // evaluator is a no-op (#143)
         StateConstraint::TemporalPredicate { .. } => false, // needs witness registry
-        StateConstraint::BoundDelta { .. } => false,        // cross-cell, not wired in embedded
-        StateConstraint::Witnessed { .. } => false,         // needs witness registry
-        StateConstraint::Renounced { .. } => false,         // needs witness registry
-        StateConstraint::Custom { .. } => false,            // needs ir/descriptor verifier
+        StateConstraint::BoundDelta { .. } => false,     // cross-cell, not wired in embedded
+        StateConstraint::Witnessed { .. } => false,      // needs witness registry
+        StateConstraint::Renounced { .. } => false,      // needs witness registry
+        StateConstraint::Custom { .. } => false,         // needs ir/descriptor verifier
     }
 }
 
@@ -213,9 +213,13 @@ fn state_constraint_coverage_ratchet_only_shrinks() {
         MAX_UNCOVERED_CONSTRAINTS
     );
     // Touch the classifier: a covered and an uncovered variant.
-    assert!(state_constraint_executor_coverage(&StateConstraint::Monotonic { index: 0 }));
-    assert!(!state_constraint_executor_coverage(&StateConstraint::FieldGteHeight {
-        index: 0,
-        offset: 0
-    }));
+    assert!(state_constraint_executor_coverage(
+        &StateConstraint::Monotonic { index: 0 }
+    ));
+    assert!(!state_constraint_executor_coverage(
+        &StateConstraint::FieldGteHeight {
+            index: 0,
+            offset: 0
+        }
+    ));
 }

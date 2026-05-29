@@ -62,8 +62,14 @@ fn audience_routing_any_of() {
     let bob = field_from_u64(0xB0B);
     let program = CellProgram::Predicate(vec![StateConstraint::AnyOf {
         variants: vec![
-            SimpleStateConstraint::FieldEquals { index: 0, value: alice },
-            SimpleStateConstraint::FieldEquals { index: 0, value: bob },
+            SimpleStateConstraint::FieldEquals {
+                index: 0,
+                value: alice,
+            },
+            SimpleStateConstraint::FieldEquals {
+                index: 0,
+                value: bob,
+            },
         ],
     }]);
 

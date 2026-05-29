@@ -22,13 +22,13 @@ mod commands;
 pub mod handoff_flow;
 // §4.7 canonical, Discord-independent signed-intent flow: produces and verifies
 // *real* signed `dregg_turn::action::Action` intents (Authorization::Signature).
-pub mod intent_flow;
 mod config;
 mod credential_issue;
 mod db;
 mod devnet;
 pub mod discord_caps;
 mod embeds;
+pub mod intent_flow;
 pub mod presence;
 
 // Production HTTP read surface (§4.7) — axum + tower middlewares, graceful shutdown,
@@ -410,9 +410,9 @@ async fn main() {
         event_bridge,
         federation_id_bytes,
         nullifier_set: Mutex::new(Vec::new()), // §4.7 friend-clique soft-federation
-        handoff_broker: Mutex::new(handoff_flow::HandoffBroker::new(
-            dregg_captp::FederationId(federation_id_bytes),
-        )),
+        handoff_broker: Mutex::new(handoff_flow::HandoffBroker::new(dregg_captp::FederationId(
+            federation_id_bytes,
+        ))),
     });
 
     // §4.7 Production HTTP read surface (Starbridge RemoteRuntime + humans).

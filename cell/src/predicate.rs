@@ -497,6 +497,45 @@ pub trait WitnessedPredicateVerifier: Send + Sync {
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// Verifies that two sorted-set neighbor leaves are bound to **consecutive
+/// leaf indices under a committed Merkle root** — the cryptographic teeth that
+/// close the Silver non-membership wide-bracket forge.
+///
+/// # Why this is a separate, injected trait
+///
+/// The real adjacency check is a STARK
+/// (`dregg_circuit::membership_adjacency_air`). The `dregg-cell` crate must not
+/// depend on `dregg-circuit` in its default build (dependency-cycle layering;
+/// cf. [`NotYetWiredVerifier`]), so the cell-side neighbor verifiers
+/// ([`SortedNeighborNonMembershipVerifier`], [`CredentialSetMembershipVerifier`])
+/// hold an `Option<Arc<dyn NeighborAdjacencyVerifier>>`. The host (the
+/// `dregg-turn` executor, which *does* link `dregg-circuit`) installs the real
+/// STARK-backed implementation via
+/// [`WitnessedPredicateRegistry::register_builtin`].
+///
+/// # Fail-closed contract
+///
+/// When **no** adjacency verifier is installed, the neighbor verifiers
+/// **reject** every non-membership / non-revocation proof. This is the
+/// "improve, don't degrade" posture: the previous commitment-keyed-tag-only
+/// form silently accepted attacker-chosen wide brackets
+/// (`lower=0x00…`, `upper=0xFF…`) for any candidate. Refusing until the real
+/// adjacency STARK is wired is strictly sounder than that forge.
+pub trait NeighborAdjacencyVerifier: Send + Sync {
+    /// Verify that `lower` and `upper` are **consecutive** leaves under the
+    /// sorted-set Merkle `root`, using the prover-supplied `adjacency_proof`
+    /// bytes. Returns `Ok(())` on accept; an explanatory `Err(reason)` on
+    /// reject. Implementations MUST bind the proof to `(root, lower, upper)`
+    /// and enforce `index(upper) == index(lower) + 1`.
+    fn verify_adjacency(
+        &self,
+        root: &[u8; 32],
+        lower: &[u8; 32],
+        upper: &[u8; 32],
+        adjacency_proof: &[u8],
+    ) -> Result<(), String>;
+}
+
 /// The registry resolving [`WitnessedPredicateKind`]s to their
 /// verifiers.
 ///
@@ -581,19 +620,14 @@ impl WitnessedPredicateRegistry {
         r.register_builtin(Arc::new(StubVerifier::dfa()));
         r.register_builtin(Arc::new(StubVerifier::temporal()));
         r.register_builtin(Arc::new(StubVerifier::merkle_membership()));
-        // NonMembership is structurally checkable from neighbor-witness
-        // bytes alone, so we register a *real* (non-stub) verifier that
-        // enforces the sorted-set neighbor invariant: A < candidate < B
-        // with A, B consecutive in the sorted leaf order. This makes
-        // forged renunciations rejectable without needing the full STARK
-        // verifier registered.
-        r.register_builtin(Arc::new(SortedNeighborNonMembershipVerifier));
-        // BlindedSet is structurally + cryptographically checkable from the
-        // credential-set membership witness alone (Merkle path + binding tag
-        // + non-revocation), so we register the *real* (Silver-Sound)
-        // verifier rather than the accept-any stub. See
-        // `CredentialSetMembershipVerifier`.
-        r.register_builtin(Arc::new(CredentialSetMembershipVerifier));
+        // NonMembership / BlindedSet ship REAL verifiers, but their soundness
+        // now requires a Merkle-adjacency STARK (consecutive-index binding)
+        // that the cell crate cannot run. Under `with_stubs` no adjacency
+        // verifier is installed, so these fail closed — their accept path is
+        // exercised in the `dregg-turn` integration tests where the
+        // circuit-backed adjacency verifier is installed.
+        r.register_builtin(Arc::new(SortedNeighborNonMembershipVerifier::fail_closed()));
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier::fail_closed()));
         r.register_builtin(Arc::new(StubVerifier::bridge_predicate()));
         r.register_builtin(Arc::new(StubVerifier::pedersen_equality()));
         r
@@ -653,14 +687,13 @@ impl WitnessedPredicateRegistry {
         r.register_builtin(Arc::new(NotYetWiredVerifier::dfa()));
         r.register_builtin(Arc::new(NotYetWiredVerifier::temporal()));
         r.register_builtin(Arc::new(NotYetWiredVerifier::merkle_membership()));
-        // NonMembership ships a real (Silver-Sound) verifier in this crate.
-        r.register_builtin(Arc::new(SortedNeighborNonMembershipVerifier));
-        // BlindedSet ships a real (Silver-Sound) verifier in this crate:
-        // the credential-set membership witness (Merkle path + commitment-
-        // keyed binding tag + sorted-neighbor non-revocation) is fully
-        // checkable without the circuit crate. See
-        // `CredentialSetMembershipVerifier`.
-        r.register_builtin(Arc::new(CredentialSetMembershipVerifier));
+        // NonMembership / BlindedSet ship real verifiers, but they now REQUIRE
+        // a Merkle-adjacency STARK that the cell crate cannot run. The cell-only
+        // default therefore installs them FAIL-CLOSED (no adjacency verifier);
+        // the host upgrades them to the circuit-backed form via
+        // `register_builtin` (see `dregg_turn::executor::membership_verifier`).
+        r.register_builtin(Arc::new(SortedNeighborNonMembershipVerifier::fail_closed()));
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier::fail_closed()));
         r.register_builtin(Arc::new(NotYetWiredVerifier::bridge_predicate()));
         r.register_builtin(Arc::new(NotYetWiredVerifier::pedersen_equality()));
         r
@@ -1342,7 +1375,66 @@ impl NonMembershipNeighborProof {
     }
 }
 
-struct SortedNeighborNonMembershipVerifier;
+/// Wire encoding for a [`WitnessedPredicateKind::NonMembership`] proof,
+/// **v2** — the sorted-neighbor witness *plus* a real Merkle-adjacency STARK
+/// proof that binds `lower`/`upper` to consecutive leaf indices under the
+/// committed root.
+///
+/// This supersedes the bare 96-byte [`NonMembershipNeighborProof`] wire form,
+/// whose commitment-keyed `adjacency_tag` was forgeable by anyone who knew the
+/// public set commitment (the documented Silver gap). The `adjacency_proof`
+/// bytes are opaque to the cell crate; they are checked by the host-installed
+/// [`NeighborAdjacencyVerifier`] (a STARK in `dregg-circuit`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NonMembershipProofV2 {
+    /// The sorted-neighbor witness (`lower < candidate < upper` + tag).
+    pub neighbor: NonMembershipNeighborProof,
+    /// Serialized Merkle-adjacency STARK proving `lower`/`upper` are
+    /// consecutive leaves under the committed root.
+    pub adjacency_proof: Vec<u8>,
+}
+
+impl NonMembershipProofV2 {
+    /// Serialize to postcard wire bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("NonMembershipProofV2 serialization is infallible")
+    }
+    /// Deserialize from postcard wire bytes; `None` on malformed/empty input.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() {
+            return None;
+        }
+        postcard::from_bytes(bytes).ok()
+    }
+}
+
+/// Real (Golden-Sound) verifier for [`WitnessedPredicateKind::NonMembership`].
+///
+/// Holds an optional host-installed [`NeighborAdjacencyVerifier`]. When present,
+/// the verifier REQUIRES a [`NonMembershipProofV2`] carrying a Merkle-adjacency
+/// STARK that binds `lower`/`upper` to consecutive leaf indices under the
+/// committed root — closing the wide-bracket forge. When **absent**, it fails
+/// closed (rejects every proof): the cell crate cannot verify the STARK itself,
+/// and accepting the bare neighbor witness would re-open the forge.
+#[derive(Clone, Default)]
+pub struct SortedNeighborNonMembershipVerifier {
+    adjacency: Option<Arc<dyn NeighborAdjacencyVerifier>>,
+}
+
+impl SortedNeighborNonMembershipVerifier {
+    /// Construct the fail-closed verifier (no adjacency STARK installed).
+    pub fn fail_closed() -> Self {
+        Self { adjacency: None }
+    }
+
+    /// Construct with a host-installed adjacency STARK verifier (the
+    /// production form; `dregg-turn` installs the `dregg-circuit`-backed one).
+    pub fn with_adjacency(adjacency: Arc<dyn NeighborAdjacencyVerifier>) -> Self {
+        Self {
+            adjacency: Some(adjacency),
+        }
+    }
+}
 
 impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
     fn name(&self) -> &'static str {
@@ -1359,15 +1451,19 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
         input: &PredicateInput<'_>,
         proof_bytes: &[u8],
     ) -> Result<(), WitnessedPredicateError> {
-        let proof = NonMembershipNeighborProof::from_bytes(proof_bytes).ok_or_else(|| {
+        // Require the v2 wire form carrying a Merkle-adjacency STARK proof.
+        let proof_v2 = NonMembershipProofV2::from_bytes(proof_bytes).ok_or_else(|| {
             WitnessedPredicateError::Rejected {
                 kind_name: "NonMembership",
                 reason: format!(
-                    "non-membership proof must be 96 bytes (lower||upper||adjacency_tag), got {}",
+                    "non-membership proof must be a postcard NonMembershipProofV2 \
+                     (neighbor witness + Merkle-adjacency STARK); got {} bytes that did \
+                     not decode",
                     proof_bytes.len()
                 ),
             }
         })?;
+        let proof = proof_v2.neighbor;
         // Resolve the candidate bytes from the input.
         let candidate: [u8; 32] = match input {
             PredicateInput::Slot(s) => **s,
@@ -1399,21 +1495,10 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
                 });
             }
         };
-        // Enforce the per-(commitment, lower, upper) adjacency tag.
-        // This closes the AIR-soundness-audit (ce1e2def) finding #2:
-        // the prior `[0xFE; 32]` sentinel was a public constant any
-        // playground prover could supply for arbitrary sets. Today the
-        // tag is keyed on the set's commitment, so a prover who doesn't
-        // know `commitment` cannot reconstruct the tag.
-        //
-        // SILVER-vs-GOLDEN GAP: this binds the tag to the commitment
-        // but not to a real Merkle adjacency relation. An attacker who
-        // *knows* the commitment (e.g. it was published) can still
-        // pick lower=0x00…, upper=0xFF… and recompute a valid tag —
-        // the candidate trivially falls in the interval. Closing that
-        // requires the real Merkle adjacency STARK (Golden Vision):
-        // prove MerklePath(commitment, lower) and
-        // MerklePath(commitment, upper) at consecutive leaf indices.
+        // Enforce the per-(commitment, lower, upper) adjacency tag. This is
+        // the first (cheap) gate: a prover who doesn't know the set's
+        // `commitment` cannot reconstruct the tag (closes the legacy
+        // public-`[0xFE;32]`-sentinel attack, AIR-soundness-audit finding #2).
         let expected =
             NonMembershipNeighborProof::adjacency_tag(commitment, &proof.lower, &proof.upper);
         if proof.adjacency_tag != expected {
@@ -1435,7 +1520,41 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
                 reason: "candidate is not strictly below the upper neighbor (the candidate equals or exceeds the upper bound)".into(),
             });
         }
-        Ok(())
+        // GOLDEN TEETH: require a real Merkle-adjacency STARK binding
+        // `lower`/`upper` to CONSECUTIVE leaf indices under the committed root.
+        // This closes the documented Silver wide-bracket forge: a prover who
+        // knows the public `commitment` can no longer pick `lower=0x00…`,
+        // `upper=0xFF…` — those are not adjacent leaves of the committed tree,
+        // so no adjacency proof exists for them.
+        //
+        // FAIL CLOSED: if no adjacency verifier is installed (the cell crate
+        // alone cannot run the STARK), reject. The host (`dregg-turn`) installs
+        // the `dregg-circuit`-backed verifier via `register_builtin`.
+        match &self.adjacency {
+            Some(adj) => adj
+                .verify_adjacency(
+                    commitment,
+                    &proof.lower,
+                    &proof.upper,
+                    &proof_v2.adjacency_proof,
+                )
+                .map_err(|reason| WitnessedPredicateError::Rejected {
+                    kind_name: "NonMembership",
+                    reason: format!(
+                        "Merkle-adjacency STARK rejected (lower/upper are not consecutive \
+                         leaves under the committed root): {reason}"
+                    ),
+                }),
+            None => Err(WitnessedPredicateError::Rejected {
+                kind_name: "NonMembership",
+                reason: "no Merkle-adjacency verifier installed: this registry cannot soundly \
+                         check that lower/upper are consecutive leaves of the committed set, so \
+                         it fails closed. The host must register the dregg-circuit-backed \
+                         SortedNeighborNonMembershipVerifier (see \
+                         dregg_turn::executor::membership_verifier)."
+                    .into(),
+            }),
+        }
     }
 }
 
@@ -1541,6 +1660,13 @@ pub struct CredentialSetMembershipProof {
     /// Sorted-neighbor non-membership witness proving `holder` is absent
     /// from `revocation_root`.
     pub non_revocation: NonMembershipNeighborProof,
+    /// Serialized Merkle-adjacency STARK proving the non-revocation neighbors
+    /// (`non_revocation.lower`/`.upper`) are CONSECUTIVE leaves under
+    /// `revocation_root`. Without this, the non-revocation leg is forgeable by
+    /// anyone who knows `revocation_root` (the documented Silver gap). Checked
+    /// by the host-installed [`NeighborAdjacencyVerifier`].
+    #[serde(default)]
+    pub revocation_adjacency_proof: Vec<u8>,
     /// Keyed binding tag over (commitment, holder, issuer_set_root,
     /// revocation_root). Reconstruct via [`Self::binding_tag`].
     pub binding_tag: [u8; 32],
@@ -1605,7 +1731,8 @@ impl CredentialSetMembershipProof {
 
     /// Serialize to postcard wire bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
-        postcard::to_allocvec(self).expect("CredentialSetMembershipProof serialization is infallible")
+        postcard::to_allocvec(self)
+            .expect("CredentialSetMembershipProof serialization is infallible")
     }
 
     /// Deserialize from postcard wire bytes. Returns `None` on malformed
@@ -1631,6 +1758,10 @@ impl CredentialSetMembershipProof {
     ///
     /// The `issuer_set_root` and `binding_tag` are derived so the result
     /// verifies under [`CredentialSetMembershipVerifier`].
+    /// `revocation_adjacency_proof` carries the Merkle-adjacency STARK proving
+    /// `rev_lower`/`rev_upper` are consecutive leaves under `revocation_root`
+    /// (produced by `dregg-circuit`'s adjacency prover). Pass an empty vec only
+    /// for tests that exercise the fail-closed path.
     pub fn new(
         commitment: &[u8; 32],
         holder: &[u8; 32],
@@ -1638,28 +1769,50 @@ impl CredentialSetMembershipProof {
         revocation_root: [u8; 32],
         rev_lower: [u8; 32],
         rev_upper: [u8; 32],
+        revocation_adjacency_proof: Vec<u8>,
     ) -> Self {
         let leaf = Self::holder_leaf(commitment, holder);
         let issuer_set_root = Self::merkle_root_from_path(leaf, &merkle_path);
         let non_revocation =
             NonMembershipNeighborProof::new(&revocation_root, rev_lower, rev_upper);
-        let binding_tag =
-            Self::binding_tag(commitment, holder, &issuer_set_root, &revocation_root);
+        let binding_tag = Self::binding_tag(commitment, holder, &issuer_set_root, &revocation_root);
         Self {
             issuer_set_root,
             revocation_root,
             merkle_path,
             non_revocation,
+            revocation_adjacency_proof,
             binding_tag,
         }
     }
 }
 
-/// Real (Silver-Sound) verifier for [`WitnessedPredicateKind::BlindedSet`]
-/// credential-set membership proofs. See [`CredentialSetMembershipProof`]
-/// for the full soundness contract and the documented Silver-vs-Golden
-/// gap.
-struct CredentialSetMembershipVerifier;
+/// Real verifier for [`WitnessedPredicateKind::BlindedSet`] credential-set
+/// membership proofs. See [`CredentialSetMembershipProof`] for the full
+/// soundness contract.
+///
+/// Holds an optional host-installed [`NeighborAdjacencyVerifier`]. The
+/// non-revocation leg REQUIRES a Merkle-adjacency STARK (consecutive revocation
+/// neighbors under `revocation_root`); without an installed verifier it fails
+/// closed, exactly like [`SortedNeighborNonMembershipVerifier`].
+#[derive(Clone, Default)]
+pub struct CredentialSetMembershipVerifier {
+    adjacency: Option<Arc<dyn NeighborAdjacencyVerifier>>,
+}
+
+impl CredentialSetMembershipVerifier {
+    /// Construct the fail-closed verifier (no adjacency STARK installed).
+    pub fn fail_closed() -> Self {
+        Self { adjacency: None }
+    }
+
+    /// Construct with a host-installed adjacency STARK verifier (production).
+    pub fn with_adjacency(adjacency: Arc<dyn NeighborAdjacencyVerifier>) -> Self {
+        Self {
+            adjacency: Some(adjacency),
+        }
+    }
+}
 
 impl WitnessedPredicateVerifier for CredentialSetMembershipVerifier {
     fn name(&self) -> &'static str {
@@ -1737,15 +1890,15 @@ impl WitnessedPredicateVerifier for CredentialSetMembershipVerifier {
                 kind_name: "BlindedSet",
                 reason: "binding_tag does not match H_keyed(\"dregg-credential-set-binding-v1\", \
                          commitment || holder || issuer_set_root || revocation_root); the proof \
-                         is not bound to this (issuer, schema) commitment + holder + roots".into(),
+                         is not bound to this (issuer, schema) commitment + holder + roots"
+                    .into(),
             });
         }
 
         // 2. Membership: recompute the holder leaf and walk the Merkle
         //    path; it must reach the issuer's published set root.
         let leaf = CredentialSetMembershipProof::holder_leaf(commitment, &holder);
-        let reached =
-            CredentialSetMembershipProof::merkle_root_from_path(leaf, &proof.merkle_path);
+        let reached = CredentialSetMembershipProof::merkle_root_from_path(leaf, &proof.merkle_path);
         if reached != proof.issuer_set_root {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "BlindedSet",
@@ -1773,18 +1926,49 @@ impl WitnessedPredicateVerifier for CredentialSetMembershipVerifier {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "BlindedSet",
                 reason: "non-revocation lower neighbor is not strictly below the holder \
-                         (the holder may be revoked)".into(),
+                         (the holder may be revoked)"
+                    .into(),
             });
         }
         if holder >= nr.upper {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "BlindedSet",
                 reason: "holder is not strictly below the non-revocation upper neighbor \
-                         (the holder may be revoked)".into(),
+                         (the holder may be revoked)"
+                    .into(),
             });
         }
 
-        Ok(())
+        // 4. GOLDEN TEETH: require a real Merkle-adjacency STARK binding the
+        //    non-revocation neighbors to CONSECUTIVE leaf indices under
+        //    `revocation_root`. Without this, a holder who knows
+        //    `revocation_root` could pick wide-bracket sentinels and forge
+        //    non-revocation. Fail closed when no adjacency verifier is
+        //    installed (the cell crate cannot run the STARK itself).
+        match &self.adjacency {
+            Some(adj) => adj
+                .verify_adjacency(
+                    &proof.revocation_root,
+                    &nr.lower,
+                    &nr.upper,
+                    &proof.revocation_adjacency_proof,
+                )
+                .map_err(|reason| WitnessedPredicateError::Rejected {
+                    kind_name: "BlindedSet",
+                    reason: format!(
+                        "non-revocation Merkle-adjacency STARK rejected (revocation neighbors \
+                         are not consecutive leaves under revocation_root): {reason}"
+                    ),
+                }),
+            None => Err(WitnessedPredicateError::Rejected {
+                kind_name: "BlindedSet",
+                reason: "no Merkle-adjacency verifier installed: this registry cannot soundly \
+                         check non-revocation neighbor adjacency, so it fails closed. The host \
+                         must register the dregg-circuit-backed CredentialSetMembershipVerifier \
+                         (see dregg_turn::executor::membership_verifier)."
+                    .into(),
+            }),
+        }
     }
 }
 
@@ -2005,95 +2189,174 @@ mod tests {
     /// Canonical set-commitment used in NonMembership tests.
     const SET_COMMITMENT: [u8; 32] = [0xAB; 32];
 
-    /// A helper that fabricates an honest renunciation neighbor witness
-    /// for a candidate that is provably *not* in the sorted set with
-    /// root `SET_COMMITMENT`. Uses the post-audit (ce1e2def)
-    /// commitment-keyed adjacency tag derivation.
-    fn honest_renunciation_proof(lower: [u8; 32], upper: [u8; 32]) -> NonMembershipNeighborProof {
-        NonMembershipNeighborProof::new(&SET_COMMITMENT, lower, upper)
+    /// A mock adjacency verifier for cell-side unit tests. The REAL adjacency
+    /// STARK lives in `dregg-circuit` / `dregg-turn`; here we only need to
+    /// exercise the cell verifier's plumbing (structural checks + the
+    /// install/fail-closed branch). The mock accepts iff `adjacency_proof ==
+    /// b"ADJ-OK"` and `lower < upper`, modelling "consecutive under root."
+    struct MockAdjacency;
+    impl NeighborAdjacencyVerifier for MockAdjacency {
+        fn verify_adjacency(
+            &self,
+            _root: &[u8; 32],
+            lower: &[u8; 32],
+            upper: &[u8; 32],
+            adjacency_proof: &[u8],
+        ) -> Result<(), String> {
+            if adjacency_proof != b"ADJ-OK" {
+                return Err("mock: missing/invalid adjacency proof".into());
+            }
+            if lower >= upper {
+                return Err("mock: lower !< upper".into());
+            }
+            Ok(())
+        }
+    }
+
+    /// A registry whose NonMembership/BlindedSet verifiers have the mock
+    /// adjacency verifier installed (mirrors the production turn-layer wiring).
+    fn registry_with_mock_adjacency() -> WitnessedPredicateRegistry {
+        let mut r = WitnessedPredicateRegistry::with_stubs();
+        let adj: Arc<dyn NeighborAdjacencyVerifier> = Arc::new(MockAdjacency);
+        r.register_builtin(Arc::new(
+            SortedNeighborNonMembershipVerifier::with_adjacency(adj.clone()),
+        ));
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier::with_adjacency(
+            adj,
+        )));
+        r
+    }
+
+    /// Build a v2 non-membership proof carrying the mock-accepted adjacency
+    /// blob `b"ADJ-OK"`.
+    fn honest_renunciation_v2(lower: [u8; 32], upper: [u8; 32]) -> Vec<u8> {
+        NonMembershipProofV2 {
+            neighbor: NonMembershipNeighborProof::new(&SET_COMMITMENT, lower, upper),
+            adjacency_proof: b"ADJ-OK".to_vec(),
+        }
+        .to_bytes()
     }
 
     #[test]
     fn non_membership_accepts_legal_renunciation() {
-        // Candidate 0x05 falls in (0x04, 0x06); honest witness accepts.
-        let lower = [0x04u8; 32];
-        let upper = [0x06u8; 32];
+        // Candidate 0x05 falls in (0x04, 0x06); honest witness + adjacency
+        // proof accepts when the adjacency verifier is installed.
         let candidate = [0x05u8; 32];
-        let proof = honest_renunciation_proof(lower, upper);
-        let bytes = proof.to_bytes();
+        let bytes = honest_renunciation_v2([0x04u8; 32], [0x06u8; 32]);
 
-        let reg = WitnessedPredicateRegistry::with_stubs();
+        let reg = registry_with_mock_adjacency();
         let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         reg.verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
             .expect("legal renunciation should verify");
     }
 
     #[test]
-    fn non_membership_rejects_candidate_equal_to_lower_neighbor() {
-        // Candidate == lower neighbor → candidate IS in set → renunciation
-        // must reject (this is the adversarial case: the prover IS in the
-        // set but is claiming non-membership).
-        let lower = [0x05u8; 32];
-        let upper = [0x06u8; 32];
+    fn non_membership_fails_closed_without_adjacency_verifier() {
+        // Same honest proof, but the default (cell-only) registry has NO
+        // adjacency verifier installed → fail closed.
         let candidate = [0x05u8; 32];
-        let proof = honest_renunciation_proof(lower, upper);
-
-        let reg = WitnessedPredicateRegistry::with_stubs();
+        let bytes = honest_renunciation_v2([0x04u8; 32], [0x06u8; 32]);
+        let reg = WitnessedPredicateRegistry::default_builtins();
         let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
-            .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
+            .unwrap_err();
+        match err {
+            WitnessedPredicateError::Rejected { reason, .. } => {
+                assert!(
+                    reason.contains("no Merkle-adjacency verifier installed"),
+                    "{reason}"
+                )
+            }
+            other => panic!("expected fail-closed Rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_membership_rejects_candidate_equal_to_lower_neighbor() {
+        // Candidate == lower neighbor → candidate IS in set → renunciation
+        // must reject (the prover IS in the set but claims non-membership).
+        let candidate = [0x05u8; 32];
+        let bytes = honest_renunciation_v2([0x05u8; 32], [0x06u8; 32]);
+
+        let reg = registry_with_mock_adjacency();
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
             .unwrap_err();
         assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
     }
 
     #[test]
     fn non_membership_rejects_candidate_equal_to_upper_neighbor() {
-        let lower = [0x04u8; 32];
-        let upper = [0x05u8; 32];
         let candidate = [0x05u8; 32];
-        let proof = honest_renunciation_proof(lower, upper);
+        let bytes = honest_renunciation_v2([0x04u8; 32], [0x05u8; 32]);
 
-        let reg = WitnessedPredicateRegistry::with_stubs();
+        let reg = registry_with_mock_adjacency();
         let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
-            .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
             .unwrap_err();
         assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
     }
 
     #[test]
     fn non_membership_rejects_out_of_interval_candidate() {
-        // Candidate above the upper neighbor: out-of-interval, neighbors
-        // don't bracket the candidate.
-        let lower = [0x04u8; 32];
-        let upper = [0x06u8; 32];
+        // Candidate above the upper neighbor: out-of-interval.
         let candidate = [0x09u8; 32];
-        let proof = honest_renunciation_proof(lower, upper);
+        let bytes = honest_renunciation_v2([0x04u8; 32], [0x06u8; 32]);
 
-        let reg = WitnessedPredicateRegistry::with_stubs();
+        let reg = registry_with_mock_adjacency();
         let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
-            .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
             .unwrap_err();
         assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
     }
 
     #[test]
     fn non_membership_rejects_forged_zero_adjacency_tag() {
-        // Even if lower < candidate < upper, a forged adjacency_tag
-        // breaks the soundness binding to the sorted-set adjacency
-        // commitment.
-        let lower = [0x04u8; 32];
-        let upper = [0x06u8; 32];
+        // Even if lower < candidate < upper and adjacency installed, a forged
+        // commitment-keyed adjacency_tag breaks the cheap binding gate.
         let candidate = [0x05u8; 32];
-        let mut proof = honest_renunciation_proof(lower, upper);
-        proof.adjacency_tag = [0u8; 32]; // forged
-        let reg = WitnessedPredicateRegistry::with_stubs();
+        let mut neighbor =
+            NonMembershipNeighborProof::new(&SET_COMMITMENT, [0x04u8; 32], [0x06u8; 32]);
+        neighbor.adjacency_tag = [0u8; 32]; // forged
+        let bytes = NonMembershipProofV2 {
+            neighbor,
+            adjacency_proof: b"ADJ-OK".to_vec(),
+        }
+        .to_bytes();
+        let reg = registry_with_mock_adjacency();
         let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
-            .verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes())
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
             .unwrap_err();
         assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
+    }
+
+    #[test]
+    fn non_membership_rejects_missing_adjacency_proof() {
+        // Valid neighbor witness but the adjacency proof blob is absent/invalid:
+        // the installed adjacency verifier rejects. THE FORGE-CLOSE: a prover
+        // who knows the commitment can recompute the tag but cannot supply a
+        // real consecutive-index adjacency proof.
+        let candidate = [0x42u8; 32];
+        let bytes = NonMembershipProofV2 {
+            // Wide bracket: knows the commitment, picks 0x00…/0xFF…
+            neighbor: NonMembershipNeighborProof::new(&SET_COMMITMENT, [0x00u8; 32], [0xFFu8; 32]),
+            adjacency_proof: Vec::new(), // no adjacency proof
+        }
+        .to_bytes();
+        let reg = registry_with_mock_adjacency();
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "wide-bracket forge without a real adjacency proof must reject; got {err:?}"
+        );
     }
 
     #[test]
@@ -2127,24 +2390,25 @@ mod tests {
 
     #[test]
     fn audit_attack_non_membership_rejects_legacy_public_sentinel() {
-        // The pre-audit attack: pick wide-bracket neighbors and the
-        // public sentinel [0xFE; 32]. Today the verifier rejects
-        // because the sentinel does not match the per-commitment
-        // adjacency_tag derivation.
+        // The pre-audit attack: pick wide-bracket neighbors and the public
+        // sentinel [0xFE; 32]. The verifier rejects because the sentinel does
+        // not match the per-commitment adjacency_tag derivation (and the bare
+        // 96-byte form no longer parses as a v2 proof anyway).
         let candidate = [0x42u8; 32];
-        let attacker_proof = NonMembershipNeighborProof {
+        let neighbor = NonMembershipNeighborProof {
             lower: [0x00u8; 32],
             upper: [0xFFu8; 32],
             adjacency_tag: [0xFEu8; 32], // the prior public constant
         };
-        let reg = WitnessedPredicateRegistry::default_builtins();
+        let bytes = NonMembershipProofV2 {
+            neighbor,
+            adjacency_proof: b"ADJ-OK".to_vec(),
+        }
+        .to_bytes();
+        let reg = registry_with_mock_adjacency();
         let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
-            .verify(
-                &wp,
-                &PredicateInput::Sender(&candidate),
-                &attacker_proof.to_bytes(),
-            )
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
             .unwrap_err();
         assert!(
             matches!(err, WitnessedPredicateError::Rejected { .. }),
@@ -2155,22 +2419,24 @@ mod tests {
     #[test]
     fn audit_attack_non_membership_rejects_wrong_commitment_keyed_tag() {
         // An attacker constructs a *well-formed* tag against a different
-        // commitment, then submits the proof against `SET_COMMITMENT`.
-        // The verifier recomputes the tag against the predicate's
-        // declared commitment and rejects.
+        // commitment, then submits the proof against `SET_COMMITMENT`. The
+        // verifier recomputes the tag against the declared commitment and
+        // rejects.
         let candidate = [0x42u8; 32];
-        let lower = [0x00u8; 32];
-        let upper = [0xFFu8; 32];
         let wrong_commitment = [0xCCu8; 32];
-        let attacker_proof = NonMembershipNeighborProof::new(&wrong_commitment, lower, upper);
-        let reg = WitnessedPredicateRegistry::default_builtins();
+        let bytes = NonMembershipProofV2 {
+            neighbor: NonMembershipNeighborProof::new(
+                &wrong_commitment,
+                [0x00u8; 32],
+                [0xFFu8; 32],
+            ),
+            adjacency_proof: b"ADJ-OK".to_vec(),
+        }
+        .to_bytes();
+        let reg = registry_with_mock_adjacency();
         let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
         let err = reg
-            .verify(
-                &wp,
-                &PredicateInput::Sender(&candidate),
-                &attacker_proof.to_bytes(),
-            )
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
             .unwrap_err();
         assert!(
             matches!(err, WitnessedPredicateError::Rejected { .. }),
@@ -2178,33 +2444,32 @@ mod tests {
         );
     }
 
-    /// SILVER-vs-GOLDEN-GAP regression test: a prover who *does* know
-    /// the set's commitment can still construct a wide-bracket proof
-    /// (lower=0x00…, upper=0xFF…) and bypass non-membership for any
-    /// candidate. This is the documented remaining gap; closing it
-    /// requires the full Merkle adjacency STARK (Golden Vision).
-    ///
-    /// This test pins the gap: it deliberately ACCEPTS the attack so a
-    /// future Golden-Vision verifier can be detected as a behavior
-    /// change (the test will start failing — that failure is the
-    /// expected signal that the Golden lift has landed).
+    /// FORGE CLOSED (fail-before / pass-after): a prover who knows the public
+    /// set commitment picks a wide bracket (lower=0x00…, upper=0xFF…) and
+    /// recomputes a valid commitment-keyed `adjacency_tag`. Pre-fix, the
+    /// Silver verifier ACCEPTED this for any candidate. Now the verifier
+    /// REQUIRES a Merkle-adjacency STARK proving lower/upper are consecutive
+    /// leaves — and 0x00…/0xFF… are not adjacent leaves of any real set, so the
+    /// installed (mock here, STARK in production) adjacency verifier REJECTS.
     #[test]
-    fn audit_silver_golden_gap_commitment_knower_can_still_forge_wide_bracket() {
+    fn audit_forge_wide_bracket_now_rejected_by_adjacency() {
         let candidate = [0x42u8; 32];
-        // Attacker knows SET_COMMITMENT (public).
-        let proof = NonMembershipNeighborProof::new(&SET_COMMITMENT, [0x00u8; 32], [0xFFu8; 32]);
-        let reg = WitnessedPredicateRegistry::default_builtins();
-        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
-        match reg.verify(&wp, &PredicateInput::Sender(&candidate), &proof.to_bytes()) {
-            Ok(()) => {
-                // Expected (Silver gap). Document the Golden-Vision lift.
-            }
-            Err(e) => panic!(
-                "Silver-vs-Golden gap regression: a future verifier rejected the \
-                 wide-bracket attack — likely the Merkle adjacency STARK landed. \
-                 Update this test to assert rejection. Got: {e:?}"
-            ),
+        // Attacker knows SET_COMMITMENT (public); recomputes a valid tag, but
+        // cannot supply a real consecutive-index adjacency proof.
+        let bytes = NonMembershipProofV2 {
+            neighbor: NonMembershipNeighborProof::new(&SET_COMMITMENT, [0x00u8; 32], [0xFFu8; 32]),
+            adjacency_proof: Vec::new(), // no real adjacency proof exists
         }
+        .to_bytes();
+        let reg = registry_with_mock_adjacency();
+        let wp = WitnessedPredicate::non_membership(SET_COMMITMENT, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&candidate), &bytes)
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "wide-bracket forge must now be REJECTED by the adjacency requirement; got {err:?}"
+        );
     }
 
     // ─── WitnessProducer — left adjoint of WitnessedPredicateVerifier ──
@@ -2501,9 +2766,6 @@ mod tests {
         let lower = {
             let mut l = *holder;
             l[31] = l[31].wrapping_sub(1);
-            // ensure strictly below by also zeroing nothing else; if holder
-            // ends in 0x00 this still produces a smaller array because we
-            // subtract from the last byte (handled by caller choosing holder).
             l
         };
         let upper = {
@@ -2511,7 +2773,17 @@ mod tests {
             u[31] = u[31].wrapping_add(1);
             u
         };
-        CredentialSetMembershipProof::new(commitment, holder, path, revocation_root, lower, upper)
+        // The mock adjacency verifier accepts `b"ADJ-OK"`; the production prover
+        // supplies a real consecutive-index STARK here.
+        CredentialSetMembershipProof::new(
+            commitment,
+            holder,
+            path,
+            revocation_root,
+            lower,
+            upper,
+            b"ADJ-OK".to_vec(),
+        )
     }
 
     #[test]
@@ -2521,10 +2793,60 @@ mod tests {
         let proof = honest_credential_proof(&commitment, &holder);
         let bytes = proof.to_bytes();
 
-        let reg = WitnessedPredicateRegistry::default_builtins();
+        let reg = registry_with_mock_adjacency();
         let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
         reg.verify(&wp, &PredicateInput::Sender(&holder), &bytes)
             .expect("honest credential-set membership proof must verify");
+    }
+
+    #[test]
+    fn blinded_set_fails_closed_without_adjacency_verifier() {
+        // The default (cell-only) registry has no adjacency verifier; an
+        // otherwise-honest proof fails closed at the non-revocation adjacency
+        // step.
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let proof = honest_credential_proof(&commitment, &holder);
+        let bytes = proof.to_bytes();
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&holder), &bytes)
+            .unwrap_err();
+        match err {
+            WitnessedPredicateError::Rejected { reason, .. } => {
+                assert!(
+                    reason.contains("no Merkle-adjacency verifier installed"),
+                    "{reason}"
+                )
+            }
+            other => panic!("expected fail-closed Rejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn blinded_set_rejects_wide_bracket_non_revocation_forge() {
+        // FORGE CLOSE: a holder who knows revocation_root picks wide-bracket
+        // non-revocation neighbors but cannot supply a real adjacency proof.
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let mut proof = honest_credential_proof(&commitment, &holder);
+        // Replace non-revocation neighbors with a wide bracket and drop the
+        // adjacency proof; re-derive the (cheap) tag so only adjacency gates.
+        let revocation_root = proof.revocation_root;
+        proof.non_revocation =
+            NonMembershipNeighborProof::new(&revocation_root, [0x00u8; 32], [0xFFu8; 32]);
+        proof.revocation_adjacency_proof = Vec::new();
+        let bytes = proof.to_bytes();
+        let reg = registry_with_mock_adjacency();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&holder), &bytes)
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "wide-bracket non-revocation forge must reject; got {err:?}"
+        );
     }
 
     #[test]
@@ -2647,16 +2969,15 @@ mod tests {
         let path = vec![(sibling, false)];
         let revocation_root = [0x33u8; 32];
         // lower == holder ⇒ holder is in the revocation set ⇒ reject.
-        let mut proof = CredentialSetMembershipProof::new(
+        let proof = CredentialSetMembershipProof::new(
             &commitment,
             &holder,
             path,
             revocation_root,
-            holder,           // lower == holder (revoked)
-            [0x06u8; 32],     // upper
+            holder,       // lower == holder (revoked)
+            [0x06u8; 32], // upper
+            b"ADJ-OK".to_vec(),
         );
-        // Re-bind tag (roots unchanged by construction; new() already bound).
-        let _ = &mut proof;
         let bytes = proof.to_bytes();
 
         let reg = WitnessedPredicateRegistry::default_builtins();

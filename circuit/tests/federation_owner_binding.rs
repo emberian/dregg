@@ -21,8 +21,7 @@
 //! assert the STARK verifier rejects.
 
 use dregg_circuit::effect_vm::{
-    self, CellState, Effect, EffectVmContext, canonical_id_to_felts_4,
-    generate_effect_vm_trace_ext,
+    self, CellState, Effect, EffectVmContext, canonical_id_to_felts_4, generate_effect_vm_trace_ext,
 };
 use dregg_circuit::stark::{prove, verify};
 

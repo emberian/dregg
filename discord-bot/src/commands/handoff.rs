@@ -36,8 +36,7 @@ pub fn register() -> CreateCommand {
             .required(true),
         )
         .add_option(
-            CreateCommandOption::new(CommandOptionType::User, "user", "Recipient")
-                .required(true),
+            CreateCommandOption::new(CommandOptionType::User, "user", "Recipient").required(true),
         )
 }
 
@@ -91,7 +90,13 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     let target_id = match target_user_id {
         Some(id) => id,
         None => {
-            return reply_err(ctx, command, "Invalid Arguments", "Specify a recipient user.").await;
+            return reply_err(
+                ctx,
+                command,
+                "Invalid Arguments",
+                "Specify a recipient user.",
+            )
+            .await;
         }
     };
 
@@ -116,7 +121,9 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
                 ctx,
                 command,
                 "Recipient Has No Cipherclerk",
-                &format!("<@{target_id}> has no dregg identity. They need `/cipherclerk create` first."),
+                &format!(
+                    "<@{target_id}> has no dregg identity. They need `/cipherclerk create` first."
+                ),
             )
             .await;
         }

@@ -66,8 +66,8 @@ fn issuer_keys() -> IssuerKeys {
     IssuerKeys::new(
         [100u8; 32],
         [
-            3, 154, 242, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0,
+            3, 154, 242, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0,
         ],
         b"composition-test",
         "starbridge-identity",
@@ -134,7 +134,8 @@ fn fresh_env(seed: u8) -> Env {
     );
 
     // nameservice + subscription cells, owned by the same agent.
-    let mk_cell = |domain: &[u8]| Cell::with_balance(owner_pk, *blake3::hash(domain).as_bytes(), 1_000_000);
+    let mk_cell =
+        |domain: &[u8]| Cell::with_balance(owner_pk, *blake3::hash(domain).as_bytes(), 1_000_000);
     let ns_obj = mk_cell(b"nameservice");
     let ns_cell = ns_obj.id();
     executor.ensure_cell(ns_obj).expect("ns cell inserts");
@@ -142,7 +143,9 @@ fn fresh_env(seed: u8) -> Env {
 
     let sub_obj = mk_cell(b"subscription");
     let sub_cell = sub_obj.id();
-    executor.ensure_cell(sub_obj).expect("subscription cell inserts");
+    executor
+        .ensure_cell(sub_obj)
+        .expect("subscription cell inserts");
     executor.install_program(sub_cell, shape(subscription_program()));
 
     // Grant the primary cell capabilities to reach the two app cells.
@@ -153,7 +156,14 @@ fn fresh_env(seed: u8) -> Env {
         }
     });
 
-    Env { executor, cipherclerk, identity_cell, ns_cell, sub_cell, owner_pk }
+    Env {
+        executor,
+        cipherclerk,
+        identity_cell,
+        ns_cell,
+        sub_cell,
+        owner_pk,
+    }
 }
 
 /// Build the ordered composition actions. Randomness in credential issuance /
@@ -164,19 +174,32 @@ fn build_actions(env: &Env) -> Vec<Action> {
 
     // ── identity: issue → present → verify ──────────────────────────────
     let schema = kyc_schema();
-    let credential = issue(&issuer_keys(), &schema, [9u8; 32], attributes(), 1_700_000_000, None)
-        .expect("issuance succeeds");
-    let issue_action = build_issue_credential_action(cc, env.identity_cell, &credential, 1, [0u8; 32]);
+    let credential = issue(
+        &issuer_keys(),
+        &schema,
+        [9u8; 32],
+        attributes(),
+        1_700_000_000,
+        None,
+    )
+    .expect("issuance succeeds");
+    let issue_action =
+        build_issue_credential_action(cc, env.identity_cell, &credential, 1, [0u8; 32]);
 
     let opts = PresentationOptions::new()
         .disclose("verification_level")
-        .predicate(PredicateRequest::new("verification_level", Predicate::Gte(1)));
+        .predicate(PredicateRequest::new(
+            "verification_level",
+            Predicate::Gte(1),
+        ));
     let presentation = present(
         &credential,
         &dregg_token::AuthRequest {
             action: Some("read".into()),
             app_id: Some("composition-test".into()),
-            user_id: Some("0909090909090909090909090909090909090909090909090909090909090909".into()),
+            user_id: Some(
+                "0909090909090909090909090909090909090909090909090909090909090909".into(),
+            ),
             now: Some(1_700_000_000),
             ..Default::default()
         },
@@ -188,7 +211,10 @@ fn build_actions(env: &Env) -> Vec<Action> {
     let verify_opts = VerificationOptions {
         expected_schema: Some(schema),
         expected_disclosure: vec!["verification_level".into()],
-        expected_predicates: vec![PredicateRequest::new("verification_level", Predicate::Gte(1))],
+        expected_predicates: vec![PredicateRequest::new(
+            "verification_level",
+            Predicate::Gte(1),
+        )],
         ..Default::default()
     };
     let verify_action =
@@ -257,7 +283,10 @@ fn cross_app_composition_chains_one_receipt_chain_and_emits_events() {
 
     for (i, r) in receipts.iter().enumerate() {
         assert!(!r.emitted_events.is_empty(), "turn {i} must emit an event");
-        assert_eq!(r.action_count, 1, "each composition turn carries one action");
+        assert_eq!(
+            r.action_count, 1,
+            "each composition turn carries one action"
+        );
     }
 
     // identity verify (turn 2) accepted the presentation.
@@ -268,7 +297,10 @@ fn cross_app_composition_chains_one_receipt_chain_and_emits_events() {
 
     // THE composition property: all eight turns — across identity,
     // nameservice, and subscription — form ONE causal receipt chain.
-    assert_eq!(receipts[0].previous_receipt_hash, None, "first turn is genesis");
+    assert_eq!(
+        receipts[0].previous_receipt_hash, None,
+        "first turn is genesis"
+    );
     for i in 1..receipts.len() {
         assert_eq!(
             receipts[i].previous_receipt_hash,
@@ -290,9 +322,21 @@ fn cross_app_composition_state_transitions_are_deterministic_on_replay() {
     let second = submit_all(&fresh_env(7), &actions);
     assert_eq!(first.len(), second.len());
     for (i, (a, b)) in first.iter().zip(second.iter()).enumerate() {
-        assert_eq!(a.turn_hash, b.turn_hash, "turn_hash deterministic (turn {i})");
-        assert_eq!(a.pre_state_hash, b.pre_state_hash, "pre_state deterministic (turn {i})");
-        assert_eq!(a.post_state_hash, b.post_state_hash, "post_state deterministic (turn {i})");
-        assert_eq!(a.effects_hash, b.effects_hash, "effects_hash deterministic (turn {i})");
+        assert_eq!(
+            a.turn_hash, b.turn_hash,
+            "turn_hash deterministic (turn {i})"
+        );
+        assert_eq!(
+            a.pre_state_hash, b.pre_state_hash,
+            "pre_state deterministic (turn {i})"
+        );
+        assert_eq!(
+            a.post_state_hash, b.post_state_hash,
+            "post_state deterministic (turn {i})"
+        );
+        assert_eq!(
+            a.effects_hash, b.effects_hash,
+            "effects_hash deterministic (turn {i})"
+        );
     }
 }

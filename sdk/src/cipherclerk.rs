@@ -33,7 +33,7 @@ use dregg_intent::sse::EncryptedIntent;
 use dregg_intent::{CommitmentId, IntentKind, MatchSpec};
 use dregg_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken, TokenClearance};
 use dregg_trace::{AuthorizationTrace, Fact as TraceFact};
-use dregg_turn::{Effect, SovereignCellWitness, Turn};
+use dregg_turn::{Effect, SovereignCellWitness, Turn, WitnessedReceipt};
 use dregg_types::{PublicKey, Signature};
 
 use crate::error::SdkError;
@@ -951,6 +951,45 @@ pub struct AgentCipherclerk {
     /// crate compiles on wasm32 (CapTpClient pulls async-runtime deps).
     #[cfg(feature = "captp")]
     captp_client: Option<crate::captp_client::CapTpClient>,
+}
+
+/// Internal carrier for a proven sovereign turn: the proof-carrying [`Turn`]
+/// plus the retained scope-2 trace and γ.2-projected public inputs that the
+/// proof committed to. Produced by `AgentCipherclerk::prove_sovereign_turn`
+/// and consumed by both `execute_sovereign_turn_with_proof` (which keeps only
+/// the turn) and `emit_witnessed_receipt` (which lifts the trace + PI into a
+/// [`WitnessedReceipt`]).
+struct ProvenSovereignTurn {
+    /// The proof-carrying turn, with `execution_proof` populated.
+    turn: Turn,
+    /// The full Effect-VM execution trace (scope-2 replay material).
+    trace: Vec<Vec<dregg_circuit::field::BabyBear>>,
+    /// The public inputs the STARK proof committed to, including the γ.2
+    /// bilateral projection and the `IS_AGENT_CELL` flag.
+    public_inputs: Vec<dregg_circuit::field::BabyBear>,
+    /// The proof's claimed new state commitment (PI[NEW_COMMIT_BASE..+4]).
+    new_commitment: [u8; 32],
+    /// The cell's state commitment captured *before* effects were applied.
+    pre_state_commitment: [u8; 32],
+}
+
+/// The SDK agent's own side of a bilateral interaction: a per-cell
+/// [`WitnessedReceipt`] plus the submittable proof-carrying [`Turn`] it was
+/// derived from.
+///
+/// Returned by [`AgentCipherclerk::emit_witnessed_receipt`]. The `witnessed`
+/// field is a real scope-2 WR (receipt + EffectVM proof bytes + γ.2-projected
+/// PI + inline scope-2 trace); it round-trips through
+/// [`crate::witness_artifact`] (DWR1) and slots into a
+/// `&[(CellId, WitnessedReceipt)]` bundle for the γ.2 aggregator.
+#[derive(Clone, Debug)]
+pub struct SovereignWitnessedReceipt {
+    /// The cell whose transition this WR attests (its role in the bundle key).
+    pub cell_id: CellId,
+    /// The submittable proof-carrying turn.
+    pub turn: Turn,
+    /// The per-cell witnessed receipt.
+    pub witnessed: WitnessedReceipt,
 }
 
 impl AgentCipherclerk {
@@ -4646,6 +4685,115 @@ impl AgentCipherclerk {
         effects: Vec<Effect>,
         fee: u64,
     ) -> Result<Turn, SdkError> {
+        let proven = self.prove_sovereign_turn(cell_id, effects, fee)?;
+        Ok(proven.turn)
+    }
+
+    /// Produce a real per-cell [`WitnessedReceipt`] for a sovereign turn.
+    ///
+    /// Where [`Self::execute_sovereign_turn_with_proof`] builds the STARK
+    /// proof, drops the scope-2 trace, and returns only a proof-carrying
+    /// [`Turn`], this method *retains* the trace and PI and lifts them — plus a
+    /// self-derived [`dregg_turn::TurnReceipt`] — into a
+    /// [`WitnessedReceipt`] via [`WitnessedReceipt::from_components`].
+    ///
+    /// The resulting WR is the SDK agent's *own side* of a bilateral
+    /// interaction: its `public_inputs` carry the γ.2 projected bilateral
+    /// roots/counts for `cell_id`'s role, so it slots directly into a
+    /// `&[(CellId, WitnessedReceipt)]` bundle for the γ.2 aggregator
+    /// ([`WitnessedReceipt::verify_bilateral_chain`]). The matching peer side
+    /// is produced by the peer running its own SDK against the same `Turn`.
+    ///
+    /// Side effects mirror [`Self::execute_sovereign_turn_with_proof`]: the
+    /// local sovereign state is advanced to the post-effect state. The
+    /// returned [`Turn`] is the same proof-carrying turn; callers that want
+    /// both the submittable turn and the WR can read `.turn` and `.receipt`
+    /// off the returned [`SovereignWitnessedReceipt`].
+    pub fn emit_witnessed_receipt(
+        &mut self,
+        cell_id: &CellId,
+        effects: Vec<Effect>,
+        fee: u64,
+    ) -> Result<SovereignWitnessedReceipt, SdkError> {
+        let proven = self.prove_sovereign_turn(cell_id, effects, fee)?;
+        let ProvenSovereignTurn {
+            turn,
+            trace,
+            public_inputs,
+            new_commitment,
+            pre_state_commitment,
+        } = proven;
+
+        // Flatten the (already γ.2-projected) public inputs to canonical u32.
+        let public_inputs_u32: Vec<u32> = public_inputs.iter().map(|bb| bb.as_u32()).collect();
+        let proof_bytes = turn
+            .execution_proof
+            .clone()
+            .expect("prove_sovereign_turn always attaches execution_proof");
+
+        // Derive a TurnReceipt for this cell's transition. The pre-state is
+        // the local cell commitment captured before effects were applied;
+        // post-state is the proof's claimed new commitment (PI[NEW_COMMIT]).
+        let (turn_hash, effects_hash_global, _actor_nonce, _prev) =
+            dregg_turn::TurnExecutor::compute_turn_identity_pi(&turn);
+        let turn_hash_bytes = dregg_turn::TurnExecutor::commitment_4bb_to_bytes(turn_hash);
+        let effects_hash_bytes =
+            dregg_turn::TurnExecutor::commitment_4bb_to_bytes(effects_hash_global);
+        let forest_hash = turn.call_forest.compute_hash();
+        let action_count = turn.call_forest.roots.len();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let receipt = dregg_turn::TurnReceipt {
+            turn_hash: turn_hash_bytes,
+            forest_hash,
+            pre_state_hash: pre_state_commitment,
+            post_state_hash: new_commitment,
+            timestamp,
+            effects_hash: effects_hash_bytes,
+            computrons_used: fee,
+            action_count,
+            previous_receipt_hash: turn.previous_receipt_hash,
+            agent: *cell_id,
+            federation_id: [0u8; 32],
+            routing_directives: Vec::new(),
+            introduction_exports: Vec::new(),
+            derivation_records: Vec::new(),
+            emitted_events: Vec::new(),
+            executor_signature: None,
+            finality: Default::default(),
+            was_encrypted: false,
+            was_burn: false,
+        };
+
+        let witnessed = WitnessedReceipt::from_components(
+            receipt,
+            proof_bytes,
+            public_inputs_u32,
+            Some(&trace),
+        );
+
+        Ok(SovereignWitnessedReceipt {
+            cell_id: *cell_id,
+            turn,
+            witnessed,
+        })
+    }
+
+    /// Internal: build the proof-carrying [`Turn`] AND retain the scope-2
+    /// trace + γ.2-projected public inputs. Both
+    /// [`Self::execute_sovereign_turn_with_proof`] (which drops the trace) and
+    /// [`Self::emit_witnessed_receipt`] (which lifts it into a
+    /// [`WitnessedReceipt`]) call into this so the proving logic lives in one
+    /// place.
+    fn prove_sovereign_turn(
+        &mut self,
+        cell_id: &CellId,
+        effects: Vec<Effect>,
+        fee: u64,
+    ) -> Result<ProvenSovereignTurn, SdkError> {
         // 1. Get our local cell state.
         let cell_state = self
             .sovereign_cells
@@ -4658,8 +4806,9 @@ impl AgentCipherclerk {
             })?
             .clone();
 
-        // 2. Compute old commitment.
-        let _old_commitment = cell_state.state_commitment();
+        // 2. Compute old commitment. Captured BEFORE effects are applied so
+        //    the emitted WitnessedReceipt can carry a faithful pre_state_hash.
+        let pre_state_commitment = cell_state.state_commitment();
 
         // 3. Determine transfer parameters from the effects.
         // Phase 2 MVP: only supports a single Transfer effect.
@@ -4791,7 +4940,13 @@ impl AgentCipherclerk {
         self.sovereign_cells.insert(*cell_id, new_cell_state);
         turn.execution_proof = Some(proof_bytes);
 
-        Ok(turn)
+        Ok(ProvenSovereignTurn {
+            turn,
+            trace,
+            public_inputs,
+            new_commitment,
+            pre_state_commitment,
+        })
     }
 
     /// Extract transfer parameters from effects for proof generation.
@@ -7424,6 +7579,123 @@ mod tests {
 
         let result = cclerk.apply_sovereign_effects(&cell_id, &[]);
         assert!(result.is_err());
+    }
+
+    /// SDK-emitted WitnessedReceipt: (a) is a real scope-2 WR, (b) round-trips
+    /// through the canonical DWR1 witness_artifact, and (c) is structurally
+    /// valid as one side of a γ.2 bilateral bundle. We build the matching peer
+    /// side from the same turn's schedule and confirm the *pair* aggregates.
+    #[test]
+    fn test_emit_witnessed_receipt_bilateral_pair_aggregates() {
+        use dregg_circuit::effect_vm::pi;
+        use dregg_circuit::field::BabyBear;
+        use dregg_turn::WitnessedReceipt;
+
+        let mut cclerk = AgentCipherclerk::new();
+        let pk = cclerk.public_key().0;
+        let token_id = *blake3::hash(b"bilateral-domain").as_bytes();
+        let cell = dregg_cell::Cell::with_balance(pk, token_id, 1000);
+        let agent_cell = cell.id();
+        cclerk.store_sovereign_state(cell);
+
+        // The peer (receiver) — a different cell id.
+        let peer_cell = CellId([0x5C; 32]);
+
+        let effects = vec![Effect::Transfer {
+            from: agent_cell,
+            to: peer_cell,
+            amount: 250,
+        }];
+
+        // --- SDK agent emits ITS side end-to-end ---
+        let emitted = cclerk
+            .emit_witnessed_receipt(&agent_cell, effects, 10)
+            .expect("emit witnessed receipt");
+
+        // The emitted WR is a real scope-2 receipt (proof + PI + inline trace).
+        let agent_wr = &emitted.witnessed;
+        assert!(!agent_wr.proof_bytes.is_empty(), "WR carries proof bytes");
+        assert!(
+            agent_wr.witness_bundle.is_some(),
+            "WR carries scope-2 inline trace"
+        );
+        agent_wr
+            .require_scope2_witness()
+            .expect("scope-2 witness binds witness_hash");
+        // PI carries the agent's projected bilateral role: one outbound transfer.
+        assert!(agent_wr.public_inputs.len() >= pi::BASE_COUNT);
+        assert_eq!(
+            agent_wr.public_inputs[pi::OUTBOUND_TRANSFER_COUNT],
+            1,
+            "agent has exactly one outbound transfer"
+        );
+        assert_eq!(
+            agent_wr.public_inputs[pi::IS_AGENT_CELL],
+            1,
+            "agent cell flags IS_AGENT_CELL == 1"
+        );
+
+        // --- (a)/(b) round-trip through the canonical DWR1 artifact ---
+        let artifact = crate::witness_artifact::encode_witnessed_receipt_artifact(agent_wr)
+            .expect("encode DWR1 artifact");
+        let decoded = crate::witness_artifact::decode_witnessed_receipt_artifact(&artifact)
+            .expect("decode DWR1 artifact");
+        assert_eq!(
+            decoded.receipt.receipt_hash(),
+            agent_wr.receipt.receipt_hash()
+        );
+        assert_eq!(decoded.public_inputs, agent_wr.public_inputs);
+        assert_eq!(decoded.witness_hash, agent_wr.witness_hash);
+        assert_eq!(
+            decoded
+                .witness_bundle
+                .as_ref()
+                .expect("decoded scope-2 bundle")
+                .trace_rows,
+            agent_wr.witness_bundle.as_ref().unwrap().trace_rows
+        );
+
+        // --- (c) construct the matching peer side from the SAME turn ---
+        // The peer (receiver) is NOT the turn.agent, so IS_AGENT_CELL == 0 and
+        // its bilateral projection is the inbound role. We derive it from the
+        // turn's canonical schedule exactly as an independent peer SDK would.
+        let turn = &emitted.turn;
+        let schedule = dregg_turn::bilateral_schedule::ExpectedBilateral::from_turn(turn);
+        let mut peer_pi = agent_wr.public_inputs.clone();
+        // Re-project the bilateral region for the peer's role.
+        let mut peer_pi_bb: Vec<BabyBear> = peer_pi
+            .iter()
+            .map(|&v| BabyBear::new_canonical(v))
+            .collect();
+        let peer_counts = schedule.counts_for(&peer_cell);
+        let peer_roots = schedule.roots_for(&peer_cell, turn.nonce);
+        dregg_turn::bilateral_schedule::project_into_pi(&mut peer_pi_bb, &peer_counts, &peer_roots);
+        peer_pi_bb[pi::IS_AGENT_CELL] = BabyBear::ZERO;
+        peer_pi = peer_pi_bb.iter().map(|bb| bb.as_u32()).collect();
+
+        // Wrap the peer PI in a (proof-less is fine for the structural γ.2 gate)
+        // WitnessedReceipt — the bilateral verifier reads only public_inputs.
+        let mut peer_receipt = dregg_turn::TurnReceipt::default();
+        peer_receipt.agent = peer_cell;
+        let peer_wr = WitnessedReceipt::from_components(peer_receipt, Vec::new(), peer_pi, None);
+
+        // Sanity: peer's inbound count is 1, outbound 0.
+        assert_eq!(peer_wr.public_inputs[pi::INBOUND_TRANSFER_COUNT], 1);
+        assert_eq!(peer_wr.public_inputs[pi::OUTBOUND_TRANSFER_COUNT], 0);
+        assert_eq!(peer_wr.public_inputs[pi::IS_AGENT_CELL], 0);
+
+        // --- the pair aggregates under the γ.2 verifier ---
+        let bundle: Vec<(CellId, &WitnessedReceipt)> =
+            vec![(agent_cell, agent_wr), (peer_cell, &peer_wr)];
+        WitnessedReceipt::verify_bilateral_chain(&bundle, turn)
+            .expect("SDK-emitted WR + peer side form a valid γ.2 bilateral bundle");
+
+        // Adversarial: dropping the peer (incomplete cross-side coverage) must reject.
+        let only_agent: Vec<(CellId, &WitnessedReceipt)> = vec![(agent_cell, agent_wr)];
+        assert!(
+            WitnessedReceipt::verify_bilateral_chain(&only_agent, turn).is_err(),
+            "single-sided bundle must reject (missing peer)"
+        );
     }
 
     #[test]

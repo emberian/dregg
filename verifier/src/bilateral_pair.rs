@@ -283,7 +283,10 @@ pub fn fabricate_witnessed_receipt_with_schedule(
     // scope-1-only WR would let an aggregate look stronger than the receipt
     // material it summarizes. A single zero row is sufficient to populate the
     // inline witness bundle + witness-hash binding.
-    let trace = vec![vec![BabyBear::ZERO; dregg_circuit::effect_vm::EFFECT_VM_WIDTH]];
+    let trace = vec![vec![
+        BabyBear::ZERO;
+        dregg_circuit::effect_vm::EFFECT_VM_WIDTH
+    ]];
     WitnessedReceipt::from_components(receipt, vec![], pi_u32, Some(trace.as_slice()))
 }
 

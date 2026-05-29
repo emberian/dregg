@@ -9,7 +9,7 @@
 use dregg_circuit::field::BABYBEAR_P;
 use dregg_circuit::poseidon_stark::{prove_poseidon, verify_poseidon};
 use dregg_circuit::poseidon_stark_verifier_circuit::PoseidonStarkVerifierCircuit;
-use dregg_circuit::stark::{generate_merkle_trace, MerkleStarkAir};
+use dregg_circuit::stark::{MerkleStarkAir, generate_merkle_trace};
 
 /// Sweep many seeds (far more than the in-module 10) through the full
 /// prove() -> verify() pipeline. If BUG 2's seed-dependent FRI fold failure

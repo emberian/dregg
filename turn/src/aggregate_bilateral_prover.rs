@@ -25,8 +25,9 @@ use crate::error::TurnError;
 use crate::turn::Turn;
 use crate::witnessed_receipt::WitnessedReceipt;
 use dregg_circuit::bilateral_aggregation_air::{
-    AggregationInnerRow, AggregationOuterPi, BilateralAggregationAir, OUTER_BASE_COUNT,
-    build_aggregation_trace,
+    AggregationInnerRow, AggregationOuterPi, BilateralAggregationAir, BundleTreeFoldAir,
+    CrossSideExistenceAir, CrossSideHalfEdge, FOLD_PI_COUNT, OUTER_BASE_COUNT,
+    build_aggregation_trace, build_cross_side_trace, build_tree_fold_trace,
 };
 use dregg_circuit::effect_vm::pi as inner_pi;
 use dregg_circuit::field::BabyBear;
@@ -78,6 +79,29 @@ pub struct AggregatedBundle {
     /// Bundle epoch — set to `turn.nonce` by the aggregator. The verifier
     /// cross-checks this against `outer_pi[OUTER_ACTOR_NONCE]`.
     pub bundle_epoch: u64,
+    /// Optional in-circuit CG-5 cross-side-existence proof. When present, the
+    /// "every outgoing edge has its matching incoming peer in the bundle"
+    /// property is attested *algebraically* by a STARK over the
+    /// `CrossSideExistenceAir` balance trace (signed edge-fingerprint sum == 0),
+    /// not just by the Rust `verify_bilateral_chain` precondition. Older
+    /// bundles (and the flat happy-path) leave this `None`; the verifier still
+    /// runs the Rust existence check, so soundness is never weaker than before
+    /// — this field *strengthens* the attestation.
+    #[serde(default)]
+    pub cross_side_existence: Option<CrossSideExistenceProof>,
+}
+
+/// In-circuit CG-5 attestation: a real STARK proof that the bundle's directed
+/// bilateral edges balance (every materialised outgoing half-edge is cancelled
+/// by its matching incoming half-edge). See
+/// `dregg_circuit::bilateral_aggregation_air::CrossSideExistenceAir`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CrossSideExistenceProof {
+    /// STARK proof bytes over the `CrossSideExistenceAir` balance trace.
+    pub proof_bytes: Vec<u8>,
+    /// The proven balance trace (rows × `CSE_WIDTH`), canonical-u32. Bound to
+    /// `proof_bytes` by trace-commitment equality at verify time.
+    pub trace: Vec<Vec<u32>>,
 }
 
 impl AggregatedBundle {
@@ -265,16 +289,12 @@ pub fn prove_aggregated_bundle(
     // trace. This is the headline upgrade over the prior trust-and-replay
     // witness: a tampered trace now fails FRI / constraint consistency rather
     // than being re-executed in Rust.
-    let proof = dregg_circuit::stark::try_prove(
-        &BilateralAggregationAir,
-        &trace,
-        &outer_pi_bb,
-    )
-    .map_err(|e| {
-        TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: outer STARK proving failed: {e}"
-        ))
-    })?;
+    let proof = dregg_circuit::stark::try_prove(&BilateralAggregationAir, &trace, &outer_pi_bb)
+        .map_err(|e| {
+            TurnError::InvalidExecutionProof(format!(
+                "aggregate_bilateral: outer STARK proving failed: {e}"
+            ))
+        })?;
     let outer_proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
     let outer_trace: Vec<Vec<u32>> = trace
         .iter()
@@ -283,14 +303,24 @@ pub fn prove_aggregated_bundle(
 
     let outer_pi_u32: Vec<u32> = outer_pi_bb.iter().map(|x| x.as_u32()).collect();
 
+    // In-circuit CG-5: produce the algebraic cross-side-existence balance
+    // proof over the canonical edges of this bundle. `verify_bilateral_chain`
+    // above already guarantees completeness (Rust precondition), so this
+    // always balances for an honestly-built bundle; we attach the STARK so the
+    // consumer can re-check existence *algebraically* without trusting the
+    // aggregator's Rust loop.
+    let participating: Vec<CellId> = per_cell.iter().map(|(c, _)| c.clone()).collect();
+    let cross_side_existence = Some(prove_cross_side_existence(turn, &participating)?);
+
     Ok(AggregatedBundle {
         turn: turn.clone(),
-        participating_cells: per_cell.iter().map(|(c, _)| c.clone()).collect(),
+        participating_cells: participating,
         outer_pi: outer_pi_u32,
         outer_proof_bytes,
         outer_trace,
         federation_ids: federation_ids_seen,
         bundle_epoch: actor_nonce,
+        cross_side_existence,
     })
 }
 
@@ -406,15 +436,13 @@ pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnErr
         .iter()
         .map(|row| row.iter().map(|&v| BabyBear::new_canonical(v)).collect())
         .collect();
-    let recomputed = dregg_circuit::stark::recompute_trace_commitment(
-        &BilateralAggregationAir,
-        &trace_bb,
-    )
-    .ok_or_else(|| {
-        TurnError::InvalidExecutionProof(
-            "aggregate_bilateral: shipped outer_trace is structurally invalid".into(),
-        )
-    })?;
+    let recomputed =
+        dregg_circuit::stark::recompute_trace_commitment(&BilateralAggregationAir, &trace_bb)
+            .ok_or_else(|| {
+                TurnError::InvalidExecutionProof(
+                    "aggregate_bilateral: shipped outer_trace is structurally invalid".into(),
+                )
+            })?;
     if recomputed != proof.trace_commitment {
         return Err(TurnError::InvalidExecutionProof(
             "aggregate_bilateral: shipped outer_trace does not match proof trace commitment".into(),
@@ -497,9 +525,424 @@ pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnErr
         }
     }
 
+    // Step 6: in-circuit CG-5. When the bundle carries a cross-side-existence
+    // proof, verify it ALGEBRAICALLY: the balance STARK attests the signed
+    // edge-fingerprint sum is zero (every outgoing edge has its matching
+    // incoming peer), and the proof-bound trace is pinned to the canonical
+    // schedule. This is a strictly stronger check than the prover-side Rust
+    // existence loop; if it is absent we still relied on the per-row schedule
+    // cross-check above, so soundness is never weakened by its absence.
+    if let Some(cse) = &bundle.cross_side_existence {
+        verify_cross_side_existence(cse, &bundle.turn, &bundle.participating_cells)?;
+    }
+
     Ok(())
 }
 
+// ===========================================================================
+// CG-5 IN-CIRCUIT — cross-side existence proof
+// ===========================================================================
+
+/// Deterministically derive the ordered multiset of materialised half-edges
+/// for `(turn, covered_cells)`. Each bilateral edge in the canonical schedule
+/// contributes an OUTGOING half-edge (claimed by `from`) and an INCOMING
+/// half-edge (claimed by `to`) — but a half-edge is *materialised only when
+/// its self-cell is in the covered set*. Both halves of a single edge share
+/// the same canonical, direction-independent `edge_id` (the transfer/grant id),
+/// so when both endpoints are covered the +/- contributions cancel.
+///
+/// For Introduce we treat the three role-pairs (introducer↔recipient,
+/// introducer↔target) as canonical edges keyed by the intro id with a per-pair
+/// salt folded in, so each pair balances independently.
+///
+/// This is the single source of truth shared by the CG-5 prover and verifier:
+/// the verifier rebuilds the *exact* multiset and requires the proof-bound
+/// trace to match it, which (together with the in-AIR balance==0 boundary)
+/// closes the missing-peer attack algebraically.
+fn canonical_half_edges(
+    turn: &Turn,
+    covered: &std::collections::HashSet<CellId>,
+) -> Vec<CrossSideHalfEdge> {
+    use dregg_circuit::poseidon2::hash_4_to_1;
+    let schedule = ExpectedBilateral::from_turn(turn);
+    let nonce = turn.nonce;
+    let mut out: Vec<CrossSideHalfEdge> = Vec::new();
+
+    // Fold a 1-felt role salt into a 4-felt id so distinct edge *roles* that
+    // share a base id (e.g. the two intro pairs) get distinct fingerprints,
+    // while the two halves of one role still share an id.
+    let salted = |id: [BabyBear; 4], salt: u32| -> [BabyBear; 4] {
+        let s = BabyBear::new(salt & 0x7FFF_FFFF);
+        [
+            hash_4_to_1(&[id[0], s, id[1], BabyBear::ZERO]),
+            hash_4_to_1(&[id[1], s, id[2], BabyBear::ZERO]),
+            hash_4_to_1(&[id[2], s, id[3], BabyBear::ZERO]),
+            hash_4_to_1(&[id[3], s, id[0], BabyBear::ZERO]),
+        ]
+    };
+
+    for t in &schedule.transfers {
+        let id = t.id(nonce);
+        if covered.contains(&t.from) {
+            out.push(CrossSideHalfEdge {
+                edge_id: id,
+                outgoing: true,
+            });
+        }
+        if covered.contains(&t.to) {
+            out.push(CrossSideHalfEdge {
+                edge_id: id,
+                outgoing: false,
+            });
+        }
+    }
+    for g in &schedule.grants {
+        let id = salted(g.id(nonce), 0x0000_0011);
+        if covered.contains(&g.from) {
+            out.push(CrossSideHalfEdge {
+                edge_id: id,
+                outgoing: true,
+            });
+        }
+        if covered.contains(&g.to) {
+            out.push(CrossSideHalfEdge {
+                edge_id: id,
+                outgoing: false,
+            });
+        }
+    }
+    for intro in &schedule.introduces {
+        let base = intro.id(nonce);
+        // Pair A: introducer (out) ↔ recipient (in).
+        let id_a = salted(base, 0x0000_00A1);
+        if covered.contains(&intro.introducer) {
+            out.push(CrossSideHalfEdge {
+                edge_id: id_a,
+                outgoing: true,
+            });
+        }
+        if covered.contains(&intro.recipient) {
+            out.push(CrossSideHalfEdge {
+                edge_id: id_a,
+                outgoing: false,
+            });
+        }
+        // Pair B: introducer (out) ↔ target (in).
+        let id_b = salted(base, 0x0000_00B2);
+        if covered.contains(&intro.introducer) {
+            out.push(CrossSideHalfEdge {
+                edge_id: id_b,
+                outgoing: true,
+            });
+        }
+        if covered.contains(&intro.target) {
+            out.push(CrossSideHalfEdge {
+                edge_id: id_b,
+                outgoing: false,
+            });
+        }
+    }
+    out
+}
+
+/// Prove the in-circuit CG-5 cross-side existence property for a bundle's
+/// `(turn, participating_cells)`. Returns a STARK proof over the
+/// `CrossSideExistenceAir` balance trace. Fails if the bundle is incomplete
+/// (a half-edge's peer is missing) — in that case the balance is nonzero and
+/// the boundary constraint is unprovable/unverifiable.
+pub fn prove_cross_side_existence(
+    turn: &Turn,
+    participating_cells: &[CellId],
+) -> Result<CrossSideExistenceProof, TurnError> {
+    let covered: std::collections::HashSet<CellId> = participating_cells.iter().cloned().collect();
+    let half_edges = canonical_half_edges(turn, &covered);
+    let trace = build_cross_side_trace(&half_edges);
+
+    // Pre-flight: a nonzero final balance means a missing peer; surface a
+    // clean error rather than an opaque prove failure.
+    use dregg_circuit::bilateral_aggregation_air::CSE_BALANCE_COL;
+    if let Some(last) = trace.last() {
+        if last[CSE_BALANCE_COL] != BabyBear::ZERO {
+            return Err(TurnError::InvalidExecutionProof(
+                "cross_side_existence: bundle does not balance (missing peer for some edge)".into(),
+            ));
+        }
+    }
+
+    let proof =
+        dregg_circuit::stark::try_prove(&CrossSideExistenceAir, &trace, &[]).map_err(|e| {
+            TurnError::InvalidExecutionProof(format!(
+                "cross_side_existence: balance STARK proving failed: {e}"
+            ))
+        })?;
+    let proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
+    let trace_u32: Vec<Vec<u32>> = trace
+        .iter()
+        .map(|row| row.iter().map(|x| x.as_u32()).collect())
+        .collect();
+    Ok(CrossSideExistenceProof {
+        proof_bytes,
+        trace: trace_u32,
+    })
+}
+
+/// Verify a CG-5 cross-side existence proof against the canonical Turn. This:
+///   1. Re-derives the exact canonical half-edge multiset from the Turn +
+///      covered cells (the schedule binding — prevents forged edge rows).
+///   2. Verifies the balance STARK (FRI + the balance==0 boundary) without
+///      re-executing the trace.
+///   3. Binds the shipped trace to the proof (commitment equality) and
+///      confirms it equals the canonical-multiset trace, so the algebraic
+///      balance argument operated on exactly the schedule-derived edges.
+pub fn verify_cross_side_existence(
+    proof: &CrossSideExistenceProof,
+    turn: &Turn,
+    participating_cells: &[CellId],
+) -> Result<(), TurnError> {
+    let covered: std::collections::HashSet<CellId> = participating_cells.iter().cloned().collect();
+    let half_edges = canonical_half_edges(turn, &covered);
+    let expected_trace = build_cross_side_trace(&half_edges);
+
+    // Decode + verify the STARK proof standalone.
+    let stark_proof = dregg_circuit::stark::proof_from_bytes(&proof.proof_bytes).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "cross_side_existence: failed to decode proof: {e}"
+        ))
+    })?;
+    if stark_proof.air_name != CrossSideExistenceAir::AIR_NAME {
+        return Err(TurnError::InvalidExecutionProof(format!(
+            "cross_side_existence: proof AIR name mismatch: {}",
+            stark_proof.air_name
+        )));
+    }
+    dregg_circuit::stark::verify(&CrossSideExistenceAir, &stark_proof, &[]).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "cross_side_existence: balance STARK verification failed: {e}"
+        ))
+    })?;
+
+    // Bind shipped trace to the proof, then require it to be the canonical
+    // schedule-derived trace. This closes forged-edge-row attacks: a prover
+    // cannot present a *different* (e.g. self-cancelling fabricated) edge set
+    // than the one the Turn predicts.
+    let trace_bb: Vec<Vec<BabyBear>> = proof
+        .trace
+        .iter()
+        .map(|row| row.iter().map(|&v| BabyBear::new_canonical(v)).collect())
+        .collect();
+    let recomputed =
+        dregg_circuit::stark::recompute_trace_commitment(&CrossSideExistenceAir, &trace_bb)
+            .ok_or_else(|| {
+                TurnError::InvalidExecutionProof(
+                    "cross_side_existence: shipped trace is structurally invalid".into(),
+                )
+            })?;
+    if recomputed != stark_proof.trace_commitment {
+        return Err(TurnError::InvalidExecutionProof(
+            "cross_side_existence: shipped trace does not match proof commitment".into(),
+        ));
+    }
+    if trace_bb != expected_trace {
+        return Err(TurnError::InvalidExecutionProof(
+            "cross_side_existence: proof-bound trace does not match canonical schedule edges"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+// ===========================================================================
+// PROOF-OF-PROOFS / TREE FOLD over child AggregatedBundles
+// ===========================================================================
+
+/// A tree-folded attestation over a set of child `AggregatedBundle`s. The
+/// outer proof is constant-size relative to the number of children: a consumer
+/// holding `(child_digests, outer_pi, outer_proof_bytes)` knows the fold chain
+/// is correct without re-running any child's inner STARK. To trust the
+/// *contents* of the children, the verifier re-checks each child bundle and
+/// recomputes the expected accumulator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AggregatedTree {
+    /// The child bundles, in fold order.
+    pub children: Vec<AggregatedBundle>,
+    /// Per-child digest (Poseidon2 over the child's outer PI), in fold order.
+    pub child_digests: Vec<u32>,
+    /// Outer fold-AIR public inputs `[initial_acc, final_acc]`.
+    pub outer_pi: Vec<u32>,
+    /// Outer fold STARK proof bytes (`BundleTreeFoldAir`).
+    pub outer_proof_bytes: Vec<u8>,
+    /// The fold trace (rows × `FOLD_WIDTH`), canonical-u32. Bound to the proof.
+    pub outer_trace: Vec<Vec<u32>>,
+}
+
+impl AggregatedTree {
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+    pub fn from_json(text: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(text)
+    }
+}
+
+/// Digest a child bundle into a single field element: Poseidon2 over its
+/// outer PI vector. Binds the entire bundle summary (turn hash, effects hash,
+/// agent, n_cells, consistent flag) into one chain element.
+fn bundle_digest(bundle: &AggregatedBundle) -> BabyBear {
+    let pi_bb: Vec<BabyBear> = bundle
+        .outer_pi
+        .iter()
+        .map(|&v| BabyBear::new_canonical(v))
+        .collect();
+    dregg_circuit::poseidon2::hash_many(&pi_bb)
+}
+
+/// Tree-fold N child `AggregatedBundle`s into a single outer attestation.
+/// Each child is verified classically (so the tree never attests an invalid
+/// child), reduced to a digest, and folded via a Poseidon2 hash chain proven
+/// by `BundleTreeFoldAir`. The result verifies in O(1) in the number of
+/// children for the fold step itself.
+pub fn prove_aggregated_tree(children: Vec<AggregatedBundle>) -> Result<AggregatedTree, TurnError> {
+    if children.is_empty() {
+        return Err(TurnError::InvalidExecutionProof(
+            "aggregate_tree: need at least one child bundle".into(),
+        ));
+    }
+    // Verify each child up front: the tree must never fold an invalid bundle.
+    for (i, child) in children.iter().enumerate() {
+        verify_aggregated_bundle(child).map_err(|e| {
+            TurnError::InvalidExecutionProof(format!(
+                "aggregate_tree: child {i} failed verification: {e}"
+            ))
+        })?;
+    }
+
+    let digests: Vec<BabyBear> = children.iter().map(bundle_digest).collect();
+    let (trace, pi) = build_tree_fold_trace(&digests);
+
+    let proof = dregg_circuit::stark::try_prove(&BundleTreeFoldAir, &trace, &pi).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "aggregate_tree: outer fold STARK proving failed: {e}"
+        ))
+    })?;
+    let outer_proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
+    let outer_trace: Vec<Vec<u32>> = trace
+        .iter()
+        .map(|row| row.iter().map(|x| x.as_u32()).collect())
+        .collect();
+
+    Ok(AggregatedTree {
+        children,
+        child_digests: digests.iter().map(|x| x.as_u32()).collect(),
+        outer_pi: pi.iter().map(|x| x.as_u32()).collect(),
+        outer_proof_bytes,
+        outer_trace,
+    })
+}
+
+/// Verify a tree-folded attestation:
+///   1. Re-verify each child bundle (full per-bundle soundness).
+///   2. Recompute each child digest and require it to match `child_digests`.
+///   3. Recompute the fold trace + public inputs from the digests and require
+///      the outer PI to match (binds the final accumulator to the children).
+///   4. Verify the outer fold STARK standalone and bind the shipped trace.
+pub fn verify_aggregated_tree(tree: &AggregatedTree) -> Result<(), TurnError> {
+    if tree.children.is_empty() {
+        return Err(TurnError::InvalidExecutionProof(
+            "aggregate_tree: empty child set".into(),
+        ));
+    }
+    if tree.outer_pi.len() != FOLD_PI_COUNT {
+        return Err(TurnError::InvalidExecutionProof(format!(
+            "aggregate_tree: outer PI has {} entries, expected {}",
+            tree.outer_pi.len(),
+            FOLD_PI_COUNT
+        )));
+    }
+
+    // Step 1+2: re-verify children and rebuild digests.
+    if tree.child_digests.len() != tree.children.len() {
+        return Err(TurnError::InvalidExecutionProof(
+            "aggregate_tree: child_digests length != children length".into(),
+        ));
+    }
+    let mut digests: Vec<BabyBear> = Vec::with_capacity(tree.children.len());
+    for (i, child) in tree.children.iter().enumerate() {
+        verify_aggregated_bundle(child).map_err(|e| {
+            TurnError::InvalidExecutionProof(format!(
+                "aggregate_tree: child {i} failed verification: {e}"
+            ))
+        })?;
+        let d = bundle_digest(child);
+        if d.as_u32() != tree.child_digests[i] {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "aggregate_tree: child {i} digest mismatch; recomputed {} != claimed {}",
+                d.as_u32(),
+                tree.child_digests[i]
+            )));
+        }
+        digests.push(d);
+    }
+
+    // Step 3: recompute the expected fold trace + PI from the digests.
+    let (expected_trace, expected_pi) = build_tree_fold_trace(&digests);
+    let expected_pi_u32: Vec<u32> = expected_pi.iter().map(|x| x.as_u32()).collect();
+    if expected_pi_u32 != tree.outer_pi {
+        return Err(TurnError::InvalidExecutionProof(format!(
+            "aggregate_tree: outer PI mismatch; digest-derived {:?} != claimed {:?}",
+            expected_pi_u32, tree.outer_pi
+        )));
+    }
+
+    // Step 4: verify the outer fold STARK + bind the shipped trace.
+    let outer_pi_bb: Vec<BabyBear> = tree
+        .outer_pi
+        .iter()
+        .map(|&v| BabyBear::new_canonical(v))
+        .collect();
+    let proof = dregg_circuit::stark::proof_from_bytes(&tree.outer_proof_bytes).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "aggregate_tree: failed to decode outer fold proof: {e}"
+        ))
+    })?;
+    if proof.air_name != BundleTreeFoldAir::AIR_NAME {
+        return Err(TurnError::InvalidExecutionProof(format!(
+            "aggregate_tree: proof AIR name mismatch: {}",
+            proof.air_name
+        )));
+    }
+    dregg_circuit::stark::verify(&BundleTreeFoldAir, &proof, &outer_pi_bb).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "aggregate_tree: outer fold STARK verification failed: {e}"
+        ))
+    })?;
+
+    let trace_bb: Vec<Vec<BabyBear>> = tree
+        .outer_trace
+        .iter()
+        .map(|row| row.iter().map(|&v| BabyBear::new_canonical(v)).collect())
+        .collect();
+    let recomputed =
+        dregg_circuit::stark::recompute_trace_commitment(&BundleTreeFoldAir, &trace_bb)
+            .ok_or_else(|| {
+                TurnError::InvalidExecutionProof(
+                    "aggregate_tree: shipped outer_trace is structurally invalid".into(),
+                )
+            })?;
+    if recomputed != proof.trace_commitment {
+        return Err(TurnError::InvalidExecutionProof(
+            "aggregate_tree: shipped outer_trace does not match proof commitment".into(),
+        ));
+    }
+    // The shipped trace must be the canonical digest-derived trace, so the
+    // chain the proof attests is exactly the one over our recomputed digests.
+    if trace_bb != expected_trace {
+        return Err(TurnError::InvalidExecutionProof(
+            "aggregate_tree: proof-bound trace does not match digest-derived fold trace".into(),
+        ));
+    }
+
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -828,9 +1271,7 @@ mod tests {
     /// over the tampered trace, and confirm verification rejects.
     #[test]
     fn aggregated_proof_verifies_consistent_and_rejects_tampered_cross_cell() {
-        use dregg_circuit::bilateral_aggregation_air::{
-            self as ag, BilateralAggregationAir,
-        };
+        use dregg_circuit::bilateral_aggregation_air::{self as ag, BilateralAggregationAir};
         use dregg_circuit::field::BabyBear;
 
         let alice = cid(0xA1);
@@ -873,12 +1314,9 @@ mod tests {
             .iter()
             .map(|&v| BabyBear::new_canonical(v))
             .collect();
-        let tampered_proof = dregg_circuit::stark::try_prove(
-            &BilateralAggregationAir,
-            &trace_bb,
-            &outer_pi_bb,
-        )
-        .expect("tampered trace still satisfies in-AIR constraints, so it proves");
+        let tampered_proof =
+            dregg_circuit::stark::try_prove(&BilateralAggregationAir, &trace_bb, &outer_pi_bb)
+                .expect("tampered trace still satisfies in-AIR constraints, so it proves");
         let mut tampered = bundle.clone();
         tampered.outer_proof_bytes = dregg_circuit::stark::proof_to_bytes(&tampered_proof);
         tampered.outer_trace = trace_bb
@@ -892,6 +1330,219 @@ mod tests {
             "aggregated proof with tampered cross-cell agreement must reject; got {:?}",
             res
         );
+    }
+
+    // ---- In-circuit CG-5 (cross-side existence) ----
+
+    #[test]
+    fn cg5_in_circuit_proof_attached_and_verifies() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+        let entries = vec![
+            (alice, fabricate_wr(&turn, &alice)),
+            (bob, fabricate_wr(&turn, &bob)),
+        ];
+        let bundle = prove_aggregated_bundle(&turn, &entries).expect("prove");
+        // The bundle carries a real in-circuit CG-5 proof.
+        let cse = bundle
+            .cross_side_existence
+            .as_ref()
+            .expect("CG-5 proof must be attached");
+        assert_eq!(&cse.proof_bytes[0..4], b"DREG");
+        // Full bundle verification (which now includes the algebraic CG-5
+        // step) succeeds.
+        verify_aggregated_bundle(&bundle).expect("verify with in-circuit CG-5");
+    }
+
+    #[test]
+    fn cg5_rejects_missing_peer_in_circuit() {
+        // Directly exercise the algebraic CG-5 path: a covered set with only
+        // the sender (peer missing) does not balance, so the proof cannot be
+        // produced — the missing-peer attack is caught algebraically.
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+        // Only alice covered; bob (the transfer peer) is missing.
+        let res = prove_cross_side_existence(&turn, &[alice]);
+        assert!(
+            res.is_err(),
+            "missing-peer bundle must fail the algebraic balance proof; got {:?}",
+            res
+        );
+    }
+
+    #[test]
+    fn cg5_verifier_rejects_forged_cell_set() {
+        // Honest 2-cell bundle, but an attacker swaps participating_cells to a
+        // single-cell list when calling the CG-5 verifier directly. The
+        // canonical schedule then expects an unbalanced edge set, so the
+        // proof-bound trace no longer matches → reject.
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+        let cse = prove_cross_side_existence(&turn, &[alice, bob]).expect("prove honest CG-5");
+        // Verify against a forged (single-cell) participant claim.
+        let res = verify_cross_side_existence(&cse, &turn, &[alice]);
+        assert!(
+            res.is_err(),
+            "CG-5 verify against forged cell set must reject; got {:?}",
+            res
+        );
+        // Sanity: honest cell set verifies.
+        verify_cross_side_existence(&cse, &turn, &[alice, bob])
+            .expect("honest cell set must verify");
+    }
+
+    #[test]
+    fn cg5_three_cell_ring_balances_in_circuit() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let carol = cid(0xC3);
+        let mut builder = TurnBuilder::new(alice, 7);
+        let action = ActionBuilder::new_unchecked_for_tests(alice, "ring", alice)
+            .effect_transfer(alice, bob, 100)
+            .effect_grant_capability(
+                bob,
+                carol,
+                dregg_cell::CapabilityRef {
+                    target: alice,
+                    slot: 0,
+                    permissions: AuthRequired::Signature,
+                    expires_at: None,
+                    breadstuff: None,
+                    allowed_effects: None,
+                },
+            )
+            .effect_transfer(carol, alice, 50)
+            .build();
+        builder.add_action(action);
+        let turn = builder.fee(0).build();
+        let cse = prove_cross_side_existence(&turn, &[alice, bob, carol])
+            .expect("3-cell ring must balance");
+        verify_cross_side_existence(&cse, &turn, &[alice, bob, carol])
+            .expect("3-cell ring CG-5 must verify");
+    }
+
+    // ---- Proof-of-proofs / tree fold ----
+
+    #[test]
+    fn tree_fold_two_bundles_proves_and_verifies() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let carol = cid(0xC3);
+        let dave = cid(0xD4);
+        let turn1 = make_transfer_turn(alice, bob, 100, 1);
+        let turn2 = make_transfer_turn(carol, dave, 200, 2);
+        let b1 = prove_aggregated_bundle(
+            &turn1,
+            &[
+                (alice, fabricate_wr(&turn1, &alice)),
+                (bob, fabricate_wr(&turn1, &bob)),
+            ],
+        )
+        .expect("bundle1");
+        let b2 = prove_aggregated_bundle(
+            &turn2,
+            &[
+                (carol, fabricate_wr(&turn2, &carol)),
+                (dave, fabricate_wr(&turn2, &dave)),
+            ],
+        )
+        .expect("bundle2");
+
+        let tree = prove_aggregated_tree(vec![b1, b2]).expect("tree fold");
+        assert_eq!(tree.children.len(), 2);
+        assert_eq!(&tree.outer_proof_bytes[0..4], b"DREG");
+        verify_aggregated_tree(&tree).expect("tree must verify");
+    }
+
+    #[test]
+    fn tree_fold_rejects_tampered_child() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let carol = cid(0xC3);
+        let dave = cid(0xD4);
+        let turn1 = make_transfer_turn(alice, bob, 100, 1);
+        let turn2 = make_transfer_turn(carol, dave, 200, 2);
+        let b1 = prove_aggregated_bundle(
+            &turn1,
+            &[
+                (alice, fabricate_wr(&turn1, &alice)),
+                (bob, fabricate_wr(&turn1, &bob)),
+            ],
+        )
+        .expect("bundle1");
+        let b2 = prove_aggregated_bundle(
+            &turn2,
+            &[
+                (carol, fabricate_wr(&turn2, &carol)),
+                (dave, fabricate_wr(&turn2, &dave)),
+            ],
+        )
+        .expect("bundle2");
+
+        let mut tree = prove_aggregated_tree(vec![b1, b2]).expect("tree fold");
+        // Tamper a child's outer PI after folding. The child re-verification
+        // (step 1) and the digest recomputation (step 2) both reject.
+        use dregg_circuit::bilateral_aggregation_air as ag;
+        tree.children[0].outer_pi[ag::OUTER_BILATERAL_CONSISTENT] = 0;
+        let res = verify_aggregated_tree(&tree);
+        assert!(res.is_err(), "tampered child must reject; got {:?}", res);
+    }
+
+    #[test]
+    fn tree_fold_rejects_swapped_child_digest() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let carol = cid(0xC3);
+        let dave = cid(0xD4);
+        let turn1 = make_transfer_turn(alice, bob, 100, 1);
+        let turn2 = make_transfer_turn(carol, dave, 200, 2);
+        let b1 = prove_aggregated_bundle(
+            &turn1,
+            &[
+                (alice, fabricate_wr(&turn1, &alice)),
+                (bob, fabricate_wr(&turn1, &bob)),
+            ],
+        )
+        .expect("bundle1");
+        let b2 = prove_aggregated_bundle(
+            &turn2,
+            &[
+                (carol, fabricate_wr(&turn2, &carol)),
+                (dave, fabricate_wr(&turn2, &dave)),
+            ],
+        )
+        .expect("bundle2");
+        let mut tree = prove_aggregated_tree(vec![b1, b2]).expect("tree fold");
+        // Lie about the first child's digest.
+        tree.child_digests[0] = tree.child_digests[0].wrapping_add(1) & 0x7FFF_FFFF;
+        let res = verify_aggregated_tree(&tree);
+        assert!(
+            res.is_err(),
+            "swapped child digest must reject; got {:?}",
+            res
+        );
+    }
+
+    #[test]
+    fn tree_fold_json_roundtrip() {
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+        let b1 = prove_aggregated_bundle(
+            &turn,
+            &[
+                (alice, fabricate_wr(&turn, &alice)),
+                (bob, fabricate_wr(&turn, &bob)),
+            ],
+        )
+        .expect("bundle");
+        let tree = prove_aggregated_tree(vec![b1.clone(), b1]).expect("tree");
+        let json = tree.to_json().expect("to_json");
+        let back = AggregatedTree::from_json(&json).expect("from_json");
+        verify_aggregated_tree(&back).expect("re-verify after roundtrip");
     }
 
     #[test]

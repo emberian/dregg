@@ -179,7 +179,10 @@ fn fabricate_wr_for_fed(turn: &Turn, cell_id: &CellId, home_fed: [u8; 32]) -> Wi
     // aggregate look stronger than its inputs. Attach a minimal scope-2
     // witness trace (matches dregg_verifier::bilateral_pair's fix). Width is
     // taken from the live EFFECT_VM_WIDTH so it tracks #131/#132's PI growth.
-    let trace = vec![vec![BabyBear::ZERO; dregg_circuit::effect_vm::EFFECT_VM_WIDTH]];
+    let trace = vec![vec![
+        BabyBear::ZERO;
+        dregg_circuit::effect_vm::EFFECT_VM_WIDTH
+    ]];
     WitnessedReceipt::from_components(
         receipt_for(*cell_id, home_fed),
         vec![],

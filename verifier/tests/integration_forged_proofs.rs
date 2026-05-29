@@ -214,7 +214,7 @@ fn wrong_effects_hash_rejected() {
     let (proof_bytes, mut pi) = make_proof_and_pi(
         3_000,
         &[Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xCAFE),
+            cap_entry: [BabyBear::new(0xCAFE); 8],
         }],
     );
     pi[pi::EFFECTS_HASH_LO] ^= 0xFFFF_FFFF;
@@ -330,7 +330,7 @@ fn multi_effect_pi_tamper_battery() {
                 value: BabyBear::new(99),
             },
             Effect::GrantCapability {
-                cap_entry: BabyBear::new(0xABCD),
+                cap_entry: [BabyBear::new(0xABCD); 8],
             },
         ],
     );

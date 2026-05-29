@@ -881,6 +881,16 @@ pub enum ProgramError {
     /// the expected witness index or no verifier matched the
     /// declared vk hash.
     CustomProgramProofRejected { ir_hash: [u8; 32], reason: String },
+    /// `CapabilityUniqueness` cannot be enforced by the scalar
+    /// `(old_state, new_state)` evaluator: structural "exactly one /
+    /// no-duplicate" enforcement needs the cell's actual
+    /// [`crate::capability::CapabilitySet`], which is only reachable from
+    /// the executor. The scalar evaluator fails **closed** with this
+    /// sentinel so the constraint can never silently pass; the executor
+    /// (`execute_tree::validate_capability_uniqueness`) performs the real
+    /// check against the cap set and binds the declared cap-set-root slot
+    /// to the canonical capability root.
+    CapabilityUniquenessRequiresExecutor { cap_set_root_slot: u8 },
 }
 
 impl core::fmt::Display for ProgramError {
@@ -948,6 +958,12 @@ impl core::fmt::Display for ProgramError {
             }
             ProgramError::CustomProgramProofRejected { reason, .. } => {
                 write!(f, "custom program proof rejected: {reason}")
+            }
+            ProgramError::CapabilityUniquenessRequiresExecutor { cap_set_root_slot } => {
+                write!(
+                    f,
+                    "CapabilityUniqueness on slot {cap_set_root_slot} requires executor-side cap-set enforcement; the scalar state evaluator cannot verify structural uniqueness and fails closed"
+                )
             }
         }
     }
@@ -1147,6 +1163,54 @@ fn check_index(index: u8) -> Result<usize, ProgramError> {
         return Err(ProgramError::InvalidFieldIndex { index });
     }
     Ok(idx)
+}
+
+/// Select the **unique** witness blob whose kind is in `kinds`.
+///
+/// SECURITY (audit item 4): the previous evaluator selected the *first*
+/// blob of a matching kind (`witnesses.blobs.iter().find(..)`). When an
+/// action carries several proofs of the same wire kind (e.g. two
+/// `ProofBytes` blobs — one for a `Renounced` non-membership proof and
+/// one for a `TemporalPredicate`), a first-of-kind scan can bind the
+/// *wrong* proof to a predicate, letting a submitter cross-match a valid
+/// proof for predicate A against predicate B.
+///
+/// The `StateConstraint` variants that need a proof
+/// (`SenderAuthorized`, `Renounced`, `Custom`) do not carry an explicit
+/// `proof_witness_index` field, so we cannot bind by index without a
+/// schema/commitment break. Instead we bind by *uniqueness*: the action
+/// must carry exactly one blob of the expected kind(s). Ambiguity (more
+/// than one candidate) fails **closed** — there is no first-of-kind
+/// cross-match window. Predicates that need to disambiguate multiple
+/// same-kind proofs must migrate to the typed
+/// [`StateConstraint::Witnessed`] variant, whose
+/// [`crate::predicate::WitnessedPredicate::proof_witness_index`] names
+/// the blob explicitly.
+///
+/// Returns the index of the unique blob and a reference to it.
+fn unique_blob_of_kinds<'a>(
+    witnesses: &WitnessBundle<'a>,
+    kinds: &[WitnessKindTag],
+) -> Result<(usize, &'a WitnessBlobView<'a>), UniqueBlobError> {
+    let mut found: Option<(usize, &WitnessBlobView<'_>)> = None;
+    for (i, b) in witnesses.blobs.iter().enumerate() {
+        if kinds.contains(&b.kind) {
+            if found.is_some() {
+                return Err(UniqueBlobError::Ambiguous);
+            }
+            found = Some((i, b));
+        }
+    }
+    found.ok_or(UniqueBlobError::Missing)
+}
+
+/// Outcome of [`unique_blob_of_kinds`].
+enum UniqueBlobError {
+    /// No blob of the requested kind(s) is present.
+    Missing,
+    /// More than one blob of the requested kind(s) is present — the
+    /// binding is ambiguous and we fail closed rather than guess.
+    Ambiguous,
 }
 
 /// Evaluate a single constraint with no witness bundle (legacy entry).
@@ -1519,11 +1583,12 @@ fn evaluate_constraint_full(
             // witnessed-predicate registry against the appropriate
             // commitment (slot root or blinded commitment). The action
             // MUST carry a `MerklePath` (PublicRoot) or `ProofBytes`
-            // (BlindedSet) witness blob at the witness index encoded by
-            // the cell program. For migration, we accept the *first*
-            // `MerklePath`/`ProofBytes` witness blob the action carries
-            // — the cell program does not yet bind a specific witness
-            // index for `SenderAuthorized`.
+            // (BlindedSet) witness blob.
+            //
+            // SECURITY (audit item 4): the blob is bound by *uniqueness*,
+            // not first-of-kind — see `unique_blob_of_kinds`. If the
+            // action carries more than one MerklePath/ProofBytes blob the
+            // binding is ambiguous and we fail closed.
             let (commitment, kind) = match set {
                 AuthorizedSet::PublicRoot { set_root_index } => {
                     let idx = check_index(*set_root_index)?;
@@ -1552,23 +1617,28 @@ fn evaluate_constraint_full(
             let Some(registry) = witnesses.registry else {
                 return Err(ProgramError::SenderMembershipWitnessMissing);
             };
-            // Find a witness blob with kind MerklePath / ProofBytes.
-            let blob = witnesses
-                .blobs
-                .iter()
-                .find(|b| {
-                    matches!(
-                        b.kind,
-                        WitnessKindTag::MerklePath | WitnessKindTag::ProofBytes
-                    )
-                })
-                .ok_or(ProgramError::SenderMembershipWitnessMissing)?;
-            // Build a placeholder WitnessedPredicate to feed the registry.
+            // Bind the unique MerklePath / ProofBytes witness blob by
+            // uniqueness. Ambiguity or absence fails closed.
+            let (blob_idx, blob) = unique_blob_of_kinds(
+                witnesses,
+                &[WitnessKindTag::MerklePath, WitnessKindTag::ProofBytes],
+            )
+            .map_err(|e| match e {
+                UniqueBlobError::Missing => ProgramError::SenderMembershipWitnessMissing,
+                UniqueBlobError::Ambiguous => ProgramError::WitnessedPredicateRejected {
+                    kind_name: "SenderAuthorized",
+                    reason: "ambiguous membership witness: action carries more than one \
+                             MerklePath/ProofBytes blob; bind explicitly via Witnessed { wp }"
+                        .into(),
+                },
+            })?;
+            // Build a placeholder WitnessedPredicate to feed the registry,
+            // binding the explicit proof witness index we resolved.
             let wp = crate::predicate::WitnessedPredicate {
                 kind,
                 commitment,
                 input_ref: InputRef::Sender,
-                proof_witness_index: 0,
+                proof_witness_index: blob_idx,
             };
             let input = PredicateInput::Sender(sender);
             registry.verify(&wp, &input, blob.bytes).map_err(|e| {
@@ -1606,17 +1676,23 @@ fn evaluate_constraint_full(
                 return Err(ProgramError::SenderMembershipWitnessMissing);
             };
             // The non-membership neighbor witness is a ProofBytes blob
-            // (96 bytes — see `NonMembershipNeighborProof`).
-            let blob = witnesses
-                .blobs
-                .iter()
-                .find(|b| b.kind == WitnessKindTag::ProofBytes)
-                .ok_or(ProgramError::SenderMembershipWitnessMissing)?;
+            // (96 bytes — see `NonMembershipNeighborProof`). Bind by
+            // uniqueness (audit item 4): ambiguity/absence fails closed.
+            let (blob_idx, blob) = unique_blob_of_kinds(witnesses, &[WitnessKindTag::ProofBytes])
+                .map_err(|e| match e {
+                UniqueBlobError::Missing => ProgramError::SenderMembershipWitnessMissing,
+                UniqueBlobError::Ambiguous => ProgramError::WitnessedPredicateRejected {
+                    kind_name: "NonMembership",
+                    reason: "ambiguous non-membership witness: action carries more than one \
+                                 ProofBytes blob; bind explicitly via Witnessed { wp }"
+                        .into(),
+                },
+            })?;
             let wp = crate::predicate::WitnessedPredicate {
                 kind: crate::predicate::WitnessedPredicateKind::NonMembership,
                 commitment,
                 input_ref: InputRef::Sender,
-                proof_witness_index: 0,
+                proof_witness_index: blob_idx,
             };
             let input = PredicateInput::Sender(sender);
             registry.verify(&wp, &input, blob.bytes).map_err(|e| {
@@ -1630,38 +1706,49 @@ fn evaluate_constraint_full(
 
         StateConstraint::CapabilityUniqueness { cap_set_root_slot } => {
             let _ = check_index(*cap_set_root_slot)?;
-            // Structural declaration: enforcement is on the cap-set root
-            // commitment shape; the variant exists so the constraint is
-            // first-class in the schema.
-            Ok(())
+            // SECURITY (audit item 1): structural "exactly one / no
+            // duplicate live capability" cannot be decided from
+            // `(old_state, new_state)` alone — the scalar evaluator only
+            // sees the 8 state-slot field values, NOT the cell's actual
+            // `CapabilitySet`. The cap-set root in
+            // `slot[cap_set_root_slot]` is an opaque 32-byte commitment;
+            // verifying that it encodes a unique cap requires the real
+            // capability list, which is only reachable from the executor.
+            //
+            // The previous implementation bounds-checked the slot and
+            // returned `Ok(())` — a silent no-op that let a cell *declare*
+            // NFT-uniqueness while enforcing nothing. We now fail
+            // **closed**: any caller that reaches this scalar path without
+            // the executor's cap-set enforcement gets a rejection. The
+            // executor (`execute_tree::validate_capability_uniqueness`)
+            // is the only place this constraint is genuinely enforced; it
+            // binds the declared root slot to
+            // `compute_canonical_capability_root(&cell.capabilities)` and
+            // rejects duplicate cap entries.
+            Err(ProgramError::CapabilityUniquenessRequiresExecutor {
+                cap_set_root_slot: *cap_set_root_slot,
+            })
         }
 
         StateConstraint::RateLimit { max_per_epoch, .. } => {
             let ctx = ctx.ok_or(ProgramError::MissingContextField {
                 field: "sender_epoch_count",
             })?;
-            // Prefer an executor-supplied count in `ctx.sender_epoch_count`
-            // (Cav-Codex Block 2: the executor populates the per-cell-per-
-            // sender counter slot). If unset (zero) AND the action carries
-            // a `RateLimitCount` witness blob, use that as a fallback (a
-            // self-attested counter that the action's signer commits to).
-            let count = if ctx.sender_epoch_count > 0 {
-                ctx.sender_epoch_count
-            } else {
-                witnesses
-                    .blobs
-                    .iter()
-                    .find_map(|b| {
-                        if b.kind == WitnessKindTag::RateLimitCount && b.bytes.len() == 4 {
-                            let mut buf = [0u8; 4];
-                            buf.copy_from_slice(b.bytes);
-                            Some(u32::from_le_bytes(buf))
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0)
-            };
+            // SECURITY (audit item 2): the count MUST come from the
+            // executor's authoritative per-(cell, sender, epoch) counter,
+            // surfaced as `ctx.sender_epoch_count`. The executor wires
+            // this in `execute_tree::state_constraint_context_count`.
+            //
+            // The previous implementation fell back to a `RateLimitCount`
+            // witness blob carried by the action itself when the ctx
+            // count was zero. That fallback was *bypassable*: the action's
+            // own signer chose the value, so a submitter could attest
+            // `count = 0` on every action and never trip the limit. The
+            // self-attested fallback is removed — there is no submitter-
+            // controlled path to the count. A `RateLimitCount` witness
+            // blob (if present) is informational only and is NOT trusted
+            // here.
+            let count = ctx.sender_epoch_count;
             if count >= *max_per_epoch {
                 return violated(
                     constraint,
@@ -1819,38 +1906,43 @@ fn evaluate_constraint_full(
             witness_index,
         } => {
             // Cav-Codex Block 2: dispatch through the witnessed-predicate
-            // registry using the `Temporal` kind. The witness_index
-            // names which witness blob is the input; the proof bytes
-            // live in the first `ProofBytes` witness blob the action
-            // carries (alongside the input).
+            // registry using the `Temporal` kind. The `witness_index`
+            // names which witness blob is the input.
+            //
+            // SECURITY (audit item 4): the proof bytes are bound by an
+            // *explicit* index — the blob immediately following the input
+            // (`witness_index + 1`) — instead of a first-of-kind
+            // ProofBytes scan. A first-of-kind scan could cross-match a
+            // proof intended for a different predicate (e.g. a `Renounced`
+            // ProofBytes blob) to this temporal predicate. The proof slot
+            // is deterministic and must be ProofBytes, else we fail closed.
             let Some(registry) = witnesses.registry else {
                 return Err(ProgramError::TemporalPredicateWitnessMissing {
                     dsl_hash: *dsl_hash,
                 });
             };
-            let input_blob = witnesses.blob(*witness_index as usize).ok_or(
-                ProgramError::TemporalPredicateWitnessMissing {
-                    dsl_hash: *dsl_hash,
-                },
-            )?;
-            // The proof bytes ride on the next ProofBytes witness blob
-            // after the input. (Apps that need a specific binding can
-            // migrate to the typed `Witnessed { wp }` variant which
-            // names the index explicitly.)
+            let input_idx = *witness_index as usize;
+            let input_blob =
+                witnesses
+                    .blob(input_idx)
+                    .ok_or(ProgramError::TemporalPredicateWitnessMissing {
+                        dsl_hash: *dsl_hash,
+                    })?;
+            let proof_idx = input_idx + 1;
             let proof_blob = witnesses
-                .blobs
-                .iter()
-                .find(|b| b.kind == WitnessKindTag::ProofBytes)
-                .ok_or(ProgramError::TemporalPredicateWitnessMissing {
-                    dsl_hash: *dsl_hash,
+                .blob(proof_idx)
+                .filter(|b| b.kind == WitnessKindTag::ProofBytes)
+                .ok_or(ProgramError::WitnessedPredicateRejected {
+                    kind_name: "Temporal",
+                    reason: "TemporalPredicate proof must be a ProofBytes blob at \
+                         witness_index + 1 (explicit binding); none found"
+                        .into(),
                 })?;
             let wp = crate::predicate::WitnessedPredicate {
                 kind: crate::predicate::WitnessedPredicateKind::Temporal,
                 commitment: *dsl_hash,
-                input_ref: InputRef::Witness {
-                    index: *witness_index as usize,
-                },
-                proof_witness_index: 0,
+                input_ref: InputRef::Witness { index: input_idx },
+                proof_witness_index: proof_idx,
             };
             let input = PredicateInput::Bytes(input_blob.bytes);
             registry.verify(&wp, &input, proof_blob.bytes).map_err(|e| {
@@ -1993,19 +2085,33 @@ fn evaluate_constraint_full(
             let Some(registry) = witnesses.registry else {
                 return Err(ProgramError::CustomConstraintUnevaluable { ir_hash: *ir_hash });
             };
-            let proof_blob = witnesses
-                .blobs
-                .iter()
-                .find(|b| b.kind == WitnessKindTag::ProofBytes)
-                .ok_or(ProgramError::CustomProgramProofRejected {
-                    ir_hash: *ir_hash,
-                    reason: "no ProofBytes witness blob carried for Custom predicate".into(),
+            // SECURITY (audit item 4): bind the proof blob by uniqueness,
+            // not first-of-kind. If the action carries more than one
+            // ProofBytes blob the binding is ambiguous (a proof for some
+            // other predicate could be cross-matched here) and we fail
+            // closed. Apps needing multiple same-kind proofs migrate to
+            // the typed `Witnessed { wp }` variant.
+            let (proof_idx, proof_blob) =
+                unique_blob_of_kinds(witnesses, &[WitnessKindTag::ProofBytes]).map_err(|e| {
+                    ProgramError::CustomProgramProofRejected {
+                        ir_hash: *ir_hash,
+                        reason: match e {
+                            UniqueBlobError::Missing => {
+                                "no ProofBytes witness blob carried for Custom predicate".into()
+                            }
+                            UniqueBlobError::Ambiguous => {
+                                "ambiguous Custom proof: action carries more than one ProofBytes \
+                                 blob; bind explicitly via Witnessed { wp }"
+                                    .to_string()
+                            }
+                        },
+                    }
                 })?;
             let wp = crate::predicate::WitnessedPredicate {
                 kind: crate::predicate::WitnessedPredicateKind::Custom { vk_hash: *ir_hash },
                 commitment: *ir_hash,
                 input_ref: InputRef::Slot { index: 0 },
-                proof_witness_index: 0,
+                proof_witness_index: proof_idx,
             };
             // Input: hand the entire new_state as Slot(0) reference;
             // custom verifiers are expected to fold whatever they need
@@ -2258,6 +2364,63 @@ mod tests {
             sender_epoch_count: epoch_count,
             ..Default::default()
         }
+    }
+
+    /// Mock adjacency verifier for cell-side NonMembership program tests. The
+    /// REAL Merkle-adjacency STARK lives in `dregg-circuit`/`dregg-turn`
+    /// (`CircuitNeighborAdjacencyVerifier`, exercised end-to-end by
+    /// `dregg_turn::executor::membership_verifier`'s
+    /// `e2e_consecutive_non_membership_accepts`). Here we only need to drive the
+    /// cell program's renunciation plumbing through a registry that HAS an
+    /// adjacency verifier installed (the post-hardening positive path), so the
+    /// mock accepts the canonical `b"ADJ-OK"` blob for any `lower < upper`.
+    struct ProgramMockAdjacency;
+    impl crate::predicate::NeighborAdjacencyVerifier for ProgramMockAdjacency {
+        fn verify_adjacency(
+            &self,
+            _root: &[u8; 32],
+            lower: &[u8; 32],
+            upper: &[u8; 32],
+            adjacency_proof: &[u8],
+        ) -> Result<(), String> {
+            if adjacency_proof != b"ADJ-OK" {
+                return Err("mock: missing/invalid adjacency proof".into());
+            }
+            if lower >= upper {
+                return Err("mock: lower !< upper".into());
+            }
+            Ok(())
+        }
+    }
+
+    /// A stub registry with the mock adjacency verifier installed on
+    /// NonMembership/BlindedSet — mirrors the production turn-layer wiring
+    /// (`registry_with_real_verifiers`) so genuine renunciations verify.
+    fn registry_with_mock_adjacency() -> crate::predicate::WitnessedPredicateRegistry {
+        use crate::predicate::{
+            CredentialSetMembershipVerifier, NeighborAdjacencyVerifier,
+            SortedNeighborNonMembershipVerifier, WitnessedPredicateRegistry,
+        };
+        use std::sync::Arc;
+        let mut r = WitnessedPredicateRegistry::with_stubs();
+        let adj: Arc<dyn NeighborAdjacencyVerifier> = Arc::new(ProgramMockAdjacency);
+        r.register_builtin(Arc::new(
+            SortedNeighborNonMembershipVerifier::with_adjacency(adj.clone()),
+        ));
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier::with_adjacency(
+            adj,
+        )));
+        r
+    }
+
+    /// Build a v2 non-membership proof carrying the mock-accepted adjacency
+    /// blob, bound to `commitment`.
+    fn honest_renunciation_v2(commitment: &[u8; 32], lower: [u8; 32], upper: [u8; 32]) -> Vec<u8> {
+        crate::predicate::NonMembershipProofV2 {
+            neighbor: crate::predicate::NonMembershipNeighborProof::new(commitment, lower, upper),
+            adjacency_proof: b"ADJ-OK".to_vec(),
+        }
+        .to_bytes()
     }
 
     fn ctx_preimage(p: [u8; 32]) -> EvalContext {
@@ -2891,15 +3054,15 @@ mod tests {
     #[test]
     fn renounced_accepts_legal_non_membership() {
         // Sender 0x05 is between lower=0x04 and upper=0x06 → not in
-        // the set → renunciation accepts.
+        // the set → renunciation accepts. Post-hardening, the bare 96-byte
+        // neighbor proof is rejected (wide-bracket forge closed); the positive
+        // path now ships a `NonMembershipProofV2` with a real Merkle-adjacency
+        // proof, verified against a registry that has an adjacency verifier
+        // installed (mocked here; the production adjacency STARK is exercised
+        // end-to-end in dregg-turn).
         let candidate = [0x05u8; 32];
-        let proof = crate::predicate::NonMembershipNeighborProof::new(
-            &[0xAB; 32],
-            [0x04u8; 32],
-            [0x06u8; 32],
-        );
-        let proof_bytes = proof.to_bytes();
-        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        let proof_bytes = honest_renunciation_v2(&[0xAB; 32], [0x04u8; 32], [0x06u8; 32]);
+        let registry = registry_with_mock_adjacency();
         let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
             kind: WitnessKindTag::ProofBytes,
             bytes: &proof_bytes,
@@ -3028,14 +3191,12 @@ mod tests {
     fn renounced_public_root_reads_slot_commitment() {
         // PublicRoot variant pulls commitment from a state slot.
         let candidate = [0x05u8; 32];
-        // Slot 3 carries the set root [0xCC; 32] (see below).
-        let proof = crate::predicate::NonMembershipNeighborProof::new(
-            &[0xCC; 32],
-            [0x04u8; 32],
-            [0x06u8; 32],
-        );
-        let proof_bytes = proof.to_bytes();
-        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        // Slot 3 carries the set root [0xCC; 32] (see below). Post-hardening
+        // positive path: a NonMembershipProofV2 bound to that root, with a real
+        // Merkle-adjacency proof (mocked here), verified against a registry that
+        // has the adjacency verifier installed.
+        let proof_bytes = honest_renunciation_v2(&[0xCC; 32], [0x04u8; 32], [0x06u8; 32]);
+        let registry = registry_with_mock_adjacency();
         let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
             kind: WitnessKindTag::ProofBytes,
             bytes: &proof_bytes,
@@ -3053,5 +3214,204 @@ mod tests {
         let ctx = ctx_sender(candidate, 0);
         p.evaluate_full(&s, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
             .expect("legal renunciation via PublicRoot accepts");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // AUDIT adversarial tests (FAIL-before / PASS-after)
+    // ─────────────────────────────────────────────────────────────────────
+
+    // Item 2: RateLimit no longer trusts a self-attested `RateLimitCount`
+    // witness blob. A submitter who attests count=0 while over the limit
+    // must be rejected — the count comes ONLY from ctx.sender_epoch_count.
+    #[test]
+    fn rate_limit_ignores_self_attested_count_witness() {
+        let p = CellProgram::Predicate(vec![StateConstraint::RateLimit {
+            max_per_epoch: 3,
+            epoch_duration: 100,
+        }]);
+        let s = CellState::new(0);
+        let sender = [9u8; 32];
+
+        // Adversary attests count=0 in the witness blob while the
+        // authoritative ctx count is 5 (over the cap). Pre-fix this
+        // accepted (ctx==0 fallthrough never happened, but a submitter
+        // setting ctx-bypassing self-attest=0 on the FIRST action of an
+        // epoch — when the real counter is 0 — would always pass).
+        let zero = 0u32.to_le_bytes();
+        let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+            kind: WitnessKindTag::RateLimitCount,
+            bytes: &zero,
+        }];
+        let bundle = WitnessBundle {
+            blobs: &blobs,
+            registry: None,
+        };
+        // Authoritative ctx count is over the cap → MUST reject, the
+        // self-attested 0 must be ignored.
+        let over = ctx_sender(sender, 5);
+        let err = p
+            .evaluate_full(&s, None, Some(&over), &TransitionMeta::wildcard(), &bundle)
+            .expect_err("over-cap ctx count must reject despite self-attested 0");
+        assert!(matches!(err, ProgramError::ConstraintViolated { .. }));
+
+        // And when ctx count is 0 (first action of the epoch), a witness
+        // blob claiming a huge count must NOT be able to "use up" the
+        // budget either — the witness is simply ignored, so it accepts.
+        let huge = 999u32.to_le_bytes();
+        let blobs2: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
+            kind: WitnessKindTag::RateLimitCount,
+            bytes: &huge,
+        }];
+        let bundle2 = WitnessBundle {
+            blobs: &blobs2,
+            registry: None,
+        };
+        let zero_ctx = ctx_sender(sender, 0);
+        p.evaluate_full(
+            &s,
+            None,
+            Some(&zero_ctx),
+            &TransitionMeta::wildcard(),
+            &bundle2,
+        )
+        .expect("ctx count 0 accepts regardless of witness blob");
+    }
+
+    // Item 1: CapabilityUniqueness fails CLOSED in the scalar evaluator —
+    // it can never silently pass. The real enforcement lives in the
+    // executor (turn/tests covers the structural cap-set path).
+    #[test]
+    fn capability_uniqueness_scalar_fails_closed() {
+        let p = CellProgram::Predicate(vec![StateConstraint::CapabilityUniqueness {
+            cap_set_root_slot: 0,
+        }]);
+        let mut s = CellState::new(0);
+        s.fields[0] = [0xAB; 32]; // non-zero root; still must fail closed
+        let err = p.evaluate(&s, None, None).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ProgramError::CapabilityUniquenessRequiresExecutor { .. }
+            ),
+            "scalar CapabilityUniqueness must fail closed, got {err:?}"
+        );
+    }
+
+    // Item 4: a mismatched / ambiguous witness must be rejected rather
+    // than cross-matched. Two ProofBytes blobs make the binding ambiguous
+    // for Renounced → fail closed (pre-fix the first-of-kind scan would
+    // silently pick blob 0).
+    #[test]
+    fn renounced_ambiguous_witness_rejected() {
+        let candidate = [0x05u8; 32];
+        let proof = crate::predicate::NonMembershipNeighborProof::new(
+            &[0xCC; 32],
+            [0x04u8; 32],
+            [0x06u8; 32],
+        );
+        let pb = proof.to_bytes();
+        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        // TWO ProofBytes blobs — ambiguous.
+        let blobs: [WitnessBlobView<'_>; 2] = [
+            WitnessBlobView {
+                kind: WitnessKindTag::ProofBytes,
+                bytes: &pb,
+            },
+            WitnessBlobView {
+                kind: WitnessKindTag::ProofBytes,
+                bytes: &pb,
+            },
+        ];
+        let bundle = WitnessBundle {
+            blobs: &blobs,
+            registry: Some(&registry),
+        };
+        let p = CellProgram::Predicate(vec![StateConstraint::Renounced {
+            set: RenouncedSet::PublicRoot { set_root_index: 3 },
+        }]);
+        let mut s = CellState::new(0);
+        s.fields[3] = [0xCC; 32];
+        let ctx = ctx_sender(candidate, 0);
+        let err = p
+            .evaluate_full(&s, None, Some(&ctx), &TransitionMeta::wildcard(), &bundle)
+            .expect_err("ambiguous double-ProofBytes witness must reject");
+        assert!(
+            matches!(
+                err,
+                ProgramError::WitnessedPredicateRejected {
+                    kind_name: "NonMembership",
+                    ..
+                }
+            ),
+            "expected ambiguity rejection, got {err:?}"
+        );
+    }
+
+    // Item 4: TemporalPredicate binds its proof explicitly at
+    // `witness_index + 1`. A proof placed elsewhere (or of the wrong
+    // kind at that slot) must be rejected, not first-of-kind matched.
+    #[test]
+    fn temporal_predicate_proof_must_be_at_explicit_index() {
+        let registry = crate::predicate::WitnessedPredicateRegistry::with_stubs();
+        let input = [1u8; 8];
+        let proof = [2u8; 64];
+        // input at index 0, but proof placed at index 2 (not 1) — the
+        // explicit slot (index 1) is the wrong kind.
+        let wrong_kind = [9u8; 4];
+        let blobs: [WitnessBlobView<'_>; 3] = [
+            WitnessBlobView {
+                kind: WitnessKindTag::Cleartext,
+                bytes: &input,
+            },
+            WitnessBlobView {
+                kind: WitnessKindTag::RateLimitCount,
+                bytes: &wrong_kind,
+            },
+            WitnessBlobView {
+                kind: WitnessKindTag::ProofBytes,
+                bytes: &proof,
+            },
+        ];
+        let bundle = WitnessBundle {
+            blobs: &blobs,
+            registry: Some(&registry),
+        };
+        let p = CellProgram::Predicate(vec![StateConstraint::TemporalPredicate {
+            witness_index: 0,
+            dsl_hash: [0xAB; 32],
+        }]);
+        let s = CellState::new(0);
+        let err = p
+            .evaluate_full(&s, None, None, &TransitionMeta::wildcard(), &bundle)
+            .expect_err("proof not at witness_index+1 must reject");
+        assert!(
+            matches!(
+                err,
+                ProgramError::WitnessedPredicateRejected {
+                    kind_name: "Temporal",
+                    ..
+                }
+            ),
+            "expected explicit-index rejection, got {err:?}"
+        );
+
+        // Now place the proof at the correct explicit slot (index 1) →
+        // the Temporal stub verifier accepts.
+        let blobs_ok: [WitnessBlobView<'_>; 2] = [
+            WitnessBlobView {
+                kind: WitnessKindTag::Cleartext,
+                bytes: &input,
+            },
+            WitnessBlobView {
+                kind: WitnessKindTag::ProofBytes,
+                bytes: &proof,
+            },
+        ];
+        let bundle_ok = WitnessBundle {
+            blobs: &blobs_ok,
+            registry: Some(&registry),
+        };
+        p.evaluate_full(&s, None, None, &TransitionMeta::wildcard(), &bundle_ok)
+            .expect("proof at witness_index+1 accepts via stub verifier");
     }
 }

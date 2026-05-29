@@ -5147,8 +5147,7 @@ fn schedule_projected_wr(
         pi.resize(p::BASE_COUNT, BabyBear::ZERO);
     }
 
-    let (th, eg, actor_nonce, prev) =
-        dregg_turn::TurnExecutor::compute_turn_identity_pi(turn);
+    let (th, eg, actor_nonce, prev) = dregg_turn::TurnExecutor::compute_turn_identity_pi(turn);
     for i in 0..p::TURN_HASH_LEN {
         pi[p::TURN_HASH_BASE + i] = th[i];
     }

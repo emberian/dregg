@@ -19,8 +19,7 @@
 
 use dregg_cell::{
     AuthRequired, CapabilityRef, Cell, CellId, CellMode, FactoryCreationParams, FactoryDescriptor,
-    Ledger, NoteCommitment, Permissions, SealPair, ValueCommitment,
-    note_bridge::BridgeReceipt,
+    Ledger, NoteCommitment, Permissions, SealPair, ValueCommitment, note_bridge::BridgeReceipt,
 };
 use dregg_turn::{
     ActionBuilder, Effect, EscrowClaimAuth, TurnBuilder, TurnResult,
@@ -91,7 +90,6 @@ fn exec_single_chained(
     turn.previous_receipt_hash = prev_hash;
     executor.execute(&turn, ledger)
 }
-
 
 fn assert_committed(result: &TurnResult, ctx: &str) {
     assert!(
@@ -272,11 +270,11 @@ fn seal_stores_commitment_in_field7() {
 
     // Inject sealer capability into actor_id manually (no prior turn needed).
     let sealer_cap_id = seal_capability_id_for_test(&pair_id, true);
-    ledger.get_mut(&actor_id).unwrap().capabilities.grant_with_breadstuff(
-        sealer_cap_id,
-        AuthRequired::None,
-        Some(pair.sealer_public),
-    );
+    ledger
+        .get_mut(&actor_id)
+        .unwrap()
+        .capabilities
+        .grant_with_breadstuff(sealer_cap_id, AuthRequired::None, Some(pair.sealer_public));
 
     // The capability to seal is a CapabilityRef pointing at some target cell.
     let cap_to_seal = CapabilityRef {
@@ -294,15 +292,17 @@ fn seal_stores_commitment_in_field7() {
         &mut ledger,
         actor_id,
         0,
-        vec![Effect::Seal { pair_id, capability: cap_to_seal }],
+        vec![Effect::Seal {
+            pair_id,
+            capability: cap_to_seal,
+        }],
     );
     assert_committed(&result, "Seal");
 
     // field[7] of actor must be non-zero (contains sealed box commitment).
     let actor_after = ledger.get(&actor_id).unwrap();
     assert_ne!(
-        actor_after.state.fields[7],
-        [0u8; 32],
+        actor_after.state.fields[7], [0u8; 32],
         "Seal must store commitment in field[7]"
     );
 }
@@ -346,11 +346,15 @@ fn unseal_round_trips_and_grants_capability_to_recipient() {
 
     // Inject the unsealer capability (only stores unsealer_secret in breadstuff).
     let unsealer_cap_id = seal_capability_id_for_test(&pair_id, false);
-    ledger.get_mut(&actor_id).unwrap().capabilities.grant_with_breadstuff(
-        unsealer_cap_id,
-        AuthRequired::None,
-        Some(pair.unsealer_secret),
-    );
+    ledger
+        .get_mut(&actor_id)
+        .unwrap()
+        .capabilities
+        .grant_with_breadstuff(
+            unsealer_cap_id,
+            AuthRequired::None,
+            Some(pair.unsealer_secret),
+        );
 
     let result = exec_single(
         &executor,
@@ -401,10 +405,8 @@ fn create_committed_escrow_locks_funds() {
     let creator_blinding = [0x11u8; 32];
     let recipient_blinding = [0x22u8; 32];
     let fake_recipient_id = CellId::from_bytes([0x99u8; 32]);
-    let creator_commitment =
-        compute_identity_commitment(&creator_id, &creator_blinding);
-    let recipient_commitment =
-        compute_identity_commitment(&fake_recipient_id, &recipient_blinding);
+    let creator_commitment = compute_identity_commitment(&creator_id, &creator_blinding);
+    let recipient_commitment = compute_identity_commitment(&fake_recipient_id, &recipient_blinding);
     let condition_commitment = *blake3::hash(b"test-condition").as_bytes();
 
     // We need a valid compressed Ristretto point for value_commitment.
@@ -488,8 +490,7 @@ fn release_committed_escrow_pays_recipient() {
     let creator_blinding = [0xAAu8; 32];
     let recipient_blinding = [0xBBu8; 32];
     let creator_commitment = compute_identity_commitment(&creator_id, &creator_blinding);
-    let recipient_commitment =
-        compute_identity_commitment(&recipient_id, &recipient_blinding);
+    let recipient_commitment = compute_identity_commitment(&recipient_id, &recipient_blinding);
     let condition_commitment = [0xCCu8; 32];
 
     let vc = ValueCommitment::identity();
@@ -581,8 +582,7 @@ fn refund_committed_escrow_returns_after_timeout() {
     let recipient_blinding = [0xEEu8; 32];
     let fake_recipient = CellId::from_bytes([0xFFu8; 32]);
     let creator_commitment = compute_identity_commitment(&creator_id, &creator_blinding);
-    let recipient_commitment =
-        compute_identity_commitment(&fake_recipient, &recipient_blinding);
+    let recipient_commitment = compute_identity_commitment(&fake_recipient, &recipient_blinding);
     let condition_commitment = [0x77u8; 32];
 
     let vc = ValueCommitment::identity();
@@ -787,13 +787,29 @@ fn introduce_grants_capability_to_recipient() {
     ledger.insert_cell(target).unwrap();
 
     // Grant introducer a capability to recipient AND a capability to target.
-    ledger.get_mut(&introducer_id).unwrap().capabilities.grant(recipient_id, AuthRequired::None);
-    ledger.get_mut(&introducer_id).unwrap().capabilities.grant(target_id, AuthRequired::None);
+    ledger
+        .get_mut(&introducer_id)
+        .unwrap()
+        .capabilities
+        .grant(recipient_id, AuthRequired::None);
+    ledger
+        .get_mut(&introducer_id)
+        .unwrap()
+        .capabilities
+        .grant(target_id, AuthRequired::None);
 
     let executor = zero_executor();
 
     // Before: recipient has no capabilities.
-    assert_eq!(ledger.get(&recipient_id).unwrap().capabilities.iter().count(), 0);
+    assert_eq!(
+        ledger
+            .get(&recipient_id)
+            .unwrap()
+            .capabilities
+            .iter()
+            .count(),
+        0
+    );
 
     let result = exec_single(
         &executor,
@@ -812,7 +828,10 @@ fn introduce_grants_capability_to_recipient() {
     // After: recipient now holds a capability to target.
     let recipient_after = ledger.get(&recipient_id).unwrap();
     assert!(
-        recipient_after.capabilities.iter().any(|cap| cap.target == target_id),
+        recipient_after
+            .capabilities
+            .iter()
+            .any(|cap| cap.target == target_id),
         "Introduce must grant recipient a capability to target"
     );
 }
@@ -826,9 +845,9 @@ fn introduce_grants_capability_to_recipient() {
 
 #[test]
 fn pipelined_send_rejects_outside_pipeline() {
+    use dregg_cell::Preconditions;
     use dregg_turn::eventual::EventualRef;
     use dregg_turn::{Action, Authorization, DelegationMode};
-    use dregg_cell::Preconditions;
 
     let actor = make_cell(90, 5_000);
     let actor_id = actor.id();
@@ -971,7 +990,10 @@ fn create_cell_from_factory_produces_new_cell() {
     };
 
     let new_cell_id = CellId::derive_raw(&owner_pubkey, &token_id);
-    assert!(ledger.get(&new_cell_id).is_none(), "cell must not exist before factory creation");
+    assert!(
+        ledger.get(&new_cell_id).is_none(),
+        "cell must not exist before factory creation"
+    );
 
     let result = exec_single(
         &executor,
@@ -1109,7 +1131,11 @@ fn refusal_bumps_nonce_and_stores_audit() {
     let after = ledger.get(&actor_id).unwrap();
     // The cell nonce is incremented twice: once by the executor's Phase 1 (fee+nonce commit)
     // and once by apply_refusal itself. Total: before_nonce + 2.
-    assert_eq!(after.state.nonce(), before_nonce + 2, "Refusal (plus executor Phase 1) must bump nonce by 2");
+    assert_eq!(
+        after.state.nonce(),
+        before_nonce + 2,
+        "Refusal (plus executor Phase 1) must bump nonce by 2"
+    );
     assert_ne!(
         after.state.fields[4], before_field4,
         "Refusal must write audit commitment to field[4]"
@@ -1153,7 +1179,9 @@ fn refusal_with_custom_reason_stores_distinct_audit() {
         vec![Effect::Refusal {
             cell: actor_id,
             offered_action_commitment: [0x01; 32],
-            refusal_reason: RefusalReason::Custom { reason_hash: [0xBEu8; 32] },
+            refusal_reason: RefusalReason::Custom {
+                reason_hash: [0xBEu8; 32],
+            },
             proof_witness_index: 0,
         }],
         prev,

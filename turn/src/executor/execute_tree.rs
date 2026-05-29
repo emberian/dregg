@@ -74,7 +74,19 @@ impl TurnExecutor {
         match program {
             dregg_cell::CellProgram::Predicate(constraints) => {
                 for constraint in constraints {
-                    if matches!(constraint, dregg_cell::StateConstraint::BoundDelta { .. }) {
+                    // BoundDelta is verified by the cross-cell γ.2 match
+                    // loop (`validate_bound_delta_program`) and
+                    // CapabilityUniqueness by the cap-set check
+                    // (`validate_capability_uniqueness`): both need data
+                    // the scalar `(old,new)` evaluator cannot reach, so
+                    // the scalar evaluator fails closed on them. Skip them
+                    // here; the executor enforces them in dedicated
+                    // passes.
+                    if matches!(
+                        constraint,
+                        dregg_cell::StateConstraint::BoundDelta { .. }
+                            | dregg_cell::StateConstraint::CapabilityUniqueness { .. }
+                    ) {
                         continue;
                     }
                     dregg_cell::CellProgram::Predicate(vec![constraint.clone()]).evaluate_full(
@@ -167,6 +179,136 @@ impl TurnExecutor {
                     },
                     path.to_vec(),
                 ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Enforce `StateConstraint::CapabilityUniqueness` against a cell's
+    /// **actual** capability set.
+    ///
+    /// SECURITY (audit item 1): the scalar `(old_state, new_state)`
+    /// evaluator cannot decide structural uniqueness — it only sees the 8
+    /// state slots, not the cell's `CapabilitySet`. It therefore fails
+    /// closed (`ProgramError::CapabilityUniquenessRequiresExecutor`). This
+    /// is the real enforcement site, where the cell's full capability list
+    /// is in scope. We enforce two structural guarantees:
+    ///
+    /// 1. **Root binding** — `slot[cap_set_root_slot]` must equal the
+    ///    canonical capability root of the cell's actual cap set
+    ///    (`compute_canonical_capability_root`). A cell cannot declare a
+    ///    cap-set root in a slot that does not match the caps it really
+    ///    holds, and the root must be non-zero (a zero root cannot commit
+    ///    to a unique cap).
+    /// 2. **No duplicate cap** — no two `CapabilityRef`s in the set may
+    ///    share the same `(target, permissions, breadstuff, allowed_effects)`
+    ///    identity, and no two may share a c-list `slot`. This is the
+    ///    "exactly one / no-duplicate-slot" guarantee the NFT-shape
+    ///    "exactly one owner cap" relies on.
+    ///
+    /// Peer/cap data absent or mismatched maps to REJECT, never skip.
+    fn validate_capability_uniqueness(
+        &self,
+        cell_id: &CellId,
+        program: &dregg_cell::CellProgram,
+        ledger: &Ledger,
+        path: &[usize],
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        let constraints = match program {
+            dregg_cell::CellProgram::Predicate(constraints) => constraints,
+            _ => return Ok(()),
+        };
+        for constraint in constraints {
+            let dregg_cell::StateConstraint::CapabilityUniqueness { cap_set_root_slot } =
+                constraint
+            else {
+                continue;
+            };
+            let slot = *cap_set_root_slot as usize;
+            if slot >= dregg_cell::state::STATE_SLOTS {
+                return Err((
+                    TurnError::ProgramViolation {
+                        cell: *cell_id,
+                        reason: format!(
+                            "CapabilityUniqueness references invalid slot {cap_set_root_slot}"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            // The cell must still exist post-effects.
+            let Some(cell) = ledger.get(cell_id) else {
+                return Err((TurnError::CellNotFound { id: *cell_id }, path.to_vec()));
+            };
+
+            // (1) Root binding: declared slot root must equal the actual
+            // canonical capability root and be non-zero.
+            let declared_root = cell.state.fields[slot];
+            if declared_root == [0u8; 32] {
+                return Err((
+                    TurnError::ProgramViolation {
+                        cell: *cell_id,
+                        reason: format!(
+                            "CapabilityUniqueness: cap-set-root slot {slot} is zero; a unique-cap \
+                             commitment cannot be empty"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            let actual_root = dregg_cell::compute_canonical_capability_root(&cell.capabilities);
+            if declared_root != actual_root {
+                return Err((
+                    TurnError::ProgramViolation {
+                        cell: *cell_id,
+                        reason: format!(
+                            "CapabilityUniqueness: cap-set-root slot {slot} does not match the \
+                             cell's canonical capability root"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+
+            // (2) No duplicate cap: reject duplicate (target, permissions,
+            // breadstuff, allowed_effects) identities and duplicate c-list
+            // slots.
+            let caps: Vec<&dregg_cell::capability::CapabilityRef> =
+                cell.capabilities.iter().collect();
+            for i in 0..caps.len() {
+                for j in (i + 1)..caps.len() {
+                    let a = caps[i];
+                    let b = caps[j];
+                    if a.slot == b.slot {
+                        return Err((
+                            TurnError::ProgramViolation {
+                                cell: *cell_id,
+                                reason: format!(
+                                    "CapabilityUniqueness: duplicate c-list slot {} in cap set",
+                                    a.slot
+                                ),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                    if a.target == b.target
+                        && a.permissions == b.permissions
+                        && a.breadstuff == b.breadstuff
+                        && a.allowed_effects == b.allowed_effects
+                    {
+                        return Err((
+                            TurnError::ProgramViolation {
+                                cell: *cell_id,
+                                reason: format!(
+                                    "CapabilityUniqueness: duplicate capability to target {} \
+                                     violates exactly-one guarantee",
+                                    a.target
+                                ),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
+                }
             }
         }
         Ok(())
@@ -734,6 +876,7 @@ impl TurnExecutor {
                 ledger,
                 &path,
             )?;
+            self.validate_capability_uniqueness(cell_id, &touched_cell.program, ledger, &path)?;
         }
 
         // Suppress unused warning on the legacy alias.

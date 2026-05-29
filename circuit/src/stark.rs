@@ -889,10 +889,7 @@ pub fn prove(
 /// `proof.trace_commitment`, the trace is provably the one the proof attests
 /// (the proof's FRI/constraint checks then guarantee that trace satisfies the
 /// AIR constraints). Returns `None` for a structurally invalid trace.
-pub fn recompute_trace_commitment(
-    air: &dyn StarkAir,
-    trace: &[Vec<BabyBear>],
-) -> Option<[u8; 32]> {
+pub fn recompute_trace_commitment(air: &dyn StarkAir, trace: &[Vec<BabyBear>]) -> Option<[u8; 32]> {
     let num_rows = trace.len();
     let num_cols = air.width();
     if num_rows < 2 || !num_rows.is_power_of_two() {

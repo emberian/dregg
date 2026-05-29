@@ -27,7 +27,7 @@
 use dregg_circuit::field::BABYBEAR_P;
 use dregg_circuit::poseidon_stark::{prove_poseidon, verify_poseidon};
 use dregg_circuit::poseidon_stark_verifier_circuit::PoseidonStarkVerifierCircuit;
-use dregg_circuit::stark::{generate_merkle_trace, MerkleStarkAir};
+use dregg_circuit::stark::{MerkleStarkAir, generate_merkle_trace};
 
 use mina_curves::pasta::Fp;
 
@@ -58,8 +58,10 @@ fn honest_proof() -> dregg_circuit::poseidon_stark::PoseidonStarkProof {
 /// A successfully producing+verifying proof is the ONLY un-acceptable outcome.
 fn assert_rejected<F>(label: &str, attempt: F)
 where
-    F: FnOnce() -> Result<dregg_circuit::poseidon_stark_verifier_circuit::PoseidonStarkKimchiProof, String>
-        + std::panic::UnwindSafe,
+    F: FnOnce() -> Result<
+            dregg_circuit::poseidon_stark_verifier_circuit::PoseidonStarkKimchiProof,
+            String,
+        > + std::panic::UnwindSafe,
 {
     let outcome = std::panic::catch_unwind(attempt);
     match outcome {
@@ -182,7 +184,9 @@ fn wrong_beta_in_fold_operand_rejected() {
 const POSEIDON_GADGET_ROWS: usize = 12; // 11 Poseidon rows + 1 Zero/output row.
 
 /// Row at which the FRI section (layer 0) begins for query 0.
-fn fri_section_start(layout: &dregg_circuit::poseidon_stark_verifier_circuit::PoseidonStarkVerifierLayout) -> usize {
+fn fri_section_start(
+    layout: &dregg_circuit::poseidon_stark_verifier_circuit::PoseidonStarkVerifierLayout,
+) -> usize {
     let d = layout.tree_depth;
     let num_bb_muls = layout.num_cols * 4 /* constraint_degree */;
     layout.public_input_count

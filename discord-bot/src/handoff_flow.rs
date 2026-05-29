@@ -78,9 +78,9 @@ impl From<HandoffError> for HandoffFlowError {
 fn parse_32(hex_str: &str, what: &str) -> Result<[u8; 32], HandoffFlowError> {
     let bytes =
         hex::decode(hex_str).map_err(|e| HandoffFlowError::BadHex(format!("{what}: {e}")))?;
-    bytes
-        .try_into()
-        .map_err(|b: Vec<u8>| HandoffFlowError::BadHex(format!("{what}: expected 32 bytes, got {}", b.len())))
+    bytes.try_into().map_err(|b: Vec<u8>| {
+        HandoffFlowError::BadHex(format!("{what}: expected 32 bytes, got {}", b.len()))
+    })
 }
 
 /// The bot's soft-federation handoff broker.
@@ -258,7 +258,14 @@ mod tests {
         // Alice (introducer) delegates a cell she owns to Bob (recipient).
         let target_cell = hex::encode([0xabu8; 32]);
         let minted = broker
-            .mint_handoff(&alice_seed, &target_cell, &pubkey_hex(&bob_seed), 100, Some(200), Some(1))
+            .mint_handoff(
+                &alice_seed,
+                &target_cell,
+                &pubkey_hex(&bob_seed),
+                100,
+                Some(200),
+                Some(1),
+            )
             .expect("mint should succeed");
 
         // The compact string is the canonical wire form.
@@ -276,7 +283,10 @@ mod tests {
         // Round-trips through the canonical compact codec losslessly.
         let decoded = HandoffCertificate::from_compact_string(&minted.compact).unwrap();
         assert!(decoded.verify_signature(&introducer_pk));
-        assert_eq!(decoded.recipient_pk, SigningKey::from_bytes(&bob_seed).public_key().0);
+        assert_eq!(
+            decoded.recipient_pk,
+            SigningKey::from_bytes(&bob_seed).public_key().0
+        );
         assert_eq!(decoded.swiss, minted.certificate.swiss);
     }
 
@@ -287,7 +297,14 @@ mod tests {
         let bob_seed = user_seed(&bot_secret, 2);
         let mut broker = HandoffBroker::new(FederationId([1u8; 32]));
         let minted = broker
-            .mint_handoff(&alice_seed, &hex::encode([5u8; 32]), &pubkey_hex(&bob_seed), 0, None, None)
+            .mint_handoff(
+                &alice_seed,
+                &hex::encode([5u8; 32]),
+                &pubkey_hex(&bob_seed),
+                0,
+                None,
+                None,
+            )
             .unwrap();
 
         // Flip the recipient pubkey — signature must no longer verify.
@@ -309,7 +326,14 @@ mod tests {
         let mut broker = HandoffBroker::new(bot_fed);
 
         let minted = broker
-            .mint_handoff(&alice_seed, &hex::encode([0xcdu8; 32]), &pubkey_hex(&bob_seed), 5, Some(100), Some(1))
+            .mint_handoff(
+                &alice_seed,
+                &hex::encode([0xcdu8; 32]),
+                &pubkey_hex(&bob_seed),
+                5,
+                Some(100),
+                Some(1),
+            )
             .unwrap();
         assert_eq!(broker.swiss_len(), 1);
 
@@ -330,7 +354,14 @@ mod tests {
         let mut broker = HandoffBroker::new(FederationId([8u8; 32]));
 
         let minted = broker
-            .mint_handoff(&alice_seed, &hex::encode([1u8; 32]), &pubkey_hex(&bob_seed), 0, None, None)
+            .mint_handoff(
+                &alice_seed,
+                &hex::encode([1u8; 32]),
+                &pubkey_hex(&bob_seed),
+                0,
+                None,
+                None,
+            )
             .unwrap();
 
         // Mallory (not the named recipient) presents — recipient-sig check fails.
@@ -351,7 +382,14 @@ mod tests {
         let bob_seed = user_seed(&bot_secret, 2);
         let mut broker = HandoffBroker::new(FederationId([2u8; 32]));
         let minted = broker
-            .mint_handoff(&alice_seed, &hex::encode([7u8; 32]), &pubkey_hex(&bob_seed), 0, None, None)
+            .mint_handoff(
+                &alice_seed,
+                &hex::encode([7u8; 32]),
+                &pubkey_hex(&bob_seed),
+                0,
+                None,
+                None,
+            )
             .unwrap();
 
         // Forget the introducer to simulate an unknown delegator.

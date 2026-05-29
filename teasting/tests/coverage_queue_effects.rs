@@ -20,7 +20,7 @@
 //! ledger with the above layout.  Subsequent tests read field[0..=6] via
 //! `with_ledger_mut` to assert observable state.
 
-use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, CellId, EmbeddedExecutor, Effect};
+use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, CellId, Effect, EmbeddedExecutor};
 use dregg_turn::QueueTxOp;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -71,9 +71,7 @@ fn derive_queue_id(actor_id: &CellId, capacity: u64, nonce_after_phase1: u64) ->
 /// This is the nonce BEFORE the next turn's Phase 1 increments it.
 /// Pass `nonce_before_submit() + 1` to `derive_queue_id`.
 fn actor_nonce(executor: &EmbeddedExecutor, actor: &CellId) -> u64 {
-    executor.with_ledger_mut(|ledger| {
-        ledger.get(actor).map(|c| c.state.nonce()).unwrap_or(0)
-    })
+    executor.with_ledger_mut(|ledger| ledger.get(actor).map(|c| c.state.nonce()).unwrap_or(0))
 }
 
 // ── Test 1: QueueAllocate ────────────────────────────────────────────────────
@@ -110,18 +108,20 @@ fn queue_allocate_creates_queue_cell_with_correct_capacity() {
     let queue_id = derive_queue_id(&actor, capacity, nonce_before + 1);
 
     // Verify the queue cell was actually created and has the right capacity.
-    let (cap_in_cell, len_in_cell, owner_in_cell) =
-        executor.with_ledger_mut(|ledger| {
-            let qc = ledger
-                .get(&queue_id)
-                .expect("queue cell must exist after QueueAllocate");
-            let cap = read_u64_field(qc.state.fields[0]);
-            let len = read_u64_field(qc.state.fields[1]);
-            let owner: [u8; 32] = qc.state.fields[2];
-            (cap, len, owner)
-        });
+    let (cap_in_cell, len_in_cell, owner_in_cell) = executor.with_ledger_mut(|ledger| {
+        let qc = ledger
+            .get(&queue_id)
+            .expect("queue cell must exist after QueueAllocate");
+        let cap = read_u64_field(qc.state.fields[0]);
+        let len = read_u64_field(qc.state.fields[1]);
+        let owner: [u8; 32] = qc.state.fields[2];
+        (cap, len, owner)
+    });
 
-    assert_eq!(cap_in_cell, capacity, "field[0] must hold the allocated capacity");
+    assert_eq!(
+        cap_in_cell, capacity,
+        "field[0] must hold the allocated capacity"
+    );
     assert_eq!(len_in_cell, 0, "field[1] (length) must start at 0");
     assert_eq!(
         owner_in_cell,
@@ -148,7 +148,10 @@ fn queue_enqueue_increments_length_and_sets_tail_and_head() {
     let alloc = cc.make_action(
         actor,
         "queue.allocate",
-        vec![Effect::QueueAllocate { capacity, program_vk: None }],
+        vec![Effect::QueueAllocate {
+            capacity,
+            program_vk: None,
+        }],
     );
     executor
         .submit_action(&cc, alloc)
@@ -184,7 +187,10 @@ fn queue_enqueue_increments_length_and_sets_tail_and_head() {
     });
 
     assert_eq!(len, 1, "length must be 1 after one enqueue");
-    assert_eq!(tail, msg_hash, "field[4] (tail) must be the enqueued message hash");
+    assert_eq!(
+        tail, msg_hash,
+        "field[4] (tail) must be the enqueued message hash"
+    );
     assert_eq!(
         head, msg_hash,
         "field[6] (head) must be set to message hash on the 0→1 transition"
@@ -211,7 +217,10 @@ fn queue_dequeue_decrements_length_and_clears_head_when_empty() {
             cc.make_action(
                 actor,
                 "queue.allocate",
-                vec![Effect::QueueAllocate { capacity, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate must succeed");
@@ -227,7 +236,11 @@ fn queue_dequeue_decrements_length_and_clears_head_when_empty() {
             cc.make_action(
                 actor,
                 "queue.enqueue",
-                vec![Effect::QueueEnqueue { queue: queue_id, message_hash: msg, deposit: 0 }],
+                vec![Effect::QueueEnqueue {
+                    queue: queue_id,
+                    message_hash: msg,
+                    deposit: 0,
+                }],
             ),
         )
         .expect("enqueue must succeed");
@@ -254,8 +267,7 @@ fn queue_dequeue_decrements_length_and_clears_head_when_empty() {
 
     assert_eq!(len_after, 0, "length must return to 0 after dequeue");
     assert_eq!(
-        head_after,
-        [0u8; 32],
+        head_after, [0u8; 32],
         "field[6] (head) must be cleared when queue becomes empty"
     );
 }
@@ -281,7 +293,10 @@ fn queue_resize_grows_capacity_field() {
             cc.make_action(
                 actor,
                 "queue.allocate",
-                vec![Effect::QueueAllocate { capacity: initial_capacity, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity: initial_capacity,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate must succeed");
@@ -293,7 +308,10 @@ fn queue_resize_grows_capacity_field() {
     let resize = cc.make_action(
         actor,
         "queue.resize",
-        vec![Effect::QueueResize { queue: queue_id, new_capacity }],
+        vec![Effect::QueueResize {
+            queue: queue_id,
+            new_capacity,
+        }],
     );
     let receipt = executor
         .submit_action(&cc, resize)
@@ -302,10 +320,19 @@ fn queue_resize_grows_capacity_field() {
     assert_eq!(receipt.action_count, 1);
 
     let cap_after = executor.with_ledger_mut(|ledger| {
-        read_u64_field(ledger.get(&queue_id).expect("queue must exist").state.fields[0])
+        read_u64_field(
+            ledger
+                .get(&queue_id)
+                .expect("queue must exist")
+                .state
+                .fields[0],
+        )
     });
 
-    assert_eq!(cap_after, new_capacity, "field[0] must reflect new capacity after resize");
+    assert_eq!(
+        cap_after, new_capacity,
+        "field[0] must reflect new capacity after resize"
+    );
 }
 
 // ── Test 5: QueueAtomicTx ────────────────────────────────────────────────────
@@ -330,7 +357,10 @@ fn queue_atomic_tx_enqueue_and_dequeue_both_commit() {
             cc.make_action(
                 actor,
                 "queue.allocate.a",
-                vec![Effect::QueueAllocate { capacity: cap_a, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity: cap_a,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate queue A");
@@ -343,7 +373,10 @@ fn queue_atomic_tx_enqueue_and_dequeue_both_commit() {
             cc.make_action(
                 actor,
                 "queue.allocate.b",
-                vec![Effect::QueueAllocate { capacity: cap_b, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity: cap_b,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate queue B");
@@ -357,7 +390,11 @@ fn queue_atomic_tx_enqueue_and_dequeue_both_commit() {
             cc.make_action(
                 actor,
                 "queue.enqueue.b",
-                vec![Effect::QueueEnqueue { queue: queue_b, message_hash: msg_b, deposit: 0 }],
+                vec![Effect::QueueEnqueue {
+                    queue: queue_b,
+                    message_hash: msg_b,
+                    deposit: 0,
+                }],
             ),
         )
         .expect("pre-load queue B");
@@ -369,7 +406,11 @@ fn queue_atomic_tx_enqueue_and_dequeue_both_commit() {
         "queue.atomic_tx",
         vec![Effect::QueueAtomicTx {
             operations: vec![
-                QueueTxOp::Enqueue { queue: queue_a, message_hash: msg_a, deposit: 0 },
+                QueueTxOp::Enqueue {
+                    queue: queue_a,
+                    message_hash: msg_a,
+                    deposit: 0,
+                },
                 QueueTxOp::Dequeue { queue: queue_b },
             ],
         }],
@@ -390,8 +431,14 @@ fn queue_atomic_tx_enqueue_and_dequeue_both_commit() {
         (len_a, tail_a, len_b)
     });
 
-    assert_eq!(len_a, 1, "queue A must have one message after atomic enqueue");
-    assert_eq!(tail_a, msg_a, "queue A tail must be the atomically enqueued message");
+    assert_eq!(
+        len_a, 1,
+        "queue A must have one message after atomic enqueue"
+    );
+    assert_eq!(
+        tail_a, msg_a,
+        "queue A tail must be the atomically enqueued message"
+    );
     assert_eq!(len_b, 0, "queue B must be empty after atomic dequeue");
 }
 
@@ -415,7 +462,10 @@ fn queue_pipeline_step_moves_message_from_source_to_sink() {
             cc.make_action(
                 actor,
                 "queue.allocate.src",
-                vec![Effect::QueueAllocate { capacity: cap_src, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity: cap_src,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate source queue");
@@ -431,7 +481,10 @@ fn queue_pipeline_step_moves_message_from_source_to_sink() {
             cc.make_action(
                 actor,
                 "queue.allocate.sink",
-                vec![Effect::QueueAllocate { capacity: cap_sink, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity: cap_sink,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate sink queue");
@@ -445,7 +498,11 @@ fn queue_pipeline_step_moves_message_from_source_to_sink() {
             cc.make_action(
                 actor,
                 "queue.enqueue.src",
-                vec![Effect::QueueEnqueue { queue: queue_src, message_hash: msg, deposit: 0 }],
+                vec![Effect::QueueEnqueue {
+                    queue: queue_src,
+                    message_hash: msg,
+                    deposit: 0,
+                }],
             ),
         )
         .expect("enqueue into source must succeed");
@@ -481,8 +538,14 @@ fn queue_pipeline_step_moves_message_from_source_to_sink() {
     });
 
     assert_eq!(src_len, 0, "source queue must be empty after pipeline step");
-    assert_eq!(sink_len, 1, "sink queue must have one message after pipeline step");
-    assert_eq!(sink_tail, msg, "sink tail (field[4]) must be the moved message hash");
+    assert_eq!(
+        sink_len, 1,
+        "sink queue must have one message after pipeline step"
+    );
+    assert_eq!(
+        sink_tail, msg,
+        "sink tail (field[4]) must be the moved message hash"
+    );
     assert_eq!(
         sink_head, msg,
         "sink head (field[6]) must be set to the moved message hash (0→1 transition)"
@@ -505,7 +568,10 @@ fn queue_dequeue_rejected_when_empty() {
             cc.make_action(
                 actor,
                 "queue.allocate",
-                vec![Effect::QueueAllocate { capacity: 4, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity: 4,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate must succeed");
@@ -547,7 +613,10 @@ fn queue_atomic_tx_rejected_when_dequeue_target_is_empty() {
             cc.make_action(
                 actor,
                 "queue.allocate.enq",
-                vec![Effect::QueueAllocate { capacity: cap, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity: cap,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate enqueue-target queue");
@@ -560,7 +629,10 @@ fn queue_atomic_tx_rejected_when_dequeue_target_is_empty() {
             cc.make_action(
                 actor,
                 "queue.allocate.deq",
-                vec![Effect::QueueAllocate { capacity: cap, program_vk: None }],
+                vec![Effect::QueueAllocate {
+                    capacity: cap,
+                    program_vk: None,
+                }],
             ),
         )
         .expect("allocate dequeue-target (empty) queue");
@@ -576,7 +648,11 @@ fn queue_atomic_tx_rejected_when_dequeue_target_is_empty() {
             "queue.atomic_tx",
             vec![Effect::QueueAtomicTx {
                 operations: vec![
-                    QueueTxOp::Enqueue { queue: queue_enq, message_hash: msg, deposit: 0 },
+                    QueueTxOp::Enqueue {
+                        queue: queue_enq,
+                        message_hash: msg,
+                        deposit: 0,
+                    },
                     QueueTxOp::Dequeue { queue: queue_deq },
                 ],
             }],
@@ -590,7 +666,13 @@ fn queue_atomic_tx_rejected_when_dequeue_target_is_empty() {
 
     // Verify the enqueue did not commit (atomicity: both rolled back).
     let len_enq = executor.with_ledger_mut(|ledger| {
-        read_u64_field(ledger.get(&queue_enq).expect("queue must exist").state.fields[1])
+        read_u64_field(
+            ledger
+                .get(&queue_enq)
+                .expect("queue must exist")
+                .state
+                .fields[1],
+        )
     });
     assert_eq!(
         len_enq, 0,

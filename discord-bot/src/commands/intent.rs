@@ -24,15 +24,19 @@ pub fn register() -> CreateCommand {
     CreateCommand::new("intent")
         .description("Publish a real signed intent to the channel")
         .add_option(
-            CreateCommandOption::new(CommandOptionType::SubCommand, "post", "Post a signed intent")
-                .add_sub_option(
-                    CreateCommandOption::new(
-                        CommandOptionType::String,
-                        "spec",
-                        "What you want (e.g. 'want: 5 GOOSE for 1hr compute')",
-                    )
-                    .required(true),
-                ),
+            CreateCommandOption::new(
+                CommandOptionType::SubCommand,
+                "post",
+                "Post a signed intent",
+            )
+            .add_sub_option(
+                CreateCommandOption::new(
+                    CommandOptionType::String,
+                    "spec",
+                    "What you want (e.g. 'want: 5 GOOSE for 1hr compute')",
+                )
+                .required(true),
+            ),
         )
 }
 
@@ -90,8 +94,11 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     }
 
     // Build the real signed intent from the poster's hosted cipherclerk.
-    let cclerk =
-        UserCipherclerk::derive(&state.config.bot_secret, invoker_id, state.federation_id_bytes);
+    let cclerk = UserCipherclerk::derive(
+        &state.config.bot_secret,
+        invoker_id,
+        state.federation_id_bytes,
+    );
     let signed = intent_flow::build_signed_intent(&cclerk.app, &spec);
 
     // Defensive: confirm the artifact verifies before we publish it.
@@ -111,7 +118,11 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     // Ephemeral confirmation to the poster.
     let confirm = embeds::success_embed("Signed Intent Published")
         .description("Real `Authorization::Signature` action posted to the channel.")
-        .field("Poster pubkey", format!("`{}`", cclerk.public_key_hex()), false)
+        .field(
+            "Poster pubkey",
+            format!("`{}`", cclerk.public_key_hex()),
+            false,
+        )
         .field("Spec hash", format!("`{}`", &spec_hash[..16]), true);
     let _ = command
         .edit_response(&ctx.http, EditInteractionResponse::new().embed(confirm))
@@ -125,7 +136,10 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     ));
     if let Ok(msg) = command.channel_id.send_message(&ctx.http, public).await {
         let _ = msg
-            .react(&ctx.http, serenity::all::ReactionType::Unicode("✋".to_string()))
+            .react(
+                &ctx.http,
+                serenity::all::ReactionType::Unicode("✋".to_string()),
+            )
             .await;
     }
 }
