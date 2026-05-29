@@ -35,8 +35,71 @@ pub struct VerificationKey {
 
 impl VerificationKey {
     /// Create a new verification key from raw data, computing its BLAKE3 hash.
+    ///
+    /// **Deprecated.** This constructor uses a plain `blake3(data)` hash, which
+    /// is *not* a `canonical_vk_v2` hash (domain key `"dregg-vk-v2"`). Any VK
+    /// built here is internally consistent but not interoperable with a validator
+    /// that re-derives the expected VK hash via `canonical_vk_v2` from the four
+    /// canonical components. Use [`VerificationKey::from_components`] for all
+    /// production VK construction where the circuit/AIR/verifier/proving-system
+    /// identity components are available. Opaque-fixture uses (tests, demos) may
+    /// continue to call `new` — the deprecation warning is expected and acceptable
+    /// for those sites. Do **not** suppress the warning with `#[allow(deprecated)]`
+    /// unless the call site is genuinely opaque-fixture only.
+    ///
+    /// See `docs-old/VK-NEW-CALLER-AUDIT.md` §2 Option A for the full rationale.
+    #[deprecated(
+        note = "use from_components for canonical vk_v2 hashing; see VK-NEW-CALLER-AUDIT"
+    )]
     pub fn new(data: Vec<u8>) -> Self {
         let hash = *blake3::hash(&data).as_bytes();
+        VerificationKey { hash, data }
+    }
+
+    /// Create a verification key from the four canonical VK v2 components,
+    /// computing the hash via [`crate::vk_v2::canonical_vk_v2`].
+    ///
+    /// This is the correct constructor for any production code path that has the
+    /// cell-program / AIR / verifier / proving-system identity components in hand:
+    ///
+    /// - `components.program_bytes` — canonical postcard(CellProgram), DSL AST,
+    ///   or opaque app-provided bytes encoding the executable spec.
+    /// - `components.air_fingerprint` — 32-byte hash of the AIR descriptor.
+    /// - `components.verifier_fingerprint` — which verifier implementation runs
+    ///   the circuit (source-hash / wasm-hash / compiled-VK-hash variant).
+    /// - `components.proving_system_id` — Plonky3BabyBearFri, KimchiPasta,
+    ///   Sp1V6, or Custom.
+    ///
+    /// The resulting `hash` field is a `blake3_keyed("dregg-vk-v2", …)` digest —
+    /// the same value that a validator re-derives independently. The `data` field
+    /// stores `program_bytes` so the program spec is recoverable for
+    /// cross-checking (AIR/verifier/proving-system identity is conveyed
+    /// out-of-band via `VkComponents`; see `vk_v2.rs` for the full boundary
+    /// contract).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dregg_cell::VerificationKey;
+    /// use dregg_cell::vk_v2::{VkComponents, VerifierFingerprint, ProvingSystemId};
+    ///
+    /// let program_bytes = b"my-cell-program-postcard-bytes";
+    /// let vk = VerificationKey::from_components(&VkComponents {
+    ///     program_bytes,
+    ///     air_fingerprint: [0x11; 32],
+    ///     verifier_fingerprint: VerifierFingerprint::SourceHash([0x22; 32]),
+    ///     proving_system_id: ProvingSystemId::Plonky3BabyBearFri {
+    ///         p3_rev: "82cfad73",
+    ///     },
+    /// });
+    /// // vk.hash is canonical_vk_v2(components), not blake3(program_bytes).
+    /// ```
+    pub fn from_components(components: &crate::vk_v2::VkComponents<'_>) -> Self {
+        let hash = crate::vk_v2::canonical_vk_v2(components);
+        // Store the program bytes so the executable spec is recoverable for
+        // cross-checking. The AIR/verifier/proving-system fields are conveyed
+        // out-of-band via VkComponents and are NOT embedded in `data`.
+        let data = components.program_bytes.to_vec();
         VerificationKey { hash, data }
     }
 
