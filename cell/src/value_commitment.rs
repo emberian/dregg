@@ -841,7 +841,12 @@ pub fn prove_asset_conservation(
     excess_blinding: &Scalar,
     message: &[u8],
 ) -> ConservationProof {
-    prove_conservation(input_commitments, output_commitments, excess_blinding, message)
+    prove_conservation(
+        input_commitments,
+        output_commitments,
+        excess_blinding,
+        message,
+    )
 }
 
 /// Verify an asset-hiding conservation proof. See [`prove_asset_conservation`]
@@ -1069,7 +1074,10 @@ pub fn prove_asset_equality_with_message(
     }
 
     AssetEqualityProof {
-        nonce_commitments: nonce_points.iter().map(|t| t.compress().to_bytes()).collect(),
+        nonce_commitments: nonce_points
+            .iter()
+            .map(|t| t.compress().to_bytes())
+            .collect(),
         response_asset: s_at.to_bytes(),
         response_values,
         response_blindings,
@@ -1791,7 +1799,10 @@ mod tests {
         // because the asset term at*H_asset remains.
         let hidden_residual = c_asset_a.point - Scalar::from(value) * value_generator();
         assert_ne!(hidden_residual, r1 * randomness_generator());
-        assert_ne!(hidden_residual, r1 * randomness_generator() - randomness_generator());
+        assert_ne!(
+            hidden_residual,
+            r1 * randomness_generator() - randomness_generator()
+        );
     }
 
     #[test]
@@ -2069,13 +2080,7 @@ mod tests {
         let c2 = ValueCommitment::commit_hidden_asset(200, asset, &r2);
         let all = vec![c1, c2];
 
-        let proof = prove_asset_equality_with_message(
-            &all,
-            asset,
-            &[100, 200],
-            &[r1, r2],
-            b"tx-A",
-        );
+        let proof = prove_asset_equality_with_message(&all, asset, &[100, 200], &[r1, r2], b"tx-A");
         assert!(verify_asset_equality_with_message(&all, &proof, b"tx-A").is_ok());
         assert!(
             verify_asset_equality_with_message(&all, &proof, b"tx-B").is_err(),
