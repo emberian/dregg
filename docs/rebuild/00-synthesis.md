@@ -358,19 +358,27 @@ living in the circuit; conflating them would be its own mistake (note in the dir
 
 ---
 
-## 9. Open decisions (the user's to make)
+## 9. Decisions (resolved 2026-05-29)
 
-1. **Regime coupling:** is "regime = a per-cell declaration that fixes *both* authority-representation
-   (caps/keys) *and* ordering (the finality tier)" the right **diagonal**, or should the two axes
-   be independently selectable per cell (4 corners; the membrane handles all four)? Lean: diagonal
-   as *default*, off-diagonal *allowed* (a proof-carrying cell that still wants single-writer
-   ordering is real).
-2. **Interaction style at a membrane between mutually-distrustful islands:** confirmed
-   **live-session-then-attest** (seL4 confines interactively to valid dregg actions; dregg
-   attests quasi-batched / offline, under the hood) — the retroactive-from-log proof is the
-   attest half.
-3. **Sequencing bite:** start at step 1 (collapse) as a real branch, or write the Lean membrane-law
-   first to pin the semantics before code.
+1. **Path: Lean core first.** Build the small core semantics + laws *executably* in Lean4
+   (`./metatheory`) before the Rust remold. Lean = semantic core + laws (+ later, the DSL via
+   metaprogramming); **Rust stays the crypto/proving/transport/wasm engine** (do NOT reimplement
+   the prover in Lean); **differential testing** bridges them (Lean = golden oracle, Rust checked
+   against it — the `dregg-dsl-differential` pattern). Rationale: the peers' three complaints
+   (hard-to-understand / huge-TCB / incoherent) are all about the *semantic layer*, not the
+   crypto; Lean targets exactly that layer, and l4.verified is the existence-proof that
+   machine-checking a cap system's integrity certifies something necessary (answers the
+   "formalization sauce" risk).
+2. **Regime coupling: 4-corners with diagonal default.** Authority-representation (caps/keys) and
+   ordering (finality tier) are *independently* selectable per cell, but the coupled diagonal is
+   the default. Off-diagonal corners are allowed (e.g. a proof-carrying cell that still wants
+   single-writer ordering); the membrane must handle all four corners.
+3. **v1 Rust: freeze and rebuild later.** Freeze the current frontend/sdk/discord-bot/playground/
+   wasm as a working v1 demo; do NOT actively maintain it. Rebuild the surface against the
+   certified core later (the existing code is week-old and rebuildable; not precious).
+4. **Interaction style: live-session-then-attest** (seL4 confines interactively to valid dregg
+   actions; dregg attests quasi-batched / offline, under the hood) — the retroactive-from-log
+   proof is the attest half.
 
 ---
 
