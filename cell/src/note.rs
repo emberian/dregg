@@ -585,7 +585,12 @@ mod tests {
     #[cfg(feature = "zkvm")]
     #[test]
     fn poseidon2_commitment_deterministic() {
-        let n = Note::with_nonce(test_owner(7), [3, 250, 0, 0, 0, 0, 0, 0], [55u8; 32], [66u8; 32]);
+        let n = Note::with_nonce(
+            test_owner(7),
+            [3, 250, 0, 0, 0, 0, 0, 0],
+            [55u8; 32],
+            [66u8; 32],
+        );
         assert_eq!(n.poseidon2_commitment(), n.poseidon2_commitment());
     }
 

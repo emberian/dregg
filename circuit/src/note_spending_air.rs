@@ -466,10 +466,26 @@ pub fn commitment_chain(
     let mut idx = 5usize;
     for step in 0..limb_col::CHAIN_INTERMEDIATES {
         intermediates[step] = running;
-        let t0 = if idx < limbs.len() { limbs[idx] } else { BabyBear::ZERO };
-        let t1 = if idx + 1 < limbs.len() { limbs[idx + 1] } else { BabyBear::ZERO };
-        let t2 = if idx + 2 < limbs.len() { limbs[idx + 2] } else { BabyBear::ZERO };
-        let t3 = if idx + 3 < limbs.len() { limbs[idx + 3] } else { BabyBear::ZERO };
+        let t0 = if idx < limbs.len() {
+            limbs[idx]
+        } else {
+            BabyBear::ZERO
+        };
+        let t1 = if idx + 1 < limbs.len() {
+            limbs[idx + 1]
+        } else {
+            BabyBear::ZERO
+        };
+        let t2 = if idx + 2 < limbs.len() {
+            limbs[idx + 2]
+        } else {
+            BabyBear::ZERO
+        };
+        let t3 = if idx + 3 < limbs.len() {
+            limbs[idx + 3]
+        } else {
+            BabyBear::ZERO
+        };
         running = hash_fact(running, &[t0, t1, t2, t3]);
         idx += 4;
     }
@@ -580,13 +596,8 @@ impl NoteSpendingWitness {
         // (high limbs zero); value/asset_type split into low/high. Callers with
         // raw 32-byte/u64 note fields should use `from_note_limbs` for true
         // full-256-bit binding.
-        let preimage_limbs = Self::limbs_from_felts(
-            owner,
-            value,
-            asset_type,
-            creation_nonce,
-            randomness,
-        );
+        let preimage_limbs =
+            Self::limbs_from_felts(owner, value, asset_type, creation_nonce, randomness);
         Self {
             owner,
             value,
@@ -1126,13 +1137,8 @@ pub fn create_test_witness(
         merkle_positions.push(pos);
     }
 
-    let preimage_limbs = NoteSpendingWitness::limbs_from_felts(
-        owner,
-        value,
-        asset_type,
-        creation_nonce,
-        randomness,
-    );
+    let preimage_limbs =
+        NoteSpendingWitness::limbs_from_felts(owner, value, asset_type, creation_nonce, randomness);
     NoteSpendingWitness {
         owner,
         value,

@@ -976,7 +976,10 @@ mod tests {
             );
 
         // The published nullifier matches the note's intrinsic nullifier.
-        assert_eq!(transfer.nullifier, secret.note.nullifier(&secret.spending_key));
+        assert_eq!(
+            transfer.nullifier,
+            secret.note.nullifier(&secret.spending_key)
+        );
         // The output note carries the same value/asset as the spent input.
         assert_eq!(transfer.recipient_secret.note.value(), secret.note.value());
         assert_eq!(
