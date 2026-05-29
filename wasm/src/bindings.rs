@@ -2290,6 +2290,75 @@ pub fn prove_turn(handle: usize, turn_hash_hex: &str) -> Result<JsValue, JsError
     })
 }
 
+/// Produce (and cache) a REAL Stage 7-γ.2 cross-cell bilateral *aggregate*
+/// proof — the GOLDEN tier — over a canonical two-cell transfer scenario, and
+/// return its summary (including the matched outgoing/incoming transfer roots).
+///
+/// This is NOT a tier flip on a single-turn EffectVM proof. It runs the
+/// canonical γ.2 aggregator
+/// (`dregg_turn::aggregate_bilateral_prover::prove_aggregated_bundle`) over two
+/// per-cell `WitnessedReceipt`s — alice's OUTGOING transfer + bob's INCOMING
+/// transfer, both projected from the SAME canonical Turn's bilateral schedule —
+/// emitting a real outer STARK over `BilateralAggregationAir`. The bundle is
+/// then self-verified (`verify_aggregated_bundle`: real outer-STARK
+/// verification + Turn-derived cross-cell schedule re-check) BEFORE the record
+/// is cached, so a returned result is a genuinely sound cross-cell aggregate —
+/// never a faked tier.
+///
+/// PERFORMANCE: like `prove_turn`, proving is expensive in wasm and is NOT run
+/// at boot. The Proofs section calls this lazily; it is idempotent (re-proving
+/// once cached is a cheap no-op).
+///
+/// Returns
+/// `{ kind, proof_size_bytes, n_cells, bilateral_consistent, roots_matched,
+///    outgoing_transfer_root, incoming_transfer_root, shared_transfer_id,
+///    sender_cell, receiver_cell, amount }`. `roots_matched == true` is the
+/// headline GOLDEN signal: the aggregate self-verified (`bilateral_consistent`
+/// + the Turn-derived schedule re-check inside `verify_aggregated_bundle`) and
+/// both transfer roots are present (non-zero). The outgoing/incoming roots are
+/// domain-separated and so intentionally NOT byte-equal; the cross-cell binding
+/// is the `shared_transfer_id` both sides fold over, attested by the verified
+/// aggregate.
+#[wasm_bindgen]
+pub fn prove_bilateral_aggregate(handle: usize) -> Result<JsValue, JsError> {
+    with_runtime(handle, |rt| {
+        rt.prove_bilateral_aggregate()?;
+        let rec = rt
+            .bilateral_aggregate
+            .as_ref()
+            .ok_or_else(|| "bilateral aggregate record missing after prove".to_string())?;
+
+        #[derive(Serialize)]
+        struct AggregateResult {
+            kind: String,
+            proof_size_bytes: usize,
+            n_cells: usize,
+            bilateral_consistent: bool,
+            roots_matched: bool,
+            outgoing_transfer_root: String,
+            incoming_transfer_root: String,
+            shared_transfer_id: String,
+            sender_cell: String,
+            receiver_cell: String,
+            amount: u64,
+        }
+        let out = AggregateResult {
+            kind: rec.kind.clone(),
+            proof_size_bytes: rec.proof_size_bytes,
+            n_cells: rec.n_cells,
+            bilateral_consistent: rec.bilateral_consistent,
+            roots_matched: rec.roots_matched,
+            outgoing_transfer_root: rec.outgoing_transfer_root.clone(),
+            incoming_transfer_root: rec.incoming_transfer_root.clone(),
+            shared_transfer_id: rec.shared_transfer_id.clone(),
+            sender_cell: rec.sender_cell.clone(),
+            receiver_cell: rec.receiver_cell.clone(),
+            amount: rec.amount,
+        };
+        serde_wasm_bindgen::to_value(&out).map_err(|e| e.to_string())
+    })
+}
+
 // ============================================================================
 // Refactor 8 — decode_peer_transition
 //
