@@ -53,9 +53,9 @@ pub enum DirectoryCommand {
         /// New URI to set.
         new_uri: String,
 
-        /// Expected current version (for CAS). If omitted, fetches current.
-        #[arg(long)]
-        version: Option<u64>,
+        /// Expected current directory-entry version (for CAS). If omitted, fetches current.
+        #[arg(long = "expected-version")]
+        expected_version: Option<u64>,
     },
 
     /// Create a new sub-directory.
@@ -101,8 +101,8 @@ pub async fn run(
         DirectoryCommand::Update {
             path,
             new_uri,
-            version,
-        } => update(cfg, ctx, &path, &new_uri, version).await,
+            expected_version,
+        } => update(cfg, ctx, &path, &new_uri, expected_version).await,
         DirectoryCommand::Create { path } => create(cfg, ctx, &path).await,
         DirectoryCommand::Discover { tag, kind } => discover(cfg, ctx, &tag, kind).await,
         DirectoryCommand::Tree { path } => tree(cfg, ctx, &path).await,
