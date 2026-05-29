@@ -1,0 +1,25 @@
+# RustSec baseline for the workspace CI cleanup branch.
+#
+# These ignores keep `cargo audit` actionable for this baseline PR while preserving
+# a documented queue of transitive dependency debt. Prefer dependency upgrades or
+# feature-scope removals in follow-up work; do not add new ignores without a
+# reachable-dependency rationale.
+
+[advisories]
+ignore = [
+    # Transitive via sqlx-mysql -> rsa through sqlx 0.8 macros for dregg-discord-bot.
+    # RustSec reports no fixed upgrade. Dregg's configured sqlx feature is sqlite,
+    # so replacing/removing the unused mysql transitive edge is follow-up dependency cleanup.
+    "RUSTSEC-2023-0071",
+
+    # Transitive via serenity 0.12 -> tokio-tungstenite 0.21 -> rustls 0.22 -> rustls-webpki 0.102.
+    # Fix requires a serenity/tungstenite/rustls stack upgrade beyond this CI-baseline pass.
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0049",
+
+    # Transitive via ark-relations 0.5.1 -> tracing-subscriber 0.2.
+    # Fix depends on upstream arkworks dependency movement; this is not direct workspace logging code.
+    "RUSTSEC-2025-0055",
+]
