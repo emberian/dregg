@@ -27,11 +27,24 @@
 //!
 //! # Sealed box encryption
 //!
-//! The full MatchSpec body is encrypted using X25519 + BLAKE3 XOF:
+//! The full MatchSpec body is encrypted using X25519 + ChaCha20-Poly1305 (AEAD):
 //! - Poster generates an ephemeral X25519 keypair
-//! - Ciphertext = XOF_keystream(shared_secret) XOR plaintext
-//! - Only someone who knows the poster's ephemeral secret key can decrypt
+//! - A symmetric key is derived from the shared secret via BLAKE3 `derive_key`
+//! - Ciphertext = ChaCha20-Poly1305(key, nonce, plaintext) — an AEAD that appends
+//!   a 128-bit Poly1305 authentication tag
+//! - Only someone who knows the poster's ephemeral secret key can decrypt, AND any
+//!   tampering with the ciphertext (or nonce/AAD) is detected as a tag failure on
+//!   decrypt rather than silently producing garbage plaintext
 //! - After SSE matching, the poster reveals the decryption key over a direct channel
+//!
+//! ## Integrity (why AEAD, not a raw keystream)
+//!
+//! An earlier construction used a raw BLAKE3 XOF keystream XORed with the plaintext
+//! and NO authentication tag. That is malleable: an attacker who flips bit `i` of the
+//! ciphertext flips bit `i` of the recovered plaintext (a controlled, undetected
+//! change). ChaCha20-Poly1305 binds a Poly1305 MAC over the ciphertext so any flip is
+//! rejected. See [`seal_decrypt`] / [`EncryptedIntent::decrypt`], which return `None`
+//! on a tag failure.
 
 use serde::{Deserialize, Serialize};
 
@@ -188,11 +201,56 @@ impl SealKeypair {
     }
 }
 
-/// Encrypt a plaintext using a sealed-box construction.
+/// Derive a 32-byte ChaCha20-Poly1305 key from an X25519 shared secret.
+///
+/// The raw X25519 DH output is never used directly as a symmetric key — it is run
+/// through BLAKE3's `derive_key` mode (a proper KDF) with both public keys mixed in
+/// for session binding and domain separation. This mirrors `cell::seal`'s KDF.
+fn derive_sealed_box_key(
+    shared_secret: &[u8; 32],
+    sender_public: &[u8; 32],
+    recipient_public: &[u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-sealed-box-key-v2");
+    hasher.update(shared_secret);
+    hasher.update(sender_public);
+    hasher.update(recipient_public);
+    *hasher.finalize().as_bytes()
+}
+
+/// Authenticated encryption with ChaCha20-Poly1305.
+///
+/// Returns `nonce_independent` ciphertext WITH a 16-byte Poly1305 tag appended.
+/// The caller is responsible for carrying the nonce alongside the ciphertext;
+/// the (key, nonce) pair must never repeat (callers here use a fresh random
+/// nonce and/or a fresh ephemeral key per call).
+fn aead_encrypt(key: &[u8; 32], nonce: &[u8; 12], plaintext: &[u8]) -> Vec<u8> {
+    use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
+    let cipher = ChaCha20Poly1305::new(key.into());
+    let aead_nonce = chacha20poly1305::Nonce::from_slice(nonce);
+    cipher
+        .encrypt(aead_nonce, plaintext)
+        .expect("ChaCha20-Poly1305 encryption should not fail")
+}
+
+/// Authenticated decryption with ChaCha20-Poly1305.
+///
+/// Returns `None` (fail closed) if the Poly1305 tag does not verify — i.e. the
+/// ciphertext, nonce, or key was tampered with. Never yields garbage plaintext.
+fn aead_decrypt(key: &[u8; 32], nonce: &[u8; 12], ciphertext: &[u8]) -> Option<Vec<u8>> {
+    use chacha20poly1305::{ChaCha20Poly1305, KeyInit, aead::Aead};
+    let cipher = ChaCha20Poly1305::new(key.into());
+    let aead_nonce = chacha20poly1305::Nonce::from_slice(nonce);
+    cipher.decrypt(aead_nonce, ciphertext).ok()
+}
+
+/// Encrypt a plaintext using an authenticated sealed-box construction.
 ///
 /// The recipient must know the ephemeral secret key to decrypt.
 /// Encryption: generate ephemeral sender keypair, DH with recipient public key,
-/// derive keystream from shared secret, XOR plaintext.
+/// derive a symmetric key from the shared secret, then ChaCha20-Poly1305 encrypt.
+/// The Poly1305 tag authenticates the ciphertext, so tampering is detected on
+/// decrypt (see [`seal_decrypt`]) rather than silently yielding garbage plaintext.
 ///
 /// For dregg's SSE use case, the "recipient" IS the poster themselves. They
 /// encrypt to their own ephemeral key and later reveal the secret to matched
@@ -208,92 +266,94 @@ pub fn seal_encrypt(plaintext: &[u8], recipient_public: &[u8; 32]) -> SealedBox 
     let recipient_pk = x25519_dalek::PublicKey::from(*recipient_public);
     let shared = sender_secret.diffie_hellman(&recipient_pk);
 
-    // Derive keystream from shared secret + sender public (for domain separation)
-    let mut hasher = blake3::Hasher::new_keyed(shared.as_bytes());
-    hasher.update(b"dregg-sealed-box-v1");
-    hasher.update(&sender_public_bytes);
-    hasher.update(recipient_public);
-    let mut keystream = vec![0u8; plaintext.len()];
-    let mut output = hasher.finalize_xof();
-    output.fill(&mut keystream);
+    let key = derive_sealed_box_key(shared.as_bytes(), &sender_public_bytes, recipient_public);
 
-    // XOR encrypt
-    let ciphertext: Vec<u8> = plaintext
-        .iter()
-        .zip(keystream.iter())
-        .map(|(p, k)| p ^ k)
-        .collect();
+    // Fresh random 96-bit AEAD nonce. The sender keypair is also fresh per call, so
+    // (key, nonce) reuse is doubly avoided.
+    let mut nonce = [0u8; 12];
+    crate::getrandom(&mut nonce);
+
+    let ciphertext = aead_encrypt(&key, &nonce, plaintext);
 
     SealedBox {
         ciphertext,
         sender_public: sender_public_bytes,
+        nonce,
     }
 }
 
 /// Decrypt a sealed box using the recipient's secret key.
-pub fn seal_decrypt(sealed: &SealedBox, recipient_secret: &[u8; 32]) -> Vec<u8> {
+///
+/// Returns `None` if the Poly1305 authentication tag fails (tampered ciphertext,
+/// tampered nonce, or wrong key) — fail closed, never a garbage plaintext.
+pub fn seal_decrypt(sealed: &SealedBox, recipient_secret: &[u8; 32]) -> Option<Vec<u8>> {
     // Compute shared secret via X25519
     let secret = x25519_dalek::StaticSecret::from(*recipient_secret);
     let sender_pk = x25519_dalek::PublicKey::from(sealed.sender_public);
     let shared = secret.diffie_hellman(&sender_pk);
 
-    // Derive the same keystream
     let recipient_public = x25519_dalek::PublicKey::from(&secret);
     let recipient_public_bytes = recipient_public.to_bytes();
-    let mut hasher = blake3::Hasher::new_keyed(shared.as_bytes());
-    hasher.update(b"dregg-sealed-box-v1");
-    hasher.update(&sealed.sender_public);
-    hasher.update(&recipient_public_bytes);
-    let mut keystream = vec![0u8; sealed.ciphertext.len()];
-    let mut output = hasher.finalize_xof();
-    output.fill(&mut keystream);
+    let key = derive_sealed_box_key(
+        shared.as_bytes(),
+        &sealed.sender_public,
+        &recipient_public_bytes,
+    );
 
-    // XOR decrypt
-    sealed
-        .ciphertext
-        .iter()
-        .zip(keystream.iter())
-        .map(|(c, k)| c ^ k)
-        .collect()
+    aead_decrypt(&key, &sealed.nonce, &sealed.ciphertext)
 }
 
-/// A sealed box: ciphertext + ephemeral sender public key.
+/// A sealed box: AEAD ciphertext (with appended Poly1305 tag) + ephemeral sender
+/// public key + nonce.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SealedBox {
-    /// The encrypted data.
+    /// The ChaCha20-Poly1305 ciphertext (includes the 16-byte authentication tag).
     pub ciphertext: Vec<u8>,
     /// The ephemeral sender's public key (needed for DH during decryption).
     pub sender_public: [u8; 32],
+    /// The 96-bit ChaCha20-Poly1305 nonce.
+    pub nonce: [u8; 12],
 }
 
 // ---------------------------------------------------------------------------
 // Secret-key encryption for EncryptedIntent bodies
 // ---------------------------------------------------------------------------
 
-/// Encrypt plaintext using a secret key (BLAKE3 XOF keystream).
+/// Derive a 32-byte ChaCha20-Poly1305 key for the intent body from the poster's
+/// ephemeral secret key, via BLAKE3's `derive_key` KDF mode (domain-separated).
 ///
-/// This is used for the intent body encryption where the poster encrypts
-/// to their own secret key and later reveals it to matched fulfillers.
-fn encrypt_with_secret(plaintext: &[u8], secret: &[u8; 32]) -> Vec<u8> {
-    let mut hasher = blake3::Hasher::new_keyed(secret);
-    hasher.update(b"dregg-intent-body-v1");
-    let mut keystream = vec![0u8; plaintext.len()];
-    let mut output = hasher.finalize_xof();
-    output.fill(&mut keystream);
-
-    plaintext
-        .iter()
-        .zip(keystream.iter())
-        .map(|(p, k)| p ^ k)
-        .collect()
+/// The raw 32-byte X25519 secret is never used directly as an AEAD key.
+fn derive_body_key(secret: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-intent-body-key-v2");
+    hasher.update(secret);
+    *hasher.finalize().as_bytes()
 }
 
-/// Decrypt ciphertext using a secret key (BLAKE3 XOF keystream).
+/// Encrypt an intent body with authenticated encryption (ChaCha20-Poly1305).
 ///
-/// Symmetric to `encrypt_with_secret` (XOR is its own inverse).
-fn decrypt_with_secret(ciphertext: &[u8], secret: &[u8; 32]) -> Vec<u8> {
-    // XOR cipher is symmetric: encrypt == decrypt
-    encrypt_with_secret(ciphertext, secret)
+/// Replaces the earlier raw BLAKE3-XOF keystream (which had NO authentication
+/// tag and was malleable: flipping ciphertext bit `i` flipped plaintext bit `i`
+/// undetected). The returned ciphertext carries a 16-byte Poly1305 tag and is
+/// bound to `nonce`; any tampering is rejected on decrypt.
+///
+/// The poster encrypts to their own ephemeral secret and later reveals it to
+/// matched fulfillers. A fresh random 96-bit nonce is generated per call and
+/// must be stored alongside the ciphertext (see [`EncryptedIntent::body_nonce`]).
+fn encrypt_body(plaintext: &[u8], secret: &[u8; 32]) -> ([u8; 12], Vec<u8>) {
+    let key = derive_body_key(secret);
+    let mut nonce = [0u8; 12];
+    crate::getrandom(&mut nonce);
+    let ciphertext = aead_encrypt(&key, &nonce, plaintext);
+    (nonce, ciphertext)
+}
+
+/// Decrypt an intent body produced by [`encrypt_body`].
+///
+/// Returns `None` (fail closed) if the Poly1305 tag fails — tampered ciphertext,
+/// tampered nonce, or wrong secret — never a garbage plaintext.
+fn decrypt_body(ciphertext: &[u8], nonce: &[u8; 12], secret: &[u8; 32]) -> Option<Vec<u8>> {
+    let key = derive_body_key(secret);
+    aead_decrypt(&key, nonce, ciphertext)
 }
 
 // ---------------------------------------------------------------------------
@@ -309,8 +369,12 @@ pub struct EncryptedIntent {
     /// SSE search tokens derived from the intent's keywords.
     /// Fulfillers test their capability keywords against these tokens.
     pub search_tokens: Vec<[u8; 32]>,
-    /// The encrypted MatchSpec body (sealed box).
+    /// The encrypted MatchSpec body: ChaCha20-Poly1305 ciphertext with an
+    /// appended 16-byte Poly1305 authentication tag. Tampering is detected on
+    /// decrypt (see [`Self::decrypt`]).
     pub encrypted_body: Vec<u8>,
+    /// The 96-bit ChaCha20-Poly1305 nonce for `encrypted_body`.
+    pub body_nonce: [u8; 12],
     /// The ephemeral public key used for the sealed box.
     /// The poster's ephemeral secret is needed to decrypt.
     pub ephemeral_pubkey: [u8; 32],
@@ -352,12 +416,14 @@ impl EncryptedIntent {
 
         // Encrypt directly using the keypair (self-encryption: poster encrypts to
         // their own ephemeral key so they can later reveal the secret to matched
-        // fulfillers). We use a BLAKE3 XOF keystream derived from the secret key.
-        let encrypted_body = encrypt_with_secret(&plaintext, &keypair.secret);
+        // fulfillers). ChaCha20-Poly1305 AEAD authenticates the ciphertext so a
+        // gossip relay cannot tamper with the body undetected.
+        let (body_nonce, encrypted_body) = encrypt_body(&plaintext, &keypair.secret);
 
         let mut intent = Self {
             search_tokens,
             encrypted_body,
+            body_nonce,
             ephemeral_pubkey: keypair.public,
             commitment_id,
             expiry,
@@ -379,11 +445,12 @@ impl EncryptedIntent {
     ) -> Self {
         let search_tokens = tokens_for_matchspec(spec, epoch);
         let plaintext = postcard::to_allocvec(spec).expect("MatchSpec serialization failed");
-        let encrypted_body = encrypt_with_secret(&plaintext, &keypair.secret);
+        let (body_nonce, encrypted_body) = encrypt_body(&plaintext, &keypair.secret);
 
         let mut intent = Self {
             search_tokens,
             encrypted_body,
+            body_nonce,
             ephemeral_pubkey: keypair.public,
             commitment_id,
             expiry,
@@ -398,8 +465,12 @@ impl EncryptedIntent {
     ///
     /// The poster reveals this secret to matched fulfillers over a direct channel.
     /// Returns the deserialized MatchSpec if decryption and deserialization succeed.
+    ///
+    /// Returns `None` (fail closed) if the ChaCha20-Poly1305 tag fails — a
+    /// tampered ciphertext, tampered nonce, or wrong secret is rejected at the
+    /// AEAD layer rather than producing garbage that might still deserialize.
     pub fn decrypt(&self, secret: &[u8; 32]) -> Option<MatchSpec> {
-        let plaintext = decrypt_with_secret(&self.encrypted_body, secret);
+        let plaintext = decrypt_body(&self.encrypted_body, &self.body_nonce, secret)?;
         postcard::from_bytes(&plaintext).ok()
     }
 
@@ -418,6 +489,7 @@ impl EncryptedIntent {
             hasher.update(token);
         }
         hasher.update(&self.encrypted_body);
+        hasher.update(&self.body_nonce);
         hasher.update(&self.ephemeral_pubkey);
         hasher.update(&self.commitment_id.0);
         if let Some(exp) = self.expiry {
@@ -632,7 +704,21 @@ mod tests {
         let sealed = seal_encrypt(plaintext, &keypair.public);
         let decrypted = seal_decrypt(&sealed, &keypair.secret);
 
-        assert_eq!(&decrypted, plaintext);
+        assert_eq!(decrypted.as_deref(), Some(&plaintext[..]));
+    }
+
+    #[test]
+    fn test_sealed_box_tampered_ciphertext_rejected() {
+        // ADVERSARIAL: a one-byte flip in the AEAD ciphertext is rejected.
+        let keypair = SealKeypair::generate();
+        let plaintext = b"secret matchspec body";
+        let mut sealed = seal_encrypt(plaintext, &keypair.public);
+        sealed.ciphertext[0] ^= 0x01;
+        assert_eq!(
+            seal_decrypt(&sealed, &keypair.secret),
+            None,
+            "tampered sealed-box ciphertext must fail the Poly1305 tag"
+        );
     }
 
     #[test]
@@ -644,8 +730,8 @@ mod tests {
         let sealed = seal_encrypt(plaintext, &keypair.public);
         let decrypted = seal_decrypt(&sealed, &wrong_keypair.secret);
 
-        // Should produce garbage, not the original plaintext
-        assert_ne!(&decrypted, plaintext);
+        // AEAD fails closed: a wrong key yields None (tag failure), not garbage.
+        assert_eq!(decrypted, None);
     }
 
     #[test]
@@ -713,6 +799,70 @@ mod tests {
         // Decrypt and verify
         let decrypted = encrypted.decrypt(&keypair.secret);
         assert_eq!(decrypted, Some(spec));
+    }
+
+    #[test]
+    fn test_encrypted_intent_tampered_body_rejected() {
+        // ADVERSARIAL: flipping one byte of the authenticated body ciphertext must
+        // be REJECTED on decrypt (Poly1305 tag failure) — NOT silently decrypted to
+        // a garbage/attacker-controlled MatchSpec. This is the integrity property
+        // that the old raw-XOR-keystream construction lacked.
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: Some("documents/*".into()),
+            }],
+            constraints: vec![Constraint::Service("storage".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+
+        let (mut encrypted, keypair) =
+            EncryptedIntent::create(&spec, CommitmentId([0x77; 32]), 0, None);
+
+        // Sanity: untampered decrypt works.
+        assert_eq!(encrypted.decrypt(&keypair.secret), Some(spec.clone()));
+
+        // Flip one byte of the ciphertext body.
+        assert!(!encrypted.encrypted_body.is_empty());
+        encrypted.encrypted_body[0] ^= 0x01;
+        assert_eq!(
+            encrypted.decrypt(&keypair.secret),
+            None,
+            "tampered body ciphertext must be rejected by the AEAD tag, not decrypted"
+        );
+
+        // Restore and instead tamper the nonce — also must be rejected.
+        encrypted.encrypted_body[0] ^= 0x01;
+        assert_eq!(
+            encrypted.decrypt(&keypair.secret),
+            Some(spec),
+            "restoring the byte restores a valid decrypt"
+        );
+        encrypted.body_nonce[0] ^= 0x01;
+        assert_eq!(
+            encrypted.decrypt(&keypair.secret),
+            None,
+            "tampered nonce must be rejected by the AEAD tag"
+        );
+    }
+
+    #[test]
+    fn test_encrypted_intent_tag_present() {
+        // The AEAD body is strictly longer than the plaintext by the 16-byte
+        // Poly1305 tag — evidence the construction is authenticated, not a raw
+        // length-preserving XOR keystream.
+        let spec = MatchSpec::default();
+        let plaintext = postcard::to_allocvec(&spec).unwrap();
+        let (encrypted, _kp) = EncryptedIntent::create(&spec, CommitmentId([0x01; 32]), 0, None);
+        assert_eq!(
+            encrypted.encrypted_body.len(),
+            plaintext.len() + 16,
+            "ciphertext must carry a 16-byte Poly1305 tag (not length-preserving XOR)"
+        );
     }
 
     #[test]

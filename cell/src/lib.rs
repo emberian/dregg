@@ -143,7 +143,8 @@ pub use unilateral::{UnilateralAttestation, UnilateralAttestationKind};
 pub use value_commitment::{
     BulletproofRangeProof, CommittedNote, CommittedNoteOpening, ConservationError,
     ConservationProof, FullConservationError, FullConservationProof, ValueCommitment,
-    ValueCommitmentBytes, prove_conservation, prove_conservation_with_range, verify_conservation,
+    ValueCommitmentBytes, asset_tag_generator, prove_asset_conservation, prove_conservation,
+    prove_conservation_with_range, verify_asset_conservation, verify_conservation,
     verify_conservation_with_range,
 };
 pub use vk_v2::{ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2};

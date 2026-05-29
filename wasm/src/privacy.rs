@@ -826,11 +826,16 @@ pub fn seal_intent_body(
     struct SealResult {
         ciphertext: Vec<u8>,
         ephemeral_pubkey: Vec<u8>,
+        /// AEAD nonce (12 bytes). Must be carried back to `unseal_intent_body`
+        /// — the seal is now ChaCha20-Poly1305 (authenticated), not a
+        /// length-preserving XOR, so the nonce is part of the sealed envelope.
+        nonce: Vec<u8>,
     }
 
     let result = SealResult {
         ciphertext: sealed.ciphertext,
         ephemeral_pubkey: sealed.sender_public.to_vec(),
+        nonce: sealed.nonce.to_vec(),
     };
     Ok(serde_wasm_bindgen::to_value(&result)?)
 }
@@ -845,26 +850,34 @@ pub fn seal_intent_body(
 pub fn unseal_intent_body(
     ciphertext: &[u8],
     ephemeral_pubkey: &[u8],
+    nonce: &[u8],
     privkey: &[u8],
 ) -> Result<String, JsError> {
     if ephemeral_pubkey.len() != 32 || privkey.len() != 32 {
         return Err(JsError::new("keys must be 32 bytes"));
     }
+    if nonce.len() != 12 {
+        return Err(JsError::new("nonce must be exactly 12 bytes"));
+    }
 
     let mut eph = [0u8; 32];
     let mut sk = [0u8; 32];
+    let mut nonce_arr = [0u8; 12];
     eph.copy_from_slice(ephemeral_pubkey);
     sk.copy_from_slice(privkey);
+    nonce_arr.copy_from_slice(nonce);
 
     let sealed = SealedBox {
         ciphertext: ciphertext.to_vec(),
         sender_public: eph,
+        nonce: nonce_arr,
     };
 
-    let plaintext = seal_decrypt(&sealed, &sk);
-    if plaintext.is_empty() {
-        return Err(JsError::new("decryption failed"));
-    }
+    // The seal is now authenticated (ChaCha20-Poly1305): decryption returns
+    // None on tag failure (tampered ciphertext / wrong key / wrong nonce),
+    // which we surface as an error rather than yielding forged plaintext.
+    let plaintext = seal_decrypt(&sealed, &sk)
+        .ok_or_else(|| JsError::new("decryption failed (authentication tag mismatch)"))?;
 
     String::from_utf8(plaintext).map_err(|e| JsError::new(&e.to_string()))
 }

@@ -97,6 +97,43 @@ impl core::fmt::Display for NoteError {
 
 impl std::error::Error for NoteError {}
 
+/// Decompose a 32-byte value into 8 BabyBear limbs (4 bytes each,
+/// little-endian). Position 0 carries bytes `[0..4]`; position 7 carries
+/// bytes `[28..32]`. Each 4-byte chunk is reduced mod `p`.
+///
+/// This is the canonical full-32-byte limb decomposition, identical to the
+/// EffectVM hash-binding lane's `circuit::effect_vm::helpers::bytes32_to_8_limbs`
+/// (commit b0b87952). Every byte of the input contributes to some limb, so two
+/// 32-byte values differing in ANY byte produce a distinct limb vector (up to
+/// the per-limb mod-p wrap, which only aliases 4-byte chunks whose raw u32
+/// exceeds `p` — a measure-zero, deterministic, total mapping that is identical
+/// for any two callers).
+#[cfg(feature = "zkvm")]
+#[inline]
+fn bytes32_to_limbs(b: &[u8; 32]) -> [dregg_circuit::field::BabyBear; 8] {
+    use dregg_circuit::field::{BABYBEAR_P, BabyBear};
+    let mut out = [BabyBear::ZERO; 8];
+    for (i, limb) in out.iter_mut().enumerate() {
+        let off = i * 4;
+        let v = u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
+        *limb = BabyBear::new(v % BABYBEAR_P);
+    }
+    out
+}
+
+/// Decompose a u64 into 2 BabyBear limbs: `[low 32 bits, high 32 bits]`, each
+/// reduced mod `p`. Binds the FULL 64 bits of a u64 note field (value /
+/// asset_type), versus the legacy form that bound only the low 32 bits.
+#[cfg(feature = "zkvm")]
+#[inline]
+fn u64_to_limbs(v: u64) -> [dregg_circuit::field::BabyBear; 2] {
+    use dregg_circuit::field::{BABYBEAR_P, BabyBear};
+    [
+        BabyBear::new((v as u32) % BABYBEAR_P),
+        BabyBear::new(((v >> 32) as u32) % BABYBEAR_P),
+    ]
+}
+
 impl Note {
     /// Create a new note with cryptographically random blinding and a unique creation nonce.
     ///
@@ -225,41 +262,54 @@ impl Note {
     /// - Non-ZK lookups and indexing
     /// - Encryption key derivation
     ///
-    /// # Field mapping
+    /// # Field mapping (full-width, 256-bit-binding)
     ///
-    /// The Poseidon2 commitment maps note fields to BabyBear as follows:
-    /// - owner: first 4 bytes of self.owner as little-endian u32, reduced mod p
-    /// - value: self.fields[1] as u32, reduced mod p
-    /// - asset_type: self.fields[0] as u32, reduced mod p
-    /// - creation_nonce: first 4 bytes of self.creation_nonce as LE u32, reduced mod p
-    /// - randomness: first 4 bytes of self.randomness as LE u32, reduced mod p
+    /// Previously each 32-byte field (owner / creation_nonce / randomness)
+    /// contributed only its FIRST 4 bytes (~31 bits) to the commitment, and
+    /// each u64 field (value / asset_type) only its low 32 bits — so two notes
+    /// differing only in the bytes ABOVE the first chunk collided. This is the
+    /// same defect class fixed in the EffectVM hash-binding lane (commit
+    /// b0b87952): a full 32-byte value must bind all 256 bits.
+    ///
+    /// The Poseidon2 commitment now maps note fields to BabyBear as follows:
+    /// - owner: 8 limbs — `owner[0..32]` as 8 little-endian 4-byte chunks,
+    ///   each reduced mod p (~248 bits bound).
+    /// - value: 2 limbs — low 32 bits and high 32 bits of `fields[1]` (full
+    ///   64-bit binding; the legacy form only bound the low 32 bits).
+    /// - asset_type: 2 limbs — low/high 32 bits of `fields[0]` (full 64-bit).
+    /// - creation_nonce: 8 limbs — `creation_nonce[0..32]` as 8 LE chunks.
+    /// - randomness: 8 limbs — `randomness[0..32]` as 8 LE chunks.
+    ///
+    /// Total preimage = 28 BabyBear limbs (8 + 2 + 2 + 8 + 8), ordered
+    /// owner ‖ value ‖ asset_type ‖ creation_nonce ‖ randomness. Two notes
+    /// that differ in ANY byte of ANY field now produce distinct commitments
+    /// (up to Poseidon2 collision resistance).
+    ///
+    /// # AIR lockstep
+    ///
+    /// `poseidon2_commitment` has no in-tree callers that feed a STARK AIR
+    /// directly: the note-spending AIR (`circuit::note_spending_air`) and its
+    /// DSL form build their witness from already-field-element preimages
+    /// (`NoteSpendingWitness { owner, value, .. : BabyBear }`) and recompute
+    /// `hash_many([owner, value, asset_type, creation_nonce, randomness])`
+    /// over those 5 felts. That legacy 5-felt AIR layout binds 5 felts of
+    /// preimage, not this 28-limb layout. Widening here closes the cell-side
+    /// (note-tree / non-ZK identity) truncation; aligning the legacy
+    /// note-spending AIR to the 28-limb preimage is a separate, out-of-scope
+    /// circuit change (the schema-based `effect_action_air` already carries
+    /// 8 limbs per 32-byte field for action-binding). See residual notes.
     #[cfg(feature = "zkvm")]
     pub fn poseidon2_commitment(&self) -> dregg_circuit::field::BabyBear {
-        use dregg_circuit::field::BabyBear;
         use dregg_circuit::poseidon2::hash_many;
 
-        let owner = BabyBear::new_canonical(u32::from_le_bytes([
-            self.owner[0],
-            self.owner[1],
-            self.owner[2],
-            self.owner[3],
-        ]));
-        let value = BabyBear::new_canonical(self.fields[1] as u32);
-        let asset_type = BabyBear::new_canonical(self.fields[0] as u32);
-        let creation_nonce = BabyBear::new_canonical(u32::from_le_bytes([
-            self.creation_nonce[0],
-            self.creation_nonce[1],
-            self.creation_nonce[2],
-            self.creation_nonce[3],
-        ]));
-        let randomness = BabyBear::new_canonical(u32::from_le_bytes([
-            self.randomness[0],
-            self.randomness[1],
-            self.randomness[2],
-            self.randomness[3],
-        ]));
+        let mut preimage = Vec::with_capacity(28);
+        preimage.extend_from_slice(&bytes32_to_limbs(&self.owner)); // 8
+        preimage.extend_from_slice(&u64_to_limbs(self.fields[1])); // 2 (value)
+        preimage.extend_from_slice(&u64_to_limbs(self.fields[0])); // 2 (asset_type)
+        preimage.extend_from_slice(&bytes32_to_limbs(&self.creation_nonce)); // 8
+        preimage.extend_from_slice(&bytes32_to_limbs(&self.randomness)); // 8
 
-        hash_many(&[owner, value, asset_type, creation_nonce, randomness])
+        hash_many(&preimage)
     }
 
     /// Position this note in the tree.
@@ -426,6 +476,117 @@ mod tests {
 
         // But commitments differ (different owner and randomness).
         assert_ne!(nft_note_a.commitment(), nft_note_b.commitment());
+    }
+
+    // ─── Poseidon2 commitment full-width binding (256-bit) ───────────────────
+    //
+    // These adversarial tests pin the closure of the first-4-bytes truncation in
+    // `poseidon2_commitment`. They FAIL on the legacy code that fed only
+    // `owner[0..4]` / `creation_nonce[0..4]` / `randomness[0..4]` (and the low 32
+    // bits of value/asset_type) and PASS once every limb is fed. Each case
+    // mutates a byte ABOVE the first 4-byte chunk, which the legacy form ignored.
+
+    #[cfg(feature = "zkvm")]
+    fn note_diff_at(field: &str, byte_index: usize) -> (Note, Note) {
+        let owner = test_owner(7);
+        let fields = [3u64, 250, 0, 0, 0, 0, 0, 0];
+        let randomness = [55u8; 32];
+        let nonce = [66u8; 32];
+
+        let base = Note::with_nonce(owner, fields, randomness, nonce);
+        let mut owner2 = owner;
+        let mut randomness2 = randomness;
+        let mut nonce2 = nonce;
+        match field {
+            "owner" => owner2[byte_index] ^= 0xFF,
+            "randomness" => randomness2[byte_index] ^= 0xFF,
+            "creation_nonce" => nonce2[byte_index] ^= 0xFF,
+            other => panic!("unknown field {other}"),
+        }
+        let mutated = Note::with_nonce(owner2, fields, randomness2, nonce2);
+        (base, mutated)
+    }
+
+    #[cfg(feature = "zkvm")]
+    #[test]
+    fn poseidon2_commitment_binds_owner_high_bytes() {
+        // Bytes 4, 8, 16 are all ABOVE the legacy first-4-byte window.
+        for idx in [4usize, 8, 16, 31] {
+            let (a, b) = note_diff_at("owner", idx);
+            assert_ne!(
+                a.poseidon2_commitment(),
+                b.poseidon2_commitment(),
+                "owner byte {idx} above the first chunk must change the commitment"
+            );
+        }
+    }
+
+    #[cfg(feature = "zkvm")]
+    #[test]
+    fn poseidon2_commitment_binds_creation_nonce_high_bytes() {
+        for idx in [4usize, 8, 16, 31] {
+            let (a, b) = note_diff_at("creation_nonce", idx);
+            assert_ne!(
+                a.poseidon2_commitment(),
+                b.poseidon2_commitment(),
+                "creation_nonce byte {idx} above the first chunk must change the commitment"
+            );
+        }
+    }
+
+    #[cfg(feature = "zkvm")]
+    #[test]
+    fn poseidon2_commitment_binds_randomness_high_bytes() {
+        for idx in [4usize, 8, 16, 31] {
+            let (a, b) = note_diff_at("randomness", idx);
+            assert_ne!(
+                a.poseidon2_commitment(),
+                b.poseidon2_commitment(),
+                "randomness byte {idx} above the first chunk must change the commitment"
+            );
+        }
+    }
+
+    #[cfg(feature = "zkvm")]
+    #[test]
+    fn poseidon2_commitment_binds_full_u64_value_and_asset_type() {
+        let owner = test_owner(7);
+        let randomness = [55u8; 32];
+        let nonce = [66u8; 32];
+
+        // value differs only in its HIGH 32 bits (legacy bound only low 32 bits).
+        let base = Note::with_nonce(owner, [3, 1, 0, 0, 0, 0, 0, 0], randomness, nonce);
+        let value_hi = Note::with_nonce(
+            owner,
+            [3, 1u64 | (1u64 << 40), 0, 0, 0, 0, 0, 0],
+            randomness,
+            nonce,
+        );
+        assert_ne!(
+            base.poseidon2_commitment(),
+            value_hi.poseidon2_commitment(),
+            "high 32 bits of value must bind"
+        );
+
+        // asset_type differs only in its HIGH 32 bits.
+        let asset_hi = Note::with_nonce(
+            owner,
+            [3u64 | (1u64 << 40), 1, 0, 0, 0, 0, 0, 0],
+            randomness,
+            nonce,
+        );
+        assert_ne!(
+            base.poseidon2_commitment(),
+            asset_hi.poseidon2_commitment(),
+            "high 32 bits of asset_type must bind"
+        );
+    }
+
+    #[cfg(feature = "zkvm")]
+    #[test]
+    fn poseidon2_commitment_deterministic() {
+        let n = Note::with_nonce(test_owner(7), [3, 250, 0, 0, 0, 0, 0, 0], [55u8; 32], [66u8; 32]);
+        assert_eq!(n.poseidon2_commitment(), n.poseidon2_commitment());
     }
 
     // ─── NoteBatcher tests ──────────────────────────────────────────────────
