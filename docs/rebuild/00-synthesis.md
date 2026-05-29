@@ -47,6 +47,13 @@ convergence *is* the structure:
 > **The turn (morphism) is the generator. It has three faithful projections — none total — and
 > sits under two ambient laws no projection owns.**
 
+> **Update (`dregg2.md §2`, `study-choreography`):** "two laws" names the two ambient *category
+> structures* (conservation, ordering). dregg2 carries a **third, orthogonal judgement** per
+> turn — **I-confluence** (invariant-merge: do concurrent writes merge invariant-safely?) — which
+> is **NOT** derivable from conservation or ordering and is **NOT the session type**. Read
+> "two laws" below as the two ambient structures; treat I-confluence as a co-equal third
+> judgement (`dregg2.md §2.3`).
+
 - **Cell** = the **endpoint** projection (what an arrow lands on). `CellLifecycle`,
   `FieldVisibility` are *attested properties* of endpoints.
 - **Capability** = the **gate/authority** projection. Here "proof is truth" is *native*: an
@@ -55,12 +62,14 @@ convergence *is* the structure:
   cache + witness-builder.
 - **Law 1 — Conservation** = the linear/symmetric-monoidal structure on the category
   (`LinearityClass`, `turn/src/action.rs:698`, exhaustive no-default match). All three spines
-  keep it as irreducible.
+  keep it as irreducible. **`Σ_k` is a monoid-homomorphism `(Turns,∘) → (ℕ,+)` + invariance on
+  ordinary turns** (`dregg2.md §2.1`, `Core.lean`); the "strong monoidal functor" packaging is
+  decorative — the monoid-hom + invariance is the load-bearing content.
 - **Law 2 — Ordering** = which arrows compose into which strand = canonicity = consensus. Both
   cap- and proof-spines independently proved this is **not subsumable** by any projection.
 
 The honest categorical reading (from the substrate study, correcting the `docs-old` over-claim
-of products/pushouts/F-algebras): a **thin posetal category** — objects = cell states,
+of products/pushouts/F-algebras): a **symmetric-monoidal category, thin only in its ordering fragment** (correction — `discoveries §3.2`: NOT a plain thin posetal category; a thin category cannot carry the non-trivial symmetry iso Law 1 needs) — objects = cell states,
 morphisms = turns over a *flat* action sequence — enriched with a **Heyting predicate algebra**
 and a **`Predicate ⊣ Witness` adjunction** that is *named in code but only half-wired*
 (verifiers still `NotYetWired`). The cell-spine verdict: **two co-primary primitives** (cell +
@@ -77,15 +86,22 @@ time-travel for free.
 
 ## 2. The trust-boundary / phase model (the operational core)
 
-### 2.1 The cell is the membrane; three grains
-- **Cell = the sync / membrane grain** (Spritely's *vat*: *near* = synchronous caps-as-caps,
+> **Terminology correction (`discoveries §2a/§3.1`):** the boundary object below is the
+> **vat / trust-root boundary**, NOT a "membrane." Miller's *membrane* is narrowly a
+> transitively-applied **revocable forwarder** (a pattern, not a trust boundary); reserve
+> "membrane" for that revocable-forwarder pattern dregg may add separately. The crossing
+> seam where caps↔keys convert and the witness side of `Predicate ⊣ Witness` becomes
+> mandatory is the **vat-boundary**.
+
+### 2.1 The cell is the vat-boundary; three grains
+- **Cell = the sync / vat-boundary grain** (Spritely's *vat*: *near* = synchronous caps-as-caps,
   *far* = async keys-as-caps).
 - **Host / principal = the trust-root grain** ("I trust my MacBook" / an seL4 CSpace). *New vs
   the lineage*, which rooted trust in the federation committee (`federation_id = H(committee)`);
   rooting it in the host is the seL4 bridge.
 - **Reference-group = the consensus-topology grain** (the finality dial of §4).
 
-A host runs *many* cells with local-async between them → a **graduated membrane**:
+A host runs *many* cells with local-async between them → a **graduated vat-boundary**:
 sync-within-a-cell → async-local between same-host cells → async-remote off-host.
 
 ### 2.2 caps-as-caps vs keys-as-caps — and why proof-is-truth forces keys
@@ -97,7 +113,7 @@ sync-within-a-cell → async-local between same-host cells → async-remote off-
 - **Demoting the executor to a cache (proof-is-truth) removes the mediator → authority must be
   epistemic.** So "the best dregg can do is keys-as-caps" is the *dual* of the inversion we
   chose. caps-as-caps survives only on **mediator islands** (seL4 kernel, live CapTP session,
-  trusted host). The **membrane is the caps↔keys conversion point**, principled-lossy:
+  trusted host). The **vat-boundary is the caps↔keys conversion point**, principled-lossy:
   caps→keys drops the mediator's structural guarantee; keys→caps needs a *trusted minter* to
   re-establish one.
 
@@ -107,7 +123,7 @@ The recovered vision (`paper/sections/06-fabric.typ:178`): *"federation-as-spect
 reference group**."* The substrate's **default phase is liquid** (local, mediated, gossiped,
 plain-logged, *unproven*); **rigidity is a phase a boundary crystallizes into, locally, on
 demand**:
-- a local cell gets *shared* → its membrane crystallizes a **proof obligation**;
+- a local cell gets *shared* → its vat-boundary crystallizes a **proof obligation**;
 - a casual friend-group decides to be *auditable* → its boundary crystallizes a **finality
   rule** (§4);
 - a trusted-on-my-host app gets *exported/migrated* → the transcript crystallizes into a
@@ -165,8 +181,8 @@ shapes but **they do not share a type**:
 | **intent** | *any* filler satisfying P (∃) | broadcast / market | `intent/` — fulfillment *literally* builds a `ConditionalTurn` (`fulfillment.rs:762-849`) |
 | **(promise-graph)** | named, with cascade | registry | `PendingTurnRegistry` + `ResolutionCondition` (`turn/src/pending.rs`) |
 
-**Intent is the inverse membrane.** A membrane gates a *complete* morphism crossing out (proof
-of what passes); an intent gates the *missing half* (predicate on the filler) — same gate
+**Intent is the inverse vat-boundary.** A vat-boundary gates a *complete* morphism crossing out
+(proof of what passes); an intent gates the *missing half* (predicate on the filler) — same gate
 machinery, opposite direction. An intent is a **continuation with an existentially-quantified
 hole**: `λ(fill satisfying P). effects`.
 
@@ -242,7 +258,7 @@ graceful-partition-fork lives in the blocklace/CRDT layer instead.
   *lean in* to Mina's **RFC-0006 receipt-chain-proving** + its in-circuit `Checked` cons (the
   precedent for the deferred-prover); **`CommitmentMode::Full|Partial`** (a *good* dregg-native
   divergence Mina lacks — serves multi-party turns).
-- **token-side:** the **biscuit/macaroon split** (it *is* the inside/between membrane, enforced
+- **token-side:** the **biscuit/macaroon split** (it *is* the inside/between vat-boundary, enforced
   by W3-F); `AuthRequest` as the shared binding-site; block-height-as-clock; the sorted-Merkle
   non-membership revocation type (already shared token↔cell).
 
@@ -293,9 +309,9 @@ graceful-partition-fork lives in the blocklace/CRDT layer instead.
 
 **Missing (the real new work):**
 1. **The deferred-prover** — a driver that consumes a no-proof receipt-chain segment and emits
-   proofs *retroactively at a membrane*. Substrate exists; only the "prove from the kept log on
+   proofs *retroactively at a vat-boundary*. Substrate exists; only the "prove from the kept log on
    demand" driver is absent. **Keystone.**
-2. **First-class trust-boundary / membrane / phase type** (no `island`/`TrustBoundary` type
+2. **First-class trust-boundary / vat-boundary / phase type** (no `island`/`TrustBoundary` type
    exists; the four scattered knobs are the same liquid↔solid dial).
 3. **Intra-island fast path for cross-cell turns** (atomic turns are proof-uniform today — the
    reason "atomic cross-cell turn" never cohered).
@@ -321,7 +337,7 @@ Cheapest-leverage first; each step *removes* trusted-executor surface or *unifie
 1. **Collapse (cheap, high-leverage):** four gates → `WitnessedCondition`; **sets → cells**;
    CallForest → flat (or real frames); merge `Breadstuff` into `Token`/`Bearer`.
 2. **The deferred-prover over the receipt chain** (keystone) + the first-class **phase** type
-   (unify the four scattered knobs). "Inside" = append to the chain without proof; "membrane" =
+   (unify the four scattered knobs). "Inside" = append to the chain without proof; "vat-boundary" =
    where `require_scope2_witness` / a proof is required.
 3. **auth-in-proof composition** (the Mina recovery) — compose auth-AIR + `spec_eval` + EffectVM;
    delete `authorize.rs`'s trust as each gap closes; `effects_hash` becomes an in-circuit fold.
@@ -348,11 +364,13 @@ Smallest adversarial seed:
 3. **Two authority models** (positional/caps-as-caps, epistemic/keys-as-caps) + a **lossy
    morphism** between them — *state precisely what's lost* (the seL4-reflection impedance
    mismatch, as a theorem not a hand-wave).
-4. **The membrane law** (the sharp target): a turn composing *purely within one trust-root*
-   needs **no witness**; **crossing a membrane is exactly where the witness side of
+4. **The vat-boundary law** (the sharp target): a turn composing *purely within one trust-root*
+   needs **no witness**; **crossing a vat-boundary is exactly where the witness side of
    `Predicate ⊣ Witness` becomes mandatory.** This is the claim the whole architecture rests on.
 
-Lean buys coherence-checking of the skeleton and precision on the two laws. It does **not**
+Lean buys coherence-checking of the skeleton and precision on the laws (and `Boundary.lean`
+adds the third, independent **I-confluence** judgement — invariant-merge — orthogonal to both
+conservation and ordering; see `dregg2.md §2.3`). It does **not**
 establish *cryptographic* soundness (that the STARK attests the morphism) — a separate obligation
 living in the circuit; conflating them would be its own mistake (note in the dir's README).
 
@@ -372,7 +390,7 @@ living in the circuit; conflating them would be its own mistake (note in the dir
 2. **Regime coupling: 4-corners with diagonal default.** Authority-representation (caps/keys) and
    ordering (finality tier) are *independently* selectable per cell, but the coupled diagonal is
    the default. Off-diagonal corners are allowed (e.g. a proof-carrying cell that still wants
-   single-writer ordering); the membrane must handle all four corners.
+   single-writer ordering); the vat-boundary must handle all four corners.
 3. **v1 Rust: freeze and rebuild later.** Freeze the current frontend/sdk/discord-bot/playground/
    wasm as a working v1 demo; do NOT actively maintain it. Rebuild the surface against the
    certified core later (the existing code is week-old and rebuildable; not precious).

@@ -1,0 +1,13 @@
+name = "Metatheory"
+defaultTargets = ["Metatheory"]
+
+# Pin mathlib to the revision matching ~/src/mathlib4 @ v4.30.0
+# (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). Using a local `path`
+# require avoids re-downloading the registry; switch to a `git`+`rev`
+# require if building on a machine without the local checkout.
+[[require]]
+name = "mathlib"
+path = "../../../src/mathlib4"
+
+[[lean_lib]]
+name = "Metatheory"

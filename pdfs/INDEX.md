@@ -1,209 +1,203 @@
 # Research Library Index
 
-136 papers, grouped by the axis of the dregg rebuild each one feeds. Each entry notes
-the **gap it closes** — read against `docs/rebuild/00-synthesis.md` (the skeleton:
-*turn = generator; cell/cap/proof = three projections; conservation + ordering = two
-ambient laws*; the *two-inheritances* thesis; the *liquid→solid* trust-boundary model).
+**238 papers**, grouped by the dregg2 axis each one feeds. Read against `docs/rebuild/dregg2.md`
+(canonical architecture) + `ROADMAP.md`. Filenames carry the source id where stable
+(`…-YYYY-NNN` = IACR eprint, `…-YYMM.NNNNN` = arXiv).
 
-Filenames carry the source id where stable: `eprint.iacr.org/YYYY/NNN` → `…-YYYY-NNN`,
-arXiv → `…-YYMM.NNNNN`. Conventions are descriptive otherwise.
+**Synthesis & study docs in this dir** (not papers — our own analysis, pass-it-upward):
+`discoveries.md` (conceptual mining + corrections to `00-synthesis`), `decisions.md` (ZK recursion/PCS
+rollup), `discoveries-2.md` (5 design gaps + the 4-study rollup); the per-cluster `LEARNINGS-*.md`,
+`DECISION-*.md` / `PATHB-*.md` (Path-B research), and `STUDY-*.md` (cyclic-GC, confluence-module,
+lean4-coinduction, projection-split, the 5 ACM papers).
 
 ---
 
 ## 1. Capability theory & object-capabilities (caps-as-caps)
-*The membrane / vat-boundary law; the authority projection. The theory dregg's cap model rhymes with.*
+- **robust-composition** — Miller's thesis; the ocap/membrane/promise-pipelining bible.
+- **capability-myths-demolished** — caps-as-caps vs ACL/keys (Properties A–G).
+- **take-grant-protection-model** · **hru-foundational-revisited** · **typed-access-matrix-model-sandhu** — decidable-safety lineage.
+- **the-need-for-capability-policies-drossopoulou** — rely/deny vocabulary (= the de-jure/de-facto badge split).
 
-- **robust-composition.pdf** — Miller, *Robust Composition* (2006 thesis). The ocap/E/CapTP bible: membrane, promise pipelining, when-blocks (the zkpromise/zkawait ancestor). NB: "membrane" is Miller's narrow term (a revocable forwarder) — see the vocab correction in the synthesis.
-- **capability-myths-demolished.pdf** — Miller/Yee/Shapiro. The caps-as-caps vs ACL/keys distinctions, verbatim — underwrites the caps↔keys functor.
-- **take-grant-protection-model.pdf** — Decidable safety of capability propagation; "the authority structure is analyzable."
-- **hru-foundational-revisited.pdf** — Harrison-Ruzzo-Ullman access-matrix safety (un)decidability — the foundation take-grant escapes.
-- **typed-access-matrix-model-sandhu.pdf** — TAM; the decidable-safety lineage mapped onto typed authority.
+## 2. Robust safety & secure compilation (the Robigalia formal underpinning)
+- **holistic-specifications-robust-programs-drossopoulou** · **swapsies-on-the-internet-capability-reasoning** — reasoning about ocap programs vs an adversarial environment.
+- **robustly-safe-compilation-toplas21** · **secure-compilation-survey-patrignani** — "untrusted code, no hacks" as a *preserved property* (robust hyperproperty preservation).
 
-## 2. Capability OS, confinement & orthogonal persistence
-*Trusted-island precedent; the seL4-reflection seam; "log is the inputs" persistence.*
+## 3. Capability OS, confinement & orthogonal persistence
+- **eros-fast-capability-system** · **keykos-nanokernel-architecture** — persistent capability OSes.
+- **capdl-sel4** — seL4 capability-distribution language (the reflection seam).
+- **verifying-eros-confinement** · **doerrie-mechanized-confinement-capability-systems** — *mechanized* confinement proofs.
+- **persistent-operating-system-dearle** — orthogonal persistence.
+- **empowering-wasm-thin-kernel-interfaces** — WASM confined by a thin (seL4-style) kernel = the Robigalia userspace seam.
+- **wasm-security-review** — WASM sandbox security (the studio runtime).
 
-- **eros-fast-capability-system.pdf** — Shapiro et al. Persistent capability OS = our "trusted island that persists and is portable," decades early.
-- **keykos-nanokernel-architecture.pdf** — KeyKOS; persistent capability nanokernel + checkpoint persistence.
-- **capdl-sel4.pdf** — seL4 capability distribution language; the concrete shape for the reflection seam (CNode/CSpace/CSlot).
-- **verifying-eros-confinement.pdf** — The EROS confinement mechanism verified; the "confined interior" as a provable claim.
-- **doerrie-mechanized-confinement-capability-systems.pdf** — *Mechanized* confinement proof (Coyotos lineage). Direct precedent for the Lean confinement work.
-- **persistent-operating-system-dearle.pdf** — Orthogonal persistence / single-level store survey (houyhnhnm "keep the inputs").
+## 4. Object-capability networking (CapTP / E / promises)
+- **concurrency-among-strangers-e-promises** — Miller/Tribble; promise pipelining = the zkpromise ancestor.
+- **captp-capability-transport-protocol-spritely** · **ocapn-interoperable-capabilities-network-spritely** — the protocols dregg reflects (caps↔keys conversion membrane).
 
-## 3. Object-capability networking (CapTP / E / promises)
-*The protocols dregg reflects; the live caps-as-caps interior.*
+## 5. Keys-as-caps & proof-carrying authorization
+- **proof-carrying-authentication-appel-felten** — authorization = a checkable proof (the auth-in-proof ancestor).
+- **intro-to-proof-carrying-authorization-garg** · **proof-carrying-authorization-system-bauer** — PCA intro + system.
+- **macaroons** · **rfc2693-spki-sdsi** · **ucan-spec** — bearer-token / keys-as-caps lineage (third-party caveat = discharge).
+- **governing-dynamic-capabilities** · **agent-identity-delegation-mcp-a2a** — 2026 crypto-bound dynamic caps + agent delegation across MCP/A2A.
 
-- **concurrency-among-strangers-e-promises.pdf** — Miller/Tribble/Shapiro. Promise pipelining in E = **the literal ancestor of zkpromise/zkawait**.
-- **captp-capability-transport-protocol-spritely.pdf** — CapTP spec (Goblins). The caps↔keys conversion membrane (near = caps-as-caps, sturdy = keys-as-caps).
-- **ocapn-interoperable-capabilities-network-spritely.pdf** — OCapN; the netlayer family the reflection seam degrades into.
+## 6. Information flow, noninterference & DIFC distributed systems
+- **sel4-information-flow-enforcement** · **noninterference-for-os-kernels-murray** · **complexity-of-intransitive-noninterference** — the integrity/info-flow theorem genre.
+- **declassification-dimensions-and-principles** — "what crosses the membrane gets revealed" (selective-disclosure theory).
+- **fabric-secure-distributed-computation-sosp09** · **sharing-mobile-code-securely-ifc-oakland12** · **securing-distributed-systems-ifc-zeldovich-nsdi08** — the closest full-system precedent: distributed + persistent + secure-cross-trust-domain.
 
-## 4. Keys-as-caps & proof-carrying authorization
-*The cryptographic-sea half; the auth-in-proof recovery (the Mina inheritance dregg dropped).*
+## 7. Continuations & algebraic effects (the await / intent / zkpromise family)
+- **handlers-of-algebraic-effects-plotkin-power** · **handling-algebraic-effects-plotkin-pretnar** — effects-as-suspended-computation.
+- **monadic-framework-delimited-continuations** · **one-shot-continuations-dybvig** (linear = conservation-respecting await) · **expressive-power-one-shot-control**.
+- **effective-concurrency-algebraic-effects** — effects→concurrency→promises.
 
-- **proof-carrying-authentication-appel-felten.pdf** — Appel/Felten PCA. **The foundational ancestor of "authorization inside the proof."**
-- **intro-to-proof-carrying-authorization-garg.pdf** — Accessible PCA intro.
-- **proof-carrying-authorization-system-bauer.pdf** — A PCA system realization.
-- **macaroons.pdf** — Birgisson et al. Bearer tokens with caveats = the `token/` system's theory.
-- **rfc2693-spki-sdsi.pdf** — SPKI/SDSI certificate theory; keys-as-caps formal lineage.
-- **ucan-spec.pdf** — UCAN delegation (DID-rooted late-bound cert chains).
-- **governing-dynamic-capabilities-2603.14332.pdf** — Cryptographic binding of dynamic capabilities (2026, bleeding edge).
-- **agent-identity-delegation-mcp-a2a-2603.24775.pdf** — Verifiable delegation across MCP/A2A (2026) — agents-as-caps, the zkRPC-toolcall product axis.
+## 8. Matching & unification (the intent-matching decidability seam)
+- **undecidability-higher-order-unification-coq** — machine-checked; matching undecidable at the flex-head.
+- **efficient-full-higher-order-unification** — the bounded practical solver.
+- **winner-determination-combinatorial-auctions-sandholm** — market-clearing complexity.
 
-## 5. Information flow / noninterference / declassification
-*What's lost at the boundary; selective disclosure (FieldVisibility) theory.*
+## 9. Linear logic & (binary) session types
+- **girard-linear-logic-syntax-semantics** — the source.
+- **sessions-as-propositions** · **comparing-session-type-systems-linear-logic** · **dependent-session-types-verified-concurrency**.
+- **coherence-generalises-duality-mpst** · **logical-interpretation-async-mpst** — MPST *from* linear logic (the conservation⊗ordering coupling).
 
-- **sel4-information-flow-enforcement.pdf** — seL4's machine-checked info-flow proof; the integrity-theorem genre the membrane law mirrors.
-- **noninterference-for-os-kernels-murray.pdf** — Noninterference for OS kernels (the seL4 confidentiality basis).
-- **complexity-of-intransitive-noninterference.pdf** — Complexity of the boundary info-flow relation.
-- **declassification-dimensions-and-principles.pdf** — Sabelfeld/Sands. **Declassification = "what crosses the membrane / what gets revealed"** — the selective-disclosure theory.
+## 10. Multiparty session types & choreographies (the coordination axis)
+- **mpst-honda-yoshida-carbone-jacm** — the MPST foundation.
+- **less-is-more-mpst-revisited** · **less-is-more-revisited** — the modern (bottom-up) MPST theory.
+- **mpst-generalising-projection** · **mpst-semantic-global-type-wellformedness** — endpoint projection / well-formedness (the projection-split core).
+- **mpst-crash-stop-async** · **mpst-crash-failure-typing-viering** · **omission-failures-choreographic** — failure-aware projection.
+- **affine-rust-mpst** — affine (drop/cancel) MPST in Rust.
+- **montesi-choreographic-programming-book** · **choral-choreographic-oop** · **functional-choreographic-programming** · **haschor-functional-choreographies-icfp23** — choreographic programming languages.
+- **deadlock-freedom-by-design-choreography-cm13** — projection-preserves-a-property (the template the projection-split extends).
+- **formulas-as-processes-deadlock-freedom-choreographies** — LL + choreographies + deadlock-freedom.
+- **cryptographic-choreographies** · **security-protocols-as-choreographies** · **bft-web-services-session-types** — Byzantine/crypto choreographies (the over-Byzantine half).
 
-## 6. Continuations & algebraic effects (the await / intent / zkpromise family)
-*Intent = inverse membrane = a suspended morphism awaiting a predicate-satisfying fill = a continuation.*
+## 11. Category theory, coalgebra & coinduction (the metatheory core)
+- **mathematical-theory-of-resources** — resource theory = conservation-as-symmetric-monoidal (Law 1).
+- **selinger-graphical-languages-monoidal** · **string-diagrams-closed-symmetric-monoidal-csl2026** — string diagrams / SMC.
+- **open-petri-nets-baez** — open Petri nets as SMCs (compositional concurrency).
+- **coalgebraic-semantics-silva** — coalgebra/bisimulation basics (the cell = final coalgebra).
+- **mixing-induction-coinduction** — the `νC.µI` nesting (bounded proof inside unbounded life).
+- **guarded-recursion-coinductive** · **guarded-dependent-type-theory-coinductive** · **generalized-modality-for-recursion-later** — the `▶` guard (= `previous_receipt_hash`).
+- **coinductive-proofs-regex-zk** — coinduction *inside* a ZK proof.
+- **lean4-codatatype-package-qpf-keizer** — how to build codatatypes in Lean4 (QPF) — the `Boundary.lean` tooling.
 
-- **handlers-of-algebraic-effects-plotkin-power.pdf** — Plotkin/Power. The semantic basis for effects-as-suspended-computation.
-- **handling-algebraic-effects-plotkin-pretnar-1312.1399.pdf** — Plotkin/Pretnar; effect handlers.
-- **monadic-framework-delimited-continuations.pdf** — Dybvig/Peyton-Jones/Sabry; delimited continuations (shift/reset).
-- **one-shot-continuations-dybvig.pdf** — One-shot = **linear** continuation = the conservation-respecting await.
-- **expressive-power-one-shot-control-2509.11901.pdf** — One-shot control operators & coroutines (2025).
-- **effective-concurrency-algebraic-effects.pdf** — Dolan et al.; effects→concurrency→promises (the multicore-OCaml basis).
+## 12. Formal verification: provers & distributed-systems verification
+- **lean4-theorem-prover-and-language** · **lean4-comprehensive-survey** — the metatheory's tool.
+- **iris-from-the-ground-up** · **beginners-guide-iris-coq-separation-logic** · **concurrent-separation-logic-brookes-ohearn** — concurrent separation logic.
+- **actris2-session-types-separation-logic** — verified MPST *in* Iris.
+- **verdi-verified-distributed-pldi15** · **disel-distributed-separation-logic** · **velisarios-bft-coq** (BFT in Coq) · **ironfleet-distributed-systems** · **igloo-refinement-separation-logic-oopsla20** — the consensus-side l4v analogs (the finality-tier proof templates).
 
-## 7. Matching & unification (the intent-matching seam)
-*Verify-a-fill is cheap & universal; find-a-fill is undecidable → a bounded pluggable solver.*
+## 13. CRDTs, invariant-confluence, local-first & CALM (Law 2 / the I-confluence judgement)
+- **crdts-comprehensive-study-rr7506** · **crdts-shapiro-sss-2011** — the CRDT design space.
+- **replicated-data-types-spec-verification-optimality-popl14** — Burckhardt's spec/verification framework.
+- **verifying-strong-eventual-consistency-crdt-isabelle** — Gomes–Kleppmann (the `Confluence.lean` template).
+- **certified-mergeable-replicated-data-types-pldi22** · **katara-synthesizing-crdts-verified-lifting** · **opsets-sequential-specifications-replicated** — certified/synthesized merges.
+- **merkle-crdts-merkle-dags** — Merkle-DAG + CRDT = the blocklace shape.
+- **local-first-software-kleppmann** — the liquid-default philosophy.
+- **byzantine-eventual-consistency** — the I-confluence iff-theorem (tier-1 limit).
+- **making-crdts-byzantine-fault-tolerant**.
+- **keeping-calm-distributed-consistency** — CALM (monotonicity ⟺ coordination-free).
+- **coordination-avoidance-bailis-vldb** · **interactive-checks-coordination-avoidance-vldb19** (the I-confluence *checker* = the projection-split tooling) · **coordination-criterion** (2026).
+- **dedalus-datalog-in-time-and-space** · **hydro-compiler-for-distributed-programs** — CALM-based languages (compiling the I-confluent fragment).
 
-- **undecidability-higher-order-unification-coq.pdf** — Spies/Forster. **Machine-checked undecidability of HOU** — the literal precedent for "general intent matching is undecidable."
-- **efficient-full-higher-order-unification.pdf** — The bounded, practical solver side.
-- **winner-determination-combinatorial-auctions-sandholm.pdf** — Market-clearing / auction matching = the domain-specific matcher (order-books, swaps).
+## 14. Byzantine CRDTs & proof-carrying / authenticated replication (fellow travelers)
+- **proof-carrying-crdts-byzantine-update-papoc25** — the on-the-nose convergent paper (CONFIRMED, not scooped — see `STUDY-acm-papers.md`).
+- **extend-only-directed-posets-byzantine-crdts** — semilattice underpinning for CDT ≡ blocklace.
+- **bounding-byzantine-impact-open-crdt-systems** — the open-deployment spam side-condition.
+- **authenticated-conflict-free-replicated-data-types** · **byzantine-ft-crdts-from-cryptocurrencies**.
 
-## 8. Linear logic & session types
-*Conservation (Law 1) as linear/monoidal structure; ordering as session sequencing.*
-
-- **girard-linear-logic-syntax-semantics.pdf** — Girard. The source.
-- **sessions-as-propositions-1406.3479.pdf** — Propositions-as-sessions (Caires/Pfenning/Wadler line).
-- **comparing-session-type-systems-linear-logic-2401.14763.pdf** — Comparison of the linear-logic-derived session systems.
-- **dependent-session-types-verified-concurrency-2510.19129.pdf** — Dependent session types for verified concurrency (2025) — closest to the Lean target.
-
-## 9. Category theory & resource theories
-*The honest categorical reading; conservation as a symmetric-monoidal resource law.*
-
-- **mathematical-theory-of-resources-1409.5531.pdf** — Coecke/Fritz/Spekkens. **Resource theory = conservation-as-monoidal**, exactly Law 1.
-- **selinger-graphical-languages-monoidal-0908.3347.pdf** — String-diagram / monoidal-category reference.
-- **string-diagrams-closed-symmetric-monoidal-csl2026.pdf** — String diagrams for closed SMCs (CSL 2026).
-
-## 10. Formal verification: theorem provers & distributed-systems verification
-*Lean for the core; the consensus-side analog to l4v (machine-checked distributed protocols).*
-
-- **lean4-theorem-prover-and-language.pdf** — de Moura/Ullrich; Lean 4 system description.
-- **lean4-comprehensive-survey-2501.18639.pdf** — Lean 4 architecture survey (2025).
-- **iris-from-the-ground-up.pdf** — Iris higher-order concurrent separation logic (the verification substrate).
-- **beginners-guide-iris-coq-separation-logic-2105.12077.pdf** — Accessible Iris/Coq/sep-logic entry.
-- **concurrent-separation-logic-brookes-ohearn.pdf** — Brookes/O'Hearn; CSL foundations.
-- **verdi-verified-distributed-pldi15.pdf** — Verified distributed systems in Coq.
-- **disel-distributed-separation-logic.pdf** — Distributed separation logic (program-and-prove protocols).
-- **velisarios-bft-coq.pdf** — **BFT/PBFT verified in Coq** — closest precedent for proving the finality tiers.
-- **ironfleet-distributed-systems.pdf** — Proving practical distributed systems correct (safety+liveness).
-- **igloo-refinement-separation-logic-oopsla20.pdf** — Soundly linking compositional refinement to separation logic.
-
-## 11. Schema evolution / gradual typing (the frozen-AIR / Urbit-trap fix)
-- **preserves-spec.pdf** — Garnock-Jones. Content-addressed data + schema; facet/AIR-by-content-hash substrate.
-- **gradual-typing-as-if-types-mattered.pdf** — Gradual typing (typed old→new boundaries).
-- **safe-on-the-fly-relational-schema-evolution.pdf** — Live schema migration = the typed-upgrade discipline.
-
-## 12. Consensus, CRDTs, DAG-BFT, local-first
-*Law 2 (ordering). The liquid substrate + the pluggable-finality menu. "Use, but not directly."*
-
+## 15. Consensus, DAG-BFT, order-fairness & accountability (Law 2 finality tiers)
 **Grassroots / blocklace lineage (original library):**
-- **blocklace.pdf** — The CRDT DAG substrate (per-creator chains, union-merge); the liquid default.
-- **cordial-miners.pdf** — The τ ordering layer (waves/leaders) — finality tier 3.
-- **constitutional-consensus.pdf** — Self-amending governance — tier-4 plugin (minus its 4 globalism seams).
-- **grassroots-federation.pdf** — Organic federation-as-spectrum (n=1 grows; no genesis ceremony).
-- **grassroots-flash.pdf** — Grassroots payment/flash construction.
-- **cryptoconcurrency.pdf** — Tonkikh/Ponomarev; (almost) consensusless asset transfer — the conservation-without-total-order point.
-- **dyno-dynamic-bft.pdf** — Duan/Zhang, *Foundations of Dynamic BFT* (changing membership).
-- **adversary-majority.pdf** — *Consensus Under Adversary Majority Done Right.*
-- **2304.14701.pdf** — Lewis-Pye & Roughgarden, *Permissionless Consensus* (the impossibility/landscape map).
-- **dyna-hints.pdf** — *Dyna-hinTS: Silent Threshold Signatures for Dynamic Committees.*
-- **ensue-whitepaper.pdf** — Ensue (project whitepaper).
+- **blocklace** · **blocklace-byzantine-repelling-universal** — the CRDT-DAG substrate.
+- **cordial-miners** (the τ ordering) · **constitutional-consensus** (tier-4 governance) · **grassroots-federation** · **grassroots-flash**.
+- **cryptoconcurrency** — (almost) consensusless asset transfer (when consensus is avoidable).
+- **dyno-dynamic-bft** · **adversary-majority** · **2304.14701** (Permissionless Consensus, Lewis-Pye/Roughgarden) · **dyna-hints** (silent threshold sigs, dynamic committees) · **ensue-whitepaper**.
 
-**Modern DAG-BFT (cordial-miners successors):**
-- **narwhal-and-tusk-dag-bft-2105.11827.pdf** — DAG mempool + BFT consensus separation.
-- **bullshark-dag-bft-2201.05677.pdf** — Partially-synchronous DAG BFT.
-- **mysticeti-uncertified-dags-2310.14821.pdf** — **Uncertified DAGs** ≈ the tier-1 causal-only default at low latency.
-- **dag-rider-all-you-need-is-dag-2102.08325.pdf** — Asynchronous Byzantine atomic broadcast on a DAG.
+**Modern DAG-BFT:**
+- **narwhal-and-tusk-dag-bft** · **bullshark-dag-bft** · **mysticeti-uncertified-dags** (validates tier-1 causal-only) · **dag-rider-all-you-need-is-dag**.
+- **sui-lutris-broadcast-and-consensus** — broadcast-for-owned + consensus-for-shared = a *shipped* per-cell-finality system.
+- **sui-shared-objects-owned-vs-shared** — the owned-object (no consensus) vs shared-object (consensus) split = dregg's tier-1-vs-tier-3 per-cell finality, in a deployed system.
 
-**CRDT / local-first foundations:**
-- **crdts-comprehensive-study-rr7506.pdf** — Shapiro et al. The canonical CRDT tech report.
-- **crdts-shapiro-sss-2011.pdf** — The SSS 2011 short version.
-- **byzantine-eventual-consistency-2012.00472.pdf** — **Limits of P2P / Byzantine causal consistency** — directly the grassroots/blocklace boundary.
-- **merkle-crdts-merkle-dags-2004.00107.pdf** — Merkle-DAG + CRDT = the blocklace shape itself.
-- **making-crdts-byzantine-fault-tolerant.pdf** — Kleppmann; BFT CRDTs.
-- **local-first-software-kleppmann.pdf** — The local-first manifesto (the liquid-default philosophy).
+**Order-fairness & accountability:**
+- **themis-order-fairness-byzantine-consensus** · **sok-consensus-fair-message-ordering** — anti-MEV order-fairness.
+- **cft-forensics-byzantine-accountability** — accountability/forensics (the slashable-attestation basis).
 
-## 13. ZK — folding & accumulation schemes
-*Real recursion replaces classical PI-matching (proof-spine §2; IVC; aggregation).*
+## 16. Schema evolution, lenses & data substrate
+- **preserves-spec** — content-addressed data + schema (cell-state/facet/AIR-id).
+- **gradual-typing-as-if-types-mattered** — typed old→new boundaries.
+- **safe-on-the-fly-relational-schema-evolution** — live migration.
+- **edit-lenses-hofmann-pierce-wagner** — the bidirectional mechanism behind Cambria.
+- **cambria-schema-evolution-edit-lenses-papoc21** — lens-graph = the schema-DAG (mechanism, not the theorem; the DAG-merge case stays open).
 
-- **pcd-without-succinct-arguments-2020-1618.pdf** — PCD; the conceptual root.
-- **nova-2021-370.pdf** — Nova, the folding origin.
-- **protostar-2023-620.pdf** / **hypernova-2023-573.pdf** — generic accumulation / CCS folding.
-- **protogalaxy-2023-1106.pdf** — multi-instance ProtoStar-style folding.
-- **cyclefold-2023-1192.pdf** — folding over a curve cycle.
-- **kilonova-2023-1579.pdf** — preprocessing folding SNARKs.
-- **mova-2024-1220.pdf** — folding without committing to error terms.
-- **neutronnova-2024-1606.pdf** — folding everything that reduces to zero-check.
-- **mangrove-2024-416.pdf** — tree-based folding SNARKs.
-- **hekaton-2024-1208.pdf** — horizontally-scalable folding/aggregation.
-- **accumulation-without-homomorphism-2024-474.pdf** / **linear-time-accumulation-2025-753.pdf** — accumulation theory.
-- **distributed-snark-via-folding-2025-1653.pdf** — distribution via folding.
-- **latticefold-2024-257.pdf** / **latticefold-plus-2025-247.pdf** / **neo-lattice-folding-ccs-2025-294.pdf** / **neo-superneo-pq-folding-2026-242.pdf** — **post-quantum / lattice folding** (closes the PQ gap).
-- **zk-pcd-from-accumulation-2026-289.pdf** — ZK proof-carrying data from accumulation (2026) — directly the proof-spine.
+## 17. Distributed garbage collection (cell-liveness)
+- **orca-actor-gc-type-codesign-oopsla17** · **orca-soundness-concurrent-actor-gc-esop18** — Pony ORCA (verified concurrent actor GC); the trust-scoped-hybrid basis (see `STUDY-cyclic-gc.md`).
 
-## 14. ZK — proximity testing, polynomial commitments & codes
-*The soundness backbone under WHIR/STIR; the STARK/Binius PCS layer.*
+## 18. ZK — folding & accumulation schemes
+- **pcd-without-succinct-arguments** · **pcd-from-accumulation-schemes** — PCD/IVC-from-accumulation (the BCMS20 interface).
+- **nova** · **protostar** · **hypernova** · **protogalaxy** · **cyclefold** · **kilonova** — the curve-cycle folding line.
+- **mova** (no error-term commits) · **neutronnova** (zero-check) · **mangrove** (tree) · **hekaton** (horizontal) · **accumulation-without-homomorphism** · **linear-time-accumulation** · **distributed-snark-via-folding**.
+- **latticefold** · **latticefold-plus** · **neo-lattice-folding-ccs** · **neo-superneo-pq-folding** · **lova-lattice-folding-unstructured** — the post-quantum / lattice folding track.
+- **halo-recursive-no-trusted-setup** · **halo-infinite-accumulation** — accumulation from any additive PC (the swappable-backend theory).
+- **zk-pcd-from-accumulation** — ZK proof-carrying data from accumulation (2026).
 
-- **deep-fri-2019-1903.12243.pdf** — the proximity-gap anchor.
-- **proximity-gaps-reed-solomon-2025-2055.pdf** — modern RS proximity-gap restatement.
-- **stir-2024-390.pdf** / **whir-2024-1586.pdf** — the modern FRI successors (fewer queries / super-fast verify).
-- **basefold-2023-1705.pdf** / **deepfold-2024-1595.pdf** — field-agnostic / multilinear code-based PCS.
-- **arc-reed-solomon-codes-2024-1731.pdf** — accumulation for RS codes (the folding↔proximity bridge).
-- **blaze-interleaved-raa-codes-2024-1609.pdf** — fast SNARKs from RAA codes.
-- **circle-starks-2024-278.pdf** — Mersenne-31 circle STARKs.
-- **binius-towers-binary-fields-2023-1784.pdf** / **binius-multilinear-binary-towers-2024-504.pdf** — Binius (binary tower fields).
-- **greyhound-lattice-pcs-2024-1293.pdf** / **hachi-lattice-multilinear-pcs-2026-156.pdf** — lattice PCS (2026).
-- **frida-das-from-fri-2024-248.pdf** — data-availability sampling from FRI.
-- **hyrax-doubly-efficient-2017-1132.pdf** / **gemini-elastic-snark-2022-420.pdf** — doubly-efficient / elastic SNARKs.
-- **gemini-pcs-soundness-attack-2025-565.pdf** / **orion-soundness-restored-2024-1164.pdf** — **soundness attacks** (a real bug found+fixed in each).
-- **brakedown-2021-1043.pdf** / **brakingbase-2024-1825.pdf** — linear-time field-agnostic codes.
-- **samaritan-multilinear-snark-2025-419.pdf** / **lightning-field-agnostic-pcs-2026-258.pdf** — 2025/26 multilinear PCS.
-- **pcs-evolution-shred-to-shine-2025-1354.pdf** — PCS evolution overview.
-- **multivariate-pcs-survey-2306.11383.pdf** — multivariate PCS survey.
-- **divide-and-conquer-sumcheck-2504.00693.pdf** — sumcheck (core to all the above).
+## 19. ZK — recursion / IVC foundations
+- **valiant-incrementally-verifiable-computation** (the original) · **valiant-conjecture-ivc-impossibility** (when IVC is impossible) · **ivc-for-np-standard-assumptions** · **ivc-arbitrary-depth**.
+- **fractal-pq-transparent-recursive** — PQ + transparent recursion from holography.
+- **plonky2-recursive-fri-plonk** — practical hash-native recursive STARK.
 
-## 15. ZK — IVC / recursion foundations, zkVM, lookups
-- **valiant-incrementally-verifiable-computation.pdf** — Valiant; the original IVC.
-- **valiant-conjecture-ivc-impossibility-2022-542.pdf** — **when IVC is impossible** (a boundary, not a recipe).
-- **ivc-for-np-standard-assumptions-2025-1546.pdf** — IVC for NP from standard assumptions (2025).
-- **ivc-arbitrary-depth-2025-1413.pdf** — when can we incrementally prove arbitrary depth (2025).
-- **jolt-2023-1217.pdf** / **understanding-lasso-2025-1169.pdf** — zkVM via lookups (Jolt/Lasso).
-- **segment-parallel-zkvm-2024-387.pdf** — non-uniform / segment / parallel zkVM = the continuation/segment angle.
+## 20. ZK — proximity testing, polynomial commitments & codes
+- **deep-fri** · **proximity-gaps-reed-solomon** — the soundness backbone.
+- **stir** · **whir** — modern FRI successors (the recursion-verifier cheapener).
+- **basefold** · **deepfold** · **arc-reed-solomon-codes** · **blaze-interleaved-raa-codes** — code-based PCS.
+- **circle-starks** (Mersenne-31) · **binius-towers-binary-fields** · **binius-multilinear-binary-towers** — small/binary fields.
+- **greyhound-lattice-pcs** · **hachi-lattice-multilinear-pcs** — lattice PCS (PQ).
+- **frida-das-from-fri** · **hyrax-doubly-efficient** · **gemini-elastic-snark** · **brakedown** · **brakingbase** · **samaritan-multilinear-snark** · **lightning-field-agnostic-pcs**.
+- **multivariate-pcs-survey** · **divide-and-conquer-sumcheck** · **pcs-evolution-shred-to-shine** — surveys/sumcheck.
 
-## 16. ZK — STARK adjacency & private smart contracts
-- **zk-for-starks-note-2024-1037.pdf** — adding zero-knowledge to STARKs (the ZK-gap).
-- **pq-transparent-distributed-snark-2025-2327.pdf** — post-quantum + transparent distributed SNARK.
-- **kachina-private-contracts-2020-543.pdf** — Kachina; **the Midnight foundation** for private smart contracts.
-- **uc-zk-smart-contracts-2022-670.pdf** — practical UC-secure ZK smart contracts.
+## 21. ZK — zkVM, lookups, STARK adjacency & private contracts
+- **jolt** · **understanding-lasso** · **segment-parallel-zkvm** · **verifying-jolt-zkvm-lookup-semantics** — zkVM + lookups (the LogUp decision).
+- **zk-for-starks-note** (adding ZK to STARKs) · **pq-transparent-distributed-snark**.
+- **kachina-private-contracts** (the Midnight foundation) · **uc-zk-smart-contracts**.
 
-## 17. Anonymous credentials, identity & misc reference
-- **anoncreds-from-ecdsa-2024-2010.pdf** — anonymous credentials from ECDSA.
-- **did-vc-survey-2402.02455.pdf** — survey of DIDs & verifiable credentials.
-- **revocable-proof-systems.pdf** — Christ/Bonneau, *Limits on revocable proof systems* (stateless-blockchain revocation bounds).
-- **zk-frameworks-survey-2502.07063.pdf** — ZK proof-frameworks landscape survey (2025).
-- **wasm-security-review-2407.12297.pdf** — WebAssembly security review (the studio wasm-runtime sandbox).
+## 22. ZK — soundness, malleability, streaming & surveys
+- **gemini-pcs-soundness-attack** · **orion-soundness-restored** — real soundness bugs (the adversarial-test basis).
+- **sok-snark-vulnerabilities** · **zk-frameworks-survey** — the landscape + the unaudited-stack risk.
+- **malleable-snarks** (controlled malleability = rejuvenation) · **sumcheck-zksnarks-non-malleable** (the soundness counterpart).
+- **verifiable-streaming-computation** · **streaming-zero-knowledge-proofs** — incremental proofs over unbounded streams (succinct-unbounded-history).
+
+## 23. Verifiable ML & federated learning (the agent/zkRPC product surface)
+- **zkml-verifiable-machine-learning-survey** · **zk-proofs-of-training-deep-neural-networks** (verifiable *training*) · **safetynets-verifiable-dnn-execution** (verifiable inference).
+- **practical-secure-aggregation-federated-learning-bonawitz** · **byzantine-robust-federated-learning-learnable-aggregation**.
+
+## 24. Anonymous credentials, accountable anonymity & revocation
+- **anoncreds-from-ecdsa** · **did-vc-survey** · **coconut-threshold-selective-disclosure-credentials** (distributed credential authority).
+- **revocable-proof-systems** — limits on revocable proof systems (stateless-chain bounds).
+- **privacy-by-design-self-sovereign-identity** — SSI privacy reference.
+- **towards-accountability-for-anonymous-credentials** · **publicly-auditable-privacy-revocation-anoncreds** — accountable anonymity (the de-jure/de-facto + auditable revocation).
+- **lattice-accumulator-anonymous-credential** (PQ accumulator) · **private-delegation-nonmembership-proof-updates-accumulators** — the revocation non-membership seam (§3) + private update delegation.
+
+## 25. Privacy: mixnets, unlinkability, PIR/ORAM, metadata-private messaging
+*(The network/storage-layer privacy tier — complements dregg's data-layer privacy stack.)*
+- **sphinx-compact-provably-secure-mix-format** — the canonical mix packet format.
+- **loopix-anonymity-system** — modern low-latency mixnet.
+- **anonymity-trilemma** — the strong-anon ⊥ latency ⊥ bandwidth tradeoff.
+- **on-privacy-notions-anonymous-communication** · **anonymity-unlinkability-pseudonymity-terminology-pfitzmann-hansen** — the rigorous sender/receiver-unlinkability definitions.
+- **vuvuzela-private-messaging-traffic-analysis** (mixnet-noise) · **riposte-anonymous-messaging-millions** (DC-net/PIR-write) · **talek-private-group-messaging-hidden-access** (PIR-log, hidden access patterns).
+- **simplepir-single-server-pir** · **path-oram-oblivious-ram** · **oblivious-data-structures** — private reads / oblivious structures (the blinded-queue complement).
+- **quasar-multicast-commitment-mixing-recursive-accumulation** — commitment mixing ⊗ recursive accumulation.
+
+## 26. Mechanism design & resource-safe contract languages
+- **credible-optimal-auctions-via-blockchains** — credible auctions (the intent-matcher incentive layer).
+- **move-resources-safe-abstraction-money** — linear resource types (conservation in a real language).
+- **movescanner-move-smart-contract-security** — Move resource-safety failure modes.
 
 ---
 
 ## Known gaps / not yet pulled
-- **Robigalia** — no clean paper exists; it's a codebase (`~/dev/sel4`, `~/dev/l4v` locally).
-- **Spartan / Lasso originals** — the zkVM lookup lineage is only partially here (Jolt + "Understanding Lasso").
-- **Mina / Pickles** — read from `~/dev/mina` source directly.
-- A non-arXiv classic occasionally needs a course-mirror fallback (HAL/lip6 serve landing pages); see git history of this dir for working URLs.
+- **Privacy-pools / compliant-anonymity proper** (Buterin et al. "association sets") — only an attack-on-Tornado surfaced; the real paper didn't.
+- **Plainfossé distributed-GC survey** — free but HAL served HTML; ORCA covers the substance.
+- **Robigalia / Pickles internals** — read from `~/dev/sel4`, `~/dev/l4v`, `~/dev/proof-systems` directly.
+- **DC-nets / Dining-Cryptographers foundations**, **traffic-analysis defenses** — adjacent to §25, not yet pulled.
 
-*Library expanded via the Kagi search API (`~/dev/allgame/.env: KAGI_API_KEY`); see the
-`reference-kagi-paper-search` memory for the reusable query harness.*
+*Library expanded via the Kagi search API (`~/dev/allgame/.env`); see the
+`reference-kagi-paper-search` memory for the harness.*

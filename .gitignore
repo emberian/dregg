@@ -31,3 +31,5 @@ spec/states
 
 *.zip
 *.xpi
+
+metatheory/.lake
