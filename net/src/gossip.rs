@@ -2371,7 +2371,7 @@ mod tests {
             }
         }
         assert!(
-            stem_count >= 800 && stem_count <= 980,
+            (800..=980).contains(&stem_count),
             "stem continuation count {stem_count}/1000 outside expected range [800, 980]"
         );
     }

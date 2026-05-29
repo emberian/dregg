@@ -230,7 +230,7 @@ async fn resolve(
                 .iter()
                 .filter_map(|c| {
                     let p = c["path"].as_str()?;
-                    if p.starts_with(&path[..path.len().min(3).max(1)]) {
+                    if p.starts_with(&path[..path.len().clamp(1, 3)]) {
                         Some(p)
                     } else {
                         None
