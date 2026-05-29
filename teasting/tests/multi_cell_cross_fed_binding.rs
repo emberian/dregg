@@ -174,7 +174,18 @@ fn fabricate_wr_for_fed(turn: &Turn, cell_id: &CellId, home_fed: [u8; 32]) -> Wi
         BabyBear::ZERO
     };
     let pi_u32: Vec<u32> = pi_bb.iter().map(|x| x.as_u32()).collect();
-    WitnessedReceipt::from_components(receipt_for(*cell_id, home_fed), vec![], pi_u32, None)
+    // The γ.2 Phase-2 aggregator (CV3 real-STARK migration, #133) requires
+    // scope-2 WitnessedReceipts — accepting a scope-1-only WR would let an
+    // aggregate look stronger than its inputs. Attach a minimal scope-2
+    // witness trace (matches dregg_verifier::bilateral_pair's fix). Width is
+    // taken from the live EFFECT_VM_WIDTH so it tracks #131/#132's PI growth.
+    let trace = vec![vec![BabyBear::ZERO; dregg_circuit::effect_vm::EFFECT_VM_WIDTH]];
+    WitnessedReceipt::from_components(
+        receipt_for(*cell_id, home_fed),
+        vec![],
+        pi_u32,
+        Some(trace.as_slice()),
+    )
 }
 
 fn build_transfer_turn(from: CellId, to: CellId, amount: u64, nonce: u64) -> Turn {

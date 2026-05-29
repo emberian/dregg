@@ -1,23 +1,23 @@
 //! Protocol-coverage gate (Pillar 2 of the test/gates initiative, #142).
 //!
 //! "Verification means something" only if the gates actually exercise the
-//! protocol. This file is a **compile-time forcing function**: the exhaustive
-//! `match` in `effect_executor_coverage` has one arm per `dregg_turn::Effect`
-//! variant, so **adding a new `Effect` variant breaks this test's compilation
-//! until someone classifies it** — covered by a real executor-invoking flow,
-//! or explicitly not-yet-covered. That makes silent, untested protocol growth
-//! impossible.
+//! protocol. This file is a **compile-time forcing function**: each exhaustive
+//! `match` below has one arm per variant of a core protocol enum (`Effect`,
+//! `Authorization`, `StateConstraint`), so **adding a new variant breaks this
+//! test's compilation until someone classifies it** — covered by a real
+//! executor-invoking flow, or explicitly not-yet-covered. Silent, untested
+//! protocol growth is therefore impossible.
 //!
 //! Honesty contract: an arm is `true` ONLY where a test in this workspace
 //! actually drives that variant through `TurnExecutor::execute` /
-//! `EmbeddedExecutor::submit_action` (per-app integration tests, the
-//! cross-app composition e2e, the lifecycle/obligation/escrow suites, and the
-//! #111–#116 apply-path tests). Where coverage is unconfirmed, the arm is
-//! conservatively `false` — under-claiming, never over-claiming. The runtime
-//! assertion ratchets: the not-yet-covered count may only shrink.
+//! `EmbeddedExecutor::submit_action` with real accept/reject assertions
+//! (the coverage_* suites, the cross-app composition e2e, the per-app
+//! integration suites, and the #111–#116 apply-path tests). Where coverage is
+//! unconfirmed, the arm is conservatively `false` — under-claiming, never
+//! over-claiming. The ratchets only shrink.
 //!
-//! Follow-ups (#142): extend the same forcing function to `Authorization`
-//! modes and `StateConstraint` variants, then wire into preflight (Pillar 3).
+//! This gate runs under `cargo test --workspace` (CI ci.yml), so it is
+//! enforced, not advisory (Pillar 3).
 
 use dregg_cell::StateConstraint;
 use dregg_turn::action::{Authorization, Effect};
@@ -57,67 +57,40 @@ fn effect_executor_coverage(e: &Effect) -> bool {
         Effect::Burn { .. } => true,                // integration_burn_receipt
         Effect::AttenuateCapability { .. } => true, // integration_attenuate_capability
         Effect::ReceiptArchive { .. } => true,      // integration_attestation_archive
+        // coverage_queue_effects.rs:
+        Effect::QueueAllocate { .. } => true,
+        Effect::QueueEnqueue { .. } => true,
+        Effect::QueueDequeue { .. } => true,
+        Effect::QueueResize { .. } => true,
+        Effect::QueueAtomicTx { .. } => true,
+        Effect::QueuePipelineStep { .. } => true,
+        // coverage_misc_effects.rs:
+        Effect::NoteCreate { .. } => true,
+        Effect::CreateSealPair { .. } => true,
+        Effect::Seal { .. } => true,
+        Effect::CreateCommittedEscrow { .. } => true,
+        Effect::ReleaseCommittedEscrow { .. } => true,
+        Effect::RefundCommittedEscrow { .. } => true,
+        Effect::BridgeFinalize { .. } => true,
+        Effect::BridgeCancel { .. } => true,
+        Effect::Introduce { .. } => true,
+        Effect::MakeSovereign { .. } => true,
+        Effect::CreateCellFromFactory { .. } => true,
+        Effect::SetPermissions { .. } => true,
+        Effect::Refusal { .. } => true,
 
-        // ── Not yet confirmed covered by an executor-invoking test ───────
-        // (#142 work-list — flip to true with the covering test as it lands)
-        Effect::SetPermissions { .. } => false,
-        Effect::NoteSpend { .. } => false,
-        Effect::NoteCreate { .. } => false,
-        Effect::CreateSealPair { .. } => false,
-        Effect::Seal { .. } => false,
-        Effect::Unseal { .. } => false,
-        Effect::BridgeFinalize { .. } => false,
-        Effect::BridgeCancel { .. } => false,
-        Effect::Introduce { .. } => false,
-        Effect::PipelinedSend { .. } => false,
-        Effect::CreateCommittedEscrow { .. } => false,
-        Effect::ReleaseCommittedEscrow { .. } => false,
-        Effect::RefundCommittedEscrow { .. } => false,
-        Effect::MakeSovereign { .. } => false,
-        Effect::CreateCellFromFactory { .. } => false,
-        Effect::QueueAllocate { .. } => false,
-        Effect::QueueEnqueue { .. } => false,
-        Effect::QueueDequeue { .. } => false,
-        Effect::QueueResize { .. } => false,
-        Effect::QueueAtomicTx { .. } => false,
-        Effect::QueuePipelineStep { .. } => false,
-        Effect::Refusal { .. } => false,
+        // ── Not yet covered: documented blockers (#142 work-list) ────────
+        Effect::NoteSpend { .. } => false,    // needs the real ZK spending-proof stack
+        Effect::Unseal { .. } => false,       // blocked on the apply_unseal bug (#144)
+        Effect::PipelinedSend { .. } => false, // only valid inside a pipeline resolution pass
     }
 }
 
-/// The set of `Effect` variant names currently classified not-yet-covered.
-/// This is the ratchet's source of truth and the #142 work-list. Keep it in
-/// sync with the `false` arms above (the exhaustive match guarantees no
-/// variant is omitted entirely).
-const NOT_YET_COVERED: &[&str] = &[
-    "SetPermissions",
-    "NoteSpend",
-    "NoteCreate",
-    "CreateSealPair",
-    "Seal",
-    "Unseal",
-    "BridgeFinalize",
-    "BridgeCancel",
-    "Introduce",
-    "PipelinedSend",
-    "CreateCommittedEscrow",
-    "ReleaseCommittedEscrow",
-    "RefundCommittedEscrow",
-    "MakeSovereign",
-    "CreateCellFromFactory",
-    "QueueAllocate",
-    "QueueEnqueue",
-    "QueueDequeue",
-    "QueueResize",
-    "QueueAtomicTx",
-    "QueuePipelineStep",
-    "Refusal",
-];
+/// `Effect` variants not yet exercised end-to-end (the #142 work-list).
+const NOT_YET_COVERED: &[&str] = &["NoteSpend", "Unseal", "PipelinedSend"];
 
-/// Ratchet: the number of `Effect` variants not yet exercised end-to-end may
-/// only DECREASE. When you add coverage, flip the arm to `true`, remove it
-/// from `NOT_YET_COVERED`, and lower this baseline. It must never rise.
-const MAX_UNCOVERED_EFFECTS: usize = 22;
+/// Ratchet: the number of not-yet-covered `Effect` variants may only DECREASE.
+const MAX_UNCOVERED_EFFECTS: usize = 3;
 
 #[test]
 fn effect_coverage_ratchet_only_shrinks() {
@@ -127,8 +100,7 @@ fn effect_coverage_ratchet_only_shrinks() {
         NOT_YET_COVERED.len(),
         MAX_UNCOVERED_EFFECTS
     );
-    // Touch the forcing function so it is compiled (and so adding a variant
-    // breaks the build here). RefreshDelegation is the unit variant.
+    // Touch the forcing function so adding a variant breaks the build here.
     assert!(effect_executor_coverage(&Effect::RefreshDelegation));
 }
 
@@ -137,8 +109,7 @@ fn effect_coverage_ratchet_only_shrinks() {
 // ============================================================================
 
 /// Returns `true` iff this `Authorization` mode is exercised end-to-end by at
-/// least one executor-invoking test. Exhaustive by design — adding an auth
-/// mode breaks compilation until classified. Same honesty contract as above.
+/// least one executor-invoking test. Exhaustive by design.
 fn authorization_executor_coverage(a: &Authorization) -> bool {
     match a {
         // Covered.
@@ -177,57 +148,73 @@ fn authorization_coverage_ratchet_only_shrinks() {
 /// Returns `true` iff this `StateConstraint` is enforced THROUGH THE EXECUTOR
 /// (a `submit_action`/`execute` test where the caveat actually gates a commit)
 /// — not merely unit-tested via a direct `CellProgram::evaluate` call.
-/// Exhaustive by design. Conservative: most caveats have rich direct-evaluate
-/// unit tests in `cell` but their executor-path enforcement is unconfirmed
-/// here, so they are `false` pending a confirming integration test (#142).
+/// Exhaustive by design.
 fn state_constraint_executor_coverage(c: &StateConstraint) -> bool {
     match c {
-        // Confirmed enforced via the executor commit path.
-        StateConstraint::Monotonic { .. } => true, // identity revocation-root rollback rejected (integration_issue_present_verify)
-        StateConstraint::MonotonicSequence { .. } => true, // subscription publish head (integration_publish_consume)
+        // Confirmed enforced via the executor commit path (coverage_state_constraints.rs
+        // accept+reject pairs, plus Monotonic/MonotonicSequence from the app suites).
+        StateConstraint::Monotonic { .. } => true,
+        StateConstraint::MonotonicSequence { .. } => true,
+        StateConstraint::FieldEquals { .. } => true,
+        StateConstraint::FieldGte { .. } => true,
+        StateConstraint::FieldLte { .. } => true,
+        StateConstraint::FieldLteField { .. } => true,
+        StateConstraint::SumEquals { .. } => true,
+        StateConstraint::SumEqualsAcross { .. } => true,
+        StateConstraint::WriteOnce { .. } => true,
+        StateConstraint::Immutable { .. } => true,
+        StateConstraint::StrictMonotonic { .. } => true,
+        StateConstraint::BoundedBy { .. } => true,
+        StateConstraint::FieldDelta { .. } => true,
+        StateConstraint::FieldDeltaInRange { .. } => true,
+        StateConstraint::RateLimit { .. } => true,
+        StateConstraint::RateLimitBySum { .. } => true,
+        StateConstraint::TemporalGate { .. } => true,
+        StateConstraint::PreimageGate { .. } => true,
+        StateConstraint::AllowedTransitions { .. } => true,
+        StateConstraint::AnyOf { .. } => true,
 
-        // Not yet confirmed enforced through the executor (#142 work-list).
-        StateConstraint::FieldEquals { .. } => false,
-        StateConstraint::FieldGte { .. } => false,
-        StateConstraint::FieldLte { .. } => false,
-        StateConstraint::FieldLteField { .. } => false,
-        StateConstraint::SumEquals { .. } => false,
-        StateConstraint::WriteOnce { .. } => false,
-        StateConstraint::Immutable { .. } => false,
-        StateConstraint::StrictMonotonic { .. } => false,
-        StateConstraint::BoundedBy { .. } => false,
-        StateConstraint::FieldDelta { .. } => false,
-        StateConstraint::FieldDeltaInRange { .. } => false,
-        StateConstraint::FieldGteHeight { .. } => false,
-        StateConstraint::FieldLteHeight { .. } => false,
-        StateConstraint::SumEqualsAcross { .. } => false,
-        StateConstraint::SenderAuthorized { .. } => false,
-        StateConstraint::CapabilityUniqueness { .. } => false,
-        StateConstraint::RateLimit { .. } => false,
-        StateConstraint::RateLimitBySum { .. } => false,
-        StateConstraint::TemporalGate { .. } => false,
-        StateConstraint::PreimageGate { .. } => false,
-        StateConstraint::AllowedTransitions { .. } => false,
-        StateConstraint::TemporalPredicate { .. } => false,
-        StateConstraint::BoundDelta { .. } => false,
-        StateConstraint::AnyOf { .. } => false,
-        StateConstraint::Witnessed { .. } => false,
-        StateConstraint::Renounced { .. } => false,
-        StateConstraint::Custom { .. } => false,
+        // Not yet enforced/confirmed through the executor (#142 work-list):
+        StateConstraint::FieldGteHeight { .. } => false, // not attempted (height-relative)
+        StateConstraint::FieldLteHeight { .. } => false, // not attempted (height-relative)
+        StateConstraint::SenderAuthorized { .. } => false, // needs witness registry verifier
+        StateConstraint::CapabilityUniqueness { .. } => false, // evaluator is a no-op (#143)
+        StateConstraint::TemporalPredicate { .. } => false, // needs witness registry
+        StateConstraint::BoundDelta { .. } => false,        // cross-cell, not wired in embedded
+        StateConstraint::Witnessed { .. } => false,         // needs witness registry
+        StateConstraint::Renounced { .. } => false,         // needs witness registry
+        StateConstraint::Custom { .. } => false,            // needs ir/descriptor verifier
     }
 }
 
+/// `StateConstraint` variants not yet executor-enforced (the #142 work-list).
+const NOT_YET_COVERED_CONSTRAINTS: &[&str] = &[
+    "FieldGteHeight",
+    "FieldLteHeight",
+    "SenderAuthorized",
+    "CapabilityUniqueness",
+    "TemporalPredicate",
+    "BoundDelta",
+    "Witnessed",
+    "Renounced",
+    "Custom",
+];
+
 /// Ratchet for StateConstraint executor-enforcement coverage — may only shrink.
-const MAX_UNCOVERED_CONSTRAINTS: usize = 27;
+const MAX_UNCOVERED_CONSTRAINTS: usize = 9;
 
 #[test]
 fn state_constraint_coverage_ratchet_only_shrinks() {
-    // Count the `false` arms by exercising the classifier over a representative
-    // instance of each variant would require constructing all 29; instead the
-    // exhaustive match above is the completeness guarantee, and this baseline
-    // is maintained alongside it. Touch the classifier so it compiles.
+    assert!(
+        NOT_YET_COVERED_CONSTRAINTS.len() <= MAX_UNCOVERED_CONSTRAINTS,
+        "not-yet-covered StateConstraint count {} exceeds baseline {} — coverage regressed",
+        NOT_YET_COVERED_CONSTRAINTS.len(),
+        MAX_UNCOVERED_CONSTRAINTS
+    );
+    // Touch the classifier: a covered and an uncovered variant.
     assert!(state_constraint_executor_coverage(&StateConstraint::Monotonic { index: 0 }));
-    assert!(!state_constraint_executor_coverage(&StateConstraint::WriteOnce { index: 0 }));
-    // 2 of 29 confirmed → 27 not-yet; baseline must never rise.
-    assert_eq!(MAX_UNCOVERED_CONSTRAINTS, 27);
+    assert!(!state_constraint_executor_coverage(&StateConstraint::FieldGteHeight {
+        index: 0,
+        offset: 0
+    }));
 }
