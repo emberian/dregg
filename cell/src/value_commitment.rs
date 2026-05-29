@@ -269,6 +269,159 @@ pub fn prove_conservation_bytes(
     }
 }
 
+/// Result of [`prove_conservation_with_range_bytes`]: the value commitments
+/// plus the full conservation proof (Schnorr excess + one Bulletproof range
+/// proof per output). The range proofs are returned as raw, variable-length
+/// byte vectors (the serialized `bulletproofs::RangeProof`, ~672 bytes each)
+/// so a wasm caller can marshal them as hex without touching curve25519-dalek
+/// or the bulletproofs API directly.
+#[derive(Clone, Debug)]
+pub struct FullConservationProofBytes {
+    /// Compressed Ristretto encoding of each input value commitment, in order.
+    pub input_commitments: Vec<[u8; 32]>,
+    /// Compressed Ristretto encoding of each output value commitment, in order.
+    pub output_commitments: Vec<[u8; 32]>,
+    /// The canonical Schnorr conservation proof (excess / nonce / response).
+    pub conservation: ConservationProof,
+    /// One serialized Bulletproof range proof per output, same order as
+    /// `output_commitments`.
+    pub output_range_proofs: Vec<Vec<u8>>,
+}
+
+/// Build value commitments for a balanced transaction and produce the FULL
+/// conservation proof (Schnorr excess + per-output Bulletproof range proofs) —
+/// all in terms of raw bytes.
+///
+/// This is the range-checked counterpart to [`prove_conservation_bytes`]. Each
+/// output additionally gets a real `bulletproofs::RangeProof` over `[0, 2^64)`,
+/// which is exactly what closes the "negative value (mod-order wrap)" inflation
+/// attack that the Schnorr-excess proof alone cannot detect.
+///
+/// Each input/output is `(value, blinding_bytes)`. The excess blinding factor
+/// is computed internally as `Σ input_blindings − Σ output_blindings`.
+pub fn prove_conservation_with_range_bytes(
+    inputs: &[(u64, [u8; 32])],
+    outputs: &[(u64, [u8; 32])],
+    message: &[u8],
+) -> FullConservationProofBytes {
+    let input_commitments: Vec<ValueCommitment> = inputs
+        .iter()
+        .map(|(v, b)| ValueCommitment::commit(*v, &scalar_from_blinding_bytes(b)))
+        .collect();
+    let output_commitments: Vec<ValueCommitment> = outputs
+        .iter()
+        .map(|(v, b)| ValueCommitment::commit(*v, &scalar_from_blinding_bytes(b)))
+        .collect();
+
+    let sum_in = inputs
+        .iter()
+        .fold(Scalar::ZERO, |acc, (_, b)| acc + scalar_from_blinding_bytes(b));
+    let sum_out = outputs
+        .iter()
+        .fold(Scalar::ZERO, |acc, (_, b)| acc + scalar_from_blinding_bytes(b));
+    let excess_blinding = sum_in - sum_out;
+
+    let output_values: Vec<u64> = outputs.iter().map(|(v, _)| *v).collect();
+    let output_blindings: Vec<Scalar> = outputs
+        .iter()
+        .map(|(_, b)| scalar_from_blinding_bytes(b))
+        .collect();
+
+    let full = prove_conservation_with_range(
+        &input_commitments,
+        &output_commitments,
+        &output_values,
+        &output_blindings,
+        &excess_blinding,
+        message,
+    );
+
+    FullConservationProofBytes {
+        input_commitments: input_commitments.iter().map(|c| c.to_bytes().0).collect(),
+        output_commitments: output_commitments.iter().map(|c| c.to_bytes().0).collect(),
+        conservation: full.conservation,
+        output_range_proofs: full
+            .output_range_proofs
+            .into_iter()
+            .map(|rp| rp.proof_bytes)
+            .collect(),
+    }
+}
+
+/// Produce a standalone Bulletproof range proof for a single value, returning
+/// `(commitment_bytes, range_proof_bytes)`. Byte-in / byte-out form of
+/// [`BulletproofRangeProof::prove_range`] for FFI / wasm callers: the commitment
+/// is the canonical 32-byte compressed Ristretto encoding and the range proof is
+/// the serialized `bulletproofs::RangeProof` (~672 bytes).
+pub fn prove_range_bytes(value: u64, blinding: &[u8; 32]) -> ([u8; 32], Vec<u8>) {
+    let scalar = scalar_from_blinding_bytes(blinding);
+    let commitment = ValueCommitment::commit(value, &scalar);
+    let proof = BulletproofRangeProof::prove_range(value, &scalar);
+    (commitment.to_bytes().0, proof.proof_bytes)
+}
+
+/// Verify a standalone Bulletproof range proof against a commitment, byte-in.
+/// Returns `Ok(())` iff the committed value is a valid 64-bit value in
+/// `[0, 2^64)`. Fails closed on a non-point commitment or malformed/out-of-range
+/// proof.
+pub fn verify_range_bytes(
+    commitment: &[u8; 32],
+    range_proof: &[u8],
+) -> Result<(), RangeProofError> {
+    let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(*commitment))
+        .ok_or(RangeProofError::Malformed)?;
+    let proof = BulletproofRangeProof {
+        proof_bytes: range_proof.to_vec(),
+    };
+    proof.verify_range(&vc)
+}
+
+/// Verify a FULL conservation proof (Schnorr excess + per-output range proofs)
+/// from raw bytes. Returns `Ok(())` only if BOTH the value-balance relation and
+/// every output's Bulletproof range proof verify.
+///
+/// - `input_commitments` / `output_commitments`: 32-byte compressed Ristretto
+///   encodings (any non-canonical / non-point input fails closed).
+/// - `conservation`: the canonical Schnorr `ConservationProof`.
+/// - `output_range_proofs`: one serialized Bulletproof per output, same order
+///   as `output_commitments`. A wrong count, malformed proof, or out-of-range
+///   value fails closed.
+///
+/// This is the byte-in verifier the wasm binding uses to surface
+/// `range_proofs_checked: true` with a real cryptographic basis.
+pub fn verify_full_conservation_bytes(
+    input_commitments: &[[u8; 32]],
+    output_commitments: &[[u8; 32]],
+    conservation: &ConservationProof,
+    output_range_proofs: &[Vec<u8>],
+    message: &[u8],
+) -> Result<(), FullConservationError> {
+    fn decode(list: &[[u8; 32]]) -> Result<Vec<ValueCommitment>, FullConservationError> {
+        list.iter()
+            .map(|b| {
+                ValueCommitment::from_bytes(&ValueCommitmentBytes(*b)).ok_or(
+                    FullConservationError::Conservation(ConservationError::InvalidExcessPoint),
+                )
+            })
+            .collect()
+    }
+
+    let inputs = decode(input_commitments)?;
+    let outputs = decode(output_commitments)?;
+
+    let proof = FullConservationProof {
+        conservation: conservation.clone(),
+        output_range_proofs: output_range_proofs
+            .iter()
+            .map(|b| BulletproofRangeProof {
+                proof_bytes: b.clone(),
+            })
+            .collect(),
+    };
+
+    verify_conservation_with_range(&inputs, &outputs, &proof, message)
+}
+
 impl Add for ValueCommitment {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
@@ -1495,6 +1648,117 @@ mod tests {
             Err(ConservationError::SignatureInvalid),
             "non-conserving (inflating) byte-roundtrip proof must fail closed"
         );
+    }
+
+    #[test]
+    fn prove_verify_range_bytes_roundtrip() {
+        let blinding = [9u8; 32];
+        let (commitment, proof) = prove_range_bytes(123_456u64, &blinding);
+        assert!(proof.len() > 100, "range proof too small: {}", proof.len());
+        assert!(verify_range_bytes(&commitment, &proof).is_ok());
+
+        // Wrong commitment fails closed.
+        let (other_commitment, _) = prove_range_bytes(999u64, &[3u8; 32]);
+        assert_eq!(
+            verify_range_bytes(&other_commitment, &proof),
+            Err(RangeProofError::VerificationFailed)
+        );
+
+        // Tampered proof bytes fail closed (malformed).
+        let mut tampered = proof.clone();
+        let n = tampered.len();
+        tampered[n - 1] ^= 0xff;
+        assert!(verify_range_bytes(&commitment, &tampered).is_err());
+
+        // Non-point commitment fails closed.
+        assert_eq!(
+            verify_range_bytes(&[0xFFu8; 32], &proof),
+            Err(RangeProofError::Malformed)
+        );
+    }
+
+    #[test]
+    fn full_conservation_with_range_bytes_roundtrip() {
+        // 1000 input == 700 transfer + 300 change. Real generate -> verify
+        // including per-output Bulletproof range proofs, all via the byte API.
+        let inputs = [(1000u64, [1u8; 32])];
+        let outputs = [(700u64, [2u8; 32]), (300u64, [3u8; 32])];
+        let msg = b"full-bytes-roundtrip";
+
+        let out = prove_conservation_with_range_bytes(&inputs, &outputs, msg);
+        assert_eq!(out.input_commitments.len(), 1);
+        assert_eq!(out.output_commitments.len(), 2);
+        assert_eq!(out.output_range_proofs.len(), 2);
+        // Each range proof should be a non-trivial Bulletproof (~672 bytes).
+        for rp in &out.output_range_proofs {
+            assert!(rp.len() > 100, "range proof unexpectedly small: {}", rp.len());
+        }
+
+        assert!(
+            verify_full_conservation_bytes(
+                &out.input_commitments,
+                &out.output_commitments,
+                &out.conservation,
+                &out.output_range_proofs,
+                msg,
+            )
+            .is_ok(),
+            "balanced + in-range byte-roundtrip full proof must verify"
+        );
+    }
+
+    #[test]
+    fn full_conservation_with_range_bytes_negative_output_rejected() {
+        // Adversarial: attacker wants input 100 -> outputs (1_000_100 legit) +
+        // (negative attack) so the excess still balances in the scalar field.
+        // The "negative" output cannot be expressed via the (u64, blinding) byte
+        // API at all — prove_range only accepts a u64 — so the attacker is forced
+        // to forge. We construct the attack commitment directly and pair the
+        // honest range proofs the attacker COULD produce (for the legit output)
+        // against the attack commitment. verify_full_conservation_bytes must
+        // reject because the range proof does not match the attack commitment.
+        let r_in = test_scalar(130);
+        let r_out_legit = test_scalar(131);
+        let r_out_attack = test_scalar(132);
+
+        let input_value = 100u64;
+        let inflated_value = 1_000_100u64;
+
+        let inputs = vec![ValueCommitment::commit(input_value, &r_in)];
+        let output_legit = ValueCommitment::commit(inflated_value, &r_out_legit);
+        let negative_scalar = Scalar::from(input_value) - Scalar::from(inflated_value);
+        let output_attack = ValueCommitment {
+            point: negative_scalar * value_generator() + r_out_attack * randomness_generator(),
+        };
+
+        let in_bytes = vec![inputs[0].to_bytes().0];
+        let out_bytes = vec![output_legit.to_bytes().0, output_attack.to_bytes().0];
+
+        let excess_blinding = r_in - (r_out_legit + r_out_attack);
+        let conservation =
+            prove_conservation(&inputs, &[output_legit.clone(), output_attack.clone()], &excess_blinding, b"attack-bytes");
+
+        // Attacker's best range proofs: a real one for the legit output, and
+        // (necessarily) a bogus one for the attack output — we reuse the legit
+        // proof, which cannot verify against the attack commitment.
+        let legit_rp = BulletproofRangeProof::prove_range(inflated_value, &r_out_legit);
+        let range_proofs = vec![legit_rp.proof_bytes.clone(), legit_rp.proof_bytes.clone()];
+
+        let result = verify_full_conservation_bytes(
+            &in_bytes,
+            &out_bytes,
+            &conservation,
+            &range_proofs,
+            b"attack-bytes",
+        );
+        assert!(
+            result.is_err(),
+            "negative-value attack must be rejected by range proofs"
+        );
+        match result {
+            Err(FullConservationError::RangeProofFailed { output_index: 1, .. }) => {}
+            other => panic!("expected RangeProofFailed at output 1, got {:?}", other),
+        }
     }
 
     #[test]

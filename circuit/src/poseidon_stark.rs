@@ -705,6 +705,88 @@ fn fri_commit_poseidon(
 }
 
 // ============================================================================
+// Fiat-Shamir challenge replay (for in-circuit verifier)
+// ============================================================================
+
+/// The Fiat-Shamir challenges a verifier derives from a `PoseidonStarkProof`.
+///
+/// This is the canonical, transcript-bound set of challenges the in-circuit
+/// Kimchi verifier must use. `fri_betas[i]` is the folding challenge for FRI
+/// layer transition `i` (matching the order in [`verify_poseidon`] and
+/// [`fri_commit_poseidon`]): `beta_i` is squeezed *before* FRI commitment `i`
+/// is absorbed, so the betas are bound to all prior commitments exactly as the
+/// prover bound them.
+#[cfg(feature = "mina")]
+#[derive(Clone, Debug)]
+pub(crate) struct PoseidonStarkChallenges {
+    /// Constraint random-combination challenge (squeezed after trace commitment
+    /// + public inputs are absorbed).
+    pub alpha: BabyBear,
+    /// Per-layer FRI folding challenges, in transition order.
+    pub fri_betas: Vec<BabyBear>,
+}
+
+/// Replay the Fiat-Shamir transcript over a `PoseidonStarkProof` and return the
+/// challenges (`alpha`, `fri_betas`) the verifier is bound to.
+///
+/// This performs EXACTLY the same absorb/squeeze sequence as the prover
+/// ([`prove_poseidon_with_nonce`]) and standalone verifier ([`verify_poseidon`])
+/// up to and including the FRI beta-squeeze loop. Exposed `pub(crate)` so the
+/// Kimchi verifier circuit (`poseidon_stark_verifier_circuit`) can derive the
+/// SAME `beta` the prover used for the in-circuit FRI fold check, rather than a
+/// hardcoded placeholder.
+///
+/// `constraint_degree` must be the AIR's constraint degree (the proof does not
+/// store it directly; the blowup is `constraint_degree.next_power_of_two().max(MIN_BLOWUP)`).
+#[cfg(feature = "mina")]
+pub(crate) fn derive_challenges(
+    proof: &PoseidonStarkProof,
+    constraint_degree: usize,
+) -> PoseidonStarkChallenges {
+    let blowup = blowup_for_degree(constraint_degree);
+    let num_rows = proof.trace_len;
+
+    let mut transcript = PoseidonTranscript::new(b"poseidon-stark-v1");
+
+    // AIR domain separation — must mirror prove_poseidon_with_nonce exactly.
+    transcript.absorb_bytes(proof.air_name.as_bytes());
+    transcript.absorb_fp(Fp::from(num_rows as u64));
+    transcript.absorb_fp(Fp::from(proof.num_cols as u64));
+    transcript.absorb_fp(Fp::from(constraint_degree as u64));
+    transcript.absorb_fp(Fp::from(blowup as u64));
+    transcript.absorb_fp(Fp::from(NUM_QUERIES as u64));
+
+    // Temporal binding.
+    if let Some(ref n) = proof.nonce {
+        transcript.absorb_bytes(n);
+    }
+
+    // Trace commitment.
+    transcript.absorb_fp(proof.trace_commitment.fp());
+
+    // Public inputs.
+    transcript.absorb_fp(Fp::from(proof.public_inputs.len() as u64));
+    for &pi in &proof.public_inputs {
+        transcript.absorb_babybear(BabyBear::new_canonical(pi));
+    }
+
+    // alpha (random combination challenge).
+    let alpha = transcript.squeeze_babybear();
+
+    // Constraint commitment.
+    transcript.absorb_fp(proof.constraint_commitment.fp());
+
+    // FRI betas: squeeze beta_i, THEN absorb commitment_i (prover order).
+    let mut fri_betas = Vec::with_capacity(proof.fri_commitments.len());
+    for commitment in &proof.fri_commitments {
+        fri_betas.push(transcript.squeeze_babybear());
+        transcript.absorb_fp(commitment.fp());
+    }
+
+    PoseidonStarkChallenges { alpha, fri_betas }
+}
+
+// ============================================================================
 // Verifier
 // ============================================================================
 

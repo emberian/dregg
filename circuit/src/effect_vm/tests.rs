@@ -11,6 +11,16 @@ fn make_initial_state(balance: u64) -> CellState {
     CellState::new(balance, 0)
 }
 
+/// 8-limb widened-hash test value: low limb carries `x`, high limbs zero.
+/// Mirrors the `bytes32_to_8_limbs` projection used for the 32-byte-widened
+/// hash params (effect-vm-hash-widen lane). The AIR anchors limb[0]; all 8
+/// limbs bind via compute_effects_hash.
+fn w8(x: u32) -> [BabyBear; 8] {
+    let mut a = [BabyBear::ZERO; 8];
+    a[0] = BabyBear::new(x);
+    a
+}
+
 /// Helper: generate trace, prove, verify, and check per-row constraints.
 fn assert_effect_vm_roundtrip(
     state: &CellState,
@@ -498,7 +508,7 @@ fn test_stage3_multi_variant_compose() {
             vk_hash: BabyBear::new(0xE3),
         },
         Effect::CreateSealPair {
-            pair_hash: BabyBear::new(0xE4),
+            pair_hash: w8(0xE4),
         },
         Effect::RefreshDelegation,
         Effect::RevokeDelegation {
@@ -526,19 +536,19 @@ fn test_stage3_multi_variant_compose() {
             finalize_hash: BabyBear::new(0xEC),
         },
         Effect::ReleaseEscrow {
-            escrow_id_hash: BabyBear::new(0xED),
+            escrow_id_hash: w8(0xED),
         },
         Effect::RefundEscrow {
-            escrow_id_hash: BabyBear::new(0xEE),
+            escrow_id_hash: w8(0xEE),
         },
         Effect::CreateCommittedEscrow {
-            commit_hash: BabyBear::new(0xEF),
+            commit_hash: w8(0xEF),
         },
         Effect::ReleaseCommittedEscrow {
-            commit_hash: BabyBear::new(0xF0),
+            commit_hash: w8(0xF0),
         },
         Effect::RefundCommittedEscrow {
-            commit_hash: BabyBear::new(0xF1),
+            commit_hash: w8(0xF1),
         },
         // Balance arithmetic:
         Effect::CreateEscrow {
@@ -618,7 +628,7 @@ fn test_passthrough_variants_verify() {
     // EmitEvent passthrough shape. One round-trip each.
     for effect in [
         Effect::CreateSealPair {
-            pair_hash: BabyBear::new(0x111),
+            pair_hash: w8(0x111),
         },
         Effect::RefreshDelegation,
         Effect::RevokeDelegation {
@@ -3917,8 +3927,8 @@ fn test_burn_forged_flag_rejected() {
 fn test_cell_destroy_happy_path() {
     let state = make_initial_state(700);
     let effect = Effect::CellDestroy {
-        target_hash: BabyBear::new(0xDEAD),
-        death_certificate_hash: BabyBear::new(0xC0DE),
+        target_hash: w8(0xDEAD),
+        death_certificate_hash: w8(0xC0DE),
     };
     let (trace, _public_inputs, _air) =
         assert_single_effect_roundtrip(&state, effect, "CellDestroy happy path");
@@ -3961,8 +3971,8 @@ fn test_cell_destroy_forged_passthrough_rejected() {
     // constraint rejects.
     let state = make_initial_state(700);
     let effects = vec![Effect::CellDestroy {
-        target_hash: BabyBear::new(0xDEAD),
-        death_certificate_hash: BabyBear::new(0xC0DE),
+        target_hash: w8(0xDEAD),
+        death_certificate_hash: w8(0xC0DE),
     }];
     let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
     let cd_row = trace
@@ -3989,8 +3999,8 @@ fn test_cell_destroy_forged_passthrough_rejected() {
 fn test_attenuate_capability_happy_path() {
     let state = make_initial_state(500);
     let effect = Effect::AttenuateCapability {
-        cap_slot_hash: BabyBear::new(0x510),
-        narrower_commitment: BabyBear::new(0xA110),
+        cap_slot_hash: w8(0x510),
+        narrower_commitment: w8(0xA110),
     };
     let (trace, _public_inputs, _air) =
         assert_single_effect_roundtrip(&state, effect, "AttenuateCapability happy path");
@@ -4031,8 +4041,8 @@ fn test_attenuate_capability_forged_cap_root_rejected() {
     // constraint must reject.
     let state = make_initial_state(500);
     let effects = vec![Effect::AttenuateCapability {
-        cap_slot_hash: BabyBear::new(0x510),
-        narrower_commitment: BabyBear::new(0xA110),
+        cap_slot_hash: w8(0x510),
+        narrower_commitment: w8(0xA110),
     }];
     let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
     let attn_row = trace
@@ -4067,8 +4077,8 @@ fn test_attenuate_capability_forged_cap_root_rejected() {
 fn test_cell_seal_happy_path() {
     let state = make_initial_state(300);
     let effect = Effect::CellSeal {
-        target: BabyBear::new(0x0CE1_15EA),
-        reason_hash: BabyBear::new(0xEA50_0001),
+        target: w8(0x0CE1_15EA),
+        reason_hash: w8(0xEA50_0001),
     };
     let (trace, _public_inputs, _air) =
         assert_single_effect_roundtrip(&state, effect, "CellSeal happy path");
@@ -4112,8 +4122,8 @@ fn test_cell_seal_forged_balance_rejected() {
     // Adversary: claim CellSeal debited balance. Passthrough constraint rejects.
     let state = make_initial_state(300);
     let effects = vec![Effect::CellSeal {
-        target: BabyBear::new(0x0CE1_15EA),
-        reason_hash: BabyBear::new(0xEA50_0001),
+        target: w8(0x0CE1_15EA),
+        reason_hash: w8(0xEA50_0001),
     }];
     let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
     let cs_row = trace
@@ -4138,7 +4148,7 @@ fn test_cell_seal_forged_balance_rejected() {
 fn test_cell_unseal_happy_path() {
     let state = make_initial_state(400);
     let effect = Effect::CellUnseal {
-        target: BabyBear::new(0x005EA1ED),
+        target: w8(0x005EA1ED),
     };
     let (trace, _public_inputs, _air) =
         assert_single_effect_roundtrip(&state, effect, "CellUnseal happy path");
@@ -4191,7 +4201,7 @@ fn test_cell_unseal_forged_target_rejected() {
     // the row inconsistent.
     let state = make_initial_state(400);
     let effects = vec![Effect::CellUnseal {
-        target: BabyBear::new(0x005EA1ED),
+        target: w8(0x005EA1ED),
     }];
     let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
     let cu_row = trace
@@ -4216,9 +4226,9 @@ fn test_cell_unseal_forged_target_rejected() {
 fn test_receipt_archive_happy_path() {
     let state = make_initial_state(500);
     let effect = Effect::ReceiptArchive {
-        target: BabyBear::new(0xABC1_DEF2),
+        target: w8(0xABC1_DEF2),
         archive_end_height: BabyBear::new(1234),
-        terminal_receipt_hash: BabyBear::new(0xFEED_DEAD),
+        terminal_receipt_hash: w8(0xFEED_DEAD),
     };
     let (trace, _public_inputs, _air) =
         assert_single_effect_roundtrip(&state, effect, "ReceiptArchive happy path");
@@ -4267,9 +4277,9 @@ fn test_receipt_archive_forged_cap_root_rejected() {
     // The passthrough constraint rejects.
     let state = make_initial_state(500);
     let effects = vec![Effect::ReceiptArchive {
-        target: BabyBear::new(0xABC1_DEF2),
+        target: w8(0xABC1_DEF2),
         archive_end_height: BabyBear::new(1234),
-        terminal_receipt_hash: BabyBear::new(0xFEED_DEAD),
+        terminal_receipt_hash: w8(0xFEED_DEAD),
     }];
     let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
     let ra_row = trace
@@ -4295,8 +4305,8 @@ fn test_receipt_archive_forged_cap_root_rejected() {
 fn test_refusal_happy_path() {
     let state = make_initial_state(200);
     let effect = Effect::Refusal {
-        target: BabyBear::new(0x0DEC_1337),
-        reason_hash: BabyBear::new(0x2025_0101),
+        target: w8(0x0DEC_1337),
+        reason_hash: w8(0x2025_0101),
     };
     let (trace, _public_inputs, _air) =
         assert_single_effect_roundtrip(&state, effect, "Refusal happy path");
@@ -4339,8 +4349,8 @@ fn test_refusal_forged_balance_rejected() {
     // Adversary: claim Refusal debited balance. Passthrough constraint rejects.
     let state = make_initial_state(200);
     let effects = vec![Effect::Refusal {
-        target: BabyBear::new(0x0DEC_1337),
-        reason_hash: BabyBear::new(0x2025_0101),
+        target: w8(0x0DEC_1337),
+        reason_hash: w8(0x2025_0101),
     }];
     let (mut trace, public_inputs) = generate_effect_vm_trace(&state, &effects);
     let rf_row = trace

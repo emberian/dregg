@@ -4858,6 +4858,17 @@ impl AgentCipherclerk {
             dregg_circuit::effect_vm::fold_bytes32_to_bb(h)
         }
 
+        // 32-byte widening (effect-vm-hash-widen lane, 2026-05-28): full
+        // 256-bit binding path for hash params widened to `[BabyBear; 8]`
+        // (CreateSealPair, *Escrow, CellSeal, etc.). Delegates to the SAME
+        // shared circuit helper the executor projector calls, so both emit
+        // byte-for-byte identical 8-limb encodings (protocol-tests differential
+        // invariant). Each limb is a 4-byte little-endian chunk; all 8 are
+        // absorbed by compute_effects_hash.
+        fn hash_to_8(h: &[u8; 32]) -> [BabyBear; 8] {
+            dregg_circuit::effect_vm::bytes32_to_8_limbs(h)
+        }
+
         // #110: full 32-byte → 8-felt projection (4 bytes per felt,
         // little-endian). Used for EmitEvent topic_hash / payload_hash and
         // related event-shaped variants that need full ~256-bit binding.
@@ -5167,7 +5178,7 @@ impl AgentCipherclerk {
                     hasher.update(unsealer_holder.as_bytes());
                     let pair_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::CreateSealPair {
-                        pair_hash: hash_to_bb(pair_hash_bytes.as_bytes()),
+                        pair_hash: hash_to_8(pair_hash_bytes.as_bytes()),
                     });
                 }
 
@@ -5309,12 +5320,12 @@ impl AgentCipherclerk {
                 }
                 Effect::ReleaseEscrow { escrow_id, .. } => {
                     vm_effects.push(VmEffect::ReleaseEscrow {
-                        escrow_id_hash: hash_to_bb(escrow_id),
+                        escrow_id_hash: hash_to_8(escrow_id),
                     });
                 }
                 Effect::RefundEscrow { escrow_id, .. } => {
                     vm_effects.push(VmEffect::RefundEscrow {
-                        escrow_id_hash: hash_to_bb(escrow_id),
+                        escrow_id_hash: hash_to_8(escrow_id),
                     });
                 }
                 Effect::CreateCommittedEscrow {
@@ -5331,7 +5342,7 @@ impl AgentCipherclerk {
                     hasher.update(condition_commitment);
                     let commit_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::CreateCommittedEscrow {
-                        commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
+                        commit_hash: hash_to_8(commit_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::ReleaseCommittedEscrow {
@@ -5344,7 +5355,7 @@ impl AgentCipherclerk {
                     hasher.update(recipient.as_bytes());
                     let commit_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::ReleaseCommittedEscrow {
-                        commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
+                        commit_hash: hash_to_8(commit_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::RefundCommittedEscrow {
@@ -5355,7 +5366,7 @@ impl AgentCipherclerk {
                     hasher.update(creator.as_bytes());
                     let commit_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::RefundCommittedEscrow {
-                        commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
+                        commit_hash: hash_to_8(commit_hash_bytes.as_bytes()),
                     });
                 }
 

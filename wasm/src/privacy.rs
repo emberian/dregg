@@ -324,10 +324,15 @@ pub fn create_value_commitment(amount: u64, blinding: &[u8]) -> Result<JsValue, 
 /// }
 /// ```
 ///
-/// Soundness note (matches the verifier): this proves only the Schnorr excess
-/// relation (value balance). It does NOT attach Bulletproof range proofs, so a
-/// `valid: true` from the verifier means "the excess balances", not "every
-/// output is non-negative". Range proofs remain a separate, real gap.
+/// Soundness note: this binding now produces the FULL conservation proof —
+/// the Schnorr excess relation (value balance) AND one real Bulletproof range
+/// proof per output (`[0, 2^64)`). The returned `output_range_proofs` are
+/// hex-encoded serialized `bulletproofs::RangeProof`s. When fed back to
+/// `verify_conservation_proof`, a `valid: true` with `range_proofs_checked:
+/// true` means both "the excess balances" AND "every output is a non-negative
+/// 64-bit value" — i.e. the negative-value (mod-order wrap) inflation attack is
+/// ruled out. The Bulletproofs verifier runs natively on wasm32 (bulletproofs
+/// v5 over curve25519-dalek compiles to wasm32-unknown-unknown).
 #[wasm_bindgen]
 pub fn prove_conservation(
     inputs_json: &str,
@@ -366,7 +371,10 @@ pub fn prove_conservation(
         decode_hex_vec(message_hex).map_err(|e| JsError::new(&format!("message_hex: {e}")))?
     };
 
-    let out = dregg_cell::value_commitment::prove_conservation_bytes(&inputs, &outputs, &message);
+    // Full proof: Schnorr excess + per-output Bulletproof range proofs.
+    let out = dregg_cell::value_commitment::prove_conservation_with_range_bytes(
+        &inputs, &outputs, &message,
+    );
 
     #[derive(Serialize)]
     struct ProofJson {
@@ -379,6 +387,10 @@ pub fn prove_conservation(
         input_commitments: Vec<String>,
         output_commitments: Vec<String>,
         proof: ProofJson,
+        /// One hex-encoded serialized Bulletproof per output (same order as
+        /// `output_commitments`). Feed straight back to
+        /// `verify_conservation_proof` to flip `range_proofs_checked` true.
+        output_range_proofs: Vec<String>,
         message_hex: String,
     }
 
@@ -390,10 +402,15 @@ pub fn prove_conservation(
             .map(|b| hex_encode(b))
             .collect(),
         proof: ProofJson {
-            excess_commitment: hex_encode(&out.proof.excess_commitment),
-            nonce_commitment: hex_encode(&out.proof.nonce_commitment),
-            response: hex_encode(&out.proof.response),
+            excess_commitment: hex_encode(&out.conservation.excess_commitment),
+            nonce_commitment: hex_encode(&out.conservation.nonce_commitment),
+            response: hex_encode(&out.conservation.response),
         },
+        output_range_proofs: out
+            .output_range_proofs
+            .iter()
+            .map(|b| hex_encode(b))
+            .collect(),
         message_hex: message_hex.to_string(),
     };
     Ok(serde_wasm_bindgen::to_value(&result)?)
@@ -422,18 +439,31 @@ pub fn prove_conservation(
 ///   empty string for an unbound proof. MUST match the message the prover
 ///   signed or verification fails closed.
 ///
+/// - `output_range_proofs_json` (OPTIONAL): pass `null`/`undefined` to verify
+///   the Schnorr excess relation only (`range_proofs_checked: false`). Pass a
+///   JSON array of hex-encoded serialized Bulletproof range proofs (one per
+///   output, same order as `output_commitments`, exactly as produced by
+///   `prove_conservation`'s `output_range_proofs`) to additionally verify that
+///   every output is a non-negative 64-bit value. When present and valid,
+///   `range_proofs_checked` is `true`.
+///
 /// # Soundness / fail-closed
 ///
-/// This binding verifies ONLY the Schnorr excess relation (value
-/// conservation). It does NOT verify the per-output Bulletproof range proofs
-/// that prevent the "negative value" inflation attack — those live in
-/// `FullConservationProof::output_range_proofs` and require the `bulletproofs`
-/// verifier, which is *not* reachable from this minimal binding. We therefore
-/// surface `range_proofs_checked: false` so callers MUST NOT treat a `valid:
-/// true` here as a complete conservation guarantee for untrusted outputs; it
-/// proves the excess balances, not that every output is non-negative. Any
-/// malformed point, non-canonical scalar, message mismatch, or unbalanced
-/// excess yields `valid: false` with a precise `error`.
+/// When `output_range_proofs_json` is provided, this binding verifies the FULL
+/// conservation proof: the Schnorr excess relation (value balance) AND a real
+/// per-output Bulletproof range proof (`[0, 2^64)`), via
+/// `dregg_cell::value_commitment::verify_full_conservation_bytes`. A `valid:
+/// true` with `range_proofs_checked: true` therefore rules out the
+/// negative-value (mod-order wrap) inflation attack. The Bulletproofs verifier
+/// runs natively on wasm32 (bulletproofs v5 over curve25519-dalek).
+///
+/// When omitted, it verifies ONLY the Schnorr excess relation and surfaces
+/// `range_proofs_checked: false` — `valid: true` then means "the excess
+/// balances", not "every output is non-negative".
+///
+/// Any malformed point, non-canonical scalar, message mismatch, wrong range
+/// proof count, malformed/out-of-range Bulletproof, or unbalanced excess yields
+/// `valid: false` with a precise `error` (never a thrown JsError).
 ///
 /// Returns JSON: `{ valid, range_proofs_checked, input_count, output_count,
 /// error }`.
@@ -443,9 +473,11 @@ pub fn verify_conservation_proof(
     output_commitments_json: &str,
     proof_json: &str,
     message_hex: &str,
+    output_range_proofs_json: Option<String>,
 ) -> Result<JsValue, JsError> {
     use dregg_cell::value_commitment::{
         ConservationProof, ValueCommitment, ValueCommitmentBytes, verify_conservation,
+        verify_full_conservation_bytes,
     };
 
     let input_hex: Vec<String> =
@@ -453,11 +485,21 @@ pub fn verify_conservation_proof(
     let output_hex: Vec<String> =
         serde_json::from_str(output_commitments_json).map_err(|e| JsError::new(&e.to_string()))?;
 
+    // Optional range proofs: an empty / null arg means "Schnorr-only".
+    let range_proofs_hex: Option<Vec<String>> = match &output_range_proofs_json {
+        None => None,
+        Some(s) if s.trim().is_empty() || s.trim() == "null" => None,
+        Some(s) => {
+            Some(serde_json::from_str(s).map_err(|e| JsError::new(&format!("range_proofs: {e}")))?)
+        }
+    };
+    let want_range = range_proofs_hex.is_some();
+
     #[derive(Serialize)]
     struct ConservationResult {
         valid: bool,
-        /// Always false in this binding: the Schnorr excess is checked but the
-        /// per-output Bulletproof range proofs are not (see fn docs).
+        /// True iff real per-output Bulletproof range proofs were supplied AND
+        /// verified. False when only the Schnorr excess relation was checked.
         range_proofs_checked: bool,
         input_count: usize,
         output_count: usize,
@@ -507,14 +549,39 @@ pub fn verify_conservation_proof(
             decode_hex_vec(message_hex).map_err(|e| format!("message_hex: {e}"))?
         };
 
-        verify_conservation(&inputs, &outputs, &proof, &message)
-            .map_err(|e| format!("conservation: {e}"))
+        match &range_proofs_hex {
+            None => verify_conservation(&inputs, &outputs, &proof, &message)
+                .map_err(|e| format!("conservation: {e}")),
+            Some(rp_hex) => {
+                // Decode each variable-length range proof from hex.
+                let range_proofs: Vec<Vec<u8>> = rp_hex
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        decode_hex_vec(h).map_err(|e| format!("range_proof[{i}]: {e}"))
+                    })
+                    .collect::<Result<_, _>>()?;
+                // Re-encode commitments to the byte form the cell helper expects.
+                let in_bytes: Vec<[u8; 32]> =
+                    inputs.iter().map(|c| c.to_bytes().0).collect();
+                let out_bytes: Vec<[u8; 32]> =
+                    outputs.iter().map(|c| c.to_bytes().0).collect();
+                verify_full_conservation_bytes(
+                    &in_bytes,
+                    &out_bytes,
+                    &proof,
+                    &range_proofs,
+                    &message,
+                )
+                .map_err(|e| format!("full conservation: {e}"))
+            }
+        }
     })();
 
     let result = match verdict {
         Ok(()) => ConservationResult {
             valid: true,
-            range_proofs_checked: false,
+            range_proofs_checked: want_range,
             input_count: input_hex.len(),
             output_count: output_hex.len(),
             error: None,
@@ -604,9 +671,19 @@ pub fn build_committed_turn(params_json: &str) -> Result<JsValue, JsError> {
     Ok(serde_wasm_bindgen::to_value(&result)?)
 }
 
-/// Generate a range proof for a committed value.
+/// Generate a **real** Bulletproof range proof that a committed value is in
+/// `[0, 2^64)`.
 ///
-/// Returns JSON: { proof: Vec<u8>, proof_size_bytes: usize }
+/// This builds the canonical Pedersen commitment `value*V + scalar(blinding)*R`
+/// over Ristretto and a real `bulletproofs::RangeProof` (curve25519-dalek,
+/// runs natively on wasm32). The `_commitment` argument is ignored — the
+/// commitment is recomputed from `(amount, blinding)` so the returned
+/// `commitment` is guaranteed to match the proof. Feed `commitment` +
+/// `range_proof` straight to [`verify_range_proof`].
+///
+/// Returns JSON: `{ commitment: Vec<u8> (32B), range_proof: Vec<u8> (~672B),
+/// proof_size_bytes: usize }`. (`proof` is kept as an alias of `range_proof`
+/// for callers that read the old field name.)
 #[wasm_bindgen]
 pub fn generate_range_proof(
     amount: u64,
@@ -616,26 +693,64 @@ pub fn generate_range_proof(
     if blinding.len() != 32 {
         return Err(JsError::new("blinding must be 32 bytes"));
     }
+    let mut blinding_arr = [0u8; 32];
+    blinding_arr.copy_from_slice(blinding);
 
-    // Generate a STARK-based range proof that amount is in [0, 2^64).
-    // Uses a simplified BabyBear decomposition proof.
-    let mut hasher = blake3::Hasher::new_derive_key("dregg-range-proof-v1");
-    hasher.update(&amount.to_le_bytes());
-    hasher.update(blinding);
-    let proof_hash = hasher.finalize();
-
-    // The proof is the BLAKE3 hash (placeholder for the full Bulletproof/STARK).
-    let proof = proof_hash.as_bytes().to_vec();
+    let (commitment, range_proof) =
+        dregg_cell::value_commitment::prove_range_bytes(amount, &blinding_arr);
 
     #[derive(Serialize)]
     struct RangeProofResult {
+        commitment: Vec<u8>,
+        range_proof: Vec<u8>,
+        /// Alias of `range_proof` for backward compatibility.
         proof: Vec<u8>,
         proof_size_bytes: usize,
     }
 
     let result = RangeProofResult {
-        proof_size_bytes: proof.len(),
-        proof,
+        proof_size_bytes: range_proof.len(),
+        commitment: commitment.to_vec(),
+        proof: range_proof.clone(),
+        range_proof,
+    };
+    Ok(serde_wasm_bindgen::to_value(&result)?)
+}
+
+/// Verify a **real** Bulletproof range proof against a Pedersen commitment.
+///
+/// `commitment`: 32-byte compressed Ristretto commitment (as produced by
+/// `generate_range_proof` / `create_value_commitment`). `range_proof`: the
+/// serialized Bulletproof bytes. Returns `{ valid: bool, error: string | null }`.
+/// Fails closed (valid:false) on a non-point commitment or a malformed /
+/// out-of-range proof — never throws for a verification failure.
+#[wasm_bindgen]
+pub fn verify_range_proof(commitment: &[u8], range_proof: &[u8]) -> Result<JsValue, JsError> {
+    #[derive(Serialize)]
+    struct VerifyRangeResult {
+        valid: bool,
+        error: Option<String>,
+    }
+
+    if commitment.len() != 32 {
+        let r = VerifyRangeResult {
+            valid: false,
+            error: Some(format!("commitment must be 32 bytes, got {}", commitment.len())),
+        };
+        return Ok(serde_wasm_bindgen::to_value(&r)?);
+    }
+    let mut commit_arr = [0u8; 32];
+    commit_arr.copy_from_slice(commitment);
+
+    let result = match dregg_cell::value_commitment::verify_range_bytes(&commit_arr, range_proof) {
+        Ok(()) => VerifyRangeResult {
+            valid: true,
+            error: None,
+        },
+        Err(e) => VerifyRangeResult {
+            valid: false,
+            error: Some(e.to_string()),
+        },
     };
     Ok(serde_wasm_bindgen::to_value(&result)?)
 }

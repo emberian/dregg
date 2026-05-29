@@ -111,14 +111,21 @@ console.log('Token:', minted.token.slice(0, 40) + '...');
       wasm.scan_stealth_announcements(viewPriv, spendPub, announcementsJson),
     createValueCommitment: (amount, blinding) => wasm.create_value_commitment(amount, blinding),
     // REAL conservation: prove builds Pedersen commitments + Schnorr excess
-    // proof; verify checks value balance. New 4-arg verifier signature.
+    // proof + per-output Bulletproof range proofs; verify checks value balance
+    // AND every output range. Pass `proved.output_range_proofs` (JSON array of
+    // hex) as the optional 5th verify arg to flip range_proofs_checked=true;
+    // omit it for a Schnorr-only check.
     proveConservation: (inputsJson, outputsJson, messageHex) =>
       wasm.prove_conservation(inputsJson, outputsJson, messageHex || ''),
-    verifyConservation: (inputCommitsJson, outputCommitsJson, proofJson, messageHex) =>
-      wasm.verify_conservation_proof(inputCommitsJson, outputCommitsJson, proofJson, messageHex || ''),
+    verifyConservation: (inputCommitsJson, outputCommitsJson, proofJson, messageHex, rangeProofsJson) =>
+      wasm.verify_conservation_proof(inputCommitsJson, outputCommitsJson, proofJson, messageHex || '', rangeProofsJson),
     buildCommittedTurn: (paramsJson) => wasm.build_committed_turn(paramsJson),
+    // REAL Bulletproof range proof: generate returns { commitment, range_proof };
+    // verify checks the committed value is in [0, 2^64).
     generateRangeProof: (amount, blinding, commitment) =>
       wasm.generate_range_proof(amount, blinding, commitment),
+    verifyRangeProof: (commitment, rangeProof) =>
+      wasm.verify_range_proof(commitment, rangeProof),
     // WASM-side audit fix: create_bearer_cap now takes a delegator *signing
     // seed* (32-byte Ed25519 secret) and returns `{ bearer_token_hex (64-byte
     // signature), delegator_pubkey_hex, binding_hex, ... }`. verify_bearer_cap

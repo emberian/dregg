@@ -58,6 +58,18 @@ pub(super) fn convert_turn_effects_to_vm(
             dregg_circuit::effect_vm::fold_bytes32_to_bb(value)
         }
 
+        // 32-byte widening (effect-vm-hash-widen lane, 2026-05-28): the full
+        // 256-bit binding path. Projects a 32-byte value into 8 BabyBear limbs
+        // (4 bytes each, little-endian) via the SHARED circuit helper, so the
+        // executor and SDK projectors emit byte-for-byte identical encodings
+        // (asserted by the protocol-tests differential invariant). Used for the
+        // hash params widened to `[BabyBear; 8]` — same shape EmitEvent/Custom
+        // already use. Where the old single-felt fold gave ~31-bit collision
+        // resistance, the 8-limb form binds all 32 bytes via compute_effects_hash.
+        fn hash_to_8(h: &[u8; 32]) -> [BabyBear; 8] {
+            dregg_circuit::effect_vm::bytes32_to_8_limbs(h)
+        }
+
         for effect in &tree.action.effects {
             match effect {
                 Effect::Transfer { from, to, amount } => {
@@ -471,7 +483,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(unsealer_holder.as_bytes());
                     let pair_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::CreateSealPair {
-                        pair_hash: hash_to_bb(pair_hash_bytes.as_bytes()),
+                        pair_hash: hash_to_8(pair_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::EmitEvent { cell, event } if cell == cell_id => {
@@ -688,13 +700,13 @@ pub(super) fn convert_turn_effects_to_vm(
                     // Stage 3: passthrough. Amount resolution requires
                     // escrow_id lookup in the ledger (out of AIR scope).
                     vm_effects.push(VmEffect::ReleaseEscrow {
-                        escrow_id_hash: hash_to_bb(escrow_id),
+                        escrow_id_hash: hash_to_8(escrow_id),
                     });
                 }
                 Effect::RefundEscrow { escrow_id, .. } => {
                     // Stage 3: passthrough. Same shape as ReleaseEscrow.
                     vm_effects.push(VmEffect::RefundEscrow {
-                        escrow_id_hash: hash_to_bb(escrow_id),
+                        escrow_id_hash: hash_to_8(escrow_id),
                     });
                 }
                 Effect::CreateCommittedEscrow {
@@ -714,7 +726,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(condition_commitment);
                     let commit_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::CreateCommittedEscrow {
-                        commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
+                        commit_hash: hash_to_8(commit_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::ReleaseCommittedEscrow {
@@ -737,7 +749,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(&claim_auth.signature);
                     let commit_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::ReleaseCommittedEscrow {
-                        commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
+                        commit_hash: hash_to_8(commit_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::RefundCommittedEscrow {
@@ -758,7 +770,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(&claim_auth.signature);
                     let commit_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::RefundCommittedEscrow {
-                        commit_hash: hash_to_bb(commit_hash_bytes.as_bytes()),
+                        commit_hash: hash_to_8(commit_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::ExerciseViaCapability {
@@ -1015,11 +1027,11 @@ pub(super) fn convert_turn_effects_to_vm(
                     target,
                     certificate,
                 } if target == cell_id => {
-                    let target_hash = hash_to_bb(target.as_bytes());
+                    let target_hash = hash_to_8(target.as_bytes());
                     let cert_hash = certificate.certificate_hash();
                     vm_effects.push(VmEffect::CellDestroy {
                         target_hash,
-                        death_certificate_hash: hash_to_bb(&cert_hash),
+                        death_certificate_hash: hash_to_8(&cert_hash),
                     });
                 }
                 Effect::AttenuateCapability {
@@ -1037,7 +1049,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     // journal entry / receipt-hash will absorb, so a
                     // forged "wider" attenuation cannot collide.
                     let slot_bytes = slot.to_le_bytes();
-                    let cap_slot_hash = hash_to_bb(blake3::hash(&slot_bytes).as_bytes());
+                    let cap_slot_hash = hash_to_8(blake3::hash(&slot_bytes).as_bytes());
                     let mut h = blake3::Hasher::new();
                     h.update(b"DREGG_ATTN_NARROWER/v1");
                     let perm_bytes =
@@ -1055,7 +1067,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     } else {
                         h.update(&[0u8]);
                     }
-                    let narrower_commitment = hash_to_bb(h.finalize().as_bytes());
+                    let narrower_commitment = hash_to_8(h.finalize().as_bytes());
                     vm_effects.push(VmEffect::AttenuateCapability {
                         cap_slot_hash,
                         narrower_commitment,
@@ -1069,17 +1081,17 @@ pub(super) fn convert_turn_effects_to_vm(
                 // own selector + AIR constraint set.
                 // ────────────────────────────────────────────────────
                 Effect::CellSeal { target, reason } if target == cell_id => {
-                    let target_hash = hash_to_bb(target.as_bytes());
+                    let target_hash = hash_to_8(target.as_bytes());
                     // `reason` is a 32-byte commitment to the sealing
-                    // rationale; we project it as a BabyBear truncation.
-                    let reason_hash = hash_to_bb(reason);
+                    // rationale; we project all 32 bytes into 8 limbs.
+                    let reason_hash = hash_to_8(reason);
                     vm_effects.push(VmEffect::CellSeal {
                         target: target_hash,
                         reason_hash,
                     });
                 }
                 Effect::CellUnseal { target } if target == cell_id => {
-                    let target_hash = hash_to_bb(target.as_bytes());
+                    let target_hash = hash_to_8(target.as_bytes());
                     vm_effects.push(VmEffect::CellUnseal {
                         target: target_hash,
                     });
@@ -1089,13 +1101,13 @@ pub(super) fn convert_turn_effects_to_vm(
                     checkpoint,
                 } if checkpoint.cell_id == *cell_id => {
                     use dregg_circuit::field::BabyBear;
-                    let target_hash = hash_to_bb(checkpoint.cell_id.as_bytes());
+                    let target_hash = hash_to_8(checkpoint.cell_id.as_bytes());
                     // Low-30-bit truncation of the end height for the AIR
                     // balance-arithmetic shape; consistent with how other
                     // u64-height fields are projected in this bridge.
                     let end_height_bb =
                         BabyBear::new((*prefix_end_height & ((1u64 << 30) - 1)) as u32);
-                    let terminal_hash = hash_to_bb(&checkpoint.archive_terminal_receipt_hash);
+                    let terminal_hash = hash_to_8(&checkpoint.archive_terminal_receipt_hash);
                     vm_effects.push(VmEffect::ReceiptArchive {
                         target: target_hash,
                         archive_end_height: end_height_bb,
@@ -1108,25 +1120,26 @@ pub(super) fn convert_turn_effects_to_vm(
                     refusal_reason,
                     proof_witness_index: _,
                 } if cell == cell_id => {
-                    use dregg_circuit::field::BabyBear;
-                    let target_hash = hash_to_bb(cell.as_bytes());
-                    // Encode `reason_hash` = discriminant ^ trunc(commitment)
-                    // so the proof binds to a specific (cell, reason, commitment)
-                    // triple without exposing the full 32 bytes in params.
+                    let target_hash = hash_to_8(cell.as_bytes());
+                    // Encode `reason_hash` over the FULL 32-byte commitment plus
+                    // the reason discriminant: XOR the discriminant into the low
+                    // 4 bytes of the commitment, then project all 32 bytes into
+                    // 8 limbs. This binds the entire (reason, commitment) pair
+                    // at ~256-bit strength (was a single ~31-bit fold). See the
+                    // shared `refusal_reason_bytes` helper for the canonical
+                    // encoding — both projectors call it so they agree
+                    // byte-for-byte.
                     let discriminant = match refusal_reason {
                         crate::action::RefusalReason::Declined => 0u32,
                         crate::action::RefusalReason::NoAuthority => 1u32,
                         crate::action::RefusalReason::WindowExpired => 2u32,
                         crate::action::RefusalReason::Custom { .. } => 3u32,
                     };
-                    // Fold ALL 32 bytes of the commitment (not just the low 4)
-                    // so two refusals over commitments differing above byte 4
-                    // bind to distinct reason_hashes.
-                    let commitment_fold =
-                        dregg_circuit::effect_vm::fold_bytes32_to_bb(offered_action_commitment);
-                    let reason_hash =
-                        BabyBear::new(discriminant % dregg_circuit::field::BABYBEAR_P)
-                            + commitment_fold;
+                    let reason_bytes = dregg_circuit::effect_vm::refusal_reason_bytes(
+                        offered_action_commitment,
+                        discriminant,
+                    );
+                    let reason_hash = hash_to_8(&reason_bytes);
                     vm_effects.push(VmEffect::Refusal {
                         target: target_hash,
                         reason_hash,

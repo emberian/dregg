@@ -265,33 +265,63 @@ export function initPrivateTransfers(wasm) {
         JSON.stringify(proved.input_commitments),
         JSON.stringify(proved.output_commitments),
         JSON.stringify(proved.proof),
-        proved.message_hex
+        proved.message_hex,
+        // REAL per-output Bulletproof range proofs => flips range_proofs_checked true.
+        JSON.stringify(proved.output_range_proofs)
       );
     } catch (e) {
       addTimelineEntry([{ text: `verify_conservation_proof failed: ${e && e.message || e}`, type: 'error' }]);
       return;
     }
+    // ADVERSARIAL: tamper the first range proof's bytes. The Bulletproof
+    // verifier must reject it, demonstrating range proofs are really checked
+    // (not a placeholder). A malformed/out-of-range output => valid:false.
+    let tamperResult = null;
+    try {
+      const tampered = proved.output_range_proofs.slice();
+      if (tampered.length > 0 && tampered[0].length >= 8) {
+        // Flip a hex nibble deep in the proof body.
+        const p = tampered[0];
+        const flipAt = p.length - 6;
+        const flipped = (parseInt(p[flipAt], 16) ^ 0xf).toString(16);
+        tampered[0] = p.slice(0, flipAt) + flipped + p.slice(flipAt + 1);
+      }
+      tamperResult = wasm.verify_conservation_proof(
+        JSON.stringify(proved.input_commitments),
+        JSON.stringify(proved.output_commitments),
+        JSON.stringify(proved.proof),
+        proved.message_hex,
+        JSON.stringify(tampered)
+      );
+    } catch (e) {
+      tamperResult = { valid: false, error: String(e && e.message || e), range_proofs_checked: false };
+    }
+
     const elapsed = (performance.now() - t0).toFixed(2);
 
     state.proofCount++;
     notifyStateChange();
 
     const conservLabel = conservResult.valid ? 'VALID' : `INVALID${conservResult.error ? ' (' + conservResult.error + ')' : ''}`;
+    const rangeLabel = conservResult.range_proofs_checked
+      ? 'VERIFIED (real Bulletproofs, every output in [0, 2^64))'
+      : 'NOT checked';
     addTimelineEntry([
       { text: `[Recipient] Derived stealth keys`, type: 'info' },
       { text: `[Sender] Created stealth transfer (${transferAmount} committed)`, type: 'info' },
       { text: `[Recipient] Scanned and found payment`, type: 'info' },
-      { text: `[Verifier] Checking conservation proof (real Schnorr excess)...`, type: 'info' },
+      { text: `[Verifier] Checking FULL conservation proof (Schnorr excess + Bulletproof range proofs)...`, type: 'info' },
       { text: `  Input: 1 commitment (original 1000)`, type: 'info' },
       { text: `  Output: ${transferAmount} to recipient + ${changeAmount} change`, type: 'info' },
       { text: `  Conservation (value balance): ${conservLabel} (${conservResult.input_count} in -> ${conservResult.output_count} out)`, type: conservResult.valid ? 'success' : 'warning' },
-      { text: `  Range proofs checked: ${conservResult.range_proofs_checked} (placeholder pending real Bulletproofs)`, type: 'warning' },
+      { text: `  Range proofs checked: ${conservResult.range_proofs_checked} — ${rangeLabel}`, type: conservResult.range_proofs_checked ? 'success' : 'warning' },
+      { text: `  [Adversarial] Tampered range proof rejected: ${tamperResult && tamperResult.valid === false ? 'YES (valid=false)' : 'NO — UNEXPECTED'}`, type: tamperResult && tamperResult.valid === false ? 'success' : 'error' },
     ]);
 
     showExplainer(explainerDiv, {
-      prover: `prove_conservation builds REAL Ristretto Pedersen commitments and a Schnorr excess proof:\n\nexcess = sum(inputs) - sum(outputs)\n       = (sum_v_in - sum_v_out)*V + r_excess*R\n\nInput: C(1000, r_in)\nOutputs: C(${transferAmount}, r1) + C(${changeAmount}, r2)\n\nBalanced => excess has no V-component => Schnorr sig over r_excess verifies.`,
-      verifier: `verify_conservation_proof checks (REAL):\n1. All commitments are valid Ristretto points\n2. excess == sum(inputs) - sum(outputs) (homomorphic)\n3. Schnorr excess signature => values balance, no inflation\n\nVerdict: valid=${conservResult.valid}, range_proofs_checked=${conservResult.range_proofs_checked}\n\nNOT yet checked: per-output Bulletproof range proofs (so a negative-value output is not yet ruled out here).`,
-      delta: `The value-balance (excess) relation is now proven for real end-to-end: generate -> verify roundtrip with consistent commitments. The remaining honest gap is per-output range proofs (Bulletproofs) — until those are wired, valid=true means "the excess balances", not "every output is non-negative".`,
+      prover: `prove_conservation builds REAL Ristretto Pedersen commitments, a Schnorr excess proof, AND one Bulletproof range proof per output:\n\nexcess = sum(inputs) - sum(outputs)\n       = (sum_v_in - sum_v_out)*V + r_excess*R\n\nInput: C(1000, r_in)\nOutputs: C(${transferAmount}, r1) + C(${changeAmount}, r2)\n\nEach output also gets a ~672-byte Bulletproof proving its value is in [0, 2^64).`,
+      verifier: `verify_conservation_proof checks (REAL, end-to-end):\n1. All commitments are valid Ristretto points\n2. excess == sum(inputs) - sum(outputs) (homomorphic)\n3. Schnorr excess signature => values balance, no inflation\n4. Per-output Bulletproof range proofs => no negative (mod-order wrap) outputs\n\nVerdict: valid=${conservResult.valid}, range_proofs_checked=${conservResult.range_proofs_checked}\nAdversarial (tampered range proof): valid=${tamperResult ? tamperResult.valid : 'n/a'} (rejected as expected).`,
+      delta: `Conservation is now proven for real end-to-end: the value-balance relation AND every output's range, all verified in-browser via curve25519 Bulletproofs compiled to wasm32. valid=true with range_proofs_checked=true means both "the excess balances" AND "every output is a non-negative 64-bit value" — the negative-value inflation attack is closed.`,
       timing: elapsed,
     });
   });

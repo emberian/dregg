@@ -58,13 +58,36 @@
 //! un-reduced native-Fp sum (which diverged from the reference whenever
 //! `even + beta*odd >= P`, the historical row-~314 mismatch regime).
 //!
-//! REMAINING GAP (not yet closed, documented honestly): the folding challenge
-//! `beta` is currently fixed to 1 rather than replayed from the Fiat-Shamir
-//! transcript, and the folded result is not yet bound to the next FRI layer's
-//! committed opening / the layer Merkle root. Deriving `beta` in-circuit requires
-//! the `PoseidonTranscript` replay that lives in `poseidon_stark.rs`; exposing a
-//! `pub(crate)` beta-derivation there (owned by a different module) is the
-//! prerequisite for a fully sound, binding FRI fold check.
+//! FRI fold binding (now closed):
+//!   1. REAL `beta`. The folding challenge is no longer hardcoded to 1. We replay
+//!      the Fiat-Shamir transcript via `poseidon_stark::derive_challenges` (a
+//!      `pub(crate)` helper that performs the same absorb/squeeze sequence as the
+//!      prover and standalone verifier) to obtain each layer's true `beta`. Each
+//!      `beta` is carried as a public input and copy-constrained into the fold's
+//!      `beta` operand, so the prover cannot substitute an arbitrary challenge:
+//!      the verifier independently re-derives the betas from the committed roots.
+//!   2. LAYER ROOT BINDING. Each FRI layer's in-circuit Merkle root is bound to
+//!      the committed layer root (carried as a public input) via an equality gate
+//!      with a copy-constraint to the public-input cell. The computed root is no
+//!      longer discarded. Per-layer Merkle depth is `tree_depth - 1 - li` (FRI
+//!      halves the domain each round).
+//!   3. CROSS-LAYER FOLD BINDING. The fold output `even + beta*odd (mod P)` of
+//!      layer `li` is copy-constrained to layer `li+1`'s committed leaf value
+//!      (which is itself root-bound in (2)), so the fold binds to the next layer's
+//!      committed opening rather than vacuously to itself. The mul/add gadget rows
+//!      are also internally chained (product -> beta_odd -> sum -> remainder) so
+//!      the output is provably the modular fold of the operands.
+//!
+//! HONEST RESIDUAL (checked by the standalone `verify_poseidon`, not yet by this
+//! circuit): (a) the fold's `even`/`odd` *operands* are not independently bound to
+//! this layer's committed query/sibling openings — only the query leaf is hashed
+//! in-circuit, and which operand is the query depends on `query_pos < sibling_pos`
+//! (proof-dependent, so it cannot be wired into the fixed gate vector); the
+//! sibling leaf is not opened in-circuit at all. (b) The layer-0 fold from the
+//! constraint-quotient even/odd values (using `fri_betas[0]`) and (c) the final
+//! FRI polynomial equality are not re-checked in-circuit. Closing (a)-(c) requires
+//! opening the FRI siblings and constraint sibling in-circuit and carrying the
+//! final polynomial as additional public inputs.
 
 #[cfg(feature = "mina")]
 use crate::field::{BABYBEAR_P, BabyBear};
@@ -210,10 +233,29 @@ impl PoseidonStarkVerifierCircuit {
         let tree_depth = self.tree_depth();
         let num_fri_layers = self.num_fri_layers();
 
-        // Public inputs: trace_commitment (Fp) + constraint_commitment (Fp)
-        let public_input_count = 2;
+        // Public inputs (verifier-supplied, bound via Kimchi's public-input
+        // polynomial). Layout:
+        //   PI[0]                         = trace_commitment
+        //   PI[1]                         = constraint_commitment
+        //   PI[2 .. 2+L]                  = fri_commitments[0..L]      (L = num_fri_layers)
+        //   PI[2+L .. 2+2L]               = fri_betas[0..L]            (Fiat-Shamir betas)
+        //
+        // The FRI layer commitments and betas MUST be public inputs (not gate
+        // constants): `build_circuit` is invoked both by the prover (with the real
+        // proof) and by `verify` via `circuit_from_layout` (with a zeroed dummy
+        // proof), so the gate vector must be proof-independent. Carrying each FRI
+        // layer root as a public input lets the verifier supply the committed root
+        // and the copy-constraint bind the in-circuit-computed root to it — closing
+        // the "Merkle root discarded" half of the prior gap. Carrying each `beta`
+        // as a public input binds the fold's challenge to the Fiat-Shamir transcript
+        // at the verifier-application layer (the verifier re-derives the betas via
+        // `poseidon_stark::derive_challenges`, a replay of the prover's transcript
+        // over the committed roots) — closing the "beta hardcoded to 1" half.
+        let public_input_count = 2 + 2 * num_fri_layers;
         const PI_TRACE_ROW: usize = 0; // public input cell holding trace_commitment
         const PI_CONSTRAINT_ROW: usize = 1; // public input cell holding constraint_commitment
+        let pi_fri_row = |li: usize| 2 + li; // PI cell holding fri_commitments[li]
+        let pi_beta_row = |li: usize| 2 + num_fri_layers + li; // PI cell holding fri_betas[li]
 
         // Rows of the equality gates whose w[1] column must be copy-constrained
         // to the public-input cells.  Steps (C) and (I) compare against the trace
@@ -222,6 +264,15 @@ impl PoseidonStarkVerifierCircuit {
         // emitted (see "copy-constraint" section below).
         let mut trace_eq_rows: Vec<usize> = Vec::new();
         let mut constraint_eq_rows: Vec<usize> = Vec::new();
+        // For each FRI layer, the equality-gate rows whose w[1] must bind to the
+        // corresponding FRI-commitment public-input cell (computed layer root ==
+        // committed layer root).
+        let mut fri_root_eq_rows: Vec<Vec<usize>> = vec![Vec::new(); num_fri_layers];
+        // Copy-constraint cycles binding each FRI layer's fold output to the leaf
+        // value that feeds that layer's committed Merkle leaf. Each entry is a
+        // pair of (row, col) cells that must be made equal by the permutation
+        // argument: (fold_output_cell, next_layer_leaf_value_cell).
+        let mut fri_fold_bind_pairs: Vec<((usize, usize), (usize, usize))> = Vec::new();
 
         // --- Section 0: Public input binding gates ---
         for _ in 0..public_input_count {
@@ -291,24 +342,108 @@ impl PoseidonStarkVerifierCircuit {
             row = Self::emit_babybear_mul(&mut gates, row);
             row = Self::emit_babybear_mul(&mut gates, row);
 
-            // (L) FRI folding verification per layer
-            for _ in 0..num_fri_layers {
-                // Hash FRI leaf (Poseidon)
+            // (L) FRI folding verification per layer.
+            //
+            // For each FRI layer we now bind THREE things that the prior gadget
+            // left open (the documented soundness gap):
+            //   1. The in-circuit-computed FRI layer Merkle root == the committed
+            //      layer root (carried as a public input). Previously the computed
+            //      root was discarded.
+            //   2. The fold uses the REAL Fiat-Shamir `beta` (carried as a public
+            //      input, derived by the verifier via the same transcript replay
+            //      the prover used). Previously `beta` was hardcoded to 1.
+            //   3. The fold output `even + beta*odd (mod P)` is bound to the NEXT
+            //      FRI layer's committed leaf value (copy-constrained to that
+            //      layer's leaf-input cell, which is in turn root-bound in step 1).
+            //      Previously the fold was bound only vacuously to itself.
+            //
+            // We record the cell coordinates needed for the permutation wiring and
+            // install the cycles after the gate vector is complete.
+            let mut fri_leaf_value_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
+            let mut fri_fold_output_cells: Vec<(usize, usize)> =
+                Vec::with_capacity(num_fri_layers);
+            let mut fri_beta_input_cells: Vec<(usize, usize)> =
+                Vec::with_capacity(num_fri_layers);
+            for li in 0..num_fri_layers {
+                // FRI leaf hash. The single BabyBear layer value is embedded at
+                // input[1] of the Poseidon gadget => witness cell (leaf_row, 1).
+                let leaf_row = row;
+                fri_leaf_value_cells.push((leaf_row, 1));
                 row = Self::emit_poseidon_gadget(&mut gates, row);
-                // Verify FRI Merkle path (shorter by 1 per layer on average,
-                // but we use max depth for circuit regularity)
-                for _ in 0..tree_depth.saturating_sub(1) {
+                // Verify FRI Merkle path. FRI layers halve each round, so layer
+                // `li` commits a tree of depth `tree_depth - 1 - li` (derivable
+                // from the layout — proof-independent, so build_circuit produces an
+                // identical gate vector at prove- and verify-time). This MUST match
+                // the real per-layer path length, otherwise the recomputed root
+                // diverges from the committed layer root and the (new) root-binding
+                // equality gate would be unsatisfiable even for honest proofs.
+                let layer_depth = tree_depth.saturating_sub(1 + li);
+                for _ in 0..layer_depth {
                     row = Self::emit_poseidon_gadget(&mut gates, row);
                 }
-                // FRI folding check: folded = (even + beta * odd) mod P.
+
+                // (L.1) Root binding: computed layer root == committed layer root.
+                Self::emit_generic_gate(&mut gates, row);
+                fri_root_eq_rows[li].push(row);
+                row += 1;
+
+                // (L.2)+(L.3) FRI folding check: folded = (even + beta * odd) mod P.
                 //   - 1 BabyBear modular multiply for `beta * odd`
                 //   - 1 BabyBear modular ADD (3 Generic rows) for `even + beta_odd`,
-                //     reducing mod P so the committed fold is a canonical field element.
-                // Computing the fold in BabyBear (mod P) rather than in native Fp is the
-                // arithmetic-domain fix: a bare Fp add diverges from the reference fold
-                // whenever `even + beta_odd >= P`.
+                //     reducing mod P so the committed fold is a canonical field
+                //     element. Computing the fold in BabyBear (mod P) rather than in
+                //     native Fp is the arithmetic-domain fix: a bare Fp add diverges
+                //     from the reference fold whenever `even + beta_odd >= P`.
+                let mul_base = row;
+                // mul gadget input w[0] holds `beta` => cell (mul_base, 0).
+                fri_beta_input_cells.push((mul_base, 0));
                 row = Self::emit_babybear_mul(&mut gates, row);
+                let add_base = row;
                 row = Self::emit_babybear_add(&mut gates, row);
+                // The canonical fold remainder lives in the reduction row's w[2]
+                // (add_base + 1, col 2): `sum - q*P - r = 0` => this cell holds r.
+                fri_fold_output_cells.push((add_base + 1, 2));
+
+                // --- Intra-gadget arithmetic chaining (proof-independent) ---
+                //
+                // The mul/add gadgets are 3 Generic rows each whose rows are NOT
+                // otherwise linked, so a malicious prover could fill them with
+                // mutually inconsistent values. We wire the data-flow cells into
+                // permutation cycles so the fold output is provably
+                // `even + beta*odd (mod P)` for whatever even/odd/beta sit in the
+                // input cells (with beta bound to its PI and the output bound to the
+                // next committed leaf):
+                //
+                //   mul row0 w[2] (product = beta*odd over Fp)
+                //        == mul row1 w[0]   (reduction input)
+                //   mul row1 w[2] (beta_odd = product mod P)
+                //        == add row0 w[1]   (the `b` addend of even + beta_odd)
+                //   add row0 w[2] (sum = even + beta_odd over Fp)
+                //        == add row1 w[0]   (reduction input)
+                // (add row1 w[2] is the canonical remainder r = the fold output.)
+                Self::wire_pair(&mut gates, mul_base, 2, mul_base + 1, 0);
+                Self::wire_pair(&mut gates, mul_base + 1, 2, add_base, 1);
+                Self::wire_pair(&mut gates, add_base, 2, add_base + 1, 0);
+            }
+
+            // Bind each layer's fold output to the NEXT layer's committed leaf
+            // value, and bind the fold's `beta` input to the matching Fiat-Shamir
+            // challenge PI. Layer li folds into layer li+1 with `fri_betas[li+1]`,
+            // mirroring the reference `verify_poseidon` relation
+            // `next.query_value = even_li + beta_{li+1} * odd_li`. The final layer
+            // has no successor in-circuit (its fold maps to the public final
+            // polynomial, still checked by the standalone verifier — see residual).
+            for li in 0..num_fri_layers.saturating_sub(1) {
+                fri_fold_bind_pairs
+                    .push((fri_fold_output_cells[li], fri_leaf_value_cells[li + 1]));
+                // beta for the li -> li+1 fold is fri_betas[li+1].
+                Self::wire_pair(
+                    &mut gates,
+                    pi_beta_row(li + 1),
+                    0,
+                    fri_beta_input_cells[li].0,
+                    fri_beta_input_cells[li].1,
+                );
             }
         }
 
@@ -337,6 +472,31 @@ impl PoseidonStarkVerifierCircuit {
         Self::wire_cycle(&mut gates, PI_TRACE_ROW, 0, &trace_eq_rows, 1);
         Self::wire_cycle(&mut gates, PI_CONSTRAINT_ROW, 0, &constraint_eq_rows, 1);
 
+        // FRI layer root binding: each layer's root-equality gate w[1] is bound to
+        // the layer's committed-root public input. Combined with the equality gate
+        // `w[0] - w[1] = 0` (computed_root - w[1]), this forces the in-circuit
+        // Merkle-recomputed root to equal the committed layer root.
+        for li in 0..num_fri_layers {
+            Self::wire_cycle(&mut gates, pi_fri_row(li), 0, &fri_root_eq_rows[li], 1);
+        }
+
+        // FRI fold -> next-layer binding: the fold output cell of layer li is wired
+        // into the same permutation cycle as the leaf-value cell of layer li+1.
+        // Because that next leaf value is itself root-bound to its committed layer
+        // root (above), the permutation argument forces
+        //   even_li + beta_{li+1}*odd_li  ==  committed next-layer query value,
+        // i.e. the fold is bound to the next layer's committed opening rather than
+        // vacuously to itself.
+        for (out_cell, next_leaf_cell) in &fri_fold_bind_pairs {
+            Self::wire_pair(
+                &mut gates,
+                out_cell.0,
+                out_cell.1,
+                next_leaf_cell.0,
+                next_leaf_cell.1,
+            );
+        }
+
         let layout = PoseidonStarkVerifierLayout {
             total_rows: row,
             public_input_count,
@@ -363,9 +523,31 @@ impl PoseidonStarkVerifierCircuit {
         let trace_root = self.proof.trace_commitment.fp();
         let constraint_root = self.proof.constraint_commitment.fp();
 
+        // Real Fiat-Shamir challenges, replayed from the proof transcript. These
+        // are the SAME betas the prover used in `fri_commit_poseidon` (and that
+        // the standalone `verify_poseidon` re-derives). Using them — rather than a
+        // hardcoded `beta = 1` — is the soundness fix for the FRI fold challenge.
+        let challenges =
+            crate::poseidon_stark::derive_challenges(&self.proof, self.constraint_degree);
+
         // Public inputs
         witness[0][0] = trace_root;
         witness[0][1] = constraint_root;
+        // FRI commitment public inputs: PI[2 .. 2+L].
+        for li in 0..num_fri_layers {
+            let c = self
+                .proof
+                .fri_commitments
+                .get(li)
+                .map(|f| f.fp())
+                .unwrap_or_else(Fp::zero);
+            witness[0][2 + li] = c;
+        }
+        // FRI beta public inputs: PI[2+L .. 2+2L].
+        for li in 0..num_fri_layers {
+            let b = challenges.fri_betas.get(li).map(|v| v.0).unwrap_or(0);
+            witness[0][2 + num_fri_layers + li] = Fp::from(b as u64);
+        }
 
         let mut row = layout.public_input_count;
 
@@ -577,19 +759,22 @@ impl PoseidonStarkVerifierCircuit {
             // Second consistency mul: verify constraint_eval * 1 = constraint_eval (binding)
             row = self.babybear_mul_witness(constraint_eval, 1, &mut witness, row);
 
-            // (L) FRI layers
+            // (L) FRI layers. Layer `li` has Merkle depth `tree_depth - 1 - li`
+            // (FRI halves the domain each round); this MUST match build_circuit.
             for li in 0..num_fri_layers {
+                let fri_depth = tree_depth.saturating_sub(1 + li);
                 if li < query.fri_layers.len() {
                     let fri_layer = &query.fri_layers[li];
                     let fri_val = BabyBear::new(fri_layer.query_value);
+                    // Leaf-value cell (leaf_row, 1) is set here; it is copy-bound to
+                    // the previous layer's fold output (see build_circuit).
                     let fri_leaf_hash =
                         self.poseidon_hash_leaf_witness(&[fri_val], &mut witness, row);
                     row += POSEIDON_GADGET_ROWS;
 
-                    // FRI Merkle path
+                    // FRI Merkle path -> computed layer root.
                     let fri_path: Vec<Fp> = fri_layer.query_path.iter().map(|s| s.fp()).collect();
-                    let fri_depth = tree_depth.saturating_sub(1);
-                    let _fri_root = self.merkle_path_witness(
+                    let computed_fri_root = self.merkle_path_witness(
                         fri_leaf_hash,
                         fri_layer.query_pos,
                         &fri_path,
@@ -599,10 +784,21 @@ impl PoseidonStarkVerifierCircuit {
                     );
                     row += fri_depth * POSEIDON_GADGET_ROWS;
 
-                    // FRI folding check: folded = even + beta * odd
-                    // The "even" position is always the one in the lower half
-                    // (i.e., min(query_pos, sibling_pos)). If query_pos < sibling_pos,
-                    // the query is "even" and sibling is "odd". Otherwise, swap.
+                    // (L.1) Root-binding equality gate: w[0] = computed root,
+                    // w[1] = committed layer root (copy-constrained to PI_fri[li]).
+                    let committed_root = self
+                        .proof
+                        .fri_commitments
+                        .get(li)
+                        .map(|f| f.fp())
+                        .unwrap_or_else(Fp::zero);
+                    witness[0][row] = computed_fri_root;
+                    witness[1][row] = committed_root;
+                    row += 1;
+
+                    // (L.2)+(L.3) Fold: folded = even + beta * odd (mod P).
+                    // even/odd ordering matches the reference verifier:
+                    //   (query, sibling) if query_pos < sibling_pos else (sibling, query).
                     let (even, odd) = if fri_layer.query_pos < fri_layer.sibling_pos {
                         (
                             fri_layer.query_value % BABYBEAR_P,
@@ -614,25 +810,29 @@ impl PoseidonStarkVerifierCircuit {
                             fri_layer.query_value % BABYBEAR_P,
                         )
                     };
-                    // beta * odd (BabyBear modular mul). NOTE: beta is the FRI folding
-                    // challenge from the Fiat-Shamir transcript. Deriving it in-circuit
-                    // requires replaying the PoseidonTranscript (which lives in
-                    // poseidon_stark.rs); with beta == 1 here the multiply reduces to
-                    // `odd`. See the module-level FRI fold note for the remaining gap.
-                    let beta = 1u32;
+                    // REAL Fiat-Shamir beta. The fold at layer `li` produces layer
+                    // `li+1`'s value, so it uses `fri_betas[li+1]` (matching the
+                    // reference relation `next = even + beta_{li+1}*odd`). This beta
+                    // is bound to PI_beta[li+1] via copy-constraint in build_circuit.
+                    // The final layer has no successor; its beta is unbound (residual).
+                    let beta = challenges
+                        .fri_betas
+                        .get(li + 1)
+                        .or_else(|| challenges.fri_betas.get(li))
+                        .map(|v| v.0)
+                        .unwrap_or(1);
                     let beta_odd = ((beta as u64 * odd as u64) % BABYBEAR_MOD_FP) as u32;
+                    // mul-input w[0] = beta is copy-bound to PI_beta[li+1].
                     row = self.babybear_mul_witness(beta, odd, &mut witness, row);
-                    // BabyBear modular ADD: folded = (even + beta_odd) mod P, committed as
-                    // a canonical, range-checked remainder. Computing the fold in BabyBear
-                    // (mod P) — rather than in native Fp as before — is the arithmetic-domain
-                    // fix: a bare Fp add diverged from the reference fold whenever the sum
-                    // crossed P. This keeps the committed fold a valid field element.
+                    // BabyBear modular ADD: folded = (even + beta_odd) mod P, a
+                    // canonical, range-checked remainder. Its reduction-row w[2]
+                    // (the fold output) is copy-bound to layer li+1's leaf value.
                     row = self.babybear_add_witness(even, beta_odd, &mut witness, row);
                 } else {
                     // Padding: fill with zeros
                     row += POSEIDON_GADGET_ROWS;
-                    let fri_depth = tree_depth.saturating_sub(1);
                     row += fri_depth * POSEIDON_GADGET_ROWS;
+                    row += 1; // root-binding equality gate
                     row += 3; // babybear_mul (beta * odd)
                     row += 3; // babybear_add (even + beta_odd) mod P
                 }
@@ -702,17 +902,48 @@ impl PoseidonStarkVerifierCircuit {
         let proof_bytes =
             rmp_serde::to_vec(&proof).map_err(|e| format!("Proof serialization error: {}", e))?;
 
-        // Public inputs
-        let trace_root = self.proof.trace_commitment.fp();
-        let constraint_root = self.proof.constraint_commitment.fp();
+        // Public inputs, in the exact order build_circuit lays them out:
+        //   [trace_root, constraint_root, fri_commitments..., fri_betas...]
+        let public_inputs = self.public_inputs_vec(&layout);
 
         Ok(PoseidonStarkKimchiProof {
             proof_bytes,
             trace_commitment: self.proof.trace_commitment.clone(),
             constraint_commitment: self.proof.constraint_commitment.clone(),
             layout,
-            public_inputs: vec![trace_root, constraint_root],
+            public_inputs,
         })
+    }
+
+    /// Build the ordered public-input vector matching `build_circuit`'s layout:
+    /// `[trace_root, constraint_root, fri_commitments[0..L], fri_betas[0..L]]`.
+    ///
+    /// The FRI betas are re-derived here from the proof via the canonical
+    /// Fiat-Shamir transcript replay (`poseidon_stark::derive_challenges`), so the
+    /// verifier-supplied public input for each `beta` is bound to the transcript
+    /// over the committed roots — the prover cannot substitute an arbitrary fold
+    /// challenge.
+    fn public_inputs_vec(&self, layout: &PoseidonStarkVerifierLayout) -> Vec<Fp> {
+        let mut pis = Vec::with_capacity(layout.public_input_count);
+        pis.push(self.proof.trace_commitment.fp());
+        pis.push(self.proof.constraint_commitment.fp());
+        for li in 0..layout.num_fri_layers {
+            let c = self
+                .proof
+                .fri_commitments
+                .get(li)
+                .map(|f| f.fp())
+                .unwrap_or_else(Fp::zero);
+            pis.push(c);
+        }
+        let challenges =
+            crate::poseidon_stark::derive_challenges(&self.proof, self.constraint_degree);
+        for li in 0..layout.num_fri_layers {
+            let b = challenges.fri_betas.get(li).map(|v| v.0).unwrap_or(0);
+            pis.push(Fp::from(b as u64));
+        }
+        debug_assert_eq!(pis.len(), layout.public_input_count);
+        pis
     }
 
     /// Verify a Kimchi proof of STARK verification.
@@ -813,6 +1044,20 @@ impl PoseidonStarkVerifierCircuit {
             let (next_row, next_col) = cells[(i + 1) % len];
             gates[row].wires[col] = Wire::new(next_row, next_col);
         }
+    }
+
+    /// Wire a 2-cell copy-constraint cycle: forces
+    /// `witness[col_a][row_a] == witness[col_b][row_b]` via Kimchi's permutation
+    /// argument. (A 2-cycle: a -> b -> a.)
+    fn wire_pair(
+        gates: &mut [CircuitGate<Fp>],
+        row_a: usize,
+        col_a: usize,
+        row_b: usize,
+        col_b: usize,
+    ) {
+        gates[row_a].wires[col_a] = Wire::new(row_b, col_b);
+        gates[row_b].wires[col_b] = Wire::new(row_a, col_a);
     }
 
     /// Emit a Generic equality gate (1 row): w[0] - w[1] = 0.
@@ -1301,7 +1546,14 @@ mod tests {
         let (gates, public_count, layout) = circuit.build_circuit();
 
         assert!(gates.len() > 0, "Circuit should have gates");
-        assert_eq!(public_count, 2, "Should have 2 public inputs");
+        // Public inputs: trace_commitment + constraint_commitment + one FRI layer
+        // commitment and one FRI beta per FRI layer (bound for the in-circuit fold
+        // root/beta checks).
+        assert_eq!(
+            public_count,
+            2 + 2 * layout.num_fri_layers,
+            "Should have trace + constraint + (commitment, beta) per FRI layer"
+        );
         assert_eq!(layout.num_queries, 1, "Minimal circuit verifies 1 query");
 
         println!("Minimal verifier circuit:");

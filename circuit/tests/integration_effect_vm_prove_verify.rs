@@ -21,6 +21,15 @@ use dregg_circuit::{
     stark::{self, StarkAir, proof_from_bytes, proof_to_bytes},
 };
 
+/// 8-limb widened-hash test value: low limb carries `x`, high limbs zero.
+/// Mirrors the `bytes32_to_8_limbs` shape used by the projectors for the
+/// 32-byte-widened hash params (effect-vm-hash-widen lane).
+fn w8(x: u32) -> [BabyBear; 8] {
+    let mut a = [BabyBear::ZERO; 8];
+    a[0] = BabyBear::new(x);
+    a
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. All-schemas smoke: every distinct effect variant verifies solo.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -100,7 +109,7 @@ fn all_schema_variants_prove_and_verify() {
         (
             "CreateSealPair",
             Effect::CreateSealPair {
-                pair_hash: BabyBear::new(0xCCCC),
+                pair_hash: w8(0xCCCC),
             },
         ),
         ("RefreshDelegation", Effect::RefreshDelegation),
@@ -155,31 +164,31 @@ fn all_schema_variants_prove_and_verify() {
         (
             "ReleaseEscrow",
             Effect::ReleaseEscrow {
-                escrow_id_hash: BabyBear::new(0x8888),
+                escrow_id_hash: w8(0x8888),
             },
         ),
         (
             "RefundEscrow",
             Effect::RefundEscrow {
-                escrow_id_hash: BabyBear::new(0x9999),
+                escrow_id_hash: w8(0x9999),
             },
         ),
         (
             "CreateCommittedEscrow",
             Effect::CreateCommittedEscrow {
-                commit_hash: BabyBear::new(0xAAAA_BBBBu32),
+                commit_hash: w8(0xAAAA_BBBBu32),
             },
         ),
         (
             "ReleaseCommittedEscrow",
             Effect::ReleaseCommittedEscrow {
-                commit_hash: BabyBear::new(0xBBBB_CCCCu32),
+                commit_hash: w8(0xBBBB_CCCCu32),
             },
         ),
         (
             "RefundCommittedEscrow",
             Effect::RefundCommittedEscrow {
-                commit_hash: BabyBear::new(0xCCCC_DDDDu32),
+                commit_hash: w8(0xCCCC_DDDDu32),
             },
         ),
         (

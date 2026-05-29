@@ -66,7 +66,16 @@ pub enum Effect {
     SetVerificationKey { vk_hash: BabyBear },
     /// CreateSealPair: register a new sealer/unsealer brand pair. Same
     /// passthrough shape; `pair_hash` is BLAKE3(sealer_holder ‖ unsealer_holder).
-    CreateSealPair { pair_hash: BabyBear },
+    ///
+    /// 32-byte widening (effect-vm-hash-widen lane, 2026-05-28): `pair_hash`
+    /// is the full 32-byte BLAKE3 projected into 8 BabyBear limbs (4 bytes
+    /// each, little-endian) via `bytes32_to_8_limbs` — same shape as
+    /// `EmitEvent` / `Custom`. `compute_effects_hash` absorbs all 8 limbs,
+    /// giving `PI[EFFECTS_HASH]` full ~256-bit binding (was ~31-bit when this
+    /// field was a single `fold_bytes32_to_bb` felt). The AIR anchors limb[0]
+    /// into `params[0]`; the high limbs bind via effects_hash + the off-AIR
+    /// verifier's PI-match loop.
+    CreateSealPair { pair_hash: [BabyBear; 8] },
     /// RefreshDelegation: bump the delegation epoch. No params (the cell's
     /// epoch lives off-trace); selector alone records the intent. State
     /// passthrough.
@@ -129,7 +138,10 @@ pub enum Effect {
     /// CreateCommittedEscrow: passthrough; the locked amount is hidden in a
     /// Pedersen commitment that's verified outside this AIR.
     /// `commit_hash` = BLAKE3(creator_commit ‖ value_commit ‖ recipient_commit ‖ condition_commit).
-    CreateCommittedEscrow { commit_hash: BabyBear },
+    ///
+    /// 32-byte widening: `commit_hash` is the full 32-byte commitment projected
+    /// into 8 BabyBear limbs (see [`Effect::CreateSealPair`] for rationale).
+    CreateCommittedEscrow { commit_hash: [BabyBear; 8] },
     /// BridgeMint: actor mints `value_lo` from a portable proof. Balance
     /// credit (mirrors NoteSpend). `mint_hash` binds (nullifier, root,
     /// dest_federation, asset_type).
@@ -148,15 +160,18 @@ pub enum Effect {
     /// ReleaseEscrow: passthrough; amount resolution requires escrow_id
     /// lookup in the ledger (out of AIR scope). `escrow_id_hash` binds
     /// which escrow was released.
-    ReleaseEscrow { escrow_id_hash: BabyBear },
+    ///
+    /// 32-byte widening: `escrow_id_hash` is the full 32-byte id projected
+    /// into 8 BabyBear limbs (see [`Effect::CreateSealPair`] for rationale).
+    ReleaseEscrow { escrow_id_hash: [BabyBear; 8] },
     /// RefundEscrow: passthrough; same shape as ReleaseEscrow.
-    RefundEscrow { escrow_id_hash: BabyBear },
+    RefundEscrow { escrow_id_hash: [BabyBear; 8] },
     /// ReleaseCommittedEscrow: passthrough; same shape, but
     /// `commit_hash` also binds the claim_auth + recipient.
-    ReleaseCommittedEscrow { commit_hash: BabyBear },
+    ReleaseCommittedEscrow { commit_hash: [BabyBear; 8] },
     /// RefundCommittedEscrow: passthrough; same shape, binds claim_auth +
     /// creator.
-    RefundCommittedEscrow { commit_hash: BabyBear },
+    RefundCommittedEscrow { commit_hash: [BabyBear; 8] },
     /// Spend a note (reveal nullifier, credit balance).
     NoteSpend { nullifier: BabyBear, value: u64 },
     /// Create a note (create commitment, debit balance).
@@ -420,10 +435,13 @@ pub enum Effect {
     /// State passthrough: balance, fields, and cap_root all unchanged;
     /// nonce ticks like any non-NoOp effect.
     CellDestroy {
-        /// Hash of the cell being destroyed.
-        target_hash: BabyBear,
-        /// `DeathCertificate::certificate_hash()` truncated to a BabyBear.
-        death_certificate_hash: BabyBear,
+        /// Hash of the cell being destroyed. Full 32-byte hash projected into
+        /// 8 BabyBear limbs (see [`Effect::CreateSealPair`]); the AIR anchors
+        /// limb[0] into params[0].
+        target_hash: [BabyBear; 8],
+        /// `DeathCertificate::certificate_hash()`, full 32 bytes projected into
+        /// 8 BabyBear limbs. AIR anchors limb[0] into params[1].
+        death_certificate_hash: [BabyBear; 8],
     },
     /// AttenuateCapability: monotonically narrow an existing c-list cap.
     /// Distinct from RevokeCapability: revoke removes a slot from the
@@ -436,10 +454,14 @@ pub enum Effect {
     /// State: balance / fields unchanged; cap_root advances to
     /// `hash_2_to_1(old_cap_root, hash_2_to_1(cap_slot_hash, narrower_commitment))`.
     AttenuateCapability {
-        /// Hash of the c-list slot being narrowed.
-        cap_slot_hash: BabyBear,
+        /// Hash of the c-list slot being narrowed. Full 32 bytes projected into
+        /// 8 BabyBear limbs (see [`Effect::CreateSealPair`]). The AIR's cap_root
+        /// advance uses limb[0] (params[0]); all 8 limbs bind via effects_hash.
+        cap_slot_hash: [BabyBear; 8],
         /// Commitment to the new (narrower) permissions / facet / expiry.
-        narrower_commitment: BabyBear,
+        /// Full 32 bytes projected into 8 BabyBear limbs; AIR uses limb[0]
+        /// (params[1]) in the cap_root advance.
+        narrower_commitment: [BabyBear; 8],
     },
     /// CellSeal: transition a cell lifecycle to `Sealed`. The AIR enforces
     /// state passthrough (balance/fields/cap_root unchanged; only the
@@ -453,10 +475,14 @@ pub enum Effect {
     /// sealed-field bit in the cell's in-trace `reserved` mask): this
     /// variant records the lifecycle-level seal of the whole cell.
     CellSeal {
-        /// Hash of the cell being sealed.
-        target: BabyBear,
-        /// BLAKE3 of the sealing reason (cleartext lives off-chain).
-        reason_hash: BabyBear,
+        /// Hash of the cell being sealed. Full 32 bytes projected into 8
+        /// BabyBear limbs (see [`Effect::CreateSealPair`]); AIR anchors limb[0]
+        /// into params[0].
+        target: [BabyBear; 8],
+        /// BLAKE3 of the sealing reason (cleartext lives off-chain). Full 32
+        /// bytes projected into 8 BabyBear limbs; AIR anchors limb[0] into
+        /// params[1].
+        reason_hash: [BabyBear; 8],
     },
     /// CellUnseal: reverse a cell seal (lifecycle `Sealed` → `Live`).
     /// State passthrough. `target_hash` binds the cell being unsealed;
@@ -464,8 +490,10 @@ pub enum Effect {
     /// algebraically distinguishing — a `CellSeal` row has two non-zero
     /// params whereas a `CellUnseal` row has only one. Domain tag 50.
     CellUnseal {
-        /// Hash of the cell being unsealed.
-        target: BabyBear,
+        /// Hash of the cell being unsealed. Full 32 bytes projected into 8
+        /// BabyBear limbs (see [`Effect::CreateSealPair`]); AIR anchors limb[0]
+        /// into params[0] and mirrors it into aux[0].
+        target: [BabyBear; 8],
     },
     /// ReceiptArchive: record that the cell's receipt-chain prefix through
     /// `archive_end_height` is summarized by a checkpoint. Lifecycle
@@ -477,16 +505,22 @@ pub enum Effect {
     /// passthrough (e.g. `SetPermissions`): a `SetPermissions` row only
     /// carries one non-zero param.
     ReceiptArchive {
-        /// Hash of the cell targeted by the archive.
-        target: BabyBear,
+        /// Hash of the cell targeted by the archive. Full 32 bytes projected
+        /// into 8 BabyBear limbs (see [`Effect::CreateSealPair`]); AIR anchors
+        /// limb[0] into params[0].
+        target: [BabyBear; 8],
         /// `archive_end_height` low-30-bits truncation (enough for u32
         /// block heights; full u64 encoded separately through the
         /// `compute_effects_hash` limb path if needed). The AIR binds
         /// this value directly into params[1] and thence into effects_hash.
+        /// This is a scalar height, NOT a 32-byte hash, so it stays a single
+        /// `BabyBear`.
         archive_end_height: BabyBear,
         /// BLAKE3 of the receipt at `archive_end_height`. The live
-        /// chain's `previous_receipt_hash` at height+1 must equal this.
-        terminal_receipt_hash: BabyBear,
+        /// chain's `previous_receipt_hash` at height+1 must equal this. Full 32
+        /// bytes projected into 8 BabyBear limbs; AIR anchors limb[0] into
+        /// params[2].
+        terminal_receipt_hash: [BabyBear; 8],
     },
     /// Refusal: evidence-of-absence. The prover commits that they did
     /// NOT perform `offered_action_commitment` within the declared window.
@@ -502,9 +536,15 @@ pub enum Effect {
     /// so the proof binds to a specific commitment + reason pair without
     /// exposing the full 32-byte commitment in params.
     Refusal {
-        /// Hash of the cell issuing the refusal.
-        target: BabyBear,
-        /// Reason-encoded binding: `discriminant ^ trunc(offered_action_commitment)`.
-        reason_hash: BabyBear,
+        /// Hash of the cell issuing the refusal. Full 32 bytes projected into
+        /// 8 BabyBear limbs (see [`Effect::CreateSealPair`]); AIR anchors
+        /// limb[0] into params[0].
+        target: [BabyBear; 8],
+        /// Reason-encoded binding: `discriminant ^ offered_action_commitment`,
+        /// full 32 bytes projected into 8 BabyBear limbs. AIR anchors limb[0]
+        /// into params[1]; all 8 limbs bind via effects_hash, so the proof now
+        /// commits to the full 256-bit (reason, commitment) pair rather than a
+        /// 4-byte equivalence class.
+        reason_hash: [BabyBear; 8],
     },
 }

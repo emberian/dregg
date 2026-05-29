@@ -582,7 +582,9 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::CreateSealPair { pair_hash } => {
-                row[PARAM_BASE + 0] = *pair_hash;
+                // 32-byte widening: anchor limb[0] into params[0] (the AIR's
+                // in-trace anchor); the full 8 limbs bind via compute_effects_hash.
+                row[PARAM_BASE + 0] = pair_hash[0];
                 new_state.nonce += 1;
             }
             Effect::RefreshDelegation => {
@@ -649,7 +651,7 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::CreateCommittedEscrow { commit_hash } => {
-                row[PARAM_BASE + 0] = *commit_hash;
+                row[PARAM_BASE + 0] = commit_hash[0];
                 new_state.nonce += 1;
             }
             Effect::BridgeMint {
@@ -670,12 +672,12 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::ReleaseEscrow { escrow_id_hash } | Effect::RefundEscrow { escrow_id_hash } => {
-                row[PARAM_BASE + 0] = *escrow_id_hash;
+                row[PARAM_BASE + 0] = escrow_id_hash[0];
                 new_state.nonce += 1;
             }
             Effect::ReleaseCommittedEscrow { commit_hash }
             | Effect::RefundCommittedEscrow { commit_hash } => {
-                row[PARAM_BASE + 0] = *commit_hash;
+                row[PARAM_BASE + 0] = commit_hash[0];
                 new_state.nonce += 1;
             }
             Effect::NoteSpend { nullifier, value } => {
@@ -1181,8 +1183,10 @@ pub fn generate_effect_vm_trace_ext(
                 // from `SetPermissions` (which only binds a single hash)
                 // both by selector and by a second-PARAM constraint that
                 // a SetPermissions row can't satisfy.
-                row[PARAM_BASE + param::CELL_DESTROY_TARGET] = *target_hash;
-                row[PARAM_BASE + param::CELL_DESTROY_CERT_HASH] = *death_certificate_hash;
+                // 32-byte widening: anchor limb[0] of each into params; the
+                // full 8 limbs of both bind via compute_effects_hash.
+                row[PARAM_BASE + param::CELL_DESTROY_TARGET] = target_hash[0];
+                row[PARAM_BASE + param::CELL_DESTROY_CERT_HASH] = death_certificate_hash[0];
                 new_state.nonce += 1;
             }
             Effect::AttenuateCapability {
@@ -1198,10 +1202,13 @@ pub fn generate_effect_vm_trace_ext(
                 // attn_hash as its slot_hash cannot satisfy this
                 // constraint without also carrying both attenuation
                 // components in params[0..2].
-                row[PARAM_BASE + param::ATTN_CAP_SLOT_HASH] = *cap_slot_hash;
-                row[PARAM_BASE + param::ATTN_NARROWER_COMMITMENT] = *narrower_commitment;
+                // 32-byte widening: the cap_root advance and the AIR both use
+                // limb[0] of each param (params[0]/params[1]); all 8 limbs of
+                // both bind via compute_effects_hash.
+                row[PARAM_BASE + param::ATTN_CAP_SLOT_HASH] = cap_slot_hash[0];
+                row[PARAM_BASE + param::ATTN_NARROWER_COMMITMENT] = narrower_commitment[0];
 
-                let leaf = hash_2_to_1(*cap_slot_hash, *narrower_commitment);
+                let leaf = hash_2_to_1(cap_slot_hash[0], narrower_commitment[0]);
                 new_state.capability_root = hash_2_to_1(new_state.capability_root, leaf);
                 new_state.nonce += 1;
             }
@@ -1214,15 +1221,18 @@ pub fn generate_effect_vm_trace_ext(
                 // State passthrough: balance/fields/cap_root/reserved unchanged.
                 // Both params bind so the proof cannot alias SetPermissions
                 // (which only carries one non-zero param).
-                row[PARAM_BASE + param::CELL_SEAL_TARGET] = *target;
-                row[PARAM_BASE + param::CELL_SEAL_REASON_HASH] = *reason_hash;
+                // 32-byte widening: anchor limb[0] of each into params; the
+                // full 8 limbs of both bind via compute_effects_hash.
+                row[PARAM_BASE + param::CELL_SEAL_TARGET] = target[0];
+                row[PARAM_BASE + param::CELL_SEAL_REASON_HASH] = reason_hash[0];
                 new_state.nonce += 1;
             }
             Effect::CellUnseal { target } => {
-                // State passthrough; mirror the single target param into aux so
-                // AIR rejects post-generation param swaps.
-                row[PARAM_BASE + param::CELL_UNSEAL_TARGET] = *target;
-                row[AUX_BASE] = *target;
+                // State passthrough; mirror the single target param (limb[0])
+                // into aux so AIR rejects post-generation param swaps. All 8
+                // limbs bind via compute_effects_hash.
+                row[PARAM_BASE + param::CELL_UNSEAL_TARGET] = target[0];
+                row[AUX_BASE] = target[0];
                 new_state.nonce += 1;
             }
             Effect::ReceiptArchive {
@@ -1231,10 +1241,12 @@ pub fn generate_effect_vm_trace_ext(
                 terminal_receipt_hash,
             } => {
                 // State passthrough; three params make this algebraically
-                // distinct from any 1- or 2-param passthrough sibling.
-                row[PARAM_BASE + param::RECEIPT_ARCHIVE_TARGET] = *target;
+                // distinct from any 1- or 2-param passthrough sibling. 32-byte
+                // widening: anchor limb[0] of target / terminal_receipt_hash;
+                // archive_end_height is a scalar height (single felt).
+                row[PARAM_BASE + param::RECEIPT_ARCHIVE_TARGET] = target[0];
                 row[PARAM_BASE + param::RECEIPT_ARCHIVE_END_HEIGHT] = *archive_end_height;
-                row[PARAM_BASE + param::RECEIPT_ARCHIVE_TERMINAL_HASH] = *terminal_receipt_hash;
+                row[PARAM_BASE + param::RECEIPT_ARCHIVE_TERMINAL_HASH] = terminal_receipt_hash[0];
                 new_state.nonce += 1;
             }
             Effect::Refusal {
@@ -1243,9 +1255,10 @@ pub fn generate_effect_vm_trace_ext(
             } => {
                 // State passthrough; two params — same count as CellSeal —
                 // but algebraically distinct because the selector gate is
-                // different (`sel::REFUSAL` vs. `sel::CELL_SEAL`).
-                row[PARAM_BASE + param::REFUSAL_TARGET] = *target;
-                row[PARAM_BASE + param::REFUSAL_REASON_HASH] = *reason_hash;
+                // different (`sel::REFUSAL` vs. `sel::CELL_SEAL`). 32-byte
+                // widening: anchor limb[0]; full 8 limbs bind via effects_hash.
+                row[PARAM_BASE + param::REFUSAL_TARGET] = target[0];
+                row[PARAM_BASE + param::REFUSAL_REASON_HASH] = reason_hash[0];
                 new_state.nonce += 1;
             }
         }

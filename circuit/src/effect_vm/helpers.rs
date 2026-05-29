@@ -87,6 +87,24 @@ pub fn fold_bytes32_to_bb(b: &[u8; 32]) -> BabyBear {
     acc
 }
 
+/// Canonical 32-byte encoding of an `Effect::Refusal` reason: the
+/// `offered_action_commitment` with the reason discriminant XOR'd into its
+/// low 4 bytes (little-endian). Projected into 8 limbs by both the executor
+/// and SDK projectors, this binds the FULL 32-byte commitment plus the
+/// discriminant at ~256-bit strength (the prior single-felt
+/// `discriminant + fold_bytes32_to_bb(commitment)` form bound only ~31 bits).
+///
+/// Both `turn::executor::effect_vm_bridge` and `sdk::cipherclerk` call this so
+/// their `[BabyBear; 8]` encodings agree byte-for-byte (protocol-tests
+/// differential invariant).
+#[inline]
+pub fn refusal_reason_bytes(commitment: &[u8; 32], discriminant: u32) -> [u8; 32] {
+    let mut out = *commitment;
+    let low = u32::from_le_bytes([out[0], out[1], out[2], out[3]]) ^ discriminant;
+    out[0..4].copy_from_slice(&low.to_le_bytes());
+    out
+}
+
 /// Decompose a u64 into 4 BabyBear limbs (16 bits each, little-endian).
 /// Returns `[lo16, mid_lo16, mid_hi16, hi16]` so the limbs sum back to
 /// the original via `Σ limbs[i] * 2^(16*i)`. Used to project full-u64
@@ -181,7 +199,9 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             }
             Effect::CreateSealPair { pair_hash } => {
                 hasher_inputs.push(BabyBear::new(28));
-                hasher_inputs.push(*pair_hash);
+                // 32-byte widening: absorb all 8 limbs so PI[EFFECTS_HASH] binds
+                // the full pair_hash (~256-bit), not a single ~31-bit fold.
+                hasher_inputs.extend_from_slice(pair_hash);
             }
             Effect::RefreshDelegation => {
                 hasher_inputs.push(BabyBear::new(29));
@@ -244,7 +264,7 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             }
             Effect::CreateCommittedEscrow { commit_hash } => {
                 hasher_inputs.push(BabyBear::new(39));
-                hasher_inputs.push(*commit_hash);
+                hasher_inputs.extend_from_slice(commit_hash);
             }
             Effect::BridgeMint {
                 value_lo,
@@ -263,19 +283,19 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             }
             Effect::ReleaseEscrow { escrow_id_hash } => {
                 hasher_inputs.push(BabyBear::new(42));
-                hasher_inputs.push(*escrow_id_hash);
+                hasher_inputs.extend_from_slice(escrow_id_hash);
             }
             Effect::RefundEscrow { escrow_id_hash } => {
                 hasher_inputs.push(BabyBear::new(43));
-                hasher_inputs.push(*escrow_id_hash);
+                hasher_inputs.extend_from_slice(escrow_id_hash);
             }
             Effect::ReleaseCommittedEscrow { commit_hash } => {
                 hasher_inputs.push(BabyBear::new(44));
-                hasher_inputs.push(*commit_hash);
+                hasher_inputs.extend_from_slice(commit_hash);
             }
             Effect::RefundCommittedEscrow { commit_hash } => {
                 hasher_inputs.push(BabyBear::new(45));
-                hasher_inputs.push(*commit_hash);
+                hasher_inputs.extend_from_slice(commit_hash);
             }
             Effect::NoteSpend { nullifier, value } => {
                 hasher_inputs.push(BabyBear::new(4));
@@ -494,16 +514,16 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
                 death_certificate_hash,
             } => {
                 hasher_inputs.push(BabyBear::new(47));
-                hasher_inputs.push(*target_hash);
-                hasher_inputs.push(*death_certificate_hash);
+                hasher_inputs.extend_from_slice(target_hash);
+                hasher_inputs.extend_from_slice(death_certificate_hash);
             }
             Effect::AttenuateCapability {
                 cap_slot_hash,
                 narrower_commitment,
             } => {
                 hasher_inputs.push(BabyBear::new(48));
-                hasher_inputs.push(*cap_slot_hash);
-                hasher_inputs.push(*narrower_commitment);
+                hasher_inputs.extend_from_slice(cap_slot_hash);
+                hasher_inputs.extend_from_slice(narrower_commitment);
             }
             // ---- AIR-impl lane #119: CellSeal / CellUnseal / ReceiptArchive / Refusal ----
             // Domain tags 49–52 match `sel::CELL_SEAL` through `sel::REFUSAL`.
@@ -512,12 +532,12 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
                 reason_hash,
             } => {
                 hasher_inputs.push(BabyBear::new(49));
-                hasher_inputs.push(*target);
-                hasher_inputs.push(*reason_hash);
+                hasher_inputs.extend_from_slice(target);
+                hasher_inputs.extend_from_slice(reason_hash);
             }
             Effect::CellUnseal { target } => {
                 hasher_inputs.push(BabyBear::new(50));
-                hasher_inputs.push(*target);
+                hasher_inputs.extend_from_slice(target);
             }
             Effect::ReceiptArchive {
                 target,
@@ -525,17 +545,18 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
                 terminal_receipt_hash,
             } => {
                 hasher_inputs.push(BabyBear::new(51));
-                hasher_inputs.push(*target);
+                hasher_inputs.extend_from_slice(target);
+                // archive_end_height is a scalar height, not a 32-byte hash.
                 hasher_inputs.push(*archive_end_height);
-                hasher_inputs.push(*terminal_receipt_hash);
+                hasher_inputs.extend_from_slice(terminal_receipt_hash);
             }
             Effect::Refusal {
                 target,
                 reason_hash,
             } => {
                 hasher_inputs.push(BabyBear::new(52));
-                hasher_inputs.push(*target);
-                hasher_inputs.push(*reason_hash);
+                hasher_inputs.extend_from_slice(target);
+                hasher_inputs.extend_from_slice(reason_hash);
             }
         }
     }

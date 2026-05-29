@@ -186,7 +186,7 @@ pub use effect::Effect;
 // ---- Re-export helpers ----
 pub use helpers::{
     bytes32_to_8_limbs, compute_effects_hash, compute_effects_hash_4, fold_bytes32_to_bb,
-    split_u64, u64_from_4_limbs_16, u64_to_4_limbs_16,
+    refusal_reason_bytes, split_u64, u64_from_4_limbs_16, u64_to_4_limbs_16,
 };
 // Re-export so sibling modules can write `use super::fill_reserved_bits`
 // (mirrors the pre-decomp module-level visibility).

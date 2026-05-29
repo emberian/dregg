@@ -762,17 +762,24 @@ class DreggStealth extends InspectorBase {
         bump();
         return;
       }
-      // generate_range_proof is an honestly-labeled BLAKE3 placeholder, NOT a
-      // real Bulletproof. Mark it stub regardless of the (absent) stub flag.
+      // generate_range_proof now returns a REAL Bulletproof: { commitment,
+      // range_proof }. Verify it for real, in-browser.
+      const rpBytes = new Uint8Array(rpResult.range_proof || rpResult.proof || []);
+      const rpCommit = new Uint8Array(rpResult.commitment || []);
+      const { result: rpVerdict } = tryWasm(
+        () => wasm && wasm.verify_range_proof(rpCommit, rpBytes)
+      );
+      ds.callCount++;
       ds.rangeProof = {
-        bytes: new Uint8Array(rpResult.proof || rpResult.proof_bytes || []),
-        stub: true,
+        bytes: rpBytes,
+        valid: !!(rpVerdict && rpVerdict.valid),
+        stub: false,
       };
 
       ds.timeline.push(
-        { actor: 'sender', type: 'warn',
-          text: `range proof: placeholder pending real Bulletproofs (${ds.rangeProof.bytes.length} B BLAKE3, not a sound range proof)` },
-        { actor: '', type: 'info', text: `  a real Bulletproof would prove amount ∈ [0, 2^64) without revealing value` },
+        { actor: 'sender', type: ds.rangeProof.valid ? 'success' : 'warn',
+          text: `range proof: REAL Bulletproof (${ds.rangeProof.bytes.length} B), verified=${ds.rangeProof.valid}` },
+        { actor: '', type: 'info', text: `  proves amount ∈ [0, 2^64) over Ristretto without revealing value` },
       );
       ds.step = 3;
       bump();
@@ -852,7 +859,9 @@ class DreggStealth extends InspectorBase {
           JSON.stringify(proved.input_commitments),
           JSON.stringify(proved.output_commitments),
           JSON.stringify(proved.proof),
-          proved.message_hex
+          proved.message_hex,
+          // REAL per-output Bulletproof range proofs => range_proofs_checked true.
+          JSON.stringify(proved.output_range_proofs)
         )
       );
       ds.callCount++;
@@ -875,10 +884,11 @@ class DreggStealth extends InspectorBase {
       };
 
       ds.timeline.push(
-        { actor: 'sender', type: 'success', text: 'built real Pedersen commitments + Schnorr excess proof' },
+        { actor: 'sender', type: 'success', text: 'built real Pedersen commitments + Schnorr excess proof + per-output Bulletproof range proofs' },
         { actor: 'verifier', type: verdict.valid ? 'success' : 'warn',
           text: `conservation (value balance): ${verdict.valid ? 'VALID' : 'INVALID'} (${verdict.input_count} in → ${verdict.output_count} out)` },
-        { actor: '', type: 'warn', text: `  range proofs checked: ${verdict.range_proofs_checked} (placeholder pending real Bulletproofs)` },
+        { actor: '', type: verdict.range_proofs_checked ? 'success' : 'warn',
+          text: `  range proofs checked: ${verdict.range_proofs_checked} (real Bulletproofs over [0, 2^64))` },
       );
       ds.step = 5;
       bump();
@@ -1029,11 +1039,12 @@ class DreggStealth extends InspectorBase {
                     h('dt', null, 'proof size'),
                     h('dd', null, h('code', null, s.rangeProof.bytes.length + ' bytes')),
                     h('dt', null, 'range'),
-                    h('dd', null, h('code', null, '[0, 2^64) (target)')),
+                    h('dd', null, h('code', null, '[0, 2^64)')),
                     h('dt', null, 'scheme'),
-                    h('dd', null, h('code', null, 'placeholder (real Bulletproofs planned)'))
-                  ),
-                  h(StubWarn, { msg: 'generate_range_proof: placeholder pending real Bulletproofs — not a sound range proof' })
+                    h('dd', null, h('code', null, 'Bulletproofs over Ristretto (curve25519)')),
+                    h('dt', null, 'verified'),
+                    h('dd', null, h('code', null, String(s.rangeProof.valid)))
+                  )
                 )
               : h('div', { style: 'color:var(--fg-dim);font-size:0.8rem;' },
                   stepDone(2)
@@ -1110,7 +1121,7 @@ class DreggStealth extends InspectorBase {
                     h('dt', null, 'output commits'), h('dd', null, h('code', null, String(cr.output_count ?? 2))),
                     h('dt', null, 'property'), h('dd', null, h('code', null, 'Pedersen homomorphic sum (Schnorr excess)')),
                     h('dt', null, 'range proofs'), h('dd', null, h('code', null,
-                      cr.stub ? 'n/a' : `${cr.range_proofs_checked} — placeholder pending Bulletproofs`))
+                      cr.stub ? 'n/a' : `${cr.range_proofs_checked} — real Bulletproofs over [0, 2^64)`))
                   )
                 )
               : h('div', { style: 'color:var(--fg-dim);font-size:0.8rem;' },

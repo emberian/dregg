@@ -270,18 +270,21 @@ async function run() {
   }
   console.log(`[test B] PASS: real conservation verdict = "${conservText.slice(0, 80)}"`);
 
-  // The range-proof row must honestly disclose it is still a placeholder, NOT
-  // claim range proofs were checked.
+  // The range-proof row must now show REAL Bulletproofs were verified
+  // (range_proofs_checked=true), not a placeholder.
   const conservKv = await page.evaluate(() => {
     const el = document.getElementById('test-stealth-demo');
     const rows = Array.from(el.querySelectorAll('.dregg-stealth-demo__step'))
       .find(s => s.textContent.includes('Verify Conservation'));
     return rows ? rows.textContent : '';
   });
-  if (!/placeholder|Bulletproof/i.test(conservKv)) {
-    throw new Error(`[test B] FAIL: conservation panel must disclose range-proof placeholder honestly. Got: "${conservKv.slice(0, 200)}"`);
+  if (!/Bulletproof/i.test(conservKv) || /placeholder/i.test(conservKv)) {
+    throw new Error(`[test B] FAIL: conservation panel must show real Bulletproof range proofs, not a placeholder. Got: "${conservKv.slice(0, 200)}"`);
   }
-  console.log('[test B] PASS: range-proof placeholder honestly disclosed in conservation step.');
+  if (!/range proofs[\s\S]*true/i.test(conservKv)) {
+    throw new Error(`[test B] FAIL: range_proofs_checked must be true. Got: "${conservKv.slice(0, 200)}"`);
+  }
+  console.log('[test B] PASS: real Bulletproof range proofs verified (range_proofs_checked=true).');
 
   // Privacy badge in demo mode
   const demoPrivacyBadge = await page.evaluate(() => {

@@ -136,10 +136,16 @@ export function initComposition(wasm) {
     const commitBytes = new Uint8Array(32);
     crypto.getRandomValues(commitBytes);
 
-    let proofJson;
+    let proofJson, rangeVerdict;
     try {
+      // REAL Bulletproof: commitment is recomputed from (amount, blinding) so
+      // it always matches the proof. Then verify it for real, in-browser.
       const result = wasm.generate_range_proof(BigInt(amount), blindingBytes, commitBytes);
-      proofJson = JSON.stringify(result);
+      rangeVerdict = wasm.verify_range_proof(
+        new Uint8Array(result.commitment),
+        new Uint8Array(result.range_proof)
+      );
+      proofJson = JSON.stringify({ ...result, verdict: rangeVerdict, type: 'range' });
     } catch (e) {
       showResult(resultDiv, 'error', `generate_range_proof failed: ${e && e.message || e}`);
       return;
@@ -150,7 +156,7 @@ export function initComposition(wasm) {
       type: 'Range Proof',
       proof_json: proofJson,
       public_inputs: [amount % 256, 64], // public: commitment byte, bit-width
-      description: `Range proof: placeholder pending real Bulletproofs (not yet a sound [0, 2^64) proof)`,
+      description: `REAL Bulletproof range proof over [0, 2^64): valid=${rangeVerdict.valid} (${JSON.parse(proofJson).proof_size_bytes}-byte proof)`,
     });
 
     state.proofCount++;
@@ -158,7 +164,10 @@ export function initComposition(wasm) {
     renderProofs();
     updateButtons();
 
-    showResult(resultDiv, 'success', `Generated range proof (${elapsed}ms)`);
+    const rlabel = rangeVerdict.valid
+      ? `valid=true (real Bulletproof verified)`
+      : `valid=false${rangeVerdict.error ? ' (' + rangeVerdict.error + ')' : ''}`;
+    showResult(resultDiv, rangeVerdict.valid ? 'success' : 'warning', `Generated + verified range proof: ${rlabel} (${elapsed}ms)`);
   });
 
   // Generate a conservation proof — REAL generate -> verify roundtrip.
@@ -184,7 +193,9 @@ export function initComposition(wasm) {
         JSON.stringify(proved.input_commitments),
         JSON.stringify(proved.output_commitments),
         JSON.stringify(proved.proof),
-        proved.message_hex
+        proved.message_hex,
+        // REAL per-output Bulletproof range proofs => range_proofs_checked true.
+        JSON.stringify(proved.output_range_proofs)
       );
       proofJson = JSON.stringify({ ...proved, verdict, type: 'conservation' });
     } catch (e) {
@@ -198,7 +209,7 @@ export function initComposition(wasm) {
       type: 'Conservation',
       proof_json: proofJson,
       public_inputs: [1, 2], // input_count, output_count
-      description: `REAL Schnorr excess proof: sum(1 input)==sum(2 outputs), valid=${verdict.valid}, range_proofs_checked=${verdict.range_proofs_checked}`,
+      description: `REAL full proof: Schnorr excess + per-output Bulletproof range proofs, valid=${verdict.valid}, range_proofs_checked=${verdict.range_proofs_checked}`,
     });
 
     state.proofCount++;
@@ -207,7 +218,7 @@ export function initComposition(wasm) {
     updateButtons();
 
     const label = verdict.valid
-      ? `valid=true (range_proofs_checked=false — placeholder pending real Bulletproofs)`
+      ? `valid=true (range_proofs_checked=${verdict.range_proofs_checked} — real Bulletproofs verified)`
       : `valid=false${verdict.error ? ' (' + verdict.error + ')' : ''}`;
     showResult(resultDiv, verdict.valid ? 'success' : 'warning', `Generated + verified conservation proof: ${label} (${elapsed}ms)`);
   });
