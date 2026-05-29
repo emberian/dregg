@@ -205,8 +205,43 @@ fn signed_sovereign_witness_for_federation(
     effects_hash: [u8; 32],
     sequence: u64,
 ) -> SovereignCellWitness {
+    // Default: declare the UNCHANGED state as the post-state (suitable for
+    // negative tests that reject before the post-execution commitment check).
+    // Positive tests that mutate the cell must declare the real post-effect
+    // commitment via `signed_sovereign_witness_with_new_commitment`.
+    let new_commitment = cell.state_commitment();
+    signed_sovereign_witness_with_new_commitment(
+        federation_id,
+        cell,
+        signing_key,
+        old_commitment,
+        new_commitment,
+        effects_hash,
+        sequence,
+    )
+}
+
+/// SECURITY (sovereign-witness hardening): a witness must name the REAL
+/// post-state commitment and a non-zero local-effect hash — all-zero fields are
+/// legacy placeholders the executor now rejects (execute.rs rules 7/8), and the
+/// executor re-executes and checks the declared `new_commitment` against the
+/// recomputed post-state (`SovereignCommitmentMismatch`). Callers whose turn
+/// mutates the cell pass the post-effect commitment here.
+fn signed_sovereign_witness_with_new_commitment(
+    federation_id: &[u8; 32],
+    cell: &Cell,
+    signing_key: &SigningKey,
+    old_commitment: [u8; 32],
+    new_commitment: [u8; 32],
+    effects_hash: [u8; 32],
+    sequence: u64,
+) -> SovereignCellWitness {
     let cell_id = cell.id();
-    let new_commitment = [0u8; 32];
+    let effects_hash = if effects_hash == [0u8; 32] {
+        *blake3::hash(b"dregg-sovereign-witness-empty-effects").as_bytes()
+    } else {
+        effects_hash
+    };
     let timestamp = 0;
     let message = SovereignCellWitness::signing_message_for_federation(
         federation_id,
@@ -228,6 +263,15 @@ fn signed_sovereign_witness_for_federation(
         cell_state: cell.clone(),
         transition_proof: None,
     }
+}
+
+/// The post-state commitment of `cell` after the executor applies
+/// `SetField(index, value)` — i.e. the value the sovereign witness must declare
+/// as `new_commitment` for a turn whose sole effect is that field write.
+fn post_set_field_commitment(cell: &Cell, index: usize, value: [u8; 32]) -> [u8; 32] {
+    let mut post = cell.clone();
+    post.state.set_field(index, value);
+    post.state_commitment()
 }
 
 fn sovereign_fixture(seed: u8) -> (Ledger, CellId, CellId, Cell, SigningKey, [u8; 32]) {
@@ -266,7 +310,19 @@ fn sovereign_fixture(seed: u8) -> (Ledger, CellId, CellId, Cell, SigningKey, [u8
 fn sovereign_witness_with_legal_key_accepts() {
     let (mut ledger, agent_id, sovereign_id, sovereign, signing_key, old_commitment) =
         sovereign_fixture(2);
-    let witness = signed_sovereign_witness(&sovereign, &signing_key, old_commitment, [0u8; 32], 1);
+    // The turn's sole effect is SetField(0, [1;32]); the witness must declare
+    // the resulting post-state as `new_commitment` (executor re-executes and
+    // checks it — see `SovereignCommitmentMismatch`).
+    let new_commitment = post_set_field_commitment(&sovereign, 0, [1u8; 32]);
+    let witness = signed_sovereign_witness_with_new_commitment(
+        &[0u8; 32],
+        &sovereign,
+        &signing_key,
+        old_commitment,
+        new_commitment,
+        [0u8; 32],
+        1,
+    );
     let mut witnesses = HashMap::new();
     witnesses.insert(sovereign_id, witness);
     let turn = set_field_turn(agent_id, sovereign_id, witnesses);
@@ -527,7 +583,17 @@ fn sovereign_witness_cross_cell_reuse_rejects() {
 fn sovereign_witness_exact_replay_rejects() {
     let (mut ledger, agent_id, sovereign_id, sovereign, signing_key, old_commitment) =
         sovereign_fixture(8);
-    let witness = signed_sovereign_witness(&sovereign, &signing_key, old_commitment, [0u8; 32], 1);
+    // First turn applies SetField(0, [1;32]); witness declares that post-state.
+    let new_commitment = post_set_field_commitment(&sovereign, 0, [1u8; 32]);
+    let witness = signed_sovereign_witness_with_new_commitment(
+        &[0u8; 32],
+        &sovereign,
+        &signing_key,
+        old_commitment,
+        new_commitment,
+        [0u8; 32],
+        1,
+    );
 
     let mut first_witnesses = HashMap::new();
     first_witnesses.insert(sovereign_id, witness.clone());
@@ -780,7 +846,18 @@ fn sovereign_with_preimage_gate_requires_both_witnesses() {
         .update_sovereign_commitment(&sovereign_id, old_commitment)
         .unwrap();
 
-    let witness = signed_sovereign_witness(&sovereign, &signing_key, old_commitment, [0u8; 32], 1);
+    // Both turns apply SetField(0, commitment); the witness declares that
+    // post-state (the commit path re-executes and verifies it).
+    let new_commitment = post_set_field_commitment(&sovereign, 0, commitment);
+    let witness = signed_sovereign_witness_with_new_commitment(
+        &[0u8; 32],
+        &sovereign,
+        &signing_key,
+        old_commitment,
+        new_commitment,
+        [0u8; 32],
+        1,
+    );
     let mut missing_preimage_witnesses = HashMap::new();
     missing_preimage_witnesses.insert(sovereign_id, witness.clone());
     let missing_preimage = set_field_turn_with_action_witnesses(

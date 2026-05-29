@@ -543,7 +543,7 @@ const MIN_BLOWUP: usize = 4;
 /// Compute the blowup factor needed for an AIR's constraint degree.
 /// Must be >= constraint_degree for FRI to provide soundness.
 /// Rounded to next power of two for FFT compatibility.
-fn blowup_for_degree(degree: usize) -> usize {
+pub(crate) fn blowup_for_degree(degree: usize) -> usize {
     degree.next_power_of_two().max(MIN_BLOWUP)
 }
 
@@ -1948,6 +1948,55 @@ pub fn verify_full(
     }
 
     Ok(())
+}
+
+/// Replay the verifier's Fiat-Shamir transcript and return the FRI folding
+/// challenges (`beta_0, beta_1, ...`), one per FRI commitment round.
+///
+/// This reproduces *exactly* the transcript schedule of [`verify_full`] up to
+/// the point where FRI betas are squeezed (AIR domain separation, trace root,
+/// public inputs, alpha, zeta, constraint root, then one beta squeezed before
+/// absorbing each FRI commitment). It is exposed for the recursive verifier
+/// gadget (`crate::stark_zk`) so the outer AIR can independently re-derive the
+/// betas without trusting values carried in the proof.
+///
+/// Uses no-PoW / no-context replay, matching `crate::stark::verify`.
+pub fn replay_fri_betas(
+    air: &dyn StarkAir,
+    proof: &StarkProof,
+    public_inputs: &[BabyBear],
+) -> Result<Vec<BabyBear>, String> {
+    let trace_len = proof.trace_len;
+    if trace_len < 2 || !trace_len.is_power_of_two() {
+        return Err(format!("replay_fri_betas: invalid trace_len {trace_len}"));
+    }
+    let blowup = blowup_for_degree(air.constraint_degree());
+
+    let mut transcript = Transcript::new(b"merkle-stark");
+    transcript.absorb_bytes(air.air_name().as_bytes());
+    transcript.absorb_bytes(&(trace_len as u32).to_le_bytes());
+    transcript.absorb_bytes(&(air.width() as u32).to_le_bytes());
+    transcript.absorb_bytes(&(air.constraint_degree() as u32).to_le_bytes());
+    transcript.absorb_bytes(&(blowup as u32).to_le_bytes());
+    transcript.absorb_bytes(&(NUM_QUERIES as u32).to_le_bytes());
+
+    transcript.absorb_hash(&proof.trace_commitment);
+    transcript.absorb_bytes(&(public_inputs.len() as u32).to_le_bytes());
+    for pi in public_inputs {
+        transcript.absorb_field(*pi);
+    }
+    // alpha (ExtElem) then zeta (base), matching verify_full's order.
+    let _alpha = transcript.squeeze_ext_elem();
+    let _zeta = transcript.squeeze_field();
+
+    transcript.absorb_hash(&proof.constraint_commitment);
+
+    let mut betas = Vec::with_capacity(proof.fri_commitments.len());
+    for commitment in &proof.fri_commitments {
+        betas.push(transcript.squeeze_field());
+        transcript.absorb_hash(commitment);
+    }
+    Ok(betas)
 }
 
 // ============================================================================

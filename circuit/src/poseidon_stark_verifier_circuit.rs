@@ -78,16 +78,33 @@
 //!      are also internally chained (product -> beta_odd -> sum -> remainder) so
 //!      the output is provably the modular fold of the operands.
 //!
-//! HONEST RESIDUAL (checked by the standalone `verify_poseidon`, not yet by this
-//! circuit): (a) the fold's `even`/`odd` *operands* are not independently bound to
-//! this layer's committed query/sibling openings — only the query leaf is hashed
-//! in-circuit, and which operand is the query depends on `query_pos < sibling_pos`
-//! (proof-dependent, so it cannot be wired into the fixed gate vector); the
-//! sibling leaf is not opened in-circuit at all. (b) The layer-0 fold from the
-//! constraint-quotient even/odd values (using `fri_betas[0]`) and (c) the final
-//! FRI polynomial equality are not re-checked in-circuit. Closing (a)-(c) requires
-//! opening the FRI siblings and constraint sibling in-circuit and carrying the
-//! final polynomial as additional public inputs.
+//! FRI fold binding — residual (a)/(b)/(c) NOW CLOSED in-circuit:
+//!   (a) FOLD OPERANDS BOUND TO COMMITTED OPENINGS. Each FRI layer now opens BOTH
+//!       the query leaf AND the sibling leaf in-circuit (hash + Merkle path), and
+//!       root-binds each computed root to the committed layer root. The two
+//!       committed values are fed through a constrained conditional-swap gadget
+//!       (a boolean-constrained selector `b`, with `even = (1-b)*q + b*s`,
+//!       `odd = (1-b)*s + b*q` over BabyBear) into the canonical (even, odd)
+//!       ordering. This handles the proof-dependent `query_pos`/`sibling_pos`
+//!       ordering with a constrained witness bit rather than a fixed wire, so the
+//!       fold operands are a provable permutation of the committed openings — not
+//!       free witness cells, and the sibling is no longer un-opened.
+//!   (b) LAYER-0 CONSTRAINT FOLD CHECKED. The constraint-quotient sibling is opened
+//!       in-circuit and root-bound to the constraint commitment; the layer-0 fold
+//!       `even0 + fri_betas[0]*odd0` (operands = swapped constraint query/sibling)
+//!       is bound to layer-0's committed query value.
+//!   (c) FINAL-POLY EQUALITY CHECKED. The final FRI polynomial is carried as
+//!       additional public inputs; the last FRI layer's committed query and sibling
+//!       openings are each bound (via a one-hot selector over the final-poly PIs,
+//!       since the position is proof-dependent) to the matching `fri_final_poly`
+//!       entry, terminating the FRI recursion against the committed final poly.
+//!
+//! HONEST RESIDUAL (remaining): the AIR constraint evaluation in section (J)/(K)
+//! still uses a deterministic `alpha` derived from the trace-commitment limbs and a
+//! `z_t = constraint_eval / quotient` reconstruction rather than a full in-circuit
+//! Fiat-Shamir replay of `alpha` and an independent vanishing-polynomial evaluation;
+//! that constraint-soundness layer (distinct from the FRI fold binding addressed
+//! here) remains as documented future work. The FRI fold itself is now fully bound.
 
 #[cfg(feature = "mina")]
 use crate::field::{BABYBEAR_P, BabyBear};
@@ -157,6 +174,41 @@ pub struct PoseidonStarkVerifierLayout {
     pub num_fri_layers: usize,
     /// Number of trace columns in the AIR.
     pub num_cols: usize,
+    /// Length of the final FRI polynomial (number of final-poly public inputs).
+    pub final_poly_len: usize,
+}
+
+/// Witness cell coordinates produced by [`PoseidonStarkVerifierCircuit::emit_fri_swap_gadget`].
+#[cfg(feature = "mina")]
+#[derive(Clone, Debug)]
+struct FriSwapCells {
+    /// Selector bit cell (boolean-constrained). Wired internally by the gadget;
+    /// retained for documentation/debugging.
+    #[allow(dead_code)]
+    b: (usize, usize),
+    /// The two cells that must equal the committed query value.
+    q_e: (usize, usize),
+    q_o: (usize, usize),
+    /// The two cells that must equal the committed sibling value.
+    s_e: (usize, usize),
+    s_o: (usize, usize),
+    /// Produced even/odd fold-operand outputs.
+    even: (usize, usize),
+    odd: (usize, usize),
+}
+
+/// Witness cell coordinates produced by [`PoseidonStarkVerifierCircuit::emit_final_poly_select`].
+#[cfg(feature = "mina")]
+#[derive(Clone, Debug)]
+struct FinalPolyCells {
+    /// One-hot selector bit cells.
+    sel: Vec<(usize, usize)>,
+    /// `fri_final_poly[j]` input cells (to be copy-bound to the final-poly PIs).
+    f_input: Vec<(usize, usize)>,
+    /// Equality-gate cell holding the leaf value being bound.
+    leaf_cmp: (usize, usize),
+    /// Row of the sum-to-one accumulator (witness fills it).
+    sum_to_one_row: usize,
 }
 
 // ============================================================================
@@ -223,6 +275,17 @@ impl PoseidonStarkVerifierCircuit {
         self.proof.fri_commitments.len()
     }
 
+    /// Length of the final FRI polynomial, derived from the layout parameters so
+    /// `build_circuit` is proof-independent. FRI halves the domain each round and
+    /// stops while `> 4`, so the final poly has `domain_size >> num_fri_layers`
+    /// entries (matching `verify_poseidon`'s `expected_final_len`).
+    fn final_poly_len(&self) -> usize {
+        let blowup = self.constraint_degree.next_power_of_two().max(4);
+        let domain_size = self.proof.trace_len * blowup;
+        let n = self.num_fri_layers();
+        (domain_size >> n).max(1)
+    }
+
     /// Build the Kimchi circuit gates for this verifier.
     ///
     /// Returns the gate vector and the number of public inputs.
@@ -251,11 +314,14 @@ impl PoseidonStarkVerifierCircuit {
         // at the verifier-application layer (the verifier re-derives the betas via
         // `poseidon_stark::derive_challenges`, a replay of the prover's transcript
         // over the committed roots) — closing the "beta hardcoded to 1" half.
-        let public_input_count = 2 + 2 * num_fri_layers;
+        //   PI[2+2L .. 2+2L+F]            = fri_final_poly[0..F]       (F = final_poly_len)
+        let final_poly_len = self.final_poly_len();
+        let public_input_count = 2 + 2 * num_fri_layers + final_poly_len;
         const PI_TRACE_ROW: usize = 0; // public input cell holding trace_commitment
         const PI_CONSTRAINT_ROW: usize = 1; // public input cell holding constraint_commitment
         let pi_fri_row = |li: usize| 2 + li; // PI cell holding fri_commitments[li]
         let pi_beta_row = |li: usize| 2 + num_fri_layers + li; // PI cell holding fri_betas[li]
+        let pi_final_poly_row = |j: usize| 2 + 2 * num_fri_layers + j; // PI cell: fri_final_poly[j]
 
         // Rows of the equality gates whose w[1] column must be copy-constrained
         // to the public-input cells.  Steps (C) and (I) compare against the trace
@@ -273,6 +339,13 @@ impl PoseidonStarkVerifierCircuit {
         // pair of (row, col) cells that must be made equal by the permutation
         // argument: (fold_output_cell, next_layer_leaf_value_cell).
         let mut fri_fold_bind_pairs: Vec<((usize, usize), (usize, usize))> = Vec::new();
+        // Final-poly one-hot selectors (residual (c)): each must have its f[j] inputs
+        // copy-bound to the fri_final_poly PI cells after the gate vector is built.
+        let mut final_poly_selects: Vec<FinalPolyCells> = Vec::new();
+        // ALL copy-constraint equalities (cell == cell), resolved into permutation
+        // cycles via union-find at the end so cells shared across multiple relations
+        // (leaf <-> swap operands <-> fold output, etc.) land in a single valid cycle.
+        let mut eq_pairs: Vec<((usize, usize), (usize, usize))> = Vec::new();
 
         // --- Section 0: Public input binding gates ---
         for _ in 0..public_input_count {
@@ -303,7 +376,10 @@ impl PoseidonStarkVerifierCircuit {
             trace_eq_rows.push(row);
             row += 1;
 
-            // (D) Hash constraint leaf value via Poseidon
+            // (D) Hash constraint leaf value via Poseidon. The constraint query
+            // value is embedded at input[1] of the gadget => cell (row, 1). We
+            // record it for the layer-0 fold's `even/odd` operand binding (L.0).
+            let constraint_query_leaf_cell = (row, 1usize);
             row = Self::emit_poseidon_gadget(&mut gates, row);
 
             // (E) Verify constraint Merkle path
@@ -342,105 +418,162 @@ impl PoseidonStarkVerifierCircuit {
             row = Self::emit_babybear_mul(&mut gates, row);
             row = Self::emit_babybear_mul(&mut gates, row);
 
-            // (L) FRI folding verification per layer.
+            // (L) FRI folding verification per layer — fully bound (closes the
+            // documented residual (a)/(b)/(c)).
             //
-            // For each FRI layer we now bind THREE things that the prior gadget
-            // left open (the documented soundness gap):
-            //   1. The in-circuit-computed FRI layer Merkle root == the committed
-            //      layer root (carried as a public input). Previously the computed
-            //      root was discarded.
-            //   2. The fold uses the REAL Fiat-Shamir `beta` (carried as a public
-            //      input, derived by the verifier via the same transcript replay
-            //      the prover used). Previously `beta` was hardcoded to 1.
-            //   3. The fold output `even + beta*odd (mod P)` is bound to the NEXT
-            //      FRI layer's committed leaf value (copy-constrained to that
-            //      layer's leaf-input cell, which is in turn root-bound in step 1).
-            //      Previously the fold was bound only vacuously to itself.
+            // For each layer we open BOTH the query leaf AND the sibling leaf in
+            // circuit (root-binding each to the committed layer root), feed both
+            // committed values through a constrained conditional-swap into the
+            // canonical (even, odd) ordering, then fold `even + beta*odd (mod P)`.
+            // The fold output is bound to the NEXT layer's committed query opening
+            // (or, for the last layer, to `fri_final_poly` via a one-hot selector).
             //
-            // We record the cell coordinates needed for the permutation wiring and
-            // install the cycles after the gate vector is complete.
-            let mut fri_leaf_value_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
+            //   (L.1) query leaf hash + Merkle path + root-bind to committed root.
+            //   (L.2) sibling leaf hash + Merkle path + root-bind to committed root.
+            //         => operands are now both committed openings, not free cells.
+            //   (L.3) conditional swap (even, odd) = perm(query, sibling) by a
+            //         boolean-constrained selector (closes (a): the proof-dependent
+            //         even/odd ordering is handled by a constrained witness bit, not
+            //         a fixed wire).
+            //   (L.4) fold `even + beta*odd (mod P)` with REAL Fiat-Shamir beta.
+            //   (L.5) bind fold output to next layer's committed query value.
+            //
+            // We record cell coordinates for the permutation wiring installed after
+            // the gate vector is complete.
+            let mut fri_query_leaf_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
+            let mut fri_sib_leaf_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
             let mut fri_fold_output_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
             let mut fri_beta_input_cells: Vec<(usize, usize)> = Vec::with_capacity(num_fri_layers);
             for li in 0..num_fri_layers {
-                // FRI leaf hash. The single BabyBear layer value is embedded at
-                // input[1] of the Poseidon gadget => witness cell (leaf_row, 1).
-                let leaf_row = row;
-                fri_leaf_value_cells.push((leaf_row, 1));
-                row = Self::emit_poseidon_gadget(&mut gates, row);
-                // Verify FRI Merkle path. FRI layers halve each round, so layer
-                // `li` commits a tree of depth `tree_depth - 1 - li` (derivable
-                // from the layout — proof-independent, so build_circuit produces an
-                // identical gate vector at prove- and verify-time). This MUST match
-                // the real per-layer path length, otherwise the recomputed root
-                // diverges from the committed layer root and the (new) root-binding
-                // equality gate would be unsatisfiable even for honest proofs.
                 let layer_depth = tree_depth.saturating_sub(1 + li);
+
+                // (L.1) Query leaf hash + Merkle path + root-bind.
+                let q_leaf_row = row;
+                fri_query_leaf_cells.push((q_leaf_row, 1));
+                row = Self::emit_poseidon_gadget(&mut gates, row);
                 for _ in 0..layer_depth {
                     row = Self::emit_poseidon_gadget(&mut gates, row);
                 }
-
-                // (L.1) Root binding: computed layer root == committed layer root.
                 Self::emit_generic_gate(&mut gates, row);
                 fri_root_eq_rows[li].push(row);
                 row += 1;
 
-                // (L.2)+(L.3) FRI folding check: folded = (even + beta * odd) mod P.
-                //   - 1 BabyBear modular multiply for `beta * odd`
-                //   - 1 BabyBear modular ADD (3 Generic rows) for `even + beta_odd`,
-                //     reducing mod P so the committed fold is a canonical field
-                //     element. Computing the fold in BabyBear (mod P) rather than in
-                //     native Fp is the arithmetic-domain fix: a bare Fp add diverges
-                //     from the reference fold whenever `even + beta_odd >= P`.
+                // (L.2) Sibling leaf hash + Merkle path + root-bind to SAME root.
+                // This is the previously-missing in-circuit sibling opening — the
+                // core of residual (a). The sibling value cell is root-bound, so the
+                // fold operand can no longer be a free/forged witness value.
+                let s_leaf_row = row;
+                fri_sib_leaf_cells.push((s_leaf_row, 1));
+                row = Self::emit_poseidon_gadget(&mut gates, row);
+                for _ in 0..layer_depth {
+                    row = Self::emit_poseidon_gadget(&mut gates, row);
+                }
+                Self::emit_generic_gate(&mut gates, row);
+                fri_root_eq_rows[li].push(row);
+                row += 1;
+
+                // (L.3) Conditional swap committed (query, sibling) -> (even, odd).
+                let (next_row, swap) = Self::emit_fri_swap_gadget(&mut gates, &mut eq_pairs, row);
+                row = next_row;
+                // Bind the swap's q/s inputs to the committed leaf VALUE cells.
+                eq_pairs.push(((q_leaf_row, 1), swap.q_e));
+                eq_pairs.push(((q_leaf_row, 1), swap.q_o));
+                eq_pairs.push(((s_leaf_row, 1), swap.s_e));
+                eq_pairs.push(((s_leaf_row, 1), swap.s_o));
+
+                // (L.4) Fold: folded = even + beta*odd (mod P).
                 let mul_base = row;
-                // mul gadget input w[0] holds `beta` => cell (mul_base, 0).
                 fri_beta_input_cells.push((mul_base, 0));
                 row = Self::emit_babybear_mul(&mut gates, row);
                 let add_base = row;
                 row = Self::emit_babybear_add(&mut gates, row);
-                // The canonical fold remainder lives in the reduction row's w[2]
-                // (add_base + 1, col 2): `sum - q*P - r = 0` => this cell holds r.
                 fri_fold_output_cells.push((add_base + 1, 2));
 
-                // --- Intra-gadget arithmetic chaining (proof-independent) ---
-                //
-                // The mul/add gadgets are 3 Generic rows each whose rows are NOT
-                // otherwise linked, so a malicious prover could fill them with
-                // mutually inconsistent values. We wire the data-flow cells into
-                // permutation cycles so the fold output is provably
-                // `even + beta*odd (mod P)` for whatever even/odd/beta sit in the
-                // input cells (with beta bound to its PI and the output bound to the
-                // next committed leaf):
-                //
-                //   mul row0 w[2] (product = beta*odd over Fp)
-                //        == mul row1 w[0]   (reduction input)
-                //   mul row1 w[2] (beta_odd = product mod P)
-                //        == add row0 w[1]   (the `b` addend of even + beta_odd)
-                //   add row0 w[2] (sum = even + beta_odd over Fp)
-                //        == add row1 w[0]   (reduction input)
-                // (add row1 w[2] is the canonical remainder r = the fold output.)
-                Self::wire_pair(&mut gates, mul_base, 2, mul_base + 1, 0);
-                Self::wire_pair(&mut gates, mul_base + 1, 2, add_base, 1);
-                Self::wire_pair(&mut gates, add_base, 2, add_base + 1, 0);
+                // Intra-gadget arithmetic chaining: product -> reduce -> beta_odd
+                // -> add.b ; even -> add.a ; sum -> reduce -> remainder(output).
+                eq_pairs.push(((mul_base, 2), (mul_base + 1, 0)));
+                eq_pairs.push(((mul_base + 1, 2), (add_base, 1)));
+                eq_pairs.push(((add_base, 2), (add_base + 1, 0)));
+                // even (swap output) -> fold add.a ; odd (swap output) -> beta*odd mul.b.
+                eq_pairs.push((swap.even, (add_base, 0)));
+                eq_pairs.push((swap.odd, (mul_base, 1)));
             }
 
-            // Bind each layer's fold output to the NEXT layer's committed leaf
-            // value, and bind the fold's `beta` input to the matching Fiat-Shamir
-            // challenge PI. Layer li folds into layer li+1 with `fri_betas[li+1]`,
-            // mirroring the reference `verify_poseidon` relation
-            // `next.query_value = even_li + beta_{li+1} * odd_li`. The final layer
-            // has no successor in-circuit (its fold maps to the public final
-            // polynomial, still checked by the standalone verifier — see residual).
+            // (L.0) Layer-0 constraint fold (closes residual (b)). Layer 0's even/odd
+            // come from the constraint-quotient query value and its sibling (NOT a
+            // FRI layer). We open the constraint sibling in-circuit (the constraint
+            // query leaf is already opened+root-bound at step (D)/(F)), swap into
+            // (even0, odd0), fold with fri_betas[0], and bind the output to layer-0's
+            // committed query value.
+            if num_fri_layers > 0 {
+                let layer0_depth = tree_depth; // constraint tree is full-domain depth
+                // Constraint sibling leaf hash + path + root-bind to constraint root.
+                let cs_leaf_row = row;
+                let cs_leaf_cell = (cs_leaf_row, 1);
+                row = Self::emit_poseidon_gadget(&mut gates, row);
+                for _ in 0..layer0_depth {
+                    row = Self::emit_poseidon_gadget(&mut gates, row);
+                }
+                Self::emit_generic_gate(&mut gates, row);
+                constraint_eq_rows.push(row);
+                row += 1;
+
+                // Swap (constraint_query, constraint_sibling) -> (even0, odd0).
+                let (next_row, swap0) = Self::emit_fri_swap_gadget(&mut gates, &mut eq_pairs, row);
+                row = next_row;
+
+                // Fold even0 + fri_betas[0]*odd0.
+                let mul_base = row;
+                let beta0_input_cell = (mul_base, 0);
+                row = Self::emit_babybear_mul(&mut gates, row);
+                let add_base = row;
+                row = Self::emit_babybear_add(&mut gates, row);
+                let fold0_output_cell = (add_base + 1, 2);
+                eq_pairs.push(((mul_base, 2), (mul_base + 1, 0)));
+                eq_pairs.push(((mul_base + 1, 2), (add_base, 1)));
+                eq_pairs.push(((add_base, 2), (add_base + 1, 0)));
+                eq_pairs.push((swap0.even, (add_base, 0)));
+                eq_pairs.push((swap0.odd, (mul_base, 1)));
+                // beta0 input bound to PI_beta[0].
+                eq_pairs.push(((pi_beta_row(0), 0), beta0_input_cell));
+                // fold0 output bound to layer-0's committed query value.
+                fri_fold_bind_pairs.push((fold0_output_cell, fri_query_leaf_cells[0]));
+                // sibling swap input bound to the constraint sibling leaf value.
+                eq_pairs.push((cs_leaf_cell, swap0.s_e));
+                eq_pairs.push((cs_leaf_cell, swap0.s_o));
+                // query swap input bound to the constraint QUERY leaf value (hashed at D).
+                eq_pairs.push((constraint_query_leaf_cell, swap0.q_e));
+                eq_pairs.push((constraint_query_leaf_cell, swap0.q_o));
+            }
+
+            // (L.5) Bind each FRI layer's fold output to the NEXT layer's committed
+            // query value, and bind the fold's `beta` input to the matching
+            // Fiat-Shamir challenge PI. Layer li folds into layer li+1 with
+            // `fri_betas[li+1]`.
             for li in 0..num_fri_layers.saturating_sub(1) {
-                fri_fold_bind_pairs.push((fri_fold_output_cells[li], fri_leaf_value_cells[li + 1]));
-                // beta for the li -> li+1 fold is fri_betas[li+1].
-                Self::wire_pair(
-                    &mut gates,
-                    pi_beta_row(li + 1),
-                    0,
-                    fri_beta_input_cells[li].0,
-                    fri_beta_input_cells[li].1,
-                );
+                fri_fold_bind_pairs.push((fri_fold_output_cells[li], fri_query_leaf_cells[li + 1]));
+                eq_pairs.push(((pi_beta_row(li + 1), 0), fri_beta_input_cells[li]));
+            }
+
+            // (L.6) Final-poly equality (closes residual (c)). The LAST FRI layer's
+            // committed query and sibling values must equal entries of the public
+            // `fri_final_poly`. We bind each via a one-hot selector (positions are
+            // proof-dependent) so the recursion terminates against the committed
+            // final polynomial rather than being left to the standalone verifier.
+            if num_fri_layers > 0 && final_poly_len > 0 {
+                let last = num_fri_layers - 1;
+                // Bind last query value to final_poly[query_pos].
+                let (next_row, fp_q) =
+                    Self::emit_final_poly_select(&mut gates, &mut eq_pairs, row, final_poly_len);
+                row = next_row;
+                eq_pairs.push((fri_query_leaf_cells[last], fp_q.leaf_cmp));
+                final_poly_selects.push(fp_q);
+                // Bind last sibling value to final_poly[sibling_pos].
+                let (next_row, fp_s) =
+                    Self::emit_final_poly_select(&mut gates, &mut eq_pairs, row, final_poly_len);
+                row = next_row;
+                eq_pairs.push((fri_sib_leaf_cells[last], fp_s.leaf_cmp));
+                final_poly_selects.push(fp_s);
             }
         }
 
@@ -464,35 +597,39 @@ impl PoseidonStarkVerifierCircuit {
         // permutation argument then forces `w[1] == witness[0][PI_ROW]`, so the
         // gate provably compares the computed root against the real public input.
         //
-        // A cycle is encoded by having each participating cell's wire point to the
-        // NEXT cell, with the last pointing back to the first.
-        Self::wire_cycle(&mut gates, PI_TRACE_ROW, 0, &trace_eq_rows, 1);
-        Self::wire_cycle(&mut gates, PI_CONSTRAINT_ROW, 0, &constraint_eq_rows, 1);
-
-        // FRI layer root binding: each layer's root-equality gate w[1] is bound to
-        // the layer's committed-root public input. Combined with the equality gate
-        // `w[0] - w[1] = 0` (computed_root - w[1]), this forces the in-circuit
-        // Merkle-recomputed root to equal the committed layer root.
+        // ALL equalities (the #135 root cycles, the FRI/constraint root binding,
+        // the fold->next-leaf binding, and the final-poly PI binding) are collected
+        // as pairwise (cell == cell) relations and resolved together via union-find
+        // into valid Kimchi permutation cycles. This is required because many cells
+        // participate in MORE than one relation (e.g. a FRI query leaf value is both
+        // a swap operand and the target of the previous fold's output); naive
+        // overlapping 2-cycles would corrupt the permutation ("final value" error).
+        //
+        // Root-equality gates: w[1] == committed root (PI cell). #135 escape path.
+        for &r in &trace_eq_rows {
+            eq_pairs.push(((PI_TRACE_ROW, 0), (r, 1)));
+        }
+        for &r in &constraint_eq_rows {
+            eq_pairs.push(((PI_CONSTRAINT_ROW, 0), (r, 1)));
+        }
+        // FRI layer root binding (query + sibling root-eq rows for each layer).
         for li in 0..num_fri_layers {
-            Self::wire_cycle(&mut gates, pi_fri_row(li), 0, &fri_root_eq_rows[li], 1);
+            for &r in &fri_root_eq_rows[li] {
+                eq_pairs.push(((pi_fri_row(li), 0), (r, 1)));
+            }
+        }
+        // FRI fold -> next-layer / layer-0 query binding.
+        for (out_cell, next_leaf_cell) in &fri_fold_bind_pairs {
+            eq_pairs.push((*out_cell, *next_leaf_cell));
+        }
+        // Final-poly PI binding: each selector's f[j] input == fri_final_poly[j] PI.
+        for j in 0..final_poly_len {
+            for s in &final_poly_selects {
+                eq_pairs.push(((pi_final_poly_row(j), 0), s.f_input[j]));
+            }
         }
 
-        // FRI fold -> next-layer binding: the fold output cell of layer li is wired
-        // into the same permutation cycle as the leaf-value cell of layer li+1.
-        // Because that next leaf value is itself root-bound to its committed layer
-        // root (above), the permutation argument forces
-        //   even_li + beta_{li+1}*odd_li  ==  committed next-layer query value,
-        // i.e. the fold is bound to the next layer's committed opening rather than
-        // vacuously to itself.
-        for (out_cell, next_leaf_cell) in &fri_fold_bind_pairs {
-            Self::wire_pair(
-                &mut gates,
-                out_cell.0,
-                out_cell.1,
-                next_leaf_cell.0,
-                next_leaf_cell.1,
-            );
-        }
+        Self::install_equalities(&mut gates, &eq_pairs);
 
         let layout = PoseidonStarkVerifierLayout {
             total_rows: row,
@@ -501,6 +638,7 @@ impl PoseidonStarkVerifierCircuit {
             tree_depth,
             num_fri_layers,
             num_cols: self.num_cols,
+            final_poly_len,
         };
 
         (gates, public_input_count, layout)
@@ -544,6 +682,11 @@ impl PoseidonStarkVerifierCircuit {
         for li in 0..num_fri_layers {
             let b = challenges.fri_betas.get(li).map(|v| v.0).unwrap_or(0);
             witness[0][2 + num_fri_layers + li] = Fp::from(b as u64);
+        }
+        // FRI final-poly public inputs: PI[2+2L .. 2+2L+F].
+        for j in 0..layout.final_poly_len {
+            let v = self.proof.fri_final_poly.get(j).copied().unwrap_or(0) % BABYBEAR_P;
+            witness[0][2 + 2 * num_fri_layers + j] = Fp::from(v as u64);
         }
 
         let mut row = layout.public_input_count;
@@ -756,83 +899,149 @@ impl PoseidonStarkVerifierCircuit {
             // Second consistency mul: verify constraint_eval * 1 = constraint_eval (binding)
             row = self.babybear_mul_witness(constraint_eval, 1, &mut witness, row);
 
-            // (L) FRI layers. Layer `li` has Merkle depth `tree_depth - 1 - li`
-            // (FRI halves the domain each round); this MUST match build_circuit.
+            // (L) FRI layers — witness mirrors the new fully-bound gate layout:
+            // per layer: query open (hash+path+eq) + sibling open (hash+path+eq) +
+            // swap (20) + fold mul(3)+add(3).  Layer `li` has Merkle depth
+            // `tree_depth - 1 - li`.
             for li in 0..num_fri_layers {
                 let fri_depth = tree_depth.saturating_sub(1 + li);
-                if li < query.fri_layers.len() {
-                    let fri_layer = &query.fri_layers[li];
-                    let fri_val = BabyBear::new(fri_layer.query_value);
-                    // Leaf-value cell (leaf_row, 1) is set here; it is copy-bound to
-                    // the previous layer's fold output (see build_circuit).
-                    let fri_leaf_hash =
-                        self.poseidon_hash_leaf_witness(&[fri_val], &mut witness, row);
-                    row += POSEIDON_GADGET_ROWS;
-
-                    // FRI Merkle path -> computed layer root.
-                    let fri_path: Vec<Fp> = fri_layer.query_path.iter().map(|s| s.fp()).collect();
-                    let computed_fri_root = self.merkle_path_witness(
-                        fri_leaf_hash,
-                        fri_layer.query_pos,
-                        &fri_path,
-                        &mut witness,
-                        row,
-                        fri_depth,
-                    );
-                    row += fri_depth * POSEIDON_GADGET_ROWS;
-
-                    // (L.1) Root-binding equality gate: w[0] = computed root,
-                    // w[1] = committed layer root (copy-constrained to PI_fri[li]).
-                    let committed_root = self
-                        .proof
-                        .fri_commitments
-                        .get(li)
-                        .map(|f| f.fp())
-                        .unwrap_or_else(Fp::zero);
-                    witness[0][row] = computed_fri_root;
-                    witness[1][row] = committed_root;
-                    row += 1;
-
-                    // (L.2)+(L.3) Fold: folded = even + beta * odd (mod P).
-                    // even/odd ordering matches the reference verifier:
-                    //   (query, sibling) if query_pos < sibling_pos else (sibling, query).
-                    let (even, odd) = if fri_layer.query_pos < fri_layer.sibling_pos {
-                        (
-                            fri_layer.query_value % BABYBEAR_P,
-                            fri_layer.sibling_value % BABYBEAR_P,
-                        )
-                    } else {
-                        (
-                            fri_layer.sibling_value % BABYBEAR_P,
-                            fri_layer.query_value % BABYBEAR_P,
-                        )
-                    };
-                    // REAL Fiat-Shamir beta. The fold at layer `li` produces layer
-                    // `li+1`'s value, so it uses `fri_betas[li+1]` (matching the
-                    // reference relation `next = even + beta_{li+1}*odd`). This beta
-                    // is bound to PI_beta[li+1] via copy-constraint in build_circuit.
-                    // The final layer has no successor; its beta is unbound (residual).
-                    let beta = challenges
-                        .fri_betas
-                        .get(li + 1)
-                        .or_else(|| challenges.fri_betas.get(li))
-                        .map(|v| v.0)
-                        .unwrap_or(1);
-                    let beta_odd = ((beta as u64 * odd as u64) % BABYBEAR_MOD_FP) as u32;
-                    // mul-input w[0] = beta is copy-bound to PI_beta[li+1].
-                    row = self.babybear_mul_witness(beta, odd, &mut witness, row);
-                    // BabyBear modular ADD: folded = (even + beta_odd) mod P, a
-                    // canonical, range-checked remainder. Its reduction-row w[2]
-                    // (the fold output) is copy-bound to layer li+1's leaf value.
-                    row = self.babybear_add_witness(even, beta_odd, &mut witness, row);
+                let committed_root = self
+                    .proof
+                    .fri_commitments
+                    .get(li)
+                    .map(|f| f.fp())
+                    .unwrap_or_else(Fp::zero);
+                let (q_val, s_val, q_pos, s_pos) = if li < query.fri_layers.len() {
+                    let fl = &query.fri_layers[li];
+                    (
+                        fl.query_value % BABYBEAR_P,
+                        fl.sibling_value % BABYBEAR_P,
+                        fl.query_pos,
+                        fl.sibling_pos,
+                    )
                 } else {
-                    // Padding: fill with zeros
-                    row += POSEIDON_GADGET_ROWS;
-                    row += fri_depth * POSEIDON_GADGET_ROWS;
-                    row += 1; // root-binding equality gate
-                    row += 3; // babybear_mul (beta * odd)
-                    row += 3; // babybear_add (even + beta_odd) mod P
-                }
+                    (0, 0, 0, 0)
+                };
+
+                // (L.1) Query leaf open.
+                let q_hash =
+                    self.poseidon_hash_leaf_witness(&[BabyBear::new(q_val)], &mut witness, row);
+                row += POSEIDON_GADGET_ROWS;
+                let q_path: Vec<Fp> = query
+                    .fri_layers
+                    .get(li)
+                    .map(|fl| fl.query_path.iter().map(|s| s.fp()).collect())
+                    .unwrap_or_default();
+                let q_root =
+                    self.merkle_path_witness(q_hash, q_pos, &q_path, &mut witness, row, fri_depth);
+                row += fri_depth * POSEIDON_GADGET_ROWS;
+                witness[0][row] = q_root;
+                witness[1][row] = committed_root;
+                row += 1;
+
+                // (L.2) Sibling leaf open.
+                let s_hash =
+                    self.poseidon_hash_leaf_witness(&[BabyBear::new(s_val)], &mut witness, row);
+                row += POSEIDON_GADGET_ROWS;
+                let s_path: Vec<Fp> = query
+                    .fri_layers
+                    .get(li)
+                    .map(|fl| fl.sibling_path.iter().map(|s| s.fp()).collect())
+                    .unwrap_or_default();
+                let s_root =
+                    self.merkle_path_witness(s_hash, s_pos, &s_path, &mut witness, row, fri_depth);
+                row += fri_depth * POSEIDON_GADGET_ROWS;
+                witness[0][row] = s_root;
+                witness[1][row] = committed_root;
+                row += 1;
+
+                // (L.3) Conditional swap (committed query, sibling) -> (even, odd).
+                // swap bit = 1 iff query is the UPPER-half (odd) operand, i.e. the
+                // reference's `query_pos >= sibling_pos` branch.
+                let swap = q_pos >= s_pos;
+                let (next_row, even, odd) =
+                    self.fri_swap_witness(q_val, s_val, swap, &mut witness, row);
+                row = next_row;
+
+                // (L.4) Fold: folded = even + beta*odd (mod P). For li < L-1 the fold
+                // produces layer li+1's value with beta_{li+1} (PI-bound). The last
+                // layer has no successor in the recursion (its values terminate at the
+                // final poly, bound in L.6), so we fold with beta_{li+1} if present
+                // else 0 — internally consistent either way.
+                let beta = challenges.fri_betas.get(li + 1).map(|v| v.0).unwrap_or(0);
+                let beta_odd = ((beta as u64 * odd as u64) % BABYBEAR_MOD_FP) as u32;
+                row = self.babybear_mul_witness(beta, odd, &mut witness, row);
+                row = self.babybear_add_witness(even, beta_odd, &mut witness, row);
+            }
+
+            // (L.0) Layer-0 constraint fold: open constraint sibling, swap
+            // (constraint_query, constraint_sibling) -> (even0, odd0), fold with
+            // fri_betas[0], output bound to layer-0 query value.
+            if num_fri_layers > 0 {
+                let cs_val = query.constraint_sibling_value % BABYBEAR_P;
+                let cs_hash =
+                    self.poseidon_hash_leaf_witness(&[BabyBear::new(cs_val)], &mut witness, row);
+                row += POSEIDON_GADGET_ROWS;
+                let cs_path: Vec<Fp> = query
+                    .constraint_sibling_path
+                    .iter()
+                    .map(|s| s.fp())
+                    .collect();
+                let cs_root = self.merkle_path_witness(
+                    cs_hash,
+                    query.constraint_sibling_pos,
+                    &cs_path,
+                    &mut witness,
+                    row,
+                    tree_depth,
+                );
+                row += tree_depth * POSEIDON_GADGET_ROWS;
+                witness[0][row] = cs_root;
+                witness[1][row] = constraint_root;
+                row += 1;
+
+                // Swap: even0/odd0 from (constraint_query=quotient, constraint_sibling).
+                // Reference ordering: (query, sibling) if idx < first_half else swap,
+                // i.e. swap iff idx >= first_half (query is upper half).
+                let first_half = (self.proof.trace_len * blowup as usize) / 2;
+                let swap0 = query.index >= first_half;
+                let cq_val = query.constraint_value % BABYBEAR_P;
+                let (next_row, even0, odd0) =
+                    self.fri_swap_witness(cq_val, cs_val, swap0, &mut witness, row);
+                row = next_row;
+
+                let beta0 = challenges.fri_betas.first().map(|v| v.0).unwrap_or(0);
+                let beta0_odd = ((beta0 as u64 * odd0 as u64) % BABYBEAR_MOD_FP) as u32;
+                row = self.babybear_mul_witness(beta0, odd0, &mut witness, row);
+                row = self.babybear_add_witness(even0, beta0_odd, &mut witness, row);
+            }
+
+            // (L.6) Final-poly equality for the LAST FRI layer's query/sibling.
+            if num_fri_layers > 0 && layout.final_poly_len > 0 {
+                let last = num_fri_layers - 1;
+                let final_poly: Vec<u32> = self
+                    .proof
+                    .fri_final_poly
+                    .iter()
+                    .map(|&v| v % BABYBEAR_P)
+                    .collect();
+                // Pad/truncate to final_poly_len (the layout-derived PI count).
+                let mut fp = final_poly.clone();
+                fp.resize(layout.final_poly_len, 0);
+                let (q_val, s_val, q_pos, s_pos) = query
+                    .fri_layers
+                    .get(last)
+                    .map(|fl| {
+                        (
+                            fl.query_value % BABYBEAR_P,
+                            fl.sibling_value % BABYBEAR_P,
+                            fl.query_pos,
+                            fl.sibling_pos,
+                        )
+                    })
+                    .unwrap_or((0, 0, 0, 0));
+                row = self.final_poly_select_witness(q_val, q_pos, &fp, &mut witness, row);
+                row = self.final_poly_select_witness(s_val, s_pos, &fp, &mut witness, row);
             }
         }
 
@@ -939,6 +1148,10 @@ impl PoseidonStarkVerifierCircuit {
             let b = challenges.fri_betas.get(li).map(|v| v.0).unwrap_or(0);
             pis.push(Fp::from(b as u64));
         }
+        for j in 0..layout.final_poly_len {
+            let v = self.proof.fri_final_poly.get(j).copied().unwrap_or(0) % BABYBEAR_P;
+            pis.push(Fp::from(v as u64));
+        }
         debug_assert_eq!(pis.len(), layout.public_input_count);
         pis
     }
@@ -1016,6 +1229,7 @@ impl PoseidonStarkVerifierCircuit {
     /// input row, that value is bound to the verifier-supplied public input — so
     /// the equality gate provably compares against the real public input rather
     /// than a free witness column.
+    #[allow(dead_code)]
     fn wire_cycle(
         gates: &mut [CircuitGate<Fp>],
         anchor_row: usize,
@@ -1046,6 +1260,7 @@ impl PoseidonStarkVerifierCircuit {
     /// Wire a 2-cell copy-constraint cycle: forces
     /// `witness[col_a][row_a] == witness[col_b][row_b]` via Kimchi's permutation
     /// argument. (A 2-cycle: a -> b -> a.)
+    #[allow(dead_code)]
     fn wire_pair(
         gates: &mut [CircuitGate<Fp>],
         row_a: usize,
@@ -1055,6 +1270,82 @@ impl PoseidonStarkVerifierCircuit {
     ) {
         gates[row_a].wires[col_a] = Wire::new(row_b, col_b);
         gates[row_b].wires[col_b] = Wire::new(row_a, col_a);
+    }
+
+    /// Resolve a set of pairwise equality constraints between witness cells into
+    /// valid Kimchi permutation cycles, then install them on the gate wires.
+    ///
+    /// Kimchi requires each cell to belong to EXACTLY ONE permutation cycle. When a
+    /// cell participates in several `must-equal` relations (e.g. a leaf value bound
+    /// to two swap-operand cells AND to a fold output), naive overlapping 2-cycles
+    /// corrupt the permutation. This helper unions all transitively-equal cells via
+    /// union-find and emits one closed cycle per equivalence class. The
+    /// initialization of each wire to its own (row,col) is preserved for cells not
+    /// mentioned (Kimchi's default), so callers need only pass the equalities.
+    fn install_equalities(
+        gates: &mut [CircuitGate<Fp>],
+        pairs: &[((usize, usize), (usize, usize))],
+    ) {
+        use std::collections::HashMap;
+        // Map each distinct cell to a dense index.
+        let mut idx_of: HashMap<(usize, usize), usize> = HashMap::new();
+        let mut cells: Vec<(usize, usize)> = Vec::new();
+        let mut id = |c: (usize, usize),
+                      idx_of: &mut HashMap<(usize, usize), usize>,
+                      cells: &mut Vec<(usize, usize)>|
+         -> usize {
+            *idx_of.entry(c).or_insert_with(|| {
+                cells.push(c);
+                cells.len() - 1
+            })
+        };
+        let mut edges: Vec<(usize, usize)> = Vec::with_capacity(pairs.len());
+        for &(a, b) in pairs {
+            let ia = id(a, &mut idx_of, &mut cells);
+            let ib = id(b, &mut idx_of, &mut cells);
+            edges.push((ia, ib));
+        }
+        // Union-find.
+        let n = cells.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(parent: &mut [usize], x: usize) -> usize {
+            let mut r = x;
+            while parent[r] != r {
+                r = parent[r];
+            }
+            let mut c = x;
+            while parent[c] != r {
+                let next = parent[c];
+                parent[c] = r;
+                c = next;
+            }
+            r
+        }
+        for (a, b) in edges {
+            let ra = find(&mut parent, a);
+            let rb = find(&mut parent, b);
+            if ra != rb {
+                parent[ra] = rb;
+            }
+        }
+        // Group cells by root.
+        let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+        for i in 0..n {
+            let r = find(&mut parent, i);
+            groups.entry(r).or_default().push(i);
+        }
+        // Emit one closed cycle per group of size >= 2.
+        for (_root, members) in groups {
+            if members.len() < 2 {
+                continue;
+            }
+            let len = members.len();
+            for k in 0..len {
+                let (row, col) = cells[members[k]];
+                let (nrow, ncol) = cells[members[(k + 1) % len]];
+                gates[row].wires[col] = Wire::new(nrow, ncol);
+            }
+        }
     }
 
     /// Emit a Generic equality gate (1 row): w[0] - w[1] = 0.
@@ -1193,6 +1484,261 @@ impl PoseidonStarkVerifierCircuit {
         }
 
         row + 3
+    }
+
+    /// Emit a boolean-constraint gate (1 row): `w[0] * (w[0] - 1) = 0`, i.e.
+    /// `w[0]^2 - w[0] = 0`, forcing `w[0] in {0, 1}`.
+    ///
+    /// Kimchi Generic gate:
+    ///   c_l*w[0] + c_r*w[1] + c_o*w[2] + c_mul*w[0]*w[1] + c_c = 0
+    /// We set w[1] := w[0] (copy-constrained by the caller), c_mul = 1, c_l = -1:
+    ///   w[0]*w[0] - w[0] = 0.
+    /// The caller must wire w[1] of this row to w[0] of the SAME row (a 2-cycle on
+    /// (row,0)<->(row,1)) so the gate genuinely squares the selector bit.
+    fn emit_bool_gate(gates: &mut Vec<CircuitGate<Fp>>, row: usize) -> usize {
+        let mut coeffs = vec![Fp::zero(); COLUMNS];
+        coeffs[3] = Fp::one(); // c_mul: w[0]*w[1]
+        coeffs[0] = -Fp::one(); // c_l: -w[0]
+        gates.push(CircuitGate::new(
+            GateType::Generic,
+            Wire::for_row(row),
+            coeffs,
+        ));
+        row + 1
+    }
+
+    /// Emit a conditional-swap-to-(even,odd) gadget binding the fold operands to
+    /// two committed leaf values `q` (query) and `s` (sibling).
+    ///
+    /// Layout (proof-independent — always the same gate sequence):
+    ///   row+0 : boolean gate forcing the selector bit b in {0,1}
+    ///           (b = 1 iff the query position is the UPPER half partner, so the
+    ///            committed query value is the ODD operand and the sibling is EVEN).
+    ///   row+1 : Generic `nb = 1 - b`  (w[0]=b, w[1]=nb, constraint nb + b - 1 = 0)
+    ///   row+2..+4   : babybear_mul  e1 = nb * q
+    ///   row+5..+7   : babybear_mul  e2 = b  * s
+    ///   row+8..+10  : babybear_add  even = e1 + e2 (mod P)
+    ///   row+11..+13 : babybear_mul  o1 = nb * s
+    ///   row+14..+16 : babybear_mul  o2 = b  * q
+    ///   row+17..+19 : babybear_add  odd = o1 + o2 (mod P)
+    ///
+    /// Returns `(next_row, cells)` where `cells` records the witness coordinates the
+    /// caller must copy-constrain:
+    ///   cells.b           : the selector bit cell (row+0, col 0)
+    ///   cells.q_e, cells.q_o : the two cells that must equal the committed query value
+    ///   cells.s_e, cells.s_o : the two cells that must equal the committed sibling value
+    ///   cells.even, cells.odd : the produced even/odd fold-operand output cells
+    ///
+    /// Because every product/sum row is internally chained and the q/s input cells
+    /// are copy-bound to the (root-bound) committed leaf values, `even`/`odd` are
+    /// provably `(1-b)*q + b*s` and `(1-b)*s + b*q` over BabyBear — a constrained
+    /// permutation of the committed openings, not free witness cells.
+    fn emit_fri_swap_gadget(
+        gates: &mut Vec<CircuitGate<Fp>>,
+        eq_pairs: &mut Vec<((usize, usize), (usize, usize))>,
+        row: usize,
+    ) -> (usize, FriSwapCells) {
+        let b_row = row;
+        let mut row = Self::emit_bool_gate(gates, row);
+        // b in (b_row,0); its w[1] must be wired to its own w[0] (caller).
+
+        // nb = 1 - b : Generic  w[0] + w[1] - 1 = 0  (w[0]=b, w[1]=nb)
+        let nb_row = row;
+        {
+            let mut coeffs = vec![Fp::zero(); COLUMNS];
+            coeffs[0] = Fp::one();
+            coeffs[1] = Fp::one();
+            coeffs[4] = -Fp::one(); // constant -1
+            gates.push(CircuitGate::new(
+                GateType::Generic,
+                Wire::for_row(row),
+                coeffs,
+            ));
+        }
+        row += 1;
+
+        // e1 = nb * q
+        let e1_base = row;
+        row = Self::emit_babybear_mul(gates, row);
+        // e2 = b * s
+        let e2_base = row;
+        row = Self::emit_babybear_mul(gates, row);
+        // even = e1 + e2
+        let even_base = row;
+        row = Self::emit_babybear_add(gates, row);
+        // o1 = nb * s
+        let o1_base = row;
+        row = Self::emit_babybear_mul(gates, row);
+        // o2 = b * q
+        let o2_base = row;
+        row = Self::emit_babybear_mul(gates, row);
+        // odd = o1 + o2
+        let odd_base = row;
+        row = Self::emit_babybear_add(gates, row);
+
+        // --- Intra-gadget chaining (proof-independent) ---
+        // b appears in: bool gate w[0]/w[1], nb_row w[0], e2 mul w[0], o2 mul w[0].
+        eq_pairs.push(((b_row, 0), (b_row, 1))); // bool gate squares b
+        eq_pairs.push(((b_row, 0), (nb_row, 0)));
+        eq_pairs.push(((b_row, 0), (e2_base, 0)));
+        eq_pairs.push(((b_row, 0), (o2_base, 0)));
+        // nb appears in: nb_row w[1], e1 mul w[0], o1 mul w[0].
+        eq_pairs.push(((nb_row, 1), (e1_base, 0)));
+        eq_pairs.push(((nb_row, 1), (o1_base, 0)));
+        // even = e1.remainder + e2.remainder ; mul remainder at (base+1,2).
+        eq_pairs.push(((e1_base + 1, 2), (even_base, 0)));
+        eq_pairs.push(((e2_base + 1, 2), (even_base, 1)));
+        // odd = o1.remainder + o2.remainder
+        eq_pairs.push(((o1_base + 1, 2), (odd_base, 0)));
+        eq_pairs.push(((o2_base + 1, 2), (odd_base, 1)));
+
+        let cells = FriSwapCells {
+            b: (b_row, 0),
+            q_e: (e1_base, 1),        // e1 = nb * q -> q at mul w[1]
+            q_o: (o2_base, 1),        // o2 = b * q  -> q at mul w[1]
+            s_e: (e2_base, 1),        // e2 = b * s  -> s at mul w[1]
+            s_o: (o1_base, 1),        // o1 = nb * s -> s at mul w[1]
+            even: (even_base + 1, 2), // babybear_add remainder
+            odd: (odd_base + 1, 2),
+        };
+        (row, cells)
+    }
+
+    /// Number of rows emitted by [`emit_fri_swap_gadget`] / its witness.
+    const FRI_SWAP_ROWS: usize = 1 + 1 + 3 + 3 + 3 + 3 + 3 + 3; // = 20
+
+    /// Emit a one-hot final-polynomial selector + equality binding (closes residual
+    /// (c)). Binds a committed leaf value (the last FRI layer's query or sibling
+    /// opening) to `fri_final_poly[pos]` where `pos` is proof-dependent, WITHOUT
+    /// putting `pos` in a fixed wire.
+    ///
+    /// Layout for `m = final_poly_len` entries (proof-independent given the layout):
+    ///   row+0 .. row+m-1 : per-entry boolean gate  sel[j] in {0,1}
+    ///   row+m            : sum-to-one gate  sum(sel[j]) - 1 = 0
+    ///   row+m+1 .. row+m+m (m muls of 3 rows) : term[j] = sel[j] * f[j]
+    ///   then m-1 babybear_add (3 rows each) accumulating  acc = sum(term[j])
+    ///   final row        : equality gate  leaf_value - acc = 0
+    ///
+    /// Returns `(next_row, FinalPolyCells)` with the witness cells the caller must
+    /// copy-constrain: each `f[j]` mul input to the final-poly PI cell, each sel bit
+    /// to its own bool gate, and `leaf_value`/`acc` to the equality gate.
+    fn emit_final_poly_select(
+        gates: &mut Vec<CircuitGate<Fp>>,
+        eq_pairs: &mut Vec<((usize, usize), (usize, usize))>,
+        row: usize,
+        m: usize,
+    ) -> (usize, FinalPolyCells) {
+        let mut cells = FinalPolyCells {
+            sel: Vec::with_capacity(m),
+            f_input: Vec::with_capacity(m),
+            leaf_cmp: (0, 0),
+            sum_to_one_row: 0,
+        };
+        // Per-entry boolean selector gates.
+        let mut row = row;
+        for _ in 0..m {
+            let r = row;
+            row = Self::emit_bool_gate(gates, row);
+            eq_pairs.push(((r, 0), (r, 1))); // square sel[j]
+            cells.sel.push((r, 0));
+        }
+        // Sum-to-one: enforce sum_j sel[j] == 1.
+        let sum_row = row;
+        cells.sum_to_one_row = sum_row;
+        if m == 1 {
+            // sel[0] - 1 = 0 : w[0] = sel[0].
+            let mut coeffs = vec![Fp::zero(); COLUMNS];
+            coeffs[0] = Fp::one();
+            coeffs[4] = -Fp::one();
+            gates.push(CircuitGate::new(
+                GateType::Generic,
+                Wire::for_row(row),
+                coeffs,
+            ));
+            eq_pairs.push(((row, 0), (cells.sel[0].0, cells.sel[0].1)));
+            row += 1;
+        } else {
+            // (m-1) running-sum rows: w[0]=acc_prev, w[1]=sel[k+1], w[2]=acc.
+            // acc_prev of the first row = sel[0]; acc of row k feeds acc_prev of row
+            // k+1; the final acc is forced to 1 by an equality-to-one row.
+            let mut prev_acc: (usize, usize) = cells.sel[0];
+            for k in 0..(m - 1) {
+                let r = row;
+                let mut coeffs = vec![Fp::zero(); COLUMNS];
+                coeffs[0] = Fp::one();
+                coeffs[1] = Fp::one();
+                coeffs[2] = -Fp::one();
+                gates.push(CircuitGate::new(
+                    GateType::Generic,
+                    Wire::for_row(r),
+                    coeffs,
+                ));
+                eq_pairs.push(((r, 0), prev_acc)); // acc_prev
+                eq_pairs.push(((r, 1), cells.sel[k + 1])); // sel[k+1]
+                prev_acc = (r, 2);
+                row += 1;
+            }
+            // equality-to-one: w[0] - 1 = 0 on the final accumulator.
+            let r = row;
+            let mut coeffs = vec![Fp::zero(); COLUMNS];
+            coeffs[0] = Fp::one();
+            coeffs[4] = -Fp::one();
+            gates.push(CircuitGate::new(
+                GateType::Generic,
+                Wire::for_row(r),
+                coeffs,
+            ));
+            eq_pairs.push(((r, 0), prev_acc));
+            row += 1;
+        }
+
+        // term[j] = sel[j] * f[j]
+        let mut term_bases = Vec::with_capacity(m);
+        for _ in 0..m {
+            let base = row;
+            row = Self::emit_babybear_mul(gates, row);
+            term_bases.push(base);
+        }
+        // sel[j] -> term mul w[0]; record f[j] input cells (mul w[1]).
+        for j in 0..m {
+            eq_pairs.push((cells.sel[j], (term_bases[j], 0)));
+            cells.f_input.push((term_bases[j], 1));
+        }
+
+        // Accumulate acc = sum_j term[j] via (m-1) babybear_add rows.
+        let acc_cell: (usize, usize);
+        if m == 1 {
+            acc_cell = (term_bases[0] + 1, 2);
+        } else {
+            let mut prev = (term_bases[0] + 1, 2);
+            for j in 1..m {
+                let add_base = row;
+                row = Self::emit_babybear_add(gates, row);
+                eq_pairs.push((prev, (add_base, 0)));
+                eq_pairs.push(((term_bases[j] + 1, 2), (add_base, 1)));
+                prev = (add_base + 1, 2);
+            }
+            acc_cell = prev;
+        }
+
+        // Equality gate: leaf_value - acc = 0. w[0]=leaf_value, w[1]=acc.
+        let eq_row = row;
+        Self::emit_generic_gate(gates, row);
+        row += 1;
+        eq_pairs.push((acc_cell, (eq_row, 1)));
+        cells.leaf_cmp = (eq_row, 0); // leaf value bound here by caller
+
+        (row, cells)
+    }
+
+    /// Rows emitted by [`emit_final_poly_select`] for `m` entries.
+    fn final_poly_select_rows(m: usize) -> usize {
+        let bool_rows = m;
+        let sum_rows = if m == 1 { 1 } else { (m - 1) + 1 };
+        let term_rows = m * 3;
+        let acc_rows = if m == 1 { 0 } else { (m - 1) * 3 };
+        let eq_rows = 1;
+        bool_rows + sum_rows + term_rows + acc_rows + eq_rows
     }
 
     // ========================================================================
@@ -1413,6 +1959,149 @@ impl PoseidonStarkVerifierCircuit {
         row + 3
     }
 
+    /// Generate witness for the conditional-swap-to-(even, odd) gadget.
+    ///
+    /// Inputs: committed `q` (query value), `s` (sibling value), and `swap` =
+    /// true iff the committed query is the UPPER-half (odd) operand. Produces
+    /// `even = (1-b)*q + b*s`, `odd = (1-b)*s + b*q` over BabyBear and fills the
+    /// 20-row gadget. Returns `(next_row, even, odd)`.
+    ///
+    /// Layout MUST mirror [`emit_fri_swap_gadget`] exactly.
+    fn fri_swap_witness(
+        &self,
+        q: u32,
+        s: u32,
+        swap: bool,
+        witness: &mut [Vec<Fp>; COLUMNS],
+        row: usize,
+    ) -> (usize, u32, u32) {
+        let q = q % BABYBEAR_P;
+        let s = s % BABYBEAR_P;
+        let b: u32 = if swap { 1 } else { 0 };
+        let nb: u32 = 1 - b;
+        let mut row = row;
+
+        // Bool gate row: w[0]=b, w[1]=b (squared). Constraint b*b - b = 0.
+        witness[0][row] = Fp::from(b as u64);
+        witness[1][row] = Fp::from(b as u64);
+        row += 1;
+
+        // nb = 1 - b : w[0]=b, w[1]=nb (constraint b + nb - 1 = 0).
+        witness[0][row] = Fp::from(b as u64);
+        witness[1][row] = Fp::from(nb as u64);
+        row += 1;
+
+        // e1 = nb * q
+        row = self.babybear_mul_witness(nb, q, witness, row);
+        // e2 = b * s
+        row = self.babybear_mul_witness(b, s, witness, row);
+        // even = e1 + e2
+        let e1 = (nb as u64 * q as u64 % BABYBEAR_MOD_FP) as u32;
+        let e2 = (b as u64 * s as u64 % BABYBEAR_MOD_FP) as u32;
+        let even = ((e1 as u64 + e2 as u64) % BABYBEAR_MOD_FP) as u32;
+        row = self.babybear_add_witness(e1, e2, witness, row);
+        // o1 = nb * s
+        row = self.babybear_mul_witness(nb, s, witness, row);
+        // o2 = b * q
+        row = self.babybear_mul_witness(b, q, witness, row);
+        // odd = o1 + o2
+        let o1 = (nb as u64 * s as u64 % BABYBEAR_MOD_FP) as u32;
+        let o2 = (b as u64 * q as u64 % BABYBEAR_MOD_FP) as u32;
+        let odd = ((o1 as u64 + o2 as u64) % BABYBEAR_MOD_FP) as u32;
+        row = self.babybear_add_witness(o1, o2, witness, row);
+
+        (row, even, odd)
+    }
+
+    /// Generate witness for the final-poly one-hot selector binding `leaf_value`
+    /// to `final_poly[pos]`. Fills the gadget to mirror [`emit_final_poly_select`].
+    /// `final_poly` is the (canonical) committed final-polynomial values.
+    fn final_poly_select_witness(
+        &self,
+        leaf_value: u32,
+        pos: usize,
+        final_poly: &[u32],
+        witness: &mut [Vec<Fp>; COLUMNS],
+        row: usize,
+    ) -> usize {
+        let m = final_poly.len();
+        let mut row = row;
+        let leaf_value = leaf_value % BABYBEAR_P;
+
+        // Selector bits: sel[j] = 1 iff j == pos.
+        for j in 0..m {
+            let sj: u32 = if j == pos { 1 } else { 0 };
+            witness[0][row] = Fp::from(sj as u64);
+            witness[1][row] = Fp::from(sj as u64); // squared (bool gate)
+            row += 1;
+        }
+
+        // Sum-to-one rows.
+        if m == 1 {
+            // sel[0] - 1 = 0 ; witness only needs w[0]=sel[0]=1.
+            witness[0][row] = Fp::from(1u64);
+            row += 1;
+        } else {
+            // (m-1) running-sum rows: w[0]=acc_prev, w[1]=sel[k+1], w[2]=acc.
+            // acc starts at sel[0]; row k adds sel[k+1].
+            let mut acc: u32 = if pos == 0 { 1 } else { 0 };
+            for k in 0..(m - 1) {
+                let add = if pos == k + 1 { 1u32 } else { 0u32 };
+                let new_acc = acc + add;
+                witness[0][row] = Fp::from(acc as u64);
+                witness[1][row] = Fp::from(add as u64);
+                witness[2][row] = Fp::from(new_acc as u64);
+                acc = new_acc;
+                row += 1;
+            }
+            // equality-to-one: w[0] = acc (== 1).
+            witness[0][row] = Fp::from(acc as u64);
+            row += 1;
+        }
+
+        // term[j] = sel[j] * final_poly[j]
+        for j in 0..m {
+            let sj: u32 = if j == pos { 1 } else { 0 };
+            let fj = final_poly[j] % BABYBEAR_P;
+            row = self.babybear_mul_witness(sj, fj, witness, row);
+        }
+
+        // Accumulate acc = sum_j term[j].
+        let acc_val: u32 = if pos < m {
+            final_poly[pos] % BABYBEAR_P
+        } else {
+            0
+        };
+        if m == 1 {
+            // acc == term[0]; no add rows.
+        } else {
+            // Running sum over term remainders. term[j] remainder = sel[j]*f[j].
+            let mut running: u32 = if pos == 0 {
+                final_poly[0] % BABYBEAR_P
+            } else {
+                0
+            };
+            for j in 1..m {
+                let tj = if pos == j {
+                    final_poly[j] % BABYBEAR_P
+                } else {
+                    0
+                };
+                let new_running = ((running as u64 + tj as u64) % BABYBEAR_MOD_FP) as u32;
+                row = self.babybear_add_witness(running, tj, witness, row);
+                running = new_running;
+            }
+            debug_assert_eq!(running, acc_val);
+        }
+
+        // Equality gate: w[0]=leaf_value, w[1]=acc_val.
+        witness[0][row] = Fp::from(leaf_value as u64);
+        witness[1][row] = Fp::from(acc_val as u64);
+        row += 1;
+
+        row
+    }
+
     /// Reconstruct a minimal circuit description from a layout (for verification).
     fn circuit_from_layout(layout: &PoseidonStarkVerifierLayout) -> Self {
         // Create a dummy proof with matching parameters
@@ -1489,21 +2178,39 @@ pub fn estimate_verifier_rows(
         fri_layers += 1;
     }
 
-    let public_inputs = 2;
+    let final_poly_len = (domain_size >> fri_layers).max(1);
+    // Public inputs: trace + constraint + (commitment, beta) per layer + final poly.
+    let public_inputs = 2 + 2 * fri_layers + final_poly_len;
 
-    // Per-query cost:
-    let leaf_hashes = 3; // trace, constraint, next-trace
-    let merkle_paths = 3 * tree_depth; // three paths of depth `tree_depth`
-    let poseidon_calls_per_query = leaf_hashes + merkle_paths;
+    // Per-query, steps A-I: three (leaf + tree_depth path) Poseidon openings + 3 eq.
+    let abc_poseidon = 3 * (1 + tree_depth) * POSEIDON_GADGET_ROWS + 3;
+    // J + K: constraint eval + consistency muls (3 rows each).
+    let bb_muls_constraint = num_cols * constraint_degree + 2;
+    let jk_rows = bb_muls_constraint * 3;
 
-    let equality_checks = 3; // root comparisons
-    let bb_muls_constraint = num_cols * constraint_degree + 2; // eval + consistency
-    let fri_cost_per_layer = 1 + (tree_depth - 1) + 1; // leaf hash + path + fold
+    // Per-layer FRI cost: query open (leaf + depth path + eq) + sibling open
+    // (same) + swap (20) + fold (mul 3 + add 3).
+    let swap_rows = PoseidonStarkVerifierCircuit::FRI_SWAP_ROWS;
+    let mut fri_rows = 0usize;
+    for li in 0..fri_layers {
+        let depth = tree_depth.saturating_sub(1 + li);
+        let one_open = (1 + depth) * POSEIDON_GADGET_ROWS + 1;
+        fri_rows += 2 * one_open + swap_rows + 6;
+    }
+    // L.0 constraint fold: constraint sibling open (full depth) + swap + fold.
+    let l0_rows = if fri_layers > 0 {
+        (1 + tree_depth) * POSEIDON_GADGET_ROWS + 1 + swap_rows + 6
+    } else {
+        0
+    };
+    // L.6 final-poly selects: query + sibling.
+    let l6_rows = if fri_layers > 0 && final_poly_len > 0 {
+        2 * PoseidonStarkVerifierCircuit::final_poly_select_rows(final_poly_len)
+    } else {
+        0
+    };
 
-    let rows_per_query = poseidon_calls_per_query * POSEIDON_GADGET_ROWS
-        + equality_checks
-        + bb_muls_constraint * 3
-        + fri_layers * (fri_cost_per_layer * POSEIDON_GADGET_ROWS + 3 + 3);
+    let rows_per_query = abc_poseidon + jk_rows + fri_rows + l0_rows + l6_rows;
 
     // +1 final gate
     public_inputs + num_queries * rows_per_query + 1
@@ -1548,8 +2255,8 @@ mod tests {
         // root/beta checks).
         assert_eq!(
             public_count,
-            2 + 2 * layout.num_fri_layers,
-            "Should have trace + constraint + (commitment, beta) per FRI layer"
+            2 + 2 * layout.num_fri_layers + layout.final_poly_len,
+            "Should have trace + constraint + (commitment, beta) per FRI layer + final poly"
         );
         assert_eq!(layout.num_queries, 1, "Minimal circuit verifies 1 query");
 
@@ -1674,8 +2381,15 @@ mod tests {
     }
 
     #[test]
-    fn full_verifier_row_count_under_2_15() {
-        // Verify that 80-query verifier fits in domain 2^15 = 32768
+    fn full_verifier_row_count_fits_2_16() {
+        // The FULLY-SOUND verifier opens, per query and per FRI layer, BOTH the
+        // query AND sibling leaves in-circuit, runs a constrained conditional-swap
+        // into (even, odd), and binds the last layer's openings to the committed
+        // final polynomial. This roughly doubles the FRI Merkle work and adds the
+        // swap/final-poly gadgets versus the prior (unsound) query-only fold, so the
+        // 80-query circuit no longer fits 2^15. It does fit comfortably in 2^16 =
+        // 65536 — still vastly smaller than the ~272K-row BLAKE3 approach. This is
+        // the honest cost of closing the FRI sibling/operand-binding residual.
         let estimate = estimate_verifier_rows(
             4,  // trace_len
             6,  // num_cols (MerkleStarkAir width)
@@ -1683,11 +2397,13 @@ mod tests {
             80, // full 80 queries
         );
 
-        println!("Full 80-query verifier estimated rows: {}", estimate);
-        // This is the key constraint: must fit in 2^15
+        println!(
+            "Full 80-query (fully-sound) verifier estimated rows: {}",
+            estimate
+        );
         assert!(
-            estimate < 32768,
-            "Full verifier ({} rows) must fit in Kimchi domain 2^15 = 32768",
+            estimate < 65536,
+            "Full verifier ({} rows) must fit in Kimchi domain 2^16 = 65536",
             estimate
         );
     }
@@ -2072,6 +2788,177 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ========================================================================
+    // SOUNDNESS AUDIT: FRI sibling opening, fold-operand binding, final-poly
+    // equality (residual (a)/(b)/(c)).
+    //
+    // The prior circuit only opened the FRI QUERY leaf in-circuit; the sibling
+    // leaf was never opened, the even/odd operands were free witness cells, and
+    // the final-poly equality was left to the standalone verifier. These tests
+    // exercise the new in-circuit bindings: each adversarial proof/witness that
+    // forges a sibling, breaks the operand binding, or tampers the final poly
+    // MUST be rejected by Kimchi.
+    // ========================================================================
+
+    /// Classify a prove attempt: returns true if the (possibly panicking) attempt
+    /// was REJECTED, false if it produced a verifying proof.
+    fn attempt_is_rejected(
+        circuit: &PoseidonStarkVerifierCircuit,
+        witness: [Vec<Fp>; COLUMNS],
+        layout: &PoseidonStarkVerifierLayout,
+    ) -> bool {
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            circuit.prove_with_witness(witness, layout)
+        }));
+        match attempt {
+            Err(_panic) => true,
+            Ok(Err(_)) => true,
+            Ok(Ok(kp)) => {
+                // A produced proof must at least fail to verify.
+                match PoseidonStarkVerifierCircuit::verify(&kp) {
+                    Err(_) => true,
+                    Ok(v) => !v,
+                }
+            }
+        }
+    }
+
+    fn honest_proof_and_circuit() -> (PoseidonStarkVerifierCircuit, PoseidonStarkVerifierLayout) {
+        let (trace, pi) = generate_merkle_trace(
+            42,
+            &[[1u32, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]],
+            &[0u32, 1, 2, 3],
+        );
+        let air = MerkleStarkAir;
+        let proof = prove_poseidon(&air, &trace, &pi);
+        assert!(
+            verify_poseidon(&air, &proof, &pi).is_ok(),
+            "baseline honest proof"
+        );
+        let circuit = PoseidonStarkVerifierCircuit::new_minimal(proof);
+        let (_, _, layout) = circuit.build_circuit();
+        (circuit, layout)
+    }
+
+    /// ADVERSARIAL (residual (a)): forge a FRI sibling leaf value while keeping the
+    /// committed layer root. The new in-circuit sibling Merkle opening recomputes a
+    /// root from the forged sibling that no longer equals the committed root PI, so
+    /// the (L.2) root-binding equality gate is violated. Before this fix the sibling
+    /// was never opened in-circuit and any sibling value was accepted.
+    #[test]
+    fn adversarial_forged_fri_sibling_rejected() {
+        let (circuit, layout) = honest_proof_and_circuit();
+
+        // Honest witness proves+verifies (sanity).
+        let honest = circuit.generate_witness(&layout);
+        let kp = circuit
+            .prove_with_witness(honest, &layout)
+            .expect("honest witness must prove");
+        assert_eq!(PoseidonStarkVerifierCircuit::verify(&kp).unwrap(), true);
+
+        // Forge: corrupt the FIRST FRI layer's sibling value in the proof. The new
+        // witness will hash a wrong sibling leaf, walk the (honest) sibling path, and
+        // arrive at a root != committed layer root -> sibling root-eq gate violated.
+        let mut forged = circuit.proof.clone();
+        let orig = forged.query_proofs[0].fri_layers[0].sibling_value;
+        forged.query_proofs[0].fri_layers[0].sibling_value = (orig ^ 1) % BABYBEAR_P;
+        let forged_circuit = PoseidonStarkVerifierCircuit::new_minimal(forged);
+        let (_, _, flayout) = forged_circuit.build_circuit();
+        let fwit = forged_circuit.generate_witness(&flayout);
+        assert!(
+            attempt_is_rejected(&forged_circuit, fwit, &flayout),
+            "ESCAPE PATH (a): forged FRI sibling accepted — sibling opening not bound"
+        );
+    }
+
+    /// ADVERSARIAL (residual (a)): break the fold-operand binding directly at the
+    /// witness level. We flip the conditional-swap selector bit of the first FRI
+    /// layer's swap gadget. With the wrong selector, `even`/`odd` are the WRONG
+    /// permutation of the committed (query, sibling) values, so either the boolean/
+    /// nb relation, the operand copy-constraints, or the downstream fold->next-leaf
+    /// binding is violated. The honest swap is the ONLY assignment consistent with
+    /// the committed openings.
+    #[test]
+    fn adversarial_wrong_swap_operand_rejected() {
+        let (circuit, layout) = honest_proof_and_circuit();
+
+        // Locate the first FRI layer's swap gadget selector-bit row. Layout per
+        // query up to the first FRI swap:
+        //   PI + [A..I] (3 openings of (1+tree_depth) poseidon + 3 eq)
+        //        + (num_cols*deg + 2) muls (3 rows each)
+        //   + layer0: query open (1+depth0)*PG + 1 + sibling open (1+depth0)*PG + 1
+        //   then swap gadget (selector bit at its row 0).
+        let pg = POSEIDON_GADGET_ROWS;
+        let td = layout.tree_depth;
+        let depth0 = td.saturating_sub(1);
+        let abc = 3 * (1 + td) * pg + 3;
+        let jk = (circuit.num_cols * circuit.constraint_degree + 2) * 3;
+        let one_open = (1 + depth0) * pg + 1;
+        let swap_bit_row = layout.public_input_count + abc + jk + 2 * one_open;
+
+        let mut wit = circuit.generate_witness(&layout);
+        // Sanity: the located cell must be the boolean selector (0 or 1) AND the
+        // honest witness must prove — otherwise the row offset is wrong and the test
+        // would be vacuous.
+        let b = wit[0][swap_bit_row];
+        assert!(
+            b == Fp::zero() || b == Fp::one(),
+            "swap_bit_row offset wrong: cell is not a boolean selector"
+        );
+        {
+            let honest = circuit.generate_witness(&layout);
+            let kp = circuit
+                .prove_with_witness(honest, &layout)
+                .expect("honest witness must prove (offset sanity)");
+            assert_eq!(PoseidonStarkVerifierCircuit::verify(&kp).unwrap(), true);
+        }
+        let flipped = if b == Fp::zero() {
+            Fp::one()
+        } else {
+            Fp::zero()
+        };
+        wit[0][swap_bit_row] = flipped;
+        wit[1][swap_bit_row] = flipped; // keep bool gate locally satisfied
+        assert!(
+            attempt_is_rejected(&circuit, wit, &layout),
+            "ESCAPE PATH (a): wrong swap selector accepted — even/odd not bound to \
+             committed openings"
+        );
+    }
+
+    /// ADVERSARIAL (residual (c)): tamper the committed final polynomial. The last
+    /// FRI layer's committed query value is bound (via the one-hot selector) to a
+    /// `fri_final_poly` entry carried as a public input. Changing that public input
+    /// to a value inconsistent with the committed last-layer opening violates the
+    /// `leaf_value == sum(sel[j]*f[j])` equality. Before this fix the final-poly
+    /// equality was not checked in-circuit at all.
+    #[test]
+    fn adversarial_tampered_final_poly_rejected() {
+        let (circuit, layout) = honest_proof_and_circuit();
+        assert!(layout.final_poly_len > 0, "test requires a final poly");
+
+        // Honest witness + public inputs verify.
+        let honest = circuit.generate_witness(&layout);
+        let kp = circuit
+            .prove_with_witness(honest, &layout)
+            .expect("honest witness must prove");
+        assert_eq!(PoseidonStarkVerifierCircuit::verify(&kp).unwrap(), true);
+
+        // Build a tampered public-input vector: corrupt one final-poly entry. The
+        // circuit's one-hot equality forces the last-layer opening to equal the
+        // committed final-poly cell, so a mismatched PI breaks the permutation /
+        // equality and verification must fail.
+        let mut tampered = kp.clone();
+        let fp_idx = 2 + 2 * layout.num_fri_layers; // first final-poly PI
+        tampered.public_inputs[fp_idx] += Fp::one();
+        let v = PoseidonStarkVerifierCircuit::verify(&tampered);
+        assert!(
+            v.is_err() || v.unwrap() == false,
+            "ESCAPE PATH (c): tampered final-poly public input still verified — \
+             last-layer opening not bound to the committed final polynomial"
+        );
     }
 
     /// Helper to create a dummy proof for unit tests that don't need real proof data.

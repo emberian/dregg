@@ -536,6 +536,113 @@ pub trait NeighborAdjacencyVerifier: Send + Sync {
     ) -> Result<(), String>;
 }
 
+/// Authority resolving a BlindedSet predicate `commitment` (the stable
+/// `(issuer, schema)` tag) to the issuer's **real, on-chain-published**
+/// membership/revocation accumulator roots.
+///
+/// # Why this exists (the self-fabrication forge)
+///
+/// A [`CredentialSetMembershipProof`] carries `issuer_set_root` /
+/// `revocation_root` *inside the proof*. The membership Merkle path and the
+/// binding tag are self-consistent for ANY pair of roots — including a pair
+/// the prover invented. So a prover can build their own one-leaf accumulator
+/// (containing only themselves) with an empty revocation set, point
+/// `issuer_set_root` at it, and self-attest membership in an issuer's set they
+/// were never admitted to. Closed-form hashing alone cannot detect this,
+/// because nothing pins the prover-supplied roots to the issuer's published
+/// state.
+///
+/// An `IssuerRootAuthority` closes the forge: the host installs an authority
+/// that knows (from the issuer cell's on-chain `MEMBERSHIP_ROOT_SLOT` /
+/// `REVOCATION_ROOT_SLOT`, a federation root registry, etc.) which roots are
+/// genuinely the issuer's. [`CredentialSetMembershipVerifier`] consults it and
+/// rejects any proof whose roots are not authorized for the `commitment`.
+///
+/// # Fail-closed contract
+///
+/// When **no** authority is installed, [`CredentialSetMembershipVerifier`]
+/// **rejects every BlindedSet proof** — it has no channel to the issuer's real
+/// roots and so cannot soundly distinguish an honest member from a
+/// self-fabricator. Refusing is strictly sounder than accepting attacker-chosen
+/// roots ("improve, don't degrade").
+pub trait IssuerRootAuthority: Send + Sync {
+    /// Return `Ok(())` iff `(issuer_set_root, revocation_root)` are the issuer's
+    /// genuine published roots for the BlindedSet `commitment`. Return an
+    /// explanatory `Err(reason)` otherwise (unknown commitment, root mismatch).
+    fn verify_issuer_roots(
+        &self,
+        commitment: &[u8; 32],
+        issuer_set_root: &[u8; 32],
+        revocation_root: &[u8; 32],
+    ) -> Result<(), String>;
+}
+
+/// A static [`IssuerRootAuthority`] backed by an in-memory table of
+/// `commitment -> (issuer_set_root, revocation_root)` bindings.
+///
+/// Production hosts that read issuer roots from on-chain slots install their
+/// own authority; this one suits hosts that snapshot the issuer registry and
+/// fixed-point test wiring. A commitment absent from the table (or present with
+/// different roots) is rejected — fail-closed by construction.
+#[derive(Clone, Debug, Default)]
+pub struct StaticIssuerRootAuthority {
+    bindings: BTreeMap<[u8; 32], ([u8; 32], [u8; 32])>,
+}
+
+impl StaticIssuerRootAuthority {
+    /// Construct an empty authority (rejects everything until roots are added).
+    pub fn new() -> Self {
+        Self {
+            bindings: BTreeMap::new(),
+        }
+    }
+
+    /// Authorize `(issuer_set_root, revocation_root)` for `commitment`.
+    pub fn authorize(
+        mut self,
+        commitment: [u8; 32],
+        issuer_set_root: [u8; 32],
+        revocation_root: [u8; 32],
+    ) -> Self {
+        self.bindings
+            .insert(commitment, (issuer_set_root, revocation_root));
+        self
+    }
+}
+
+impl IssuerRootAuthority for StaticIssuerRootAuthority {
+    fn verify_issuer_roots(
+        &self,
+        commitment: &[u8; 32],
+        issuer_set_root: &[u8; 32],
+        revocation_root: &[u8; 32],
+    ) -> Result<(), String> {
+        match self.bindings.get(commitment) {
+            None => Err(
+                "no issuer roots registered for this (issuer, schema) commitment; \
+                 the prover-supplied accumulator is not a recognized issuer set"
+                    .to_string(),
+            ),
+            Some((set_root, rev_root)) => {
+                if set_root != issuer_set_root {
+                    return Err(
+                        "issuer_set_root does not match the issuer's published membership root \
+                         (self-fabricated accumulator rejected)"
+                            .to_string(),
+                    );
+                }
+                if rev_root != revocation_root {
+                    return Err(
+                        "revocation_root does not match the issuer's published revocation root"
+                            .to_string(),
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// The registry resolving [`WitnessedPredicateKind`]s to their
 /// verifiers.
 ///
@@ -1583,71 +1690,105 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
 ///
 /// 1. `issuer_set_root` — the issuer's published membership-accumulator
 ///    root. The federation only ever sees the root (the "blinded" part).
-/// 2. A Merkle membership path from the holder leaf
-///    `leaf = H_keyed("dregg-credential-holder-leaf-v1", commitment ||
-///    holder)` up to `issuer_set_root`. The leaf binds the holder pubkey
-///    **and** the (issuer, schema) commitment, so a path valid under one
-///    (issuer, schema) is not valid under another, and a path for holder
-///    A is not valid for holder B.
+/// 2. A Merkle membership path from the **hiding committed leaf**
+///    `committed_leaf = H_keyed("dregg-credential-holder-commit-v1",
+///    commitment || holder || holder_blinding)` up to `issuer_set_root`. The
+///    leaf binds the holder pubkey **and** the (issuer, schema) commitment, so
+///    a path valid under one (issuer, schema) is not valid under another, and a
+///    path for holder A is not valid for holder B — yet because the leaf is a
+///    *hiding commitment*, the issuer's tree (and any observer of the published
+///    root or the proof) never sees the holder pubkey. The holder pubkey is in
+///    NO public input. Anti-replay is enforced separately: the verifier
+///    recomputes `committed_leaf` from the *presenting* sender's pubkey +
+///    `holder_blinding`, so the proof only opens for the holder it was minted
+///    for.
 /// 3. `revocation_root` — the issuer's published non-revocation
-///    accumulator root (sorted-leaf set of revoked holders).
+///    accumulator root (sorted-leaf set of revoked *committed leaves*, same
+///    hiding domain so non-revocation stays blind).
 /// 4. A sorted-neighbor non-membership witness
-///    ([`NonMembershipNeighborProof`]) proving `holder` is absent from
+///    ([`NonMembershipNeighborProof`]) proving `committed_leaf` is absent from
 ///    `revocation_root`.
-/// 5. `binding_tag` — `H_keyed("dregg-credential-set-binding-v1",
-///    commitment || holder || issuer_set_root || revocation_root)`. This
-///    cryptographically welds the four public quantities together so a
-///    proof cannot be transplanted across (issuer, schema), holders, or
-///    swapped roots.
+/// 5. `binding_tag` — `H_keyed("dregg-credential-set-binding-v2",
+///    commitment || committed_leaf || issuer_set_root || revocation_root)`.
+///    This cryptographically welds the four **blind** public quantities
+///    together so a proof cannot be transplanted across (issuer, schema) or
+///    have its roots swapped — without exposing the holder.
 ///
 /// # Verification (what the verifier actually checks)
 ///
-/// All checks are closed-form hash recomputations — no STARK, no circuit
-/// dependency (the cell crate cannot depend on `dregg-circuit` /
-/// `dregg-bridge` / `dregg-credentials`; cf. [`NotYetWiredVerifier`]). The
+/// The cell-side checks are closed-form hash recomputations (no `dregg-circuit`
+/// dependency; cf. [`NotYetWiredVerifier`]); the issuer-root binding and
+/// non-revocation adjacency STARK are delegated to host-installed traits. The
 /// verifier:
 ///
 /// - decodes the proof (rejects empty / malformed bytes),
-/// - recomputes `binding_tag` from `(commitment, holder, issuer_set_root,
-///   revocation_root)` and rejects on mismatch (transplant / root-swap
-///   defense),
-/// - recomputes the holder leaf and walks `merkle_path` to a root,
-///   rejecting unless it equals `issuer_set_root` (membership),
-/// - verifies the sorted-neighbor non-membership of `holder` against
+/// - recomputes `committed_leaf` from the presenting `(commitment, sender,
+///   holder_blinding)` and rejects unless it matches (anti-replay / transplant
+///   defense, holder-blind),
+/// - recomputes `binding_tag` from `(commitment, committed_leaf,
+///   issuer_set_root, revocation_root)` and rejects on mismatch (transplant /
+///   root-swap defense),
+/// - walks `merkle_path` from `committed_leaf` to a root, rejecting unless it
+///   equals `issuer_set_root` (membership),
+/// - binds `issuer_set_root` / `revocation_root` to the issuer's real published
+///   roots via the host-installed [`IssuerRootAuthority`] (rejecting
+///   self-fabricated accumulators),
+/// - verifies the sorted-neighbor non-membership of `committed_leaf` against
 ///   `revocation_root` (non-revocation).
 ///
-/// # Silver-Sound vs. Golden-Sound (honest soundness statement)
+/// The closed-form checks need no `dregg-circuit` dependency; the
+/// [`IssuerRootAuthority`] and [`NeighborAdjacencyVerifier`] are host-installed
+/// (the `dregg-turn` executor links the real implementations).
 ///
-/// This is **Silver-Sound, not Golden-Sound**, exactly like
-/// [`SortedNeighborNonMembershipVerifier`]:
+/// # Soundness statement (holder-blind + issuer-bound)
 ///
-/// - **Closed:** empty/garbage proofs, wrong-holder transplant (the leaf
-///   and binding tag both bind `holder`), cross-(issuer,schema) replay
-///   (the leaf and tag bind `commitment`), revoked holders (non-revocation
-///   witness), and root-swap (the binding tag covers both roots).
-/// - **Open (the Silver gap):** the verifier resolves its input from
-///   `InputRef::Sender` only — it has **no channel to the issuer cell's
-///   on-chain `REVOCATION_ROOT_SLOT` / `SCHEMA_COMMITMENT_SLOT`**, so it
-///   cannot confirm that the prover-supplied `issuer_set_root` /
-///   `revocation_root` are the issuer's *real* published roots. A prover
-///   who fabricates their own accumulator containing themselves (and an
-///   empty revocation set) can therefore self-attest. Closing this
-///   requires either (a) the executor binding the issuer cell's slot
-///   values into the [`PredicateInput`] so the verifier can equate them,
-///   or (b) a full STARK that proves the roots are reads of the issuer
-///   cell's state at the turn's state root (Golden Vision). Until then
-///   this verifier is the interim rung: strictly stronger than
-///   reject-all / accept-any, strictly weaker than the issuer-bound
-///   STARK.
+/// - **Holder anonymity (closed):** the holder pubkey appears in NO public
+///   input. The tree leaf is a hiding commitment `committed_leaf`; the binding
+///   tag covers `committed_leaf`, not the holder. An observer of the issuer's
+///   published root or of the proof bytes cannot recover the holder. Anti-replay
+///   is still enforced — the verifier recomputes `committed_leaf` from the
+///   presenting sender + blinding, so the proof only opens for the holder it was
+///   minted for.
+/// - **Issuer-root binding (closed):** the prover-supplied `issuer_set_root` /
+///   `revocation_root` are checked against the issuer's REAL published roots via
+///   the host-installed [`IssuerRootAuthority`]. A prover who fabricates their
+///   own one-leaf accumulator (and an empty revocation set) to self-attest is
+///   rejected, because their root is not the issuer's. When no authority is
+///   installed the verifier **fails closed** (rejects every proof).
+/// - **Also closed:** empty/garbage proofs, wrong-holder transplant (the leaf
+///   commitment does not open under another holder), cross-(issuer,schema)
+///   replay (the leaf and tag bind `commitment`), revoked holders
+///   (non-revocation neighbor witness over `committed_leaf` + adjacency STARK),
+///   and root-swap (the binding tag covers both roots).
+/// - **Open (the residual Golden gap):** the [`IssuerRootAuthority`] equates the
+///   roots to a host-trusted registry/snapshot; it does not (yet) carry a STARK
+///   proving the roots are reads of the issuer cell's state at the turn's state
+///   root. The Golden lift replaces the authority's equality check with that
+///   in-circuit state-read proof.
 ///
 /// # Versioning
 ///
-/// The keyed-derive domains `dregg-credential-holder-leaf-v1`,
-/// `dregg-credential-merkle-v1`, and `dregg-credential-set-binding-v1`
-/// are versioned wire formats; the Golden lift will introduce `-v2`
-/// variants whose tags differ, making the cut-over unambiguous.
+/// The keyed-derive domains `dregg-credential-holder-commit-v1`,
+/// `dregg-credential-merkle-v1`, and `dregg-credential-set-binding-v2`
+/// are versioned wire formats; the `-v2` binding domain (and the
+/// holder-commit leaf) supersede the prior raw-holder `-v1` scheme,
+/// making the holder-blinding cut-over unambiguous.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialSetMembershipProof {
+    /// The **hiding commitment** to the holder that is the membership-tree
+    /// leaf: `committed_leaf = H_keyed("dregg-credential-holder-commit-v1",
+    /// commitment || holder || holder_blinding)`. The issuer's tree and every
+    /// observer of the proof see only this commitment — never the raw holder
+    /// pubkey — so the holder is anonymous against the issuer's published
+    /// accumulator. The Merkle path is over `committed_leaf`, and the binding
+    /// tag covers `committed_leaf` (NOT the holder), so the holder pubkey never
+    /// enters the proof's public inputs.
+    pub committed_leaf: [u8; 32],
+    /// The blinding factor opening `committed_leaf` to the presenting holder.
+    /// The verifier recomputes `committed_leaf` from `(commitment, sender,
+    /// holder_blinding)` to bind the proof to *this* presenter (anti-replay),
+    /// while the blinding keeps the leaf hiding in the issuer's tree.
+    pub holder_blinding: [u8; 32],
     /// The issuer's published membership-accumulator root (blinded set).
     pub issuer_set_root: [u8; 32],
     /// The issuer's published non-revocation accumulator root.
@@ -1673,17 +1814,26 @@ pub struct CredentialSetMembershipProof {
 }
 
 impl CredentialSetMembershipProof {
-    /// Compute the holder leaf hash for the membership accumulator.
+    /// Compute the **hiding** holder-commitment leaf for the membership
+    /// accumulator.
     ///
-    /// `leaf = H_keyed("dregg-credential-holder-leaf-v1", commitment ||
-    /// holder)`. Binding the leaf to both the (issuer, schema)
-    /// `commitment` and the `holder` pubkey is what makes a membership
-    /// path non-transplantable across holders and across (issuer, schema)
-    /// pairs.
-    pub fn holder_leaf(commitment: &[u8; 32], holder: &[u8; 32]) -> [u8; 32] {
-        let mut h = blake3::Hasher::new_derive_key("dregg-credential-holder-leaf-v1");
+    /// `leaf = H_keyed("dregg-credential-holder-commit-v1", commitment ||
+    /// holder || holder_blinding)`. Binding the leaf to the (issuer, schema)
+    /// `commitment` and the `holder` pubkey keeps a membership path
+    /// non-transplantable across holders and across (issuer, schema) pairs; the
+    /// `holder_blinding` makes the commitment **hiding**, so the issuer's tree
+    /// (and any observer of the published root) cannot link the leaf back to the
+    /// holder. This is the holder-anonymity primitive: the leaf in the tree is a
+    /// commitment, not the holder itself.
+    pub fn holder_commit_leaf(
+        commitment: &[u8; 32],
+        holder: &[u8; 32],
+        holder_blinding: &[u8; 32],
+    ) -> [u8; 32] {
+        let mut h = blake3::Hasher::new_derive_key("dregg-credential-holder-commit-v1");
         h.update(commitment);
         h.update(holder);
+        h.update(holder_blinding);
         *h.finalize().as_bytes()
     }
 
@@ -1711,19 +1861,26 @@ impl CredentialSetMembershipProof {
 
     /// Compute the canonical binding tag.
     ///
-    /// `tag = H_keyed("dregg-credential-set-binding-v1", commitment ||
-    /// holder || issuer_set_root || revocation_root)`. Welds all four
-    /// public quantities so the proof cannot be transplanted or have its
-    /// roots swapped.
+    /// `tag = H_keyed("dregg-credential-set-binding-v2", commitment ||
+    /// committed_leaf || issuer_set_root || revocation_root)`. Welds the four
+    /// **blind** public quantities so the proof cannot be transplanted across
+    /// (issuer, schema) or have its roots swapped — WITHOUT placing the holder
+    /// pubkey in the tag. The holder is bound transitively through
+    /// `committed_leaf` (the hiding commitment), so holder anonymity is
+    /// preserved while transplant resistance is retained.
+    ///
+    /// The `-v2` domain differs from the prior `-v1` (which committed the raw
+    /// holder); the version bump makes the holder-blinding cut-over
+    /// unambiguous.
     pub fn binding_tag(
         commitment: &[u8; 32],
-        holder: &[u8; 32],
+        committed_leaf: &[u8; 32],
         issuer_set_root: &[u8; 32],
         revocation_root: &[u8; 32],
     ) -> [u8; 32] {
-        let mut h = blake3::Hasher::new_derive_key("dregg-credential-set-binding-v1");
+        let mut h = blake3::Hasher::new_derive_key("dregg-credential-set-binding-v2");
         h.update(commitment);
-        h.update(holder);
+        h.update(committed_leaf);
         h.update(issuer_set_root);
         h.update(revocation_root);
         *h.finalize().as_bytes()
@@ -1744,39 +1901,53 @@ impl CredentialSetMembershipProof {
         postcard::from_bytes(bytes).ok()
     }
 
-    /// Construct a well-formed honest proof for a holder against a known
-    /// issuer membership accumulator. Prover-side helper.
+    /// Construct a well-formed honest **holder-blinded** proof for a holder
+    /// against a known issuer membership accumulator. Prover-side helper.
     ///
     /// - `commitment`: the (issuer, schema) tag
     ///   ([`crate::program::AuthorizedSet::credential_set_commitment`]).
-    /// - `holder`: the holder pubkey (the `InputRef::Sender` value).
-    /// - `merkle_path`: the membership path from the holder leaf up to
-    ///   the issuer's accumulator root.
-    /// - `revocation_root`: the issuer's published revocation root.
-    /// - `rev_lower`/`rev_upper`: the sorted-set neighbors bracketing
-    ///   `holder` in the revocation set (witnessing non-revocation).
+    /// - `holder`: the holder pubkey (the `InputRef::Sender` value). It is
+    ///   **never placed in the proof** — only its hiding commitment is.
+    /// - `holder_blinding`: the per-credential blinding that makes the leaf
+    ///   commitment hiding (the issuer assigns this when minting the leaf).
+    /// - `merkle_path`: the membership path from the committed-leaf up to the
+    ///   issuer's accumulator root.
+    /// - `revocation_root`: the issuer's published revocation root (a sorted
+    ///   set of revoked *committed leaves*, mirroring the membership domain so
+    ///   non-revocation stays blind).
+    /// - `rev_lower`/`rev_upper`: the sorted-set neighbors bracketing this
+    ///   credential's `committed_leaf` in the revocation set (witnessing
+    ///   non-revocation without revealing the holder).
     ///
-    /// The `issuer_set_root` and `binding_tag` are derived so the result
-    /// verifies under [`CredentialSetMembershipVerifier`].
+    /// The `committed_leaf`, `issuer_set_root`, and `binding_tag` are derived so
+    /// the result verifies under [`CredentialSetMembershipVerifier`] (given a
+    /// matching [`IssuerRootAuthority`] and [`NeighborAdjacencyVerifier`]).
     /// `revocation_adjacency_proof` carries the Merkle-adjacency STARK proving
-    /// `rev_lower`/`rev_upper` are consecutive leaves under `revocation_root`
-    /// (produced by `dregg-circuit`'s adjacency prover). Pass an empty vec only
-    /// for tests that exercise the fail-closed path.
+    /// `rev_lower`/`rev_upper` are consecutive leaves under `revocation_root`.
+    /// Pass an empty vec only for tests exercising the fail-closed path.
     pub fn new(
         commitment: &[u8; 32],
         holder: &[u8; 32],
+        holder_blinding: &[u8; 32],
         merkle_path: Vec<([u8; 32], bool)>,
         revocation_root: [u8; 32],
         rev_lower: [u8; 32],
         rev_upper: [u8; 32],
         revocation_adjacency_proof: Vec<u8>,
     ) -> Self {
-        let leaf = Self::holder_leaf(commitment, holder);
-        let issuer_set_root = Self::merkle_root_from_path(leaf, &merkle_path);
+        let committed_leaf = Self::holder_commit_leaf(commitment, holder, holder_blinding);
+        let issuer_set_root = Self::merkle_root_from_path(committed_leaf, &merkle_path);
         let non_revocation =
             NonMembershipNeighborProof::new(&revocation_root, rev_lower, rev_upper);
-        let binding_tag = Self::binding_tag(commitment, holder, &issuer_set_root, &revocation_root);
+        let binding_tag = Self::binding_tag(
+            commitment,
+            &committed_leaf,
+            &issuer_set_root,
+            &revocation_root,
+        );
         Self {
+            committed_leaf,
+            holder_blinding: *holder_blinding,
             issuer_set_root,
             revocation_root,
             merkle_path,
@@ -1798,18 +1969,49 @@ impl CredentialSetMembershipProof {
 #[derive(Clone, Default)]
 pub struct CredentialSetMembershipVerifier {
     adjacency: Option<Arc<dyn NeighborAdjacencyVerifier>>,
+    issuer_roots: Option<Arc<dyn IssuerRootAuthority>>,
 }
 
 impl CredentialSetMembershipVerifier {
-    /// Construct the fail-closed verifier (no adjacency STARK installed).
+    /// Construct the fail-closed verifier (no adjacency STARK / issuer-root
+    /// authority installed). Rejects every proof.
     pub fn fail_closed() -> Self {
-        Self { adjacency: None }
+        Self {
+            adjacency: None,
+            issuer_roots: None,
+        }
     }
 
-    /// Construct with a host-installed adjacency STARK verifier (production).
+    /// Construct with a host-installed adjacency STARK verifier. The
+    /// issuer-root authority is still absent, so this still fails closed on the
+    /// issuer-root-binding step (use [`Self::production`] for the full wiring).
     pub fn with_adjacency(adjacency: Arc<dyn NeighborAdjacencyVerifier>) -> Self {
         Self {
             adjacency: Some(adjacency),
+            issuer_roots: None,
+        }
+    }
+
+    /// Construct with a host-installed [`IssuerRootAuthority`] (binds the
+    /// prover-supplied roots to the issuer's real published roots) but no
+    /// adjacency verifier — fails closed at the non-revocation adjacency step.
+    pub fn with_issuer_roots(issuer_roots: Arc<dyn IssuerRootAuthority>) -> Self {
+        Self {
+            adjacency: None,
+            issuer_roots: Some(issuer_roots),
+        }
+    }
+
+    /// Construct the **production** verifier: both the adjacency STARK verifier
+    /// AND the issuer-root authority installed. Only this configuration can
+    /// soundly ACCEPT a proof (the others fail closed on a missing leg).
+    pub fn production(
+        adjacency: Arc<dyn NeighborAdjacencyVerifier>,
+        issuer_roots: Arc<dyn IssuerRootAuthority>,
+    ) -> Self {
+        Self {
+            adjacency: Some(adjacency),
+            issuer_roots: Some(issuer_roots),
         }
     }
 }
@@ -1876,41 +2078,102 @@ impl WitnessedPredicateVerifier for CredentialSetMembershipVerifier {
             }
         })?;
 
-        // 1. Binding tag: weld (commitment, holder, issuer_set_root,
-        //    revocation_root). Rejects transplant across (issuer, schema)
-        //    or holder, and root-swap.
-        let expected_tag = CredentialSetMembershipProof::binding_tag(
+        // 1. Holder binding (anti-replay) WITHOUT revealing the holder in the
+        //    proof's public inputs. The verifier recomputes the hiding leaf
+        //    commitment from (commitment, sender, holder_blinding) and checks
+        //    it equals the proof's `committed_leaf`. This binds the proof to
+        //    *this* presenter — a proof minted for holder A does not open under
+        //    holder B's pubkey — while the leaf carried in the proof / the
+        //    issuer's tree is a hiding commitment, never the holder pubkey. The
+        //    holder pubkey appears in NO public input (binding tag, leaf, PI).
+        let recomputed_leaf = CredentialSetMembershipProof::holder_commit_leaf(
             commitment,
             &holder,
+            &proof.holder_blinding,
+        );
+        if recomputed_leaf != proof.committed_leaf {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "BlindedSet",
+                reason: "committed_leaf does not open to the presenting holder under \
+                         H_keyed(\"dregg-credential-holder-commit-v1\", commitment || holder || \
+                         holder_blinding); the proof was minted for a different holder (transplant \
+                         rejected)"
+                    .into(),
+            });
+        }
+
+        // 2. Binding tag: weld (commitment, committed_leaf, issuer_set_root,
+        //    revocation_root) — BLIND quantities only. Rejects transplant
+        //    across (issuer, schema) and root-swap, without the holder pubkey.
+        let expected_tag = CredentialSetMembershipProof::binding_tag(
+            commitment,
+            &proof.committed_leaf,
             &proof.issuer_set_root,
             &proof.revocation_root,
         );
         if proof.binding_tag != expected_tag {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "BlindedSet",
-                reason: "binding_tag does not match H_keyed(\"dregg-credential-set-binding-v1\", \
-                         commitment || holder || issuer_set_root || revocation_root); the proof \
-                         is not bound to this (issuer, schema) commitment + holder + roots"
+                reason: "binding_tag does not match H_keyed(\"dregg-credential-set-binding-v2\", \
+                         commitment || committed_leaf || issuer_set_root || revocation_root); the \
+                         proof is not bound to this (issuer, schema) commitment + leaf + roots"
                     .into(),
             });
         }
 
-        // 2. Membership: recompute the holder leaf and walk the Merkle
-        //    path; it must reach the issuer's published set root.
-        let leaf = CredentialSetMembershipProof::holder_leaf(commitment, &holder);
-        let reached = CredentialSetMembershipProof::merkle_root_from_path(leaf, &proof.merkle_path);
+        // 3. Membership: walk the Merkle path from the committed leaf; it must
+        //    reach the issuer's published set root.
+        let reached = CredentialSetMembershipProof::merkle_root_from_path(
+            proof.committed_leaf,
+            &proof.merkle_path,
+        );
         if reached != proof.issuer_set_root {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "BlindedSet",
                 reason: "Merkle membership path does not reconstruct issuer_set_root from the \
-                         holder leaf; the holder is not provably in the issuer's authorized set"
+                         committed leaf; the holder is not provably in the issuer's authorized set"
                     .into(),
             });
         }
 
-        // 3. Non-revocation: the holder must be absent from the issuer's
-        //    revocation accumulator. Reuse the sorted-neighbor algebra,
-        //    verifying against `revocation_root`.
+        // 4. ISSUER-ROOT BINDING: the prover-supplied issuer_set_root /
+        //    revocation_root must be the issuer's REAL published roots for this
+        //    (issuer, schema) commitment. Without this, a prover can fabricate
+        //    their own one-leaf accumulator and self-attest (the membership
+        //    path is self-consistent for any root). Fail closed when no
+        //    authority is installed — the cell crate has no channel to the
+        //    issuer cell's on-chain state, so it cannot soundly distinguish an
+        //    honest member from a self-fabricator.
+        match &self.issuer_roots {
+            Some(authority) => authority
+                .verify_issuer_roots(commitment, &proof.issuer_set_root, &proof.revocation_root)
+                .map_err(|reason| WitnessedPredicateError::Rejected {
+                    kind_name: "BlindedSet",
+                    reason: format!(
+                        "issuer-root binding failed (prover-supplied accumulator is not the \
+                         issuer's published set): {reason}"
+                    ),
+                })?,
+            None => {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: "BlindedSet",
+                    reason: "no issuer-root authority installed: this registry cannot bind the \
+                             prover-supplied roots to the issuer's real published roots, so it \
+                             fails closed (a self-fabricated accumulator would otherwise be \
+                             accepted). The host must register a CredentialSetMembershipVerifier \
+                             with an IssuerRootAuthority (see \
+                             dregg_turn::executor::membership_verifier)."
+                        .into(),
+                });
+            }
+        }
+
+        // 5. Non-revocation: the holder's COMMITTED LEAF must be absent from
+        //    the issuer's revocation accumulator (a sorted set of revoked
+        //    committed leaves — same domain, so non-revocation stays blind).
+        //    Reuse the sorted-neighbor algebra, verifying against
+        //    `revocation_root` and bracketing `committed_leaf`.
+        let leaf_key = proof.committed_leaf;
         let nr = &proof.non_revocation;
         let expected_adj =
             NonMembershipNeighborProof::adjacency_tag(&proof.revocation_root, &nr.lower, &nr.upper);
@@ -1922,24 +2185,24 @@ impl WitnessedPredicateVerifier for CredentialSetMembershipVerifier {
                     .into(),
             });
         }
-        if nr.lower >= holder {
+        if nr.lower >= leaf_key {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "BlindedSet",
-                reason: "non-revocation lower neighbor is not strictly below the holder \
+                reason: "non-revocation lower neighbor is not strictly below the committed leaf \
                          (the holder may be revoked)"
                     .into(),
             });
         }
-        if holder >= nr.upper {
+        if leaf_key >= nr.upper {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "BlindedSet",
-                reason: "holder is not strictly below the non-revocation upper neighbor \
+                reason: "committed leaf is not strictly below the non-revocation upper neighbor \
                          (the holder may be revoked)"
                     .into(),
             });
         }
 
-        // 4. GOLDEN TEETH: require a real Merkle-adjacency STARK binding the
+        // 6. GOLDEN TEETH: require a real Merkle-adjacency STARK binding the
         //    non-revocation neighbors to CONSECUTIVE leaf indices under
         //    `revocation_root`. Without this, a holder who knows
         //    `revocation_root` could pick wide-bracket sentinels and forge
@@ -2750,27 +3013,47 @@ mod tests {
         *h.finalize().as_bytes()
     }
 
+    /// The per-credential holder blinding used by the BlindedSet tests.
+    const HOLDER_BLINDING: [u8; 32] = [0xB1u8; 32];
+
     /// Build an honest single-member accumulator + non-revocation witness
-    /// for `holder`. The membership path is a depth-1 tree whose other
-    /// leaf is a fixed sibling; the revocation set has the holder absent
-    /// in the open interval (lower, upper).
+    /// for `holder` (holder-blinded). The membership path is a depth-1 tree
+    /// whose other leaf is a fixed sibling; the revocation set has the holder's
+    /// *committed leaf* absent in the open interval (lower, upper).
     fn honest_credential_proof(
         commitment: &[u8; 32],
         holder: &[u8; 32],
     ) -> CredentialSetMembershipProof {
+        honest_credential_proof_blinded(commitment, holder, &HOLDER_BLINDING)
+    }
+
+    fn honest_credential_proof_blinded(
+        commitment: &[u8; 32],
+        holder: &[u8; 32],
+        blinding: &[u8; 32],
+    ) -> CredentialSetMembershipProof {
         let sibling = [0x77u8; 32];
-        let path = vec![(sibling, false)]; // holder is the left child
+        let path = vec![(sibling, false)]; // committed leaf is the left child
         let revocation_root = [0x33u8; 32];
-        // Pick neighbors strictly bracketing the holder. holder is e.g.
-        // [0x05; 32]; (0x04, 0x06) brackets it.
+        // The non-revocation neighbors bracket the *committed leaf*, not the
+        // holder (keeps non-revocation blind). Pick neighbors strictly
+        // bracketing committed_leaf by decrementing/incrementing its last byte.
+        let leaf = CredentialSetMembershipProof::holder_commit_leaf(commitment, holder, blinding);
         let lower = {
-            let mut l = *holder;
-            l[31] = l[31].wrapping_sub(1);
+            let mut l = leaf;
+            // ensure strictly below: zero the last byte (leaf last byte chosen
+            // below to be > 0 by construction is not guaranteed, so subtract on
+            // a non-zero byte). Use a robust bracket: zero out the low 16 bytes.
+            for b in l[16..].iter_mut() {
+                *b = 0;
+            }
             l
         };
         let upper = {
-            let mut u = *holder;
-            u[31] = u[31].wrapping_add(1);
+            let mut u = leaf;
+            for b in u[16..].iter_mut() {
+                *b = 0xFF;
+            }
             u
         };
         // The mock adjacency verifier accepts `b"ADJ-OK"`; the production prover
@@ -2778,12 +3061,41 @@ mod tests {
         CredentialSetMembershipProof::new(
             commitment,
             holder,
+            blinding,
             path,
             revocation_root,
             lower,
             upper,
             b"ADJ-OK".to_vec(),
         )
+    }
+
+    /// Build a `StaticIssuerRootAuthority` authorizing the given proof's roots
+    /// under `commitment` (so the issuer-root-binding leg passes).
+    fn issuer_authority_for(
+        commitment: &[u8; 32],
+        proof: &CredentialSetMembershipProof,
+    ) -> Arc<dyn IssuerRootAuthority> {
+        Arc::new(StaticIssuerRootAuthority::new().authorize(
+            *commitment,
+            proof.issuer_set_root,
+            proof.revocation_root,
+        ))
+    }
+
+    /// A production-shaped registry for a specific honest proof: mock adjacency
+    /// + an issuer-root authority that recognizes the proof's roots.
+    fn registry_for_proof(
+        commitment: &[u8; 32],
+        proof: &CredentialSetMembershipProof,
+    ) -> WitnessedPredicateRegistry {
+        let mut r = WitnessedPredicateRegistry::with_stubs();
+        let adj: Arc<dyn NeighborAdjacencyVerifier> = Arc::new(MockAdjacency);
+        let auth = issuer_authority_for(commitment, proof);
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier::production(
+            adj, auth,
+        )));
+        r
     }
 
     #[test]
@@ -2793,22 +3105,121 @@ mod tests {
         let proof = honest_credential_proof(&commitment, &holder);
         let bytes = proof.to_bytes();
 
-        let reg = registry_with_mock_adjacency();
+        let reg = registry_for_proof(&commitment, &proof);
         let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
         reg.verify(&wp, &PredicateInput::Sender(&holder), &bytes)
             .expect("honest credential-set membership proof must verify");
     }
 
+    /// HOLDER ANONYMITY: the holder pubkey must NOT appear anywhere in the
+    /// serialized proof's public inputs (committed_leaf, binding_tag,
+    /// issuer_set_root, merkle path). Only the hiding commitment does.
+    #[test]
+    fn blinded_set_holder_pubkey_absent_from_public_inputs() {
+        let commitment = cred_commitment();
+        // Use a distinctive holder so a byte-scan is meaningful.
+        let holder = [0xA7u8; 32];
+        let proof = honest_credential_proof(&commitment, &holder);
+
+        // The raw holder pubkey must not be a field of the proof.
+        assert_ne!(
+            proof.committed_leaf, holder,
+            "leaf must be a commitment, not the holder"
+        );
+        assert_ne!(proof.binding_tag, holder);
+        assert_ne!(proof.issuer_set_root, holder);
+        // And it must not appear as a contiguous 32-byte run in the wire bytes.
+        let bytes = proof.to_bytes();
+        let needle = &holder[..];
+        let found = bytes.windows(32).any(|w| w == needle);
+        assert!(
+            !found,
+            "holder pubkey leaked into the serialized BlindedSet proof public inputs"
+        );
+    }
+
+    /// ISSUER-ROOT FORGE (fail-before / pass-after): a prover fabricates their
+    /// OWN one-leaf accumulator (containing only themselves) and self-attests.
+    /// The membership path + binding tag are internally consistent, but the
+    /// issuer-root authority does not recognize the fabricated root, so it
+    /// rejects. (Pre-fix there was no authority and this self-attestation
+    /// succeeded.)
+    #[test]
+    fn blinded_set_rejects_self_fabricated_accumulator() {
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        // The forger's self-built proof (well-formed, but its root is theirs).
+        let forged = honest_credential_proof(&commitment, &holder);
+
+        // The issuer's REAL authority recognizes a DIFFERENT root (a different
+        // member set), not the forger's fabricated one.
+        let honest_other =
+            honest_credential_proof_blinded(&commitment, &[0x09u8; 32], &[0xC2u8; 32]);
+        let mut r = WitnessedPredicateRegistry::with_stubs();
+        let adj: Arc<dyn NeighborAdjacencyVerifier> = Arc::new(MockAdjacency);
+        let auth: Arc<dyn IssuerRootAuthority> =
+            Arc::new(StaticIssuerRootAuthority::new().authorize(
+                commitment,
+                honest_other.issuer_set_root,
+                honest_other.revocation_root,
+            ));
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier::production(
+            adj, auth,
+        )));
+
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = r
+            .verify(&wp, &PredicateInput::Sender(&holder), &forged.to_bytes())
+            .unwrap_err();
+        match err {
+            WitnessedPredicateError::Rejected { reason, .. } => assert!(
+                reason.contains("issuer-root binding failed") || reason.contains("self-fabricated"),
+                "expected issuer-root rejection, got: {reason}"
+            ),
+            other => panic!("expected issuer-root Rejected, got {other:?}"),
+        }
+    }
+
+    /// Fail-closed when no issuer-root authority is installed (even with a valid
+    /// adjacency verifier): an honest, otherwise-valid proof is rejected at the
+    /// issuer-root-binding step.
+    #[test]
+    fn blinded_set_fails_closed_without_issuer_authority() {
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let proof = honest_credential_proof(&commitment, &holder);
+        let mut r = WitnessedPredicateRegistry::with_stubs();
+        let adj: Arc<dyn NeighborAdjacencyVerifier> = Arc::new(MockAdjacency);
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier::with_adjacency(
+            adj,
+        )));
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = r
+            .verify(&wp, &PredicateInput::Sender(&holder), &proof.to_bytes())
+            .unwrap_err();
+        match err {
+            WitnessedPredicateError::Rejected { reason, .. } => assert!(
+                reason.contains("no issuer-root authority installed"),
+                "{reason}"
+            ),
+            other => panic!("expected fail-closed Rejected, got {other:?}"),
+        }
+    }
+
     #[test]
     fn blinded_set_fails_closed_without_adjacency_verifier() {
-        // The default (cell-only) registry has no adjacency verifier; an
-        // otherwise-honest proof fails closed at the non-revocation adjacency
-        // step.
+        // An issuer-root authority is installed (so the issuer-root step
+        // passes) but NO adjacency verifier; an otherwise-honest proof fails
+        // closed at the non-revocation adjacency step.
         let commitment = cred_commitment();
         let holder = [0x05u8; 32];
         let proof = honest_credential_proof(&commitment, &holder);
         let bytes = proof.to_bytes();
-        let reg = WitnessedPredicateRegistry::default_builtins();
+        let mut reg = WitnessedPredicateRegistry::with_stubs();
+        let auth = issuer_authority_for(&commitment, &proof);
+        reg.register_builtin(Arc::new(
+            CredentialSetMembershipVerifier::with_issuer_roots(auth),
+        ));
         let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
         let err = reg
             .verify(&wp, &PredicateInput::Sender(&holder), &bytes)
@@ -2837,8 +3248,8 @@ mod tests {
         proof.non_revocation =
             NonMembershipNeighborProof::new(&revocation_root, [0x00u8; 32], [0xFFu8; 32]);
         proof.revocation_adjacency_proof = Vec::new();
+        let reg = registry_for_proof(&commitment, &proof);
         let bytes = proof.to_bytes();
-        let reg = registry_with_mock_adjacency();
         let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
         let err = reg
             .verify(&wp, &PredicateInput::Sender(&holder), &bytes)
@@ -2960,27 +3371,38 @@ mod tests {
     #[test]
     fn blinded_set_rejects_revoked_holder() {
         // The holder IS in the revocation set: the non-revocation neighbor
-        // witness cannot bracket it in an open interval. Simulate by
-        // building a non-revocation witness whose lower neighbor equals the
-        // holder (i.e. the holder is present at `lower`).
+        // witness cannot bracket the committed leaf in an open interval.
+        // Simulate by building a non-revocation witness whose lower neighbor
+        // equals the committed leaf (i.e. the leaf is present at `lower`).
         let commitment = cred_commitment();
         let holder = [0x05u8; 32];
+        let blinding = HOLDER_BLINDING;
         let sibling = [0x77u8; 32];
         let path = vec![(sibling, false)];
         let revocation_root = [0x33u8; 32];
-        // lower == holder ⇒ holder is in the revocation set ⇒ reject.
+        let leaf =
+            CredentialSetMembershipProof::holder_commit_leaf(&commitment, &holder, &blinding);
+        // lower == committed_leaf ⇒ leaf is in the revocation set ⇒ reject.
+        let upper = {
+            let mut u = leaf;
+            for b in u[16..].iter_mut() {
+                *b = 0xFF;
+            }
+            u
+        };
         let proof = CredentialSetMembershipProof::new(
             &commitment,
             &holder,
+            &blinding,
             path,
             revocation_root,
-            holder,       // lower == holder (revoked)
-            [0x06u8; 32], // upper
+            leaf,  // lower == committed_leaf (revoked)
+            upper, // upper
             b"ADJ-OK".to_vec(),
         );
         let bytes = proof.to_bytes();
 
-        let reg = WitnessedPredicateRegistry::default_builtins();
+        let reg = registry_for_proof(&commitment, &proof);
         let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
         let err = reg
             .verify(&wp, &PredicateInput::Sender(&holder), &bytes)

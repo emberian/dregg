@@ -154,6 +154,7 @@ pub mod quantified_absence;
 pub mod schnorr_curve;
 pub mod schnorr_sig;
 pub mod stark;
+pub mod stark_zk;
 
 #[cfg(feature = "mina")]
 pub mod poseidon_stark;

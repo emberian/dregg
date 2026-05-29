@@ -20,7 +20,7 @@ use thiserror::Error;
 use dregg_circuit::PresentationVerification;
 
 use crate::presentation::Presentation;
-use crate::revocation::RevocationProof;
+use crate::revocation::{NonRevocationError, RevocationProof};
 use crate::schema::{AttrValue, CredentialSchema, PredicateRequest};
 
 /// Options carried by the verifier.
@@ -39,9 +39,20 @@ pub struct VerificationOptions {
     /// Whether the presentation must be anonymous (blinded membership).
     pub require_anonymous: bool,
 
-    /// Optional non-revocation proof. If supplied the verifier checks
-    /// that the credential is not in the revocation set.
+    /// Optional non-revocation proof. If supplied the verifier performs
+    /// a real non-membership check: it recomputes the revocation root
+    /// from the proof's committed witness set, binds it to
+    /// [`Self::expected_revocation_root`] (when set), and checks the
+    /// credential's genuine absence from the committed set.
     pub revocation: Option<RevocationProof>,
+
+    /// Externally-trusted revocation root the proof must be anchored
+    /// against. When `Some`, the proof's root must equal it (rejecting
+    /// stale or attacker-chosen roots). When `None`, the verifier still
+    /// recomputes the root from the witness and checks genuine absence,
+    /// but trusts the proof's own root (suitable only when the proof
+    /// originates from a registry the caller already trusts).
+    pub expected_revocation_root: Option<[u8; 32]>,
 
     /// Federation root the verifier expects the credential to be
     /// anchored against. When `Some`, this is compared against the
@@ -83,6 +94,18 @@ pub enum VerificationError {
     FederationRootMismatch { expected_hex: String },
     #[error("credential is revoked")]
     Revoked,
+    #[error(
+        "anonymous presentation requires a real cryptographic proof, got a non-cryptographic LocalOnly proof"
+    )]
+    LocalOnlyRejected,
+    #[error("predicate proof for `{attribute}` failed cryptographic verification")]
+    PredicateProofInvalid { attribute: String },
+    #[error("predicate proof for `{attribute}` proves a different statement than requested")]
+    PredicateMismatch { attribute: String },
+    #[error("non-revocation witness does not commit to the proof's root")]
+    RevocationRootMismatch,
+    #[error("non-revocation proof anchored against an untrusted revocation root")]
+    RevocationUnexpectedRoot,
 }
 
 /// Verify a presentation against the verifier's expectations.
@@ -122,13 +145,31 @@ fn verify_inner(
         return Err(VerificationError::AnonymityMismatch);
     }
 
-    // 2. Bridge proof check. We accept both `Valid` (real STARK) and
-    //    `LocalOnly` (constraint-check) for the test path. Production
-    //    callers should pass `require_real_stark = true` (TODO when the
-    //    Bridge-Hardening lane lands the proof-to-action binding).
+    // 2. Bridge proof check.
+    //
+    // Anonymous presentations carry an unlinkability guarantee that only a
+    // real STARK (ring-blinded issuer membership) can back. A `LocalOnly`
+    // constraint-check proof has no cryptographic backing and no blinded
+    // leaf, so accepting one for an anonymous presentation would be a
+    // soundness lie: the verifier would "trust" an unlinkability claim that
+    // was never proven. Reject `LocalOnly` whenever anonymity is required,
+    // and additionally require the proof to actually carry a real STARK.
     match &proof.verification {
-        PresentationVerification::Valid | PresentationVerification::LocalOnly => {}
+        PresentationVerification::Valid => {}
+        PresentationVerification::LocalOnly => {
+            if options.require_anonymous {
+                return Err(VerificationError::LocalOnlyRejected);
+            }
+        }
         other => return Err(VerificationError::Bridge(other.clone())),
+    }
+
+    // For anonymous presentations, also require a real STARK proof object
+    // (the ring-blinded issuer membership). `is_valid()` returns true only
+    // when a real STARK / IVC proof is present AND verification is `Valid`,
+    // so this rejects a hand-crafted `verification = Valid` with no proof.
+    if options.require_anonymous && !proof.is_valid() {
+        return Err(VerificationError::LocalOnlyRejected);
     }
 
     // 3. Schema match. Each disclosed attribute must belong to the
@@ -150,16 +191,42 @@ fn verify_inner(
         }
     }
 
-    // 5. Expected predicates must be present (we check name only — the
-    //    actual predicate comparison is delegated to the bridge layer).
+    // 5. Expected predicates must be present AND cryptographically valid.
+    //
+    // SOUNDNESS: matching by attribute *name* alone is forgeable — a holder
+    // could attach a `NamedPredicateProof { attribute: "age", .. }` whose
+    // inner proof proves nothing (or proves a weaker statement). For every
+    // requested predicate we:
+    //   (i)   find a matching named proof,
+    //   (ii)  require its proven statement to equal the requested predicate
+    //         (same operator + threshold/bounds), not just the name, and
+    //   (iii) verify the STARK cryptographically against the proof's own
+    //         `fact_commitment` (which the proof's STARK binds to the
+    //         witnessed value). A garbage / mismatched proof fails here.
     for expected in &options.expected_predicates {
-        if !predicate_proofs
+        let candidate = predicate_proofs
             .iter()
-            .any(|p| p.attribute == expected.attribute)
-        {
-            return Err(VerificationError::MissingPredicate(
-                expected.attribute.clone(),
-            ));
+            .find(|p| p.attribute == expected.attribute)
+            .ok_or_else(|| VerificationError::MissingPredicate(expected.attribute.clone()))?;
+
+        // (ii) The proof must prove exactly the requested statement.
+        if candidate.proof.predicate != expected.predicate {
+            return Err(VerificationError::PredicateMismatch {
+                attribute: expected.attribute.clone(),
+            });
+        }
+
+        // (iii) Cryptographically verify the STARK. We verify against the
+        // proof's own `fact_commitment`; the predicate STARK binds that
+        // commitment to the witnessed value, so a forged or weakened proof
+        // (e.g. a name-only spoof carrying random bytes) fails verification.
+        if !dregg_bridge::present::verify_predicate_proof(
+            &candidate.proof,
+            candidate.proof.fact_commitment,
+        ) {
+            return Err(VerificationError::PredicateProofInvalid {
+                attribute: expected.attribute.clone(),
+            });
         }
     }
 
@@ -172,10 +239,28 @@ fn verify_inner(
         }
     }
 
-    // 7. Revocation check.
+    // 7. Revocation check — a real non-membership check, not a trusted bool.
+    //
+    // The verifier recomputes the revocation root from the proof's
+    // committed witness set, binds it to the trusted expected root (when
+    // supplied), and checks the credential's genuine absence from the
+    // committed set. A holder cannot escape revocation by flipping a
+    // `revoked` boolean: dropping their own id from the witness changes the
+    // recomputed root, which then fails the root-binding check.
     if let Some(rev) = &options.revocation {
-        if rev.revoked {
-            return Err(VerificationError::Revoked);
+        // When no externally-trusted root is configured, trust the proof's
+        // own root for the binding step (the witness-commitment and
+        // absence checks still run). When configured, enforce it.
+        let expected_root = options.expected_revocation_root.unwrap_or(rev.root);
+        match rev.verify_non_revocation(&expected_root) {
+            Ok(()) => {}
+            Err(NonRevocationError::Revoked) => return Err(VerificationError::Revoked),
+            Err(NonRevocationError::RootMismatch) => {
+                return Err(VerificationError::RevocationRootMismatch);
+            }
+            Err(NonRevocationError::UnexpectedRoot) => {
+                return Err(VerificationError::RevocationUnexpectedRoot);
+            }
         }
     }
 

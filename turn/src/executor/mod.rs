@@ -134,6 +134,12 @@ fn estimate_authorization_cost(auth: &Authorization, costs: &ComputronCosts) -> 
             .map(|c| estimate_authorization_cost(c, costs))
             .max()
             .unwrap_or(0),
+        // Stealth: one Ed25519 verify + one point addition; meter as a
+        // signature verify.
+        Authorization::Stealth { .. } => costs.signature_verify,
+        // Token: a biscuit/macaroon cryptographic verify + Datalog/caveat
+        // evaluation; meter as a proof verify (it is the heaviest auth path).
+        Authorization::Token { .. } => costs.proof_verify,
     }
 }
 

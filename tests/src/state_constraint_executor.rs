@@ -378,7 +378,17 @@ fn executor_rate_limit_count_witness_under_cap_accepts() {
 }
 
 #[test]
-fn executor_rate_limit_count_witness_at_cap_rejects() {
+fn executor_ignores_self_attested_rate_limit_count_witness_at_cap() {
+    // SECURITY (audit item 2): RateLimit no longer trusts a self-attested
+    // `RateLimitCount` witness — the count comes ONLY from the executor's
+    // authoritative per-(cell, sender, epoch) counter (ctx.sender_epoch_count).
+    // Pre-fix, an at-cap (=3) witness made the executor REJECT, which meant a
+    // submitter could equally attest count=0 to BYPASS the limit. Post-fix the
+    // witness is IGNORED: the authoritative count for this fresh ledger is 0
+    // (< cap 3), so the action COMMITS regardless of the at-cap witness. A
+    // submitter therefore cannot use the witness to either trip or evade the
+    // limit. (Real over-cap rejection is driven by the authoritative counter;
+    // see the lib test `rate_limit_ignores_self_attested_count_witness`.)
     let program = CellProgram::Predicate(vec![StateConstraint::RateLimit {
         max_per_epoch: 3,
         epoch_duration: 1024,
@@ -398,8 +408,8 @@ fn executor_rate_limit_count_witness_at_cap_rejects() {
     );
     let result = executor.execute(&turn, &mut ledger);
     assert!(
-        matches!(result, TurnResult::Rejected { .. }),
-        "expected executor to reject at-cap RateLimitCount witness, got: {result:?}"
+        matches!(result, TurnResult::Committed { .. }),
+        "at-cap RateLimitCount witness must be IGNORED; authoritative count 0 commits, got: {result:?}"
     );
 }
 
@@ -767,26 +777,76 @@ fn executor_rejects_cell_declaring_renounced_variant_today() {
 #[test]
 fn executor_renounced_accepts_when_sender_not_in_set() {
     // Cell declares Renounced { BlindedSet { commitment } }.
-    // Agent (sender) has pk with first byte 0x0B; proof brackets it between
-    // lower=0x0A.. and upper=0x0C..  The executor wires default_builtins()
-    // (SortedNeighborNonMembershipVerifier), and the action carries the 96-byte
-    // neighbor proof as a ProofBytes witness blob.
-    use dregg_cell::predicate::NonMembershipNeighborProof;
+    //
+    // SECURITY (wide-bracket forge closed): the bare 96-byte neighbor proof is
+    // now rejected. A legal renunciation must ship a `NonMembershipProofV2`
+    // whose `lower`/`upper` are CONSECUTIVE leaves under the committed set root,
+    // proven by a real Merkle-adjacency STARK, and the executor must wire the
+    // adjacency-backed registry (`registry_with_real_verifiers`). We build a
+    // genuine 4-leaf sorted adjacency tree, take its root as the predicate
+    // commitment, and bracket the agent's sender key between two consecutive
+    // leaves. This is the real end-to-end honest path (no mock).
+    use dregg_cell::predicate::{NonMembershipNeighborProof, NonMembershipProofV2};
     use dregg_cell::program::RenouncedSet;
+    use dregg_circuit::poseidon2::hash_2_to_1;
     use dregg_turn::action::{WitnessBlob, WitnessKind};
+    use dregg_turn::executor::membership_verifier::{
+        NeighborAdjStep, adjacency_commitment_bytes, adjacency_leaf_felt, prove_neighbor_adjacency,
+        registry_with_real_verifiers,
+    };
 
-    let commitment = [0xABu8; 32];
     // Agent pk is controlled by make_cell_with_program(seed=11, …):
     //   pk[0] = 11 = 0x0B, pk[31] = 11*7 = 77 = 0x4D, rest = 0x00.
-    // lower = [0x0A; 32]: 0x0A00…00 < 0x0B00…00 ✓
-    // upper = [0x0C; 32]: 0x0B00…00 < 0x0C00…00 ✓
+    // Candidate (raw 32-byte order) sits strictly between lower=0x0A.. and
+    // upper=0x0C.. We embed those as the two MIDDLE (consecutive) leaves of a
+    // sorted 4-leaf tree: 0x05 < 0x0A(lower) < 0x0C(upper) < 0x40.
     let mut lower = [0u8; 32];
     lower[0] = 0x0A;
     let mut upper = [0u8; 32];
     upper[0] = 0x0C;
+    let neighbors: [[u8; 32]; 4] = [[0x05u8; 32], lower, upper, [0x40u8; 32]];
 
-    let proof = NonMembershipNeighborProof::new(&commitment, lower, upper);
-    let proof_bytes = proof.to_bytes().to_vec();
+    // Build the binary Poseidon2 tree over compress(neighbor) leaves; the root
+    // felt's LE bytes are the published set commitment.
+    let leaves: Vec<_> = neighbors.iter().map(adjacency_leaf_felt).collect();
+    let mut levels: Vec<Vec<_>> = vec![leaves];
+    while levels.last().unwrap().len() > 1 {
+        let cur = levels.last().unwrap();
+        let next: Vec<_> = cur.chunks(2).map(|p| hash_2_to_1(p[0], p[1])).collect();
+        levels.push(next);
+    }
+    let root_felt = *levels.last().unwrap().first().unwrap();
+    let commitment = adjacency_commitment_bytes(root_felt);
+
+    // Authentication paths for the two consecutive leaves (indices 1, 2).
+    let auth_path = |mut index: usize| -> Vec<NeighborAdjStep> {
+        let depth = levels.len() - 1;
+        let mut path = Vec::with_capacity(depth);
+        for level in &levels[..depth] {
+            let is_right = index & 1 == 1;
+            let sibling = if is_right {
+                level[index - 1]
+            } else {
+                level[index + 1]
+            };
+            path.push(NeighborAdjStep {
+                sibling,
+                dir: is_right,
+            });
+            index >>= 1;
+        }
+        path
+    };
+    let lp = auth_path(1);
+    let up = auth_path(2);
+    let adjacency_proof = prove_neighbor_adjacency(&lower, &lp, &upper, &up)
+        .expect("consecutive neighbors must produce an adjacency proof");
+
+    let proof = NonMembershipProofV2 {
+        neighbor: NonMembershipNeighborProof::new(&commitment, lower, upper),
+        adjacency_proof,
+    };
+    let proof_bytes = proof.to_bytes();
 
     let program = CellProgram::Predicate(vec![StateConstraint::Renounced {
         set: RenouncedSet::BlindedSet { commitment },
@@ -796,7 +856,8 @@ fn executor_renounced_accepts_when_sender_not_in_set() {
     let mut ledger = Ledger::new();
     ledger.insert_cell(agent_cell).unwrap();
 
-    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let executor = TurnExecutor::new(ComputronCosts::zero())
+        .with_witnessed_registry(registry_with_real_verifiers());
 
     // Build a SetField turn carrying the non-membership proof as a ProofBytes blob.
     let mut forest = CallForest::new();

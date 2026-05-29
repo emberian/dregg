@@ -201,7 +201,15 @@ fn present_impl(
         BridgePresentationBuilder::new(credential.root_key, credential.federation_root);
     builder.set_root_token(root_token);
 
-    // Re-apply the issuance attenuation: confine_user + features.
+    // Re-apply the issuance attenuation features.
+    //
+    // UNLINKABILITY: for anonymous presentations we MUST NOT bind the
+    // holder's identity (`confine_user` / the request's `user_id`) into the
+    // proof. Doing so would make two shows of the same credential linkable
+    // by the shared `holder_user`, defeating the per-presentation
+    // ring-blinding that `prove()` applies (fresh `blinding_factor` →
+    // fresh `blinded_leaf` each show). Non-anonymous presentations keep the
+    // `confine_user` binding (standard macaroon holder confinement).
     let holder_user = hex_encode(&credential.holder_id);
     let mut features = Vec::with_capacity(credential.attributes.attributes.len() + 1);
     features.push(format!("schema:{}", credential.schema.name));
@@ -221,7 +229,14 @@ fn present_impl(
     }
 
     let att = dregg_token::Attenuation {
-        confine_user: Some(holder_user.clone()),
+        // Bind the holder only for non-anonymous presentations. Anonymous
+        // presentations omit `confine_user` so multi-show is unlinkable
+        // (see the UNLINKABILITY note above).
+        confine_user: if anonymous {
+            None
+        } else {
+            Some(holder_user.clone())
+        },
         features: features.clone(),
         not_after: credential.not_after,
         apps,
@@ -262,7 +277,12 @@ fn present_impl(
     // Anonymous presentations always use the Poseidon2 path because the
     // blinding-factor mechanism lives only on `prove_real`.
     let mut proof_request = request.clone();
-    proof_request.user_id = Some(holder_user);
+    // UNLINKABILITY: only bind the holder identity into the request for
+    // non-anonymous presentations. Anonymous presentations leave
+    // `user_id` unset so the proof cannot be correlated across shows.
+    if !anonymous {
+        proof_request.user_id = Some(holder_user);
+    }
     for feature in &features {
         if !proof_request.features.iter().any(|f| f == feature) {
             proof_request.features.push(feature.clone());
@@ -270,6 +290,10 @@ fn present_impl(
     }
 
     let proof = if anonymous {
+        // Anonymous path: real STARK with per-presentation ring-blinding.
+        // `prove()` generates a fresh `blinding_factor` each call, so the
+        // public `blinded_leaf` differs across shows of the same credential
+        // — the genuine unlinkable machinery from `bridge::present`.
         builder
             .prove(&proof_request)
             .map_err(|e| PresentationError::Bridge(format!("{e:?}")))?

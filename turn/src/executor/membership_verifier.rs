@@ -30,10 +30,12 @@
 use std::sync::Arc;
 
 use dregg_cell::predicate::{
-    NeighborAdjacencyVerifier, PredicateInput, WitnessedPredicateError, WitnessedPredicateKind,
-    WitnessedPredicateRegistry, WitnessedPredicateVerifier,
+    IssuerRootAuthority, NeighborAdjacencyVerifier, PredicateInput, WitnessedPredicateError,
+    WitnessedPredicateKind, WitnessedPredicateRegistry, WitnessedPredicateVerifier,
 };
+use dregg_cell::value_commitment::verify_range_bytes;
 use dregg_circuit::BabyBear;
+use dregg_circuit::dsl::circuit::ProgramRegistry;
 use dregg_circuit::dsl::membership::{
     generate_merkle_poseidon2_trace, prove_membership_dsl, verify_membership_dsl,
 };
@@ -42,6 +44,9 @@ use dregg_circuit::membership_adjacency_air::{
 };
 use dregg_circuit::poseidon2;
 use dregg_circuit::stark::{StarkProof, proof_from_bytes, proof_to_bytes};
+use dregg_circuit::temporal_predicate_dsl::{
+    TemporalPredicateProof, TemporalPredicateRequirement, verify_temporal_predicate,
+};
 
 const KIND_NAME: &str = "MerkleMembership";
 
@@ -309,6 +314,278 @@ pub fn adjacency_leaf_felt(neighbor: &[u8; 32]) -> BabyBear {
     compress(neighbor)
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Dfa — real DSL-circuit STARK verifier (dregg_circuit::dsl::circuit).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Wire encoding for a [`WitnessedPredicateKind::Dfa`] proof.
+///
+/// Layout (postcard): `{ public_inputs: Vec<u32>, stark: Vec<u8> }`. The
+/// `public_inputs` are the BabyBear public inputs (as canonical u32s) the DSL
+/// program's AIR boundary-constrains; the STARK binds them, so a forger cannot
+/// substitute a different transition. The program *descriptor* is NOT carried —
+/// it is resolved from the host-trusted [`ProgramRegistry`] by `commitment`
+/// (the program's `vk_hash`), so a prover cannot swap in their own circuit.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DfaProofWire {
+    public_inputs: Vec<u32>,
+    stark: Vec<u8>,
+}
+
+/// Real DSL-circuit-backed verifier for [`WitnessedPredicateKind::Dfa`].
+///
+/// Holds a host-installed [`ProgramRegistry`] of deployed DSL programs. The
+/// predicate `commitment` is the program `vk_hash`; the verifier looks the
+/// program up and calls `CellProgram::verify_transition`, which runs
+/// `dregg_circuit::stark::verify` over the program's AIR. A `vk_hash` absent
+/// from the registry fails closed (an unknown / self-declared circuit is never
+/// trusted). Verification is the authoritative STARK gate — not a field compare.
+#[derive(Clone)]
+pub struct DslCircuitDfaVerifier {
+    programs: Arc<ProgramRegistry>,
+}
+
+impl DslCircuitDfaVerifier {
+    /// Construct from a host-trusted registry of deployed DSL programs.
+    pub fn new(programs: Arc<ProgramRegistry>) -> Self {
+        Self { programs }
+    }
+}
+
+impl WitnessedPredicateVerifier for DslCircuitDfaVerifier {
+    fn name(&self) -> &'static str {
+        "dsl-circuit-dfa"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Dfa
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        _input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        let wire: DfaProofWire =
+            postcard::from_bytes(proof_bytes).map_err(|e| WitnessedPredicateError::Rejected {
+                kind_name: "Dfa",
+                reason: format!("Dfa proof wire did not decode (expected DfaProofWire): {e}"),
+            })?;
+        let program =
+            self.programs
+                .get(commitment)
+                .ok_or_else(|| WitnessedPredicateError::Rejected {
+                    kind_name: "Dfa",
+                    reason:
+                        "no DSL program registered for this vk_hash (commitment); the circuit is \
+                         not host-trusted, so the proof fails closed"
+                            .into(),
+                })?;
+        let public_inputs: Vec<BabyBear> = wire
+            .public_inputs
+            .iter()
+            .map(|v| BabyBear::new(*v))
+            .collect();
+        program
+            .verify_transition(&public_inputs, &wire.stark)
+            .map_err(|e| WitnessedPredicateError::Rejected {
+                kind_name: "Dfa",
+                reason: format!("DSL-circuit transition STARK rejected: {e:?}"),
+            })
+    }
+}
+
+/// Produce a serialized [`WitnessedPredicateKind::Dfa`] proof for the program
+/// identified by `vk_hash`, given witness column values and the public inputs.
+/// The returned bytes verify under [`DslCircuitDfaVerifier`] when the same
+/// program is registered.
+pub fn prove_dfa_transition(
+    programs: &ProgramRegistry,
+    vk_hash: &[u8; 32],
+    witness_values: &std::collections::HashMap<String, Vec<BabyBear>>,
+    num_rows: usize,
+    public_inputs: &[BabyBear],
+) -> Result<Vec<u8>, String> {
+    let program = programs
+        .get(vk_hash)
+        .ok_or_else(|| "no DSL program registered for vk_hash".to_string())?;
+    let stark = program
+        .prove_transition(witness_values, num_rows, public_inputs)
+        .map_err(|e| format!("{e:?}"))?;
+    let wire = DfaProofWire {
+        public_inputs: public_inputs.iter().map(|f| f.as_u32()).collect(),
+        stark,
+    };
+    Ok(postcard::to_allocvec(&wire).expect("DfaProofWire serialization is infallible"))
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Temporal — real temporal-predicate STARK verifier
+// (dregg_circuit::temporal_predicate_dsl).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Host-installed authority mapping a [`WitnessedPredicateKind::Temporal`]
+/// predicate `commitment` (the policy `dsl_hash`) to the authoritative policy
+/// the proof must satisfy: the requirement (`predicate_type`, `threshold`,
+/// `min_duration_steps`) and the state-root endpoints the proof binds to.
+///
+/// This closes the soundness hole of trusting the proof's own claimed
+/// threshold / num_steps / roots: the verifier reconstructs the STARK public
+/// inputs from *these host-trusted values*, so a prover cannot lower the
+/// threshold or shorten the duration.
+pub trait TemporalPolicyAuthority: Send + Sync {
+    /// Return the authoritative policy for `commitment`, or `None` if no policy
+    /// is registered (the verifier then fails closed).
+    fn policy(&self, commitment: &[u8; 32]) -> Option<TemporalPolicy>;
+}
+
+/// An authoritative temporal policy: the requirement the proof must satisfy and
+/// the exact STARK boundary parameters (num_steps + state-root endpoints).
+#[derive(Clone, Debug)]
+pub struct TemporalPolicy {
+    /// The requirement (predicate type, threshold, minimum duration).
+    pub requirement: TemporalPredicateRequirement,
+    /// The exact number of steps the STARK boundary commits to.
+    pub num_steps: u32,
+    /// The initial state-root the proof must bind to (BabyBear, as u32).
+    pub initial_state_root: u32,
+    /// The final state-root the proof must bind to (BabyBear, as u32).
+    pub final_state_root: u32,
+}
+
+/// Real temporal-predicate-STARK-backed verifier for
+/// [`WitnessedPredicateKind::Temporal`].
+///
+/// Decodes a serialized [`TemporalPredicateProof`], looks up the authoritative
+/// [`TemporalPolicy`] for the `commitment`, and calls
+/// `verify_temporal_predicate` with the policy's threshold / num_steps / roots —
+/// NOT the proof's self-claimed values. It additionally enforces
+/// `TemporalPredicateRequirement::is_satisfied_by` (predicate type + minimum
+/// duration). A commitment with no registered policy fails closed.
+#[derive(Clone)]
+pub struct TemporalPredicateStarkVerifier {
+    policies: Arc<dyn TemporalPolicyAuthority>,
+}
+
+impl TemporalPredicateStarkVerifier {
+    /// Construct from a host-trusted policy authority.
+    pub fn new(policies: Arc<dyn TemporalPolicyAuthority>) -> Self {
+        Self { policies }
+    }
+}
+
+impl WitnessedPredicateVerifier for TemporalPredicateStarkVerifier {
+    fn name(&self) -> &'static str {
+        "temporal-predicate-stark"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::Temporal
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        _input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        let proof: TemporalPredicateProof =
+            postcard::from_bytes(proof_bytes).map_err(|e| WitnessedPredicateError::Rejected {
+                kind_name: "Temporal",
+                reason: format!(
+                    "Temporal proof wire did not decode (expected TemporalPredicateProof): {e}"
+                ),
+            })?;
+        let policy =
+            self.policies
+                .policy(commitment)
+                .ok_or_else(|| WitnessedPredicateError::Rejected {
+                    kind_name: "Temporal",
+                    reason:
+                        "no temporal policy registered for this commitment (dsl_hash); the policy \
+                         is not host-trusted, so the proof fails closed"
+                            .into(),
+                })?;
+
+        // Enforce the host policy against the proof's plain fields first (cheap
+        // gate: predicate type + minimum duration). These are re-bound by the
+        // STARK below, but checking them here yields precise rejection reasons.
+        if !policy.requirement.is_satisfied_by(&proof) {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "Temporal",
+                reason: "temporal proof does not satisfy the host policy (predicate type, \
+                         threshold floor, or minimum duration)"
+                    .into(),
+            });
+        }
+
+        // Authoritative STARK gate: reconstruct PI from the HOST policy's
+        // threshold / num_steps / roots (not the proof's self-claimed values).
+        // A proof whose embedded values disagree with the policy yields a PI
+        // that mismatches the STARK boundary commitments and is rejected.
+        let threshold = BabyBear::new(policy.requirement.threshold as u32);
+        let initial = BabyBear::new(policy.initial_state_root);
+        let final_ = BabyBear::new(policy.final_state_root);
+        if verify_temporal_predicate(&proof, threshold, policy.num_steps, initial, final_) {
+            Ok(())
+        } else {
+            Err(WitnessedPredicateError::Rejected {
+                kind_name: "Temporal",
+                reason: "temporal-predicate STARK rejected (the predicate did not hold \
+                         continuously over the policy's step range against the policy's roots)"
+                    .into(),
+            })
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PedersenEquality — real Bulletproof opening verifier
+// (dregg_cell::value_commitment).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Real Bulletproof-backed verifier for [`WitnessedPredicateKind::PedersenEquality`].
+///
+/// The predicate `commitment` is a 32-byte compressed Ristretto Pedersen
+/// commitment; the proof bytes are a Bulletproof range proof. Verification
+/// (`dregg_cell::value_commitment::verify_range_bytes`) accepts iff the prover
+/// knows a valid opening of `commitment` to a 64-bit value — a genuine
+/// zero-knowledge proof of a valid Pedersen opening bound to the commitment. A
+/// non-point commitment or malformed / wrong-commitment proof fails closed.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PedersenBulletproofVerifier;
+
+impl WitnessedPredicateVerifier for PedersenBulletproofVerifier {
+    fn name(&self) -> &'static str {
+        "pedersen-bulletproof"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::PedersenEquality
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        _input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        if proof_bytes.is_empty() {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "PedersenEquality",
+                reason: "empty Bulletproof range proof".into(),
+            });
+        }
+        verify_range_bytes(commitment, proof_bytes).map_err(|e| WitnessedPredicateError::Rejected {
+            kind_name: "PedersenEquality",
+            reason: format!(
+                "Bulletproof opening proof rejected for the Pedersen commitment: {e:?}"
+            ),
+        })
+    }
+}
+
 /// Build the **production** witnessed-predicate registry: the real STARK-backed
 /// MerkleMembership verifier *plus* the real adjacency-backed NonMembership and
 /// BlindedSet verifiers, installed on top of `default_builtins`.
@@ -323,13 +600,26 @@ pub fn adjacency_leaf_felt(neighbor: &[u8; 32]) -> BabyBear {
 ///   [`CircuitNeighborAdjacencyVerifier`] installed (consecutive-index
 ///   adjacency STARK; `StateConstraint::Renounced`).
 /// - `BlindedSet` → `CredentialSetMembershipVerifier` with the adjacency
-///   verifier installed (`SenderAuthorized { CredentialSet }`).
+///   verifier installed. NOTE: no [`IssuerRootAuthority`] is installed here, so
+///   BlindedSet **fails closed on the issuer-root-binding step** (it cannot bind
+///   prover-supplied roots to the issuer's real roots). Use
+///   [`registry_with_real_verifiers_full`] to install the authority and make
+///   BlindedSet acceptable.
+/// - `PedersenEquality` → [`PedersenBulletproofVerifier`] (real Bulletproof
+///   opening proof over `dregg_cell::value_commitment`; needs no host context).
 ///
-/// Kinds whose real verifier lives in *other* crates remain fail-closed
-/// (`NotYetWiredVerifier`): `Dfa` (`dregg_circuit::dsl::circuit`), `Temporal`
-/// (`dregg_circuit::temporal_predicate_dsl`), `BridgePredicate`
-/// (`dregg_bridge::present::verify_predicate_proof`), and `PedersenEquality`
-/// (Schnorr/Bulletproof). Those hosts must install their adapters separately.
+/// Kinds that need host-trusted context remain fail-closed here and are wired by
+/// [`registry_with_real_verifiers_full`]: `Dfa` (needs a [`ProgramRegistry`]),
+/// `Temporal` (needs a [`TemporalPolicyAuthority`]), and `BlindedSet`'s
+/// issuer-root binding (needs an [`IssuerRootAuthority`]).
+///
+/// `BridgePredicate` REMAINS fail-closed (`NotYetWiredVerifier`) in BOTH
+/// constructors: its real verifier is `dregg_bridge::present::verify_predicate_proof`,
+/// which lives in `dregg-bridge` — a crate `dregg-turn` does **not** depend on
+/// (turn → cell + circuit only). Wiring it from here would create a new
+/// dependency edge; a host that links `dregg-bridge` must register its
+/// BridgePredicate adapter via `register_builtin`. This is left fail-closed
+/// rather than faked.
 pub fn registry_with_real_verifiers() -> WitnessedPredicateRegistry {
     use dregg_cell::predicate::{
         CredentialSetMembershipVerifier, SortedNeighborNonMembershipVerifier,
@@ -344,6 +634,45 @@ pub fn registry_with_real_verifiers() -> WitnessedPredicateRegistry {
     ));
     r.register_builtin(Arc::new(CredentialSetMembershipVerifier::with_adjacency(
         adjacency,
+    )));
+    // PedersenEquality needs no host context — wire its real verifier here too.
+    r.register_builtin(Arc::new(PedersenBulletproofVerifier));
+    r
+}
+
+/// Build the **fully production-wired** witnessed-predicate registry, installing
+/// every real verifier whose backend lives in `dregg-cell` / `dregg-circuit`,
+/// given the host-trusted context each context-dependent kind requires.
+///
+/// On top of [`registry_with_real_verifiers`] it additionally installs:
+///
+/// - `Dfa` → [`DslCircuitDfaVerifier`] over `programs` (a deployed
+///   [`ProgramRegistry`]); a `vk_hash` absent from it fails closed.
+/// - `Temporal` → [`TemporalPredicateStarkVerifier`] over `temporal_policies`;
+///   a commitment with no policy fails closed.
+/// - `BlindedSet` → `CredentialSetMembershipVerifier::production` with both the
+///   adjacency STARK verifier AND `issuer_roots` (so the issuer-root binding can
+///   ACCEPT honest members and reject self-fabricated accumulators).
+///
+/// `BridgePredicate` still fails closed (its verifier is in `dregg-bridge`; see
+/// [`registry_with_real_verifiers`]).
+pub fn registry_with_real_verifiers_full(
+    programs: Arc<ProgramRegistry>,
+    temporal_policies: Arc<dyn TemporalPolicyAuthority>,
+    issuer_roots: Arc<dyn IssuerRootAuthority>,
+) -> WitnessedPredicateRegistry {
+    use dregg_cell::predicate::CredentialSetMembershipVerifier;
+
+    let adjacency: Arc<dyn NeighborAdjacencyVerifier> = Arc::new(CircuitNeighborAdjacencyVerifier);
+
+    let mut r = registry_with_real_verifiers();
+    r.register_builtin(Arc::new(DslCircuitDfaVerifier::new(programs)));
+    r.register_builtin(Arc::new(TemporalPredicateStarkVerifier::new(
+        temporal_policies,
+    )));
+    r.register_builtin(Arc::new(CredentialSetMembershipVerifier::production(
+        adjacency,
+        issuer_roots,
     )));
     r
 }
@@ -586,5 +915,352 @@ mod tests {
     #[allow(non_snake_case)]
     fn PredicateInputRefSender() -> dregg_cell::predicate::InputRef {
         dregg_cell::predicate::InputRef::Sender
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Dfa / Temporal / PedersenEquality real-verifier wiring tests.
+    // ─────────────────────────────────────────────────────────────────────
+
+    use dregg_cell::predicate::StaticIssuerRootAuthority;
+    use dregg_cell::value_commitment::prove_range_bytes;
+    use dregg_circuit::PredicateType;
+    use dregg_circuit::dsl::circuit::{
+        CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
+    };
+    use dregg_circuit::field::BABYBEAR_P;
+    use std::collections::HashMap;
+
+    /// A minimal balance-conservation DSL descriptor (the canonical 6-column
+    /// sovereign transition): `new = old - transfer + 2*dir*transfer`, `dir`
+    /// boolean. Used to exercise the Dfa verifier end-to-end.
+    fn dfa_descriptor() -> CircuitDescriptor {
+        let v = |name: &str, index, kind| ColumnDef {
+            name: name.to_string(),
+            index,
+            kind,
+        };
+        CircuitDescriptor {
+            name: "dfa-test-conservation-v1".to_string(),
+            trace_width: 6,
+            max_degree: 2,
+            columns: vec![
+                v("old_balance", 0, ColumnKind::Value),
+                v("transfer_amount", 1, ColumnKind::Value),
+                v("new_balance", 2, ColumnKind::Value),
+                v("direction", 3, ColumnKind::Binary),
+                v("pad0", 4, ColumnKind::Value),
+                v("pad1", 5, ColumnKind::Value),
+            ],
+            constraints: vec![
+                ConstraintExpr::Binary { col: 3 },
+                ConstraintExpr::Polynomial {
+                    terms: vec![
+                        PolyTerm {
+                            coeff: BabyBear::ONE,
+                            col_indices: vec![2],
+                        },
+                        PolyTerm {
+                            coeff: BabyBear::new(BABYBEAR_P - 1),
+                            col_indices: vec![0],
+                        },
+                        PolyTerm {
+                            coeff: BabyBear::new(BABYBEAR_P - 1),
+                            col_indices: vec![1],
+                        },
+                        PolyTerm {
+                            coeff: BabyBear::new(2),
+                            col_indices: vec![3, 1],
+                        },
+                    ],
+                },
+            ],
+            boundaries: vec![],
+            public_input_count: 32,
+            lookup_tables: vec![],
+        }
+    }
+
+    fn dfa_witness(
+        old: u64,
+        transfer: u64,
+        new: u64,
+        dir: u32,
+        rows: usize,
+    ) -> HashMap<String, Vec<BabyBear>> {
+        let mut w = HashMap::new();
+        w.insert("old_balance".into(), vec![BabyBear::from_u64(old); rows]);
+        w.insert(
+            "transfer_amount".into(),
+            vec![BabyBear::from_u64(transfer); rows],
+        );
+        w.insert("new_balance".into(), vec![BabyBear::from_u64(new); rows]);
+        w.insert("direction".into(), vec![BabyBear::new(dir); rows]);
+        w
+    }
+
+    /// Dfa: a valid transition proof verifies through the wired DslCircuitDfaVerifier.
+    #[test]
+    fn dfa_real_verifier_accepts_valid_transition() {
+        let descriptor = dfa_descriptor();
+        let program = CellProgram::new(descriptor, 1);
+        let mut programs = ProgramRegistry::new();
+        let vk_hash = programs.deploy(program).unwrap();
+        let programs = Arc::new(programs);
+
+        let pi = vec![BabyBear::ZERO; 32];
+        let witness = dfa_witness(1000, 100, 900, 1, 2);
+        let proof = prove_dfa_transition(&programs, &vk_hash, &witness, 2, &pi).unwrap();
+
+        let v = DslCircuitDfaVerifier::new(programs);
+        let dummy = [0u8; 32];
+        v.verify(&vk_hash, &PredicateInput::Sender(&dummy), &proof)
+            .expect("valid DSL transition must verify");
+    }
+
+    /// Dfa FORGE: a proof for one set of public inputs is rejected when checked
+    /// against different public inputs (the AIR boundary binds PI). And an
+    /// unknown vk_hash fails closed.
+    #[test]
+    fn dfa_real_verifier_rejects_forged_and_unknown() {
+        let descriptor = dfa_descriptor();
+        let program = CellProgram::new(descriptor, 1);
+        let mut programs = ProgramRegistry::new();
+        let vk_hash = programs.deploy(program).unwrap();
+        let programs = Arc::new(programs);
+        let dummy = [0u8; 32];
+
+        // Forged PI: tamper the wire's declared public inputs so they no longer
+        // match the STARK's boundary commitments.
+        let pi = vec![BabyBear::ZERO; 32];
+        let witness = dfa_witness(1000, 100, 900, 1, 2);
+        let good = prove_dfa_transition(&programs, &vk_hash, &witness, 2, &pi).unwrap();
+        let mut wire: DfaProofWire = postcard::from_bytes(&good).unwrap();
+        wire.public_inputs[0] = wire.public_inputs[0].wrapping_add(1);
+        let forged = postcard::to_allocvec(&wire).unwrap();
+        let v = DslCircuitDfaVerifier::new(programs.clone());
+        assert!(
+            v.verify(&vk_hash, &PredicateInput::Sender(&dummy), &forged)
+                .is_err(),
+            "forged public inputs must be rejected by the AIR boundary"
+        );
+
+        // Unknown vk_hash → fail closed.
+        let unknown = [0x99u8; 32];
+        assert!(
+            v.verify(&unknown, &PredicateInput::Sender(&dummy), &good)
+                .is_err(),
+            "unknown vk_hash must fail closed"
+        );
+
+        // Garbage wire → reject.
+        assert!(
+            v.verify(&vk_hash, &PredicateInput::Sender(&dummy), b"junk")
+                .is_err()
+        );
+    }
+
+    /// Dfa: routed through the full production registry.
+    #[test]
+    fn dfa_via_full_registry() {
+        let descriptor = dfa_descriptor();
+        let program = CellProgram::new(descriptor, 1);
+        let mut programs = ProgramRegistry::new();
+        let vk_hash = programs.deploy(program).unwrap();
+        let programs = Arc::new(programs);
+        let pi = vec![BabyBear::ZERO; 32];
+        let witness = dfa_witness(500, 200, 700, 0, 2);
+        let proof = prove_dfa_transition(&programs, &vk_hash, &witness, 2, &pi).unwrap();
+
+        let reg = registry_with_real_verifiers_full(
+            programs,
+            Arc::new(EmptyTemporalPolicy),
+            Arc::new(StaticIssuerRootAuthority::new()),
+        );
+        let wp = WitnessedPredicate::dfa(vk_hash, PredicateInputRefSender(), 0);
+        let dummy = [0u8; 32];
+        reg.verify(&wp, &PredicateInput::Sender(&dummy), &proof)
+            .expect("Dfa must verify through the full production registry");
+    }
+
+    /// Temporal policy authority for tests.
+    struct OneTemporalPolicy {
+        commitment: [u8; 32],
+        policy: TemporalPolicy,
+    }
+    impl TemporalPolicyAuthority for OneTemporalPolicy {
+        fn policy(&self, commitment: &[u8; 32]) -> Option<TemporalPolicy> {
+            if commitment == &self.commitment {
+                Some(self.policy.clone())
+            } else {
+                None
+            }
+        }
+    }
+    struct EmptyTemporalPolicy;
+    impl TemporalPolicyAuthority for EmptyTemporalPolicy {
+        fn policy(&self, _commitment: &[u8; 32]) -> Option<TemporalPolicy> {
+            None
+        }
+    }
+
+    /// Build an honest temporal proof: value >= threshold held for N steps.
+    fn honest_temporal(values: &[u32], threshold: u32) -> TemporalPredicateProof {
+        let vs: Vec<BabyBear> = values.iter().map(|v| BabyBear::new(*v)).collect();
+        let roots: Vec<BabyBear> = (0..values.len())
+            .map(|i| BabyBear::new(1000 + i as u32))
+            .collect();
+        dregg_circuit::temporal_predicate_dsl::prove_temporal_predicate(
+            &vs,
+            &roots,
+            PredicateType::Gte,
+            BabyBear::new(threshold),
+        )
+        .expect("honest temporal predicate should be provable")
+    }
+
+    fn temporal_policy_from(proof: &TemporalPredicateProof, min_steps: u64) -> TemporalPolicy {
+        TemporalPolicy {
+            requirement: TemporalPredicateRequirement {
+                attribute: "balance".into(),
+                predicate_type: PredicateType::Gte,
+                threshold: proof.threshold.as_u32() as u64,
+                min_duration_steps: min_steps,
+            },
+            num_steps: proof.num_steps,
+            initial_state_root: proof.initial_state_root.as_u32(),
+            final_state_root: proof.final_state_root.as_u32(),
+        }
+    }
+
+    #[test]
+    fn temporal_real_verifier_accepts_valid_proof() {
+        let proof = honest_temporal(&[100, 110, 120], 50);
+        let commitment = [0x7Au8; 32];
+        let policy = temporal_policy_from(&proof, 3);
+        let auth = Arc::new(OneTemporalPolicy { commitment, policy });
+        let v = TemporalPredicateStarkVerifier::new(auth);
+        let bytes = postcard::to_allocvec(&proof).unwrap();
+        let dummy = [0u8; 32];
+        v.verify(&commitment, &PredicateInput::Sender(&dummy), &bytes)
+            .expect("valid temporal proof must verify");
+    }
+
+    #[test]
+    fn temporal_real_verifier_rejects_forge_and_unknown() {
+        let proof = honest_temporal(&[100, 110, 120], 50);
+        let commitment = [0x7Au8; 32];
+        let dummy = [0u8; 32];
+
+        // FORGE: host policy demands a HIGHER threshold than the proof carries.
+        // is_satisfied_by fails (proof.threshold < policy.threshold).
+        let mut policy = temporal_policy_from(&proof, 3);
+        policy.requirement.threshold = 200; // higher than proof's 50
+        let auth = Arc::new(OneTemporalPolicy { commitment, policy });
+        let v = TemporalPredicateStarkVerifier::new(auth);
+        let bytes = postcard::to_allocvec(&proof).unwrap();
+        assert!(
+            v.verify(&commitment, &PredicateInput::Sender(&dummy), &bytes)
+                .is_err(),
+            "proof failing the host threshold floor must reject"
+        );
+
+        // FORGE 2: tamper the proof's final_state_root after minting; the STARK
+        // PI (reconstructed from the HONEST policy roots) mismatches → reject.
+        let honest_policy = temporal_policy_from(&proof, 3);
+        let auth2 = Arc::new(OneTemporalPolicy {
+            commitment,
+            policy: honest_policy,
+        });
+        let v2 = TemporalPredicateStarkVerifier::new(auth2);
+        let mut tampered = proof.clone();
+        tampered.final_state_root = BabyBear::new(424242);
+        let tbytes = postcard::to_allocvec(&tampered).unwrap();
+        assert!(
+            v2.verify(&commitment, &PredicateInput::Sender(&dummy), &tbytes)
+                .is_err(),
+            "tampered state root must reject against the policy-derived PI"
+        );
+
+        // Unknown commitment → fail closed.
+        let v3 = TemporalPredicateStarkVerifier::new(Arc::new(EmptyTemporalPolicy));
+        assert!(
+            v3.verify(&commitment, &PredicateInput::Sender(&dummy), &bytes)
+                .is_err(),
+            "unknown temporal commitment must fail closed"
+        );
+    }
+
+    #[test]
+    fn pedersen_real_verifier_accepts_valid_and_rejects_forged() {
+        // Honest: commit value=42 with a blinding, prove the range.
+        let blinding = [0x5Cu8; 32];
+        let (commitment, range_proof) = prove_range_bytes(42, &blinding);
+        let v = PedersenBulletproofVerifier;
+        let dummy = [0u8; 32];
+        v.verify(&commitment, &PredicateInput::Slot(&dummy), &range_proof)
+            .expect("valid Bulletproof opening must verify");
+
+        // FORGE 1: present the proof against a DIFFERENT commitment.
+        let (other_commitment, _) = prove_range_bytes(43, &[0x01u8; 32]);
+        assert!(
+            v.verify(
+                &other_commitment,
+                &PredicateInput::Slot(&dummy),
+                &range_proof
+            )
+            .is_err(),
+            "Bulletproof must not verify against a different commitment"
+        );
+
+        // FORGE 2: garbage / empty proof bytes.
+        assert!(
+            v.verify(&commitment, &PredicateInput::Slot(&dummy), b"")
+                .is_err()
+        );
+        assert!(
+            v.verify(&commitment, &PredicateInput::Slot(&dummy), &[0u8; 16])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn pedersen_wired_in_default_registry() {
+        let reg = registry_with_real_verifiers();
+        assert_eq!(
+            reg.get(WitnessedPredicateKind::PedersenEquality)
+                .unwrap()
+                .name(),
+            "pedersen-bulletproof"
+        );
+        // BridgePredicate stays fail-closed (its verifier lives in dregg-bridge).
+        let bridge = reg.get(WitnessedPredicateKind::BridgePredicate).unwrap();
+        let dummy = [0u8; 32];
+        assert!(
+            bridge
+                .verify(&[0u8; 32], &PredicateInput::Sender(&dummy), b"anything")
+                .is_err(),
+            "BridgePredicate must remain fail-closed in turn (no dregg-bridge dep)"
+        );
+    }
+
+    #[test]
+    fn full_registry_blinded_set_has_issuer_authority() {
+        let reg = registry_with_real_verifiers_full(
+            Arc::new(ProgramRegistry::new()),
+            Arc::new(EmptyTemporalPolicy),
+            Arc::new(StaticIssuerRootAuthority::new()),
+        );
+        assert_eq!(
+            reg.get(WitnessedPredicateKind::Dfa).unwrap().name(),
+            "dsl-circuit-dfa"
+        );
+        assert_eq!(
+            reg.get(WitnessedPredicateKind::Temporal).unwrap().name(),
+            "temporal-predicate-stark"
+        );
+        assert_eq!(
+            reg.get(WitnessedPredicateKind::BlindedSet).unwrap().name(),
+            "credential-set-membership"
+        );
     }
 }

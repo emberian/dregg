@@ -3513,6 +3513,7 @@ dependencies = [
  "dregg-circuit",
  "dregg-commit",
  "dregg-dsl-runtime",
+ "dregg-token",
  "dregg-types",
  "ed25519-dalek",
  "getrandom 0.3.4",
@@ -3521,6 +3522,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tracing",
  "x25519-dalek",
 ]

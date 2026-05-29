@@ -188,6 +188,46 @@ impl TurnExecutor {
             return Ok(());
         }
 
+        // Token: first-class biscuit/macaroon credential
+        // (TOKEN-CAPABILITY-UNIFICATION.md). Verified holistically by the
+        // turn-side TokenAuthorityVerifier: cryptographic verify + caveat /
+        // Datalog evaluation bound to THIS call's AuthRequest + capability
+        // cover + block-height-bound expiry. Fail-closed.
+        if let Authorization::Token {
+            encoded,
+            key_ref,
+            discharges,
+        } = &action.authorization
+        {
+            self.verify_token_authorization(
+                action,
+                target_cell,
+                encoded,
+                key_ref,
+                discharges,
+                path,
+                turn_nonce,
+            )?;
+            info!(kind = "authorization", auth_kind = "token", target = %action.target);
+            return Ok(());
+        }
+
+        // Stealth: one-time-key invocation (anonymity of the actor). The
+        // one-time signature is verified against the stealth-spend relation
+        // P == c·G + S, where S is the target cell's public key (treated as a
+        // stealth spend pubkey). This MUST be checked regardless of the
+        // permission level for the *signature* itself, but we still funnel
+        // through the per-permission requirement check below so a cell that
+        // forbids the action (Impossible) is honored. We verify the stealth
+        // signature up front (fail-closed) and let the permission lattice
+        // accept it via `to_auth_kind() == Signature`.
+        if let Authorization::Stealth { .. } = &action.authorization {
+            self.verify_stealth_authorization(action, target_cell, path, turn_nonce)?;
+            // Fall through to the permission-requirement checks so that
+            // `AuthRequired::Impossible` / `Proof`-only / `Custom` cells still
+            // reject a stealth signature that does not match their lattice.
+        }
+
         // Determine ALL required permissions for this action's effects.
         let required_actions = self.determine_required_permissions(action);
 
@@ -651,6 +691,15 @@ impl TurnExecutor {
                 Authorization::Signature(r, s) => {
                     self.verify_ed25519_signature(action, target_cell, r, s, path, turn_nonce)
                 }
+                // Stealth one-time signatures satisfy a Signature
+                // requirement; the relation was already verified in
+                // `verify_authorization` (fail-closed) before falling
+                // through here. Re-verify to keep this arm self-contained
+                // and defend against any future caller that reaches it
+                // without the early check.
+                Authorization::Stealth { .. } => {
+                    self.verify_stealth_authorization(action, target_cell, path, turn_nonce)
+                }
                 Authorization::Breadstuff(token) => {
                     let effects_mask = action
                         .effects
@@ -757,6 +806,19 @@ impl TurnExecutor {
                     )
                 }
                 Authorization::Bearer(proof) => self.verify_bearer_cap(proof, ledger, path),
+                Authorization::Stealth { .. } => {
+                    self.verify_stealth_authorization(action, target_cell, path, turn_nonce)
+                }
+                // Token is short-circuited in verify_authorization; if we
+                // reach here the early-return was bypassed: treat as deny.
+                Authorization::Token { .. } => Err((
+                    TurnError::PermissionDenied {
+                        cell: action.target,
+                        action: action_name.to_string(),
+                        required: AuthRequired::Either,
+                    },
+                    path.to_vec(),
+                )),
                 Authorization::Unchecked => Err((
                     TurnError::PermissionDenied {
                         cell: action.target,
@@ -1205,6 +1267,34 @@ impl TurnExecutor {
                 let mut public_inputs: Vec<BabyBear> = Vec::new();
                 public_inputs.extend(Self::bytes32_to_babybear(root_issuer_commitment));
                 public_inputs.extend(Self::bytes32_to_babybear(proof.target.as_bytes()));
+                // Goal-2 hardening (anonymous delegation): bind the
+                // *exercised scope* into the proof's public inputs so a
+                // relay cannot reuse a valid proof for a wider grant.
+                // The delegator/bearer pubkeys are deliberately NOT
+                // bound (they stay hidden behind `root_issuer_commitment`
+                // — that is the whole point of the anonymous path); only
+                // the permission tier, the expiry, and the federation id
+                // are bound, all of which are public on the turn anyway.
+                let perm_tag: u32 = match &proof.permissions {
+                    AuthRequired::None => 0,
+                    AuthRequired::Signature => 1,
+                    AuthRequired::Proof => 2,
+                    AuthRequired::Either => 3,
+                    AuthRequired::Impossible => 4,
+                    AuthRequired::Custom { .. } => 5,
+                };
+                let scope_hash = {
+                    let mut h = blake3::Hasher::new();
+                    h.update(b"dregg-stark-delegation-scope-v1:");
+                    h.update(&self.local_federation_id);
+                    h.update(&perm_tag.to_le_bytes());
+                    if let AuthRequired::Custom { vk_hash } = &proof.permissions {
+                        h.update(vk_hash);
+                    }
+                    h.update(&proof.expires_at.to_le_bytes());
+                    *h.finalize().as_bytes()
+                };
+                public_inputs.extend(Self::bytes32_to_babybear(&scope_hash));
                 if stark_proof.public_inputs.len() < public_inputs.len() {
                     return Err((
                         TurnError::BearerCapInvalidProof {
@@ -1242,6 +1332,381 @@ impl TurnExecutor {
                 Ok(())
             }
         }
+    }
+
+    /// Verify a [`Authorization::Stealth`] one-time-key authorization
+    /// (anonymity-of-actor goal 1).
+    ///
+    /// The on-chain turn carries only `(one_time_pubkey P, ephemeral_pubkey
+    /// R, blinding_scalar c, signature)`. The persistent spend public key
+    /// `S` is the *target cell's* public key and never appears in the turn.
+    /// We check the stealth-spend relation
+    ///   `P == c·G + S`
+    /// using Ed25519 point arithmetic (no Diffie-Hellman / view key needed
+    /// at verify time — this mirrors `cell::stealth::derive_one_time_pubkey`,
+    /// where `P = derive_stealth_scalar(shared)·G + S` and the signer holds
+    /// `k = derive_stealth_scalar(shared) + s`). Then we verify `signature`
+    /// under `P` over [`Authorization::stealth_signing_message`].
+    ///
+    /// ## Why this is sound
+    /// Forging a valid signature under any `P = c·G + S` requires knowing the
+    /// discrete log of `S` (the spend scalar `s`), because the one-time
+    /// secret key is `k = c + s`. An adversary who only knows the public `S`
+    /// cannot produce a valid signature. `c` is bound into `P` and into the
+    /// signing message, so a relay cannot substitute a different `c`.
+    ///
+    /// ## Unlinkability
+    /// `c` is `derive_stealth_scalar(H(r·V))` for a fresh ephemeral `r` per
+    /// call, so `P`, `R`, and `c` look independently random across calls and
+    /// reveal nothing tying two turns to the same `S` (the persistent
+    /// identity) to a turn-stream observer.
+    ///
+    /// ## Replay
+    /// The signing message binds `federation_id` + `turn_nonce` + position +
+    /// `action.hash()`, so a stealth authorization for one (federation,
+    /// nonce, action) does not re-verify against another. Same-turn
+    /// resubmission is rejected by the per-agent receipt-chain / nonce gate.
+    pub(super) fn verify_stealth_authorization(
+        &self,
+        action: &Action,
+        target_cell: &Cell,
+        path: &[usize],
+        turn_nonce: u64,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+        use curve25519_dalek::edwards::CompressedEdwardsY;
+        use curve25519_dalek::scalar::Scalar;
+
+        let (one_time_pubkey, ephemeral_pubkey, blinding_scalar, signature) =
+            match &action.authorization {
+                Authorization::Stealth {
+                    one_time_pubkey,
+                    ephemeral_pubkey,
+                    blinding_scalar,
+                    signature,
+                } => (
+                    one_time_pubkey,
+                    ephemeral_pubkey,
+                    blinding_scalar,
+                    signature,
+                ),
+                _ => {
+                    return Err((
+                        TurnError::StealthAuthInvalid {
+                            reason: "verify_stealth_authorization called on non-Stealth auth"
+                                .to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+            };
+
+        // S = the target cell's persistent spend public key (Ed25519).
+        let spend_pubkey = target_cell.public_key();
+        let spend_point = CompressedEdwardsY(*spend_pubkey)
+            .decompress()
+            .ok_or_else(|| {
+                (
+                    TurnError::StealthAuthInvalid {
+                        reason: "target cell public key is not a valid Ed25519 point".to_string(),
+                    },
+                    path.to_vec(),
+                )
+            })?;
+
+        // Recompute P' = c·G + S and require it equals the carried one-time
+        // pubkey. `Scalar::from_bytes_mod_order` matches the reduction
+        // `cell::stealth` uses when deriving the one-time key, so an honest
+        // prover's `c` reproduces the exact `P` they signed under.
+        let c = Scalar::from_bytes_mod_order(*blinding_scalar);
+        let expected_point = (&c * ED25519_BASEPOINT_TABLE) + spend_point;
+        let expected_p = expected_point.compress().to_bytes();
+        if &expected_p != one_time_pubkey {
+            return Err((
+                TurnError::StealthAuthInvalid {
+                    reason: "one-time pubkey does not match c·G + S (stealth-spend relation \
+                             failed): the signer does not control the cell's spend key"
+                        .to_string(),
+                },
+                path.to_vec(),
+            ));
+        }
+
+        // Verify the one-time signature under P over the bound message.
+        let position = path.first().copied().unwrap_or(0);
+        let message = Authorization::stealth_signing_message(
+            &self.local_federation_id,
+            &action.hash(),
+            ephemeral_pubkey,
+            blinding_scalar,
+            position,
+            turn_nonce,
+        );
+        let verifying_key = VerifyingKey::from_bytes(one_time_pubkey).map_err(|_| {
+            (
+                TurnError::StealthAuthInvalid {
+                    reason: "one-time pubkey is not a valid Ed25519 verifying key".to_string(),
+                },
+                path.to_vec(),
+            )
+        })?;
+        let sig = Signature::from_bytes(signature);
+        verifying_key.verify_strict(&message, &sig).map_err(|_| {
+            (
+                TurnError::StealthAuthInvalid {
+                    reason: "one-time signature verification failed".to_string(),
+                },
+                path.to_vec(),
+            )
+        })?;
+
+        info!(
+            kind = "authorization",
+            auth_kind = "stealth",
+            target = %action.target,
+        );
+        Ok(())
+    }
+
+    /// Build the deterministic [`dregg_token::AuthRequest`] that binds a
+    /// presented token to THIS call (TOKEN-CAPABILITY-UNIFICATION.md step 4).
+    ///
+    /// The binding facts are:
+    /// - `action`  = the action's method symbol (hex of the 32-byte symbol).
+    /// - `service` = the target cell id (hex) — the *resource* being called.
+    /// - `app_id`  = the local federation id (hex) — domain / cross-federation
+    ///   replay defense.
+    /// - `now`     = the current **block height** (NOT wall-clock), so any
+    ///   temporal caveat in the token is evaluated against consensus height.
+    ///   This is what makes verification deterministic and expiry
+    ///   block-height-bound.
+    ///
+    /// Replaying the token against a different action/cell/federation
+    /// produces different facts, so the token's caveats / Datalog no longer
+    /// authorize → the verify call denies. This mirrors `Proof`'s
+    /// bound_action/bound_resource and `CapTpDelivered`'s signing message.
+    fn token_auth_request(&self, action: &Action) -> dregg_token::AuthRequest {
+        let mut req = dregg_token::AuthRequest::default();
+        req.action = Some(hex::encode(action.method));
+        req.service = Some(hex::encode(action.target.as_bytes()));
+        req.app_id = Some(hex::encode(self.local_federation_id));
+        // Deterministic, consensus-bound "now": the block height. Temporal
+        // caveats reference this, never wall-clock.
+        req.now = Some(self.block_height as i64);
+        req
+    }
+
+    /// Verify a first-class [`Authorization::Token`] biscuit / macaroon
+    /// credential (goal 3, TOKEN-CAPABILITY-UNIFICATION.md P1+P3).
+    ///
+    /// Flow (deterministic, fail-closed):
+    /// 1. **Decode** the encoded credential (UTF-8 of the `eb2_`/`em2_`
+    ///    string). Format is self-describing via the prefix.
+    /// 2. **Resolve the root key + trust anchor** from `key_ref`:
+    ///    - `BiscuitIssuer { issuer_pubkey }`: the issuer MUST be a granting
+    ///      authority the target cell trusts. The trust anchor (no executor
+    ///      field, fully cell-derived) is: the issuer pubkey equals the
+    ///      target cell's `public_key` (the cell is its own granting
+    ///      authority — "I minted this credential against my own key"), or
+    ///      the cell's verification-key bytes. An untrusted issuer is
+    ///      rejected even if the token verifies cryptographically.
+    ///    - `CellScopedMacaroon { cell }`: `cell` MUST equal the target cell;
+    ///      the root secret is derived deterministically from the cell id via
+    ///      a domain-separated KDF. Cross-cell macaroons (secret not held)
+    ///      are rejected because their HMAC will not verify under the derived
+    ///      key.
+    /// 3. **Cryptographically verify + caveat/Datalog evaluate** the token
+    ///    against the call-bound `AuthRequest` (`AuthToken::verify`). A
+    ///    crypto failure → `TokenAuthInvalid`; a policy/caveat denial (the
+    ///    capability-cover check — the token does not grant this
+    ///    action/resource) → `TokenInsufficientCapability`. Expiry-by-height
+    ///    surfaces as a denial too (the time fact is the block height).
+    ///
+    /// Discharges (third-party caveats) are passed through for the macaroon
+    /// path; biscuit third-party blocks are carried inside the token itself.
+    pub(super) fn verify_token_authorization(
+        &self,
+        action: &Action,
+        target_cell: &Cell,
+        encoded: &[u8],
+        key_ref: &crate::action::TokenKeyRef,
+        discharges: &[Vec<u8>],
+        path: &[usize],
+        _turn_nonce: u64,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        use crate::action::TokenKeyRef;
+        use dregg_token::TokenFormat;
+        use dregg_token::traits::AuthToken;
+
+        let token_str = std::str::from_utf8(encoded).map_err(|_| {
+            (
+                TurnError::TokenAuthInvalid {
+                    reason: "encoded token is not valid UTF-8".to_string(),
+                },
+                path.to_vec(),
+            )
+        })?;
+
+        let fmt = TokenFormat::detect(token_str).map_err(|e| {
+            (
+                TurnError::TokenAuthInvalid {
+                    reason: format!("token format detection failed: {e}"),
+                },
+                path.to_vec(),
+            )
+        })?;
+
+        let request = self.token_auth_request(action);
+
+        // Build the concrete token, resolving + trust-checking the root key.
+        let token: Box<dyn AuthToken> = match (fmt, key_ref) {
+            (TokenFormat::Biscuit, TokenKeyRef::BiscuitIssuer { issuer_pubkey }) => {
+                // Trust anchor: the issuer must be one the target cell
+                // authorizes. Field-free anchor — the cell is its own
+                // granting authority, or names the issuer via its VK bytes.
+                let cell_pk: [u8; 32] = *target_cell.public_key();
+                let vk_match = target_cell
+                    .verification_key
+                    .as_ref()
+                    .map(|vk| vk.data.as_slice() == issuer_pubkey.as_slice())
+                    .unwrap_or(false);
+                if &cell_pk != issuer_pubkey && !vk_match {
+                    return Err((
+                        TurnError::TokenAuthInvalid {
+                            reason: "biscuit issuer is not a granting authority the target \
+                                     cell trusts (must equal the cell's public key or its \
+                                     verification key)"
+                                .to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let pk = dregg_token::biscuit_auth::PublicKey::from_bytes(
+                    issuer_pubkey,
+                    dregg_token::biscuit_auth::Algorithm::Ed25519,
+                )
+                .map_err(|e| {
+                    (
+                        TurnError::TokenAuthInvalid {
+                            reason: format!("biscuit issuer pubkey invalid: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                let bt = dregg_token::BiscuitToken::from_encoded(token_str, pk).map_err(|e| {
+                    (
+                        TurnError::TokenAuthInvalid {
+                            reason: format!("biscuit decode/signature-check failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                Box::new(bt)
+            }
+            (TokenFormat::Macaroon, TokenKeyRef::CellScopedMacaroon { cell }) => {
+                // Cell-scoped macaroon: the verifier may only hold the secret
+                // for the target cell. Reject cross-cell key refs outright.
+                if cell != &action.target {
+                    return Err((
+                        TurnError::TokenAuthInvalid {
+                            reason: "cell-scoped macaroon key_ref does not name the action's \
+                                     target cell; a macaroon is only sound where the verifier \
+                                     legitimately holds the cell's secret"
+                                .to_string(),
+                        },
+                        path.to_vec(),
+                    ));
+                }
+                let root_key = self.derive_cell_macaroon_secret(&action.target);
+                // Discharge macaroons are raw serialized bytes (NOT UTF-8
+                // strings — the macaroon backend `deserialize`s them).
+                let mt = if discharges.is_empty() {
+                    dregg_token::MacaroonToken::from_encoded(token_str, root_key)
+                } else {
+                    dregg_token::MacaroonToken::from_encoded_with_discharges(
+                        token_str, root_key, discharges,
+                    )
+                }
+                .map_err(|e| {
+                    (
+                        TurnError::TokenAuthInvalid {
+                            reason: format!("macaroon decode failed: {e}"),
+                        },
+                        path.to_vec(),
+                    )
+                })?;
+                Box::new(mt)
+            }
+            (TokenFormat::Biscuit, TokenKeyRef::CellScopedMacaroon { .. }) => {
+                return Err((
+                    TurnError::TokenAuthInvalid {
+                        reason: "token is a biscuit but key_ref is CellScopedMacaroon".to_string(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            (TokenFormat::Macaroon, TokenKeyRef::BiscuitIssuer { .. }) => {
+                return Err((
+                    TurnError::TokenAuthInvalid {
+                        reason: "token is a macaroon but key_ref is BiscuitIssuer".to_string(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        };
+
+        // Cryptographic verify + caveat/Datalog evaluation bound to THIS
+        // call. A denial here IS the capability-cover failure: the token did
+        // not grant the requested (action, resource) under its caveats.
+        match token.verify(&request) {
+            Ok(_clearance) => Ok(()),
+            Err(dregg_token::TokenError::Denied(msg)) => Err((
+                TurnError::TokenInsufficientCapability {
+                    cell: action.target,
+                    action: hex::encode(action.method),
+                    reason: format!("token caveats/Datalog do not authorize this call: {msg}"),
+                },
+                path.to_vec(),
+            )),
+            Err(dregg_token::TokenError::Expired) => Err((
+                TurnError::TokenInsufficientCapability {
+                    cell: action.target,
+                    action: hex::encode(action.method),
+                    reason: "token expired by block height".to_string(),
+                },
+                path.to_vec(),
+            )),
+            Err(e) => Err((
+                TurnError::TokenAuthInvalid {
+                    reason: format!("token verification failed: {e}"),
+                },
+                path.to_vec(),
+            )),
+        }
+    }
+
+    /// Derive the deterministic, cell-scoped macaroon root secret.
+    ///
+    /// HMAC macaroons require the verifier to hold the root secret, so this
+    /// path is only sound where the federation legitimately owns the cell's
+    /// secret. The secret is a domain-separated BLAKE3 KDF over the local
+    /// federation id + the cell id, so it is:
+    /// - deterministic (no wall-clock / randomness — consensus-safe),
+    /// - cell-scoped (a different cell yields a different secret, so a
+    ///   macaroon minted for cell A cannot verify against cell B),
+    /// - federation-scoped (cross-federation replay produces a different
+    ///   secret).
+    ///
+    /// NOTE: this binds the macaroon secret to the federation that runs the
+    /// turn. A macaroon minted against this derivation is a *cell-local*
+    /// credential, exactly as TOKEN-CAPABILITY-UNIFICATION.md requires (no
+    /// shared HMAC secret ever crosses domains; cross-domain auth must use a
+    /// biscuit).
+    fn derive_cell_macaroon_secret(&self, cell: &CellId) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("dregg-cell-macaroon-secret-v1");
+        hasher.update(&self.local_federation_id);
+        hasher.update(cell.as_bytes());
+        *hasher.finalize().as_bytes()
     }
 
     /// Compute the delegation message signed by a delegator for a bearer capability.
@@ -1576,5 +2041,448 @@ impl TurnExecutor {
         }
         walk(&mut out, &action.effects);
         out
+    }
+}
+
+// =============================================================================
+// Adversarial tests: stealth invocation + first-class token authorization.
+//
+// These exercise the three anonymity-of-actor goals at the
+// `verify_authorization` surface (the canonical entry point):
+//   1. Stealth (one-time-key) invocation — unlinkable, replay-rejected.
+//   3. Authorization::Token (biscuit) — replay-rejected, insufficient-cap
+//      rejected, expired-by-height rejected, tampered rejected.
+// (Goal 2, StarkDelegation, is exercised via the existing bearer-cap tests
+//  in `turn/src/tests.rs`; the hardening here only *adds* bound public
+//  inputs, which those proofs must now also satisfy.)
+// =============================================================================
+#[cfg(test)]
+mod anonymity_tests {
+    use super::*;
+    use crate::action::{Authorization, CommitmentMode, Effect, TokenKeyRef};
+    use crate::executor::ComputronCosts;
+    use crate::executor::TurnExecutor;
+    use curve25519_dalek::constants::ED25519_BASEPOINT_TABLE;
+    use curve25519_dalek::scalar::Scalar;
+    use dregg_cell::{Cell, Ledger, Preconditions};
+    use ed25519_dalek::SigningKey;
+
+    fn exec_at(block_height: u64) -> TurnExecutor {
+        let mut e = TurnExecutor::new(ComputronCosts::zero());
+        e.block_height = block_height;
+        e.local_federation_id = [7u8; 32];
+        e
+    }
+
+    fn vk_with_data(data: Vec<u8>) -> dregg_cell::VerificationKey {
+        let hash = *blake3::hash(&data).as_bytes();
+        dregg_cell::VerificationKey { hash, data }
+    }
+
+    /// Build an action targeting `target` with a single SetState effect
+    /// (so the Signature requirement on `set_state` is exercised) plus the
+    /// given authorization. `method` lets us vary the bound action.
+    fn action_for(target: CellId, method: [u8; 32], authorization: Authorization) -> Action {
+        Action {
+            target,
+            method,
+            args: vec![],
+            authorization,
+            preconditions: Preconditions::default(),
+            effects: vec![Effect::SetField {
+                cell: target,
+                index: 0,
+                value: [9u8; 32],
+            }],
+            may_delegate: crate::action::DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        }
+    }
+
+    // ── Stealth helpers ────────────────────────────────────────────────
+
+    /// Produce a `(spend_pubkey S, spend_scalar s)` pair where `S = s·G` is a
+    /// valid Ed25519 point. We derive `s` from an Ed25519 seed exactly the
+    /// way `cell::stealth` does, so the relation P = c·G + S holds with the
+    /// signing key k = c + s.
+    fn spend_keypair(seed: u8) -> ([u8; 32], Scalar) {
+        let sk = SigningKey::from_bytes(&[seed; 32]);
+        let s = sk.to_scalar();
+        let s_point = &s * ED25519_BASEPOINT_TABLE;
+        (s_point.compress().to_bytes(), s)
+    }
+
+    /// Craft a valid `Authorization::Stealth` for `action_template` using a
+    /// fresh blinding scalar `c` (derived from `c_seed`). Returns the auth
+    /// AND mutates a clone of the action to carry it (since the signing
+    /// message binds `action.hash()`, which excludes the signature).
+    fn make_stealth_auth(
+        federation_id: &[u8; 32],
+        spend_scalar: &Scalar,
+        c_seed: u8,
+        target: CellId,
+        method: [u8; 32],
+        turn_nonce: u64,
+        position: usize,
+    ) -> Authorization {
+        let c = Scalar::from_bytes_mod_order([c_seed; 32]);
+        let p_point = (&c * ED25519_BASEPOINT_TABLE) + (spend_scalar * ED25519_BASEPOINT_TABLE);
+        let one_time_pubkey = p_point.compress().to_bytes();
+        // k = c + s (the one-time signing key, a raw scalar).
+        let k = c + spend_scalar;
+        let ephemeral_pubkey = [c_seed.wrapping_add(1); 32];
+        let blinding_scalar = c.to_bytes();
+
+        // Build the action carrying a placeholder signature to compute hash.
+        let placeholder = Authorization::Stealth {
+            one_time_pubkey,
+            ephemeral_pubkey,
+            blinding_scalar,
+            signature: [0u8; 64],
+        };
+        let action = action_for(target, method, placeholder);
+        let action_hash = action.hash();
+        let msg = Authorization::stealth_signing_message(
+            federation_id,
+            &action_hash,
+            &ephemeral_pubkey,
+            &blinding_scalar,
+            position,
+            turn_nonce,
+        );
+        // Sign with k. We must sign as the one-time key whose public key is P.
+        // ed25519_dalek::SigningKey::from_bytes treats the input as a *seed*,
+        // not a scalar — so we cannot use it directly for a raw scalar key.
+        // Instead use the hazmat raw-scalar signing.
+        let sig = sign_with_scalar(&k, &one_time_pubkey, &msg);
+
+        Authorization::Stealth {
+            one_time_pubkey,
+            ephemeral_pubkey,
+            blinding_scalar,
+            signature: sig,
+        }
+    }
+
+    /// Sign a message with a raw Ed25519 scalar `k` whose public key is
+    /// `pubkey = k·G`, using the dalek hazmat raw-key API. This matches the
+    /// stealth construction where the one-time secret is a scalar, not a seed.
+    fn sign_with_scalar(k: &Scalar, pubkey: &[u8; 32], msg: &[u8]) -> [u8; 64] {
+        use ed25519_dalek::VerifyingKey;
+        use ed25519_dalek::hazmat::{ExpandedSecretKey, raw_sign};
+        use sha2::Sha512;
+        // Build an ExpandedSecretKey from the scalar. The "hash prefix" (nonce
+        // domain) can be any fixed value for a deterministic test; real
+        // stealth signers derive it from the shared secret. We use a fixed
+        // prefix derived from k for determinism.
+        let mut prefix = [0u8; 32];
+        prefix.copy_from_slice(&blake3::hash(&k.to_bytes()).as_bytes()[..32]);
+        let esk = ExpandedSecretKey {
+            scalar: *k,
+            hash_prefix: prefix,
+        };
+        let vk = VerifyingKey::from_bytes(pubkey).expect("valid P");
+        let sig = raw_sign::<Sha512>(&esk, msg, &vk);
+        sig.to_bytes()
+    }
+
+    #[test]
+    fn stealth_valid_authorizes_and_persistent_key_absent() {
+        let fed = [7u8; 32];
+        let (s_pub, s_scalar) = spend_keypair(11);
+        let mut ledger = Ledger::new();
+        let cell = Cell::new(s_pub, [0u8; 32]);
+        let cid = cell.id();
+        ledger.insert_cell(cell).unwrap();
+        let target_cell = ledger.get(&cid).unwrap().clone();
+
+        let method = [1u8; 32];
+        let auth = make_stealth_auth(&fed, &s_scalar, 3, cid, method, 0, 0);
+        // The persistent spend pubkey S must NOT appear anywhere in the auth.
+        if let Authorization::Stealth {
+            one_time_pubkey, ..
+        } = &auth
+        {
+            assert_ne!(
+                one_time_pubkey, &s_pub,
+                "one-time key must differ from persistent spend key"
+            );
+        }
+        let action = action_for(cid, method, auth);
+        let exec = exec_at(0);
+        exec.verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect("valid stealth auth should verify");
+    }
+
+    #[test]
+    fn stealth_two_calls_unlinkable() {
+        // Two stealth auths from the SAME spend key but fresh blinding scalars
+        // must carry different one-time keys / blinding scalars (unlinkable).
+        let fed = [7u8; 32];
+        let (s_pub, s_scalar) = spend_keypair(12);
+        let cid = Cell::new(s_pub, [0u8; 32]).id();
+        let method = [2u8; 32];
+        let a1 = make_stealth_auth(&fed, &s_scalar, 5, cid, method, 0, 0);
+        let a2 = make_stealth_auth(&fed, &s_scalar, 6, cid, method, 0, 0);
+        match (a1, a2) {
+            (
+                Authorization::Stealth {
+                    one_time_pubkey: p1,
+                    blinding_scalar: c1,
+                    ..
+                },
+                Authorization::Stealth {
+                    one_time_pubkey: p2,
+                    blinding_scalar: c2,
+                    ..
+                },
+            ) => {
+                assert_ne!(p1, p2, "two calls must have unlinkable one-time keys");
+                assert_ne!(c1, c2, "two calls must have distinct blinding scalars");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn stealth_replay_across_turn_nonce_rejected() {
+        // A stealth auth signed for turn_nonce 0 must NOT verify at nonce 1.
+        let fed = [7u8; 32];
+        let (s_pub, s_scalar) = spend_keypair(13);
+        let mut ledger = Ledger::new();
+        let cell = Cell::new(s_pub, [0u8; 32]);
+        let cid = cell.id();
+        ledger.insert_cell(cell).unwrap();
+        let target_cell = ledger.get(&cid).unwrap().clone();
+        let method = [3u8; 32];
+        let auth = make_stealth_auth(&fed, &s_scalar, 7, cid, method, 0, 0);
+        let action = action_for(cid, method, auth);
+        let exec = exec_at(0);
+        // Verifying at the SAME nonce/position works…
+        exec.verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect("nonce 0 should verify");
+        // …but replaying the same auth bytes at a DIFFERENT turn nonce fails
+        // (the signing message binds the nonce).
+        let err = exec
+            .verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 1)
+            .expect_err("replay at nonce 1 must be rejected");
+        assert!(
+            matches!(err.0, TurnError::StealthAuthInvalid { .. }),
+            "expected StealthAuthInvalid, got {:?}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn stealth_wrong_spend_key_rejected() {
+        // An attacker who does NOT know the cell's spend scalar cannot forge:
+        // signing with an unrelated scalar breaks the P == c·G + S relation
+        // OR the signature under P.
+        let fed = [7u8; 32];
+        let (s_pub, _real_s) = spend_keypair(14);
+        let (_attacker_pub, attacker_s) = spend_keypair(99);
+        let mut ledger = Ledger::new();
+        let cell = Cell::new(s_pub, [0u8; 32]); // cell registers the REAL S
+        let cid = cell.id();
+        ledger.insert_cell(cell).unwrap();
+        let target_cell = ledger.get(&cid).unwrap().clone();
+        let method = [4u8; 32];
+        // Attacker builds an auth with THEIR scalar; P = c·G + attacker·G ≠ c·G + S.
+        let auth = make_stealth_auth(&fed, &attacker_s, 8, cid, method, 0, 0);
+        let action = action_for(cid, method, auth);
+        let exec = exec_at(0);
+        let err = exec
+            .verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect_err("forged stealth auth must be rejected");
+        assert!(
+            matches!(err.0, TurnError::StealthAuthInvalid { .. }),
+            "expected StealthAuthInvalid, got {:?}",
+            err.0
+        );
+    }
+
+    // ── Token (biscuit) helpers + tests ────────────────────────────────
+
+    fn mint_biscuit_for(
+        cell: CellId,
+        method: [u8; 32],
+        not_after: Option<i64>,
+    ) -> (Vec<u8>, [u8; 32]) {
+        use dregg_token::BiscuitToken;
+        use dregg_token::biscuit_auth::KeyPair;
+        use dregg_token::traits::{Attenuation, AuthToken};
+        let kp = KeyPair::new();
+        let issuer: [u8; 32] = kp
+            .public()
+            .to_bytes()
+            .try_into()
+            .expect("32-byte ed25519 pubkey");
+        let svc = hex::encode(cell.as_bytes());
+        let act = hex::encode(method);
+        // Token grants service=cell-id with action set containing the method.
+        let mut tok: Box<dyn AuthToken> = Box::new(
+            BiscuitToken::mint_dregg(&kp, &[], &[(svc, act)], &[], &[], &[], None).unwrap(),
+        );
+        if let Some(na) = not_after {
+            let att = Attenuation {
+                not_after: Some(na),
+                ..Default::default()
+            };
+            tok = tok.attenuate(&att).unwrap();
+        }
+        let encoded = tok.to_encoded().unwrap().into_bytes();
+        (encoded, issuer)
+    }
+
+    #[test]
+    fn token_biscuit_valid_authorizes() {
+        let mut ledger = Ledger::new();
+        let cell = Cell::new([21u8; 32], [0u8; 32]);
+        let cid = cell.id();
+        ledger.insert_cell(cell).unwrap();
+        let mut target_cell = ledger.get(&cid).unwrap().clone();
+        let method = [5u8; 32];
+        let (encoded, issuer) = mint_biscuit_for(cid, method, None);
+        // Trust anchor: make the issuer the cell's verification key.
+        target_cell.verification_key = Some(vk_with_data(issuer.to_vec()));
+        let auth = Authorization::Token {
+            encoded,
+            key_ref: TokenKeyRef::BiscuitIssuer {
+                issuer_pubkey: issuer,
+            },
+            discharges: vec![],
+        };
+        let action = action_for(cid, method, auth);
+        let exec = exec_at(100);
+        exec.verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect("valid biscuit token should authorize");
+    }
+
+    #[test]
+    fn token_biscuit_replay_against_different_action_rejected() {
+        let mut ledger = Ledger::new();
+        let cell = Cell::new([22u8; 32], [0u8; 32]);
+        let cid = cell.id();
+        ledger.insert_cell(cell).unwrap();
+        let mut target_cell = ledger.get(&cid).unwrap().clone();
+        let method = [6u8; 32];
+        let (encoded, issuer) = mint_biscuit_for(cid, method, None);
+        target_cell.verification_key = Some(vk_with_data(issuer.to_vec()));
+        // Present the token bound to a DIFFERENT method — capability cover fails.
+        let other_method = [0x99u8; 32];
+        let auth = Authorization::Token {
+            encoded,
+            key_ref: TokenKeyRef::BiscuitIssuer {
+                issuer_pubkey: issuer,
+            },
+            discharges: vec![],
+        };
+        let action = action_for(cid, other_method, auth);
+        let exec = exec_at(100);
+        let err = exec
+            .verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect_err("token replayed against a different action must be rejected");
+        assert!(
+            matches!(err.0, TurnError::TokenInsufficientCapability { .. }),
+            "expected TokenInsufficientCapability, got {:?}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn token_biscuit_untrusted_issuer_rejected() {
+        let mut ledger = Ledger::new();
+        let cell = Cell::new([23u8; 32], [0u8; 32]);
+        let cid = cell.id();
+        ledger.insert_cell(cell).unwrap();
+        let target_cell = ledger.get(&cid).unwrap().clone(); // no VK, pk != issuer
+        let method = [7u8; 32];
+        let (encoded, issuer) = mint_biscuit_for(cid, method, None);
+        let auth = Authorization::Token {
+            encoded,
+            key_ref: TokenKeyRef::BiscuitIssuer {
+                issuer_pubkey: issuer,
+            },
+            discharges: vec![],
+        };
+        let action = action_for(cid, method, auth);
+        let exec = exec_at(100);
+        let err = exec
+            .verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect_err("untrusted issuer must be rejected");
+        assert!(
+            matches!(err.0, TurnError::TokenAuthInvalid { .. }),
+            "expected TokenAuthInvalid (untrusted issuer), got {:?}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn token_biscuit_expired_by_height_rejected() {
+        let mut ledger = Ledger::new();
+        let cell = Cell::new([24u8; 32], [0u8; 32]);
+        let cid = cell.id();
+        ledger.insert_cell(cell).unwrap();
+        let mut target_cell = ledger.get(&cid).unwrap().clone();
+        let method = [8u8; 32];
+        // not_after = 5 (a block height); we verify at height 10 -> expired.
+        let (encoded, issuer) = mint_biscuit_for(cid, method, Some(5));
+        target_cell.verification_key = Some(vk_with_data(issuer.to_vec()));
+        let auth = Authorization::Token {
+            encoded,
+            key_ref: TokenKeyRef::BiscuitIssuer {
+                issuer_pubkey: issuer,
+            },
+            discharges: vec![],
+        };
+        let action = action_for(cid, method, auth);
+        let exec = exec_at(10); // block height past not_after
+        let err = exec
+            .verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect_err("token expired by block height must be rejected");
+        assert!(
+            matches!(err.0, TurnError::TokenInsufficientCapability { .. }),
+            "expected TokenInsufficientCapability (expired), got {:?}",
+            err.0
+        );
+        // And the SAME token verifies BEFORE expiry (height 3 < 5).
+        let exec_ok = exec_at(3);
+        exec_ok
+            .verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect("token should authorize before its height expiry");
+    }
+
+    #[test]
+    fn token_biscuit_tampered_rejected() {
+        let mut ledger = Ledger::new();
+        let cell = Cell::new([25u8; 32], [0u8; 32]);
+        let cid = cell.id();
+        ledger.insert_cell(cell).unwrap();
+        let mut target_cell = ledger.get(&cid).unwrap().clone();
+        let method = [10u8; 32];
+        let (mut encoded, issuer) = mint_biscuit_for(cid, method, None);
+        target_cell.verification_key = Some(vk_with_data(issuer.to_vec()));
+        // Flip a byte in the middle of the encoded token.
+        let mid = encoded.len() / 2;
+        encoded[mid] ^= 0xFF;
+        let auth = Authorization::Token {
+            encoded,
+            key_ref: TokenKeyRef::BiscuitIssuer {
+                issuer_pubkey: issuer,
+            },
+            discharges: vec![],
+        };
+        let action = action_for(cid, method, auth);
+        let exec = exec_at(100);
+        let err = exec
+            .verify_authorization(&action, &target_cell, &ledger, &cid, &[0], 0)
+            .expect_err("tampered token must be rejected");
+        assert!(
+            matches!(err.0, TurnError::TokenAuthInvalid { .. }),
+            "expected TokenAuthInvalid (tampered), got {:?}",
+            err.0
+        );
     }
 }

@@ -571,6 +571,8 @@ impl TurnExecutor {
                             .map(|c| cand_cost(costs, c))
                             .max()
                             .unwrap_or(0),
+                        Authorization::Stealth { .. } => costs.signature_verify,
+                        Authorization::Token { .. } => costs.proof_verify,
                     }
                 }
                 candidates
@@ -579,6 +581,10 @@ impl TurnExecutor {
                     .max()
                     .unwrap_or(0)
             }
+            // Stealth: one Ed25519 verify + one point addition.
+            Authorization::Stealth { .. } => self.costs.signature_verify,
+            // Token: biscuit/macaroon crypto verify + Datalog/caveat eval.
+            Authorization::Token { .. } => self.costs.proof_verify,
         };
         *computrons_used = computrons_used.saturating_add(auth_cost);
         if *computrons_used > budget {

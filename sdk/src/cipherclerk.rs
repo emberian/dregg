@@ -4569,15 +4569,50 @@ impl AgentCipherclerk {
                 cell_id
             )));
         }
-        // For the witness path the cipherclerk does not pre-execute effects, so
-        // it cannot pre-compute new_commitment/effects_hash. Both are
-        // declared by the signer as the intended post-state and verified
-        // by the executor *after* it re-executes. In the witness path
-        // (no STARK), the executor recomputes both from journal output;
-        // a mismatch surfaces as `SovereignCommitmentMismatch` /
-        // `EffectsHashMismatch`. We emit zeroed declared values here.
-        let new_commitment: [u8; 32] = [0u8; 32];
-        let effects_hash: [u8; 32] = [0u8; 32];
+        // For the witness path there is NO STARK; the executor verifies the
+        // transition by RE-EXECUTING the effects against the injected
+        // pre-state and requiring that the resulting `state_commitment()`
+        // equals the witness's declared `new_commitment`
+        // (`execute.rs::SovereignCommitmentMismatch`). It also rejects all-zero
+        // placeholder `new_commitment`/`effects_hash` (rules 7/8). So we must
+        // pre-execute the effects locally, declare the real post-state
+        // commitment, and sign the canonical effects hash.
+        //
+        // Apply the same effects the executor will: Transfer / SetField /
+        // IncrementNonce mutate the cell, mirroring
+        // `prove_sovereign_turn` (the STARK path). `new_commitment` is the
+        // executor-aligned `CellState::state_commitment()` of the post-state
+        // (NOT the EffectVM PI commitment — that form is only for the
+        // proof-carrying path, which is verified via STARK PI rather than
+        // state re-execution).
+        let mut new_cell_state = cell_state.clone();
+        for effect in &effects {
+            match effect {
+                Effect::Transfer { from, to, amount } => {
+                    if from == cell_id {
+                        new_cell_state
+                            .state
+                            .set_balance(new_cell_state.state.balance().saturating_sub(*amount));
+                    }
+                    if to == cell_id {
+                        new_cell_state
+                            .state
+                            .set_balance(new_cell_state.state.balance().saturating_add(*amount));
+                    }
+                }
+                Effect::SetField { cell, index, value } if cell == cell_id => {
+                    if *index < new_cell_state.state.fields.len() {
+                        new_cell_state.state.fields[*index] = *value;
+                    }
+                }
+                Effect::IncrementNonce { cell } if cell == cell_id => {
+                    let _ = new_cell_state.state.increment_nonce();
+                }
+                _ => {}
+            }
+        }
+        let new_commitment: [u8; 32] = new_cell_state.state_commitment();
+
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -4588,6 +4623,59 @@ impl AgentCipherclerk {
             .copied()
             .unwrap_or(0)
             + 1;
+
+        // 4. Build the turn (with EMPTY witnesses first) so we can derive the
+        //    canonical effects hash via `compute_turn_identity_pi` — the same
+        //    function the executor uses for turn identity. The witness is NOT
+        //    part of turn identity (the proof path proves this by computing
+        //    identity over an empty-witness turn), so we can attach it after.
+        let agent_cell = *cell_id;
+        let nonce = self.receipt_chain.len() as u64;
+
+        let mut forest = dregg_turn::forest::CallForest::new();
+        let action = dregg_turn::Action {
+            target: agent_cell,
+            method: dregg_turn::action::symbol("sovereign_execute"),
+            args: Vec::new(),
+            authorization: dregg_turn::Authorization::Unchecked,
+            effects,
+            preconditions: dregg_cell::Preconditions::default(),
+            may_delegate: dregg_turn::DelegationMode::None,
+            commitment_mode: dregg_turn::CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        forest.add_root(action);
+
+        let mut turn = Turn {
+            agent: agent_cell,
+            nonce,
+            call_forest: forest,
+            fee,
+            memo: None,
+            valid_until: None,
+            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
+            depends_on: Vec::new(),
+            conservation_proof: None,
+            sovereign_witnesses: HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+
+        // Canonical effects hash (4 BabyBear felts → 32 bytes), matching the
+        // executor's `compute_turn_identity_pi`/`commitment_4bb_to_bytes`. This
+        // is always non-zero (BLAKE3 of even an empty effect set is non-zero),
+        // satisfying the executor's no-placeholder rule.
+        let (_turn_hash, effects_hash_global, _actor_nonce, _prev) =
+            dregg_turn::TurnExecutor::compute_turn_identity_pi(&turn);
+        let effects_hash: [u8; 32] =
+            dregg_turn::TurnExecutor::commitment_4bb_to_bytes(effects_hash_global);
+
         let signing_message = SovereignCellWitness::signing_message(
             cell_id,
             &old_commitment,
@@ -4609,48 +4697,12 @@ impl AgentCipherclerk {
             transition_proof: None,
         };
         self.sovereign_witness_sequences.insert(*cell_id, sequence);
+        turn.sovereign_witnesses.insert(*cell_id, witness);
 
-        // 4. Build the turn with sovereign_witnesses populated.
-        let agent_cell = *cell_id;
-        let nonce = self.receipt_chain.len() as u64;
-
-        let mut forest = dregg_turn::forest::CallForest::new();
-        let action = dregg_turn::Action {
-            target: agent_cell,
-            method: dregg_turn::action::symbol("sovereign_execute"),
-            args: Vec::new(),
-            authorization: dregg_turn::Authorization::Unchecked,
-            effects,
-            preconditions: dregg_cell::Preconditions::default(),
-            may_delegate: dregg_turn::DelegationMode::None,
-            commitment_mode: dregg_turn::CommitmentMode::Full,
-            balance_change: None,
-            witness_blobs: vec![],
-        };
-        forest.add_root(action);
-
-        let mut sovereign_witnesses = HashMap::new();
-        sovereign_witnesses.insert(*cell_id, witness);
-
-        let turn = Turn {
-            agent: agent_cell,
-            nonce,
-            call_forest: forest,
-            fee,
-            memo: None,
-            valid_until: None,
-            previous_receipt_hash: self.receipt_chain.last().map(|r| r.receipt_hash()),
-            depends_on: Vec::new(),
-            conservation_proof: None,
-            sovereign_witnesses,
-            execution_proof: None,
-            execution_proof_cell: None,
-            execution_proof_new_commitment: None,
-            custom_program_proofs: None,
-            effect_binding_proofs: Vec::new(),
-            cross_effect_dependencies: Vec::new(),
-            effect_witness_index_map: Vec::new(),
-        };
+        // Advance local sovereign state to the post-state so the NEXT turn's
+        // pre-state commitment matches the ledger (which the executor updates
+        // to `new_commitment` on accept). Mirrors `prove_sovereign_turn`.
+        self.sovereign_cells.insert(*cell_id, new_cell_state);
 
         Ok(turn)
     }

@@ -344,6 +344,109 @@ pub enum Authorization {
         /// is claiming satisfies the authorization.
         proof_index: u32,
     },
+    /// **Stealth (one-time-key) invocation — anonymity of the *actor*.**
+    ///
+    /// The caller authorizes this action with a ONE-TIME Ed25519 key
+    /// derived per-call from their persistent *spend* key `S` (the
+    /// target cell's `public_key`, treated as a stealth spend pubkey)
+    /// plus a fresh ephemeral secret `r`, using the
+    /// [`dregg_cell::stealth`] machinery. The on-chain turn carries only
+    /// the one-time public key `P`, the ephemeral public key `R = r·G`,
+    /// the derived blinding scalar `c`, and a signature by the one-time
+    /// private key `k = c + s` (`s` = spend scalar). The **persistent
+    /// spend public key never appears in the turn**, and because `r` is
+    /// fresh per call, `P`/`R`/`c` differ every call → two invocations
+    /// are unlinkable to a turn-stream observer.
+    ///
+    /// ## Soundness relation
+    /// The executor verifies the stealth-spend relation
+    ///   `P == c·G + S`
+    /// (point arithmetic, NO Diffie-Hellman / view key needed at verify
+    /// time — see `derive_one_time_pubkey` in `cell::stealth`) and that
+    /// `signature` verifies under `P` over
+    /// [`Self::stealth_signing_message`]. Producing a valid signature
+    /// under any `P = c·G + S` requires knowledge of the discrete log of
+    /// `S` (the spend scalar), so only the legitimate spend-key holder
+    /// can authorize — an attacker who only knows the public `S` cannot
+    /// forge. `c` is bound into `P` and into the action hash, so a
+    /// tampering relay cannot swap `c` (which would change `P`, breaking
+    /// the signature).
+    ///
+    /// ## Replay
+    /// The signing message binds `federation_id` + `turn_nonce` + the
+    /// action body, exactly like the `Signature` path, so a stealth
+    /// authorization for one (federation, nonce, action) does not
+    /// re-verify against another turn. `(P, R)` MAY additionally be
+    /// recorded by the federation as a one-time-key nullifier to make
+    /// in-window replay of the *same* turn observable; that gate lives in
+    /// the executor's nonce/receipt-chain machinery (the persistent
+    /// per-agent `previous_receipt_hash` already rejects same-turn
+    /// resubmission).
+    Stealth {
+        /// One-time public key `P = c·G + S` (compressed Ed25519). The
+        /// signature verifies under this key.
+        one_time_pubkey: [u8; 32],
+        /// Ephemeral public key `R = r·G` (X25519/Ed25519 point bytes),
+        /// published for the cell owner's own scanning/bookkeeping. Not
+        /// load-bearing for verification, but bound into the action hash
+        /// so a relay cannot strip or swap it.
+        ephemeral_pubkey: [u8; 32],
+        /// The blinding scalar `c = H(shared_secret)` reduced mod l,
+        /// carried so the verifier can recompute `P = c·G + S` without
+        /// any Diffie-Hellman (the view key stays private).
+        blinding_scalar: [u8; 32],
+        /// Ed25519 signature by the one-time key `k = c + s` over
+        /// [`Self::stealth_signing_message`].
+        #[serde(with = "crate::escrow::serde_sig64")]
+        signature: [u8; 64],
+    },
+    /// **First-class biscuit/macaroon credential authorization** per
+    /// `docs/TOKEN-CAPABILITY-UNIFICATION.md` (goal 3). A peer of
+    /// `Bearer`/`CapTpDelivered`: the caller authorizes by *presenting a
+    /// token* whose caveats/Datalog are verified — deterministically and
+    /// on-chain — against THIS call's `(action, resource, effects,
+    /// nonce, federation, block_height)` via a turn-side
+    /// `TokenAuthorityVerifier`.
+    ///
+    /// - **Biscuit** (prefix `eb2_`): decentralized public-key verify.
+    ///   The root key is a granting authority the executor trusts; any
+    ///   federation can verify offline.
+    /// - **Macaroon** (prefix `em2_`): intra-authority fast path; only
+    ///   sound where the verifier legitimately holds the root secret
+    ///   (cell-scoped derived key).
+    ///
+    /// Replay against a different call fails because the bound
+    /// `AuthRequest` facts differ. Expiry is block-height-bound (no
+    /// wall-clock). Capability-cover is enforced (the token must grant
+    /// ≥ what the cell requires). All checks fail closed.
+    Token {
+        /// Self-describing encoded credential (`eb2_…` biscuit /
+        /// `em2_…` macaroon), as produced by `dregg_token`.
+        encoded: Vec<u8>,
+        /// How the verifier resolves the root key + trust anchor.
+        key_ref: TokenKeyRef,
+        /// Optional discharge tokens satisfying third-party caveats
+        /// (each itself verifiable against a known gateway pubkey).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        discharges: Vec<Vec<u8>>,
+    },
+}
+
+/// How a [`Authorization::Token`] verifier resolves the credential's
+/// root key and trust anchor (per `TOKEN-CAPABILITY-UNIFICATION.md`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TokenKeyRef {
+    /// Biscuit: verify offline against this granting-authority Ed25519
+    /// public key. The key MUST be one the target cell's permissions /
+    /// trusted-issuer set authorizes (the executor's
+    /// `TokenAuthorityVerifier` holds that allowlist); an untrusted
+    /// issuer is rejected even if the token verifies cryptographically.
+    BiscuitIssuer { issuer_pubkey: [u8; 32] },
+    /// Macaroon: verify against the target cell's deterministically
+    /// derived root secret (cell-scoped). The verifier derives the
+    /// secret from the cell id + a domain-separated KDF; cross-cell
+    /// macaroons (whose secret the verifier does not hold) are rejected.
+    CellScopedMacaroon { cell: CellId },
 }
 
 /// Proof-carrying bearer capability: demonstrates delegated authority to exercise
@@ -418,6 +521,15 @@ impl Authorization {
             // wrapper. Permission checks dispatch by inspecting the
             // chosen candidate at `verify_authorization` time.
             Authorization::OneOf { .. } => None,
+            // Stealth authorizes by a one-time Ed25519 signature; it
+            // satisfies the Signature requirement (the one-time key is
+            // a derived signing key). Reported as Signature so cells
+            // requiring `AuthRequired::Signature` accept it.
+            Authorization::Stealth { .. } => Some(dregg_cell::AuthKind::Signature),
+            // Token is verified holistically by the TokenAuthorityVerifier
+            // (capability-cover decides whether it satisfies the cell's
+            // requirement), so it is not part of the Sig/Proof lattice.
+            Authorization::Token { .. } => None,
         }
     }
 
@@ -489,6 +601,37 @@ impl Authorization {
         msg.extend_from_slice(&(effects_bytes.len() as u32).to_le_bytes());
         msg.extend_from_slice(&effects_bytes);
         msg
+    }
+
+    /// Canonical signing message for [`Authorization::Stealth`].
+    ///
+    /// The one-time private key `k = c + s` signs this message. It binds
+    /// the same fields the `Signature` path's preimage covers plus the
+    /// blinding scalar `c` and the ephemeral pubkey `R`, so that:
+    ///   * a tampering relay cannot retarget the signature to a
+    ///     different action / federation / nonce (T2 + T6 + T11), and
+    ///   * `c` and `R` are committed (a relay cannot swap them; `c` also
+    ///     determines `P`, so swapping it breaks the signature anyway).
+    ///
+    /// `position` is the action's index in the forest root, mirroring
+    /// the partial-commitment binding.
+    pub fn stealth_signing_message(
+        federation_id: &[u8; 32],
+        action_hash: &[u8; 32],
+        ephemeral_pubkey: &[u8; 32],
+        blinding_scalar: &[u8; 32],
+        position: usize,
+        turn_nonce: u64,
+    ) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"dregg-stealth-sig-v1:");
+        hasher.update(federation_id);
+        hasher.update(action_hash);
+        hasher.update(ephemeral_pubkey);
+        hasher.update(blinding_scalar);
+        hasher.update(&(position as u64).to_le_bytes());
+        hasher.update(&turn_nonce.to_le_bytes());
+        *hasher.finalize().as_bytes()
     }
 }
 
@@ -1435,6 +1578,43 @@ impl Action {
                 let cand_bytes = postcard::to_allocvec(candidates).unwrap_or_default();
                 hasher.update(&(cand_bytes.len() as u64).to_le_bytes());
                 hasher.update(&cand_bytes);
+            }
+            Authorization::Stealth {
+                one_time_pubkey,
+                ephemeral_pubkey,
+                blinding_scalar,
+                signature,
+            } => {
+                hasher.update(&[8u8]);
+                hasher.update(one_time_pubkey);
+                hasher.update(ephemeral_pubkey);
+                hasher.update(blinding_scalar);
+                // IMPORTANT: the signature is NOT hashed here. The
+                // stealth signing message (`stealth_signing_message`)
+                // consumes `action.hash()`, so including the signature
+                // would be circular at signing time. Excluding it
+                // mirrors how the `Signature` path's
+                // `compute_signing_message` does not hash its own
+                // signature. The keys + blinding scalar above fully
+                // determine `P`, and `P` is what the signature binds.
+                let _ = signature;
+            }
+            Authorization::Token {
+                encoded,
+                key_ref,
+                discharges,
+            } => {
+                hasher.update(&[9u8]);
+                hasher.update(&(encoded.len() as u64).to_le_bytes());
+                hasher.update(encoded);
+                let kr_bytes = postcard::to_allocvec(key_ref).unwrap_or_default();
+                hasher.update(&(kr_bytes.len() as u64).to_le_bytes());
+                hasher.update(&kr_bytes);
+                hasher.update(&(discharges.len() as u64).to_le_bytes());
+                for d in discharges {
+                    hasher.update(&(d.len() as u64).to_le_bytes());
+                    hasher.update(d);
+                }
             }
         }
         // Hash delegation mode.

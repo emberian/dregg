@@ -823,15 +823,27 @@ fn sender_authorized_blinded_set_with_tampered_witness_rejects() {
 // ===========================================================================
 
 #[test]
-fn capability_uniqueness_structural_accept() {
-    // Per CAVEAT-LAYER-COVERAGE.md §1 row 16: today cell-side evaluator is
-    // structural only — it checks slot index validity and returns Ok. So a
-    // declared CapabilityUniqueness on a valid slot accepts any transition.
+fn capability_uniqueness_scalar_fails_closed() {
+    // SECURITY (audit item 1): the scalar state evaluator only sees the 8
+    // state-slot field values, not the cell's actual `CapabilitySet`, so it
+    // cannot decide structural cap uniqueness. Pre-fix it bounds-checked the
+    // slot and returned Ok — a silent no-op letting a cell *declare*
+    // uniqueness while enforcing nothing. Post-fix it fails CLOSED: even a
+    // valid slot with a non-zero cap-set root must reject with
+    // `CapabilityUniquenessRequiresExecutor`. Real enforcement lives in the
+    // executor (see state_constraint_executor.rs / turn cap-set tests).
     let p = single_predicate(StateConstraint::CapabilityUniqueness {
         cap_set_root_slot: 6,
     });
     let new = state_with(&[(6, 0xdeadbeef)]);
-    assert_accept(&p, &new, None, None, "CapabilityUniqueness structural");
+    assert_reject_err(
+        &p,
+        &new,
+        None,
+        None,
+        |e| matches!(e, ProgramError::CapabilityUniquenessRequiresExecutor { .. }),
+        "CapabilityUniqueness scalar fail-closed",
+    );
 }
 
 #[test]
@@ -924,7 +936,15 @@ fn rate_limit_accepts_count_witness_when_ctx_count_unset() {
 }
 
 #[test]
-fn rate_limit_rejects_count_witness_at_cap_when_ctx_count_unset() {
+fn rate_limit_ignores_self_attested_count_witness_when_ctx_count_unset() {
+    // SECURITY (audit item 2): RateLimit no longer trusts a self-attested
+    // `RateLimitCount` witness. The count comes ONLY from the executor's
+    // authoritative `ctx.sender_epoch_count`. Pre-fix, a `RateLimitCount`
+    // witness at the cap (here 5) would be trusted as the count and REJECT;
+    // that was an insecure submitter-controlled path. Post-fix the witness is
+    // IGNORED — the authoritative ctx count (0, first action of the epoch) is
+    // under the cap, so the action ACCEPTS. (A submitter therefore can neither
+    // raise nor exhaust the budget via the witness blob.)
     let p = single_predicate(StateConstraint::RateLimit {
         max_per_epoch: 5,
         epoch_duration: 1024,
@@ -944,19 +964,14 @@ fn rate_limit_rejects_count_witness_at_cap_when_ctx_count_unset() {
         ..Default::default()
     };
 
-    let err = p
-        .evaluate_full(
-            &CellState::default(),
-            None,
-            Some(&ctx),
-            &TransitionMeta::wildcard(),
-            &witnesses,
-        )
-        .expect_err("at-cap RateLimitCount witness must reject");
-    assert!(
-        matches!(err, ProgramError::ConstraintViolated { .. }),
-        "expected ConstraintViolated, got: {err:?}"
-    );
+    p.evaluate_full(
+        &CellState::default(),
+        None,
+        Some(&ctx),
+        &TransitionMeta::wildcard(),
+        &witnesses,
+    )
+    .expect("at-cap RateLimitCount witness must be ignored; ctx count 0 accepts");
 }
 
 #[test]
@@ -1692,20 +1707,69 @@ fn renounced_public_root_returns_sentinel_without_registry() {
 
 #[test]
 fn renounced_accepts_when_sender_not_in_set() {
-    // Sender 0x05.. is strictly between lower=0x04.. and upper=0x06..;
-    // the SortedNeighborNonMembershipVerifier (registered in default_builtins)
-    // must accept the proof and the program must evaluate Ok(()).
-    use dregg_cell::predicate::{NonMembershipNeighborProof, WitnessedPredicateRegistry};
+    // Sender 0x05.. is strictly between two CONSECUTIVE sorted-set leaves
+    // lower=0x04.. and upper=0x06.. .
+    //
+    // SECURITY (wide-bracket forge closed): a bare 96-byte neighbor proof is
+    // now rejected. The honest path ships a `NonMembershipProofV2` whose
+    // lower/upper are consecutive leaves under the committed root, proven by a
+    // real Merkle-adjacency STARK, and must be verified against a registry that
+    // has the adjacency verifier installed (`registry_with_real_verifiers`).
+    // We build a genuine 4-leaf sorted tree and take its root as the
+    // commitment.
+    use dregg_cell::predicate::{NonMembershipNeighborProof, NonMembershipProofV2};
     use dregg_cell::program::{
         RenouncedSet, TransitionMeta, WitnessBlobView, WitnessBundle, WitnessKindTag,
     };
+    use dregg_circuit::poseidon2::hash_2_to_1;
+    use dregg_turn::executor::membership_verifier::{
+        NeighborAdjStep, adjacency_commitment_bytes, adjacency_leaf_felt, prove_neighbor_adjacency,
+        registry_with_real_verifiers,
+    };
 
-    let commitment = [0xABu8; 32];
     let candidate = [0x05u8; 32];
-    let proof = NonMembershipNeighborProof::new(&commitment, [0x04u8; 32], [0x06u8; 32]);
+    let lower = [0x04u8; 32];
+    let upper = [0x06u8; 32];
+    // Sorted 4-leaf set with lower/upper as the two MIDDLE (consecutive) leaves.
+    let neighbors: [[u8; 32]; 4] = [[0x02u8; 32], lower, upper, [0x08u8; 32]];
+
+    let leaves: Vec<_> = neighbors.iter().map(adjacency_leaf_felt).collect();
+    let mut levels: Vec<Vec<_>> = vec![leaves];
+    while levels.last().unwrap().len() > 1 {
+        let cur = levels.last().unwrap();
+        let next: Vec<_> = cur.chunks(2).map(|p| hash_2_to_1(p[0], p[1])).collect();
+        levels.push(next);
+    }
+    let root_felt = *levels.last().unwrap().first().unwrap();
+    let commitment = adjacency_commitment_bytes(root_felt);
+
+    let auth_path = |mut index: usize| -> Vec<NeighborAdjStep> {
+        let depth = levels.len() - 1;
+        let mut path = Vec::with_capacity(depth);
+        for level in &levels[..depth] {
+            let is_right = index & 1 == 1;
+            let sibling = if is_right {
+                level[index - 1]
+            } else {
+                level[index + 1]
+            };
+            path.push(NeighborAdjStep {
+                sibling,
+                dir: is_right,
+            });
+            index >>= 1;
+        }
+        path
+    };
+    let adjacency_proof = prove_neighbor_adjacency(&lower, &auth_path(1), &upper, &auth_path(2))
+        .expect("consecutive neighbors must produce an adjacency proof");
+    let proof = NonMembershipProofV2 {
+        neighbor: NonMembershipNeighborProof::new(&commitment, lower, upper),
+        adjacency_proof,
+    };
     let proof_bytes = proof.to_bytes();
 
-    let registry = WitnessedPredicateRegistry::default_builtins();
+    let registry = registry_with_real_verifiers();
     let blobs: [WitnessBlobView<'_>; 1] = [WitnessBlobView {
         kind: WitnessKindTag::ProofBytes,
         bytes: &proof_bytes,

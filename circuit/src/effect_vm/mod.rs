@@ -170,6 +170,10 @@ mod helpers;
 mod trace;
 mod verify;
 
+// Per-action proof granularity: prove a single call-forest Action's effects
+// and compose per-action sub-proofs into the per-turn/per-cell statement.
+pub mod per_action;
+
 #[cfg(test)]
 mod tests;
 
@@ -206,4 +210,11 @@ pub use trace::{
 pub use verify::{
     verify_balance_limb_pis, verify_balance_limb_ranges, verify_slot_caveat_manifest,
     verify_state_integrity,
+};
+
+// ---- Re-export per-action proof granularity ----
+pub use per_action::{
+    ActionForestAccumulator, ComposeError, PerActionProof, PerActionSummary,
+    check_composition_matches_turn, compose_action_summaries, generate_action_proof,
+    summarize_action_proof, verify_action_proof,
 };

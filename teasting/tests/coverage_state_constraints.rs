@@ -774,11 +774,19 @@ fn any_of_accept_and_reject() {
 // 19. CapabilityUniqueness — structural declaration only (no reject path)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `CapabilityUniqueness`: the evaluator is a structural no-op (always Ok).
-/// This confirms the accept path executes through the executor without panic;
-/// there is no executor-enforced reject path for this variant.
+/// `CapabilityUniqueness`: SECURITY (audit item 1) — the scalar evaluator can
+/// no longer silently accept this variant (it fails closed with
+/// `CapabilityUniquenessRequiresExecutor`); real enforcement lives in the
+/// executor's `validate_capability_uniqueness`, which binds the declared
+/// cap-set-root slot to `compute_canonical_capability_root(&cell.capabilities)`
+/// and rejects a zero/empty root. Pre-fix this was a structural no-op that let
+/// a cell *declare* NFT-uniqueness while enforcing nothing.
+///
+/// Here the cell has no capabilities and slot 0 holds the zero default, so the
+/// executor must REJECT (a unique-cap commitment cannot be empty) rather than
+/// wave the transition through.
 #[test]
-fn capability_uniqueness_accept_only() {
+fn capability_uniqueness_executor_fails_closed_on_empty_root() {
     let (ex, cc) = fresh(20);
     ex.install_program(
         ex.cell_id(),
@@ -786,6 +794,10 @@ fn capability_uniqueness_accept_only() {
             cap_set_root_slot: 0,
         }]),
     );
-    let ok = ex.submit_action(&cc, set_field(&ex, &cc, 1, field_from_u64(1)));
-    assert!(ok.is_ok(), "CapabilityUniqueness accept failed: {ok:?}");
+    let res = ex.submit_action(&cc, set_field(&ex, &cc, 1, field_from_u64(1)));
+    assert!(
+        res.is_err(),
+        "CapabilityUniqueness must NOT silently accept; executor must fail closed on an \
+         empty/zero cap-set root, got: {res:?}"
+    );
 }

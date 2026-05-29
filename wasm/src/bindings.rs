@@ -2601,6 +2601,28 @@ pub enum AuthorizationView {
         num_candidates: usize,
         proof_index: u32,
     },
+    /// Stealth (one-time-key) invocation — actor anonymity. All fields are
+    /// public (they appear in the turn); the persistent spend key does not.
+    Stealth {
+        one_time_pubkey: String,
+        ephemeral_pubkey: String,
+        blinding_scalar: String,
+        signature: String,
+    },
+    /// First-class biscuit/macaroon credential authorization.
+    Token {
+        /// Token format (`biscuit` / `macaroon` / `unknown`) from the prefix.
+        format: String,
+        /// Encoded token length in bytes (the token itself is presented,
+        /// not surfaced for render).
+        encoded_len: usize,
+        /// Trust-anchor kind (`BiscuitIssuer` / `CellScopedMacaroon`).
+        key_ref_kind: String,
+        /// Resolved key handle (issuer pubkey hex, or target cell id hex).
+        key_ref: String,
+        /// Number of discharge tokens for third-party caveats.
+        num_discharges: usize,
+    },
 }
 
 /// Summary fields from a HandoffCertificate for CapTpDelivered display.
@@ -2674,6 +2696,45 @@ fn authorization_to_view(auth: &Authorization) -> AuthorizationView {
             num_candidates: candidates.len(),
             proof_index: *proof_index,
         },
+        Authorization::Stealth {
+            one_time_pubkey,
+            ephemeral_pubkey,
+            blinding_scalar,
+            signature,
+        } => AuthorizationView::Stealth {
+            one_time_pubkey: hex_encode(one_time_pubkey),
+            ephemeral_pubkey: hex_encode(ephemeral_pubkey),
+            blinding_scalar: hex_encode(blinding_scalar),
+            signature: hex_encode(signature),
+        },
+        Authorization::Token {
+            encoded,
+            key_ref,
+            discharges,
+        } => {
+            let format = if encoded.starts_with(b"eb2_") {
+                "biscuit"
+            } else if encoded.starts_with(b"em2_") {
+                "macaroon"
+            } else {
+                "unknown"
+            };
+            let (key_ref_kind, key_ref_hex) = match key_ref {
+                dregg_turn::action::TokenKeyRef::BiscuitIssuer { issuer_pubkey } => {
+                    ("BiscuitIssuer", hex_encode(issuer_pubkey))
+                }
+                dregg_turn::action::TokenKeyRef::CellScopedMacaroon { cell } => {
+                    ("CellScopedMacaroon", hex_encode(&cell.0))
+                }
+            };
+            AuthorizationView::Token {
+                format: format.to_string(),
+                encoded_len: encoded.len(),
+                key_ref_kind: key_ref_kind.to_string(),
+                key_ref: key_ref_hex,
+                num_discharges: discharges.len(),
+            }
+        }
     }
 }
 

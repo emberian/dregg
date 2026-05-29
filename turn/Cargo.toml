@@ -15,9 +15,11 @@ dregg-cell = { path = "../cell" }
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
+dregg-token = { path = "../token" }
 dregg-types = { path = "../types" }
 blake3 = "1"
 chacha20poly1305 = { workspace = true }
+curve25519-dalek = { version = "4", features = ["alloc"] }
 tracing = { workspace = true }
 ed25519-dalek = { version = "2", features = ["hazmat"] }
 getrandom = { workspace = true }
@@ -28,8 +30,8 @@ serde_json = { workspace = true }
 x25519-dalek = { workspace = true }
 
 [dev-dependencies]
-curve25519-dalek = { version = "4", features = ["alloc"] }
 proptest = { workspace = true }
+sha2 = "0.10"
 
 [lints]
 workspace = true

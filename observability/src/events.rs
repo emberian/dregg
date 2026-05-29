@@ -4,7 +4,7 @@
 use dregg_cell::{AuthRequired, CellId};
 use dregg_circuit::field::BabyBear;
 use dregg_turn::{
-    action::{Authorization, BearerCapProof, DelegationProofData},
+    action::{Authorization, BearerCapProof, DelegationProofData, TokenKeyRef},
     bilateral_schedule::{
         BilateralCounts, BilateralRoots, GrantEntry, IntroduceEntry, TransferEntry,
     },
@@ -287,6 +287,41 @@ pub enum AuthorizationPayload {
         /// Effect mask the cert restricts (None = full effect set).
         allowed_effects: Option<u32>,
     },
+    /// Stealth (one-time-key) invocation. All emitted fields are public
+    /// (they appear in the on-chain turn). The persistent spend key never
+    /// appears here — by construction it is not in the authorization.
+    Stealth {
+        /// One-time public key `P = c·G + S` (hex). The signature verifies
+        /// under this key.
+        one_time_pubkey: String,
+        /// Ephemeral public key `R = r·G` (hex).
+        ephemeral_pubkey: String,
+        /// Blinding scalar `c` (hex). Public — carried so the verifier can
+        /// recompute `P` without Diffie-Hellman.
+        blinding_scalar: String,
+        /// First 16 bytes of the one-time-key signature (hex). The full
+        /// 64-byte signature is public; the receipt carries it.
+        signature_prefix: String,
+    },
+    /// First-class biscuit/macaroon credential authorization
+    /// (`docs/TOKEN-CAPABILITY-UNIFICATION.md`). The encoded token is
+    /// hashed (it can be large and is presented, not a secret); the key
+    /// reference and discharge count are surfaced so studio consumers can
+    /// see the trust anchor and third-party-caveat shape.
+    Token {
+        /// Token format detected from the prefix (`biscuit`/`macaroon`/`unknown`).
+        format: &'static str,
+        /// BLAKE3 hash of the encoded token bytes (hex).
+        encoded_hash: String,
+        /// Length of the encoded token in bytes.
+        encoded_len: usize,
+        /// Trust-anchor tag (`biscuit_issuer` / `cell_scoped_macaroon`).
+        key_ref_kind: &'static str,
+        /// The resolved key handle (issuer pubkey hex, or target cell id hex).
+        key_ref: String,
+        /// Number of discharge tokens presented for third-party caveats.
+        num_discharges: usize,
+    },
 }
 
 /// Structured rendering of [`DelegationProofData`].
@@ -396,7 +431,59 @@ impl AuthorizationPayload {
                     allowed_effects: handoff_cert.allowed_effects,
                 }
             }
+            Authorization::Stealth {
+                one_time_pubkey,
+                ephemeral_pubkey,
+                blinding_scalar,
+                signature,
+            } => {
+                let mut sig_prefix = [0u8; 16];
+                sig_prefix.copy_from_slice(&signature[..16]);
+                AuthorizationPayload::Stealth {
+                    one_time_pubkey: hex32(one_time_pubkey),
+                    ephemeral_pubkey: hex32(ephemeral_pubkey),
+                    blinding_scalar: hex32(blinding_scalar),
+                    signature_prefix: hex_bytes(&sig_prefix),
+                }
+            }
+            Authorization::Token {
+                encoded,
+                key_ref,
+                discharges,
+            } => {
+                let format = token_format_tag(encoded);
+                let (key_ref_kind, key_ref_hex) = match key_ref {
+                    TokenKeyRef::BiscuitIssuer { issuer_pubkey } => {
+                        ("biscuit_issuer", hex32(issuer_pubkey))
+                    }
+                    TokenKeyRef::CellScopedMacaroon { cell } => {
+                        ("cell_scoped_macaroon", hex32(cell.as_bytes()))
+                    }
+                };
+                AuthorizationPayload::Token {
+                    format,
+                    encoded_hash: hex32(blake3::hash(encoded).as_bytes()),
+                    encoded_len: encoded.len(),
+                    key_ref_kind,
+                    key_ref: key_ref_hex,
+                    num_discharges: discharges.len(),
+                }
+            }
         }
+    }
+}
+
+/// Detect a presented token's format from its self-describing prefix
+/// (`eb2_` biscuit / `em2_` macaroon), for the observability tag. Mirrors
+/// the executor's `TokenFormat::detect`; an unrecognized prefix is
+/// `"unknown"` (the executor rejects it — observability must not panic).
+fn token_format_tag(encoded: &[u8]) -> &'static str {
+    if encoded.starts_with(b"eb2_") {
+        "biscuit"
+    } else if encoded.starts_with(b"em2_") {
+        "macaroon"
+    } else {
+        "unknown"
     }
 }
 
@@ -414,6 +501,8 @@ fn authorization_tag(auth: &Authorization) -> &'static str {
         Authorization::Custom { .. } => "custom",
         Authorization::CapTpDelivered { .. } => "captp_delivered",
         Authorization::OneOf { .. } => "one_of",
+        Authorization::Stealth { .. } => "stealth",
+        Authorization::Token { .. } => "token",
     }
 }
 

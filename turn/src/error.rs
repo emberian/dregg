@@ -340,6 +340,41 @@ pub enum TurnError {
     /// Per audit P2-2: wrapping a nonce would re-enable replay of historical
     /// actions. The turn is rejected rather than allowing the wrap.
     NonceOverflow { cell: CellId },
+
+    /// A stealth (one-time) authorization failed verification.
+    ///
+    /// Stealth invocation (anonymity-of-actor goal 1) authorizes a call with a
+    /// per-call one-time Ed25519 key derived from the actor's persistent spend
+    /// key plus a fresh ephemeral secret (see `cell::stealth`). The on-chain
+    /// turn carries only the one-time public key + ephemeral public key + a
+    /// signature; the persistent caller key never appears, and two calls are
+    /// unlinkable. This error is returned when the one-time signature does not
+    /// verify, the ephemeral/one-time keys are not valid Ed25519 points, or
+    /// the (executor-recomputed) binding does not match.
+    StealthAuthInvalid { reason: String },
+
+    /// A first-class `Authorization::Token` (biscuit / macaroon credential)
+    /// failed verification (goal 3 / `TOKEN-CAPABILITY-UNIFICATION.md`).
+    ///
+    /// Covers: undecodable token, format/key-ref mismatch, cryptographic
+    /// verification failure, caveat/Datalog rejection when bound to THIS
+    /// call's `AuthRequest`, an untrusted granting authority, or an expired
+    /// (by block height) token.
+    TokenAuthInvalid { reason: String },
+
+    /// The token verified cryptographically but its granted authority does not
+    /// cover what the cell requires for this action (capability-cover check,
+    /// `TOKEN-CAPABILITY-UNIFICATION.md` step 5). Fail-closed.
+    TokenInsufficientCapability {
+        cell: CellId,
+        action: String,
+        reason: String,
+    },
+
+    /// The action carried `Authorization::Token` but the executor has no
+    /// `TokenAuthorityVerifier` configured (fail-closed, mirrors the
+    /// no-proof-verifier posture).
+    TokenVerifierNotConfigured,
 }
 
 impl core::fmt::Display for TurnError {
@@ -743,6 +778,30 @@ impl core::fmt::Display for TurnError {
                     f,
                     "nonce overflow on cell {cell}: u64::MAX exceeded; \
                      turn rejected to prevent P2-2 replay window"
+                )
+            }
+            TurnError::StealthAuthInvalid { reason } => {
+                write!(f, "stealth (one-time) authorization invalid: {reason}")
+            }
+            TurnError::TokenAuthInvalid { reason } => {
+                write!(f, "token authorization invalid: {reason}")
+            }
+            TurnError::TokenInsufficientCapability {
+                cell,
+                action,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "token does not cover required capability on cell {cell} for action \
+                     '{action}': {reason}"
+                )
+            }
+            TurnError::TokenVerifierNotConfigured => {
+                write!(
+                    f,
+                    "Authorization::Token presented but no TokenAuthorityVerifier configured \
+                     (fail-closed)"
                 )
             }
         }

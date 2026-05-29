@@ -104,6 +104,8 @@ impl TurnExecutor {
                 .map(|c| estimate_authorization_cost(c, &self.costs))
                 .max()
                 .unwrap_or(0),
+            Authorization::Stealth { .. } => self.costs.signature_verify,
+            Authorization::Token { .. } => self.costs.proof_verify,
         });
 
         for effect in &tree.action.effects {

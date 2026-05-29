@@ -736,14 +736,24 @@ fn sentinel_variant_inside_long_conjunction_accepts_when_witness_verifies() {
 fn all_locally_dispatchable_state_constraint_variants_declared_and_satisfied() {
     let custom_hash = [0xC3u8; 32];
     let registry = stress_registry(custom_hash);
+    // SECURITY (audit item 4): two ambiguity-closing rules interact here.
+    //   - TemporalPredicate now binds its proof by an EXPLICIT index — the
+    //     ProofBytes blob at `witness_index + 1` — not a first-of-kind scan.
+    //   - StateConstraint::Custom requires a UNIQUE ProofBytes blob (more than
+    //     one is rejected as ambiguous; bind explicitly otherwise).
+    // To satisfy both with a single program we lay out exactly ONE ProofBytes
+    // blob and point the TemporalPredicate's input at the Cleartext blob that
+    // immediately precedes it: blob[0] = Cleartext (Temporal input), blob[1] =
+    // ProofBytes (both the Temporal proof at witness_index(0)+1 AND the unique
+    // Custom proof). The TemporalPredicate below uses `witness_index: 0`.
     let blobs = [
-        WitnessBlobView {
-            kind: WitnessKindTag::ProofBytes,
-            bytes: b"shared-proof",
-        },
         WitnessBlobView {
             kind: WitnessKindTag::Cleartext,
             bytes: b"temporal-window",
+        },
+        WitnessBlobView {
+            kind: WitnessKindTag::ProofBytes,
+            bytes: b"shared-proof",
         },
     ];
     let witnesses = WitnessBundle {
@@ -793,10 +803,11 @@ fn all_locally_dispatchable_state_constraint_variants_declared_and_satisfied() {
         },
         StateConstraint::TemporalPredicate {
             dsl_hash: [0xD2u8; 32],
-            witness_index: 1,
+            witness_index: 0,
         },
         StateConstraint::Witnessed {
-            wp: WitnessedPredicate::dfa([0xD1u8; 32], InputRef::Sender, 0),
+            // proof_witness_index points at the single ProofBytes blob (index 1).
+            wp: WitnessedPredicate::dfa([0xD1u8; 32], InputRef::Sender, 1),
         },
         StateConstraint::Custom {
             ir_hash: custom_hash,
