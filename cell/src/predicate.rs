@@ -588,7 +588,12 @@ impl WitnessedPredicateRegistry {
         // forged renunciations rejectable without needing the full STARK
         // verifier registered.
         r.register_builtin(Arc::new(SortedNeighborNonMembershipVerifier));
-        r.register_builtin(Arc::new(StubVerifier::blinded_set()));
+        // BlindedSet is structurally + cryptographically checkable from the
+        // credential-set membership witness alone (Merkle path + binding tag
+        // + non-revocation), so we register the *real* (Silver-Sound)
+        // verifier rather than the accept-any stub. See
+        // `CredentialSetMembershipVerifier`.
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier));
         r.register_builtin(Arc::new(StubVerifier::bridge_predicate()));
         r.register_builtin(Arc::new(StubVerifier::pedersen_equality()));
         r
@@ -650,7 +655,12 @@ impl WitnessedPredicateRegistry {
         r.register_builtin(Arc::new(NotYetWiredVerifier::merkle_membership()));
         // NonMembership ships a real (Silver-Sound) verifier in this crate.
         r.register_builtin(Arc::new(SortedNeighborNonMembershipVerifier));
-        r.register_builtin(Arc::new(NotYetWiredVerifier::blinded_set()));
+        // BlindedSet ships a real (Silver-Sound) verifier in this crate:
+        // the credential-set membership witness (Merkle path + commitment-
+        // keyed binding tag + sorted-neighbor non-revocation) is fully
+        // checkable without the circuit crate. See
+        // `CredentialSetMembershipVerifier`.
+        r.register_builtin(Arc::new(CredentialSetMembershipVerifier));
         r.register_builtin(Arc::new(NotYetWiredVerifier::bridge_predicate()));
         r.register_builtin(Arc::new(NotYetWiredVerifier::pedersen_equality()));
         r
@@ -1059,12 +1069,6 @@ impl StubVerifier {
             name: "stub-merkle-membership",
         }
     }
-    fn blinded_set() -> Self {
-        Self {
-            kind: WitnessedPredicateKind::BlindedSet,
-            name: "stub-blinded-set",
-        }
-    }
     fn bridge_predicate() -> Self {
         Self {
             kind: WitnessedPredicateKind::BridgePredicate,
@@ -1166,13 +1170,6 @@ impl NotYetWiredVerifier {
             kind: WitnessedPredicateKind::MerkleMembership,
             name: "not-yet-wired-merkle-membership",
             upstream: "dregg_circuit::dsl::membership::verify_membership_dsl_full",
-        }
-    }
-    fn blinded_set() -> Self {
-        Self {
-            kind: WitnessedPredicateKind::BlindedSet,
-            name: "not-yet-wired-blinded-set",
-            upstream: "dregg_circuit::dsl::membership::verify_blinded_membership_dsl_full",
         }
     }
     fn bridge_predicate() -> Self {
@@ -1443,6 +1440,355 @@ impl WitnessedPredicateVerifier for SortedNeighborNonMembershipVerifier {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// BlindedSet: real (non-stub) credential-set membership verifier
+// ─────────────────────────────────────────────────────────────────────
+
+/// Wire encoding for a [`WitnessedPredicateKind::BlindedSet`] proof — a
+/// cell-native credential-set membership / non-revocation witness.
+///
+/// # What a BlindedSet proof is
+///
+/// `WitnessedPredicateKind::BlindedSet` powers
+/// `StateConstraint::SenderAuthorized { AuthorizedSet::CredentialSet { .. } }`
+/// (the cross-app identity-attested tier; see
+/// `cell::program::AuthorizedSet::CredentialSet`). The predicate's
+/// `commitment` is the **stable (issuer, schema) tag**
+/// `blake3_derive_key("dregg-credential-set-v1") || issuer_cell ||
+/// credential_schema_id` — it identifies *which* issuer-cell/schema pair
+/// gates the action, but it is **not** itself a member-set root.
+///
+/// The set of authorized holders is a *blinded* accumulator the issuer
+/// publishes: the federation sees only its 32-byte Poseidon-style root.
+/// A holder proves "I am in the issuer's authorized set for this schema
+/// **and** I am not revoked" by exhibiting:
+///
+/// 1. `issuer_set_root` — the issuer's published membership-accumulator
+///    root. The federation only ever sees the root (the "blinded" part).
+/// 2. A Merkle membership path from the holder leaf
+///    `leaf = H_keyed("dregg-credential-holder-leaf-v1", commitment ||
+///    holder)` up to `issuer_set_root`. The leaf binds the holder pubkey
+///    **and** the (issuer, schema) commitment, so a path valid under one
+///    (issuer, schema) is not valid under another, and a path for holder
+///    A is not valid for holder B.
+/// 3. `revocation_root` — the issuer's published non-revocation
+///    accumulator root (sorted-leaf set of revoked holders).
+/// 4. A sorted-neighbor non-membership witness
+///    ([`NonMembershipNeighborProof`]) proving `holder` is absent from
+///    `revocation_root`.
+/// 5. `binding_tag` — `H_keyed("dregg-credential-set-binding-v1",
+///    commitment || holder || issuer_set_root || revocation_root)`. This
+///    cryptographically welds the four public quantities together so a
+///    proof cannot be transplanted across (issuer, schema), holders, or
+///    swapped roots.
+///
+/// # Verification (what the verifier actually checks)
+///
+/// All checks are closed-form hash recomputations — no STARK, no circuit
+/// dependency (the cell crate cannot depend on `dregg-circuit` /
+/// `dregg-bridge` / `dregg-credentials`; cf. [`NotYetWiredVerifier`]). The
+/// verifier:
+///
+/// - decodes the proof (rejects empty / malformed bytes),
+/// - recomputes `binding_tag` from `(commitment, holder, issuer_set_root,
+///   revocation_root)` and rejects on mismatch (transplant / root-swap
+///   defense),
+/// - recomputes the holder leaf and walks `merkle_path` to a root,
+///   rejecting unless it equals `issuer_set_root` (membership),
+/// - verifies the sorted-neighbor non-membership of `holder` against
+///   `revocation_root` (non-revocation).
+///
+/// # Silver-Sound vs. Golden-Sound (honest soundness statement)
+///
+/// This is **Silver-Sound, not Golden-Sound**, exactly like
+/// [`SortedNeighborNonMembershipVerifier`]:
+///
+/// - **Closed:** empty/garbage proofs, wrong-holder transplant (the leaf
+///   and binding tag both bind `holder`), cross-(issuer,schema) replay
+///   (the leaf and tag bind `commitment`), revoked holders (non-revocation
+///   witness), and root-swap (the binding tag covers both roots).
+/// - **Open (the Silver gap):** the verifier resolves its input from
+///   `InputRef::Sender` only — it has **no channel to the issuer cell's
+///   on-chain `REVOCATION_ROOT_SLOT` / `SCHEMA_COMMITMENT_SLOT`**, so it
+///   cannot confirm that the prover-supplied `issuer_set_root` /
+///   `revocation_root` are the issuer's *real* published roots. A prover
+///   who fabricates their own accumulator containing themselves (and an
+///   empty revocation set) can therefore self-attest. Closing this
+///   requires either (a) the executor binding the issuer cell's slot
+///   values into the [`PredicateInput`] so the verifier can equate them,
+///   or (b) a full STARK that proves the roots are reads of the issuer
+///   cell's state at the turn's state root (Golden Vision). Until then
+///   this verifier is the interim rung: strictly stronger than
+///   reject-all / accept-any, strictly weaker than the issuer-bound
+///   STARK.
+///
+/// # Versioning
+///
+/// The keyed-derive domains `dregg-credential-holder-leaf-v1`,
+/// `dregg-credential-merkle-v1`, and `dregg-credential-set-binding-v1`
+/// are versioned wire formats; the Golden lift will introduce `-v2`
+/// variants whose tags differ, making the cut-over unambiguous.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialSetMembershipProof {
+    /// The issuer's published membership-accumulator root (blinded set).
+    pub issuer_set_root: [u8; 32],
+    /// The issuer's published non-revocation accumulator root.
+    pub revocation_root: [u8; 32],
+    /// Merkle path from the holder leaf to `issuer_set_root`. Each entry
+    /// is `(sibling, holder_is_right_child)`: when `is_right` is true the
+    /// running hash is the *right* child and `sibling` the left, else the
+    /// running hash is the left child.
+    pub merkle_path: Vec<(([u8; 32]), bool)>,
+    /// Sorted-neighbor non-membership witness proving `holder` is absent
+    /// from `revocation_root`.
+    pub non_revocation: NonMembershipNeighborProof,
+    /// Keyed binding tag over (commitment, holder, issuer_set_root,
+    /// revocation_root). Reconstruct via [`Self::binding_tag`].
+    pub binding_tag: [u8; 32],
+}
+
+impl CredentialSetMembershipProof {
+    /// Compute the holder leaf hash for the membership accumulator.
+    ///
+    /// `leaf = H_keyed("dregg-credential-holder-leaf-v1", commitment ||
+    /// holder)`. Binding the leaf to both the (issuer, schema)
+    /// `commitment` and the `holder` pubkey is what makes a membership
+    /// path non-transplantable across holders and across (issuer, schema)
+    /// pairs.
+    pub fn holder_leaf(commitment: &[u8; 32], holder: &[u8; 32]) -> [u8; 32] {
+        let mut h = blake3::Hasher::new_derive_key("dregg-credential-holder-leaf-v1");
+        h.update(commitment);
+        h.update(holder);
+        *h.finalize().as_bytes()
+    }
+
+    /// Combine two Merkle children into their parent hash (domain-keyed).
+    fn merkle_parent(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+        let mut h = blake3::Hasher::new_derive_key("dregg-credential-merkle-v1");
+        h.update(left);
+        h.update(right);
+        *h.finalize().as_bytes()
+    }
+
+    /// Walk `merkle_path` from `leaf` to the root it implies.
+    pub fn merkle_root_from_path(leaf: [u8; 32], path: &[([u8; 32], bool)]) -> [u8; 32] {
+        let mut acc = leaf;
+        for (sibling, is_right) in path {
+            acc = if *is_right {
+                // acc is the right child, sibling is the left.
+                Self::merkle_parent(sibling, &acc)
+            } else {
+                Self::merkle_parent(&acc, sibling)
+            };
+        }
+        acc
+    }
+
+    /// Compute the canonical binding tag.
+    ///
+    /// `tag = H_keyed("dregg-credential-set-binding-v1", commitment ||
+    /// holder || issuer_set_root || revocation_root)`. Welds all four
+    /// public quantities so the proof cannot be transplanted or have its
+    /// roots swapped.
+    pub fn binding_tag(
+        commitment: &[u8; 32],
+        holder: &[u8; 32],
+        issuer_set_root: &[u8; 32],
+        revocation_root: &[u8; 32],
+    ) -> [u8; 32] {
+        let mut h = blake3::Hasher::new_derive_key("dregg-credential-set-binding-v1");
+        h.update(commitment);
+        h.update(holder);
+        h.update(issuer_set_root);
+        h.update(revocation_root);
+        *h.finalize().as_bytes()
+    }
+
+    /// Serialize to postcard wire bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("CredentialSetMembershipProof serialization is infallible")
+    }
+
+    /// Deserialize from postcard wire bytes. Returns `None` on malformed
+    /// input (including empty bytes).
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.is_empty() {
+            return None;
+        }
+        postcard::from_bytes(bytes).ok()
+    }
+
+    /// Construct a well-formed honest proof for a holder against a known
+    /// issuer membership accumulator. Prover-side helper.
+    ///
+    /// - `commitment`: the (issuer, schema) tag
+    ///   ([`crate::program::AuthorizedSet::credential_set_commitment`]).
+    /// - `holder`: the holder pubkey (the `InputRef::Sender` value).
+    /// - `merkle_path`: the membership path from the holder leaf up to
+    ///   the issuer's accumulator root.
+    /// - `revocation_root`: the issuer's published revocation root.
+    /// - `rev_lower`/`rev_upper`: the sorted-set neighbors bracketing
+    ///   `holder` in the revocation set (witnessing non-revocation).
+    ///
+    /// The `issuer_set_root` and `binding_tag` are derived so the result
+    /// verifies under [`CredentialSetMembershipVerifier`].
+    pub fn new(
+        commitment: &[u8; 32],
+        holder: &[u8; 32],
+        merkle_path: Vec<([u8; 32], bool)>,
+        revocation_root: [u8; 32],
+        rev_lower: [u8; 32],
+        rev_upper: [u8; 32],
+    ) -> Self {
+        let leaf = Self::holder_leaf(commitment, holder);
+        let issuer_set_root = Self::merkle_root_from_path(leaf, &merkle_path);
+        let non_revocation =
+            NonMembershipNeighborProof::new(&revocation_root, rev_lower, rev_upper);
+        let binding_tag =
+            Self::binding_tag(commitment, holder, &issuer_set_root, &revocation_root);
+        Self {
+            issuer_set_root,
+            revocation_root,
+            merkle_path,
+            non_revocation,
+            binding_tag,
+        }
+    }
+}
+
+/// Real (Silver-Sound) verifier for [`WitnessedPredicateKind::BlindedSet`]
+/// credential-set membership proofs. See [`CredentialSetMembershipProof`]
+/// for the full soundness contract and the documented Silver-vs-Golden
+/// gap.
+struct CredentialSetMembershipVerifier;
+
+impl WitnessedPredicateVerifier for CredentialSetMembershipVerifier {
+    fn name(&self) -> &'static str {
+        "credential-set-membership"
+    }
+
+    fn kind(&self) -> WitnessedPredicateKind {
+        WitnessedPredicateKind::BlindedSet
+    }
+
+    fn verify(
+        &self,
+        commitment: &[u8; 32],
+        input: &PredicateInput<'_>,
+        proof_bytes: &[u8],
+    ) -> Result<(), WitnessedPredicateError> {
+        // Resolve the holder (sender) bytes from the input. The credential
+        // gate binds the credential to the *holder* presenting it.
+        let holder: [u8; 32] = match input {
+            PredicateInput::Sender(s) => **s,
+            PredicateInput::Slot(s) => **s,
+            PredicateInput::Bytes(b) => {
+                if b.len() != 32 {
+                    return Err(WitnessedPredicateError::InputShapeMismatch {
+                        kind_name: "BlindedSet",
+                        expected: "32-byte holder",
+                        actual: "non-32-byte Bytes",
+                    });
+                }
+                let mut c = [0u8; 32];
+                c.copy_from_slice(b);
+                c
+            }
+            PredicateInput::PublicInput { .. } => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: "BlindedSet",
+                    expected: "Sender/Slot/Bytes (32-byte holder)",
+                    actual: "PublicInput",
+                });
+            }
+            PredicateInput::SigningMessage(_) => {
+                return Err(WitnessedPredicateError::InputShapeMismatch {
+                    kind_name: "BlindedSet",
+                    expected: "Sender/Slot/Bytes (32-byte holder)",
+                    actual: "SigningMessage",
+                });
+            }
+        };
+
+        // Decode the proof; reject empty / malformed bytes. This is the
+        // line that closes the prior playground bypass (a 1-byte garbage
+        // "proof" no longer parses).
+        let proof = CredentialSetMembershipProof::from_bytes(proof_bytes).ok_or_else(|| {
+            WitnessedPredicateError::Rejected {
+                kind_name: "BlindedSet",
+                reason: format!(
+                    "credential-set membership proof must be a non-empty postcard \
+                     CredentialSetMembershipProof; got {} bytes that did not decode",
+                    proof_bytes.len()
+                ),
+            }
+        })?;
+
+        // 1. Binding tag: weld (commitment, holder, issuer_set_root,
+        //    revocation_root). Rejects transplant across (issuer, schema)
+        //    or holder, and root-swap.
+        let expected_tag = CredentialSetMembershipProof::binding_tag(
+            commitment,
+            &holder,
+            &proof.issuer_set_root,
+            &proof.revocation_root,
+        );
+        if proof.binding_tag != expected_tag {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "BlindedSet",
+                reason: "binding_tag does not match H_keyed(\"dregg-credential-set-binding-v1\", \
+                         commitment || holder || issuer_set_root || revocation_root); the proof \
+                         is not bound to this (issuer, schema) commitment + holder + roots".into(),
+            });
+        }
+
+        // 2. Membership: recompute the holder leaf and walk the Merkle
+        //    path; it must reach the issuer's published set root.
+        let leaf = CredentialSetMembershipProof::holder_leaf(commitment, &holder);
+        let reached =
+            CredentialSetMembershipProof::merkle_root_from_path(leaf, &proof.merkle_path);
+        if reached != proof.issuer_set_root {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "BlindedSet",
+                reason: "Merkle membership path does not reconstruct issuer_set_root from the \
+                         holder leaf; the holder is not provably in the issuer's authorized set"
+                    .into(),
+            });
+        }
+
+        // 3. Non-revocation: the holder must be absent from the issuer's
+        //    revocation accumulator. Reuse the sorted-neighbor algebra,
+        //    verifying against `revocation_root`.
+        let nr = &proof.non_revocation;
+        let expected_adj =
+            NonMembershipNeighborProof::adjacency_tag(&proof.revocation_root, &nr.lower, &nr.upper);
+        if nr.adjacency_tag != expected_adj {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "BlindedSet",
+                reason: "non_revocation.adjacency_tag is not bound to revocation_root; \
+                         the non-revocation witness is not anchored to the issuer's revocation set"
+                    .into(),
+            });
+        }
+        if nr.lower >= holder {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "BlindedSet",
+                reason: "non-revocation lower neighbor is not strictly below the holder \
+                         (the holder may be revoked)".into(),
+            });
+        }
+        if holder >= nr.upper {
+            return Err(WitnessedPredicateError::Rejected {
+                kind_name: "BlindedSet",
+                reason: "holder is not strictly below the non-revocation upper neighbor \
+                         (the holder may be revoked)".into(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1477,11 +1823,14 @@ mod tests {
     #[test]
     fn stub_registry_accepts_non_empty_proof_for_each_builtin() {
         let reg = WitnessedPredicateRegistry::with_stubs();
+        // Note: BlindedSet and NonMembership are NOT in this loop — even
+        // under `with_stubs` they install REAL (Silver-Sound) verifiers
+        // that reject opaque `b"proof"` bytes. Their accept/reject
+        // behavior is exercised by their dedicated test sections.
         for wp in [
             WitnessedPredicate::dfa([0u8; 32], InputRef::Sender, 0),
             WitnessedPredicate::temporal([0u8; 32], 0, 0),
             WitnessedPredicate::merkle_membership([0u8; 32], InputRef::Sender, 0),
-            WitnessedPredicate::blinded_set([0u8; 32], InputRef::Sender, 0),
             WitnessedPredicate::bridge_predicate(
                 [0u8; 32],
                 InputRef::PublicInput { pi_index: 0 },
@@ -1883,11 +2232,14 @@ mod tests {
         // verify(proof_bytes) accepts. Walks every built-in kind.
         let producers = WitnessProducerRegistry::with_stubs();
         let verifiers = WitnessedPredicateRegistry::with_stubs();
+        // BlindedSet is excluded: its real verifier requires a structured
+        // CredentialSetMembershipProof, not the stub producer's opaque
+        // length-prefixed blob. Its round-trip is covered by
+        // `blinded_set_accepts_honest_membership_proof`.
         for wp in [
             WitnessedPredicate::dfa([0u8; 32], InputRef::Sender, 0),
             WitnessedPredicate::temporal([0u8; 32], 0, 0),
             WitnessedPredicate::merkle_membership([0u8; 32], InputRef::Sender, 0),
-            WitnessedPredicate::blinded_set([0u8; 32], InputRef::Sender, 0),
             WitnessedPredicate::bridge_predicate(
                 [0u8; 32],
                 InputRef::PublicInput { pi_index: 0 },
@@ -2112,5 +2464,249 @@ mod tests {
             .get(WitnessedPredicateKind::NonMembership)
             .expect("NonMembership must be registered in default_builtins");
         assert_eq!(v.name(), "sorted-neighbor-non-membership");
+    }
+
+    // ─── BlindedSet credential-set membership verifier ──────────────────
+    //
+    // The credential-gated cross-app tier (nameservice attested
+    // registration, governed-namespace credential voting) dispatches
+    // `AuthorizedSet::CredentialSet` to `WitnessedPredicateKind::BlindedSet`.
+    // Before this verifier landed, BlindedSet mapped to NotYetWiredVerifier
+    // (reject-all), so the tier could never ACCEPT. These tests prove the
+    // real verifier ACCEPTS a valid honest proof and REJECTS empty/invalid
+    // ones — closing task #140 to Silver-Sound.
+
+    /// The (issuer, schema) commitment used in BlindedSet tests — mirrors
+    /// `AuthorizedSet::credential_set_commitment`.
+    fn cred_commitment() -> [u8; 32] {
+        let mut h = blake3::Hasher::new_derive_key("dregg-credential-set-v1");
+        h.update(&[0xEEu8; 32]); // issuer_cell
+        h.update(&[0x11u8; 32]); // credential_schema_id
+        *h.finalize().as_bytes()
+    }
+
+    /// Build an honest single-member accumulator + non-revocation witness
+    /// for `holder`. The membership path is a depth-1 tree whose other
+    /// leaf is a fixed sibling; the revocation set has the holder absent
+    /// in the open interval (lower, upper).
+    fn honest_credential_proof(
+        commitment: &[u8; 32],
+        holder: &[u8; 32],
+    ) -> CredentialSetMembershipProof {
+        let sibling = [0x77u8; 32];
+        let path = vec![(sibling, false)]; // holder is the left child
+        let revocation_root = [0x33u8; 32];
+        // Pick neighbors strictly bracketing the holder. holder is e.g.
+        // [0x05; 32]; (0x04, 0x06) brackets it.
+        let lower = {
+            let mut l = *holder;
+            l[31] = l[31].wrapping_sub(1);
+            // ensure strictly below by also zeroing nothing else; if holder
+            // ends in 0x00 this still produces a smaller array because we
+            // subtract from the last byte (handled by caller choosing holder).
+            l
+        };
+        let upper = {
+            let mut u = *holder;
+            u[31] = u[31].wrapping_add(1);
+            u
+        };
+        CredentialSetMembershipProof::new(commitment, holder, path, revocation_root, lower, upper)
+    }
+
+    #[test]
+    fn blinded_set_accepts_honest_membership_proof() {
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let proof = honest_credential_proof(&commitment, &holder);
+        let bytes = proof.to_bytes();
+
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        reg.verify(&wp, &PredicateInput::Sender(&holder), &bytes)
+            .expect("honest credential-set membership proof must verify");
+    }
+
+    #[test]
+    fn blinded_set_rejects_empty_proof() {
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&holder), b"")
+            .unwrap_err();
+        assert!(matches!(err, WitnessedPredicateError::Rejected { .. }));
+    }
+
+    #[test]
+    fn blinded_set_rejects_garbage_proof() {
+        // 1-byte and 64-byte garbage — the prior playground bypass payload.
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        for garbage in [vec![0x42u8], (0..64u8).collect::<Vec<u8>>()] {
+            let err = reg
+                .verify(&wp, &PredicateInput::Sender(&holder), &garbage)
+                .unwrap_err();
+            assert!(
+                matches!(err, WitnessedPredicateError::Rejected { .. }),
+                "garbage proof must reject"
+            );
+        }
+    }
+
+    #[test]
+    fn blinded_set_rejects_wrong_holder_transplant() {
+        // A proof minted for holder A must not verify when presented by
+        // holder B (the leaf and binding tag both bind the holder).
+        let commitment = cred_commitment();
+        let holder_a = [0x05u8; 32];
+        let holder_b = [0x06u8; 32];
+        let proof = honest_credential_proof(&commitment, &holder_a);
+        let bytes = proof.to_bytes();
+
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&holder_b), &bytes)
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "transplant to a different holder must reject; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn blinded_set_rejects_wrong_commitment_transplant() {
+        // A proof minted under (issuer_A, schema_A) must not verify under a
+        // different commitment (the leaf + binding tag bind the commitment).
+        let commitment_a = cred_commitment();
+        let commitment_b = {
+            let mut h = blake3::Hasher::new_derive_key("dregg-credential-set-v1");
+            h.update(&[0xEEu8; 32]);
+            h.update(&[0x22u8; 32]); // different schema
+            *h.finalize().as_bytes()
+        };
+        let holder = [0x05u8; 32];
+        let proof = honest_credential_proof(&commitment_a, &holder);
+        let bytes = proof.to_bytes();
+
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment_b, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&holder), &bytes)
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "cross-(issuer,schema) transplant must reject; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn blinded_set_rejects_forged_membership_path() {
+        // Forge the Merkle path so it no longer reconstructs the claimed
+        // issuer_set_root, but recompute the binding tag so the tag check
+        // passes — isolating the membership check.
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let mut proof = honest_credential_proof(&commitment, &holder);
+        // Tamper the sibling so the path reaches a different root.
+        proof.merkle_path[0].0 = [0xAAu8; 32];
+        // Re-bind the tag to the (unchanged) claimed roots so we exercise
+        // the membership check, not the tag check.
+        proof.binding_tag = CredentialSetMembershipProof::binding_tag(
+            &commitment,
+            &holder,
+            &proof.issuer_set_root,
+            &proof.revocation_root,
+        );
+        let bytes = proof.to_bytes();
+
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&holder), &bytes)
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "forged membership path must reject; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn blinded_set_rejects_revoked_holder() {
+        // The holder IS in the revocation set: the non-revocation neighbor
+        // witness cannot bracket it in an open interval. Simulate by
+        // building a non-revocation witness whose lower neighbor equals the
+        // holder (i.e. the holder is present at `lower`).
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let sibling = [0x77u8; 32];
+        let path = vec![(sibling, false)];
+        let revocation_root = [0x33u8; 32];
+        // lower == holder ⇒ holder is in the revocation set ⇒ reject.
+        let mut proof = CredentialSetMembershipProof::new(
+            &commitment,
+            &holder,
+            path,
+            revocation_root,
+            holder,           // lower == holder (revoked)
+            [0x06u8; 32],     // upper
+        );
+        // Re-bind tag (roots unchanged by construction; new() already bound).
+        let _ = &mut proof;
+        let bytes = proof.to_bytes();
+
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&holder), &bytes)
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "revoked holder must reject; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn blinded_set_rejects_swapped_revocation_root() {
+        // Swap the revocation_root after minting so the non-revocation
+        // adjacency tag no longer anchors to it AND the binding tag breaks.
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let mut proof = honest_credential_proof(&commitment, &holder);
+        proof.revocation_root = [0x99u8; 32]; // swapped, tag now stale
+        let bytes = proof.to_bytes();
+
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let wp = WitnessedPredicate::blinded_set(commitment, InputRef::Sender, 0);
+        let err = reg
+            .verify(&wp, &PredicateInput::Sender(&holder), &bytes)
+            .unwrap_err();
+        assert!(
+            matches!(err, WitnessedPredicateError::Rejected { .. }),
+            "swapped revocation root must reject; got {err:?}"
+        );
+    }
+
+    #[test]
+    fn blinded_set_default_registry_installs_real_verifier() {
+        let reg = WitnessedPredicateRegistry::default_builtins();
+        let v = reg
+            .get(WitnessedPredicateKind::BlindedSet)
+            .expect("BlindedSet must be registered in default_builtins");
+        assert_eq!(v.name(), "credential-set-membership");
+    }
+
+    #[test]
+    fn credential_set_membership_proof_roundtrips_bytes() {
+        let commitment = cred_commitment();
+        let holder = [0x05u8; 32];
+        let proof = honest_credential_proof(&commitment, &holder);
+        let bytes = proof.to_bytes();
+        let back = CredentialSetMembershipProof::from_bytes(&bytes).unwrap();
+        assert_eq!(back, proof);
     }
 }
