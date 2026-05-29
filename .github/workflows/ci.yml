@@ -14,7 +14,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -30,9 +30,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
+      - if: runner.os == 'Linux'
+        name: Free disk for full workspace test link step
+        run: |
+          df -h
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af || true
+          df -h
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
@@ -43,7 +50,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -56,7 +63,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
@@ -67,7 +74,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -76,5 +83,5 @@ jobs:
     name: No-Unchecked-Auth grep guard (P2.F)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: bash scripts/no-unchecked-auth.sh
