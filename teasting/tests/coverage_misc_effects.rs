@@ -308,19 +308,16 @@ fn seal_stores_commitment_in_field7() {
 }
 
 // ---------------------------------------------------------------------------
-// Unseal — BLOCKER: apply_unseal reconstructs the pair with sealer_public=[0u8;32]
-// instead of computing it from unsealer_secret via X25519. Since derive_encryption_key
-// uses sealer_public (the recipient public key), zeroing it produces a wrong enc_key
-// and ECDH decryption always fails. This is a bug in apply_unseal
-// (`SealPair::from_keys([0u8; 32], unsealer_secret)` should be
-// `SealPair::from_secret(unsealer_secret)`).
-//
-// The test below confirms the variant reaches apply_unseal and fails with the
-// expected "sealed box decryption/verification failed" error (not a panic).
+// Unseal — full Seal->Unseal round-trip through the executor. Exercises the
+// #144 fix: apply_unseal reconstructs the pair via SealPair::from_secret, which
+// recomputes sealer_public = X25519_base × unsealer_secret, so the ECDH-derived
+// decryption key matches the seal side and the sealed capability is recovered.
+// (Previously apply_unseal used from_keys([0u8;32], …), zeroing sealer_public,
+// which always produced the wrong key and failed with DecryptionFailed.)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn unseal_rejects_due_to_sealer_public_reconstruction_bug() {
+fn unseal_round_trips_and_grants_capability_to_recipient() {
     let actor = make_cell(30, 5_000);
     let actor_id = actor.id();
     let recipient = make_cell(31, 0);
@@ -365,18 +362,14 @@ fn unseal_rejects_due_to_sealer_public_reconstruction_bug() {
             recipient: recipient_id,
         }],
     );
-    // BLOCKER: apply_unseal reconstructs with sealer_public=[0u8;32] which gives wrong
-    // ECDH enc_key. Decryption fails → "sealed box decryption/verification failed".
-    // Fix: use SealPair::from_secret(unsealer_secret) which recomputes sealer_public
-    // from the private key (since sealer_public = X25519_base × unsealer_secret).
-    assert_rejected(&result, "Unseal (expected rejection due to apply_unseal bug)");
-    if let TurnResult::Rejected { reason, .. } = &result {
-        let msg = format!("{reason:?}");
-        assert!(
-            msg.contains("decryption") || msg.contains("verification failed"),
-            "rejection must be decryption failure: {msg}"
-        );
-    }
+    // With the #144 fix the ECDH key matches, decryption succeeds, and the
+    // recovered capability is granted to the recipient cell.
+    assert_committed(&result, "Unseal round-trip");
+    let recipient_after = ledger.get(&recipient_id).unwrap();
+    assert!(
+        recipient_after.capabilities.iter().count() > 0,
+        "Unseal must grant the recovered capability to the recipient cell"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -2909,7 +2909,13 @@ impl TurnExecutor {
             )
         })?;
 
-        let mut pair = dregg_cell::SealPair::from_keys([0u8; 32], unsealer_secret);
+        // Reconstruct the pair from the unsealer's secret. `from_secret`
+        // recomputes sealer_public = X25519_base × unsealer_secret, which for a
+        // `generate()`d pair equals the original sealer_public the box was
+        // sealed against — so the ECDH-derived decryption key matches. The
+        // prior `from_keys([0u8;32], …)` zeroed sealer_public, derived the wrong
+        // key, and made every Unseal fail with DecryptionFailed (#144).
+        let mut pair = dregg_cell::SealPair::from_secret(unsealer_secret);
         pair.id = sealed_box.pair_id;
 
         match pair.unseal(sealed_box) {

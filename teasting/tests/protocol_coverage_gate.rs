@@ -79,18 +79,19 @@ fn effect_executor_coverage(e: &Effect) -> bool {
         Effect::SetPermissions { .. } => true,
         Effect::Refusal { .. } => true,
 
+        Effect::Unseal { .. } => true, // coverage_misc_effects Seal->Unseal round-trip (#144 fixed)
+
         // ── Not yet covered: documented blockers (#142 work-list) ────────
         Effect::NoteSpend { .. } => false,    // needs the real ZK spending-proof stack
-        Effect::Unseal { .. } => false,       // blocked on the apply_unseal bug (#144)
         Effect::PipelinedSend { .. } => false, // only valid inside a pipeline resolution pass
     }
 }
 
 /// `Effect` variants not yet exercised end-to-end (the #142 work-list).
-const NOT_YET_COVERED: &[&str] = &["NoteSpend", "Unseal", "PipelinedSend"];
+const NOT_YET_COVERED: &[&str] = &["NoteSpend", "PipelinedSend"];
 
 /// Ratchet: the number of not-yet-covered `Effect` variants may only DECREASE.
-const MAX_UNCOVERED_EFFECTS: usize = 3;
+const MAX_UNCOVERED_EFFECTS: usize = 2;
 
 #[test]
 fn effect_coverage_ratchet_only_shrinks() {
