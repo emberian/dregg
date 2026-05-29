@@ -97,10 +97,21 @@ use crate::poseidon2::{hash_4_to_1, hash_many};
 use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
 
 /// Trace width for the note spending AIR.
-/// 20 columns: 5 note preimage + commitment + 8 key limbs + nullifier +
-/// randomness + is_merkle + nullifier_intermediate + destination_federation +
-/// value_hi (the 30-bit-trunc fix high limb).
-pub const NOTE_SPENDING_WIDTH: usize = 20;
+///
+/// Columns 0..20 are the legacy layout: 5 note preimage felts + commitment +
+/// 8 key limbs + nullifier + randomness + is_merkle + nullifier_intermediate +
+/// destination_federation + value_hi (the 30-bit-trunc fix high limb).
+///
+/// Columns 20..62 are the FULL-WIDTH commitment-binding extension (this lane).
+/// They carry the 28-limb Poseidon2 preimage (owner 8 ‖ value 2 ‖ asset_type 2
+/// ‖ creation_nonce 8 ‖ randomness 8) — the SAME limb layout as
+/// `dregg_cell::Note::poseidon2_commitment` — plus 6 chained-hash intermediate
+/// columns. The legacy single-felt commitment (col 5) previously bound only the
+/// first 4 bytes of each 32-byte field (~31 bits) and the low 32 bits of each
+/// u64; the limb columns + the `commitment_full` binding close that truncation
+/// so two notes differing in ANY byte of ANY field produce distinct in-circuit
+/// commitments. See [`limb_col`].
+pub const NOTE_SPENDING_WIDTH: usize = 62;
 
 /// Number of BabyBear limbs for the spending key (248 bits of security).
 pub const SPENDING_KEY_LIMBS: usize = 8;
@@ -144,6 +155,89 @@ pub mod col {
     /// distinct proofs. For amounts that fit in 30 bits (and all pre-fix
     /// callers using the BabyBear-typed API), `VALUE_HI == 0`.
     pub const VALUE_HI: usize = 19;
+}
+
+/// Column indices for the FULL-WIDTH commitment-binding extension.
+///
+/// These columns live only on the commitment row (row 0); they are zero on
+/// Merkle / padding rows (which only touch cols 0..6). They carry the 28-limb
+/// Poseidon2 preimage matching `dregg_cell::Note::poseidon2_commitment`:
+///
+/// ```text
+///   owner          : 8 limbs  (owner[0..32] as 8 LE 4-byte chunks mod p)
+///   value          : 2 limbs  (low 32 bits, high 32 bits)
+///   asset_type     : 2 limbs  (low 32 bits, high 32 bits)
+///   creation_nonce : 8 limbs  (creation_nonce[0..32] as 8 LE chunks)
+///   randomness     : 8 limbs  (randomness[0..32] as 8 LE chunks)
+/// ```
+///
+/// ordered owner ‖ value ‖ asset_type ‖ creation_nonce ‖ randomness, plus 6
+/// chained-hash intermediate columns used to bind `col::COMMITMENT` to a
+/// Poseidon2 sponge over all 28 limbs (see [`commitment_chain`]). Two notes
+/// that differ in ANY byte of ANY field produce a DISTINCT 28-limb vector and
+/// therefore a distinct in-circuit commitment (up to Poseidon2 collision
+/// resistance) — the full-256-bit-per-field binding the legacy 5-felt layout
+/// lacked.
+pub mod limb_col {
+    /// Total number of preimage limbs (8 + 2 + 2 + 8 + 8). Matches the 28-limb
+    /// preimage of `dregg_cell::Note::poseidon2_commitment`.
+    pub const PREIMAGE_LIMBS: usize = 28;
+    /// Number of chained-hash intermediate columns (one per absorb step beyond
+    /// the first, for the 7-step hash_fact chain over 28 limbs).
+    pub const CHAIN_INTERMEDIATES: usize = 6;
+
+    /// First limb column. The 28 preimage limbs occupy `START .. START+28`.
+    pub const START: usize = 20;
+
+    pub const OWNER_START: usize = START; // 20..28
+    pub const VALUE_LO: usize = OWNER_START + 8; // 28
+    pub const VALUE_HI: usize = VALUE_LO + 1; // 29
+    pub const ASSET_LO: usize = VALUE_HI + 1; // 30
+    pub const ASSET_HI: usize = ASSET_LO + 1; // 31
+    pub const NONCE_START: usize = ASSET_HI + 1; // 32..40
+    pub const RANDOMNESS_START: usize = NONCE_START + 8; // 40..48
+
+    /// First chained-hash intermediate column. 6 intermediates occupy
+    /// `CHAIN_START .. CHAIN_START+6` (48..54).
+    pub const CHAIN_START: usize = RANDOMNESS_START + 8; // 48
+    /// The recomputed full-width commitment (Poseidon2 sponge over the 28
+    /// limbs). Bound to `col::COMMITMENT` by an equality constraint so the
+    /// legacy commitment column equals the full-width binding.
+    pub const COMMITMENT_FULL: usize = CHAIN_START + CHAIN_INTERMEDIATES; // 54
+
+    /// Iterator over the 28 preimage limb column indices in canonical order
+    /// (owner ‖ value ‖ asset_type ‖ creation_nonce ‖ randomness).
+    pub fn preimage_cols() -> [usize; PREIMAGE_LIMBS] {
+        let mut cols = [0usize; PREIMAGE_LIMBS];
+        let mut i = 0;
+        let mut c = 0;
+        while c < 8 {
+            cols[i] = OWNER_START + c;
+            i += 1;
+            c += 1;
+        }
+        cols[i] = VALUE_LO;
+        i += 1;
+        cols[i] = VALUE_HI;
+        i += 1;
+        cols[i] = ASSET_LO;
+        i += 1;
+        cols[i] = ASSET_HI;
+        i += 1;
+        c = 0;
+        while c < 8 {
+            cols[i] = NONCE_START + c;
+            i += 1;
+            c += 1;
+        }
+        c = 0;
+        while c < 8 {
+            cols[i] = RANDOMNESS_START + c;
+            i += 1;
+            c += 1;
+        }
+        cols
+    }
 }
 
 /// Column indices for Merkle level rows.
@@ -228,6 +322,24 @@ pub struct NoteSpendingWitness {
     /// verifier expects the same value here as the executor passes in the PI
     /// buffer; otherwise the proof is rejected.
     pub destination_federation: BabyBear,
+    /// The FULL-WIDTH 28-limb Poseidon2 preimage of the note commitment.
+    ///
+    /// Layout matches `dregg_cell::Note::poseidon2_commitment` exactly:
+    /// owner[8] ‖ value[lo,hi] ‖ asset_type[lo,hi] ‖ creation_nonce[8] ‖
+    /// randomness[8]. These limbs are placed into the [`limb_col`] columns and
+    /// the in-circuit commitment binds ALL 28 of them via a chained Poseidon2
+    /// sponge ([`commitment_chain`]). This closes the legacy truncation where
+    /// each 32-byte field contributed only its first 4 bytes (~31 bits) and
+    /// each u64 only its low 32 bits.
+    ///
+    /// For witnesses constructed from BabyBear-typed fields (the legacy API),
+    /// [`NoteSpendingWitness::from_real_proof`] derives a faithful 28-limb
+    /// vector by limb-decomposing `owner`/`creation_nonce`/`randomness` (single
+    /// felts → high limbs zero) and splitting `value`/`asset_type` into
+    /// low/high. For full-width binding, construct the witness with
+    /// [`NoteSpendingWitness::from_note_limbs`] so every byte of every field is
+    /// bound.
+    pub preimage_limbs: [BabyBear; limb_col::PREIMAGE_LIMBS],
 }
 
 /// Convert a 256-bit external spending key (e.g., from BLAKE3) to 8 BabyBear limbs.
@@ -244,8 +356,133 @@ pub fn key_to_field_elements(key: &[u8; 32]) -> [BabyBear; SPENDING_KEY_LIMBS] {
     limbs
 }
 
+/// Decompose a 32-byte field into 8 BabyBear limbs (4 LE bytes each, mod p).
+///
+/// Identical to `dregg_cell::note::bytes32_to_limbs` (the limb layout consumed
+/// by `Note::poseidon2_commitment`). Every byte of the input contributes to a
+/// limb, so two 32-byte values differing in ANY byte produce a distinct limb
+/// vector (up to per-limb mod-p aliasing of raw u32 ≥ p, a deterministic total
+/// mapping shared by prover and verifier).
+pub fn bytes32_to_limbs(b: &[u8; 32]) -> [BabyBear; 8] {
+    let mut out = [BabyBear::ZERO; 8];
+    for (i, limb) in out.iter_mut().enumerate() {
+        let off = i * 4;
+        let v = u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
+        *limb = BabyBear::new_canonical(v);
+    }
+    out
+}
+
+/// Decompose a u64 into 2 BabyBear limbs `[low 32 bits, high 32 bits]` (mod p).
+///
+/// Binds the FULL 64 bits of a u64 note field. Matches
+/// `dregg_cell::note::u64_to_limbs` (a 32/32 split). Used for the asset_type
+/// field, where there is no separate PI high limb.
+pub fn u64_to_limbs(v: u64) -> [BabyBear; 2] {
+    [
+        BabyBear::new_canonical(v as u32),
+        BabyBear::new_canonical((v >> 32) as u32),
+    ]
+}
+
+/// Decompose a u64 into the (low-30, upper-34) BabyBear limb pair used for the
+/// note VALUE field.
+///
+/// Unlike [`u64_to_limbs`]'s 32/32 split, the value field uses a 30/34 boundary
+/// so the low limb (`col::VALUE`, which is also pinned by `pi::VALUE`) is a
+/// canonical sub-2^30 BabyBear that participates directly in the commitment
+/// preimage, while the high limb (`col::VALUE_HI` / `limb_col::VALUE_HI`, pinned
+/// by `pi::VALUE_HI`) carries the remaining 34 bits. Together they bind the FULL
+/// u64 amount. This matches the executor's bridge-mint `u64_to_limbs` split
+/// (CAVEAT-LAYER-COVERAGE.md §6.5), so prover and verifier agree.
+pub fn value_to_limbs_30_34(v: u64) -> [BabyBear; 2] {
+    [
+        BabyBear::new_canonical((v & ((1u64 << 30) - 1)) as u32),
+        BabyBear::new_canonical((v >> 30) as u32),
+    ]
+}
+
+/// Assemble the canonical 28-limb commitment preimage from a real note's raw
+/// fields, in the SAME order as `dregg_cell::Note::poseidon2_commitment`:
+/// owner[8] ‖ value[lo,hi] ‖ asset_type[lo,hi] ‖ creation_nonce[8] ‖
+/// randomness[8].
+pub fn note_to_preimage_limbs(
+    owner: &[u8; 32],
+    value: u64,
+    asset_type: u64,
+    creation_nonce: &[u8; 32],
+    randomness: &[u8; 32],
+) -> [BabyBear; limb_col::PREIMAGE_LIMBS] {
+    let mut out = [BabyBear::ZERO; limb_col::PREIMAGE_LIMBS];
+    let owner_l = bytes32_to_limbs(owner);
+    // VALUE uses the 30/34 split so the low limb matches `col::VALUE`/`pi::VALUE`
+    // and the high limb matches `col::VALUE_HI`/`pi::VALUE_HI`. asset_type uses a
+    // plain 32/32 split (no separate PI high limb; high bits bind only through
+    // the commitment).
+    let value_l = value_to_limbs_30_34(value);
+    let asset_l = u64_to_limbs(asset_type);
+    let nonce_l = bytes32_to_limbs(creation_nonce);
+    let rand_l = bytes32_to_limbs(randomness);
+    out[0..8].copy_from_slice(&owner_l);
+    out[8] = value_l[0];
+    out[9] = value_l[1];
+    out[10] = asset_l[0];
+    out[11] = asset_l[1];
+    out[12..20].copy_from_slice(&nonce_l);
+    out[20..28].copy_from_slice(&rand_l);
+    out
+}
+
+/// Recompute the FULL-WIDTH note commitment as a chained Poseidon2 sponge over
+/// the 28 preimage limbs, returning `(commitment, intermediates)`.
+///
+/// The chain absorbs the 28 limbs in 7 `hash_fact` steps (predicate + 4 terms
+/// per step): the first step consumes limbs 0..5, each subsequent step folds the
+/// running hash with the next 4 limbs (last step zero-pads). The 6 intermediate
+/// digests (after steps 1..7, excluding the final) are returned so the trace can
+/// expose them in the [`limb_col`] chain columns for the in-circuit `Hash`
+/// constraints to recompute and check.
+///
+/// This is a DIFFERENT sponge than `Note::poseidon2_commitment`'s single
+/// `hash_many(28)` call (the DSL constraint primitive is `hash_fact`, not the
+/// variable-length `hash_many`). It is, however, a full-256-bit-per-field
+/// binding over the IDENTICAL 28-limb preimage: two notes differing in any byte
+/// of any field yield a distinct limb vector and therefore a distinct commitment
+/// (up to Poseidon2 collision resistance). The in-circuit commitment is
+/// internally consistent (prover computes it, the AIR re-derives and checks it,
+/// the nullifier and Merkle membership both chain off it), so an exact match to
+/// `hash_many` is not required for soundness; full-width binding is. See the
+/// residual note in this file's tests.
+pub fn commitment_chain(
+    limbs: &[BabyBear; limb_col::PREIMAGE_LIMBS],
+) -> (BabyBear, [BabyBear; limb_col::CHAIN_INTERMEDIATES]) {
+    use crate::poseidon2::hash_fact;
+    // Step 1: h = hash_fact(limbs[0], [limbs[1..5]])  (consumes 5)
+    let mut running = hash_fact(limbs[0], &[limbs[1], limbs[2], limbs[3], limbs[4]]);
+    let mut intermediates = [BabyBear::ZERO; limb_col::CHAIN_INTERMEDIATES];
+    // Steps 2..8: each folds 4 more limbs. 28 - 5 = 23 remaining => 6 steps
+    // of 4 (the 6th zero-pads its last term). After each step (except the
+    // final) we record the running hash as an intermediate.
+    let mut idx = 5usize;
+    for step in 0..limb_col::CHAIN_INTERMEDIATES {
+        intermediates[step] = running;
+        let t0 = if idx < limbs.len() { limbs[idx] } else { BabyBear::ZERO };
+        let t1 = if idx + 1 < limbs.len() { limbs[idx + 1] } else { BabyBear::ZERO };
+        let t2 = if idx + 2 < limbs.len() { limbs[idx + 2] } else { BabyBear::ZERO };
+        let t3 = if idx + 3 < limbs.len() { limbs[idx + 3] } else { BabyBear::ZERO };
+        running = hash_fact(running, &[t0, t1, t2, t3]);
+        idx += 4;
+    }
+    (running, intermediates)
+}
+
 impl NoteSpendingWitness {
     /// Compute the commitment: poseidon2_hash(owner, value, asset_type, creation_nonce, randomness).
+    ///
+    /// NOTE: this is the LEGACY 5-felt commitment, retained for the deprecated
+    /// hand-written AIR and for callers that still reason in single felts. The
+    /// production DSL path binds the FULL-WIDTH commitment via
+    /// [`NoteSpendingWitness::commitment_full`] (28-limb chained sponge).
     pub fn commitment(&self) -> BabyBear {
         hash_many(&[
             self.owner,
@@ -256,9 +493,21 @@ impl NoteSpendingWitness {
         ])
     }
 
+    /// Compute the FULL-WIDTH commitment binding all 28 preimage limbs (the
+    /// chained Poseidon2 sponge of [`commitment_chain`]). Two notes differing in
+    /// ANY byte of ANY field produce distinct values here.
+    pub fn commitment_full(&self) -> BabyBear {
+        commitment_chain(&self.preimage_limbs).0
+    }
+
     /// Compute the nullifier: poseidon2_hash(commitment, spending_key[0..8], creation_nonce).
     ///
     /// The nullifier is derived from all 8 key limbs, making brute-force infeasible (~2^248).
+    ///
+    /// NOTE: this LEGACY accessor chains off the legacy 5-felt [`commitment`].
+    /// The production DSL nullifier (`dsl_nullifier`) chains off the FULL-WIDTH
+    /// commitment so the nullifier also binds the full 256-bit-per-field
+    /// identity.
     pub fn nullifier(&self) -> BabyBear {
         let commitment = self.commitment();
         let mut inputs = Vec::with_capacity(1 + SPENDING_KEY_LIMBS + 1);
@@ -326,6 +575,18 @@ impl NoteSpendingWitness {
             merkle_positions.len(),
             "siblings and positions must have the same length"
         );
+        // Derive a 28-limb preimage from the BabyBear-typed fields. The
+        // single-felt owner/creation_nonce/randomness occupy their first limb
+        // (high limbs zero); value/asset_type split into low/high. Callers with
+        // raw 32-byte/u64 note fields should use `from_note_limbs` for true
+        // full-256-bit binding.
+        let preimage_limbs = Self::limbs_from_felts(
+            owner,
+            value,
+            asset_type,
+            creation_nonce,
+            randomness,
+        );
         Self {
             owner,
             value,
@@ -336,6 +597,71 @@ impl NoteSpendingWitness {
             merkle_siblings,
             merkle_positions,
             destination_federation: BabyBear::ZERO,
+            preimage_limbs,
+        }
+    }
+
+    /// Derive a 28-limb preimage from single BabyBear felts (legacy callers).
+    ///
+    /// owner/creation_nonce/randomness go into their lowest limb (the rest of
+    /// the 8-limb slots are zero); value/asset_type split low/high. This is a
+    /// faithful, injective embedding of the felt-typed witness into the
+    /// full-width layout — it does NOT recover bytes a single felt never had,
+    /// but it binds whatever the legacy witness carried.
+    pub fn limbs_from_felts(
+        owner: BabyBear,
+        value: BabyBear,
+        asset_type: BabyBear,
+        creation_nonce: BabyBear,
+        randomness: BabyBear,
+    ) -> [BabyBear; limb_col::PREIMAGE_LIMBS] {
+        let mut out = [BabyBear::ZERO; limb_col::PREIMAGE_LIMBS];
+        out[0] = owner; // owner limb 0
+        out[8] = value; // value lo
+        out[10] = asset_type; // asset lo
+        out[12] = creation_nonce; // nonce limb 0
+        out[20] = randomness; // randomness limb 0
+        out
+    }
+
+    /// Construct a full-width witness directly from a note's RAW fields so the
+    /// in-circuit commitment binds all 256 bits per field, matching
+    /// `dregg_cell::Note::poseidon2_commitment`'s 28-limb preimage.
+    ///
+    /// The single-felt `owner`/`value`/`asset_type`/`creation_nonce`/
+    /// `randomness` columns (used by the legacy commitment + the value/asset PI
+    /// boundary bindings) are set to the LOW limb of the corresponding field so
+    /// the existing boundary constraints remain meaningful; the full identity is
+    /// bound through `preimage_limbs`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_note_limbs(
+        owner: &[u8; 32],
+        value: u64,
+        asset_type: u64,
+        creation_nonce: &[u8; 32],
+        randomness: &[u8; 32],
+        spending_key: [BabyBear; SPENDING_KEY_LIMBS],
+        merkle_siblings: Vec<[BabyBear; 3]>,
+        merkle_positions: Vec<u8>,
+    ) -> Self {
+        assert_eq!(
+            merkle_siblings.len(),
+            merkle_positions.len(),
+            "siblings and positions must have the same length"
+        );
+        let preimage_limbs =
+            note_to_preimage_limbs(owner, value, asset_type, creation_nonce, randomness);
+        Self {
+            owner: preimage_limbs[0],
+            value: preimage_limbs[8],
+            asset_type: preimage_limbs[10],
+            creation_nonce: preimage_limbs[12],
+            randomness: preimage_limbs[20],
+            spending_key,
+            merkle_siblings,
+            merkle_positions,
+            destination_federation: BabyBear::ZERO,
+            preimage_limbs,
         }
     }
 
@@ -463,6 +789,20 @@ impl NoteSpendingAir {
         row0[col::RANDOMNESS] = witness.randomness;
         row0[col::IS_MERKLE] = BabyBear::ZERO; // This is the commitment row
         row0[col::DESTINATION_FEDERATION] = witness.destination_federation;
+        // FULL-WIDTH commitment-binding columns (28 limbs + chain). These are
+        // present on the commitment row only; Merkle/padding rows leave them
+        // zero. The legacy hand-written AIR fills them for layout consistency
+        // even though its `eval_constraints` keeps using the legacy 5-felt
+        // commitment (the DSL path is the one that algebraically binds them).
+        let preimage = witness.preimage_limbs;
+        for (slot, &col) in limb_col::preimage_cols().iter().enumerate() {
+            row0[col] = preimage[slot];
+        }
+        let (full_commit, intermediates) = commitment_chain(&preimage);
+        for (k, &inter) in intermediates.iter().enumerate() {
+            row0[limb_col::CHAIN_START + k] = inter;
+        }
+        row0[limb_col::COMMITMENT_FULL] = full_commit;
         trace.push(row0);
 
         // Rows 1..depth+1: Merkle membership proof
@@ -786,6 +1126,13 @@ pub fn create_test_witness(
         merkle_positions.push(pos);
     }
 
+    let preimage_limbs = NoteSpendingWitness::limbs_from_felts(
+        owner,
+        value,
+        asset_type,
+        creation_nonce,
+        randomness,
+    );
     NoteSpendingWitness {
         owner,
         value,
@@ -796,6 +1143,7 @@ pub fn create_test_witness(
         merkle_siblings,
         merkle_positions,
         destination_federation: BabyBear::ZERO,
+        preimage_limbs,
     }
 }
 

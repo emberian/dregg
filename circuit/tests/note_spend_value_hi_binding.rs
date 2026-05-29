@@ -15,7 +15,7 @@
 
 use dregg_circuit::dsl::note_spending::{
     dsl_merkle_root, dsl_nullifier, prove_note_spend_dsl, prove_note_spend_dsl_full,
-    verify_note_spend_dsl_full,
+    verify_note_spend_dsl_full, witness_with_value_hi,
 };
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::note_spending_air::{create_test_witness, test_spending_key};
@@ -49,9 +49,12 @@ fn full_value_honest_roundtrip() {
     let (lo, hi) = u64_limbs(amount);
     let w = witness_for_amount(amount);
     let proof = prove_note_spend_dsl_full(&w, hi);
-    let root = dsl_merkle_root(&w);
+    // value_hi is now folded into the FULL-WIDTH commitment, so the nullifier
+    // and Merkle root must be computed from the value_hi-bearing witness.
+    let wf = witness_with_value_hi(&w, hi);
+    let root = dsl_merkle_root(&wf);
     let res = verify_note_spend_dsl_full(
-        dsl_nullifier(&w),
+        dsl_nullifier(&wf),
         root,
         lo,
         hi,
@@ -73,11 +76,12 @@ fn high_bit_amount_rejected_against_truncation() {
 
     let w = witness_for_amount(amount);
     let proof = prove_note_spend_dsl_full(&w, hi);
-    let root = dsl_merkle_root(&w);
+    let wf = witness_with_value_hi(&w, hi);
+    let root = dsl_merkle_root(&wf);
 
     // Verifier truncates to low 30 bits (high limb = 0) — pre-fix behaviour.
     let res = verify_note_spend_dsl_full(
-        dsl_nullifier(&w),
+        dsl_nullifier(&wf),
         root,
         lo,
         BabyBear::ZERO, // truncated high limb
@@ -105,12 +109,13 @@ fn two_amounts_same_low_distinct_high_not_interchangeable() {
 
     let w = witness_for_amount(amount_a);
     let proof_a = prove_note_spend_dsl_full(&w, hi_a);
-    let root = dsl_merkle_root(&w);
+    let wf = witness_with_value_hi(&w, hi_a);
+    let root = dsl_merkle_root(&wf);
 
     // proof_a verifies against amount_a's limbs.
     assert!(
         verify_note_spend_dsl_full(
-            dsl_nullifier(&w),
+            dsl_nullifier(&wf),
             root,
             lo_a,
             hi_a,
@@ -123,7 +128,7 @@ fn two_amounts_same_low_distinct_high_not_interchangeable() {
     // But NOT against amount_b's high limb.
     assert!(
         verify_note_spend_dsl_full(
-            dsl_nullifier(&w),
+            dsl_nullifier(&wf),
             root,
             lo_b,
             hi_b,

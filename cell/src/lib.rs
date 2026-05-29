@@ -141,10 +141,12 @@ pub use stealth::{StealthAddress, StealthAnnouncement, StealthKeys, StealthMetaA
 pub use unilateral::{UnilateralAttestation, UnilateralAttestationKind};
 #[cfg(feature = "crypto")]
 pub use value_commitment::{
-    BulletproofRangeProof, CommittedNote, CommittedNoteOpening, ConservationError,
-    ConservationProof, FullConservationError, FullConservationProof, ValueCommitment,
-    ValueCommitmentBytes, asset_tag_generator, prove_asset_conservation, prove_conservation,
-    prove_conservation_with_range, verify_asset_conservation, verify_conservation,
+    AssetEqualityError, AssetEqualityProof, BulletproofRangeProof, CommittedNote,
+    CommittedNoteOpening, ConservationError, ConservationProof, FullConservationError,
+    FullConservationProof, ValueCommitment, ValueCommitmentBytes, asset_tag_generator,
+    prove_asset_conservation, prove_asset_equality, prove_asset_equality_with_message,
+    prove_conservation, prove_conservation_with_range, verify_asset_conservation,
+    verify_asset_equality, verify_asset_equality_with_message, verify_conservation,
     verify_conservation_with_range,
 };
 pub use vk_v2::{ProvingSystemId, VerifierFingerprint, VkComponents, canonical_vk_v2};

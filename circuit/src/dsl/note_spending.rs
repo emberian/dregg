@@ -21,7 +21,8 @@
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::note_spending_air::{
-    MIN_MERKLE_DEPTH, NOTE_SPENDING_WIDTH, NoteSpendingWitness, col, merkle_col, pi,
+    MIN_MERKLE_DEPTH, NOTE_SPENDING_WIDTH, NoteSpendingWitness, col, commitment_chain, limb_col,
+    merkle_col, pi,
 };
 use crate::poseidon2::hash_fact;
 use crate::stark::{self, StarkProof};
@@ -82,21 +83,105 @@ pub fn note_spending_circuit_descriptor() -> CircuitDescriptor {
         col: col::IS_MERKLE,
     });
 
-    // C2: Commitment hash binding (gated by 1-is_merkle)
-    // On commitment rows: commitment == hash_fact(owner, [value, asset_type, creation_nonce, randomness])
-    constraints.push(ConstraintExpr::InvertedGated {
-        selector_col: col::IS_MERKLE,
-        inner: Box::new(ConstraintExpr::Hash {
-            output_col: col::COMMITMENT,
-            input_cols: vec![
-                col::OWNER,
-                col::VALUE,
-                col::ASSET_TYPE,
-                col::CREATION_NONCE,
-                col::RANDOMNESS,
-            ],
-        }),
-    });
+    // C2 (FULL-WIDTH commitment binding). The legacy single `hash_fact(owner,
+    // [value, asset_type, creation_nonce, randomness])` bound only 5 felts —
+    // the first 4 bytes (~31 bits) of each 32-byte field and the low 32 bits of
+    // each u64 — so two notes differing in any byte above those chunks
+    // collided. We instead bind the FULL 28-limb preimage
+    // (`owner[8] ‖ value[lo,hi] ‖ asset_type[lo,hi] ‖ creation_nonce[8] ‖
+    // randomness[8]`, the SAME layout as
+    // `dregg_cell::Note::poseidon2_commitment`) via a chained Poseidon2
+    // `hash_fact` sponge whose output is pinned to `col::COMMITMENT`. Each step
+    // is a `ConstraintExpr::Hash` (= `hash_fact(predicate, terms)`), gated to the
+    // commitment row. The chain layout exactly mirrors
+    // `note_spending_air::commitment_chain`.
+    //
+    // Limb columns and chain intermediates live in `limb_col` (cols 20..55),
+    // present on the commitment row only (Merkle/padding rows zero them).
+    {
+        let lc = limb_col::preimage_cols();
+        let chain = limb_col::CHAIN_START;
+        // C2a: chain[0] == hash_fact(L0, [L1, L2, L3, L4])      (limbs 0..5)
+        constraints.push(ConstraintExpr::InvertedGated {
+            selector_col: col::IS_MERKLE,
+            inner: Box::new(ConstraintExpr::Hash {
+                output_col: chain,
+                input_cols: vec![lc[0], lc[1], lc[2], lc[3], lc[4]],
+            }),
+        });
+        // C2b..C2f: chain[k] == hash_fact(chain[k-1], [next 4 limbs]).
+        // step k folds limbs (5 + 4*(k-1)) .. (5 + 4*k).
+        for k in 1..limb_col::CHAIN_INTERMEDIATES {
+            let base = 5 + 4 * (k - 1);
+            constraints.push(ConstraintExpr::InvertedGated {
+                selector_col: col::IS_MERKLE,
+                inner: Box::new(ConstraintExpr::Hash {
+                    output_col: chain + k,
+                    input_cols: vec![
+                        chain + k - 1,
+                        lc[base],
+                        lc[base + 1],
+                        lc[base + 2],
+                        lc[base + 3],
+                    ],
+                }),
+            });
+        }
+        // C2g (final): COMMITMENT_FULL == hash_fact(chain[5], [L25, L26, L27]).
+        // The last step folds the final 3 limbs (hash_fact zero-pads the 4th
+        // term, matching `commitment_chain`'s zero pad).
+        let last_base = 5 + 4 * (limb_col::CHAIN_INTERMEDIATES - 1); // = 25
+        constraints.push(ConstraintExpr::InvertedGated {
+            selector_col: col::IS_MERKLE,
+            inner: Box::new(ConstraintExpr::Hash {
+                output_col: limb_col::COMMITMENT_FULL,
+                input_cols: vec![
+                    chain + limb_col::CHAIN_INTERMEDIATES - 1,
+                    lc[last_base],
+                    lc[last_base + 1],
+                    lc[last_base + 2],
+                ],
+            }),
+        });
+        // C2-final: col::COMMITMENT == COMMITMENT_FULL (gated to commitment row).
+        // Pins the legacy commitment column (which feeds the nullifier chain and
+        // Merkle membership) to the full-width binding, so the WHOLE proof binds
+        // the 28-limb identity.
+        constraints.push(ConstraintExpr::InvertedGated {
+            selector_col: col::IS_MERKLE,
+            inner: Box::new(ConstraintExpr::Equality {
+                col_a: col::COMMITMENT,
+                col_b: limb_col::COMMITMENT_FULL,
+            }),
+        });
+        // C2-link: the single-felt value/asset_type columns that the value/asset
+        // PI boundary constraints pin MUST equal the low limb that participates
+        // in the commitment preimage, so a prover cannot present one value in
+        // the PI and bind a different value in the commitment. (owner/nonce/
+        // randomness single felts are not PI-bound, so only value/asset need
+        // linking; their high limbs are bound through the commitment chain.)
+        constraints.push(ConstraintExpr::InvertedGated {
+            selector_col: col::IS_MERKLE,
+            inner: Box::new(ConstraintExpr::Equality {
+                col_a: col::VALUE,
+                col_b: limb_col::VALUE_LO,
+            }),
+        });
+        constraints.push(ConstraintExpr::InvertedGated {
+            selector_col: col::IS_MERKLE,
+            inner: Box::new(ConstraintExpr::Equality {
+                col_a: col::VALUE_HI,
+                col_b: limb_col::VALUE_HI,
+            }),
+        });
+        constraints.push(ConstraintExpr::InvertedGated {
+            selector_col: col::IS_MERKLE,
+            inner: Box::new(ConstraintExpr::Equality {
+                col_a: col::ASSET_TYPE,
+                col_b: limb_col::ASSET_LO,
+            }),
+        });
+    }
 
     // C3: Nullifier intermediate hash (gated by 1-is_merkle)
     constraints.push(ConstraintExpr::InvertedGated {
@@ -313,6 +398,61 @@ pub fn note_spending_circuit_descriptor() -> CircuitDescriptor {
         },
     ];
 
+    // FULL-WIDTH commitment-binding columns: 28 preimage limbs + 6 chain
+    // intermediates + the recomputed full commitment. These carry the 28-limb
+    // Poseidon2 preimage matching `dregg_cell::Note::poseidon2_commitment` and
+    // the chained-hash intermediates the C2a..C2g constraints recompute.
+    let mut columns = columns;
+    let limb_names: [&str; limb_col::PREIMAGE_LIMBS] = [
+        "owner_limb0",
+        "owner_limb1",
+        "owner_limb2",
+        "owner_limb3",
+        "owner_limb4",
+        "owner_limb5",
+        "owner_limb6",
+        "owner_limb7",
+        "value_lo_limb",
+        "value_hi_limb",
+        "asset_lo_limb",
+        "asset_hi_limb",
+        "nonce_limb0",
+        "nonce_limb1",
+        "nonce_limb2",
+        "nonce_limb3",
+        "nonce_limb4",
+        "nonce_limb5",
+        "nonce_limb6",
+        "nonce_limb7",
+        "rand_limb0",
+        "rand_limb1",
+        "rand_limb2",
+        "rand_limb3",
+        "rand_limb4",
+        "rand_limb5",
+        "rand_limb6",
+        "rand_limb7",
+    ];
+    for (slot, &c) in limb_col::preimage_cols().iter().enumerate() {
+        columns.push(ColumnDef {
+            name: limb_names[slot].into(),
+            index: c,
+            kind: ColumnKind::Value,
+        });
+    }
+    for k in 0..limb_col::CHAIN_INTERMEDIATES {
+        columns.push(ColumnDef {
+            name: format!("commitment_chain_{k}"),
+            index: limb_col::CHAIN_START + k,
+            kind: ColumnKind::Hash,
+        });
+    }
+    columns.push(ColumnDef {
+        name: "commitment_full".into(),
+        index: limb_col::COMMITMENT_FULL,
+        kind: ColumnKind::Hash,
+    });
+
     CircuitDescriptor {
         name: "dregg-note-spending-dsl-v3".into(),
         trace_width: NOTE_SPENDING_WIDTH,
@@ -336,22 +476,21 @@ pub fn note_spending_dsl_circuit() -> DslCircuit {
 // DSL Merkle root computation
 // ============================================================================
 
-/// Compute the note commitment with the DSL hashing convention
-/// (`hash_fact(owner, [value, asset_type, creation_nonce, randomness])`).
+/// Compute the FULL-WIDTH note commitment with the DSL hashing convention: a
+/// chained Poseidon2 `hash_fact` sponge over the 28-limb preimage
+/// (`owner[8] ‖ value[lo,hi] ‖ asset_type[lo,hi] ‖ creation_nonce[8] ‖
+/// randomness[8]`), matching the limb layout of
+/// `dregg_cell::Note::poseidon2_commitment`.
 ///
-/// This matches the C2 commitment constraint, which uses `ConstraintExpr::Hash`
-/// (=`hash_fact`), NOT the witness's `hash_many`-based `commitment()`. The two
-/// hashes differ, so the DSL trace MUST use this form.
+/// This matches the C2a..C2g commitment-chain constraints (each a
+/// `ConstraintExpr::Hash` = `hash_fact`) plus the C2-final equality
+/// `col::COMMITMENT == limb_col::COMMITMENT_FULL`. The DSL trace MUST use this
+/// form. Two notes differing in ANY byte of ANY field produce a distinct
+/// 28-limb vector and therefore a distinct commitment — the full-256-bit
+/// binding the legacy 5-felt `hash_fact(owner, [value, asset, nonce, rand])`
+/// lacked.
 pub fn dsl_commitment(witness: &NoteSpendingWitness) -> BabyBear {
-    hash_fact(
-        witness.owner,
-        &[
-            witness.value,
-            witness.asset_type,
-            witness.creation_nonce,
-            witness.randomness,
-        ],
-    )
+    commitment_chain(&witness.preimage_limbs).0
 }
 
 /// Compute the note nullifier with the DSL two-step hashing convention
@@ -465,12 +604,30 @@ pub fn generate_note_spending_trace(
     row0[col::IS_MERKLE] = BabyBear::ZERO;
     row0[NULLIFIER_INTERMEDIATE] = intermediate;
     row0[col::DESTINATION_FEDERATION] = witness.destination_federation;
-    // 30-bit-trunc fix: high u34 limb of the note value. The witness `value`
-    // is a single field element (the committed low limb), so the standard
-    // trace leaves the high limb at zero. The bridge-mint path builds the
-    // full-u64 trace via `generate_note_spending_trace_with_value_hi`, which
-    // overrides this column with the real high bits before proving.
-    row0[col::VALUE_HI] = BabyBear::ZERO;
+    // FULL-WIDTH commitment binding: place the 28 preimage limbs and the 6
+    // chained-hash intermediates so the C2a..C2g Hash constraints can recompute
+    // `limb_col::COMMITMENT_FULL` and the C2-final equality can pin it to
+    // `col::COMMITMENT`. `commitment` above already equals this chain's output
+    // (dsl_commitment == commitment_chain(preimage).0).
+    let preimage = witness.preimage_limbs;
+    for (slot, &c) in limb_col::preimage_cols().iter().enumerate() {
+        row0[c] = preimage[slot];
+    }
+    let (full_commit, chain_inter) = commitment_chain(&preimage);
+    debug_assert_eq!(full_commit, commitment, "DSL commitment chain mismatch");
+    for (k, &inter) in chain_inter.iter().enumerate() {
+        row0[limb_col::CHAIN_START + k] = inter;
+    }
+    row0[limb_col::COMMITMENT_FULL] = full_commit;
+    // High u34 limb of the note value (30-bit-trunc fix, §6.5). It is carried
+    // by the witness as `preimage_limbs[VALUE_HI slot]` (index 9): felt-typed
+    // callers leave it zero, while `from_note_limbs` sets it to the value's
+    // upper 34 bits. The standard trace now derives it from the witness so a
+    // full-u64 witness is self-consistent (commitment, value PI, and value-hi
+    // PI all agree). `generate_note_spending_trace_with_value_hi` remains a thin
+    // wrapper for callers that supply the high limb out-of-band.
+    let value_hi_limb = witness.preimage_limbs[9];
+    row0[col::VALUE_HI] = value_hi_limb;
     trace.push(row0);
 
     // Rows 1..depth+1: Merkle membership proof
@@ -528,28 +685,42 @@ pub fn generate_note_spending_trace(
         witness.value,
         witness.asset_type,
         witness.destination_federation,
-        BabyBear::ZERO, // pi::VALUE_HI: standard (felt-sized) value has no high bits
+        // pi::VALUE_HI: the witness's value-hi limb (zero for felt-typed callers,
+        // the upper-34 bits for `from_note_limbs`).
+        value_hi_limb,
     ];
     (trace, public_inputs)
+}
+
+/// Clone a witness with its VALUE_HI preimage limb (index 9) overridden.
+///
+/// Folding `value_hi` into the witness preimage makes the commitment chain,
+/// nullifier, Merkle root, value PI, and value-hi PI all consistently bind the
+/// full u64 amount. Use [`dsl_nullifier`]/[`dsl_merkle_root`] on the returned
+/// witness to obtain the matching public inputs.
+pub fn witness_with_value_hi(
+    witness: &NoteSpendingWitness,
+    value_hi: BabyBear,
+) -> NoteSpendingWitness {
+    let mut w = witness.clone();
+    w.preimage_limbs[9] = value_hi;
+    w
 }
 
 /// Generate a note-spending trace binding a FULL u64 value via the high limb.
 ///
 /// 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5). The standard
-/// [`generate_note_spending_trace`] leaves `col::VALUE_HI` (and `pi[5]`) at
-/// zero because a `NoteSpendingWitness::value` is a single field element. The
-/// bridge-mint executor path, however, presents a u64 amount whose high 34
-/// bits previously were silently masked away. This function takes the high
-/// limb explicitly and binds it into the trace + PI so the proof commits to
-/// the entire u64 (low 30 bits via `col::VALUE`, high 34 via `col::VALUE_HI`).
+/// [`generate_note_spending_trace`] derives the high limb from the witness; this
+/// wrapper lets callers supply it out-of-band. The high limb is now folded into
+/// the FULL-WIDTH commitment preimage (not merely pinned by a standalone PI
+/// boundary), so the commitment, nullifier, and Merkle root all bind the entire
+/// u64 (low 30 bits via `col::VALUE`, high 34 via `col::VALUE_HI`).
 pub fn generate_note_spending_trace_with_value_hi(
     witness: &NoteSpendingWitness,
     value_hi: BabyBear,
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    let (mut trace, mut public_inputs) = generate_note_spending_trace(witness);
-    trace[0][col::VALUE_HI] = value_hi;
-    public_inputs[pi::VALUE_HI] = value_hi;
-    (trace, public_inputs)
+    let w = witness_with_value_hi(witness, value_hi);
+    generate_note_spending_trace(&w)
 }
 
 // ============================================================================

@@ -322,24 +322,24 @@ impl AgentCipherclerk {
         recipient_spending_key_hasher.update(recipient_key);
         let recipient_spending_key: [u8; 32] = *recipient_spending_key_hasher.finalize().as_bytes();
 
-        // Build the spending witness for the STARK proof.
-        let owner_bb = Self::bytes_to_babybear(&note.owner);
-        let value_bb = BabyBear::new(note.value() as u32);
-        let asset_type_bb = BabyBear::new(note.asset_type() as u32);
-
-        // Derive creation_nonce and randomness as field elements.
-        let creation_nonce_bb = Self::bytes_to_babybear(&note.creation_nonce);
-        let randomness_bb = Self::bytes_to_babybear(&note.randomness);
-
         // Convert spending key to 8 BabyBear limbs.
         let spending_key_limbs = key_to_field_elements(spending_key);
 
-        let witness = NoteSpendingWitness::from_real_proof(
-            owner_bb,
-            value_bb,
-            asset_type_bb,
-            creation_nonce_bb,
-            randomness_bb,
+        // Build the spending witness for the STARK proof with FULL-WIDTH
+        // (256-bit-per-field) commitment binding. `from_note_limbs` decomposes
+        // every 32-byte field (owner / creation_nonce / randomness) into 8
+        // BabyBear limbs and every u64 (value / asset_type) into low+high
+        // limbs — the SAME 28-limb preimage layout as
+        // `dregg_cell::Note::poseidon2_commitment`. This replaces the legacy
+        // single-felt-per-field witness, whose in-circuit commitment bound only
+        // the first 4 bytes of each 32-byte field (so two notes differing only
+        // in bytes above byte 4 of owner/nonce/randomness collided).
+        let witness = NoteSpendingWitness::from_note_limbs(
+            &note.owner,
+            note.value(),
+            note.asset_type(),
+            &note.creation_nonce,
+            &note.randomness,
             spending_key_limbs,
             merkle_siblings,
             merkle_positions,
@@ -968,20 +968,23 @@ mod tests {
 
         let recipient_key = [0xBB; 32];
 
-        let transfer = cclerk.transfer_note_privately(
-            &secret,
-            &recipient_key,
-            merkle_siblings,
-            merkle_positions,
-        );
+        let transfer = cclerk
+            .transfer_note_privately(&secret, &recipient_key, merkle_siblings, merkle_positions)
+            .expect(
+                "full-width (28-limb) witness should produce a valid note-spending proof; \
+                 previously the felt-collapsed witness made the prover reject this path",
+            );
 
-        assert!(
-            matches!(
-                transfer,
-                Err(SdkError::Auth(dregg_bridge::AuthError::InvalidRequest(ref msg)))
-                    if msg.contains("note spending proof generation failed")
-            ),
-            "prover-rejected note spending witnesses should return an SDK error"
+        // The published nullifier matches the note's intrinsic nullifier.
+        assert_eq!(transfer.nullifier, secret.note.nullifier(&secret.spending_key));
+        // The output note carries the same value/asset as the spent input.
+        assert_eq!(transfer.recipient_secret.note.value(), secret.note.value());
+        assert_eq!(
+            transfer.recipient_secret.note.asset_type(),
+            secret.note.asset_type()
         );
+        // A non-empty STARK proof was produced (the FULL-WIDTH commitment-binding
+        // trace proved successfully).
+        assert!(transfer.spending_proof.trace_len >= 4);
     }
 }
