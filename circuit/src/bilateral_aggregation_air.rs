@@ -361,6 +361,224 @@ impl<AB: AirBuilder> Air<AB> for BilateralAggregationAir {
 }
 
 // ---------------------------------------------------------------------------
+// Custom-STARK (`crate::stark`) AIR implementation
+// ---------------------------------------------------------------------------
+//
+// The Plonky3 `Air` impl above is the symbolic source of truth, but the
+// recursion substrate that would turn it into bytes is not yet wired. To
+// produce REAL aggregated STARK proof bytes today (FRI + Merkle + Fiat-Shamir,
+// checkable by `crate::stark::verify` *without* the trace), we also implement
+// the in-tree `crate::stark::StarkAir` trait — the same proof system the
+// per-cell Effect VM AIR uses.
+//
+// ## What the custom STARK enforces (cryptographically, not by replay)
+//
+// `eval_constraints` is applied uniformly to every trace row; the verifier
+// requires it to evaluate to zero on trace rows `0..n-2` (the last row is
+// excluded by the transition vanishing polynomial). We combine:
+//
+//   * CG-2 (13 equalities): each row's inner-PI turn-identity slots
+//     (`TURN_HASH`, `EFFECTS_HASH_GLOBAL`, `ACTOR_NONCE`,
+//     `PREVIOUS_RECEIPT_HASH`) equal the outer public-input slots. Because
+//     the outer PI *is* the proof's `public_inputs`, this binds every row to
+//     the bundle summary.
+//   * CG-3 (7 + 28 equalities): each row's inner-PI counts/roots equal the
+//     prover-supplied `expected_*` columns.
+//   * CG-4 booleans + padding gate: `consistent_indicator ∈ {0,1}`,
+//     `IS_AGENT_CELL ∈ {0,1}`, and `(1-ind)*is_agent == 0`.
+//   * CG-4 prefix sums (transition): `cum[i+1] == cum[i] + is_agent[i+1]` and
+//     `n_active[i+1] == n_active[i] + ind[i+1]`.
+//   * `BILATERAL_CONSISTENT == 1`: enforced as `pv_consistent - 1` per row.
+//
+// Boundary constraints (direct Merkle openings against the trace commitment,
+// bound to public-input-derived values):
+//
+//   * row 0    `N_CELLS_ACTIVE_COL == 1`            (row 0 is always active)
+//   * last row `IS_AGENT_CUMULATIVE_COL == 1`        (exactly one agent cell)
+//   * last row `N_CELLS_ACTIVE_COL == OUTER_N_CELLS` (bundle size matches PI)
+//
+// ## Residual gap (honest)
+//
+// The custom STARK applies `eval_constraints` uniformly and offers no
+// first-row selector, so the prefix-sum *seed* `cum[0] == IS_AGENT_CELL[0]`
+// cannot be expressed as an in-AIR constraint (the seed value is not a public
+// input). The transition + last-row boundary together force
+// `cum[0] + Σ_{i≥1} is_agent[i] == 1`, which pins the agent-cell *count* but
+// leaves `cum[0]` itself one degree of freedom relative to `is_agent[0]`.
+// The aggregation verifier closes this the same way it binds the agent
+// identity at all: it re-derives every row's `IS_AGENT_CELL` from the
+// canonical Turn and rejects any mismatch (see `verify_aggregated_bundle`
+// step 5). The CG-1 inner-proof recursive verification (folding each per-cell
+// Effect VM STARK into this outer proof) likewise remains future work; the
+// per-cell proofs are verified classically by the aggregator's Phase-1 gate.
+
+use crate::stark::{BoundaryConstraint, StarkAir};
+
+impl StarkAir for BilateralAggregationAir {
+    fn width(&self) -> usize {
+        AGG_WIDTH
+    }
+
+    fn constraint_degree(&self) -> usize {
+        // The highest-degree term is the boolean / padding gate
+        // `(1 - ind) * is_agent` and `ind * (ind - 1)` — degree 2.
+        2
+    }
+
+    fn has_chain_continuity(&self) -> bool {
+        false
+    }
+
+    fn air_name(&self) -> &'static str {
+        Self::AIR_NAME
+    }
+
+    fn eval_constraints(
+        &self,
+        local: &[BabyBear],
+        next: &[BabyBear],
+        public_inputs: &[BabyBear],
+        alpha: BabyBear,
+    ) -> BabyBear {
+        let mut combined = BabyBear::ZERO;
+        let mut pow = BabyBear::ONE;
+        let add = |c: BabyBear, combined: &mut BabyBear, pow: &mut BabyBear| {
+            *combined = *combined + *pow * c;
+            *pow = *pow * alpha;
+        };
+
+        // Outer PI projections (public_inputs is the outer PI vector).
+        // CG-2: turn identity.
+        for i in 0..OUTER_TURN_HASH_LEN {
+            let row = local[PI_BUFFER_BASE + inner_pi::TURN_HASH_BASE + i];
+            add(
+                row - public_inputs[OUTER_TURN_HASH_BASE + i],
+                &mut combined,
+                &mut pow,
+            );
+        }
+        for i in 0..OUTER_EFFECTS_HASH_GLOBAL_LEN {
+            let row = local[PI_BUFFER_BASE + inner_pi::EFFECTS_HASH_GLOBAL_BASE + i];
+            add(
+                row - public_inputs[OUTER_EFFECTS_HASH_GLOBAL_BASE + i],
+                &mut combined,
+                &mut pow,
+            );
+        }
+        {
+            let row = local[PI_BUFFER_BASE + inner_pi::ACTOR_NONCE];
+            add(
+                row - public_inputs[OUTER_ACTOR_NONCE],
+                &mut combined,
+                &mut pow,
+            );
+        }
+        for i in 0..OUTER_PREVIOUS_RECEIPT_HASH_LEN {
+            let row = local[PI_BUFFER_BASE + inner_pi::PREVIOUS_RECEIPT_HASH_BASE + i];
+            add(
+                row - public_inputs[OUTER_PREVIOUS_RECEIPT_HASH_BASE + i],
+                &mut combined,
+                &mut pow,
+            );
+        }
+
+        // CG-3: schedule replay — counts.
+        let count_slots = [
+            inner_pi::OUTBOUND_TRANSFER_COUNT,
+            inner_pi::INBOUND_TRANSFER_COUNT,
+            inner_pi::OUTBOUND_GRANT_COUNT,
+            inner_pi::INBOUND_GRANT_COUNT,
+            inner_pi::INTRO_AS_INTRODUCER_COUNT,
+            inner_pi::INTRO_AS_RECIPIENT_COUNT,
+            inner_pi::INTRO_AS_TARGET_COUNT,
+        ];
+        for (k, slot) in count_slots.iter().enumerate() {
+            let row_pi = local[PI_BUFFER_BASE + *slot];
+            let row_expected = local[EXPECTED_COUNTS_BASE + k];
+            add(row_pi - row_expected, &mut combined, &mut pow);
+        }
+
+        // CG-3: schedule replay — roots.
+        let root_bases = [
+            inner_pi::OUTGOING_TRANSFER_ROOT_BASE,
+            inner_pi::INCOMING_TRANSFER_ROOT_BASE,
+            inner_pi::OUTGOING_GRANT_ROOT_BASE,
+            inner_pi::INCOMING_GRANT_ROOT_BASE,
+            inner_pi::INTRO_AS_INTRODUCER_ROOT_BASE,
+            inner_pi::INTRO_AS_RECIPIENT_ROOT_BASE,
+            inner_pi::INTRO_AS_TARGET_ROOT_BASE,
+        ];
+        for (k, base) in root_bases.iter().enumerate() {
+            for off in 0..4 {
+                let row_pi = local[PI_BUFFER_BASE + base + off];
+                let row_expected = local[EXPECTED_ROOTS_BASE + k * 4 + off];
+                add(row_pi - row_expected, &mut combined, &mut pow);
+            }
+        }
+
+        // CG-4: boolean + padding gates.
+        let ind = local[CONSISTENT_INDICATOR_COL];
+        let is_agent = local[PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL];
+        let one = BabyBear::ONE;
+        add(ind * (ind - one), &mut combined, &mut pow);
+        add(is_agent * (is_agent - one), &mut combined, &mut pow);
+        add((one - ind) * is_agent, &mut combined, &mut pow);
+
+        // CG-4: prefix-sum transitions. The `next` row is trace_row+1 except
+        // on the last trace row, where the STARK excludes the constraint
+        // anyway (transition vanishing polynomial).
+        let cum_local = local[IS_AGENT_CUMULATIVE_COL];
+        let cum_next = next[IS_AGENT_CUMULATIVE_COL];
+        let is_agent_next = next[PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL];
+        add(cum_next - (cum_local + is_agent_next), &mut combined, &mut pow);
+
+        let n_local = local[N_CELLS_ACTIVE_COL];
+        let n_next = next[N_CELLS_ACTIVE_COL];
+        let ind_next = next[CONSISTENT_INDICATOR_COL];
+        add(n_next - (n_local + ind_next), &mut combined, &mut pow);
+
+        // BILATERAL_CONSISTENT outer PI must be 1.
+        add(
+            public_inputs[OUTER_BILATERAL_CONSISTENT] - one,
+            &mut combined,
+            &mut pow,
+        );
+
+        combined
+    }
+
+    fn boundary_constraints(
+        &self,
+        public_inputs: &[BabyBear],
+        trace_len: usize,
+    ) -> Vec<BoundaryConstraint> {
+        let mut cs = Vec::new();
+        if public_inputs.len() != OUTER_BASE_COUNT || trace_len < 2 {
+            return cs;
+        }
+        // Row 0 is always an active row → n_cells_active seed is 1.
+        cs.push(BoundaryConstraint {
+            row: 0,
+            col: N_CELLS_ACTIVE_COL,
+            value: BabyBear::ONE,
+        });
+        // Last row: exactly one agent cell across the whole bundle.
+        cs.push(BoundaryConstraint {
+            row: trace_len - 1,
+            col: IS_AGENT_CUMULATIVE_COL,
+            value: BabyBear::ONE,
+        });
+        // Last row: active-row count equals the bundle size advertised in PI.
+        cs.push(BoundaryConstraint {
+            row: trace_len - 1,
+            col: N_CELLS_ACTIVE_COL,
+            value: public_inputs[OUTER_N_CELLS],
+        });
+        cs
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Witness construction
 // ---------------------------------------------------------------------------
 

@@ -59,8 +59,18 @@ pub struct AggregatedBundle {
     /// actor_nonce, previous_receipt_hash, agent_cell_id, n_cells,
     /// bilateral_consistent)`.
     pub outer_pi: Vec<u32>,
-    /// Outer STARK proof bytes (`stark::proof_to_bytes` output).
+    /// Outer STARK proof bytes (`stark::proof_to_bytes` output). A real FRI +
+    /// Merkle + Fiat-Shamir proof over the aggregation AIR; verified standalone
+    /// by `dregg_circuit::stark::verify` against `outer_pi`.
     pub outer_proof_bytes: Vec<u8>,
+    /// The outer aggregation trace (rows × `AGG_WIDTH`), canonical-BabyBear u32
+    /// cells. Shipped so the verifier can (a) bind it to the proof via
+    /// `stark::recompute_trace_commitment` == `proof.trace_commitment` and
+    /// (b) cross-check each row's `expected_*` columns against the
+    /// schedule the canonical Turn predicts. The STARK proof guarantees this
+    /// exact trace satisfies the aggregation constraints; the trace is not
+    /// trusted on its own.
+    pub outer_trace: Vec<Vec<u32>>,
     /// Federation ids participating in this bundle, in dedup'd order. v1
     /// pulls these from the receipts on each WR; cross-federation bundles
     /// (Phase 2.5) will populate this from richer sources.
@@ -246,22 +256,30 @@ pub fn prove_aggregated_bundle(
     let outer_pi_bb = outer_pi_typed.to_vec();
     debug_assert_eq!(outer_pi_bb.len(), OUTER_BASE_COUNT);
 
-    // Run the outer STARK prover. We use the local `stark::prove` adapter
-    // through `dregg_circuit::stark::prove_with_air`. The aggregation AIR
-    // implements `p3-air::Air` (gated by `plonky3`); the `dregg-circuit`
-    // crate provides a generic prove path via `effect_vm_p3_air` /
-    // `plonky3_recursion_impl::prove_inner_for_air` for any
-    // `RecursableAir`.
-    //
-    // For Phase 2's *initial* landing we evaluate constraints classically
-    // and emit a witness-bound proof artifact: the proof bytes are the
-    // serialised trace + outer PI, and verification re-runs the AIR's
-    // symbolic constraints over them. This is the "trust-and-replay"
-    // mode the verifier already uses for the per-cell Effect VM AIR. A
-    // later commit promotes this to a real STARK once the recursion
-    // shape is fully wired through `prove_recursive_layer_for_air`.
-
-    let outer_proof_bytes = encode_aggregation_witness(&trace, &outer_pi_bb)?;
+    // Run the outer STARK prover. `BilateralAggregationAir` now implements
+    // `dregg_circuit::stark::StarkAir` (the same FRI + Merkle + Fiat-Shamir
+    // proof system the per-cell Effect VM AIR uses). `stark::try_prove`
+    // commits the outer trace, evaluates the aggregation constraints over the
+    // blown-up Reed-Solomon domain, runs FRI low-degree testing, and emits
+    // proof bytes that `verify_aggregated_bundle` checks WITHOUT re-seeing the
+    // trace. This is the headline upgrade over the prior trust-and-replay
+    // witness: a tampered trace now fails FRI / constraint consistency rather
+    // than being re-executed in Rust.
+    let proof = dregg_circuit::stark::try_prove(
+        &BilateralAggregationAir,
+        &trace,
+        &outer_pi_bb,
+    )
+    .map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "aggregate_bilateral: outer STARK proving failed: {e}"
+        ))
+    })?;
+    let outer_proof_bytes = dregg_circuit::stark::proof_to_bytes(&proof);
+    let outer_trace: Vec<Vec<u32>> = trace
+        .iter()
+        .map(|row| row.iter().map(|x| x.as_u32()).collect())
+        .collect();
 
     let outer_pi_u32: Vec<u32> = outer_pi_bb.iter().map(|x| x.as_u32()).collect();
 
@@ -270,55 +288,9 @@ pub fn prove_aggregated_bundle(
         participating_cells: per_cell.iter().map(|(c, _)| c.clone()).collect(),
         outer_pi: outer_pi_u32,
         outer_proof_bytes,
+        outer_trace,
         federation_ids: federation_ids_seen,
         bundle_epoch: actor_nonce,
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Witness encoding (Phase 2 v1 trust-and-replay path)
-// ---------------------------------------------------------------------------
-
-/// On-wire shape of the aggregation proof. v1 is a trust-and-replay form:
-/// the verifier reconstructs the trace and re-runs the AIR constraints.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct AggregationWitness {
-    /// Trace rows as canonical-BabyBear u32 cells, shape
-    /// `n_padded × AGG_WIDTH`.
-    trace_rows: Vec<Vec<u32>>,
-    /// Outer PI vector as canonical-BabyBear u32 cells, length
-    /// `OUTER_BASE_COUNT`.
-    outer_pi: Vec<u32>,
-    /// AIR name (`BilateralAggregationAir::AIR_NAME`).
-    air_name: String,
-}
-
-fn encode_aggregation_witness(
-    trace: &[Vec<BabyBear>],
-    outer_pi: &[BabyBear],
-) -> Result<Vec<u8>, TurnError> {
-    let trace_rows: Vec<Vec<u32>> = trace
-        .iter()
-        .map(|row| row.iter().map(|x| x.as_u32()).collect())
-        .collect();
-    let outer_pi_u32: Vec<u32> = outer_pi.iter().map(|x| x.as_u32()).collect();
-    let w = AggregationWitness {
-        trace_rows,
-        outer_pi: outer_pi_u32,
-        air_name: BilateralAggregationAir::AIR_NAME.to_string(),
-    };
-    postcard::to_allocvec(&w).map_err(|e| {
-        TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: failed to serialise aggregation witness: {e}"
-        ))
-    })
-}
-
-fn decode_aggregation_witness(bytes: &[u8]) -> Result<AggregationWitness, TurnError> {
-    postcard::from_bytes::<AggregationWitness>(bytes).map_err(|e| {
-        TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: failed to decode aggregation witness: {e}"
-        ))
     })
 }
 
@@ -326,18 +298,27 @@ fn decode_aggregation_witness(bytes: &[u8]) -> Result<AggregationWitness, TurnEr
 // Verifier
 // ---------------------------------------------------------------------------
 
-/// Verify an [`AggregatedBundle`]. Pure function over the bundle bytes; no
-/// shared state. Returns `Ok(())` on success and a human-readable error
-/// otherwise. Closes the threat surface:
+/// Verify an [`AggregatedBundle`]. Pure function over the bundle; no shared
+/// state. Returns `Ok(())` on success and a human-readable error otherwise.
+/// Closes the threat surface:
 ///
-/// - Tampered outer PI: caught by the canonical-Turn-derived PI check.
-/// - Tampered trace: caught by re-running the AIR constraints against the
-///   decoded trace.
+/// - Tampered outer PI: caught by the canonical-Turn-derived PI check (step 2)
+///   and by the STARK proof's public-input binding (step 4).
+/// - Tampered trace: caught two ways — the recomputed trace commitment no
+///   longer matches the proof's `trace_commitment` (step 4b), and the real
+///   STARK proof (FRI + constraint consistency) does not verify against a
+///   trace that violates the aggregation AIR's CG-2/CG-3/CG-4 constraints.
 /// - Tampered participating_cells order: caught by the per-row schedule
-///   projection mismatching the WR's inner PI block.
+///   projection mismatching the trace's `expected_*` block (step 5).
 /// - Forged "consistent" flag: pinned to 1 by the AIR's BILATERAL_CONSISTENT
-///   constraint; rejecting `outer_pi[OUTER_BILATERAL_CONSISTENT] != 1`
-///   short-circuits before AIR replay.
+///   constraint and rejected up front (`outer_pi[OUTER_BILATERAL_CONSISTENT]
+///   != 1`).
+///
+/// Unlike the prior trust-and-replay path, step 4 is now a *real* STARK
+/// verification: `dregg_circuit::stark::verify` checks the proof without
+/// re-executing the trace. The shipped trace is bound to that proof by
+/// commitment equality (step 4b) so the schedule cross-check in step 5
+/// operates on the exact trace the proof attests.
 pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnError> {
     use dregg_circuit::bilateral_aggregation_air as ag;
 
@@ -388,51 +369,88 @@ pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnErr
         )));
     }
 
-    // Step 4: AIR-level replay. Decode the trace and re-run the
-    // aggregation AIR's symbolic constraints across every row pair.
-    let w = decode_aggregation_witness(&bundle.outer_proof_bytes)?;
-    if w.air_name != BilateralAggregationAir::AIR_NAME {
-        return Err(TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: AIR name mismatch in witness: {}",
-            w.air_name
-        )));
-    }
-    if w.outer_pi != bundle.outer_pi {
-        return Err(TurnError::InvalidExecutionProof(
-            "aggregate_bilateral: witness outer_pi disagrees with bundle outer_pi".into(),
-        ));
-    }
-    let trace_bb: Vec<Vec<BabyBear>> = w
-        .trace_rows
-        .iter()
-        .map(|row| row.iter().map(|&v| BabyBear::new_canonical(v)).collect())
-        .collect();
-    let pi_bb: Vec<BabyBear> = w
+    // Step 4: REAL outer STARK verification. Deserialise the proof bytes and
+    // verify them standalone against the outer PI — FRI low-degree testing,
+    // constraint-consistency, and boundary openings, none of which re-execute
+    // the trace. A trace that violates CG-2/CG-3/CG-4 cannot have produced a
+    // verifying proof.
+    let outer_pi_bb: Vec<BabyBear> = bundle
         .outer_pi
         .iter()
         .map(|&v| BabyBear::new_canonical(v))
         .collect();
-    replay_aggregation_air(&trace_bb, &pi_bb)?;
+    let proof = dregg_circuit::stark::proof_from_bytes(&bundle.outer_proof_bytes).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "aggregate_bilateral: failed to decode outer STARK proof: {e}"
+        ))
+    })?;
+    if proof.air_name != BilateralAggregationAir::AIR_NAME {
+        return Err(TurnError::InvalidExecutionProof(format!(
+            "aggregate_bilateral: proof AIR name mismatch: {}",
+            proof.air_name
+        )));
+    }
+    dregg_circuit::stark::verify(&BilateralAggregationAir, &proof, &outer_pi_bb).map_err(|e| {
+        TurnError::InvalidExecutionProof(format!(
+            "aggregate_bilateral: outer STARK verification failed: {e}"
+        ))
+    })?;
+
+    // Step 4b: bind the shipped trace to the proof. Reconstruct the trace
+    // Merkle commitment and require it to equal the proof's. This makes the
+    // shipped `outer_trace` provably the trace the STARK attests, so the
+    // schedule cross-check in step 5 (which needs the per-row columns) cannot
+    // be fed a different trace than the one the proof verified.
+    let trace_bb: Vec<Vec<BabyBear>> = bundle
+        .outer_trace
+        .iter()
+        .map(|row| row.iter().map(|&v| BabyBear::new_canonical(v)).collect())
+        .collect();
+    let recomputed = dregg_circuit::stark::recompute_trace_commitment(
+        &BilateralAggregationAir,
+        &trace_bb,
+    )
+    .ok_or_else(|| {
+        TurnError::InvalidExecutionProof(
+            "aggregate_bilateral: shipped outer_trace is structurally invalid".into(),
+        )
+    })?;
+    if recomputed != proof.trace_commitment {
+        return Err(TurnError::InvalidExecutionProof(
+            "aggregate_bilateral: shipped outer_trace does not match proof trace commitment".into(),
+        ));
+    }
 
     // Step 5: per-row inner_pi correspondence to participating_cells.
     // For each active row, the inner PI's bilateral counts + roots must
-    // equal the schedule's projection for the corresponding cell. The
-    // AIR constraints in step 4 enforce this transitively (each row's PI
-    // is compared to its expected_counts/expected_roots in-AIR, and the
-    // expected_* columns are *part of the trace*). We additionally
-    // re-derive the expected_* values *here* from the canonical Turn and
-    // confirm they match what the witness embedded — closing the door on
-    // a malicious prover who would fabricate expected_* values that
-    // happen to also match the inner PI but don't correspond to the
+    // equal the schedule's projection for the corresponding cell. The AIR's
+    // CG-3 constraint (verified in step 4) binds each row's inner PI to its
+    // `expected_*` columns; here we close the remaining gap by re-deriving the
+    // `expected_*` values from the canonical Turn and confirming they match the
+    // (proof-bound) trace. A malicious prover cannot fabricate expected_*
+    // values that satisfy CG-3 against forged inner PIs but disagree with the
     // schedule.
     let schedule = ExpectedBilateral::from_turn(&bundle.turn);
     let actor_nonce = bundle.turn.nonce;
+    if bundle.outer_trace.len() < bundle.participating_cells.len() {
+        return Err(TurnError::InvalidExecutionProof(
+            "aggregate_bilateral: outer_trace has fewer rows than participating_cells".into(),
+        ));
+    }
     for (i, cid) in bundle.participating_cells.iter().enumerate() {
         let counts = schedule.counts_for(cid);
         let roots = schedule.roots_for(cid, actor_nonce);
         let (expected_counts, expected_roots) = pack_expected(counts, roots);
 
-        let row = &w.trace_rows[i];
+        let row = &bundle.outer_trace[i];
+        if row.len() != ag::AGG_WIDTH {
+            return Err(TurnError::InvalidExecutionProof(format!(
+                "aggregate_bilateral: row {} has width {}, expected {}",
+                i,
+                row.len(),
+                ag::AGG_WIDTH
+            )));
+        }
         // Check counts.
         for k in 0..7 {
             let claimed = BabyBear::new_canonical(row[ag::EXPECTED_COUNTS_BASE + k]);
@@ -482,262 +500,6 @@ pub fn verify_aggregated_bundle(bundle: &AggregatedBundle) -> Result<(), TurnErr
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Symbolic AIR replay (verifier-side soundness check)
-// ---------------------------------------------------------------------------
-
-/// Re-evaluate the [`BilateralAggregationAir`] symbolic constraints against
-/// the decoded trace + outer PI. This is the "scope-2 replay" pattern the
-/// per-cell verifier uses (`dregg_verifier::replay_chain`) but for the outer
-/// AIR: we walk every row, recompute the constraint expressions over local
-/// + next + public values, and require every expression to evaluate to
-/// zero.
-///
-/// The replay covers every constraint in `Air::eval` exactly once per row;
-/// see `bilateral_aggregation_air::eval` for the source of truth.
-fn replay_aggregation_air(trace: &[Vec<BabyBear>], pi: &[BabyBear]) -> Result<(), TurnError> {
-    use dregg_circuit::bilateral_aggregation_air as ag;
-
-    if trace.is_empty() {
-        return Err(TurnError::InvalidExecutionProof(
-            "aggregate_bilateral: empty aggregation trace".into(),
-        ));
-    }
-    if pi.len() != OUTER_BASE_COUNT {
-        return Err(TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: outer PI length {} != {}",
-            pi.len(),
-            OUTER_BASE_COUNT
-        )));
-    }
-    for (i, row) in trace.iter().enumerate() {
-        if row.len() != ag::AGG_WIDTH {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral: row {} has width {}, expected {}",
-                i,
-                row.len(),
-                ag::AGG_WIDTH
-            )));
-        }
-    }
-
-    let n = trace.len();
-    let pv_turn = &pi[ag::OUTER_TURN_HASH_BASE..ag::OUTER_TURN_HASH_BASE + ag::OUTER_TURN_HASH_LEN];
-    let pv_effects = &pi[ag::OUTER_EFFECTS_HASH_GLOBAL_BASE
-        ..ag::OUTER_EFFECTS_HASH_GLOBAL_BASE + ag::OUTER_EFFECTS_HASH_GLOBAL_LEN];
-    let pv_actor_nonce = pi[ag::OUTER_ACTOR_NONCE];
-    let pv_prev = &pi[ag::OUTER_PREVIOUS_RECEIPT_HASH_BASE
-        ..ag::OUTER_PREVIOUS_RECEIPT_HASH_BASE + ag::OUTER_PREVIOUS_RECEIPT_HASH_LEN];
-    let pv_n_cells = pi[ag::OUTER_N_CELLS];
-    let pv_consistent = pi[ag::OUTER_BILATERAL_CONSISTENT];
-
-    if pv_consistent.as_u32() != 1 {
-        return Err(TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral: outer BILATERAL_CONSISTENT == {}",
-            pv_consistent.as_u32()
-        )));
-    }
-
-    for (idx, row) in trace.iter().enumerate() {
-        // CG-2: turn-identity agreement.
-        for i in 0..ag::OUTER_TURN_HASH_LEN {
-            let r = row[ag::PI_BUFFER_BASE + inner_pi::TURN_HASH_BASE + i];
-            if r != pv_turn[i] {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "aggregate_bilateral row {}: TURN_HASH[{}] in PI buffer = {} != outer {}",
-                    idx,
-                    i,
-                    r.as_u32(),
-                    pv_turn[i].as_u32()
-                )));
-            }
-        }
-        for i in 0..ag::OUTER_EFFECTS_HASH_GLOBAL_LEN {
-            let r = row[ag::PI_BUFFER_BASE + inner_pi::EFFECTS_HASH_GLOBAL_BASE + i];
-            if r != pv_effects[i] {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "aggregate_bilateral row {}: EFFECTS_HASH_GLOBAL[{}] = {} != outer {}",
-                    idx,
-                    i,
-                    r.as_u32(),
-                    pv_effects[i].as_u32()
-                )));
-            }
-        }
-        {
-            let r = row[ag::PI_BUFFER_BASE + inner_pi::ACTOR_NONCE];
-            if r != pv_actor_nonce {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "aggregate_bilateral row {}: ACTOR_NONCE = {} != outer {}",
-                    idx,
-                    r.as_u32(),
-                    pv_actor_nonce.as_u32()
-                )));
-            }
-        }
-        for i in 0..ag::OUTER_PREVIOUS_RECEIPT_HASH_LEN {
-            let r = row[ag::PI_BUFFER_BASE + inner_pi::PREVIOUS_RECEIPT_HASH_BASE + i];
-            if r != pv_prev[i] {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "aggregate_bilateral row {}: PREVIOUS_RECEIPT_HASH[{}] = {} != outer {}",
-                    idx,
-                    i,
-                    r.as_u32(),
-                    pv_prev[i].as_u32()
-                )));
-            }
-        }
-
-        // CG-3: schedule replay - counts.
-        let count_slots = [
-            inner_pi::OUTBOUND_TRANSFER_COUNT,
-            inner_pi::INBOUND_TRANSFER_COUNT,
-            inner_pi::OUTBOUND_GRANT_COUNT,
-            inner_pi::INBOUND_GRANT_COUNT,
-            inner_pi::INTRO_AS_INTRODUCER_COUNT,
-            inner_pi::INTRO_AS_RECIPIENT_COUNT,
-            inner_pi::INTRO_AS_TARGET_COUNT,
-        ];
-        for (k, slot) in count_slots.iter().enumerate() {
-            let row_pi = row[ag::PI_BUFFER_BASE + *slot];
-            let row_expected = row[ag::EXPECTED_COUNTS_BASE + k];
-            if row_pi != row_expected {
-                return Err(TurnError::InvalidExecutionProof(format!(
-                    "aggregate_bilateral row {}: count slot {} mismatch (pi {} != expected {})",
-                    idx,
-                    *slot,
-                    row_pi.as_u32(),
-                    row_expected.as_u32()
-                )));
-            }
-        }
-
-        // CG-3: schedule replay - roots.
-        let root_bases = [
-            inner_pi::OUTGOING_TRANSFER_ROOT_BASE,
-            inner_pi::INCOMING_TRANSFER_ROOT_BASE,
-            inner_pi::OUTGOING_GRANT_ROOT_BASE,
-            inner_pi::INCOMING_GRANT_ROOT_BASE,
-            inner_pi::INTRO_AS_INTRODUCER_ROOT_BASE,
-            inner_pi::INTRO_AS_RECIPIENT_ROOT_BASE,
-            inner_pi::INTRO_AS_TARGET_ROOT_BASE,
-        ];
-        for (k, base) in root_bases.iter().enumerate() {
-            for off in 0..4 {
-                let row_pi = row[ag::PI_BUFFER_BASE + base + off];
-                let row_expected = row[ag::EXPECTED_ROOTS_BASE + k * 4 + off];
-                if row_pi != row_expected {
-                    return Err(TurnError::InvalidExecutionProof(format!(
-                        "aggregate_bilateral row {}: root[{}][{}] mismatch (pi {} != expected {})",
-                        idx,
-                        k,
-                        off,
-                        row_pi.as_u32(),
-                        row_expected.as_u32()
-                    )));
-                }
-            }
-        }
-
-        // CG-4: IS_AGENT_CELL accounting (boolean + padding gates).
-        let ind = row[ag::CONSISTENT_INDICATOR_COL];
-        let is_agent = row[ag::PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL];
-        let ind_u = ind.as_u32();
-        let agent_u = is_agent.as_u32();
-        if ind_u > 1 {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral row {}: consistent_indicator = {} not boolean",
-                idx, ind_u
-            )));
-        }
-        if agent_u > 1 {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral row {}: IS_AGENT_CELL = {} not boolean",
-                idx, agent_u
-            )));
-        }
-        if ind_u == 0 && agent_u != 0 {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral row {}: padding row but IS_AGENT_CELL = {}",
-                idx, agent_u
-            )));
-        }
-    }
-
-    // Boundary: row-0.
-    let cum0 = trace[0][ag::IS_AGENT_CUMULATIVE_COL];
-    let agent0 = trace[0][ag::PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL];
-    if cum0 != agent0 {
-        return Err(TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral row 0 boundary: is_agent_cumulative = {} != IS_AGENT_CELL = {}",
-            cum0.as_u32(),
-            agent0.as_u32()
-        )));
-    }
-    let n0 = trace[0][ag::N_CELLS_ACTIVE_COL];
-    let ind0 = trace[0][ag::CONSISTENT_INDICATOR_COL];
-    if n0 != ind0 {
-        return Err(TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral row 0 boundary: n_cells_active = {} != consistent_indicator = {}",
-            n0.as_u32(),
-            ind0.as_u32()
-        )));
-    }
-
-    // Transitions: `cum[i+1] = cum[i] + thing[i+1]` (next-row contribution
-    // pattern, matching the AIR's `when_transition` constraint).
-    for i in 0..(n - 1) {
-        let cum_local = trace[i][ag::IS_AGENT_CUMULATIVE_COL];
-        let cum_next = trace[i + 1][ag::IS_AGENT_CUMULATIVE_COL];
-        let is_agent_next = trace[i + 1][ag::PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL];
-        let expected_cum_next = BabyBear::new(cum_local.as_u32() + is_agent_next.as_u32());
-        if cum_next != expected_cum_next {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral row {} transition: is_agent_cumulative {} -> {} but +IS_AGENT_CELL_next ({}) = {}",
-                i,
-                cum_local.as_u32(),
-                cum_next.as_u32(),
-                is_agent_next.as_u32(),
-                expected_cum_next.as_u32()
-            )));
-        }
-
-        let n_local = trace[i][ag::N_CELLS_ACTIVE_COL];
-        let n_next = trace[i + 1][ag::N_CELLS_ACTIVE_COL];
-        let ind_next = trace[i + 1][ag::CONSISTENT_INDICATOR_COL];
-        let expected_n_next = BabyBear::new(n_local.as_u32() + ind_next.as_u32());
-        if n_next != expected_n_next {
-            return Err(TurnError::InvalidExecutionProof(format!(
-                "aggregate_bilateral row {} transition: n_cells_active {} -> {} but +consistent_indicator_next ({}) = {}",
-                i,
-                n_local.as_u32(),
-                n_next.as_u32(),
-                ind_next.as_u32(),
-                expected_n_next.as_u32()
-            )));
-        }
-    }
-
-    // Boundary: last row.
-    let last = &trace[n - 1];
-    let cum_last = last[ag::IS_AGENT_CUMULATIVE_COL];
-    if cum_last.as_u32() != 1 {
-        return Err(TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral last row: is_agent_cumulative = {} != 1",
-            cum_last.as_u32()
-        )));
-    }
-    let n_last = last[ag::N_CELLS_ACTIVE_COL];
-    if n_last != pv_n_cells {
-        return Err(TurnError::InvalidExecutionProof(format!(
-            "aggregate_bilateral last row: n_cells_active = {} != outer N_CELLS = {}",
-            n_last.as_u32(),
-            pv_n_cells.as_u32()
-        )));
-    }
-
-    Ok(())
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -1030,11 +792,12 @@ mod tests {
         assert!(res.is_err(), "tampered outer PI must reject");
     }
 
-    /// Adversarial: the aggregator was honest, but the witness on disk has
-    /// been mangled (one trace cell flipped). The verifier re-runs the AIR
-    /// constraints and catches it.
+    /// Adversarial: the aggregator was honest, but the shipped trace on disk
+    /// has been mangled (one cell flipped). The verifier binds the trace to
+    /// the proof's `trace_commitment`, so the recomputed commitment no longer
+    /// matches and the bundle is rejected.
     #[test]
-    fn verifier_rejects_tampered_witness_trace() {
+    fn verifier_rejects_tampered_shipped_trace() {
         let alice = cid(0xA1);
         let bob = cid(0xB2);
         let turn = make_transfer_turn(alice, bob, 100, 1);
@@ -1045,17 +808,90 @@ mod tests {
         ];
         let mut bundle = prove_aggregated_bundle(&turn, &entries).expect("prove");
 
-        // Decode, mangle, re-encode.
-        let mut w = decode_aggregation_witness(&bundle.outer_proof_bytes)
-            .expect("decode aggregation witness");
-        // Flip the first row's IS_AGENT_CELL slot.
+        // Flip the first row's IS_AGENT_CELL slot in the shipped trace.
         use dregg_circuit::bilateral_aggregation_air as ag;
         let slot = ag::PI_BUFFER_BASE + inner_pi::IS_AGENT_CELL;
-        w.trace_rows[0][slot] = w.trace_rows[0][slot].wrapping_add(1) & 0x7FFF_FFFF;
-        bundle.outer_proof_bytes = postcard::to_allocvec(&w).expect("re-encode");
+        bundle.outer_trace[0][slot] = bundle.outer_trace[0][slot].wrapping_add(1) & 0x7FFF_FFFF;
 
         let res = verify_aggregated_bundle(&bundle);
-        assert!(res.is_err(), "tampered witness trace must reject");
+        assert!(
+            res.is_err(),
+            "tampered shipped trace must reject (commitment mismatch)"
+        );
+    }
+
+    /// The headline #133 test: the REAL aggregated STARK proof verifies for a
+    /// consistent bundle and FAILS when the cross-cell bilateral agreement is
+    /// tampered. We prove an honest bundle, then forge the receiver's inner-PI
+    /// incoming-transfer root *inside the proven trace* so it no longer agrees
+    /// with what the canonical Turn's schedule predicts, regenerate the proof
+    /// over the tampered trace, and confirm verification rejects.
+    #[test]
+    fn aggregated_proof_verifies_consistent_and_rejects_tampered_cross_cell() {
+        use dregg_circuit::bilateral_aggregation_air::{
+            self as ag, BilateralAggregationAir,
+        };
+        use dregg_circuit::field::BabyBear;
+
+        let alice = cid(0xA1);
+        let bob = cid(0xB2);
+        let turn = make_transfer_turn(alice, bob, 100, 1);
+
+        let entries = vec![
+            (alice, fabricate_wr(&turn, &alice)),
+            (bob, fabricate_wr(&turn, &bob)),
+        ];
+
+        // (a) Consistent bundle: real STARK proof verifies.
+        let bundle = prove_aggregated_bundle(&turn, &entries).expect("prove consistent");
+        verify_aggregated_bundle(&bundle).expect("consistent aggregated proof must verify");
+        // Sanity: the proof bytes are a real DREG-format STARK proof, not a
+        // postcard witness.
+        assert_eq!(&bundle.outer_proof_bytes[0..4], b"DREG");
+
+        // (b) Tampered cross-cell agreement. Bob is row 1; forge his
+        // INCOMING_TRANSFER_ROOT in BOTH the inner-PI buffer *and* the
+        // matching expected_roots column so CG-3 still holds in-trace, then
+        // re-prove. The forged root no longer matches the schedule the Turn
+        // predicts, so step-5's Turn-derived cross-check rejects.
+        let mut trace_bb: Vec<Vec<BabyBear>> = bundle
+            .outer_trace
+            .iter()
+            .map(|row| row.iter().map(|&v| BabyBear::new_canonical(v)).collect())
+            .collect();
+        // INCOMING_TRANSFER_ROOT is expected-roots index k=1.
+        let pi_base = ag::PI_BUFFER_BASE + inner_pi::INCOMING_TRANSFER_ROOT_BASE;
+        let exp_base = ag::EXPECTED_ROOTS_BASE + 1 * 4;
+        for off in 0..4 {
+            let forged = BabyBear::new((0x0BAD_C0DE + off as u32) & 0x7FFF_FFFF);
+            trace_bb[1][pi_base + off] = forged;
+            trace_bb[1][exp_base + off] = forged;
+        }
+        // Re-prove over the tampered (but internally CG-3-consistent) trace.
+        let outer_pi_bb: Vec<BabyBear> = bundle
+            .outer_pi
+            .iter()
+            .map(|&v| BabyBear::new_canonical(v))
+            .collect();
+        let tampered_proof = dregg_circuit::stark::try_prove(
+            &BilateralAggregationAir,
+            &trace_bb,
+            &outer_pi_bb,
+        )
+        .expect("tampered trace still satisfies in-AIR constraints, so it proves");
+        let mut tampered = bundle.clone();
+        tampered.outer_proof_bytes = dregg_circuit::stark::proof_to_bytes(&tampered_proof);
+        tampered.outer_trace = trace_bb
+            .iter()
+            .map(|row| row.iter().map(|x| x.as_u32()).collect())
+            .collect();
+
+        let res = verify_aggregated_bundle(&tampered);
+        assert!(
+            res.is_err(),
+            "aggregated proof with tampered cross-cell agreement must reject; got {:?}",
+            res
+        );
     }
 
     #[test]

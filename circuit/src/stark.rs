@@ -883,6 +883,51 @@ pub fn prove(
     try_prove(air, trace, public_inputs).unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// Recompute the trace Merkle commitment for a given AIR + trace, exactly as
+/// [`try_prove_full`] does. Lets a verifier bind a separately-transmitted trace
+/// to a proof's `trace_commitment`: if the recomputed root matches
+/// `proof.trace_commitment`, the trace is provably the one the proof attests
+/// (the proof's FRI/constraint checks then guarantee that trace satisfies the
+/// AIR constraints). Returns `None` for a structurally invalid trace.
+pub fn recompute_trace_commitment(
+    air: &dyn StarkAir,
+    trace: &[Vec<BabyBear>],
+) -> Option<[u8; 32]> {
+    let num_rows = trace.len();
+    let num_cols = air.width();
+    if num_rows < 2 || !num_rows.is_power_of_two() {
+        return None;
+    }
+    for row in trace {
+        if row.len() != num_cols {
+            return None;
+        }
+    }
+    let blowup = blowup_for_degree(air.constraint_degree());
+    let domain_size = num_rows.checked_mul(blowup)?;
+    if domain_size.trailing_zeros() > 27 {
+        return None;
+    }
+    let trace_points: Vec<BabyBear> = build_evaluation_domain(num_rows);
+    let eval_points: Vec<BabyBear> = build_evaluation_domain(domain_size);
+
+    let mut trace_evals = Vec::with_capacity(num_cols);
+    for col in 0..num_cols {
+        let col_values: Vec<BabyBear> = trace.iter().map(|row| row[col]).collect();
+        let poly = interpolate(&trace_points, &col_values);
+        trace_evals.push(
+            eval_points
+                .iter()
+                .map(|&x| poly_eval(&poly, x))
+                .collect::<Vec<_>>(),
+        );
+    }
+    let trace_leaves: Vec<[u8; 32]> = (0..domain_size)
+        .map(|i| hash_leaf_multi(&trace_evals.iter().map(|col| col[i]).collect::<Vec<_>>()))
+        .collect();
+    Some(MerkleTree::new(trace_leaves).root())
+}
+
 pub fn try_prove(
     air: &dyn StarkAir,
     trace: &[Vec<BabyBear>],

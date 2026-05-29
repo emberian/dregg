@@ -277,7 +277,14 @@ pub fn fabricate_witnessed_receipt_with_schedule(
     };
     let pi_u32: Vec<u32> = pi_bb.iter().map(|x| x.as_u32()).collect();
 
-    WitnessedReceipt::from_components(receipt, vec![], pi_u32, None)
+    // Attach a minimal scope-2 witness trace so the artifact is a full
+    // scope-(2) WitnessedReceipt. The Phase-2 aggregator
+    // (`prove_aggregated_bundle`) requires scope-2 inputs — accepting a
+    // scope-1-only WR would let an aggregate look stronger than the receipt
+    // material it summarizes. A single zero row is sufficient to populate the
+    // inline witness bundle + witness-hash binding.
+    let trace = vec![vec![BabyBear::ZERO; dregg_circuit::effect_vm::EFFECT_VM_WIDTH]];
+    WitnessedReceipt::from_components(receipt, vec![], pi_u32, Some(trace.as_slice()))
 }
 
 // ---------------------------------------------------------------------------

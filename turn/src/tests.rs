@@ -8158,6 +8158,10 @@ fn generate_sovereign_transfer_proof_for_turn(
     ctx.actor_nonce = actor_nonce;
     ctx.previous_receipt_hash = previous_receipt_hash;
     ctx.is_sovereign_cell = true;
+    // γ.2 follow-up (#132): bind the owner cell id so the verifier's
+    // reconstructed commit(proof_cell) matches. federation_id stays [0u8; 32]
+    // (the test executor's default local_federation_id).
+    ctx.owner_cell_id = *proof_cell.as_bytes();
 
     let (trace, mut public_inputs) = generate_effect_vm_trace_ext(&initial_state, &effects, ctx);
     let schedule = crate::bilateral_schedule::ExpectedBilateral::from_turn(&proof_turn);

@@ -169,6 +169,29 @@ impl TurnExecutor {
             };
         }
 
+        // γ.2 follow-up (#131 + #132): bind the federation id + owner cell id
+        // into the per-cell PI. These are reconstructed here from TRUSTED
+        // inputs — the executor's `local_federation_id` and the cell whose
+        // proof we are verifying — so a proof minted under a different
+        // federation (or for a different owner cell) fails the PI-match loop
+        // below: its claimed PI[FEDERATION_ID]/PI[OWNER_CELL_ID] won't equal
+        // the commitments we recompute here. The AIR's row-0 boundary
+        // additionally pins these PI slots to the proof's own trace, so the
+        // prover cannot decouple the claimed federation/owner from what the
+        // trace committed. Closes the cross-federation / cross-cell proof
+        // substitution gap (#131/#132).
+        {
+            use dregg_commit::typed::canonical_32_to_felts_4;
+            let fed_id_4 = canonical_32_to_felts_4(&self.local_federation_id);
+            let owner_id_4 = canonical_32_to_felts_4(cell_id.as_bytes());
+            for i in 0..effect_vm::pi::FEDERATION_ID_LEN {
+                public_inputs[effect_vm::pi::FEDERATION_ID_BASE + i] = fed_id_4[i];
+            }
+            for i in 0..effect_vm::pi::OWNER_CELL_ID_LEN {
+                public_inputs[effect_vm::pi::OWNER_CELL_ID_BASE + i] = owner_id_4[i];
+            }
+        }
+
         // Sovereign-witness AIR teeth (SOVEREIGN-WITNESS-AIR-DESIGN.md §3.2):
         //
         // This path (`verify_and_commit_proof`) is the proof-carrying path

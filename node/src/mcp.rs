@@ -5100,12 +5100,92 @@ async fn tool_sign_sovereign_witness(params: &Value, state: &NodeState) -> McpTo
 // γ.2 bilateral binding receipts
 // =============================================================================
 
+/// Build a schedule-projected scope-2 `WitnessedReceipt` for one cell of a
+/// committed bilateral Turn.
+///
+/// The Effect-VM proof material carries the real per-cell trace + base PI
+/// vector, but `generate_effect_vm_proof` does not write the bilateral-schedule
+/// / turn-identity PI slots (those are populated by the executor's
+/// `populate_pi`). We replay the *exact same* canonical projection here —
+/// `compute_turn_identity_pi` + `ExpectedBilateral::counts_for/roots_for` +
+/// `project_into_pi` + `IS_AGENT_CELL` — so the resulting WR's PI agrees with
+/// what `WitnessedReceipt::verify_bilateral_chain` (and the outer aggregation
+/// AIR) expect. No fabrication: the trace is the real proven trace, and the
+/// PI slots are derived from the canonical Turn the same way the executor does.
+fn schedule_projected_wr(
+    turn: &Turn,
+    cell_id: &CellId,
+    receipt: &dregg_turn::TurnReceipt,
+    material: &EffectVmProofMaterial,
+) -> dregg_turn::WitnessedReceipt {
+    use dregg_circuit::BabyBear;
+    use dregg_circuit::effect_vm::pi as p;
+    use dregg_turn::bilateral_schedule::{ExpectedBilateral, project_into_pi};
+
+    let mut pi: Vec<BabyBear> = material
+        .public_inputs
+        .iter()
+        .map(|&v| BabyBear::new(v as u32))
+        .collect();
+    if pi.len() < p::BASE_COUNT {
+        pi.resize(p::BASE_COUNT, BabyBear::ZERO);
+    }
+
+    let (th, eg, actor_nonce, prev) =
+        dregg_turn::TurnExecutor::compute_turn_identity_pi(turn);
+    for i in 0..p::TURN_HASH_LEN {
+        pi[p::TURN_HASH_BASE + i] = th[i];
+    }
+    for i in 0..p::EFFECTS_HASH_GLOBAL_LEN {
+        pi[p::EFFECTS_HASH_GLOBAL_BASE + i] = eg[i];
+    }
+    pi[p::ACTOR_NONCE] = BabyBear::new((actor_nonce & 0x7FFF_FFFF) as u32);
+    for i in 0..p::PREVIOUS_RECEIPT_HASH_LEN {
+        pi[p::PREVIOUS_RECEIPT_HASH_BASE + i] = prev[i];
+    }
+
+    let schedule = ExpectedBilateral::from_turn(turn);
+    let counts = schedule.counts_for(cell_id);
+    let roots = schedule.roots_for(cell_id, actor_nonce);
+    project_into_pi(&mut pi, &counts, &roots);
+    pi[p::IS_AGENT_CELL] = if cell_id == &turn.agent {
+        BabyBear::new(1)
+    } else {
+        BabyBear::ZERO
+    };
+
+    let pi_u32: Vec<u32> = pi.iter().map(|x| x.as_u32()).collect();
+    let trace_bb: Vec<Vec<BabyBear>> = material
+        .trace_rows
+        .iter()
+        .map(|row| row.iter().map(|&v| BabyBear::new(v)).collect())
+        .collect();
+    dregg_turn::WitnessedReceipt::from_components(
+        receipt.clone(),
+        hex_decode_var(&material.proof_hex).unwrap_or_default(),
+        pi_u32,
+        if trace_bb.is_empty() {
+            None
+        } else {
+            Some(trace_bb.as_slice())
+        },
+    )
+}
+
 /// Submit a Turn carrying exactly one bilateral effect (Transfer / Grant /
 /// Introduce) and surface per-side WitnessedReceipts. The executor's
 /// `ExpectedBilateral::from_turn` derives the same schedule the AIR PIs
 /// project into; this tool returns the trace + proof for the from- and
 /// to-side cells so the caller can independently verify the bilateral
 /// identity via `WitnessedReceipt::verify_bilateral_chain`.
+///
+/// Stage 7-γ.2 Phase 2 (#134): when both per-cell proofs are present, the
+/// tool also runs the joint bilateral aggregator
+/// (`prove_aggregated_bundle`) over the two schedule-projected
+/// WitnessedReceipts and attaches the resulting `AggregatedBundle` (real outer
+/// STARK proof bytes) under `aggregated_bundle`. The bundle verifies in
+/// constant time relative to the number of cells via
+/// `verify_aggregated_bundle`.
 async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResult {
     let mode = match params.get("mode").and_then(|v| v.as_str()) {
         Some(m) => m.to_string(),
@@ -5403,6 +5483,30 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
         &to_proof.trace_rows,
     );
 
+    // Stage 7-γ.2 Phase 2 (#134): run the joint bilateral aggregator over the
+    // two schedule-projected WitnessedReceipts and attach the real outer STARK
+    // proof. We re-derive the canonical schedule projection (the executor's
+    // `populate_pi` discipline) so the aggregator's Phase-1 gate and outer AIR
+    // both accept the per-cell PIs.
+    let (aggregated_bundle_json, aggregation_status) = {
+        let from_wr = schedule_projected_wr(&turn, &from_cell, &receipt, &from_proof);
+        let to_wr = schedule_projected_wr(&turn, &to_cell, &receipt, &to_proof);
+        let entries = vec![(from_cell, from_wr), (to_cell, to_wr)];
+        match dregg_turn::aggregate_bilateral_prover::prove_aggregated_bundle(&turn, &entries) {
+            Ok(bundle) => {
+                // Self-check: the bundle must verify (real outer STARK verify).
+                match dregg_turn::aggregate_bilateral_prover::verify_aggregated_bundle(&bundle) {
+                    Ok(()) => (
+                        serde_json::to_value(&bundle).unwrap_or(Value::Null),
+                        "aggregated".to_string(),
+                    ),
+                    Err(e) => (Value::Null, format!("aggregation_verify_failed: {e}")),
+                }
+            }
+            Err(e) => (Value::Null, format!("aggregation_prove_failed: {e}")),
+        }
+    };
+
     McpToolResult::json(&serde_json::json!({
         "activity_status": "committed",
         "proof_status": "proved",
@@ -5411,6 +5515,8 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
         "turn_hash": turn_hash,
         "from_cell": from_hex,
         "to_cell": to_hex,
+        "aggregated_bundle": aggregated_bundle_json,
+        "aggregation_status": aggregation_status,
         "expected_schedule": {
             "transfers": sched.transfers.len(),
             "grants": sched.grants.len(),
