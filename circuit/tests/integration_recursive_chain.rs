@@ -120,7 +120,13 @@ fn ivc_three_step_chain_verifies() {
             direction: 1,
         },
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xCAFE),
+            // 32-byte widening: cap_entry is now [BabyBear; 8]; the AIR's
+            // cap_root advance uses limb[0].
+            cap_entry: {
+                let mut a = [BabyBear::ZERO; 8];
+                a[0] = BabyBear::new(0xCAFE);
+                a
+            },
         },
         Effect::SetField {
             field_idx: 2,
@@ -146,7 +152,7 @@ fn ivc_three_step_chain_verifies() {
                 state.refresh_commitment();
             }
             Effect::GrantCapability { cap_entry } => {
-                state.capability_root = hash_2_to_1(state.capability_root, *cap_entry);
+                state.capability_root = hash_2_to_1(state.capability_root, cap_entry[0]);
                 state.nonce += 1;
                 state.refresh_commitment();
             }

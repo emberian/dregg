@@ -1467,7 +1467,18 @@ mod tests {
     fn test_unified_grant_capability() {
         let state = CellState::new(1000, 0);
         let effects = vec![Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xCAFE),
+            // 32-byte widening: limb[0] drives the cap_root advance the
+            // constraint checks; remaining limbs bind via effects_hash.
+            cap_entry: [
+                BabyBear::new(0xCAFE),
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ],
         }];
 
         let (trace, _pi) = generate_effect_vm_trace(&state, &effects);
@@ -1528,7 +1539,16 @@ mod tests {
                 direction: 1,
             },
             Effect::GrantCapability {
-                cap_entry: BabyBear::new(0xABCD),
+                cap_entry: [
+                    BabyBear::new(0xABCD),
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
             },
             Effect::SetField {
                 field_idx: 2,

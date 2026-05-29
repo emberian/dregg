@@ -94,7 +94,7 @@ pub(super) fn convert_turn_effects_to_vm(
                 Effect::GrantCapability { to, cap, .. } if to == cell_id => {
                     let cap_hash = blake3::hash(&cap.slot.to_le_bytes());
                     vm_effects.push(VmEffect::GrantCapability {
-                        cap_entry: hash_to_bb(cap_hash.as_bytes()),
+                        cap_entry: hash_to_8(cap_hash.as_bytes()),
                     });
                 }
                 Effect::NoteSpend {
@@ -429,30 +429,30 @@ pub(super) fn convert_turn_effects_to_vm(
                     let perm_bytes = postcard::to_allocvec(new_permissions).unwrap_or_default();
                     let perm_hash_bytes = blake3::hash(&perm_bytes);
                     vm_effects.push(VmEffect::SetPermissions {
-                        permissions_hash: hash_to_bb(perm_hash_bytes.as_bytes()),
+                        permissions_hash: hash_to_8(perm_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::SetVerificationKey { cell, new_vk } if cell == cell_id => {
                     // Stage 3: real AIR coverage. VK lives off-trace;
-                    // bind its hash into effects_hash. None → 0.
+                    // bind its hash into effects_hash. None → all-zero limbs.
                     let vk_hash = match new_vk {
                         Some(vk) => {
                             let bytes = postcard::to_allocvec(vk).unwrap_or_default();
                             let h = blake3::hash(&bytes);
-                            hash_to_bb(h.as_bytes())
+                            hash_to_8(h.as_bytes())
                         }
-                        None => dregg_circuit::field::BabyBear::ZERO,
+                        None => [dregg_circuit::field::BabyBear::ZERO; 8],
                     };
                     vm_effects.push(VmEffect::SetVerificationKey { vk_hash });
                 }
                 Effect::RevokeCapability { cell, slot } if cell == cell_id => {
                     // Stage 3: real AIR coverage. Mirrors GrantCapability.
-                    // The slot's bytes are hashed and the result is mixed
-                    // into capability_root deterministically by the AIR.
+                    // The slot's bytes are hashed and limb[0] is mixed into
+                    // capability_root deterministically by the AIR.
                     let slot_bytes = slot.to_le_bytes();
                     let slot_hash_bytes = blake3::hash(&slot_bytes);
                     vm_effects.push(VmEffect::RevokeCapability {
-                        slot_hash: hash_to_bb(slot_hash_bytes.as_bytes()),
+                        slot_hash: hash_to_8(slot_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::CreateCell {
@@ -469,7 +469,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(&balance.to_le_bytes());
                     let create_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::CreateCell {
-                        create_hash: hash_to_bb(create_hash_bytes.as_bytes()),
+                        create_hash: hash_to_8(create_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::CreateSealPair {
@@ -539,7 +539,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(&max_staleness.to_le_bytes());
                     let spawn_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::SpawnWithDelegation {
-                        spawn_hash: hash_to_bb(spawn_hash_bytes.as_bytes()),
+                        spawn_hash: hash_to_8(spawn_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::RefreshDelegation => {
@@ -551,7 +551,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     // Stage 3: real AIR coverage. child_hash binds the
                     // target cell into effects_hash.
                     vm_effects.push(VmEffect::RevokeDelegation {
-                        child_hash: hash_to_bb(child.as_bytes()),
+                        child_hash: hash_to_8(child.as_bytes()),
                     });
                 }
                 Effect::IncrementNonce { cell } if cell == cell_id => {
@@ -616,14 +616,14 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(&receipt_bytes);
                     let finalize_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::BridgeFinalize {
-                        finalize_hash: hash_to_bb(finalize_hash_bytes.as_bytes()),
+                        finalize_hash: hash_to_8(finalize_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::BridgeCancel { nullifier } => {
                     // Stage 3: real AIR coverage. Passthrough — bridge
                     // state lives off-trace; nullifier binds intent.
                     vm_effects.push(VmEffect::BridgeCancel {
-                        nullifier_hash: hash_to_bb(nullifier),
+                        nullifier_hash: hash_to_8(nullifier),
                     });
                 }
                 Effect::Introduce {
@@ -656,7 +656,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     }
                     let intro_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::Introduce {
-                        intro_hash: hash_to_bb(intro_hash_bytes.as_bytes()),
+                        intro_hash: hash_to_8(intro_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::PipelinedSend { target, action } => {
@@ -669,7 +669,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     hasher.update(&action.hash());
                     let send_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::PipelinedSend {
-                        send_hash: hash_to_bb(send_hash_bytes.as_bytes()),
+                        send_hash: hash_to_8(send_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::CreateEscrow {
@@ -788,7 +788,7 @@ pub(super) fn convert_turn_effects_to_vm(
                     }
                     let exercise_hash_bytes = hasher.finalize();
                     vm_effects.push(VmEffect::ExerciseViaCapability {
-                        exercise_hash: hash_to_bb(exercise_hash_bytes.as_bytes()),
+                        exercise_hash: hash_to_8(exercise_hash_bytes.as_bytes()),
                     });
                 }
 

@@ -534,19 +534,22 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::GrantCapability { cap_entry } => {
-                row[PARAM_BASE + param::CAP_ENTRY] = *cap_entry;
+                // 32-byte widening: anchor limb[0] into params[0]; the AIR's
+                // cap_root advance uses limb[0]. The full 8 limbs bind via
+                // compute_effects_hash → PI[EFFECTS_HASH].
+                row[PARAM_BASE + param::CAP_ENTRY] = cap_entry[0];
 
-                let new_cap = hash_2_to_1(current_state.capability_root, *cap_entry);
+                let new_cap = hash_2_to_1(current_state.capability_root, cap_entry[0]);
                 new_state.capability_root = new_cap;
                 new_state.nonce += 1;
             }
             Effect::RevokeCapability { slot_hash } => {
-                // The slot_hash parameter shares param slot 0 with cap_entry.
-                row[PARAM_BASE + param::CAP_ENTRY] = *slot_hash;
+                // The slot_hash limb[0] shares param slot 0 with cap_entry.
+                row[PARAM_BASE + param::CAP_ENTRY] = slot_hash[0];
 
                 // Mirror GrantCapability: cap_root deterministically updates
-                // by hashing the slot_hash with the previous root.
-                let new_cap = hash_2_to_1(current_state.capability_root, *slot_hash);
+                // by hashing limb[0] of slot_hash with the previous root.
+                let new_cap = hash_2_to_1(current_state.capability_root, slot_hash[0]);
                 new_state.capability_root = new_cap;
                 new_state.nonce += 1;
             }
@@ -571,14 +574,15 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::SetPermissions { permissions_hash } => {
-                // Same shape as EmitEvent: hash in param 0; AIR forbids any
-                // state column change; nonce ticks.
-                row[PARAM_BASE + 0] = *permissions_hash;
+                // 32-byte widening: anchor limb[0] into params[0]; AIR forbids
+                // any state column change; nonce ticks. Full 8 limbs bind via
+                // compute_effects_hash.
+                row[PARAM_BASE + 0] = permissions_hash[0];
                 new_state.nonce += 1;
             }
             Effect::SetVerificationKey { vk_hash } => {
-                // Same shape as SetPermissions: VK lives off-trace.
-                row[PARAM_BASE + 0] = *vk_hash;
+                // Same shape as SetPermissions: VK lives off-trace. Anchor limb[0].
+                row[PARAM_BASE + 0] = vk_hash[0];
                 new_state.nonce += 1;
             }
             Effect::CreateSealPair { pair_hash } => {
@@ -597,31 +601,32 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::RevokeDelegation { child_hash } => {
-                row[PARAM_BASE + 0] = *child_hash;
+                // 32-byte widening: anchor limb[0]; full 8 limbs bind via effects_hash.
+                row[PARAM_BASE + 0] = child_hash[0];
                 new_state.nonce += 1;
             }
             Effect::CreateCell { create_hash } => {
-                row[PARAM_BASE + 0] = *create_hash;
+                row[PARAM_BASE + 0] = create_hash[0];
                 new_state.nonce += 1;
             }
             Effect::SpawnWithDelegation { spawn_hash } => {
-                row[PARAM_BASE + 0] = *spawn_hash;
+                row[PARAM_BASE + 0] = spawn_hash[0];
                 new_state.nonce += 1;
             }
             Effect::BridgeCancel { nullifier_hash } => {
-                row[PARAM_BASE + 0] = *nullifier_hash;
+                row[PARAM_BASE + 0] = nullifier_hash[0];
                 new_state.nonce += 1;
             }
             Effect::ExerciseViaCapability { exercise_hash } => {
-                row[PARAM_BASE + 0] = *exercise_hash;
+                row[PARAM_BASE + 0] = exercise_hash[0];
                 new_state.nonce += 1;
             }
             Effect::Introduce { intro_hash } => {
-                row[PARAM_BASE + 0] = *intro_hash;
+                row[PARAM_BASE + 0] = intro_hash[0];
                 new_state.nonce += 1;
             }
             Effect::PipelinedSend { send_hash } => {
-                row[PARAM_BASE + 0] = *send_hash;
+                row[PARAM_BASE + 0] = send_hash[0];
                 new_state.nonce += 1;
             }
             Effect::CreateEscrow {
@@ -668,7 +673,8 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::BridgeFinalize { finalize_hash } => {
-                row[PARAM_BASE + 0] = *finalize_hash;
+                // 32-byte widening: anchor limb[0]; full 8 limbs bind via effects_hash.
+                row[PARAM_BASE + 0] = finalize_hash[0];
                 new_state.nonce += 1;
             }
             Effect::ReleaseEscrow { escrow_id_hash } | Effect::RefundEscrow { escrow_id_hash } => {

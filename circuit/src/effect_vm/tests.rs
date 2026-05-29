@@ -162,7 +162,7 @@ fn test_multi_effect_turn() {
             value: BabyBear::new(42),
         },
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xCAFE),
+            cap_entry: w8(0xCAFE),
         },
     ];
 
@@ -487,10 +487,10 @@ fn test_stage3_multi_variant_compose() {
     let effects = vec![
         // Cap-root transition variants:
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(1),
+            cap_entry: w8(1),
         },
         Effect::RevokeCapability {
-            slot_hash: BabyBear::new(2),
+            slot_hash: w8(2),
         },
         // Stateless side-effects (passthrough):
         Effect::EmitEvent {
@@ -502,38 +502,38 @@ fn test_stage3_multi_variant_compose() {
             payload_hash: [BabyBear::ZERO; 8],
         },
         Effect::SetPermissions {
-            permissions_hash: BabyBear::new(0xE2),
+            permissions_hash: w8(0xE2),
         },
         Effect::SetVerificationKey {
-            vk_hash: BabyBear::new(0xE3),
+            vk_hash: w8(0xE3),
         },
         Effect::CreateSealPair {
             pair_hash: w8(0xE4),
         },
         Effect::RefreshDelegation,
         Effect::RevokeDelegation {
-            child_hash: BabyBear::new(0xE5),
+            child_hash: w8(0xE5),
         },
         Effect::CreateCell {
-            create_hash: BabyBear::new(0xE6),
+            create_hash: w8(0xE6),
         },
         Effect::SpawnWithDelegation {
-            spawn_hash: BabyBear::new(0xE7),
+            spawn_hash: w8(0xE7),
         },
         Effect::BridgeCancel {
-            nullifier_hash: BabyBear::new(0xE8),
+            nullifier_hash: w8(0xE8),
         },
         Effect::ExerciseViaCapability {
-            exercise_hash: BabyBear::new(0xE9),
+            exercise_hash: w8(0xE9),
         },
         Effect::Introduce {
-            intro_hash: BabyBear::new(0xEA),
+            intro_hash: w8(0xEA),
         },
         Effect::PipelinedSend {
-            send_hash: BabyBear::new(0xEB),
+            send_hash: w8(0xEB),
         },
         Effect::BridgeFinalize {
-            finalize_hash: BabyBear::new(0xEC),
+            finalize_hash: w8(0xEC),
         },
         Effect::ReleaseEscrow {
             escrow_id_hash: w8(0xED),
@@ -632,7 +632,7 @@ fn test_passthrough_variants_verify() {
         },
         Effect::RefreshDelegation,
         Effect::RevokeDelegation {
-            child_hash: BabyBear::new(0x222),
+            child_hash: w8(0x222),
         },
     ] {
         let state = make_initial_state(700);
@@ -661,14 +661,14 @@ fn test_basic_effect_constraints() {
     let cases = [
         Case {
             effect: Effect::SetVerificationKey {
-                vk_hash: BabyBear::new(0xBEEF),
+                vk_hash: w8(0xBEEF),
             },
             balance: 300,
             extra_assert: |_| {},
         },
         Case {
             effect: Effect::SetPermissions {
-                permissions_hash: BabyBear::new(0xDEAD),
+                permissions_hash: w8(0xDEAD),
             },
             balance: 200,
             extra_assert: |_| {},
@@ -694,7 +694,7 @@ fn test_basic_effect_constraints() {
         },
         Case {
             effect: Effect::RevokeCapability {
-                slot_hash: BabyBear::new(0x12345),
+                slot_hash: w8(0x12345),
             },
             balance: 100,
             extra_assert: |trace| {
@@ -734,7 +734,7 @@ fn test_single_row_constraint_eval() {
         (
             100,
             Effect::GrantCapability {
-                cap_entry: BabyBear::new(0x1234),
+                cap_entry: w8(0x1234),
             },
             "GrantCapability",
         ),
@@ -770,7 +770,7 @@ fn test_four_effect_stark_roundtrip() {
             value: BabyBear::new(99),
         },
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xABCD),
+            cap_entry: w8(0xABCD),
         },
         Effect::Transfer {
             amount: 200,
@@ -854,7 +854,7 @@ fn test_integration_real_multi_effect_turn() {
             value: BabyBear::new(0x1234),
         },
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xCAFEBABE),
+            cap_entry: w8(0xCAFEBABE),
         },
         Effect::CreateObligation {
             stake_amount: 500,
@@ -1260,10 +1260,10 @@ fn test_integration_8_effect_sovereign_turn() {
             value: BabyBear::new(99),
         },
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(0x1111),
+            cap_entry: w8(0x1111),
         },
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(0x2222),
+            cap_entry: w8(0x2222),
         },
         Effect::CreateObligation {
             stake_amount: 1000,
@@ -1335,7 +1335,7 @@ fn test_commitment_chain_continuity() {
             },
         ],
         vec![Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xFACE),
+            cap_entry: w8(0xFACE),
         }],
     ];
 
@@ -1368,8 +1368,10 @@ fn test_commitment_chain_continuity() {
                     current_state.refresh_commitment();
                 }
                 Effect::GrantCapability { cap_entry } => {
+                    // 32-byte widening: cap_root advance uses limb[0] (matches
+                    // the trace generator + AIR).
                     current_state.capability_root =
-                        hash_2_to_1(current_state.capability_root, *cap_entry);
+                        hash_2_to_1(current_state.capability_root, cap_entry[0]);
                     current_state.nonce += 1;
                     current_state.refresh_commitment();
                 }
@@ -1511,7 +1513,7 @@ fn test_proof_size_measurement() {
             value: BabyBear::new(42),
         },
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xBEEF),
+            cap_entry: w8(0xBEEF),
         },
         Effect::Transfer {
             amount: 100,

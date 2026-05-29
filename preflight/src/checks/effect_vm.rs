@@ -106,7 +106,13 @@ fn check_all_14_effect_types() -> Result<(), String> {
             value: BabyBear::new(999),
         },
         Effect::GrantCapability {
-            cap_entry: BabyBear::new(7777),
+            // 32-byte widening: cap_entry is now [BabyBear; 8]; the AIR's
+            // cap_root advance uses limb[0].
+            cap_entry: {
+                let mut a = [BabyBear::ZERO; 8];
+                a[0] = BabyBear::new(7777);
+                a
+            },
         },
         Effect::NoteSpend {
             nullifier: BabyBear::new(1234),

@@ -175,11 +175,12 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             }
             Effect::GrantCapability { cap_entry } => {
                 hasher_inputs.push(BabyBear::new(3));
-                hasher_inputs.push(*cap_entry);
+                // 32-byte widening: absorb all 8 limbs (~256-bit binding).
+                hasher_inputs.extend_from_slice(cap_entry);
             }
             Effect::RevokeCapability { slot_hash } => {
                 hasher_inputs.push(BabyBear::new(24));
-                hasher_inputs.push(*slot_hash);
+                hasher_inputs.extend_from_slice(slot_hash);
             }
             Effect::EmitEvent {
                 topic_hash,
@@ -191,11 +192,11 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             }
             Effect::SetPermissions { permissions_hash } => {
                 hasher_inputs.push(BabyBear::new(26));
-                hasher_inputs.push(*permissions_hash);
+                hasher_inputs.extend_from_slice(permissions_hash);
             }
             Effect::SetVerificationKey { vk_hash } => {
                 hasher_inputs.push(BabyBear::new(27));
-                hasher_inputs.push(*vk_hash);
+                hasher_inputs.extend_from_slice(vk_hash);
             }
             Effect::CreateSealPair { pair_hash } => {
                 hasher_inputs.push(BabyBear::new(28));
@@ -211,31 +212,31 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             }
             Effect::RevokeDelegation { child_hash } => {
                 hasher_inputs.push(BabyBear::new(30));
-                hasher_inputs.push(*child_hash);
+                hasher_inputs.extend_from_slice(child_hash);
             }
             Effect::CreateCell { create_hash } => {
                 hasher_inputs.push(BabyBear::new(31));
-                hasher_inputs.push(*create_hash);
+                hasher_inputs.extend_from_slice(create_hash);
             }
             Effect::SpawnWithDelegation { spawn_hash } => {
                 hasher_inputs.push(BabyBear::new(32));
-                hasher_inputs.push(*spawn_hash);
+                hasher_inputs.extend_from_slice(spawn_hash);
             }
             Effect::BridgeCancel { nullifier_hash } => {
                 hasher_inputs.push(BabyBear::new(33));
-                hasher_inputs.push(*nullifier_hash);
+                hasher_inputs.extend_from_slice(nullifier_hash);
             }
             Effect::ExerciseViaCapability { exercise_hash } => {
                 hasher_inputs.push(BabyBear::new(34));
-                hasher_inputs.push(*exercise_hash);
+                hasher_inputs.extend_from_slice(exercise_hash);
             }
             Effect::Introduce { intro_hash } => {
                 hasher_inputs.push(BabyBear::new(35));
-                hasher_inputs.push(*intro_hash);
+                hasher_inputs.extend_from_slice(intro_hash);
             }
             Effect::PipelinedSend { send_hash } => {
                 hasher_inputs.push(BabyBear::new(36));
-                hasher_inputs.push(*send_hash);
+                hasher_inputs.extend_from_slice(send_hash);
             }
             Effect::CreateEscrow {
                 amount_lo,
@@ -279,7 +280,7 @@ pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {
             }
             Effect::BridgeFinalize { finalize_hash } => {
                 hasher_inputs.push(BabyBear::new(41));
-                hasher_inputs.push(*finalize_hash);
+                hasher_inputs.extend_from_slice(finalize_hash);
             }
             Effect::ReleaseEscrow { escrow_id_hash } => {
                 hasher_inputs.push(BabyBear::new(42));

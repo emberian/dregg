@@ -46,6 +46,18 @@ use crate::state::NodeState;
 
 // Re-import x25519 and chacha for seal/unseal operations.
 
+/// 32-byte-widening helper (effect-vm-hash-widen lane, 2026-05-28): the
+/// EffectVM `GrantCapability.cap_entry` param is now `[BabyBear; 8]`. These
+/// MCP construction sites carry a SCALAR cap-slot index (not a 32-byte hash),
+/// so we anchor it in limb[0] — which drives the AIR's cap_root advance — and
+/// leave the high limbs zero. This is byte-for-byte equivalent to the prior
+/// single-felt binding, now in the widened 8-limb shape.
+fn grant_cap_entry_8(scalar: u32) -> [dregg_circuit::BabyBear; 8] {
+    let mut a = [dregg_circuit::BabyBear::ZERO; 8];
+    a[0] = dregg_circuit::BabyBear::new(scalar);
+    a
+}
+
 /// Parse a JSON effect descriptor into a turn `Effect`.
 ///
 /// Supports the subset needed for the two-AI handoff demo:
@@ -1794,7 +1806,11 @@ async fn tool_grant_capability(params: &Value, state: &NodeState) -> McpToolResu
         .map(|c| (c.state.balance(), c.state.nonce()));
 
     let vm_effects = vec![dregg_circuit::effect_vm::Effect::GrantCapability {
-        cap_entry: dregg_circuit::BabyBear::new(cap_slot.wrapping_add(1)),
+        // 32-byte widening: the cap-entry identity is a scalar slot index here,
+        // not a 32-byte hash. Anchor it in limb[0] (which drives the AIR's
+        // cap_root advance) with zero high limbs — equivalent to the prior
+        // single-felt binding, now in the [BabyBear; 8] shape.
+        cap_entry: grant_cap_entry_8(cap_slot.wrapping_add(1)),
     }];
     let (bal, n) = match require_pre_state(&agent_cell_id, pre_state, "grant capability") {
         Ok(pre) => pre,
@@ -3537,7 +3553,7 @@ async fn tool_prove_sovereign_turn(params: &Value, state: &NodeState) -> McpTool
                 value: dregg_circuit::BabyBear::new(amount as u32),
             },
             "grant_cap" => dregg_circuit::effect_vm::Effect::GrantCapability {
-                cap_entry: dregg_circuit::BabyBear::new(amount as u32),
+                cap_entry: grant_cap_entry_8(amount as u32),
             },
             other => {
                 return McpToolResult::error(format!("unknown effect type: '{other}'"));
@@ -5362,10 +5378,10 @@ async fn tool_bilateral_action(params: &Value, state: &NodeState) -> McpToolResu
         ),
         dregg_turn::Effect::GrantCapability { cap, .. } => (
             vec![dregg_circuit::effect_vm::Effect::GrantCapability {
-                cap_entry: dregg_circuit::BabyBear::new(cap.slot.wrapping_add(1)),
+                cap_entry: grant_cap_entry_8(cap.slot.wrapping_add(1)),
             }],
             vec![dregg_circuit::effect_vm::Effect::GrantCapability {
-                cap_entry: dregg_circuit::BabyBear::new(cap.slot.wrapping_add(1)),
+                cap_entry: grant_cap_entry_8(cap.slot.wrapping_add(1)),
             }],
         ),
         dregg_turn::Effect::Introduce { .. } => (
@@ -6689,7 +6705,7 @@ mod tests {
         use dregg_circuit::effect_vm::pi as evm_pi;
 
         let vm_effects = vec![dregg_circuit::effect_vm::Effect::GrantCapability {
-            cap_entry: dregg_circuit::BabyBear::new(1),
+            cap_entry: grant_cap_entry_8(1),
         }];
 
         let (proof_hex, public_inputs, _trace, _witness_hash) =
@@ -6724,7 +6740,7 @@ mod tests {
         use dregg_circuit::effect_vm::pi as evm_pi;
         let state = dregg_circuit::effect_vm::CellState::new(100, 0);
         let effects = vec![dregg_circuit::effect_vm::Effect::GrantCapability {
-            cap_entry: dregg_circuit::BabyBear::new(1),
+            cap_entry: grant_cap_entry_8(1),
         }];
         let (_trace, public_inputs) =
             dregg_circuit::effect_vm::generate_effect_vm_trace(&state, &effects);

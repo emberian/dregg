@@ -69,13 +69,13 @@ fn all_schema_variants_prove_and_verify() {
         (
             "GrantCapability",
             Effect::GrantCapability {
-                cap_entry: BabyBear::new(0xCAFE),
+                cap_entry: w8(0xCAFE),
             },
         ),
         (
             "RevokeCapability",
             Effect::RevokeCapability {
-                slot_hash: BabyBear::new(0xDEAD),
+                slot_hash: w8(0xDEAD),
             },
         ),
         (
@@ -97,13 +97,13 @@ fn all_schema_variants_prove_and_verify() {
         (
             "SetPermissions",
             Effect::SetPermissions {
-                permissions_hash: BabyBear::new(0xAAAA),
+                permissions_hash: w8(0xAAAA),
             },
         ),
         (
             "SetVerificationKey",
             Effect::SetVerificationKey {
-                vk_hash: BabyBear::new(0xBBBB),
+                vk_hash: w8(0xBBBB),
             },
         ),
         (
@@ -116,49 +116,49 @@ fn all_schema_variants_prove_and_verify() {
         (
             "RevokeDelegation",
             Effect::RevokeDelegation {
-                child_hash: BabyBear::new(0xDDDD),
+                child_hash: w8(0xDDDD),
             },
         ),
         (
             "CreateCell",
             Effect::CreateCell {
-                create_hash: BabyBear::new(0x1111),
+                create_hash: w8(0x1111),
             },
         ),
         (
             "SpawnWithDelegation",
             Effect::SpawnWithDelegation {
-                spawn_hash: BabyBear::new(0x2222),
+                spawn_hash: w8(0x2222),
             },
         ),
         (
             "BridgeCancel",
             Effect::BridgeCancel {
-                nullifier_hash: BabyBear::new(0x3333),
+                nullifier_hash: w8(0x3333),
             },
         ),
         (
             "ExerciseViaCapability",
             Effect::ExerciseViaCapability {
-                exercise_hash: BabyBear::new(0x4444),
+                exercise_hash: w8(0x4444),
             },
         ),
         (
             "Introduce",
             Effect::Introduce {
-                intro_hash: BabyBear::new(0x5555),
+                intro_hash: w8(0x5555),
             },
         ),
         (
             "PipelinedSend",
             Effect::PipelinedSend {
-                send_hash: BabyBear::new(0x6666),
+                send_hash: w8(0x6666),
             },
         ),
         (
             "BridgeFinalize",
             Effect::BridgeFinalize {
-                finalize_hash: BabyBear::new(0x7777),
+                finalize_hash: w8(0x7777),
             },
         ),
         (
@@ -311,7 +311,7 @@ fn commitment_chain_three_turns_verifies_and_swap_detected() {
             value: BabyBear::new(77),
         }],
         &[Effect::GrantCapability {
-            cap_entry: BabyBear::new(0xFACE),
+            cap_entry: w8(0xFACE),
         }],
     ];
 
@@ -357,7 +357,7 @@ fn commitment_chain_three_turns_verifies_and_swap_detected() {
                 current.refresh_commitment();
             }
             Effect::GrantCapability { cap_entry } => {
-                current.capability_root = hash_2_to_1(current.capability_root, cap_entry);
+                current.capability_root = hash_2_to_1(current.capability_root, cap_entry[0]);
                 current.nonce += 1;
                 current.refresh_commitment();
             }

@@ -194,6 +194,91 @@ fn release_escrow_widened_id_yields_distinct_effects_hash() {
 }
 
 #[test]
+fn grant_capability_widened_entry_yields_distinct_public_inputs() {
+    // effect-vm-hash-widen lane (second batch): GrantCapability.cap_entry is
+    // widened from a single ~31-bit fold felt to [BabyBear; 8]. The AIR's
+    // cap_root advance uses limb[0] ONLY, so two cap entries that AGREE on the
+    // low 4 bytes but DIFFER above byte 4 produce the SAME in-trace anchor AND
+    // the SAME cap_root — yet they MUST still be non-interchangeable proofs.
+    // The distinguishing 256-bit binding flows through compute_effects_hash →
+    // PI[EFFECTS_HASH]. This is the load-bearing adversarial property: without
+    // the 8-limb absorption these two proofs would alias.
+    let (a, b) = high_byte_pair();
+
+    let mut initial = CellState::new(1_000_000, 0);
+    initial.refresh_commitment();
+
+    let eff_a = vec![VmEffect::GrantCapability {
+        cap_entry: bytes32_to_8_limbs(&a),
+    }];
+    let eff_b = vec![VmEffect::GrantCapability {
+        cap_entry: bytes32_to_8_limbs(&b),
+    }];
+
+    // effects_hash differs (full 256-bit binding).
+    let (lo_a, _) = compute_effects_hash(&eff_a);
+    let (lo_b, _) = compute_effects_hash(&eff_b);
+    assert_ne!(
+        lo_a, lo_b,
+        "GrantCapability effects_hash must differ when cap entries differ above byte 4",
+    );
+
+    // End-to-end: PI[EFFECTS_HASH] differs.
+    let (ta, pi_a) = generate_effect_vm_trace(&initial, &eff_a);
+    let (tb, pi_b) = generate_effect_vm_trace(&initial, &eff_b);
+    let eh_a = &pi_a[pi::EFFECTS_HASH_BASE..pi::EFFECTS_HASH_BASE + pi::EFFECTS_HASH_LEN];
+    let eh_b = &pi_b[pi::EFFECTS_HASH_BASE..pi::EFFECTS_HASH_BASE + pi::EFFECTS_HASH_LEN];
+    assert_ne!(
+        eh_a, eh_b,
+        "EffectVM PI[EFFECTS_HASH] must differ for GrantCapability entries differing above byte 4",
+    );
+
+    // The in-trace anchor (limb[0]) AND the advanced cap_root AGREE across a/b —
+    // proving the distinguishing binding lives ONLY in PI[EFFECTS_HASH].
+    use dregg_circuit::effect_vm::{PARAM_BASE, STATE_AFTER_BASE, param, sel, state};
+    let row_a = ta
+        .iter()
+        .find(|r| r[sel::GRANT_CAP] == BabyBear::ONE)
+        .expect("GrantCapability row");
+    let row_b = tb
+        .iter()
+        .find(|r| r[sel::GRANT_CAP] == BabyBear::ONE)
+        .expect("GrantCapability row");
+    assert_eq!(
+        row_a[PARAM_BASE + param::CAP_ENTRY],
+        row_b[PARAM_BASE + param::CAP_ENTRY],
+        "in-trace anchor (limb[0]) AGREES — low 4 bytes identical",
+    );
+    assert_eq!(
+        row_a[STATE_AFTER_BASE + state::CAP_ROOT],
+        row_b[STATE_AFTER_BASE + state::CAP_ROOT],
+        "advanced cap_root AGREES (it is a function of limb[0] only) — \
+         the distinguishing 256-bit binding MUST be in PI[EFFECTS_HASH]",
+    );
+
+    // 4-felt helper agrees with the PI slot.
+    let h4_a = compute_effects_hash_4(&eff_a);
+    assert_eq!(&h4_a[..], eh_a);
+}
+
+#[test]
+fn create_cell_widened_hash_yields_distinct_effects_hash() {
+    // CreateCell.create_hash widened to [BabyBear; 8]. Two creations whose
+    // 32-byte create-hashes differ only above byte 4 must bind distinctly.
+    let (a, b) = high_byte_pair();
+    let (lo_a, _) = compute_effects_hash(&[VmEffect::CreateCell {
+        create_hash: bytes32_to_8_limbs(&a),
+    }]);
+    let (lo_b, _) = compute_effects_hash(&[VmEffect::CreateCell {
+        create_hash: bytes32_to_8_limbs(&b),
+    }]);
+    assert_ne!(
+        lo_a, lo_b,
+        "CreateCell effects_hash must differ when create hashes differ above byte 4",
+    );
+}
+
+#[test]
 fn attenuate_capability_widened_components_bind_full_32_bytes() {
     // AttenuateCapability's two hash params are widened. The cap_root advance
     // (AIR-bound) uses limb[0] only, but the FULL 32-byte components bind via

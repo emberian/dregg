@@ -94,17 +94,18 @@ fn fold_is_backward_compatible_for_low_4_byte_only_values() {
 
 #[test]
 fn grant_capability_effects_hash_binds_full_32_bytes() {
-    // GrantCapability carries `cap_entry: BabyBear`, populated via the
-    // projector's `hash_to_bb`. With the fix, two cap hashes differing only
-    // above byte 4 produce DIFFERENT cap_entry felts and therefore DIFFERENT
+    // GrantCapability.cap_entry is now `[BabyBear; 8]` (effect-vm-hash-widen
+    // lane, second batch), populated via the projector's `bytes32_to_8_limbs`.
+    // Two cap hashes differing only above byte 4 produce DIFFERENT limb arrays
+    // (limbs[1..8] carry the upper 28 bytes verbatim) and therefore DIFFERENT
     // effects hashes — non-interchangeable proofs.
     let (a, b) = high_byte_pair();
 
     let eff_a = vec![VmEffect::GrantCapability {
-        cap_entry: fold_bytes32_to_bb(&a),
+        cap_entry: dregg_circuit::effect_vm::bytes32_to_8_limbs(&a),
     }];
     let eff_b = vec![VmEffect::GrantCapability {
-        cap_entry: fold_bytes32_to_bb(&b),
+        cap_entry: dregg_circuit::effect_vm::bytes32_to_8_limbs(&b),
     }];
 
     let (lo_a, _) = compute_effects_hash(&eff_a);
@@ -114,14 +115,24 @@ fn grant_capability_effects_hash_binds_full_32_bytes() {
         "GrantCapability effects_hash must differ when cap hashes differ above byte 4",
     );
 
-    // And the OLD truncation would have produced identical cap_entry felts:
-    let old_a = old_truncating_hash_to_bb(&a);
-    let old_b = old_truncating_hash_to_bb(&b);
-    let (old_lo_a, _) = compute_effects_hash(&[VmEffect::GrantCapability { cap_entry: old_a }]);
-    let (old_lo_b, _) = compute_effects_hash(&[VmEffect::GrantCapability { cap_entry: old_b }]);
+    // Contrast with the pre-widening SINGLE-felt form: the AIR's cap_root
+    // advance uses ONLY limb[0], which AGREES for a/b (low 4 bytes identical).
+    // Had cap_entry stayed a single felt anchored to limb[0], the two proofs
+    // would have been interchangeable — the widening is what makes the upper
+    // 28 bytes binding.
+    let la = dregg_circuit::effect_vm::bytes32_to_8_limbs(&a);
+    let lb = dregg_circuit::effect_vm::bytes32_to_8_limbs(&b);
+    assert_eq!(la[0], lb[0], "limb[0] (cap_root anchor) agrees — low 4 bytes identical");
+    assert_ne!(&la[1..], &lb[1..], "upper limbs differ — the new binding the single felt lacked");
+    // The old single-felt fold of limb[0]-only inputs would collapse:
+    let mut a_lo = [0u8; 32];
+    let mut b_lo = [0u8; 32];
+    a_lo[..4].copy_from_slice(&a[..4]);
+    b_lo[..4].copy_from_slice(&b[..4]);
     assert_eq!(
-        old_lo_a, old_lo_b,
-        "sanity: OLD truncation collapsed both to the same effects_hash (the bug)",
+        old_truncating_hash_to_bb(&a_lo),
+        old_truncating_hash_to_bb(&b_lo),
+        "sanity: a single felt anchored to the low 4 bytes collapses both (the bug)",
     );
 }
 

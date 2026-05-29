@@ -21,12 +21,24 @@ pub enum Effect {
     /// Set a custom field value.
     SetField { field_idx: u32, value: BabyBear },
     /// Grant a capability (add entry to c-list Merkle root).
-    GrantCapability { cap_entry: BabyBear },
+    ///
+    /// 32-byte widening (effect-vm-hash-widen lane, 2026-05-28): `cap_entry`
+    /// is the full 32-byte capability-identity hash projected into 8 BabyBear
+    /// limbs (4 bytes each, little-endian) via `bytes32_to_8_limbs` — same
+    /// shape as `EmitEvent`/`Custom`. The AIR's cap_root advance uses limb[0]
+    /// (`params[0]`): `new_cap_root == hash_2_to_1(old_cap_root, cap_entry[0])`;
+    /// all 8 limbs bind via `compute_effects_hash` → `PI[EFFECTS_HASH]`, giving
+    /// full ~256-bit binding (was ~31-bit when this was a single fold felt).
+    GrantCapability { cap_entry: [BabyBear; 8] },
     /// Revoke a capability (mix the revoked slot's hash into the c-list Merkle root).
     /// Like `GrantCapability`, the AIR constraint enforces
-    /// `new_cap_root == hash_2_to_1(old_cap_root, slot_hash)` so a malicious
+    /// `new_cap_root == hash_2_to_1(old_cap_root, slot_hash[0])` so a malicious
     /// prover cannot make up an arbitrary new root.
-    RevokeCapability { slot_hash: BabyBear },
+    ///
+    /// 32-byte widening: `slot_hash` is the full 32-byte slot hash projected
+    /// into 8 BabyBear limbs (see [`Effect::GrantCapability`]). The cap_root
+    /// advance uses limb[0]; all 8 limbs bind via effects_hash.
+    RevokeCapability { slot_hash: [BabyBear; 8] },
     /// EmitEvent: stateless side-effect. Mirrors the runtime `Event` canonical
     /// encoding (topic ‖ data): `topic_hash` is the 32-byte BLAKE3 of the topic
     /// symbol, projected into 8 BabyBear felts (4 bytes per felt), and
@@ -58,12 +70,19 @@ pub enum Effect {
     /// passthrough (balance / fields / cap_root unchanged) and the
     /// `permissions_hash` parameter binds the new permissions into
     /// effects_hash so the prover commits to the specific update.
-    SetPermissions { permissions_hash: BabyBear },
+    ///
+    /// 32-byte widening: `permissions_hash` is the full 32-byte hash projected
+    /// into 8 BabyBear limbs (see [`Effect::GrantCapability`]); the AIR anchors
+    /// limb[0] into `params[0]` and all 8 limbs bind via effects_hash.
+    SetPermissions { permissions_hash: [BabyBear; 8] },
     /// SetVerificationKey: update a cell's verification key (Option<VK>).
     /// Same shape as SetPermissions: VK lives off-trace, the AIR enforces
     /// state passthrough and `vk_hash` binds the new VK into effects_hash.
-    /// `vk_hash == 0` represents "set to None" (revoke the VK).
-    SetVerificationKey { vk_hash: BabyBear },
+    /// `vk_hash == [0; 8]` represents "set to None" (revoke the VK).
+    ///
+    /// 32-byte widening: `vk_hash` is the full 32-byte hash projected into 8
+    /// BabyBear limbs (see [`Effect::GrantCapability`]).
+    SetVerificationKey { vk_hash: [BabyBear; 8] },
     /// CreateSealPair: register a new sealer/unsealer brand pair. Same
     /// passthrough shape; `pair_hash` is BLAKE3(sealer_holder ‖ unsealer_holder).
     ///
@@ -87,26 +106,47 @@ pub enum Effect {
     IncrementNonce,
     /// RevokeDelegation: invalidate a child cell's delegation. State
     /// passthrough; `child_hash` binds the target cell into effects_hash.
-    RevokeDelegation { child_hash: BabyBear },
+    ///
+    /// 32-byte widening: full 32-byte hash → 8 BabyBear limbs (see
+    /// [`Effect::GrantCapability`]); AIR anchors limb[0] into `params[0]`.
+    RevokeDelegation { child_hash: [BabyBear; 8] },
     /// CreateCell: actor records the creation of a new cell. Passthrough.
-    /// `create_hash` = BLAKE3(pk ‖ token_id ‖ balance) truncated to BabyBear.
-    CreateCell { create_hash: BabyBear },
+    /// `create_hash` = BLAKE3(pk ‖ token_id ‖ balance).
+    ///
+    /// 32-byte widening: full 32-byte hash → 8 BabyBear limbs (see
+    /// [`Effect::GrantCapability`]); AIR anchors limb[0] into `params[0]`.
+    CreateCell { create_hash: [BabyBear; 8] },
     /// SpawnWithDelegation: actor records spawning a child cell.
     /// `spawn_hash` = BLAKE3(child_pk ‖ child_token_id ‖ max_staleness).
-    SpawnWithDelegation { spawn_hash: BabyBear },
+    ///
+    /// 32-byte widening: full 32-byte hash → 8 BabyBear limbs (see
+    /// [`Effect::GrantCapability`]); AIR anchors limb[0] into `params[0]`.
+    SpawnWithDelegation { spawn_hash: [BabyBear; 8] },
     /// BridgeCancel: actor records the cancellation of a pending bridge.
     /// `nullifier_hash` binds the cancelled bridge into effects_hash.
-    BridgeCancel { nullifier_hash: BabyBear },
+    ///
+    /// 32-byte widening: full 32-byte hash → 8 BabyBear limbs (see
+    /// [`Effect::GrantCapability`]); AIR anchors limb[0] into `params[0]`.
+    BridgeCancel { nullifier_hash: [BabyBear; 8] },
     /// ExerciseViaCapability: actor records exercise of a c-list cap on a
     /// target cell. From the actor's perspective the actor's own state
     /// doesn't change; `exercise_hash` = BLAKE3(cap_slot ‖ inner_effects_hash).
-    ExerciseViaCapability { exercise_hash: BabyBear },
+    ///
+    /// 32-byte widening: full 32-byte hash → 8 BabyBear limbs (see
+    /// [`Effect::GrantCapability`]); AIR anchors limb[0] into `params[0]`.
+    ExerciseViaCapability { exercise_hash: [BabyBear; 8] },
     /// Introduce: 3-party introduction. Passthrough from the introducer's
     /// POV; `intro_hash` = BLAKE3(introducer ‖ recipient ‖ target ‖ perm).
-    Introduce { intro_hash: BabyBear },
+    ///
+    /// 32-byte widening: full 32-byte hash → 8 BabyBear limbs (see
+    /// [`Effect::GrantCapability`]); AIR anchors limb[0] into `params[0]`.
+    Introduce { intro_hash: [BabyBear; 8] },
     /// PipelinedSend: dispatch a future action against an EventualRef.
     /// Passthrough; `send_hash` = BLAKE3(target.source_turn ‖ target.output_slot ‖ action.hash()).
-    PipelinedSend { send_hash: BabyBear },
+    ///
+    /// 32-byte widening: full 32-byte hash → 8 BabyBear limbs (see
+    /// [`Effect::GrantCapability`]); AIR anchors limb[0] into `params[0]`.
+    PipelinedSend { send_hash: [BabyBear; 8] },
     /// CreateEscrow: actor's balance debits by `amount_lo`. Mirrors NoteCreate.
     /// `escrow_hash` = BLAKE3(recipient ‖ condition) binds the escrow target.
     ///
@@ -156,7 +196,10 @@ pub enum Effect {
     },
     /// BridgeFinalize: actor finalizes a pending bridge. Passthrough.
     /// `finalize_hash` = BLAKE3(nullifier ‖ receipt_bytes).
-    BridgeFinalize { finalize_hash: BabyBear },
+    ///
+    /// 32-byte widening: full 32-byte hash → 8 BabyBear limbs (see
+    /// [`Effect::GrantCapability`]); AIR anchors limb[0] into `params[0]`.
+    BridgeFinalize { finalize_hash: [BabyBear; 8] },
     /// ReleaseEscrow: passthrough; amount resolution requires escrow_id
     /// lookup in the ledger (out of AIR scope). `escrow_id_hash` binds
     /// which escrow was released.

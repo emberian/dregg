@@ -152,6 +152,13 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
     fn field_to_bb(v: &[u8; 32]) -> BabyBear {
         dregg_circuit::effect_vm::fold_bytes32_to_bb(v)
     }
+    // 32-byte widening (effect-vm-hash-widen lane): the 12 identity/hash params
+    // are now `[BabyBear; 8]`. Mirror the executor + SDK projectors, which
+    // project the full 32 bytes into 8 limbs via the shared circuit helper, so
+    // the differential check stays byte-for-byte meaningful.
+    fn hash_to_8(h: &[u8; 32]) -> [BabyBear; 8] {
+        dregg_circuit::effect_vm::bytes32_to_8_limbs(h)
+    }
 
     let mut out: Vec<VmEffect> = Vec::new();
     for root in &turn.call_forest.roots {
@@ -180,13 +187,13 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                 Effect::GrantCapability { to, cap, .. } if to == cell_id => {
                     let cap_hash = blake3::hash(&cap.slot.to_le_bytes());
                     out.push(VmEffect::GrantCapability {
-                        cap_entry: hash_to_bb(cap_hash.as_bytes()),
+                        cap_entry: hash_to_8(cap_hash.as_bytes()),
                     });
                 }
                 Effect::RevokeCapability { cell, slot } if cell == cell_id => {
                     let slot_hash_bytes = blake3::hash(&slot.to_le_bytes());
                     out.push(VmEffect::RevokeCapability {
-                        slot_hash: hash_to_bb(slot_hash_bytes.as_bytes()),
+                        slot_hash: hash_to_8(slot_hash_bytes.as_bytes()),
                     });
                 }
                 Effect::EmitEvent { cell, event } if cell == cell_id => {
@@ -215,7 +222,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                     let perm_bytes = postcard::to_allocvec(new_permissions).unwrap_or_default();
                     let perm_hash = blake3::hash(&perm_bytes);
                     out.push(VmEffect::SetPermissions {
-                        permissions_hash: hash_to_bb(perm_hash.as_bytes()),
+                        permissions_hash: hash_to_8(perm_hash.as_bytes()),
                     });
                 }
                 Effect::SetVerificationKey { cell, new_vk } if cell == cell_id => {
@@ -223,9 +230,9 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                         Some(vk) => {
                             let bytes = postcard::to_allocvec(vk).unwrap_or_default();
                             let h = blake3::hash(&bytes);
-                            hash_to_bb(h.as_bytes())
+                            hash_to_8(h.as_bytes())
                         }
-                        None => BabyBear::ZERO,
+                        None => [BabyBear::ZERO; 8],
                     };
                     out.push(VmEffect::SetVerificationKey { vk_hash });
                 }
@@ -239,7 +246,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                     h.update(token_id);
                     h.update(&balance.to_le_bytes());
                     out.push(VmEffect::CreateCell {
-                        create_hash: hash_to_bb(h.finalize().as_bytes()),
+                        create_hash: hash_to_8(h.finalize().as_bytes()),
                     });
                 }
                 Effect::SpawnWithDelegation {
@@ -252,7 +259,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                     h.update(child_token_id);
                     h.update(&max_staleness.to_le_bytes());
                     out.push(VmEffect::SpawnWithDelegation {
-                        spawn_hash: hash_to_bb(h.finalize().as_bytes()),
+                        spawn_hash: hash_to_8(h.finalize().as_bytes()),
                     });
                 }
                 Effect::RefreshDelegation => {
@@ -260,7 +267,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                 }
                 Effect::RevokeDelegation { child } => {
                     out.push(VmEffect::RevokeDelegation {
-                        child_hash: hash_to_bb(child.as_bytes()),
+                        child_hash: hash_to_8(child.as_bytes()),
                     });
                 }
                 Effect::BridgeMint { portable_proof } => {
@@ -299,7 +306,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                 }
                 Effect::BridgeCancel { nullifier } => {
                     out.push(VmEffect::BridgeCancel {
-                        nullifier_hash: hash_to_bb(nullifier),
+                        nullifier_hash: hash_to_8(nullifier),
                     });
                 }
                 Effect::BridgeFinalize { nullifier, receipt } => {
@@ -308,7 +315,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                     let receipt_bytes = postcard::to_allocvec(receipt).unwrap_or_default();
                     h.update(&receipt_bytes);
                     out.push(VmEffect::BridgeFinalize {
-                        finalize_hash: hash_to_bb(h.finalize().as_bytes()),
+                        finalize_hash: hash_to_8(h.finalize().as_bytes()),
                     });
                 }
                 Effect::Introduce {
@@ -337,7 +344,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                         h.update(vk_hash);
                     }
                     out.push(VmEffect::Introduce {
-                        intro_hash: hash_to_bb(h.finalize().as_bytes()),
+                        intro_hash: hash_to_8(h.finalize().as_bytes()),
                     });
                 }
                 Effect::PipelinedSend { target, action } => {
@@ -346,7 +353,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                     h.update(&target.output_slot.to_le_bytes());
                     h.update(&action.hash());
                     out.push(VmEffect::PipelinedSend {
-                        send_hash: hash_to_bb(h.finalize().as_bytes()),
+                        send_hash: hash_to_8(h.finalize().as_bytes()),
                     });
                 }
                 Effect::CreateEscrow {
@@ -377,7 +384,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                         h.update(&inner.hash());
                     }
                     out.push(VmEffect::ExerciseViaCapability {
-                        exercise_hash: hash_to_bb(h.finalize().as_bytes()),
+                        exercise_hash: hash_to_8(h.finalize().as_bytes()),
                     });
                 }
                 _ => { /* Skipped; not part of this cell's projection. */ }
