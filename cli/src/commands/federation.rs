@@ -246,10 +246,7 @@ async fn routes(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::E
         }
     }
     let commitment = hasher.finalize();
-    ctx.kv_dim(
-        "Commitment",
-        &abbrev_hex(&commitment.to_hex().to_string(), 8, 4),
-    );
+    ctx.kv_dim("Commitment", &abbrev_hex(commitment.to_hex().as_ref(), 8, 4));
 
     Ok(())
 }

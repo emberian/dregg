@@ -520,10 +520,7 @@ fn emit_authorization_tour(em: &Emitter, turn_hash: &[u8; 32]) {
     });
     emit_auth_event(em, turn_hash, &auth_bearer_stark);
 
-    // 5. Unchecked
-    emit_auth_event(em, turn_hash, &Authorization::Unchecked);
-
-    // 6. CapTpDelivered — construct a real HandoffCertificate so the
+    // 5. CapTpDelivered — construct a real HandoffCertificate so the
     //    payload reflects the on-wire shape Studio will see.
     let auth_captp = build_captp_authorization();
     emit_auth_event(em, turn_hash, &auth_captp);

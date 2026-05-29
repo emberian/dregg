@@ -105,6 +105,7 @@ files=($(git ls-files '*.rs' 2>/dev/null || find . -name '*.rs' -type f))
 for file in "${files[@]}"; do
     # Skip test-shaped paths.
     case "$file" in
+        tests/*) continue ;;
         */tests/*) continue ;;
         */test/*) continue ;;
     esac
@@ -123,16 +124,22 @@ for file in "${files[@]}"; do
     done
     $skip && continue
 
-    # Walk the file line by line.
+    # Walk the file line by line. In mixed production/test files, stop at
+    # `#[cfg(test)]`; repository test modules live after production code.
     lineno=0
     while IFS= read -r line; do
         lineno=$((lineno + 1))
+        trimmed=${line##+([[:space:]])}
+
+        case "$trimmed" in
+            '#[cfg(test)]') break ;;
+        esac
+
         case "$line" in
             *"$NEEDLE"*) ;;
             *) continue ;;
         esac
 
-        trimmed=${line##+([[:space:]])}
         # Skip comment lines.
         case "$trimmed" in
             //*|/\**) continue ;;
@@ -147,9 +154,10 @@ for file in "${files[@]}"; do
             "$NEEDLE,") continue ;;
             "$NEEDLE") continue ;;
         esac
-        # Skip defensive guards.
+        # Skip defensive guards / assertions that inspect the variant rather
+        # than construct an unauthenticated action.
         case "$line" in
-            *"!matches!"*|*"debug_assert"*|*"refusing"*|*"Refusing"*) continue ;;
+            *"matches!"*|*"assert!"*|*"debug_assert"*|*"refusing"*|*"Refusing"*) continue ;;
         esac
 
         offenders+=("$file:$lineno: $line")

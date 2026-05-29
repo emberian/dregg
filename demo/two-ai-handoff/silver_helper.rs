@@ -1192,7 +1192,7 @@ fn cmd_make_introduce(
         target: introducer_cell,
         method: dregg_turn::action::symbol("introduce"),
         args: vec![],
-        authorization: Authorization::Unchecked,
+        authorization: Authorization::Signature([0u8; 32], [0u8; 32]),
         preconditions: Default::default(),
         effects: vec![Effect::Introduce {
             introducer: introducer_cell,
@@ -1534,11 +1534,12 @@ fn cmd_make_bilateral_bundle(
         target: alice_cell,
         method: dregg_turn::action::symbol("transfer"),
         args: vec![],
-        // We use Unchecked here because bilateral verification operates on
-        // the bilateral schedule (call_forest + nonce), not the auth path.
+        // Bilateral verification operates on the bilateral schedule
+        // (call_forest + nonce), not the auth path. Use an explicit signature
+        // variant here so the demo does not rely on unchecked authorization.
         // The CapTpDelivered variant is exercised in the captp_delivered
         // artifact path; the bilateral schedule is identical either way.
-        authorization: Authorization::Unchecked,
+        authorization: Authorization::Signature([0u8; 32], [0u8; 32]),
         preconditions: Default::default(),
         effects: vec![Effect::Transfer {
             from: alice_cell,

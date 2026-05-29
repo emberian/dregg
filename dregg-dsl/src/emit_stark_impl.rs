@@ -282,7 +282,7 @@ fn emit_constraint_body(ir: &ConstraintIr, layout: &TraceLayout) -> TokenStream 
 
     // Compose: result = sum_i(alpha^i * c_i)
     let n = constraint_exprs.len();
-    let composed = if n == 1 {
+    if n == 1 {
         let c = &constraint_exprs[0];
         quote! {
             let c0 = #c;
@@ -302,9 +302,7 @@ fn emit_constraint_body(ir: &ConstraintIr, layout: &TraceLayout) -> TokenStream 
         }
         stmts.push(quote! { result });
         quote! { #(#stmts)* }
-    };
-
-    composed
+    }
 }
 
 fn emit_constraints_from_statements(
@@ -588,10 +586,10 @@ fn emit_boundary_body(ir: &ConstraintIr, layout: &TraceLayout) -> TokenStream {
             pi_index += 2;
         } else {
             // Skip Set/ByteArray32 for now (only bind u64 params).
-            let is_bindable = ir.params.iter().any(|ip| {
-                ip.name.to_string() == p.name
-                    && matches!(ip.ty, ParamType::U64 | ParamType::UserDefined(_))
-            });
+            let is_bindable = ir
+                .params
+                .iter()
+                .any(|ip| ip.name == p.name && matches!(ip.ty, ParamType::U64 | ParamType::UserDefined(_)));
             if is_bindable {
                 let col = p.start_col;
                 let pi_idx = pi_index;
