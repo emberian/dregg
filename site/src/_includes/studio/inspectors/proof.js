@@ -4,11 +4,24 @@
  * Reads the `proof_view` field on a receipt from `get_receipt_chain(handle)`.
  *
  * Trust-tier heuristic (Houyhnhnm directive / NEW-WORLD.md "blame is sub-additive"):
- *   - Placeholder  — proof_view is null/undefined (scope-0: sim runtime, no STARK generated)
+ *   - Placeholder  — proof_view is null/undefined: the turn has no STARK proof
+ *                    generated yet (scope-0). For sim-runtime receipts this is a
+ *                    transient state — see the lazy-prove step below — and is only
+ *                    final if proving genuinely failed.
  *   - Silver       — proof_view is present with kind + public_inputs, but bilateral_pi is absent
- *                    (executor-trusted boundaries still exist; section 1/6 of What's not done)
+ *                    (executor-trusted boundaries still exist; section 1/6 of What's not done).
+ *                    This is what an honest EffectVM STARK over the sim runtime produces:
+ *                    a real proof binding the net-delta + commitment transition, with the
+ *                    γ.2 bilateral accumulator roots still executor-trusted (zero sentinels).
  *   - Golden       — proof_view present AND bilateral_pi present with all six accumulator roots
  *                    (outgoing_X/incoming_X for transfer/grant/introduce): full gamma.2 bilateral binding
+ *
+ * Lazy proving (perf): STARK proving is expensive in wasm, so the runtime does
+ * NOT prove on commit or at boot. On first view of a sim-runtime receipt with
+ * no proof_view, this inspector triggers `wasm.prove_turn(handle, turnHash)`
+ * once (idempotent + cached in the runtime) and bumps the runtime version so
+ * the receipt-chain signal re-fetches with the real proof_view. Subsequent
+ * renders read the cache — no re-proving.
  *
  * The 9 PI placeholder variants and 3 executor-trusted boundary cuts are the reason this
  * badge must be visible: the UI must not hide scope-reduction.
@@ -65,6 +78,31 @@ class DreggProof extends InspectorBase {
     const sig = this._runtime.getReceipt(parsed.id);
     const root = document.createElement('div');
     this.appendChild(root);
+
+    // Lazy, cached, non-blocking STARK proving. The sim runtime does not prove
+    // on commit (perf); we trigger one real EffectVM proof on first view of a
+    // proofless receipt, then bump the runtime version so the receipt-chain
+    // signal re-fetches with the real proof_view. Guarded so we attempt at
+    // most once per turn hash on this element.
+    const rt = this._runtime;
+    const maybeProve = (receipt) => {
+      if (!receipt || receipt.proof_view) return;       // nothing to do
+      if (!rt || !rt._wasm || rt._handle == null) return; // sim only
+      if (typeof rt._wasm.prove_turn !== 'function') return;
+      this._proveAttempts = this._proveAttempts || new Set();
+      if (this._proveAttempts.has(parsed.id)) return;
+      this._proveAttempts.add(parsed.id);
+      // Defer off the render tick so we never block the inspector paint.
+      Promise.resolve().then(() => {
+        try {
+          rt._wasm.prove_turn(rt._handle, parsed.id);
+          if (rt.version) rt.version.value = rt.version.value + 1; // refresh signal
+        } catch (e) {
+          // Genuine proving failure: leave Placeholder (honest scope-0).
+          console.warn('[dregg-proof] prove_turn failed for', parsed.id, e?.message || e);
+        }
+      });
+    };
 
     const TierBadge = ({ tier }) => {
       const meta = TIER_META[tier] || TIER_META.Placeholder;
@@ -147,6 +185,8 @@ class DreggProof extends InspectorBase {
         </div>`;
 
       const pv = r.proof_view || null;
+      // Kick off lazy proving on first sight of a proofless receipt.
+      if (!pv) maybeProve(r);
       const tier = trustTier(pv);
 
       if (mode === 'compact') {

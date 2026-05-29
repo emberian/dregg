@@ -185,7 +185,8 @@ pub use effect::Effect;
 
 // ---- Re-export helpers ----
 pub use helpers::{
-    compute_effects_hash, compute_effects_hash_4, split_u64, u64_from_4_limbs_16, u64_to_4_limbs_16,
+    bytes32_to_8_limbs, compute_effects_hash, compute_effects_hash_4, fold_bytes32_to_bb,
+    split_u64, u64_from_4_limbs_16, u64_to_4_limbs_16,
 };
 // Re-export so sibling modules can write `use super::fill_reserved_bits`
 // (mirrors the pre-decomp module-level visibility).
@@ -196,9 +197,9 @@ pub use air::{AIR_DESCRIPTOR, EffectVmAir};
 
 // ---- Re-export trace generation ----
 pub use trace::{
-    EffectVmContext, SlotCaveatEntry, encode_net_delta, extract_custom_proof_commitments,
-    extract_net_delta, extract_slot_caveat_manifest, generate_effect_vm_trace,
-    generate_effect_vm_trace_ext,
+    EffectVmContext, SlotCaveatEntry, canonical_id_to_felts_4, encode_net_delta,
+    extract_custom_proof_commitments, extract_net_delta, extract_slot_caveat_manifest,
+    generate_effect_vm_trace, generate_effect_vm_trace_ext,
 };
 
 // ---- Re-export verify ----

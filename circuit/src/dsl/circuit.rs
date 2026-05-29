@@ -632,11 +632,15 @@ impl ConstraintExpr {
             Self::Gated { inner, .. } => 1 + inner.degree(),
             Self::InvertedGated { inner, .. } => 1 + inner.degree(),
             Self::Squared { inner } => 2 * inner.degree(),
-            Self::Hash { input_cols, .. } => {
-                // Hash is degree 1 per column reference in the constraint check,
-                // but the hash computation itself is opaque (non-algebraic helper).
-                // The constraint is: hash(inputs) - output, which is degree 1.
-                input_cols.len().max(1)
+            Self::Hash { .. } => {
+                // The hash computation (`hash_fact(predicate, terms)`) is an opaque,
+                // non-algebraic helper evaluated over the witness columns; the AIR
+                // constraint is `hash(inputs) - output`, which is degree 1 in the
+                // committed columns (the same way Hash2to1/Hash4to1/MerkleHash report
+                // degree 1). Counting `input_cols.len()` here was a bug: it conflated
+                // the number of input columns with algebraic degree, causing the
+                // degree-validation step to over-conservatively reject valid circuits.
+                1
             }
             Self::ConditionalNonzero { .. } => {
                 // selector * (value * inverse - 1): degree 3

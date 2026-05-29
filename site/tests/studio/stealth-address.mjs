@@ -262,7 +262,26 @@ async function run() {
   if (!conservText) {
     throw new Error('[test B] FAIL: conservation text empty');
   }
-  console.log(`[test B] PASS: conservation text = "${conservText.slice(0, 80)}"`);
+  // verify_conservation_proof is now REAL: a balanced set proves the Schnorr
+  // excess (value balance). The old "STUB — verify_conservation_proof not yet
+  // implemented" expectation is stale; assert the real VALID verdict instead.
+  if (!conservText.includes('VALID') || conservText.includes('STUB')) {
+    throw new Error(`[test B] FAIL: expected real VALID conservation verdict, got: "${conservText.slice(0, 120)}"`);
+  }
+  console.log(`[test B] PASS: real conservation verdict = "${conservText.slice(0, 80)}"`);
+
+  // The range-proof row must honestly disclose it is still a placeholder, NOT
+  // claim range proofs were checked.
+  const conservKv = await page.evaluate(() => {
+    const el = document.getElementById('test-stealth-demo');
+    const rows = Array.from(el.querySelectorAll('.dregg-stealth-demo__step'))
+      .find(s => s.textContent.includes('Verify Conservation'));
+    return rows ? rows.textContent : '';
+  });
+  if (!/placeholder|Bulletproof/i.test(conservKv)) {
+    throw new Error(`[test B] FAIL: conservation panel must disclose range-proof placeholder honestly. Got: "${conservKv.slice(0, 200)}"`);
+  }
+  console.log('[test B] PASS: range-proof placeholder honestly disclosed in conservation step.');
 
   // Privacy badge in demo mode
   const demoPrivacyBadge = await page.evaluate(() => {

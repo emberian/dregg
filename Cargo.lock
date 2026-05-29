@@ -3270,6 +3270,7 @@ name = "dregg-protocol-tests"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "curve25519-dalek",
  "dregg-cell",
  "dregg-circuit",
  "dregg-turn",
@@ -3405,6 +3406,7 @@ dependencies = [
  "dregg-circuit",
  "dregg-commit",
  "dregg-coord",
+ "dregg-dfa",
  "dregg-dsl-runtime",
  "dregg-federation",
  "dregg-intent",
@@ -3422,6 +3424,7 @@ dependencies = [
  "getrandom 0.3.4",
  "postcard",
  "serde",
+ "starbridge-governed-namespace",
  "starbridge-identity",
  "starbridge-nameservice",
  "starbridge-subscription",

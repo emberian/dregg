@@ -24,5 +24,10 @@ postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }
 ed25519-dalek = { version = "2", features = ["hazmat"] }
 
+[dev-dependencies]
+# Used by the conservation_proof_wasm adversarial test to build Ristretto
+# scalars for Pedersen value commitments (mirrors the WASM binding's path).
+curve25519-dalek = { version = "4", features = ["alloc"] }
+
 [lints]
 workspace = true

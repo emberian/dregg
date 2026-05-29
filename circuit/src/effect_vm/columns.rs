@@ -63,7 +63,9 @@
 /// AIR-impl lane (#119): 117 (+ 4 selectors for CellSeal, CellUnseal,
 /// ReceiptArchive, Refusal).
 /// IncrementNonce lane: 118 (+ 1 selector for explicit nonce-only turns).
-pub const EFFECT_VM_WIDTH: usize = 118;
+/// γ.2 federation+owner binding (#131/#132): 126 (+ 8 aux cols:
+/// 4 FEDERATION_ID + 4 OWNER_CELL_ID, row-0-pinned to the matching PI slots).
+pub const EFFECT_VM_WIDTH: usize = 126;
 
 /// Number of effect types (selectors).
 pub const NUM_EFFECTS: usize = 54;
@@ -294,7 +296,8 @@ pub const AUX_BASE: usize = STATE_AFTER_BASE + state::SIZE; // 44 + 14 = 58
 /// Stage 1: 12 (8 effect-aux + 3 state intermediates + 1 custom-count acc).
 /// Stage 2: 23 (+ 8 reserved bits + 1 mode flag + 2 ResizeQueue sign/mag).
 /// Sovereign-witness teeth: 28 (+ 4 WITNESS_KEY_COMMIT + 1 WITNESS_SEQUENCE).
-pub const NUM_AUX: usize = 28;
+/// γ.2 federation+owner binding (#131/#132): 36 (+ 4 FEDERATION_ID + 4 OWNER_CELL_ID).
+pub const NUM_AUX: usize = 36;
 
 /// Auxiliary column offsets for state commitment tree intermediates.
 pub mod aux_off {
@@ -351,6 +354,26 @@ pub mod aux_off {
     /// Per-cell monotonic sequence counter, row-0-pinned to
     /// PI[SOVEREIGN_WITNESS_SEQUENCE]. Zero sentinel for non-sovereign proofs.
     pub const WITNESS_SEQUENCE: usize = 27;
+
+    // ---- γ.2 follow-up (#131/#132): per-cell federation + owner binding ----
+    /// 4-felt Poseidon2 compression of the 32-byte federation id this proof
+    /// was minted under. Row-0-pinned to PI[FEDERATION_ID_BASE..+4]. Every
+    /// row carries the same value (it is a property of the turn's federation,
+    /// not of individual effects); the boundary constraint binds row 0.
+    /// A proof minted under federation A cannot satisfy the row-0 binding
+    /// when checked against federation B's reconstructed PI.
+    pub const FEDERATION_ID_0: usize = 28;
+    pub const FEDERATION_ID_1: usize = 29;
+    pub const FEDERATION_ID_2: usize = 30;
+    pub const FEDERATION_ID_3: usize = 31;
+    /// 4-felt Poseidon2 compression of the 32-byte owner cell id whose state
+    /// transition this proof attests. Row-0-pinned to PI[OWNER_CELL_ID_BASE..+4].
+    /// Binds the proof to a specific owner cell so a proof for owner cell X
+    /// cannot be substituted for owner cell Y.
+    pub const OWNER_CELL_ID_0: usize = 32;
+    pub const OWNER_CELL_ID_1: usize = 33;
+    pub const OWNER_CELL_ID_2: usize = 34;
+    pub const OWNER_CELL_ID_3: usize = 35;
 }
 
 /// Effect parameter meanings per effect type.

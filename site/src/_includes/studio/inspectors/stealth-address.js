@@ -762,17 +762,17 @@ class DreggStealth extends InspectorBase {
         bump();
         return;
       }
+      // generate_range_proof is an honestly-labeled BLAKE3 placeholder, NOT a
+      // real Bulletproof. Mark it stub regardless of the (absent) stub flag.
       ds.rangeProof = {
-        bytes: new Uint8Array(rpResult.proof_bytes || []),
-        stub: !!rpResult.stub,
+        bytes: new Uint8Array(rpResult.proof || rpResult.proof_bytes || []),
+        stub: true,
       };
 
       ds.timeline.push(
-        { actor: 'sender', type: rpStub ? 'warn' : 'success',
-          text: rpStub
-            ? `range proof: stub (${ds.rangeProof.bytes.length} B placeholder)`
-            : `range proof generated (${ds.rangeProof.bytes.length} B bulletproof)` },
-        { actor: '', type: 'info', text: `  proves amount ∈ [0, 2^64) without revealing value` },
+        { actor: 'sender', type: 'warn',
+          text: `range proof: placeholder pending real Bulletproofs (${ds.rangeProof.bytes.length} B BLAKE3, not a sound range proof)` },
+        { actor: '', type: 'info', text: `  a real Bulletproof would prove amount ∈ [0, 2^64) without revealing value` },
       );
       ds.step = 3;
       bump();
@@ -814,22 +814,71 @@ class DreggStealth extends InspectorBase {
 
     const doStep5 = () => {
       if (!ds.commitment) return;
-      const conservProbe = tryWasm(() => wasm && wasm.verify_conservation_proof);
+
+      // REAL generate -> verify roundtrip over a balanced set: the transfer
+      // amount plus change must equal a 1000-unit input. The prover owns all
+      // the blindings (required to know the excess), so we generate a fresh
+      // balanced set here rather than reusing the displayed commitment.
+      const inputValue = Math.max(1000, ds.amount);
+      const changeAmount = inputValue - ds.amount;
+      const inputBlindingHex = bytesToHex(randomBytes(32));
+      const transferBlindingHex = bytesToHex(randomBytes(32));
+      const changeBlindingHex = bytesToHex(randomBytes(32));
+      const messageHex = bytesToHex(randomBytes(32));
+
+      const { result: proved, stub: proveStub } = tryWasm(
+        () => wasm && wasm.prove_conservation(
+          JSON.stringify([{ value: inputValue, blinding_hex: inputBlindingHex }]),
+          JSON.stringify([
+            { value: ds.amount, blinding_hex: transferBlindingHex },
+            { value: changeAmount, blinding_hex: changeBlindingHex },
+          ]),
+          messageHex
+        )
+      );
       ds.callCount++;
-      ds.stubCount++;
+      if (proveStub || !proved) {
+        ds.stubCount++;
+        ds.conservResult = { valid: false, stub: true, input_count: 1, output_count: 2,
+          reason: 'prove_conservation wasm export missing' };
+        ds.timeline.push({ actor: 'sender', type: 'warn', text: 'conservation proof: awaiting wasm32 support' });
+        ds.step = 5;
+        bump();
+        return;
+      }
+
+      const { result: verdict, stub: verifyStub } = tryWasm(
+        () => wasm && wasm.verify_conservation_proof(
+          JSON.stringify(proved.input_commitments),
+          JSON.stringify(proved.output_commitments),
+          JSON.stringify(proved.proof),
+          proved.message_hex
+        )
+      );
+      ds.callCount++;
+      if (verifyStub || !verdict) {
+        ds.stubCount++;
+        ds.conservResult = { valid: false, stub: true, input_count: 1, output_count: 2,
+          reason: 'verify_conservation_proof wasm export missing' };
+        ds.timeline.push({ actor: 'verifier', type: 'warn', text: 'conservation verify: awaiting wasm32 support' });
+        ds.step = 5;
+        bump();
+        return;
+      }
+
       ds.conservResult = {
-        valid: false,
-        not_implemented: true,
-        input_count: 0,
-        output_count: 1,
-        reason: conservProbe.stub
-          ? 'verify_conservation_proof wasm export missing'
-          : 'inspector lacks canonical input commitment set for this transfer',
+        valid: verdict.valid,
+        range_proofs_checked: verdict.range_proofs_checked,
+        input_count: verdict.input_count,
+        output_count: verdict.output_count,
+        error: verdict.error || null,
       };
 
       ds.timeline.push(
-        { actor: 'verifier', type: 'warn', text: 'conservation proof: awaiting canonical input/output commitment set from runtime' },
-        { actor: '', type: 'info', text: '  no JS-side commitment set was fabricated' },
+        { actor: 'sender', type: 'success', text: 'built real Pedersen commitments + Schnorr excess proof' },
+        { actor: 'verifier', type: verdict.valid ? 'success' : 'warn',
+          text: `conservation (value balance): ${verdict.valid ? 'VALID' : 'INVALID'} (${verdict.input_count} in → ${verdict.output_count} out)` },
+        { actor: '', type: 'warn', text: `  range proofs checked: ${verdict.range_proofs_checked} (placeholder pending real Bulletproofs)` },
       );
       ds.step = 5;
       bump();
@@ -980,13 +1029,11 @@ class DreggStealth extends InspectorBase {
                     h('dt', null, 'proof size'),
                     h('dd', null, h('code', null, s.rangeProof.bytes.length + ' bytes')),
                     h('dt', null, 'range'),
-                    h('dd', null, h('code', null, '[0, 2^64)')),
+                    h('dd', null, h('code', null, '[0, 2^64) (target)')),
                     h('dt', null, 'scheme'),
-                    h('dd', null, h('code', null, s.rangeProof.stub ? 'stub (bulletproof planned)' : 'bulletproof'))
+                    h('dd', null, h('code', null, 'placeholder (real Bulletproofs planned)'))
                   ),
-                  s.rangeProof.stub
-                    ? h(StubWarn, { msg: 'generate_range_proof: wasm stub — not a real bulletproof' })
-                    : null
+                  h(StubWarn, { msg: 'generate_range_proof: placeholder pending real Bulletproofs — not a sound range proof' })
                 )
               : h('div', { style: 'color:var(--fg-dim);font-size:0.8rem;' },
                   stepDone(2)
@@ -1039,7 +1086,7 @@ class DreggStealth extends InspectorBase {
       const Step5 = () => {
         const cr = s.conservResult;
         const conservClass = !cr ? ''
-          : cr.not_implemented ? 'dregg-stealth-demo__conservation--stub'
+          : cr.stub ? 'dregg-stealth-demo__conservation--stub'
           : cr.valid ? 'dregg-stealth-demo__conservation--valid'
           : 'dregg-stealth-demo__conservation--invalid';
 
@@ -1052,16 +1099,18 @@ class DreggStealth extends InspectorBase {
             cr
               ? h('div', null,
                   h('div', { class: 'dregg-stealth-demo__conservation ' + conservClass },
-                    cr.not_implemented
-                      ? 'STUB — verify_conservation_proof not yet implemented in wasm; sum-to-zero check deferred'
+                    cr.stub
+                      ? 'STUB — prove/verify_conservation_proof wasm export missing'
                       : (cr.valid
-                          ? `VALID — inputs (${cr.input_count}) == outputs (${cr.output_count}); no value created`
-                          : `INVALID — conservation check failed (${cr.input_count}→${cr.output_count})`)
+                          ? `VALID (value balance) — inputs (${cr.input_count}) == outputs (${cr.output_count}); no value created`
+                          : `INVALID — conservation check failed${cr.error ? ' (' + cr.error + ')' : ''} (${cr.input_count}→${cr.output_count})`)
                   ),
                   h('dl', { class: 'dregg-stealth-demo__kv', style: 'margin-top:8px;' },
                     h('dt', null, 'input commits'),  h('dd', null, h('code', null, String(cr.input_count ?? 1))),
                     h('dt', null, 'output commits'), h('dd', null, h('code', null, String(cr.output_count ?? 2))),
-                    h('dt', null, 'property'), h('dd', null, h('code', null, 'Pedersen homomorphic sum'))
+                    h('dt', null, 'property'), h('dd', null, h('code', null, 'Pedersen homomorphic sum (Schnorr excess)')),
+                    h('dt', null, 'range proofs'), h('dd', null, h('code', null,
+                      cr.stub ? 'n/a' : `${cr.range_proofs_checked} — placeholder pending Bulletproofs`))
                   )
                 )
               : h('div', { style: 'color:var(--fg-dim);font-size:0.8rem;' },

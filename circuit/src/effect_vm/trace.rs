@@ -5,13 +5,40 @@
 //! slot-caveat manifests, and per-effect commitment witnesses.
 
 use crate::field::BabyBear;
-use crate::poseidon2::hash_2_to_1;
+use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
 
 use super::{
     AUX_BASE, CellState, EFFECT_VM_WIDTH, Effect, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
     aux_off, compute_effects_hash, compute_effects_hash_4, fill_reserved_bits, param, pi, sel,
     split_u64, u64_to_4_limbs_16,
 };
+
+/// Compress a 32-byte canonical id (federation id or cell id) into 4 BabyBear
+/// felts (γ.2 #131/#132 per-cell federation + owner binding).
+///
+/// This is bit-identical to `dregg_commit::typed::canonical_32_to_felts_4`
+/// (30-bit-per-limb packing folded through four `hash_4_to_1` compressions),
+/// re-implemented here so the `dregg-circuit` crate stays free of a
+/// `dregg-commit` dependency while still producing the same felts the
+/// off-AIR verifier (`turn::executor::proof_verify`) reconstructs. Any drift
+/// between the two would show up immediately as a PI-match rejection in the
+/// `federation_owner_binding_round_trip` test and the executor PI loop.
+pub fn canonical_id_to_felts_4(canonical: &[u8; 32]) -> [BabyBear; 4] {
+    let mut eight = [BabyBear::ZERO; 8];
+    for i in 0..8 {
+        let lo = canonical[i * 4] as u32;
+        let mid1 = canonical[i * 4 + 1] as u32;
+        let mid2 = canonical[i * 4 + 2] as u32;
+        let hi = canonical[i * 4 + 3] as u32;
+        // Pack 30 bits: 8 + 8 + 8 + 6 = 30.
+        eight[i] = BabyBear::new(lo | (mid1 << 8) | (mid2 << 16) | ((hi & 0x3F) << 24));
+    }
+    let a = hash_4_to_1(&[eight[0], eight[1], eight[2], eight[3]]);
+    let b = hash_4_to_1(&[eight[4], eight[5], eight[6], eight[7]]);
+    let c = hash_4_to_1(&[eight[0], eight[4], eight[2], eight[6]]);
+    let d = hash_4_to_1(&[eight[1], eight[5], eight[3], eight[7]]);
+    [a, b, c, d]
+}
 
 /// Generate the execution trace and public inputs for an effect VM proof.
 ///
@@ -113,6 +140,20 @@ pub struct EffectVmContext {
     /// carries the entries.
     pub slot_caveat_count: u32,
     pub slot_caveat_manifest: [SlotCaveatEntry; pi::MAX_SLOT_CAVEATS],
+
+    /// γ.2 follow-up (#131): the 32-byte federation id under which this proof
+    /// is minted. Compressed to 4 felts via [`canonical_id_to_felts_4`] and
+    /// pinned to PI[FEDERATION_ID_BASE..+4] + the row-0 aux columns. Zero by
+    /// default (a fresh federation id of all-zeros is the local-federation
+    /// sentinel, matching `TurnExecutor::local_federation_id`'s default).
+    pub federation_id: [u8; 32],
+    /// γ.2 follow-up (#132): the 32-byte owner cell id whose state transition
+    /// this proof attests. Compressed to 4 felts via
+    /// [`canonical_id_to_felts_4`] and pinned to PI[OWNER_CELL_ID_BASE..+4] +
+    /// the row-0 aux columns. Zero by default (back-compat for callers that
+    /// do not yet thread the owner id through; the off-AIR verifier supplies
+    /// the same sentinel so the binding holds trivially).
+    pub owner_cell_id: [u8; 32],
 }
 
 /// A single entry in the slot-caveat manifest (Cav-Codex Block 3).
@@ -170,6 +211,8 @@ impl Default for EffectVmContext {
             create_escrow_amount_limbs: [BabyBear::ZERO; 4],
             slot_caveat_count: 0,
             slot_caveat_manifest: [SlotCaveatEntry::zero(); pi::MAX_SLOT_CAVEATS],
+            federation_id: [0u8; 32],
+            owner_cell_id: [0u8; 32],
         }
     }
 }
@@ -1278,6 +1321,25 @@ pub fn generate_effect_vm_trace_ext(
             context.sovereign_witness_key_commit[3];
         trace[0][AUX_BASE + aux_off::WITNESS_SEQUENCE] =
             BabyBear::new((context.sovereign_witness_sequence & 0x7FFF_FFFF) as u32);
+
+        // γ.2 follow-up (#131/#132): bind the federation id + owner cell id
+        // into row-0 aux columns. The boundary constraints pin these to
+        // PI[FEDERATION_ID_BASE..+4] / PI[OWNER_CELL_ID_BASE..+4]. The
+        // off-AIR verifier recomputes both 4-felt commitments from the
+        // trusted federation id + owner cell id, so a proof minted under a
+        // different federation (or for a different owner cell) cannot satisfy
+        // both the boundary (vs. its own PI) AND the verifier's PI-match loop
+        // (vs. the expected federation/owner).
+        let fed_id_4 = canonical_id_to_felts_4(&context.federation_id);
+        let owner_id_4 = canonical_id_to_felts_4(&context.owner_cell_id);
+        trace[0][AUX_BASE + aux_off::FEDERATION_ID_0] = fed_id_4[0];
+        trace[0][AUX_BASE + aux_off::FEDERATION_ID_1] = fed_id_4[1];
+        trace[0][AUX_BASE + aux_off::FEDERATION_ID_2] = fed_id_4[2];
+        trace[0][AUX_BASE + aux_off::FEDERATION_ID_3] = fed_id_4[3];
+        trace[0][AUX_BASE + aux_off::OWNER_CELL_ID_0] = owner_id_4[0];
+        trace[0][AUX_BASE + aux_off::OWNER_CELL_ID_1] = owner_id_4[1];
+        trace[0][AUX_BASE + aux_off::OWNER_CELL_ID_2] = owner_id_4[2];
+        trace[0][AUX_BASE + aux_off::OWNER_CELL_ID_3] = owner_id_4[3];
     }
     // Silence unused warnings on the legacy 2-felt return values.
     let _ = (effects_hash_lo, effects_hash_hi);
@@ -1571,6 +1633,21 @@ pub fn generate_effect_vm_trace_ext(
         for i in 0..pi::EMIT_EVENT_PAYLOAD_HASH_LEN {
             public_inputs[pi::EMIT_EVENT_PAYLOAD_HASH_BASE + i] = p[i];
         }
+    }
+
+    // ---- γ.2 follow-up (#131/#132): per-cell federation + owner binding ----
+    //
+    // Surface the 4-felt commitments to the federation id + owner cell id.
+    // The row-0 boundary constraints (air.rs) pin these to the matching aux
+    // columns, and the off-AIR verifier reconstructs the expected values from
+    // the trusted federation id + owner cell id and rejects any disagreement.
+    let fed_id_4 = canonical_id_to_felts_4(&context.federation_id);
+    let owner_id_4 = canonical_id_to_felts_4(&context.owner_cell_id);
+    for i in 0..pi::FEDERATION_ID_LEN {
+        public_inputs[pi::FEDERATION_ID_BASE + i] = fed_id_4[i];
+    }
+    for i in 0..pi::OWNER_CELL_ID_LEN {
+        public_inputs[pi::OWNER_CELL_ID_BASE + i] = owner_id_4[i];
     }
 
     // ---- Slot-caveat manifest (Cav-Codex Block 3) ----

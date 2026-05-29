@@ -259,6 +259,17 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
                 offset: pi::EMIT_EVENT_PAYLOAD_HASH_BASE,
                 length_in_felts: pi::EMIT_EVENT_PAYLOAD_HASH_LEN,
             },
+            // γ.2 follow-up (#131/#132): per-cell federation + owner binding.
+            crate::air_descriptor::PiSlot {
+                name: "federation_id",
+                offset: pi::FEDERATION_ID_BASE,
+                length_in_felts: pi::FEDERATION_ID_LEN,
+            },
+            crate::air_descriptor::PiSlot {
+                name: "owner_cell_id",
+                offset: pi::OWNER_CELL_ID_BASE,
+                length_in_felts: pi::OWNER_CELL_ID_LEN,
+            },
         ],
         // Constraint groups: selector validity (NUM_EFFECTS+1), per-effect
         // gated constraints (~NUM_EFFECTS large groups), boundary bindings
@@ -266,7 +277,9 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
         // aggregation accumulators. Number is a stable property of the AIR
         // shape — when constraints are added/removed, this bumps.
         constraint_polynomial_count: NUM_EFFECTS + 1 + NUM_EFFECTS,
-        boundary_constraint_count: 32,
+        // 32 prior + 8 (γ.2 #131/#132: 4 FEDERATION_ID + 4 OWNER_CELL_ID
+        // row-0 boundary bindings).
+        boundary_constraint_count: 40,
         max_degree: 9,
         source_hash: None,
     };
@@ -2811,6 +2824,39 @@ impl StarkAir for EffectVmAir {
             col: AUX_BASE + aux_off::WITNESS_SEQUENCE,
             value: public_inputs[pi::SOVEREIGN_WITNESS_SEQUENCE],
         });
+
+        // ====================================================================
+        // γ.2 FOLLOW-UP (#131 + #132): per-cell federation + owner binding.
+        //
+        // Row-0 boundary: pin the in-trace federation-id + owner-cell-id aux
+        // columns to PI[FEDERATION_ID_BASE..+4] / PI[OWNER_CELL_ID_BASE..+4].
+        // The trace generator writes the 4-felt Poseidon2 commitment of each
+        // 32-byte id into these columns; the off-AIR verifier reconstructs the
+        // SAME commitments from the *trusted* federation id + owner cell id
+        // and rejects any per-cell PI that disagrees.
+        //
+        // Effect of both teeth together: a proof minted under federation A
+        // (resp. owner cell X) carries PI[FEDERATION_ID] = commit(A) (resp.
+        // PI[OWNER_CELL_ID] = commit(X)). When a verifier checks it against
+        // federation B (resp. owner cell Y), the PI-match loop computes
+        // commit(B) (resp. commit(Y)) and the equality fails — the proof is
+        // rejected. The boundary here additionally binds the value *inside*
+        // the proof: a prover cannot claim a PI federation/owner that
+        // disagrees with the row-0 aux columns its trace actually committed.
+        for i in 0..pi::FEDERATION_ID_LEN {
+            constraints.push(BoundaryConstraint {
+                row: 0,
+                col: AUX_BASE + aux_off::FEDERATION_ID_0 + i,
+                value: public_inputs[pi::FEDERATION_ID_BASE + i],
+            });
+        }
+        for i in 0..pi::OWNER_CELL_ID_LEN {
+            constraints.push(BoundaryConstraint {
+                row: 0,
+                col: AUX_BASE + aux_off::OWNER_CELL_ID_0 + i,
+                value: public_inputs[pi::OWNER_CELL_ID_BASE + i],
+            });
+        }
 
         // ====================================================================
         // SOUNDNESS FIX (Gap 1): Net delta range check via balance binding.

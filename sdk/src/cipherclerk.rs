@@ -4764,6 +4764,13 @@ impl AgentCipherclerk {
         ctx.actor_nonce = actor_nonce;
         ctx.previous_receipt_hash = previous_receipt_hash;
         ctx.is_sovereign_cell = true;
+        // γ.2 follow-up (#132): bind the owner cell id whose transition this
+        // proof attests. The verifier (`verify_and_commit_proof`) reconstructs
+        // commit(cell_id) and rejects any mismatch. federation_id stays at the
+        // [0u8; 32] default, matching this path's executor `local_federation_id`
+        // default (#131); cross-federation flows that set a non-zero local
+        // federation must thread it through here too.
+        ctx.owner_cell_id = *cell_id.as_bytes();
 
         let (trace, mut public_inputs) = dregg_circuit::effect_vm::generate_effect_vm_trace_ext(
             &initial_vm_state,
@@ -4832,31 +4839,32 @@ impl AgentCipherclerk {
         use dregg_circuit::effect_vm::Effect as VmEffect;
         use dregg_circuit::field::BabyBear;
 
-        // AUDIT[P1-1]: 4-byte truncation. See trait-level audit note above.
-        // Stage 1 widens commitment slots only; per-effect parameter slots
-        // remain 31-bit until the per-variant AIR rewrites in Stages 3–6.
+        // CLOSED (effect-vm-hash-truncation lane, 2026-05-28): formerly a
+        // 4-byte truncation (AUDIT[P1-1]). Both helpers now delegate to the
+        // SHARED canonical fold `dregg_circuit::effect_vm::fold_bytes32_to_bb`,
+        // which Horner-folds all 8 four-byte limbs of the 32-byte value into
+        // the BabyBear felt. The executor projector
+        // (`turn/src/executor/effect_vm_bridge.rs`) calls the SAME function,
+        // so this SDK projector and the executor projector emit byte-for-byte
+        // identical felts — the differential invariant in
+        // `protocol-tests/.../effect_vm_differential.rs` asserts this. The
+        // full 32-byte value is now bound through the per-effect param column
+        // and `PI[EFFECTS_HASH]` (`compute_effects_hash`).
         fn field_element_to_bb(value: &[u8; 32]) -> BabyBear {
-            let val_u32 = u32::from_le_bytes([value[0], value[1], value[2], value[3]]);
-            BabyBear::new(val_u32 % dregg_circuit::field::BABYBEAR_P)
+            dregg_circuit::effect_vm::fold_bytes32_to_bb(value)
         }
 
-        // AUDIT[P1-1]: 4-byte truncation.
         fn hash_to_bb(h: &[u8; 32]) -> BabyBear {
-            let val_u32 = u32::from_le_bytes([h[0], h[1], h[2], h[3]]);
-            BabyBear::new(val_u32 % dregg_circuit::field::BABYBEAR_P)
+            dregg_circuit::effect_vm::fold_bytes32_to_bb(h)
         }
 
         // #110: full 32-byte → 8-felt projection (4 bytes per felt,
         // little-endian). Used for EmitEvent topic_hash / payload_hash and
         // related event-shaped variants that need full ~256-bit binding.
+        // Delegates to the shared circuit helper so it stays in lock-step with
+        // the executor projector.
         fn bytes32_to_8_felts(b: &[u8; 32]) -> [BabyBear; 8] {
-            let mut out = [BabyBear::ZERO; 8];
-            for i in 0..8 {
-                let off = i * 4;
-                let v = u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
-                out[i] = BabyBear::new(v % dregg_circuit::field::BABYBEAR_P);
-            }
-            out
+            dregg_circuit::effect_vm::bytes32_to_8_limbs(b)
         }
 
         let mut vm_effects = Vec::new();

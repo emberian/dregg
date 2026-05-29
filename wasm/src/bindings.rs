@@ -2216,13 +2216,19 @@ pub fn get_receipt_chain(handle: usize) -> Result<JsValue, JsError> {
             .map(|(r, t)| {
                 // Refactor 3: walk the call forest and project each action.
                 let actions = collect_actions_from_forest(t);
-                // Refactor 7: the wasm runtime does not run the Effect VM
-                // STARK (no proof generation in-browser). Receipts from the
-                // sim runtime are scope-0 (no attached proof). Surface None
-                // with a gap-note so inspectors can show "no proof — sim
-                // runtime" clearly. If a proof were attached via a
-                // WitnessedReceipt wrapper, we'd decode it here.
-                let proof_view: Option<ProofView> = None;
+                // Refactor 7 + per-turn STARK: if the runtime has a real
+                // EffectVM STARK proof cached for this turn (generated lazily
+                // by `prove_turn` — the canonical `generate_effect_vm_trace` →
+                // `stark::prove` → `stark::verify` pipeline), surface it as a
+                // real ProofView. The bilateral γ.2 accumulator roots are
+                // executor-trusted at this stage (the trace generator leaves
+                // PI[OUTGOING_*_ROOT..] as zero sentinels), so `bilateral_pi`
+                // is None — honestly classifying this as Silver, not Golden,
+                // in `<dregg-proof>`. When no proof is cached yet the receipt
+                // is scope-0 (Placeholder until first inspector view triggers
+                // proving).
+                let proof_view: Option<ProofView> =
+                    proof_view_from_record(rt.turn_proofs.get(&r.turn_hash));
 
                 ReceiptView {
                     turn_hash: hex_encode(&r.turn_hash),
@@ -2238,6 +2244,49 @@ pub fn get_receipt_chain(handle: usize) -> Result<JsValue, JsError> {
             .collect();
 
         serde_wasm_bindgen::to_value(&chain).map_err(|e| e.to_string())
+    })
+}
+
+/// Generate (and cache) a REAL EffectVM STARK proof for a committed turn,
+/// identified by its `turn_hash` (hex32).
+///
+/// This drives the canonical Effect VM prove path
+/// (`generate_effect_vm_trace` → `stark::prove` → `stark::verify`), the same
+/// pipeline `circuit/tests/integration_effect_vm_prove_verify.rs` exercises.
+/// The proof is self-verified before being cached, so once this returns Ok the
+/// turn's `get_receipt_chain` entry carries a real `proof_view` (Silver tier).
+///
+/// PERFORMANCE: STARK proving is expensive in wasm, so this is NOT run on the
+/// commit path or at boot. The `<dregg-proof>` inspector calls it lazily on
+/// first view; it is idempotent (re-proving a cached turn is a cheap no-op),
+/// so repeated inspector renders cost nothing after the first.
+///
+/// Returns `{ kind, proof_size_bytes, trace_rows, net_delta }` describing the
+/// generated (or already-cached) proof.
+#[wasm_bindgen]
+pub fn prove_turn(handle: usize, turn_hash_hex: &str) -> Result<JsValue, JsError> {
+    let turn_hash = hex_decode_32(turn_hash_hex).map_err(|e| JsError::new(&e))?;
+    with_runtime(handle, |rt| {
+        rt.prove_turn(turn_hash)?;
+        let rec = rt
+            .turn_proofs
+            .get(&turn_hash)
+            .ok_or_else(|| "proof record missing after prove_turn".to_string())?;
+
+        #[derive(Serialize)]
+        struct ProveTurnResult {
+            kind: String,
+            proof_size_bytes: usize,
+            trace_rows: usize,
+            net_delta: i64,
+        }
+        let out = ProveTurnResult {
+            kind: rec.kind.clone(),
+            proof_size_bytes: rec.proof_size_bytes,
+            trace_rows: rec.trace_rows,
+            net_delta: rec.net_delta,
+        };
+        serde_wasm_bindgen::to_value(&out).map_err(|e| e.to_string())
     })
 }
 
@@ -2680,6 +2729,78 @@ pub struct BilateralPiView {
     pub incoming_transfer_root: String,
     pub incoming_grant_root: String,
     pub incoming_introduce_root: String,
+}
+
+/// Build a `ProofView` from a cached per-turn EffectVM STARK proof record.
+///
+/// Returns `None` when no proof has been generated for the turn yet (scope-0
+/// — the inspector shows Placeholder until `prove_turn` populates the cache).
+///
+/// The γ.2 bilateral accumulator roots (PI[OUTGOING_*_ROOT..],
+/// PI[INCOMING_*_ROOT..]) are surfaced as `bilateral_pi` ONLY when at least
+/// one of the six roots is non-zero. The current `generate_effect_vm_trace`
+/// path leaves these as zero sentinels (the bilateral accumulator is
+/// executor-trusted at this stage), so for sim-runtime proofs this is `None`
+/// — which `<dregg-proof>` honestly classifies as Silver (a real proof with
+/// executor-trusted cross-cell boundaries), never Golden.
+fn proof_view_from_record(
+    record: Option<&crate::runtime::TurnProofRecord>,
+) -> Option<ProofView> {
+    use dregg_circuit::effect_vm::pi;
+
+    let record = record?;
+
+    // The PI public_inputs are raw u32 felts; surface them as fixed-width
+    // hex strings so the inspector renders stable identifiers.
+    let public_inputs: Vec<String> = record
+        .public_inputs
+        .iter()
+        .map(|v| format!("{v:08x}"))
+        .collect();
+
+    // Read the six bilateral roots (each 4 felts). Present them only if any
+    // root is non-zero — otherwise the cross-cell accumulator is not bound
+    // and the tier must stay Silver.
+    let root_hex = |base: usize| -> (String, bool) {
+        let mut nonzero = false;
+        let mut bytes = String::with_capacity(8 * 4);
+        for i in 0..4 {
+            let felt = record.public_inputs.get(base + i).copied().unwrap_or(0);
+            if felt != 0 {
+                nonzero = true;
+            }
+            bytes.push_str(&format!("{felt:08x}"));
+        }
+        (bytes, nonzero)
+    };
+
+    let (out_transfer, nz0) = root_hex(pi::OUTGOING_TRANSFER_ROOT_BASE);
+    let (in_transfer, nz1) = root_hex(pi::INCOMING_TRANSFER_ROOT_BASE);
+    let (out_grant, nz2) = root_hex(pi::OUTGOING_GRANT_ROOT_BASE);
+    let (in_grant, nz3) = root_hex(pi::INCOMING_GRANT_ROOT_BASE);
+    let (out_intro, nz4) = root_hex(pi::INTRO_AS_INTRODUCER_ROOT_BASE);
+    let (in_intro, nz5) = root_hex(pi::INTRO_AS_RECIPIENT_ROOT_BASE);
+
+    let bilateral_pi = if nz0 || nz1 || nz2 || nz3 || nz4 || nz5 {
+        Some(BilateralPiView {
+            outgoing_transfer_root: out_transfer,
+            incoming_transfer_root: in_transfer,
+            outgoing_grant_root: out_grant,
+            incoming_grant_root: in_grant,
+            outgoing_introduce_root: out_intro,
+            incoming_introduce_root: in_intro,
+        })
+    } else {
+        None
+    };
+
+    Some(ProofView {
+        kind: record.kind.clone(),
+        public_inputs,
+        bilateral_pi,
+        is_agent_cell: record.is_agent_cell,
+        is_sovereign_cell: record.is_sovereign_cell,
+    })
 }
 
 // ---------------------------------------------------------------------------

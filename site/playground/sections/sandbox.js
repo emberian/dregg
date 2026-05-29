@@ -110,8 +110,12 @@ console.log('Token:', minted.token.slice(0, 40) + '...');
     scanStealthAnnouncements: (viewPriv, spendPub, announcementsJson) =>
       wasm.scan_stealth_announcements(viewPriv, spendPub, announcementsJson),
     createValueCommitment: (amount, blinding) => wasm.create_value_commitment(amount, blinding),
-    verifyConservation: (inputsJson, outputsJson) =>
-      wasm.verify_conservation_proof(inputsJson, outputsJson),
+    // REAL conservation: prove builds Pedersen commitments + Schnorr excess
+    // proof; verify checks value balance. New 4-arg verifier signature.
+    proveConservation: (inputsJson, outputsJson, messageHex) =>
+      wasm.prove_conservation(inputsJson, outputsJson, messageHex || ''),
+    verifyConservation: (inputCommitsJson, outputCommitsJson, proofJson, messageHex) =>
+      wasm.verify_conservation_proof(inputCommitsJson, outputCommitsJson, proofJson, messageHex || ''),
     buildCommittedTurn: (paramsJson) => wasm.build_committed_turn(paramsJson),
     generateRangeProof: (amount, blinding, commitment) =>
       wasm.generate_range_proof(amount, blinding, commitment),

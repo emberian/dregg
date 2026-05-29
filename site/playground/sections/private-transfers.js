@@ -181,7 +181,7 @@ export function initPrivateTransfers(wasm) {
     ]);
 
     showExplainer(explainerDiv, {
-      prover: `Sender derives one-time address:\n1. Generate ephemeral X25519 keypair\n2. DH: shared = X25519(eph_priv, view_pub)\n3. scalar = BLAKE3(shared, "dregg-stealth-derive")\n4. OT_pubkey = H(scalar || spend_pub)\n\nCommitment: C = BLAKE3(amount || blinding)\nAmount: ${transferAmount} (hidden in commitment)`,
+      prover: `Sender derives one-time address:\n1. Generate ephemeral X25519 keypair\n2. DH: shared = X25519(eph_priv, view_pub)\n3. scalar = BLAKE3(shared, "dregg-stealth-derive")\n4. OT_pubkey = H(scalar || spend_pub)\n\nCommitment: C = amount*V + blinding*R (real Ristretto Pedersen)\nAmount: ${transferAmount} (hidden in commitment)`,
       verifier: `On-chain sees:\n- New commitment (hides amount)\n- Ephemeral pubkey (for recipient scanning)\n- One-time address (unlinkable to recipient)\n\nDoes NOT see:\n- Amount\n- Sender identity\n- Recipient identity\n- Linkage to any known address`,
       delta: `The transfer is fully private:\n- Stealth address: nobody can tell WHO received it\n- Commitment: nobody can tell HOW MUCH was sent\n- Ephemeral key: only recipient can detect it\n\nThis is stronger than Zcash shielded (which leaks timing) because the one-time address is fresh per-transfer.`,
       timing: elapsed,
@@ -226,66 +226,72 @@ export function initPrivateTransfers(wasm) {
     });
   });
 
-  // Verify conservation
+  // Verify conservation — REAL generate -> verify roundtrip.
   verifyBtn.addEventListener('click', () => {
     if (!commitment) return;
 
     const t0 = performance.now();
 
-    // Create a "change" commitment to demonstrate conservation
+    // Balanced set: 1000 input == transferAmount + change. We re-derive the
+    // recipient output blinding here (the displayed `commitment` above used a
+    // separate blinding; for a verifiable roundtrip the prover must own all the
+    // blindings, so we generate a fresh balanced set and prove over it).
     const changeAmount = 1000 - transferAmount; // Assume 1000 input
-    const changeBlinding = randomBytes(32);
-    const inputBlinding = randomBytes(32);
-    let changeCommitResult, inputCommitResult;
+    const inputBlindingHex = bytesToHex(randomBytes(32));
+    const transferBlindingHex = bytesToHex(randomBytes(32));
+    const changeBlindingHex = bytesToHex(randomBytes(32));
+    const messageHex = bytesToHex(randomBytes(32)); // turn-binding context
+
+    // REAL generate: build commitments + canonical Schnorr excess proof.
+    let proved;
     try {
-      changeCommitResult = wasm.create_value_commitment(BigInt(changeAmount), changeBlinding);
-      // Real commitment for the "original 1000" input — no fabricated hex.
-      inputCommitResult = wasm.create_value_commitment(BigInt(1000), inputBlinding);
+      proved = wasm.prove_conservation(
+        JSON.stringify([{ value: 1000, blinding_hex: inputBlindingHex }]),
+        JSON.stringify([
+          { value: transferAmount, blinding_hex: transferBlindingHex },
+          { value: changeAmount, blinding_hex: changeBlindingHex },
+        ]),
+        messageHex
+      );
     } catch (e) {
-      addTimelineEntry([{ text: `create_value_commitment failed: ${e && e.message || e}`, type: 'error' }]);
+      addTimelineEntry([{ text: `prove_conservation failed: ${e && e.message || e}`, type: 'error' }]);
       return;
     }
-    const changeCommitment = new Uint8Array(changeCommitResult.commitment);
 
-    // Verify conservation: input commitment == output commitments sum
-    const inputCommitHex = bytesToHex(new Uint8Array(inputCommitResult.commitment));
-    const outputCommitHex1 = bytesToHex(commitment);
-    const outputCommitHex2 = bytesToHex(changeCommitment);
-
-    // WASM-side audit fix: verify_conservation_proof is now a fail-closed
-    // stub (returns `valid: false, not_implemented: true`). Surface that
-    // explicitly instead of pretending the check passed.
+    // REAL verify: the same commitments + proof + message the prover produced.
     let conservResult;
     try {
       conservResult = wasm.verify_conservation_proof(
-        JSON.stringify([inputCommitHex]),
-        JSON.stringify([outputCommitHex1, outputCommitHex2])
+        JSON.stringify(proved.input_commitments),
+        JSON.stringify(proved.output_commitments),
+        JSON.stringify(proved.proof),
+        proved.message_hex
       );
     } catch (e) {
-      conservResult = { valid: false, not_implemented: true, input_count: 1, output_count: 2 };
+      addTimelineEntry([{ text: `verify_conservation_proof failed: ${e && e.message || e}`, type: 'error' }]);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 
     state.proofCount++;
     notifyStateChange();
 
-    const conservLabel = conservResult.not_implemented
-      ? 'STUB (verify_conservation_proof is not yet implemented in WASM)'
-      : (conservResult.valid ? 'VALID' : 'INVALID');
+    const conservLabel = conservResult.valid ? 'VALID' : `INVALID${conservResult.error ? ' (' + conservResult.error + ')' : ''}`;
     addTimelineEntry([
       { text: `[Recipient] Derived stealth keys`, type: 'info' },
       { text: `[Sender] Created stealth transfer (${transferAmount} committed)`, type: 'info' },
       { text: `[Recipient] Scanned and found payment`, type: 'info' },
-      { text: `[Verifier] Checking conservation proof...`, type: 'info' },
+      { text: `[Verifier] Checking conservation proof (real Schnorr excess)...`, type: 'info' },
       { text: `  Input: 1 commitment (original 1000)`, type: 'info' },
       { text: `  Output: ${transferAmount} to recipient + ${changeAmount} change`, type: 'info' },
-      { text: `  Conservation: ${conservLabel} (${conservResult.input_count} in -> ${conservResult.output_count} out)`, type: conservResult.valid ? 'success' : 'warning' },
+      { text: `  Conservation (value balance): ${conservLabel} (${conservResult.input_count} in -> ${conservResult.output_count} out)`, type: conservResult.valid ? 'success' : 'warning' },
+      { text: `  Range proofs checked: ${conservResult.range_proofs_checked} (placeholder pending real Bulletproofs)`, type: 'warning' },
     ]);
 
     showExplainer(explainerDiv, {
-      prover: `Conservation proof demonstrates:\n\nsum(input_commitments) == sum(output_commitments)\n\nInput: C(1000, r_in)\nOutputs: C(${transferAmount}, r1) + C(${changeAmount}, r2)\n\nThe homomorphic property of Pedersen commitments allows this check WITHOUT revealing any amounts.`,
-      verifier: `Verifies:\n1. All commitments are well-formed\n2. Sum of inputs == sum of outputs (homomorphic)\n3. Range proofs: all amounts in [0, 2^64)\n4. No value created from nothing\n\nDoes NOT learn:\n- Individual amounts\n- Who sent to whom`,
-      delta: `Conservation is the fundamental soundness property of private transfers. Without it, users could create value from nothing. The Pedersen commitment scheme makes this verification possible without revealing any values: C(a) + C(b) == C(a+b) only if the amounts actually balance.`,
+      prover: `prove_conservation builds REAL Ristretto Pedersen commitments and a Schnorr excess proof:\n\nexcess = sum(inputs) - sum(outputs)\n       = (sum_v_in - sum_v_out)*V + r_excess*R\n\nInput: C(1000, r_in)\nOutputs: C(${transferAmount}, r1) + C(${changeAmount}, r2)\n\nBalanced => excess has no V-component => Schnorr sig over r_excess verifies.`,
+      verifier: `verify_conservation_proof checks (REAL):\n1. All commitments are valid Ristretto points\n2. excess == sum(inputs) - sum(outputs) (homomorphic)\n3. Schnorr excess signature => values balance, no inflation\n\nVerdict: valid=${conservResult.valid}, range_proofs_checked=${conservResult.range_proofs_checked}\n\nNOT yet checked: per-output Bulletproof range proofs (so a negative-value output is not yet ruled out here).`,
+      delta: `The value-balance (excess) relation is now proven for real end-to-end: generate -> verify roundtrip with consistent commitments. The remaining honest gap is per-output range proofs (Bulletproofs) — until those are wired, valid=true means "the excess balances", not "every output is non-negative".`,
       timing: elapsed,
     });
   });

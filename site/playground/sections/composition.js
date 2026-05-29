@@ -150,7 +150,7 @@ export function initComposition(wasm) {
       type: 'Range Proof',
       proof_json: proofJson,
       public_inputs: [amount % 256, 64], // public: commitment byte, bit-width
-      description: `Proves value (hidden) is in [0, 2^64)`,
+      description: `Range proof: placeholder pending real Bulletproofs (not yet a sound [0, 2^64) proof)`,
     });
 
     state.proofCount++;
@@ -161,25 +161,36 @@ export function initComposition(wasm) {
     showResult(resultDiv, 'success', `Generated range proof (${elapsed}ms)`);
   });
 
-  // Generate a conservation proof
+  // Generate a conservation proof — REAL generate -> verify roundtrip.
   container.querySelector('#comp-gen-conservation').addEventListener('click', () => {
     const t0 = performance.now();
-    const inputCommit = randomHex(32);
-    const outputCommit1 = randomHex(32);
-    const outputCommit2 = randomHex(32);
+    // Balanced set: 1000 == 700 + 300, with real Pedersen commitments.
+    const inputBlinding = randomHex(32);
+    const outBlinding1 = randomHex(32);
+    const outBlinding2 = randomHex(32);
+    const messageHex = randomHex(32);
 
-    // WASM-side audit fix: verify_conservation_proof now returns
-    // `{ valid: false, not_implemented: true }`. We still capture the
-    // (currently stub) result as the proof body for composition demos.
-    let proofJson;
+    let proofJson, verdict;
     try {
-      const result = wasm.verify_conservation_proof(
-        JSON.stringify([inputCommit]),
-        JSON.stringify([outputCommit1, outputCommit2])
+      const proved = wasm.prove_conservation(
+        JSON.stringify([{ value: 1000, blinding_hex: inputBlinding }]),
+        JSON.stringify([
+          { value: 700, blinding_hex: outBlinding1 },
+          { value: 300, blinding_hex: outBlinding2 },
+        ]),
+        messageHex
       );
-      proofJson = JSON.stringify({ ...result, type: 'conservation' });
+      verdict = wasm.verify_conservation_proof(
+        JSON.stringify(proved.input_commitments),
+        JSON.stringify(proved.output_commitments),
+        JSON.stringify(proved.proof),
+        proved.message_hex
+      );
+      proofJson = JSON.stringify({ ...proved, verdict, type: 'conservation' });
     } catch (e) {
-      proofJson = JSON.stringify({ type: 'conservation', valid: false, not_implemented: true, inputs: 1, outputs: 2 });
+      // No fabrication: a wasm failure is surfaced, not faked as valid.
+      showResult(resultDiv, 'error', `conservation prove/verify failed: ${e && e.message || e}`);
+      return;
     }
     const elapsed = (performance.now() - t0).toFixed(2);
 
@@ -187,7 +198,7 @@ export function initComposition(wasm) {
       type: 'Conservation',
       proof_json: proofJson,
       public_inputs: [1, 2], // input_count, output_count
-      description: `Proves sum(1 input) == sum(2 outputs) without revealing values`,
+      description: `REAL Schnorr excess proof: sum(1 input)==sum(2 outputs), valid=${verdict.valid}, range_proofs_checked=${verdict.range_proofs_checked}`,
     });
 
     state.proofCount++;
@@ -195,7 +206,10 @@ export function initComposition(wasm) {
     renderProofs();
     updateButtons();
 
-    showResult(resultDiv, 'success', `Generated conservation proof (${elapsed}ms)`);
+    const label = verdict.valid
+      ? `valid=true (range_proofs_checked=false — placeholder pending real Bulletproofs)`
+      : `valid=false${verdict.error ? ' (' + verdict.error + ')' : ''}`;
+    showResult(resultDiv, verdict.valid ? 'success' : 'warning', `Generated + verified conservation proof: ${label} (${elapsed}ms)`);
   });
 
   // Compose proofs

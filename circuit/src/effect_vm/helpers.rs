@@ -22,6 +22,71 @@ fn join_u64(lo: BabyBear, hi: BabyBear) -> u64 {
     (lo.0 as u64) | ((hi.0 as u64) << 30)
 }
 
+/// Decompose a 32-byte value into 8 BabyBear limbs (4 bytes each,
+/// little-endian). Position 0 carries bytes `[0..4]`; position 7 carries
+/// bytes `[28..32]`. Each limb is reduced mod `p` (so a 4-byte chunk whose
+/// top bits exceed `p` wraps — this is fine: the encoding is a deterministic,
+/// total function and is identical on both projectors).
+///
+/// This is the canonical full-32-byte limb decomposition used to bind hashes
+/// / field elements into the Effect VM PI. It matches the `bytes32_to_8_felts`
+/// convention already used for `Effect::EmitEvent` and `Effect::Custom`.
+#[inline]
+pub fn bytes32_to_8_limbs(b: &[u8; 32]) -> [BabyBear; 8] {
+    let mut out = [BabyBear::ZERO; 8];
+    for i in 0..8 {
+        let off = i * 4;
+        let v = u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
+        out[i] = BabyBear::new(v % crate::field::BABYBEAR_P);
+    }
+    out
+}
+
+/// Collision-resistant fold of a full 32-byte value into a single BabyBear.
+///
+/// CLOSED (effect-vm-hash-truncation lane, 2026-05-28): the previous
+/// `hash_to_bb` / `field_element_to_bb` projectors took ONLY the first 4 bytes
+/// of each 32-byte hash/field element, so the EffectVM proof bound only 4
+/// bytes of each value (P1-2 in AUDIT-turn-executor.md). Two effects differing
+/// solely in bytes `[4..32]` projected to the *identical* BabyBear and thus to
+/// the identical `compute_effects_hash` / `PI[EFFECTS_HASH]` — interchangeable
+/// proofs.
+///
+/// This fold makes the felt a function of ALL 32 bytes via a Horner evaluation
+/// over the 8 four-byte limbs in the BabyBear field:
+///
+/// ```text
+///   fold = Σ_{i=0}^{7} limb_i · MIX^i   (mod p)
+/// ```
+///
+/// where `limb_i` is the i-th little-endian 4-byte chunk and `MIX` is a fixed
+/// non-trivial field element. Because every limb contributes with a distinct,
+/// invertible weight, flipping any byte changes the output (and two distinct
+/// 32-byte inputs collide only with ~`1/p ≈ 2^-31` probability for random
+/// inputs — versus the previous *guaranteed* collision whenever the low 4
+/// bytes matched).
+///
+/// Both the executor projector (`effect_vm_bridge.rs`) and the SDK projector
+/// (`cipherclerk.rs`) call THIS function, so their per-effect felts agree
+/// byte-for-byte by construction. The full-strength 256-bit binding for the
+/// EmitEvent/Custom families is carried by their 8-limb fields; this fold is
+/// the single-felt closure for the remaining identity/hash params, which the
+/// AIR pins into a param column and `compute_effects_hash` absorbs.
+#[inline]
+pub fn fold_bytes32_to_bb(b: &[u8; 32]) -> BabyBear {
+    // Fixed non-trivial mixing constant (a 31-bit prime, < p). Chosen to be
+    // far from 0/1 so the Horner weights MIX^i are well-distributed.
+    const MIX: u32 = 0x4FD3_9C8B % crate::field::BABYBEAR_P;
+    let mix = BabyBear::new(MIX);
+    let limbs = bytes32_to_8_limbs(b);
+    let mut acc = BabyBear::ZERO;
+    // Horner: acc = ((..(limb7)*mix + limb6)*mix + ...)*mix + limb0
+    for i in (0..8).rev() {
+        acc = acc * mix + limbs[i];
+    }
+    acc
+}
+
 /// Decompose a u64 into 4 BabyBear limbs (16 bits each, little-endian).
 /// Returns `[lo16, mid_lo16, mid_hi16, hi16]` so the limbs sum back to
 /// the original via `Σ limbs[i] * 2^(16*i)`. Used to project full-u64

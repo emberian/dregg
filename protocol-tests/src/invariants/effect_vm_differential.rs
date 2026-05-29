@@ -142,14 +142,15 @@ fn fresh_ledger() -> (Ledger, Vec<CellId>) {
 /// cover the variants exercised by tests below — others fall through to
 /// `VmEffect::NoOp`.
 fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
+    // CLOSED (effect-vm-hash-truncation lane, 2026-05-28): mirror the
+    // executor + SDK projectors, which now fold all 32 bytes via the shared
+    // `dregg_circuit::effect_vm::fold_bytes32_to_bb`. Keeping this inline
+    // helper in lock-step is what makes the differential checks meaningful.
     fn hash_to_bb(h: &[u8; 32]) -> BabyBear {
-        let v = u32::from_le_bytes([h[0], h[1], h[2], h[3]]) % dregg_circuit::field::BABYBEAR_P;
-        BabyBear::new(v)
+        dregg_circuit::effect_vm::fold_bytes32_to_bb(h)
     }
     fn field_to_bb(v: &[u8; 32]) -> BabyBear {
-        let val_u32 =
-            u32::from_le_bytes([v[0], v[1], v[2], v[3]]) % dregg_circuit::field::BABYBEAR_P;
-        BabyBear::new(val_u32)
+        dregg_circuit::effect_vm::fold_bytes32_to_bb(v)
     }
 
     let mut out: Vec<VmEffect> = Vec::new();
@@ -200,14 +201,7 @@ fn project_turn_to_vm(cell_id: &CellId, turn: &Turn) -> Vec<VmEffect> {
                     }
                     let payload_bytes = *ph.finalize().as_bytes();
                     fn bytes32_to_8_felts(b: &[u8; 32]) -> [BabyBear; 8] {
-                        let mut out = [BabyBear::ZERO; 8];
-                        for i in 0..8 {
-                            let off = i * 4;
-                            let v =
-                                u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]);
-                            out[i] = BabyBear::new(v % dregg_circuit::field::BABYBEAR_P);
-                        }
-                        out
+                        dregg_circuit::effect_vm::bytes32_to_8_limbs(b)
                     }
                     out.push(VmEffect::EmitEvent {
                         topic_hash: bytes32_to_8_felts(&topic_bytes),

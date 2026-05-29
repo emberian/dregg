@@ -25,6 +25,11 @@ pub mod permission_enforcement;
 pub mod receipt_chain;
 pub mod sealed_field_integrity;
 
+/// The WASM `verify_conservation_proof` binding accepts a balanced Pedersen
+/// transaction and rejects an unbalanced one (real Schnorr excess check).
+/// Adversarial accept/reject pair for the effect-vm-hash-truncation lane.
+pub mod conservation_proof_wasm;
+
 // New invariants for the substrate-test mandate (silver-vision).
 // Each module is one protocol claim from CAVEAT-LAYER-COVERAGE.md,
 // SLOT-CAVEATS-DESIGN.md, STAGE-7-GAMMA-2-PI-DESIGN.md, or

@@ -313,6 +313,8 @@ pub const VK_PI_LAYOUT_VERSION: u32 = 2;
 ///   173     EMIT_EVENT_COUNT                    (closes #110)
 ///   174..182 EMIT_EVENT_TOPIC_HASH[8]            (closes #110)
 ///   182..190 EMIT_EVENT_PAYLOAD_HASH[8]          (closes #110)
+///   190..194 FEDERATION_ID[4]                    (γ.2 #131)
+///   194..198 OWNER_CELL_ID[4]                    (γ.2 #132)
 ///
 /// ---- Slot-caveat manifest (Cav-Codex Block 3) ----
 ///
@@ -517,7 +519,38 @@ pub const EMIT_EVENT_PAYLOAD_HASH_BASE: usize =
     EMIT_EVENT_TOPIC_HASH_BASE + EMIT_EVENT_TOPIC_HASH_LEN; // 182
 pub const EMIT_EVENT_PAYLOAD_HASH_LEN: usize = 8;
 
-pub const BASE_COUNT: usize = EMIT_EVENT_PAYLOAD_HASH_BASE + EMIT_EVENT_PAYLOAD_HASH_LEN; // 190
+// ---- Stage 7-γ.2 follow-up (#131 + #132): per-cell federation + owner binding ----
+//
+// Without these two slots, a per-cell / bilateral / witnessed-receipt proof
+// minted under federation A (or for owner cell X) is structurally
+// indistinguishable from one minted under federation B (or owner cell Y):
+// the cross-cell match loop (CG-2/CG-3) checks turn-identity + bilateral
+// roots but never the federation or the proving cell's own id, so a verifier
+// could be tricked into accepting a proof swapped in from a different
+// federation or a different owner cell.
+//
+// Both fields are a 4-felt Poseidon2 compression of a 32-byte canonical id
+// (`federation_id_to_felts_4` / `owner_cell_id_to_felts_4` in the trace
+// module — bit-identical to `dregg_commit::typed::canonical_32_to_felts_4`
+// so the executor-side verifier reconstruction matches). The AIR pins both
+// to dedicated row-0 aux columns (`aux_off::FEDERATION_ID_*` /
+// `aux_off::OWNER_CELL_ID_*`); the off-AIR verifier recomputes the expected
+// values from the trusted federation id + owner cell id and rejects any
+// per-cell PI that disagrees.
+//
+// #131: FEDERATION_ID — the federation under which this proof was minted.
+//       All per-cell proofs of one turn share this value (the verifier's
+//       PI-match loop also enforces cross-proof equality).
+pub const FEDERATION_ID_BASE: usize = EMIT_EVENT_PAYLOAD_HASH_BASE + EMIT_EVENT_PAYLOAD_HASH_LEN; // 190
+pub const FEDERATION_ID_LEN: usize = 4;
+// #132: OWNER_CELL_ID — the cell whose state transition this proof attests.
+//       Distinct per per-cell proof (each side of a bilateral effect carries
+//       its own owner). Binds the proof to a specific owner cell so a proof
+//       for owner cell X cannot be substituted for owner cell Y.
+pub const OWNER_CELL_ID_BASE: usize = FEDERATION_ID_BASE + FEDERATION_ID_LEN; // 194
+pub const OWNER_CELL_ID_LEN: usize = 4;
+
+pub const BASE_COUNT: usize = OWNER_CELL_ID_BASE + OWNER_CELL_ID_LEN; // 198
 /// Elements per custom effect entry in PI (8 vk_hash + 4 proof_commit).
 /// Was 8 in PI layout v1; widened to 12 in v2 (`VK_PI_LAYOUT_VERSION == 2`).
 pub const CUSTOM_ENTRY_SIZE: usize = 12;

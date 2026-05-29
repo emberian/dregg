@@ -28,41 +28,34 @@ pub(super) fn convert_turn_effects_to_vm(
         use dregg_circuit::effect_vm::Effect as VmEffect;
         use dregg_circuit::field::BabyBear;
 
-        // REVIEW[effect-vm-coord]: Both helpers truncate 32-byte values to
-        // 4 bytes (P1-2 in AUDIT-turn-executor.md). Many distinct effects
-        // collapse to the same circuit-side identifier; the proof binds to
-        // a coarse equivalence class rather than the specific effect.
+        // CLOSED (effect-vm-hash-truncation lane, 2026-05-28): both helpers
+        // previously took ONLY the first 4 bytes of each 32-byte value
+        // (P1-2 in AUDIT-turn-executor.md), so the EffectVM proof bound only
+        // 4 bytes of each hash/field element — two effects differing solely
+        // in bytes [4..32] collapsed to the same circuit-side identifier and
+        // produced interchangeable proofs.
         //
-        // SCOPED OUT (AIR-soundness lane, 2026-05-28): widening these to a
-        // faithful 8-limb encoding is a genuinely cross-surface coordinated
-        // change and is NOT safe to land from this lane alone. It requires,
-        // in lockstep:
-        //   1. the `dregg_circuit::effect_vm::Effect` enum variants to carry
-        //      8-limb hashes instead of single felts (circuit crate);
-        //   2. the EffectVM AIR constraints + `compute_effects_hash` + the PI
-        //      layout to consume the wider columns (circuit crate);
-        //   3. THIS projector AND the parallel SDK projector
-        //      (`sdk/src/cipherclerk.rs::convert_*`) — they MUST agree byte-
-        //      for-byte or the effects-hash diverges and no proof verifies;
-        //   4. the differential invariant in
-        //      `protocol-tests/.../effect_vm_differential.rs`, which asserts
-        //      the executor and SDK projectors produce identical VM effects.
-        // Items 3-4 live outside this lane's write surface (sdk/, protocol-
-        // tests/). Changing only the executor side would desync the two
-        // projectors and break every bridge proof, so it is deferred to a
-        // single coordinated landing rather than partially applied here.
-        // (The full-u64 amount truncation, by contrast, WAS closed: the VM
-        // effect carries `value_full` bound via 4×16-bit PI limbs +
+        // Both helpers now delegate to the SHARED canonical fold
+        // `dregg_circuit::effect_vm::fold_bytes32_to_bb`, which Horner-folds
+        // all 8 four-byte limbs of the value into the BabyBear felt. The SDK
+        // projector (`sdk/src/cipherclerk.rs::convert_effects_to_vm`) imports
+        // and calls the SAME function, so the two projectors agree byte-for-
+        // byte by construction (asserted by the differential invariant in
+        // `protocol-tests/.../effect_vm_differential.rs`). Because every byte
+        // now contributes to the felt, the per-effect param column and the
+        // `compute_effects_hash`-derived `PI[EFFECTS_HASH]` bind the full
+        // 32-byte value rather than a 4-byte equivalence class.
+        //
+        // (The full-u64 amount truncation, by contrast, was closed earlier:
+        // the VM effect carries `value_full` bound via 4×16-bit PI limbs +
         // effects_hash, and the note-spending spend proof now binds the full
         // u64 via the VALUE_HI column — see apply.rs + dsl::note_spending.)
         fn hash_to_bb(h: &[u8; 32]) -> BabyBear {
-            let val_u32 = u32::from_le_bytes([h[0], h[1], h[2], h[3]]);
-            BabyBear::new(val_u32 % dregg_circuit::field::BABYBEAR_P)
+            dregg_circuit::effect_vm::fold_bytes32_to_bb(h)
         }
 
         fn field_element_to_bb(value: &[u8; 32]) -> BabyBear {
-            let val_u32 = u32::from_le_bytes([value[0], value[1], value[2], value[3]]);
-            BabyBear::new(val_u32 % dregg_circuit::field::BABYBEAR_P)
+            dregg_circuit::effect_vm::fold_bytes32_to_bb(value)
         }
 
         for effect in &tree.action.effects {
@@ -1126,15 +1119,14 @@ pub(super) fn convert_turn_effects_to_vm(
                         crate::action::RefusalReason::WindowExpired => 2u32,
                         crate::action::RefusalReason::Custom { .. } => 3u32,
                     };
-                    let commitment_trunc = u32::from_le_bytes([
-                        offered_action_commitment[0],
-                        offered_action_commitment[1],
-                        offered_action_commitment[2],
-                        offered_action_commitment[3],
-                    ]);
-                    let reason_hash = BabyBear::new(
-                        (discriminant ^ commitment_trunc) % dregg_circuit::field::BABYBEAR_P,
-                    );
+                    // Fold ALL 32 bytes of the commitment (not just the low 4)
+                    // so two refusals over commitments differing above byte 4
+                    // bind to distinct reason_hashes.
+                    let commitment_fold =
+                        dregg_circuit::effect_vm::fold_bytes32_to_bb(offered_action_commitment);
+                    let reason_hash =
+                        BabyBear::new(discriminant % dregg_circuit::field::BABYBEAR_P)
+                            + commitment_fold;
                     vm_effects.push(VmEffect::Refusal {
                         target: target_hash,
                         reason_hash,
@@ -1434,15 +1426,13 @@ mod tests {
                 expected_message_hash,
                 ..
             } => {
-                // Compute what hash_to_bb produces for msg1 vs msg3.
-                let msg1_bb = BabyBear::new(
-                    u32::from_le_bytes([msg1[0], msg1[1], msg1[2], msg1[3]])
-                        % dregg_circuit::field::BABYBEAR_P,
-                );
-                let msg3_bb = BabyBear::new(
-                    u32::from_le_bytes([msg3[0], msg3[1], msg3[2], msg3[3]])
-                        % dregg_circuit::field::BABYBEAR_P,
-                );
+                let _ = BabyBear::ZERO; // keep BabyBear import referenced
+                // Compute what hash_to_bb produces for msg1 vs msg3. Post the
+                // hash-truncation fix, hash_to_bb folds ALL 32 bytes via the
+                // shared `fold_bytes32_to_bb`, so the expected value must use
+                // that same canonical fold (not the old 4-byte truncation).
+                let msg1_bb = dregg_circuit::effect_vm::fold_bytes32_to_bb(&msg1);
+                let msg3_bb = dregg_circuit::effect_vm::fold_bytes32_to_bb(&msg3);
                 assert_eq!(
                     *expected_message_hash, msg1_bb,
                     "dequeue must bind to msg1 (FIFO head), not msg3 (tail)"

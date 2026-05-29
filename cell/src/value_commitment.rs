@@ -178,6 +178,97 @@ impl ValueCommitment {
     }
 }
 
+// ─── Byte-friendly helpers (for FFI / wasm marshalling) ──────────────────────
+//
+// These keep the curve25519-dalek `Scalar`/`RistrettoPoint` work inside the
+// `cell` crate so that callers (e.g. the wasm bindings) only ever marshal
+// `[u8; 32]` arrays across the FFI boundary and never need a direct
+// curve25519-dalek dependency.
+
+/// Interpret 32 little-endian bytes as a Ristretto `Scalar` (reduced mod the
+/// group order). Always succeeds — non-canonical encodings are reduced rather
+/// than rejected, which is exactly what we want for a freshly-generated random
+/// blinding factor handed in as raw bytes.
+pub fn scalar_from_blinding_bytes(blinding: &[u8; 32]) -> Scalar {
+    Scalar::from_bytes_mod_order(*blinding)
+}
+
+/// Create a Pedersen value commitment from a value and 32 raw blinding bytes,
+/// returning the 32-byte compressed Ristretto encoding.
+///
+/// `commit_bytes(value, blinding) = (value * V + scalar(blinding) * R).compress()`
+///
+/// This is the byte-in / byte-out form of [`ValueCommitment::commit`]: the
+/// blinding bytes are reduced mod the group order via
+/// [`scalar_from_blinding_bytes`] and the resulting point is returned in the
+/// canonical 32-byte compressed Ristretto encoding (the same bytes
+/// [`ValueCommitment::to_bytes`] produces).
+pub fn commit_bytes(value: u64, blinding: &[u8; 32]) -> [u8; 32] {
+    let scalar = scalar_from_blinding_bytes(blinding);
+    ValueCommitment::commit(value, &scalar).to_bytes().0
+}
+
+/// Result of [`prove_conservation_bytes`]: all fields are 32-byte compressed
+/// Ristretto / scalar encodings, ready to hand across an FFI boundary as hex.
+#[derive(Clone, Debug)]
+pub struct ConservationProofBytes {
+    /// Compressed Ristretto encoding of each input value commitment, in order.
+    pub input_commitments: Vec<[u8; 32]>,
+    /// Compressed Ristretto encoding of each output value commitment, in order.
+    pub output_commitments: Vec<[u8; 32]>,
+    /// The canonical Schnorr conservation proof (excess / nonce / response).
+    pub proof: ConservationProof,
+}
+
+/// Build value commitments for a balanced transaction and produce the canonical
+/// Schnorr conservation proof — all in terms of raw bytes.
+///
+/// Each input/output is `(value, blinding_bytes)`. The excess blinding factor
+/// is computed internally as `Σ input_blindings − Σ output_blindings`, so the
+/// caller does not need to touch a `Scalar`. The returned commitments and proof
+/// are exactly what [`verify_conservation`] (and the wasm
+/// `verify_conservation_proof` binding) consume.
+///
+/// This is the prove-side counterpart to the byte-in verifier: it lets a wasm
+/// caller produce a real generate→verify roundtrip without depending on
+/// curve25519-dalek directly.
+pub fn prove_conservation_bytes(
+    inputs: &[(u64, [u8; 32])],
+    outputs: &[(u64, [u8; 32])],
+    message: &[u8],
+) -> ConservationProofBytes {
+    let input_commitments: Vec<ValueCommitment> = inputs
+        .iter()
+        .map(|(v, b)| ValueCommitment::commit(*v, &scalar_from_blinding_bytes(b)))
+        .collect();
+    let output_commitments: Vec<ValueCommitment> = outputs
+        .iter()
+        .map(|(v, b)| ValueCommitment::commit(*v, &scalar_from_blinding_bytes(b)))
+        .collect();
+
+    // excess_blinding = Σ input_blindings − Σ output_blindings.
+    let sum_in = inputs
+        .iter()
+        .fold(Scalar::ZERO, |acc, (_, b)| acc + scalar_from_blinding_bytes(b));
+    let sum_out = outputs
+        .iter()
+        .fold(Scalar::ZERO, |acc, (_, b)| acc + scalar_from_blinding_bytes(b));
+    let excess_blinding = sum_in - sum_out;
+
+    let proof = prove_conservation(
+        &input_commitments,
+        &output_commitments,
+        &excess_blinding,
+        message,
+    );
+
+    ConservationProofBytes {
+        input_commitments: input_commitments.iter().map(|c| c.to_bytes().0).collect(),
+        output_commitments: output_commitments.iter().map(|c| c.to_bytes().0).collect(),
+        proof,
+    }
+}
+
 impl Add for ValueCommitment {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
@@ -1332,6 +1423,78 @@ mod tests {
             }) => {}
             other => panic!("expected RangeProofFailed at index 1, got {:?}", other),
         }
+    }
+
+    // ─── Byte-friendly helper tests ──────────────────────────────────────────
+
+    #[test]
+    fn commit_bytes_matches_scalar_commit() {
+        // commit_bytes(value, blinding_bytes) must equal the compressed bytes of
+        // ValueCommitment::commit(value, Scalar::from_bytes_mod_order(blinding)).
+        let blinding = [7u8; 32];
+        let scalar = Scalar::from_bytes_mod_order(blinding);
+        let expected = ValueCommitment::commit(12345, &scalar).to_bytes().0;
+        let got = commit_bytes(12345, &blinding);
+        assert_eq!(got, expected);
+        // And it must decompress back to a valid Ristretto point.
+        assert!(ValueCommitment::from_bytes(&ValueCommitmentBytes(got)).is_some());
+    }
+
+    #[test]
+    fn prove_conservation_bytes_roundtrip_balanced() {
+        // 1000 input == 700 transfer + 300 change. Real generate -> verify.
+        let inputs = [(1000u64, [1u8; 32])];
+        let outputs = [(700u64, [2u8; 32]), (300u64, [3u8; 32])];
+        let msg = b"roundtrip-balanced";
+
+        let out = prove_conservation_bytes(&inputs, &outputs, msg);
+        assert_eq!(out.input_commitments.len(), 1);
+        assert_eq!(out.output_commitments.len(), 2);
+
+        // Reconstruct ValueCommitments from the returned bytes and verify.
+        let in_vcs: Vec<ValueCommitment> = out
+            .input_commitments
+            .iter()
+            .map(|b| ValueCommitment::from_bytes(&ValueCommitmentBytes(*b)).unwrap())
+            .collect();
+        let out_vcs: Vec<ValueCommitment> = out
+            .output_commitments
+            .iter()
+            .map(|b| ValueCommitment::from_bytes(&ValueCommitmentBytes(*b)).unwrap())
+            .collect();
+
+        assert!(
+            verify_conservation(&in_vcs, &out_vcs, &out.proof, msg).is_ok(),
+            "balanced byte-roundtrip proof must verify"
+        );
+    }
+
+    #[test]
+    fn prove_conservation_bytes_non_conserving_fails() {
+        // Adversarial: 1000 input but outputs sum to 1100 (inflation). The
+        // excess point has a nonzero V-component, so the Schnorr proof must NOT
+        // verify even though excess_blinding is computed honestly.
+        let inputs = [(1000u64, [1u8; 32])];
+        let outputs = [(700u64, [2u8; 32]), (400u64, [3u8; 32])]; // 1100 != 1000
+        let msg = b"non-conserving";
+
+        let out = prove_conservation_bytes(&inputs, &outputs, msg);
+        let in_vcs: Vec<ValueCommitment> = out
+            .input_commitments
+            .iter()
+            .map(|b| ValueCommitment::from_bytes(&ValueCommitmentBytes(*b)).unwrap())
+            .collect();
+        let out_vcs: Vec<ValueCommitment> = out
+            .output_commitments
+            .iter()
+            .map(|b| ValueCommitment::from_bytes(&ValueCommitmentBytes(*b)).unwrap())
+            .collect();
+
+        assert_eq!(
+            verify_conservation(&in_vcs, &out_vcs, &out.proof, msg),
+            Err(ConservationError::SignatureInvalid),
+            "non-conserving (inflating) byte-roundtrip proof must fail closed"
+        );
     }
 
     #[test]

@@ -267,21 +267,28 @@ pub fn scan_stealth_announcements(
 // Private Transfers (Pedersen commitments + conservation)
 // ============================================================================
 
-/// Create a Pedersen-style value commitment.
+/// Create a **real** Pedersen value commitment over the Ristretto group.
 ///
-/// Uses BLAKE3-based commitment: C = H(value || blinding).
-/// Returns JSON: { commitment: Vec<u8>, blinding: Vec<u8> }
+/// `commitment = amount * V + scalar(blinding) * R`, where `V`/`R` are the
+/// canonical `dregg_cell` value/randomness generators and the 32 blinding bytes
+/// are reduced mod the group order into a `Scalar`. The returned `commitment`
+/// is the 32-byte compressed Ristretto encoding — the exact bytes that
+/// `verify_conservation_proof` / `prove_conservation` consume and that
+/// `ValueCommitment::to_bytes` produces. This replaces the previous BLAKE3
+/// hash placeholder, which was NOT a real curve point and was incompatible with
+/// the homomorphic conservation verifier.
+///
+/// Returns JSON: { commitment: Vec<u8> (32-byte compressed Ristretto), blinding: Vec<u8> }
 #[wasm_bindgen]
 pub fn create_value_commitment(amount: u64, blinding: &[u8]) -> Result<JsValue, JsError> {
     if blinding.len() != 32 {
         return Err(JsError::new("blinding must be 32 bytes"));
     }
+    let mut blinding_arr = [0u8; 32];
+    blinding_arr.copy_from_slice(blinding);
 
-    // Construct commitment: blake3_derive_key("dregg-pedersen-v1", amount_le || blinding)
-    let mut input = Vec::with_capacity(40);
-    input.extend_from_slice(&amount.to_le_bytes());
-    input.extend_from_slice(blinding);
-    let commitment = blake3::derive_key("dregg-pedersen-v1", &input);
+    // Real Pedersen commitment (curve25519-dalek work stays in `cell`).
+    let commitment = dregg_cell::value_commitment::commit_bytes(amount, &blinding_arr);
 
     #[derive(Serialize)]
     struct CommitmentResult {
@@ -296,49 +303,259 @@ pub fn create_value_commitment(amount: u64, blinding: &[u8]) -> Result<JsValue, 
     Ok(serde_wasm_bindgen::to_value(&result)?)
 }
 
-/// Verify a conservation proof (sum of inputs == sum of outputs).
+/// Produce a **real** conservation proof for a balanced transaction.
 ///
-/// `input_commitments_json`: JSON array of hex-encoded 32-byte commitments
-/// `output_commitments_json`: same format
-/// `excess_signature_hex`: the Schnorr excess signature binding inputs to outputs
+/// Given inputs and outputs (each `{ value, blinding_hex }`) plus a `message_hex`
+/// binding context, this builds the real Ristretto `ValueCommitment`s, computes
+/// the excess blinding `Σ input_blindings − Σ output_blindings` internally, and
+/// produces the canonical `dregg_cell::ConservationProof` (Schnorr excess
+/// signature). All the curve25519-dalek work happens inside `dregg_cell`
+/// (`prove_conservation_bytes`); this binding only marshals bytes.
 ///
-/// Returns JSON: { valid: bool }
+/// The returned shape is EXACTLY what `verify_conservation_proof` parses:
+/// ```json
+/// {
+///   "input_commitments":  ["<hex32>", ...],
+///   "output_commitments": ["<hex32>", ...],
+///   "proof": { "excess_commitment": "<hex32>",
+///              "nonce_commitment":  "<hex32>",
+///              "response":          "<hex32>" },
+///   "message_hex": "<hex>"
+/// }
+/// ```
+///
+/// Soundness note (matches the verifier): this proves only the Schnorr excess
+/// relation (value balance). It does NOT attach Bulletproof range proofs, so a
+/// `valid: true` from the verifier means "the excess balances", not "every
+/// output is non-negative". Range proofs remain a separate, real gap.
+#[wasm_bindgen]
+pub fn prove_conservation(
+    inputs_json: &str,
+    outputs_json: &str,
+    message_hex: &str,
+) -> Result<JsValue, JsError> {
+    #[derive(Deserialize)]
+    struct Note {
+        value: u64,
+        blinding_hex: String,
+    }
+
+    let inputs_raw: Vec<Note> =
+        serde_json::from_str(inputs_json).map_err(|e| JsError::new(&format!("inputs_json: {e}")))?;
+    let outputs_raw: Vec<Note> = serde_json::from_str(outputs_json)
+        .map_err(|e| JsError::new(&format!("outputs_json: {e}")))?;
+
+    fn to_pairs(notes: &[Note]) -> Result<Vec<(u64, [u8; 32])>, JsError> {
+        notes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let b = decode_hex_32(&n.blinding_hex)
+                    .map_err(|e| JsError::new(&format!("note[{i}].blinding_hex: {e}")))?;
+                Ok((n.value, b))
+            })
+            .collect()
+    }
+
+    let inputs = to_pairs(&inputs_raw)?;
+    let outputs = to_pairs(&outputs_raw)?;
+
+    let message = if message_hex.is_empty() {
+        Vec::new()
+    } else {
+        decode_hex_vec(message_hex).map_err(|e| JsError::new(&format!("message_hex: {e}")))?
+    };
+
+    let out = dregg_cell::value_commitment::prove_conservation_bytes(&inputs, &outputs, &message);
+
+    #[derive(Serialize)]
+    struct ProofJson {
+        excess_commitment: String,
+        nonce_commitment: String,
+        response: String,
+    }
+    #[derive(Serialize)]
+    struct ProveConservationResult {
+        input_commitments: Vec<String>,
+        output_commitments: Vec<String>,
+        proof: ProofJson,
+        message_hex: String,
+    }
+
+    let result = ProveConservationResult {
+        input_commitments: out.input_commitments.iter().map(|b| hex_encode(b)).collect(),
+        output_commitments: out
+            .output_commitments
+            .iter()
+            .map(|b| hex_encode(b))
+            .collect(),
+        proof: ProofJson {
+            excess_commitment: hex_encode(&out.proof.excess_commitment),
+            nonce_commitment: hex_encode(&out.proof.nonce_commitment),
+            response: hex_encode(&out.proof.response),
+        },
+        message_hex: message_hex.to_string(),
+    };
+    Ok(serde_wasm_bindgen::to_value(&result)?)
+}
+
+/// Verify a conservation proof (sum of inputs == sum of outputs) using the
+/// canonical Pedersen/Ristretto homomorphic check from
+/// `dregg_cell::value_commitment`.
+///
+/// This is the SAME primitive the executor uses for committed-value turns
+/// (`verify_conservation` — a Schnorr signature proving the excess
+/// `Σ inputs − Σ outputs` is a commitment to *zero value*, i.e. the values
+/// balance and no inflation occurred).
+///
+/// # Arguments
+///
+/// - `input_commitments_json`: JSON array of hex-encoded 32-byte **compressed
+///   Ristretto** value commitments (as produced by
+///   `ValueCommitment::to_bytes` / the SDK committed-turn builder).
+/// - `output_commitments_json`: same format, for the created notes.
+/// - `proof_json`: JSON object `{ excess_commitment, nonce_commitment,
+///   response }`, each a hex-encoded 32 bytes — the canonical
+///   `dregg_cell::ConservationProof` (Schnorr excess signature). This is the
+///   `conservation` field of the SDK's `FullConservationProof`.
+/// - `message_hex`: hex-encoded binding context (e.g. the turn hash). Pass an
+///   empty string for an unbound proof. MUST match the message the prover
+///   signed or verification fails closed.
+///
+/// # Soundness / fail-closed
+///
+/// This binding verifies ONLY the Schnorr excess relation (value
+/// conservation). It does NOT verify the per-output Bulletproof range proofs
+/// that prevent the "negative value" inflation attack — those live in
+/// `FullConservationProof::output_range_proofs` and require the `bulletproofs`
+/// verifier, which is *not* reachable from this minimal binding. We therefore
+/// surface `range_proofs_checked: false` so callers MUST NOT treat a `valid:
+/// true` here as a complete conservation guarantee for untrusted outputs; it
+/// proves the excess balances, not that every output is non-negative. Any
+/// malformed point, non-canonical scalar, message mismatch, or unbalanced
+/// excess yields `valid: false` with a precise `error`.
+///
+/// Returns JSON: `{ valid, range_proofs_checked, input_count, output_count,
+/// error }`.
 #[wasm_bindgen]
 pub fn verify_conservation_proof(
     input_commitments_json: &str,
     output_commitments_json: &str,
+    proof_json: &str,
+    message_hex: &str,
 ) -> Result<JsValue, JsError> {
-    let inputs: Vec<String> =
+    use dregg_cell::value_commitment::{
+        ConservationProof, ValueCommitment, ValueCommitmentBytes, verify_conservation,
+    };
+
+    let input_hex: Vec<String> =
         serde_json::from_str(input_commitments_json).map_err(|e| JsError::new(&e.to_string()))?;
-    let outputs: Vec<String> =
+    let output_hex: Vec<String> =
         serde_json::from_str(output_commitments_json).map_err(|e| JsError::new(&e.to_string()))?;
 
-    // P1 audit fix: a full implementation needs to verify
-    // sum(inputs) == sum(outputs) using the homomorphic property of Pedersen
-    // commitments + an excess signature. None of that is wired up here. The
-    // previous version returned `valid: true` whenever both lists were
-    // non-empty, which is silently authorizing every call. We now fail closed:
-    // `valid: false` with `not_implemented: true` so callers can surface a
-    // "stub" indicator rather than treating non-empty lists as a verified
-    // conservation proof.
     #[derive(Serialize)]
     struct ConservationResult {
         valid: bool,
-        not_implemented: bool,
-        message: &'static str,
+        /// Always false in this binding: the Schnorr excess is checked but the
+        /// per-output Bulletproof range proofs are not (see fn docs).
+        range_proofs_checked: bool,
         input_count: usize,
         output_count: usize,
+        error: Option<String>,
     }
 
-    let result = ConservationResult {
-        valid: false,
-        not_implemented: true,
-        message: "verify_conservation_proof is unimplemented; this binding only \
-                  parses inputs and refuses to assert any conservation property.",
-        input_count: inputs.len(),
-        output_count: outputs.len(),
+    // Helper: decode a hex commitment into a real Ristretto ValueCommitment.
+    // Fails closed (returns Err) on any malformed / non-canonical point.
+    fn decode_commitments(
+        list: &[String],
+    ) -> Result<Vec<ValueCommitment>, String> {
+        let mut out = Vec::with_capacity(list.len());
+        for (i, h) in list.iter().enumerate() {
+            let bytes = decode_hex_32(h).map_err(|e| format!("commitment[{i}]: {e}"))?;
+            let vc = ValueCommitment::from_bytes(&ValueCommitmentBytes(bytes))
+                .ok_or_else(|| format!("commitment[{i}]: not a valid Ristretto point"))?;
+            out.push(vc);
+        }
+        Ok(out)
+    }
+
+    // Any decode/verify failure becomes a fail-closed `valid: false` with an
+    // error string — never a thrown JsError (so callers always get a verdict).
+    let verdict: Result<(), String> = (|| {
+        let inputs = decode_commitments(&input_hex)?;
+        let outputs = decode_commitments(&output_hex)?;
+
+        #[derive(Deserialize)]
+        struct ProofJson {
+            excess_commitment: String,
+            nonce_commitment: String,
+            response: String,
+        }
+        let pj: ProofJson =
+            serde_json::from_str(proof_json).map_err(|e| format!("proof_json: {e}"))?;
+        let proof = ConservationProof {
+            excess_commitment: decode_hex_32(&pj.excess_commitment)
+                .map_err(|e| format!("excess_commitment: {e}"))?,
+            nonce_commitment: decode_hex_32(&pj.nonce_commitment)
+                .map_err(|e| format!("nonce_commitment: {e}"))?,
+            response: decode_hex_32(&pj.response).map_err(|e| format!("response: {e}"))?,
+        };
+
+        let message = if message_hex.is_empty() {
+            Vec::new()
+        } else {
+            decode_hex_vec(message_hex).map_err(|e| format!("message_hex: {e}"))?
+        };
+
+        verify_conservation(&inputs, &outputs, &proof, &message)
+            .map_err(|e| format!("conservation: {e}"))
+    })();
+
+    let result = match verdict {
+        Ok(()) => ConservationResult {
+            valid: true,
+            range_proofs_checked: false,
+            input_count: input_hex.len(),
+            output_count: output_hex.len(),
+            error: None,
+        },
+        Err(e) => ConservationResult {
+            valid: false,
+            range_proofs_checked: false,
+            input_count: input_hex.len(),
+            output_count: output_hex.len(),
+            error: Some(e),
+        },
     };
     Ok(serde_wasm_bindgen::to_value(&result)?)
+}
+
+/// Decode a hex string into exactly 32 bytes. Returns a descriptive error
+/// string on the wrong length or invalid hex (used by the fail-closed
+/// conservation verifier).
+fn decode_hex_32(hex: &str) -> Result<[u8; 32], String> {
+    if hex.len() != 64 {
+        return Err(format!("expected 64 hex chars, got {}", hex.len()));
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+            .map_err(|e| format!("invalid hex at byte {i}: {e}"))?;
+    }
+    Ok(out)
+}
+
+/// Decode an arbitrary-length even hex string into bytes.
+fn decode_hex_vec(hex: &str) -> Result<Vec<u8>, String> {
+    if hex.len() % 2 != 0 {
+        return Err("hex string must have even length".to_string());
+    }
+    (0..hex.len() / 2)
+        .map(|i| {
+            u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+                .map_err(|e| format!("invalid hex at byte {i}: {e}"))
+        })
+        .collect()
 }
 
 /// Build a committed (private) transfer turn.
@@ -1368,21 +1585,117 @@ mod audit_tests {
     }
 
     #[test]
-    fn adversarial_verify_conservation_proof_fails_closed() {
-        // P1 audit fix: previously returned `valid: true` for any non-empty
-        // input/output lists. Now fails closed with `not_implemented: true`.
-        let inputs = serde_json::json!(["aa".repeat(32)]).to_string();
-        let outputs = serde_json::json!(["bb".repeat(32)]).to_string();
-        let result = verify_conservation_proof(&inputs, &outputs).expect("parse ok");
+    fn conservation_prove_verify_roundtrip_balanced() {
+        // Real generate -> verify: 1000 input == 700 + 300 outputs.
+        let inputs = serde_json::json!([
+            {"value": 1000u64, "blinding_hex": hex_of(&[1u8; 32])}
+        ])
+        .to_string();
+        let outputs = serde_json::json!([
+            {"value": 700u64, "blinding_hex": hex_of(&[2u8; 32])},
+            {"value": 300u64, "blinding_hex": hex_of(&[3u8; 32])}
+        ])
+        .to_string();
+        let msg_hex = hex_of(b"roundtrip");
+
+        let proved = prove_conservation(&inputs, &outputs, &msg_hex).expect("prove ok");
 
         #[derive(serde::Deserialize)]
-        struct Out {
-            valid: bool,
-            not_implemented: bool,
+        struct Proof {
+            excess_commitment: String,
+            nonce_commitment: String,
+            response: String,
         }
-        let o: Out = serde_wasm_bindgen::from_value(result).unwrap();
-        assert!(!o.valid, "stub must fail closed");
-        assert!(o.not_implemented, "must flag not_implemented");
+        #[derive(serde::Deserialize)]
+        struct Proved {
+            input_commitments: Vec<String>,
+            output_commitments: Vec<String>,
+            proof: Proof,
+            message_hex: String,
+        }
+        let p: Proved = serde_wasm_bindgen::from_value(proved).unwrap();
+        assert_eq!(p.input_commitments.len(), 1);
+        assert_eq!(p.output_commitments.len(), 2);
+
+        let proof_json = serde_json::json!({
+            "excess_commitment": p.proof.excess_commitment,
+            "nonce_commitment": p.proof.nonce_commitment,
+            "response": p.proof.response,
+        })
+        .to_string();
+
+        let verdict = verify_conservation_proof(
+            &serde_json::to_string(&p.input_commitments).unwrap(),
+            &serde_json::to_string(&p.output_commitments).unwrap(),
+            &proof_json,
+            &p.message_hex,
+        )
+        .expect("verify ok");
+
+        #[derive(serde::Deserialize)]
+        struct Verdict {
+            valid: bool,
+            range_proofs_checked: bool,
+        }
+        let v: Verdict = serde_wasm_bindgen::from_value(verdict).unwrap();
+        assert!(v.valid, "balanced real roundtrip must verify");
+        assert!(
+            !v.range_proofs_checked,
+            "range proofs are still the honest remaining gap"
+        );
+    }
+
+    #[test]
+    fn adversarial_verify_conservation_proof_non_conserving_fails() {
+        // Inflating set (1000 in, 1100 out) must fail closed even with an
+        // honestly-derived excess blinding.
+        let inputs = serde_json::json!([
+            {"value": 1000u64, "blinding_hex": hex_of(&[1u8; 32])}
+        ])
+        .to_string();
+        let outputs = serde_json::json!([
+            {"value": 700u64, "blinding_hex": hex_of(&[2u8; 32])},
+            {"value": 400u64, "blinding_hex": hex_of(&[3u8; 32])}
+        ])
+        .to_string();
+        let msg_hex = hex_of(b"inflate");
+
+        let proved = prove_conservation(&inputs, &outputs, &msg_hex).expect("prove ok");
+        #[derive(serde::Deserialize)]
+        struct Proof {
+            excess_commitment: String,
+            nonce_commitment: String,
+            response: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Proved {
+            input_commitments: Vec<String>,
+            output_commitments: Vec<String>,
+            proof: Proof,
+            message_hex: String,
+        }
+        let p: Proved = serde_wasm_bindgen::from_value(proved).unwrap();
+        let proof_json = serde_json::json!({
+            "excess_commitment": p.proof.excess_commitment,
+            "nonce_commitment": p.proof.nonce_commitment,
+            "response": p.proof.response,
+        })
+        .to_string();
+
+        let verdict = verify_conservation_proof(
+            &serde_json::to_string(&p.input_commitments).unwrap(),
+            &serde_json::to_string(&p.output_commitments).unwrap(),
+            &proof_json,
+            &p.message_hex,
+        )
+        .expect("verify ok");
+
+        #[derive(serde::Deserialize)]
+        struct Verdict {
+            valid: bool,
+        }
+        let v: Verdict = serde_wasm_bindgen::from_value(verdict).unwrap();
+        assert!(!v.valid, "non-conserving set must fail closed");
     }
 
     #[test]
