@@ -4,55 +4,76 @@ Dragon's Egg is my experiment in the metatheory of constructive knowledge, and a
 
 (end-of-human-text)
 
-> **Start here:** [`STATUS.md`](STATUS.md) is the code-verified status (what builds,
-> what runs, what's honest about proofs). Two runnable examples are the fastest on-ramp:
-> `cargo run -p dregg-sdk --example hello_receipt_chain` (the smallest receipt chain) and
-> `cargo run -p dregg-cell --example predicate_language` (the predicate language).
-> The design/audit `*.md` documents formerly at the repo root now live in
-> [`docs-old/`](docs-old/) and are **not** authoritative — trust the code.
+> **There are two layers here, and it matters which you're looking at.**
+>
+> 1. **dregg1 — the running Rust fabric** (~60 crates, this repo's top level). Integration-complete:
+>    a real STARK proof system, CapTP, a blocklace, programmable queues, intents. It *works* —
+>    but its security is **trust-based at the semantic core** (authorization is plain Rust outside
+>    any proof; the per-turn surface is step-*incomplete*). This is the **Silver Vision**:
+>    everything connected, not yet verified from first principles.
+> 2. **dregg2 — the verified successor, in Lean 4** ([`metatheory/`](metatheory/)). The semantic
+>    core *as proof*: the metatheory of constructive knowledge made executable and machine-checked,
+>    l4v-shaped (Abstract Spec → factored middle layer → executable Design Spec → refinement). This
+>    is where the system is being **re-derived honestly** — and it is the present focus.
+>
+> **Start with dregg2 if you want the ideas:** [`metatheory/CONSTRUCTIVE-KNOWLEDGE.md`](metatheory/CONSTRUCTIVE-KNOWLEDGE.md)
+> (the actual metatheory), then [`metatheory/README.md`](metatheory/README.md) (the Lean
+> architecture), then [`docs/rebuild/REORIENT.md`](docs/rebuild/REORIENT.md).
+> **Start with dregg1 if you want to run something:** [`STATUS.md`](STATUS.md) +
+> `cargo run -p dregg-sdk --example hello_receipt_chain`. The design `*.md` once at the repo root
+> now live in [`docs-old/`](docs-old/) and are **not** authoritative — trust the code.
 
-## The Model
+## dregg2 — the metatheory, in Lean (the verified core)
 
-`dregg` is a **unified fabric**: a shared blocklace (DAG) where groups form emergently through mutual acknowledgment. There are no fixed federations to join or leave. Nodes participate in strands; reference groups crystallize from repeated interaction. Your phone is a node. A cloud cluster is a node. The sovereignty spectrum is continuous.
+A capability is **constructive knowledge**: to *hold* one is to be able to *exhibit a witness that
+verifies* — never merely to assert. dregg2 builds that as theorems. The current shape (all
+`lake build`-green, every `sorry` honest and in one of two declared buckets):
 
-Cells are isolated objects. Turns are atomic state transitions. The Effect VM proves the per-turn execution surface, with several cross-cell and recursive verifier lanes still tracked in `SILVER-DEBT.md`. CapTP sessions carry capability references across the fabric. Intents broadcast needs; ring trades solve them trustlessly.
+- **The actual metatheory** (`Metatheory.*`) — the candidate-independent logic: knowledge = a
+  discharging witness exists; the verify/find asymmetry; the epistemic-boundary lattice (a ZK
+  verifier learns only *acceptance*); the generative/restrictive authority duality and
+  *"only connectivity begets connectivity"*; coinductive no-drift soundness.
+- **The factored middle layer** (`Dregg2.Spec.*`) — a *small* set of orthogonal primitives that
+  *generate* dregg1's sprawling catalogs (no flat-coproduct port): one verify-seam **`Guard`**,
+  multi-domain value-monoid-parametric **`Conservation`** (value hidden yet provably conserved),
+  the generative **`Authority`** graph, the attested-dual-of-creation **`Lifecycle`**, and the
+  **`Hyperedge`** — *the turn is an atomic hyperedge* (a wide pullback over a shared turn-id;
+  bilateral / ring / forest are incidences of one object; committing it is a decidable proof, not
+  a consensus protocol — canonicity is the separate consensus layer).
+- **The executable kernel + portals** (`Dregg2.Exec.*`, `CryptoKernel`/`World`) — a step-complete
+  running machine, `#eval`-able, with crypto-soundness kept on the Rust side of a clean §8 portal.
 
-## Key Capabilities
+Honest calibration: dregg2 is **not** a finished verified distributed OS — it's a well-architected,
+machine-checked, honestly-`sorry`-budgeted *seed* of one, growing module by module. `seL4`/`l4v`
+is the north star (Abstract→Design→Refinement); we're early on that arc but the keystones are real.
 
-- **CapTP** -- Capability transport protocol. Sessions, sturdy refs, distributed GC, three-party handoff, store-and-forward.
-- **Programmable Queues** -- Merkle queues with attached DSL programs. Queue semantics are enforced by the executor and Effect VM projection; remaining algebraic gaps are tracked in `SILVER-DEBT.md`.
-- **DFA Routing** -- Governance-controlled route tables compiled to prefix-trie state machines. Constitutional amendments via threshold voting.
-- **Nameservice** -- Hierarchical names with rent-based anti-squatting, sub-delegation, cross-federation resolution.
-- **Intent Solving** -- Privacy-preserving marketplace. Commit-reveal frontrunning protection. Ring trades without a coordinator.
-- **Effect VM** -- Abstract instruction set proven per-turn in one STARK. Transfer, seal, factory, CapTP, and queue variants are being hardened toward full in-circuit coverage; do not treat this README as the debt ledger.
+## dregg1 — the running fabric (Rust)
 
-## Quick Start
+A **unified fabric**: a shared blocklace (DAG) where groups form emergently through mutual
+acknowledgment — no fixed federations. Your phone is a node; a cloud cluster is a node; the
+sovereignty spectrum is continuous. Cells are isolated objects; turns are atomic state transitions;
+CapTP sessions carry capability references; intents broadcast needs and ring trades solve them
+trustlessly. (Semantic-core verification is dregg2's job; the algebraic/circuit debt is tracked in
+`SILVER-DEBT.md`, *not* this README.)
 
+### Key capabilities
+- **CapTP** — sessions, sturdy refs, distributed GC, three-party handoff, store-and-forward.
+- **Programmable Queues** — Merkle queues with attached DSL programs, enforced by the executor.
+- **DFA Routing** — governance-controlled route tables compiled to prefix-trie state machines.
+- **Nameservice** — hierarchical names, rent-based anti-squatting, cross-federation resolution.
+- **Intent Solving** — privacy-preserving marketplace; commit-reveal; coordinator-free ring trades.
+- **Effect VM** — an abstract instruction set proven per-turn in one STARK (hardening in progress).
+
+### Quick start (dregg1)
 ```sh
-# Build
 git clone https://github.com/emberian/dregg && cd dregg
 cargo build
-
-# Run a node
-cargo run -p dregg-node run
-
-# CLI interaction
-dregg cell list
-dregg cell create --name my-agent
-dregg cap grant <cell-id> --service storage --actions read,write
-dregg turn submit <turn-file>
-dregg namespace register alice --target <cell-id>
-dregg intent post --spec '{"service": "compute", "action": "execute"}'
-
-# Run the demo agent (full pipeline: token + STARK + turn)
-cargo run -p dregg-demo-agent
-
-# 4-node devnet
-cd docker && docker compose up
+cargo run -p dregg-node run                       # run a node
+cargo run -p dregg-demo-agent                      # full pipeline: token + STARK + turn
+cd docker && docker compose up                     # 4-node devnet
 ```
 
-## Crate Overview
-
+### Crate overview (dregg1)
 | Crate | Purpose |
 |-------|---------|
 | `circuit` | STARK prover/verifier, Effect VM AIR, 17+ specialized AIRs, IVC, Plonky3 |
@@ -64,47 +85,35 @@ cd docker && docker compose up
 | `intent` | Gossip broadcast, local Datalog matching, commit-reveal, IT-PIR discovery |
 | `storage` | Programmable queues, relay operators, inboxes, erasure-coded availability |
 | `bridge` | Token-to-circuit pipeline, blinded membership, predicate proofs |
-| `cli` | User-facing CLI: cell, turn, cap, namespace, route, storage, cclerk commands |
+| `cli` | User-facing CLI: cell, turn, cap, namespace, route, storage, cclerk |
 | `sdk` | AgentCipherclerk, AgentRuntime, HD keys, verification modes, IT-PIR client |
-| `node` | Federation daemon: HTTP API, MCP server (15+ tools), gossip sync |
+| `node` | Federation daemon: HTTP API, MCP server, gossip sync |
 | `net` | Quinn QUIC, Plumtree gossip, topic-based dissemination |
 | `commit` | 4-ary Merkle trees (BLAKE3 fast / Poseidon2 ZK), fold deltas |
 | `token` | AuthToken: Macaroon HMAC-SHA256 + Biscuit Ed25519+Datalog |
-| `trace` | Datalog evaluator with derivation trace, deny-overrides-allow |
 | `coord` | Causal DAG, 2PC atomic commit, Stingray bounded counters |
-| `wire` | TCP postcard framing, STARK verification on receive |
-| `hints` | BLS12-381 threshold sigs via KZG + SNARK aggregate verification |
-| `store` | redb ACID persistence, note commitment tree, nullifier set |
-| `wasm` | Browser WASM bindings (43 exports, full simulation) |
-| `dregg-dsl` | Constraint DSL: `#[dregg_caveat]`, `#[dregg_effect]`, multi-backend |
-| `verification` | Typed composition checker for proof soundness |
-| `app-framework` | Shared patterns for building apps on the runtime |
-| `starbridge-apps/*` | Current userspace app surface: nameservice, identity, subscription, governed namespace, plus unported legacy manifests |
-| `apps/*` | Legacy app crates retained for porting: gallery, compute exchange, bounty board, privacy voting |
+| `commit`/`store`/`wire`/`hints`/`wasm`/`dregg-dsl`/`verification`/`app-framework`/`apps/*` | merkle, persistence, framing, threshold sigs, WASM, the constraint DSL, the composition checker, and the app surface |
 
-## Privacy Model
+## Privacy model (the epistemic boundary, in practice)
+Three verification modes from the same Datalog rules — the verifier's *epistemic position* is a dial:
 
-Three verification modes from the same Datalog rules:
-
-| Mode | Verifier Learns | Proof Size |
+| Mode | Verifier learns | Proof size |
 |------|----------------|-----------|
 | Trusted | Full cleartext + trace | 0 |
 | Selective Disclosure | Chosen facts + conclusion | ~45 KB |
 | Fully Private | One bit (allow/deny) | ~80 KB |
 
-All modes work offline. Proofs are post-quantum secure (BabyBear STARK + FRI).
+All modes work offline; proofs are post-quantum (BabyBear STARK + FRI). In dregg2's terms: each
+mode is a different *epistemic boundary* over the same `Verify` seam.
 
 ## Links
+- [Paper](https://dregg.dev/paper.html) · [Docs](https://dregg.dev/docs/) · [Playground](https://dregg.dev/playground/) · [Explorer](https://dregg.dev/explorer/)
 
-- [Paper](https://dregg.dev/paper.html)
-- [Documentation](https://dregg.dev/docs/)
-- [Playground](https://dregg.dev/playground/)
-- [Explorer](https://dregg.dev/explorer/)
-
-## Status: Experimental
-
-Research software under active development. The proof system is real (Plonky3 STARKs with algebraic Poseidon2 constraints, 2000+ tests). The networking and consensus layers are functional but not battle-tested. Do not use for anything security-critical without independent audit.
+## Status: experimental
+Research software under active development. dregg1's proof system is real (Plonky3 STARKs,
+algebraic Poseidon2, 2000+ tests); its networking/consensus are functional but not battle-tested.
+dregg2 (the Lean verification) is early but its proved keystones are genuine and its `sorry`s are
+honest. Do not use for anything security-critical without independent audit.
 
 ## License
-
 MIT OR Apache-2.0

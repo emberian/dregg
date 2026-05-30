@@ -1,0 +1,8 @@
+# Rust build output
+/target
+
+# The linked Lean static archive (~246 MB) — a derived build artifact (the full native
+# transitive closure of the compiled Metatheory + mathlib). Regenerate it from the Lean
+# build; do NOT commit it.
+*.a
+*.o

@@ -1,0 +1,24 @@
+# Standalone PoC crate: Rust hosts the compiled Lean kernel and calls it for real.
+# An EMPTY [workspace] table detaches this crate from the metatheory cargo workspace
+# so building it does not disturb the repo's workspace (other agents are editing it).
+[workspace]
+
+[package]
+name = "dregg-lean-ffi"
+version = "0.1.0"
+edition = "2021"
+# `cargo run` (no --bin) runs the differential harness — the cascade beachhead.
+default-run = "differential"
+
+[[bin]]
+name = "dregg-lean-ffi"
+path = "src/main.rs"
+
+# The cascade beachhead: a property-based DIFFERENTIAL harness that makes the
+# verified Lean kernel the golden oracle for a Rust reference implementation.
+[[bin]]
+name = "differential"
+path = "src/differential.rs"
+
+[build-dependencies]
+cc = "1"

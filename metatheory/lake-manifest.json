@@ -88,6 +88,6 @@
    "inputRev": "v4.30.0",
    "inherited": true,
    "configFile": "lakefile.toml"}],
- "name": "Metatheory",
+ "name": "Dregg2",
  "lakeDir": ".lake",
  "fixedToolchain": false}

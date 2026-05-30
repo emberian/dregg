@@ -1,5 +1,5 @@
-name = "Metatheory"
-defaultTargets = ["Metatheory"]
+name = "Dregg2"
+defaultTargets = ["Dregg2"]
 
 # Pin mathlib to the revision matching ~/src/mathlib4 @ v4.30.0
 # (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). Using a local `path`
@@ -10,4 +10,4 @@ name = "mathlib"
 path = "../../../src/mathlib4"
 
 [[lean_lib]]
-name = "Metatheory"
+name = "Dregg2"
