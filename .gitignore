@@ -33,3 +33,4 @@ spec/states
 *.xpi
 
 metatheory/.lake
+lean-objs

@@ -94,7 +94,7 @@ class World (Msg : Type) where
   delay and reorder but cannot make a delivered message *un*-happen. The runtime discharges
   it (an append-only receive log). (Asynchrony / GST liveness is NOT here — that needs the
   protocol; see the OPEN below.) -/
-  recv_mono : ∀ {r r' : Nat}, r ≤ r' → recv r <+ recv r'
+  recv_mono : ∀ {r r' : Nat}, r ≤ r' → List.Sublist (recv r) (recv r')
 
 variable {Msg : Type}
 
@@ -150,15 +150,16 @@ theorem votersFor_length_le (votes : List Vote) (block : Nat) :
 sublist of `votes₂` (the network only ever *added* votes), then the distinct voters for any
 block under `votes₁` are a subset of those under `votes₂`, hence no more numerous. The key
 monotonicity step under the network's append-only delivery. -/
-theorem votersFor_length_mono {votes₁ votes₂ : List Vote} (h : votes₁ <+ votes₂)
+theorem votersFor_length_mono {votes₁ votes₂ : List Vote}
+    (h : List.Sublist votes₁ votes₂)
     (block : Nat) :
     (votersFor votes₁ block).length ≤ (votersFor votes₂ block).length := by
   -- filtering preserves the sublist, mapping preserves it, and dedup is monotone in length
   -- under the subset induced by a sublist.
-  have hfilt : votes₁.filter (fun v => v.block = block)
-      <+ votes₂.filter (fun v => v.block = block) := h.filter _
-  have hmap : (votes₁.filter (fun v => v.block = block)).map (·.voter)
-      <+ (votes₂.filter (fun v => v.block = block)).map (·.voter) := hfilt.map _
+  have hfilt : List.Sublist (votes₁.filter (fun v => v.block = block))
+      (votes₂.filter (fun v => v.block = block)) := h.filter _
+  have hmap : List.Sublist ((votes₁.filter (fun v => v.block = block)).map (·.voter))
+      ((votes₂.filter (fun v => v.block = block)).map (·.voter)) := hfilt.map _
   -- a sublist's dedup is contained in the larger list's dedup ⇒ length ≤.
   have hsub : ((votes₁.filter (fun v => v.block = block)).map (·.voter)).dedup
       ⊆ ((votes₂.filter (fun v => v.block = block)).map (·.voter)).dedup := by
@@ -167,14 +168,16 @@ theorem votersFor_length_mono {votes₁ votes₂ : List Vote} (h : votes₁ <+ v
     exact hmap.subset ha
   have hnd : ((votes₁.filter (fun v => v.block = block)).map (·.voter)).dedup.Nodup :=
     List.nodup_dedup _
-  simpa [votersFor] using List.Nodup.length_le_of_subset hnd hsub
+  -- a nodup list that is a subset of another is a subperm of it, hence no longer.
+  simpa [votersFor] using (List.subperm_of_subset hnd hsub).length_le
 
 /-- **`quorum_monotone` (PROVED) — more votes preserve quorum-reached.** If a quorum was
 reached over a vote list `votes₁`, then it is still reached over any larger list `votes₂`
 (`votes₁ <+ votes₂`). Distinct-voter count is monotone under adding votes, and the threshold
 is fixed; this is *safety of the count* under the network's append-only delivery — once a
 quorum exists, delivering more messages cannot destroy it. -/
-theorem quorum_monotone {votes₁ votes₂ : List Vote} (h : votes₁ <+ votes₂)
+theorem quorum_monotone {votes₁ votes₂ : List Vote}
+    (h : List.Sublist votes₁ votes₂)
     (cfg : Finality.Config) (block : Nat)
     (hq : quorumReached votes₁ cfg block = true) :
     quorumReached votes₂ cfg block = true := by
@@ -190,7 +193,8 @@ superlist of votes). So `committedByQuorum` is monotone in the round — a commi
 commits do not un-happen. -/
 theorem committedByQuorum_mono [World Msg]
     (votesOf : List Msg → List Vote)
-    (hvotesOf : ∀ {m₁ m₂ : List Msg}, m₁ <+ m₂ → votesOf m₁ <+ votesOf m₂)
+    (hvotesOf : ∀ {m₁ m₂ : List Msg}, List.Sublist m₁ m₂ →
+      List.Sublist (votesOf m₁) (votesOf m₂))
     {r r' : Nat} (hrr : r ≤ r') (cfg : Finality.Config) (block : BlockId)
     (hc : committedByQuorum votesOf r cfg block) :
     committedByQuorum votesOf r' cfg block := by
@@ -261,17 +265,18 @@ theorem quorum_intersection_safety_OPEN
     (hconflict : b₁ ≠ b₂)
     (hquorum_is_half : cfg.threshold = Finality.Config.halfQuorum cfg.n cfg.f)
     (hbft : cfg.n > 3 * cfg.f)
-    -- "≤ f Byzantine voters" and "a block needs ≤ n distinct honest voters" would be extra
-    -- hypotheses the protocol layer supplies; without them this is genuinely unprovable.
+    -- the honest population is bounded by `n` participants (the membership bound the
+    -- protocol layer supplies; the bare network oracle says nothing about who is honest):
+    (hbound : (votersFor votes b₁).length + (votersFor votes b₂).length ≤ cfg.n + cfg.f)
     (hq1 : quorumReached votes cfg b₁ = true) (hq2 : quorumReached votes cfg b₂ = true) :
-    -- the intended conclusion: at least one quorum shares an honest voter ⇒ contradiction
-    -- under the honest-majority assumption. Stated as the False target it reduces to.
-    True := by
+    -- the intended conclusion: two quorums for conflicting blocks must share a voter
+    -- (quorum intersection) — the seed of the BFT safety contradiction.
+    ∃ voter, voter ∈ votersFor votes b₁ ∧ voter ∈ votersFor votes b₂ := by
   -- OPEN: needs the adversary/honesty model + conflict semantics + the n>3f arithmetic of
-  -- quorum intersection — not derivable from the network oracle alone. Discharging the
-  -- trivial `True` here only records the obligation's shape; the real content (a
-  -- non-trivial safety contradiction) is the protocol's.
-  trivial
+  -- quorum intersection — not derivable from the network oracle alone. The membership bound
+  -- `hbound` is the protocol-supplied hypothesis; the pigeonhole/intersection argument over
+  -- `Nat`-valued voters belongs with the protocol, which owns the honest-set semantics.
+  sorry
 
 /-- **OPEN: liveness after GST (a quorum eventually forms).** That, after the global
 stabilization time, the network delivers enough honest votes for `quorumReached` to become
@@ -281,13 +286,14 @@ neither of which the `World` interface commits to. It is the liveness counterpar
 safety OPEN above and likewise belongs with the protocol. -/
 theorem liveness_after_gst_OPEN [World Msg]
     (votesOf : List Msg → List Vote) (cfg : Finality.Config) :
-    -- intended: ∃ round r and block, committedByQuorum holds — requires the GST + honesty
-    -- model the interface deliberately omits (asynchrony is the adversary's, not a law).
-    True := by
+    -- intended: eventually (at some round) some block's quorum forms — the τ-BFT progress
+    -- guarantee. Requires the GST + honesty model the interface deliberately omits
+    -- (asynchrony is the adversary's, not a law), so it is not provable here.
+    ∃ (r : Nat) (block : BlockId), committedByQuorum votesOf r cfg block := by
   -- OPEN: liveness is not a property of the bare (possibly fully-asynchronous) network
   -- oracle; without a GST bound the adversary may delay all votes forever. Provable only
   -- against the protocol + partial-synchrony assumption.
-  trivial
+  sorry
 
 /-! ## A reference (test) `World` — the Lean-as-host realization.
 
@@ -312,7 +318,13 @@ instance : World M where
   rand := fun r => r
   recv_mono := by
     intro r r' h
-    exact List.take_sublist_take fixedVotes h
+    -- `take r = take r (take r')` when `r ≤ r'` (via `take_take`/`min`), and
+    -- `take r (take r') <+ take r'`; compose.
+    have hmin : min r r' = r := Nat.min_eq_left h
+    have : fixedVotes.take r = (fixedVotes.take r').take r := by
+      rw [List.take_take, hmin]
+    rw [this]
+    exact List.take_sublist r (fixedVotes.take r')
 
 /-- The reference world is lawful and the parametric defs compute: by round 3 the fixed
 schedule has delivered 3 distinct voters (0,1,2) for block 7, meeting a threshold of 3. -/

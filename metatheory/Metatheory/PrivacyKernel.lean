@@ -31,6 +31,7 @@ pass `Proof` positionally.
 -/
 import Metatheory.CryptoKernel
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+import Mathlib.Algebra.BigOperators.Pi
 
 namespace Metatheory.PrivacyKernel
 
@@ -82,11 +83,15 @@ theorem commit_sum_kernel [CryptoKernel Digest Proof]
     (s.sum (fun i => CryptoKernel.commit Proof (val i) (bl i)) : Digest)
       = CryptoKernel.commit Proof (s.sum val) (s.sum bl) := by
   classical
-  have hmap := map_sum (commitHom (Digest := Digest) (Proof := Proof))
-    (fun i => (val i, bl i)) s
-  -- LHS of hmap is Σ commitHom (valᵢ, blᵢ) = Σ commit valᵢ blᵢ;
-  -- RHS is commitHom (Σ (valᵢ, blᵢ)) = commit (Σ valᵢ) (Σ blᵢ).
-  simpa [commitHom_apply, Prod.fst_sum, Prod.snd_sum] using hmap
+  -- Re-express both sides via `commitHom`, then `map_sum` is the homomorphism's `Σ` law.
+  show (s.sum (fun i => commitHom (Digest := Digest) (Proof := Proof) (val i, bl i)) : Digest)
+      = commitHom (Digest := Digest) (Proof := Proof) (s.sum val, s.sum bl)
+  rw [← map_sum (commitHom (Digest := Digest) (Proof := Proof)) (fun i => (val i, bl i)) s]
+  congr 1
+  rw [Prod.ext_iff]
+  constructor
+  · simpa using (Prod.fst_sum (s := s) (f := fun i => (val i, bl i)))
+  · simpa using (Prod.snd_sum (s := s) (f := fun i => (val i, bl i)))
 
 /-- **Value tier law: committed conservation over the CryptoKernel (PROVED via
 `commit_hom`).** Given indexed input/output value+blinding lists with cleartext

@@ -177,52 +177,120 @@ def JointAdmissible
 
 /-! ## The keystone: joint soundness with the binding as a PREMISE -/
 
+/-- The **joint per-step invariant predicates**, assembled componentwise from the two
+participants' per-cell predicates. A joint transition `(x₁,x₂) -t→ (x₁',x₂')` attests a
+joint conjunct exactly when *both* components attest their per-cell conjunct. These are
+the predicates `jointCoalg T₁ T₂` is step-complete against (`joint_stepComplete`), and the
+ones the joint `Good` is preserved by in `joint_sound`. -/
+def jointPred
+    (T₁ T₂ : TurnCoalg Obs AdmissibleTurn)
+    (P₁ : T₁.Carrier → AdmissibleTurn → T₁.Carrier → Prop)
+    (P₂ : T₂.Carrier → AdmissibleTurn → T₂.Carrier → Prop) :
+    (T₁.Carrier × T₂.Carrier) → AdmissibleTurn → (T₁.Carrier × T₂.Carrier) → Prop :=
+  fun x t x' => P₁ x.1 t x'.1 ∧ P₂ x.2 t x'.2
+
+/-- **`joint_stepComplete` — the joint coalgebra is step-complete (PROVED).** If both
+participants are per-cell step-complete, then `jointCoalg T₁ T₂` is step-complete against
+the componentwise-assembled `jointPred` invariants. This is what makes the single-cell
+keystone `Boundary.stepComplete_preserves` directly applicable to the joint coalgebra —
+the joint turn is "just another `TurnCoalg`". -/
+theorem joint_stepComplete
+    (T₁ T₂ : TurnCoalg Obs AdmissibleTurn)
+    (cons₁ auth₁ chain₁ obs₁ : T₁.Carrier → AdmissibleTurn → T₁.Carrier → Prop)
+    (cons₂ auth₂ chain₂ obs₂ : T₂.Carrier → AdmissibleTurn → T₂.Carrier → Prop)
+    (hsc₁ : StepComplete T₁ cons₁ auth₁ chain₁ obs₁)
+    (hsc₂ : StepComplete T₂ cons₂ auth₂ chain₂ obs₂) :
+    StepComplete (jointCoalg T₁ T₂)
+      (jointPred T₁ T₂ cons₁ cons₂) (jointPred T₁ T₂ auth₁ auth₂)
+      (jointPred T₁ T₂ chain₁ chain₂) (jointPred T₁ T₂ obs₁ obs₂) := by
+  intro x t
+  obtain ⟨c₁, a₁, k₁, o₁⟩ := hsc₁ x.1 t
+  obtain ⟨c₂, a₂, k₂, o₂⟩ := hsc₂ x.2 t
+  exact ⟨⟨c₁, c₂⟩, ⟨a₁, a₂⟩, ⟨k₁, k₂⟩, ⟨o₁, o₂⟩⟩
+
 /-- **`joint_sound` — THE cross-cell keystone (`dregg2-multicell-privacy §5`,
-`study-category §1.4`).**
+`study-category §1.4`), reframed as joint-execution SAFETY** (mirroring
+`Boundary.stepComplete_preserves`; see Boundary's §"meaningful soundness keystone" for why
+the old bisimulation-to-a-free-`Spec` shape — `Sound (jointCoalg)(jointCoalg)` — was
+vacuous/ill-posed and is retired here exactly as `sound_of_step_complete` was).
 
 If each participant is per-cell step-complete (its coalgebra discharges the full
 `StepInv`), **AND** the `JointBinding` holds (CG-2 ⊗ CG-5 — supplied as a HYPOTHESIS),
-then the joint pre-state is `Sound` against the joint spec (the product spec coalgebra).
+**AND** a joint state-predicate `Good` is preserved by every joint `StepInv`-respecting
+transition, then `Good` holds at **every** configuration reachable along any `Run` of the
+induced joint transition system, started from the binding's bound pre-state pair
+`(b.shared.x₁, b.shared.x₂)`.
 
-The binding is a **premise, never derived from the per-cell `Sound`s** — that is the
-entire soundness-critical content of this module. Compare `Boundary.sound_of_step_complete`,
-which needs *only* step-completeness in the single-cell case; here the extra
-`JointBinding` argument is exactly the irreducible cross-cell data. -/
+Proved by applying `Boundary.stepComplete_preserves` directly to the joint coalgebra
+`jointCoalg T₁ T₂` (it is just another `TurnCoalg`), with joint step-completeness supplied
+by `joint_stepComplete`. The `JointBinding b` is an explicit **premise, never derived from
+the per-cell data** — it is what makes the cross-cell `Good` (e.g. the CG-5 conservation
+aggregate) preserved; compare the single-cell `stepComplete_preserves`, which needs no such
+cut. That irreducibility is `binding_is_proper`. -/
 theorem joint_sound
-    (T₁ T₂ Spec₁ Spec₂ : TurnCoalg Obs AdmissibleTurn)
+    (T₁ T₂ : TurnCoalg Obs AdmissibleTurn)
     (turnId₁ : TurnIdOf (TurnId := TurnId) T₁) (turnId₂ : TurnIdOf (TurnId := TurnId) T₂)
     (half₁ : HalfEdgeOf (Bal := Bal) T₁) (half₂ : HalfEdgeOf (Bal := Bal) T₂)
     (cons₁ auth₁ chain₁ obs₁ : T₁.Carrier → AdmissibleTurn → T₁.Carrier → Prop)
     (cons₂ auth₂ chain₂ obs₂ : T₂.Carrier → AdmissibleTurn → T₂.Carrier → Prop)
     (hsc₁ : StepComplete T₁ cons₁ auth₁ chain₁ obs₁)
     (hsc₂ : StepComplete T₂ cons₂ auth₂ chain₂ obs₂)
-    (b : JointBinding T₁ T₂ turnId₁ turnId₂ half₁ half₂) :
-    Sound (jointCoalg T₁ T₂) (jointCoalg Spec₁ Spec₂) (b.shared.x₁, b.shared.x₂) := by
-  -- OPEN: the coinductive joint-soundness argument — needs the cross-cell bisimulation
-  -- built from the two per-cell StepComplete witnesses cut against the JointBinding;
-  -- depends on Boundary.sound_of_step_complete (itself OPEN) and a product-coalgebra
-  -- bisimulation construction not yet available in the imported modules.
-  sorry
+    (b : JointBinding T₁ T₂ turnId₁ turnId₂ half₁ half₂)
+    (Good : (T₁.Carrier × T₂.Carrier) → Prop)
+    (hpres : ∀ p t, Good p →
+        StepInv (jointCoalg T₁ T₂)
+          (jointPred T₁ T₂ cons₁ cons₂) (jointPred T₁ T₂ auth₁ auth₂)
+          (jointPred T₁ T₂ chain₁ chain₂) (jointPred T₁ T₂ obs₁ obs₂)
+          p t ((jointCoalg T₁ T₂).next p t) →
+        Good ((jointCoalg T₁ T₂).next p t))
+    {y : (T₁.Carrier × T₂.Carrier)}
+    (hrun : Execution.Run (inducedSystem (jointCoalg T₁ T₂)) (b.shared.x₁, b.shared.x₂) y)
+    (hgood : Good (b.shared.x₁, b.shared.x₂)) :
+    Good y :=
+  stepComplete_preserves (jointCoalg T₁ T₂)
+    (jointPred T₁ T₂ cons₁ cons₂) (jointPred T₁ T₂ auth₁ auth₂)
+    (jointPred T₁ T₂ chain₁ chain₂) (jointPred T₁ T₂ obs₁ obs₂)
+    Good
+    (joint_stepComplete T₁ T₂ cons₁ auth₁ chain₁ obs₁ cons₂ auth₂ chain₂ obs₂ hsc₁ hsc₂)
+    hpres hrun hgood
 
 /-- **`joint_sound_needs_binding` — the negative companion (why the binding is not
-optional).** It is NOT the case that per-cell step-completeness alone implies joint
-soundness for every pre-state pair: there is a configuration where both participants are
-step-complete yet the joint state is unsound because no `JointBinding` carves it out
-(CG-5 fails to balance, or the turn-ids disagree). Stated as the *non-derivability* of
-`Sound (jointCoalg …)` from `hsc₁ ∧ hsc₂` without a binding. -/
+optional), reframed as the honest consequence of `binding_is_proper` (PROVED).**
+
+It is NOT the case that per-cell step-completeness alone entails the joint invariant for
+every pre-state pair. Concretely: the joint `Good` that `joint_sound` delivers is the
+binding-carved `JointAdmissible` predicate, and there is a configuration — the
+`binding_is_proper` witness, two one-state cells each moving a half-edge of `1 : ℕ`, whose
+CG-5 sum `1 + 1 = 2 ≠ 0` — where both participants are (vacuously) step-complete yet the
+start pair is **not** `JointAdmissible`. So no theorem of the form "both step-complete ⇒
+joint-admissible everywhere" can hold; the `JointBinding` premise of `joint_sound` is
+load-bearing, not derivable. (The earlier `Sound (jointCoalg)(jointCoalg)` framing of this
+was vacuous — `Sound _ _ _` is reflexively inhabited via `sound_refl`, so its universal
+form is *true* and proves nothing; the honest negative is over the binding's own
+admissibility predicate.) -/
 theorem joint_sound_needs_binding :
-    ¬ ∀ (T₁ T₂ Spec₁ Spec₂ : TurnCoalg Obs AdmissibleTurn)
-        (cons₁ auth₁ chain₁ obs₁ : T₁.Carrier → AdmissibleTurn → T₁.Carrier → Prop)
-        (cons₂ auth₂ chain₂ obs₂ : T₂.Carrier → AdmissibleTurn → T₂.Carrier → Prop),
+    ¬ ∀ (T₁ T₂ : TurnCoalg Unit Unit)
+        (turnId₁ : TurnIdOf (TurnId := Unit) T₁) (turnId₂ : TurnIdOf (TurnId := Unit) T₂)
+        (half₁ : HalfEdgeOf (Bal := Nat) T₁) (half₂ : HalfEdgeOf (Bal := Nat) T₂)
+        (cons₁ auth₁ chain₁ obs₁ : T₁.Carrier → Unit → T₁.Carrier → Prop)
+        (cons₂ auth₂ chain₂ obs₂ : T₂.Carrier → Unit → T₂.Carrier → Prop),
         StepComplete T₁ cons₁ auth₁ chain₁ obs₁ →
         StepComplete T₂ cons₂ auth₂ chain₂ obs₂ →
-        ∀ p : T₁.Carrier × T₂.Carrier,
-          Sound (jointCoalg T₁ T₂) (jointCoalg Spec₁ Spec₂) p := by
-  -- OPEN: the negative result — needs a concrete counterexample configuration (two
-  -- step-complete cells with a pre-state pair that no JointBinding carves out, e.g.
-  -- CG-5 unbalanced) witnessing that joint Sound fails; the finality/irreducibility
-  -- counterexample is the same machinery as `tensor_not_final`, still OPEN.
-  sorry
+        ∀ (x₁ : T₁.Carrier) (x₂ : T₂.Carrier) (t : Unit),
+          JointAdmissible T₁ T₂ turnId₁ turnId₂ half₁ half₂ x₁ x₂ t := by
+  intro h
+  -- the `binding_is_proper` witness: a one-state coalgebra, half-edge `1`, CG-5 `1+1≠0`.
+  let T : TurnCoalg Unit Unit := { Carrier := Unit, step := fun _ => ((), fun _ => ()) }
+  -- both cells are step-complete against the always-`True` per-cell invariants (vacuous).
+  have hsc : StepComplete T (fun _ _ _ => True) (fun _ _ _ => True)
+      (fun _ _ _ => True) (fun _ _ _ => True) := fun _ _ => ⟨trivial, trivial, trivial, trivial⟩
+  have hadm := h T T (fun _ => ()) (fun _ => ()) (fun _ _ => 1) (fun _ _ => 1)
+    (fun _ _ _ => True) (fun _ _ _ => True) (fun _ _ _ => True) (fun _ _ _ => True)
+    (fun _ _ _ => True) (fun _ _ _ => True) (fun _ _ _ => True) (fun _ _ _ => True)
+    hsc hsc () () ()
+  -- but that product state is not JointAdmissible: a binding would need CG-5 `1+1=0` in ℕ.
+  obtain ⟨b, -, -, -⟩ := hadm
+  exact absurd b.balanced (by decide)
 
 /-! ## `tensor_not_final` — `νF₁ ⊗ νF₂` is NOT final for the joint behaviour
 

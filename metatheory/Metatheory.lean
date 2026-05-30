@@ -31,10 +31,14 @@ import Metatheory.Liveness       -- GC-as-cell-liveness; lease-expiry; cross-vat
 import Metatheory.Upgrade        -- anti-brick set_program: AIR_VERSION pin + signature fallback
 import Metatheory.Execution      -- userspace programs: configurations, runs, invariant-preservation (PROVED)
 import Metatheory.CryptoKernel    -- THE PORTAL: crypto ops as an uninterpreted interface (Lean⟷Rust); verify/find seam instantiated; cross-vat bridge closed
+import Metatheory.PrivacyKernel   -- privacy realized over the portal: committed_conservation + nullifier anti-double-spend PROVED via the interface laws
+import Metatheory.World           -- the sibling portal: network/clock/randomness oracle for consensus; quorum finality over it (PROVED) + Byzantine/GST OPEN
 import Metatheory.Exec.Kernel     -- the EXECUTABLE kernel (Design-Spec layer): exec checks conservation+authority, fail-closed; PROVED + #eval
 import Metatheory.Exec.Generators -- mint/burn conservation generators (mint_delta/burn_delta PROVED)
 import Metatheory.Exec.Caps        -- capability ops (grant/attenuate/derive/revoke/invoke) + integrity bridge (PROVED)
+import Metatheory.Exec.Unified      -- ONE KernelOp + step: unified conservation (step_delta) + ledger (PROVED)
 import Metatheory.Exec.CellProgram -- the CellProgram DSL = the executable coalgebra structure-map; denote_conserves PROVED
 import Metatheory.Proof.Refine    -- Exec ⊑ Abstract: conservation + integrity-intra refinement (PROVED), simulation diagram OPEN
 -- Executable protocols (concrete, computable, theorems PROVED — no sorry):
 import Metatheory.Protocol.Transfer  -- two-cell atomic token transfer + payment-channel run; conservation/CG-5/atomicity proved + #eval
+import Metatheory.Protocol.Workflow  -- RDII demonstrator: authenticated, capability-gated, attested multi-party workflow (DocuSign-for-workflows); all guarantees PROVED + #eval
