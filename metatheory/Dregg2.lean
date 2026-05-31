@@ -19,6 +19,7 @@ import Dregg2.Laws
 import Dregg2.Authority.Positional
 import Dregg2.Authority.Caveat   -- keys-as-caps token layer (biscuit/macaroon/caveat/discharge): attenuation chain + attenuate_narrows (the one rule, PROVED) + biscuit/macaroon=vat-boundary + token-as-Verify bridge + #eval
 import Dregg2.Confluence
+import Dregg2.Confluence.CRDT   -- the CRDT instance catalog over the third judgement: G/PN-counter, G/OR-set, LWW register (each a MergeState + classified keystone invariant), the bounded-counter NON-confluence + the escrow/quota-partition refinement (Balegas/Sypytkowski), all pure-mathlib, #assert_axioms-clean
 import Dregg2.Boundary
 -- Wave (multi-cell + distributed + privacy + coordination + effects + lifecycle):
 import Dregg2.StepCamera     -- step-indexed Iris camera (higher-order resources; shares Boundary's ▶)
