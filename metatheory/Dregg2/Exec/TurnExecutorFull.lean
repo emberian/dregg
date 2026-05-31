@@ -53,6 +53,7 @@ import Dregg2.Exec.TurnExecutor
 import Dregg2.Exec.AuthTurn
 import Dregg2.Exec.Generators
 import Dregg2.CatalogEffects
+import Dregg2.Exec.EffectsState
 
 namespace Dregg2.Exec.TurnExecutorFull
 
@@ -62,6 +63,9 @@ open Dregg2.CatalogInstances (EffectKind effectLinearity)
 open Dregg2.CatalogEffects (Regime effectObligation)
 open Dregg2.Spec (Domain conservedInDomain LinearityClass)
 open Dregg2.Exec.TurnExecutor (Action)
+open Dregg2.Exec.EffectsState (setField fieldOf writeField stateAuthB stateStep stateStep_factors
+  setField_balOf state_caps_unchanged state_authGraph_unchanged state_authorized state_obsadvance
+  state_field_written)
 open scoped BigOperators
 
 /-! ## §1 — Record-cell MINT/BURN: the supply generators over the `balance` FIELD.
@@ -734,6 +738,83 @@ def recCBurnAsset (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt
   | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := -amt } :: s.log }
   | none    => none
 
+/-! ### §MA-state — the 5 PURE-STATE (field/log) effects on the per-asset dispatch.
+
+dregg1's `turn/src/executor/apply.rs` runs FIVE effects that write the cell-RECORD (a named field)
+or the LOG, and NEVER touch the per-asset `bal` ledger:
+
+  * `SetField { cell, index, value }` (`apply_set_field` ~:497) — a state-slot write, gated by the
+    `idx < STATE_SLOTS` bound + (for a cross-cell target) the `SetState` permission;
+  * `EmitEvent { cell, event }` (`apply_emit_event` ~:703) — a journal append, gated ONLY by
+    cell-existence (NO authority/cross-cell check — the integrity-free observation move);
+  * `IncrementNonce { cell }` (`apply_increment_nonce` ~:719) — a monotone counter bump, gated by
+    the `IncrementNonce` permission (cross-cell);
+  * `SetPermissions { cell, new_permissions }` (`apply_set_permissions` ~:775) — the permission
+    snapshot write, gated by the `SetPermissions` permission (dregg1 applies it LAST off the ORIGINAL
+    permission snapshot — see the per-effect `stateAuthB` gate below);
+  * `SetVerificationKey { cell, new_vk }` (`apply_set_verification_key` ~:803) — the VK-field write,
+    gated by `SetVerificationKey` permission (the VK hash-integrity check is a §8 Prop-carrier
+    portal, off this executable layer).
+
+ALL FIVE carry `Effect::linearity ∈ {Neutral, Monotonic}` (`EffectsState §7`: `setField`/`emitEvent`/
+`setPermissions`/`setVerificationKey` Neutral; `incrementNonce` Monotonic) — the NON-balance regime.
+Their per-asset semantics are ALREADY proven in `Exec/EffectsState.lean` (`stateStep` + the
+neutrality lemmas): the chained `stateStep` writes ONLY `kernel.cell` (a named field) + appends a
+receipt, leaving `kernel.bal` and `kernel.accounts` literally untouched. So their `ledgerDeltaAsset`
+is `0` for EVERY asset and `recTotalAsset` is UNCHANGED — balance-NEUTRALITY, proved (not assumed)
+below. Here we WIRE those proven steps into the executed `execFullA` dispatch (we do NOT re-prove the
+per-effect semantics). -/
+
+/-- **Balance-NEUTRALITY of a field write over the per-asset ledger — PROVED (the load-bearing
+keystone for the 5 pure-state effects).** `EffectsState.writeField` updates ONLY the record map
+`cell` of the kernel; it touches NEITHER `bal` NOR `accounts`. So `recTotalAsset` (= `∑ c ∈
+accounts, bal c b`) is LITERALLY UNCHANGED for EVERY asset `b`. THIS is what makes the 5 pure-state
+effects per-asset conservation-trivial: a `nonce`/`status`/`permissions`/`vk` write cannot move ANY
+asset's supply. (Contrast `recBalCredit_recTotalAsset`, which DOES move `bal` — these effects never
+write `bal`.) -/
+theorem writeField_recTotalAsset (k : RecordKernelState) (f : FieldName) (target : CellId)
+    (v : Value) (b : AssetId) : recTotalAsset (writeField k f target v) b = recTotalAsset k b := by
+  -- `writeField k f target v = { k with cell := … }`; `bal` and `accounts` are the SAME projections.
+  rfl
+
+/-- **Balance-NEUTRALITY of a committed `stateStep` over the per-asset ledger — PROVED.** A committed
+`EffectsState.stateStep` (the chained field-write the 5 pure-state effects run) leaves `recTotalAsset
+b` UNCHANGED for EVERY asset `b`: it writes a named record field, never the `bal` ledger. The
+per-asset analog of `EffectsState.state_conserves` (which preserved the scalar `recTotal`); here it
+holds for the asset VECTOR with NO side-condition on the field name (a write to ANY field, even
+`balance`, leaves the `bal` ledger fixed — the `bal` ledger is independent of the `cell` record). -/
+theorem stateStep_recTotalAsset {s s' : RecChainedState} {f : FieldName} {actor target : CellId}
+    {v : Value} (h : stateStep s f actor target v = some s') (b : AssetId) :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
+  obtain ⟨_, hs'⟩ := stateStep_factors h
+  subst hs'
+  exact writeField_recTotalAsset s.kernel f target v b
+
+/-- **The `EmitEvent` chained step — log-only, authority-FREE (dregg1 `apply_emit_event` ~:703).**
+Unlike the field-writing effects, `EmitEvent` runs NO authority/cross-cell check (in dregg1 the only
+gate is cell-existence) and writes NO state — it appends an event receipt to the chain and nothing
+else. We model the observation faithfully: a self-`Turn` receipt (amount `0`) carrying the event,
+with the kernel UNCHANGED (so `bal`/`cell`/`caps`/`accounts` are all fixed). The `topic`/`data`
+ride the receipt's `src`/`dst` as the event payload markers. ALWAYS commits (no gate). -/
+def emitStep (s : RecChainedState) (actor cell : CellId) (topic data : Int) : RecChainedState :=
+  { kernel := s.kernel,
+    log    := { actor := actor, src := cell, dst := cell, amt := 0 } :: s.log }
+
+/-- **`emitStep` is balance-NEUTRAL — PROVED.** `EmitEvent` leaves the kernel (hence `recTotalAsset
+b` for EVERY asset `b`) UNCHANGED — it only appends a receipt. -/
+theorem emitStep_recTotalAsset (s : RecChainedState) (actor cell : CellId) (topic data : Int)
+    (b : AssetId) : recTotalAsset (emitStep s actor cell topic data).kernel b = recTotalAsset s.kernel b := rfl
+
+/-- **`emitStep` advances the chain by exactly one row — PROVED** (the observation/replay clock). -/
+theorem emitStep_obsadvance (s : RecChainedState) (actor cell : CellId) (topic data : Int) :
+    (emitStep s actor cell topic data).log.length = s.log.length + 1 := by simp [emitStep]
+
+/-- **The canonical field names the 4 field-writing pure-state effects target** (the metatheory's
+named-field model of dregg1's `state.fields[index]` slot / `permissions` / `verification_key`). -/
+def nonceField : FieldName := "nonce"
+def permsField : FieldName := "permissions"
+def vkField    : FieldName := "verification_key"
+
 /-- **The FULL per-asset op-set, as one sum.** `balanceA t a` (a per-asset transfer of asset `a`);
 `delegate`/`revoke` (authority, asset-orthogonal); `mintA`/`burnA` (the per-asset supply
 generators). The asset-typed analog of `FullAction`. -/
@@ -748,25 +829,60 @@ inductive FullActionA where
   | mintA    (actor cell : CellId) (asset : AssetId) (amt : ℤ)
   /-- A privileged per-asset supply burn. -/
   | burnA    (actor cell : CellId) (asset : AssetId) (amt : ℤ)
+  -- §MA-state: the 5 PURE-STATE (field/log) effects — they write the `cell` record or the LOG,
+  -- NEVER the `bal` ledger, so `ledgerDeltaAsset = 0` for EVERY asset (balance-NEUTRAL).
+  /-- `SetField { cell, index→field, value }` (dregg1 `apply_set_field`): write `actor`-authorized
+  cell `cell`'s named state field `field` to `v`. Authority: `actor` holds authority over `cell`. -/
+  | setFieldA       (actor cell : CellId) (field : FieldName) (v : Int)
+  /-- `EmitEvent { cell, event }` (dregg1 `apply_emit_event`): append an event receipt. NO state
+  write, NO authority gate (dregg1's only gate is cell-existence). -/
+  | emitEventA      (actor cell : CellId) (topic data : Int)
+  /-- `IncrementNonce { cell }` (dregg1 `apply_increment_nonce`): monotone nonce bump. The bumped
+  counter value `newNonce` is written to the `nonce` field; `actor` holds authority over `cell`. -/
+  | incrementNonceA (actor cell : CellId) (newNonce : Int)
+  /-- `SetPermissions { cell, new_permissions }` (dregg1 `apply_set_permissions`, applied LAST off
+  the ORIGINAL permission snapshot): write the `permissions` field to `perms`; `actor` holds
+  authority over `cell`. -/
+  | setPermissionsA (actor cell : CellId) (perms : Int)
+  /-- `SetVerificationKey { cell, new_vk }` (dregg1 `apply_set_verification_key`): write the
+  `verification_key` field to `vk`; `actor` holds authority over `cell` (the VK hash-integrity check
+  is the §8 Prop-carrier portal, off this executable layer). -/
+  | setVKA          (actor cell : CellId) (vk : Int)
 
 /-- **The per-asset ledger delta of a `FullActionA`, indexed by asset `b`.** Transfer and authority
 are conservation-trivial (`0` for every asset); `mintA a` adds `amt` to asset `a` only; `burnA a`
-subtracts from asset `a` only. A FAMILY indexed by `AssetId` — never one aggregate scalar. -/
+subtracts from asset `a` only. The 5 PURE-STATE effects (`setFieldA`/`emitEventA`/`incrementNonceA`/
+`setPermissionsA`/`setVKA`) write the `cell` record or the LOG, never the `bal` ledger — so their
+delta is `0` for EVERY asset (balance-NEUTRALITY). A FAMILY indexed by `AssetId` — never one
+aggregate scalar. -/
 def ledgerDeltaAsset : FullActionA → AssetId → ℤ
-  | .balanceA _ _,     _ => 0
-  | .delegate _ _ _,   _ => 0
-  | .revoke _ _,       _ => 0
-  | .mintA _ _ a amt,  b => if b = a then amt else 0
-  | .burnA _ _ a amt,  b => if b = a then (-amt) else 0
+  | .balanceA _ _,        _ => 0
+  | .delegate _ _ _,      _ => 0
+  | .revoke _ _,          _ => 0
+  | .mintA _ _ a amt,     b => if b = a then amt else 0
+  | .burnA _ _ a amt,     b => if b = a then (-amt) else 0
+  | .setFieldA _ _ _ _,   _ => 0
+  | .emitEventA _ _ _ _,  _ => 0
+  | .incrementNonceA _ _ _, _ => 0
+  | .setPermissionsA _ _ _, _ => 0
+  | .setVKA _ _ _,        _ => 0
 
 /-- **The per-asset full executor.** Dispatch each kind to its chained per-asset primitive. ONE
-executor over the per-asset op-set; the asset-typed analog of `execFull`. -/
+executor over the per-asset op-set; the asset-typed analog of `execFull`. The 5 pure-state effects
+route to `EffectsState.stateStep` (the authority-gated field write — `setFieldA`/`incrementNonceA`/
+`setPermissionsA`/`setVKA`) or to `emitStep` (the authority-free log append — `emitEventA`), the
+ALREADY-PROVEN per-effect steps. -/
 def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   | .balanceA t a           => recCexecAsset s t a
   | .delegate del rec t      => recCDelegate s del rec t
   | .revoke holder t         => some (recCRevoke s holder t)
   | .mintA actor cell a amt   => recCMintAsset s actor cell a amt
   | .burnA actor cell a amt   => recCBurnAsset s actor cell a amt
+  | .setFieldA actor cell f v        => stateStep s f actor cell (.int v)
+  | .emitEventA actor cell topic data => some (emitStep s actor cell topic data)
+  | .incrementNonceA actor cell n     => stateStep s nonceField actor cell (.int n)
+  | .setPermissionsA actor cell p     => stateStep s permsField actor cell (.int p)
+  | .setVKA actor cell vk             => stateStep s vkField actor cell (.int vk)
 
 /-- **`execFullA_ledger_per_asset` — PROVED (the per-asset conservation vector).** Every committed
 `FullActionA` moves `recTotalAsset b` by EXACTLY `ledgerDeltaAsset fa b`, for EVERY asset `b`
@@ -820,6 +936,23 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | some k' =>
           rw [hb] at h; simp only [Option.some.injEq] at h; subst h
           exact recKBurnAsset_delta s.kernel k' actor cell a amt hb b
+  -- §MA-state: the 5 PURE-STATE effects are balance-NEUTRAL (`ledgerDeltaAsset = 0`) — they write
+  -- the `cell` record / the LOG, NEVER the `bal` ledger, so `recTotalAsset b` is UNCHANGED.
+  | setFieldA actor cell f v =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [stateStep_recTotalAsset h b, add_zero]
+  | emitEventA actor cell topic data =>
+      simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
+      subst h; rw [emitStep_recTotalAsset s actor cell topic data b, add_zero]
+  | incrementNonceA actor cell n =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [stateStep_recTotalAsset h b, add_zero]
+  | setPermissionsA actor cell p =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [stateStep_recTotalAsset h b, add_zero]
+  | setVKA actor cell vk =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [stateStep_recTotalAsset h b, add_zero]
 
 /-- **The per-asset full turn executor.** A transaction of `FullActionA`s, all-or-nothing. -/
 def execFullTurnA (s : RecChainedState) : List FullActionA → Option RecChainedState
@@ -913,6 +1046,13 @@ def fullReceiptA : FullActionA → Turn
   | .revoke holder _       => authReceipt holder
   | .mintA actor cell _ amt  => { actor := actor, src := cell, dst := cell, amt := amt }
   | .burnA actor cell _ amt  => { actor := actor, src := cell, dst := cell, amt := -amt }
+  -- §MA-state: every pure-state effect appends a balance-`0` self-`Turn` on the target `cell` (the
+  -- metadata clock row that `stateStep`/`emitStep` thread; no balance delta).
+  | .setFieldA actor cell _ _   => { actor := actor, src := cell, dst := cell, amt := 0 }
+  | .emitEventA actor cell _ _  => { actor := actor, src := cell, dst := cell, amt := 0 }
+  | .incrementNonceA actor cell _ => { actor := actor, src := cell, dst := cell, amt := 0 }
+  | .setPermissionsA actor cell _ => { actor := actor, src := cell, dst := cell, amt := 0 }
+  | .setVKA actor cell _        => { actor := actor, src := cell, dst := cell, amt := 0 }
 
 /-- **`execFullA_chainlink` — PROVED.** A committed `FullActionA` extends the receipt chain by EXACTLY
 its `fullReceiptA`, newest-first, with no fork or rewrite. The per-action generalization across the
@@ -943,6 +1083,22 @@ theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
       cases hb : recKBurnAsset s.kernel actor cell a amt with
       | none => rw [hb] at h; exact absurd h (by simp)
       | some k' => rw [hb] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  -- §MA-state: each pure-state effect appends exactly the metadata clock row (`stateStep`/`emitStep`).
+  | setFieldA actor cell f v =>
+      simp only [execFullA, fullReceiptA] at h ⊢
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
+  | emitEventA actor cell topic data =>
+      simp only [execFullA, fullReceiptA, Option.some.injEq] at h ⊢
+      subst h; rfl
+  | incrementNonceA actor cell n =>
+      simp only [execFullA, fullReceiptA] at h ⊢
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
+  | setPermissionsA actor cell p =>
+      simp only [execFullA, fullReceiptA] at h ⊢
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
+  | setVKA actor cell vk =>
+      simp only [execFullA, fullReceiptA] at h ⊢
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'; rfl
 
 /-- **`execFullA_obsadvance` — PROVED.** A committed `FullActionA` grows the chain by exactly one
 row, so a replayed action (which would re-append the same receipt) is detectable. -/
@@ -1028,6 +1184,42 @@ theorem execFullA_burnA_authorized (s s' : RecChainedState) (actor cell : CellId
   | none => rw [hb] at h; exact absurd h (by simp)
   | some k' => exact recKBurnAsset_authorized s.kernel k' actor cell a amt hb
 
+/-! ### §MA-state authority obligations — the 4 field-writing pure-state effects WERE authorized;
+`emitEventA` is authority-FREE (dregg1 `apply_emit_event` runs NO cap check). The field-writing
+effects reuse `EffectsState.state_authorized` (the `stateAuthB` gate over the target cell — the
+faithful model of dregg1's `check_cross_cell_permission`/ownership), so the gate is REAL, not
+vacuous: an actor without authority over `cell` cannot commit a field write (see the fail-closed
+`#eval`s in §13-state). -/
+
+/-- **`setFieldA` authorized — PROVED.** A committed `setFieldA` implies the actor held authority over
+`cell` (`stateAuthB` — the faithful model of dregg1's `SetState` cross-cell / ownership gate). -/
+theorem execFullA_setFieldA_authorized (s s' : RecChainedState) (actor cell : CellId) (f : FieldName)
+    (v : Int) (h : execFullA s (.setFieldA actor cell f v) = some s') :
+    stateAuthB s.kernel.caps actor cell = true :=
+  state_authorized (by simpa only [execFullA] using h)
+
+/-- **`incrementNonceA` authorized — PROVED.** Implies the actor held authority over `cell` (the
+`IncrementNonce` cross-cell / ownership gate). -/
+theorem execFullA_incrementNonceA_authorized (s s' : RecChainedState) (actor cell : CellId) (n : Int)
+    (h : execFullA s (.incrementNonceA actor cell n) = some s') :
+    stateAuthB s.kernel.caps actor cell = true :=
+  state_authorized (by simpa only [execFullA] using h)
+
+/-- **`setPermissionsA` authorized — PROVED.** Implies the actor held authority over `cell` (the
+`SetPermissions` gate; dregg1 applies the permission write LAST off the ORIGINAL snapshot, so the
+gate is evaluated against the PRE-state caps — exactly `stateAuthB s.kernel.caps`, the pre-state). -/
+theorem execFullA_setPermissionsA_authorized (s s' : RecChainedState) (actor cell : CellId) (p : Int)
+    (h : execFullA s (.setPermissionsA actor cell p) = some s') :
+    stateAuthB s.kernel.caps actor cell = true :=
+  state_authorized (by simpa only [execFullA] using h)
+
+/-- **`setVKA` authorized — PROVED.** Implies the actor held authority over `cell` (the
+`SetVerificationKey` gate). -/
+theorem execFullA_setVKA_authorized (s s' : RecChainedState) (actor cell : CellId) (vk : Int)
+    (h : execFullA s (.setVKA actor cell vk) = some s') :
+    stateAuthB s.kernel.caps actor cell = true :=
+  state_authorized (by simpa only [execFullA] using h)
+
 /-- **The per-`FullActionA` `StepInv`** — the per-asset analog of `fullActionInv`, true of every
 committed per-asset action across all kinds. Its **Ledger** conjunct is the full per-asset VECTOR (a
 `∀ b`, never an aggregate scalar — the FILL-1 carrier that forbids cross-asset laundering):
@@ -1061,7 +1253,25 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        (effectLinearity mintEffect).is_disclosed_non_conservation = true
    | .burnA actor cell _ _  =>
        mintAuthorizedB s.kernel.caps actor cell = true ∧
-       (effectLinearity burnEffect).is_disclosed_non_conservation = true)
+       (effectLinearity burnEffect).is_disclosed_non_conservation = true
+   -- §MA-state: the field-writing pure-state effects carry their REAL authority gate
+   -- (`stateAuthB` over the cell) ∧ their `Neutral`/`Monotonic` linearity coloring (the
+   -- faithful-mirror tripwire). `emitEventA` is authority-FREE (dregg1 runs no cap check), so its
+   -- obligation is JUST the `Neutral` coloring — honestly NOT an authority claim.
+   | .setFieldA actor cell _ _ =>
+       stateAuthB s.kernel.caps actor cell = true ∧
+       effectLinearity .setField = LinearityClass.Neutral
+   | .emitEventA _ _ _ _ =>
+       effectLinearity .emitEvent = LinearityClass.Neutral
+   | .incrementNonceA actor cell _ =>
+       stateAuthB s.kernel.caps actor cell = true ∧
+       effectLinearity .incrementNonce = LinearityClass.Monotonic
+   | .setPermissionsA actor cell _ =>
+       stateAuthB s.kernel.caps actor cell = true ∧
+       effectLinearity .setPermissions = LinearityClass.Neutral
+   | .setVKA actor cell _ =>
+       stateAuthB s.kernel.caps actor cell = true ∧
+       effectLinearity .setVerificationKey = LinearityClass.Neutral)
 
 /-- **`execFullA_attests_per_asset` — THE PER-ASSET OP-SET IS STEP-COMPLETE BY CONSTRUCTION
 (PROVED).** Every committed `FullActionA` attests its full `StepInv` content: the per-asset ledger
@@ -1078,6 +1288,13 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | revoke holder t => exact execFullA_revoke_removeEdge s s' holder t h
   | mintA actor cell a amt => exact ⟨execFullA_mintA_authorized s s' actor cell a amt h, mint_discloses⟩
   | burnA actor cell a amt => exact ⟨execFullA_burnA_authorized s s' actor cell a amt h, burn_discloses⟩
+  -- §MA-state: discharge the field-writing effects' (authority ∧ coloring) obligation; emitEvent's
+  -- coloring-only obligation (authority-free, dregg1-faithful).
+  | setFieldA actor cell f v => exact ⟨execFullA_setFieldA_authorized s s' actor cell f v h, rfl⟩
+  | emitEventA actor cell topic data => exact rfl
+  | incrementNonceA actor cell n => exact ⟨execFullA_incrementNonceA_authorized s s' actor cell n h, rfl⟩
+  | setPermissionsA actor cell p => exact ⟨execFullA_setPermissionsA_authorized s s' actor cell p h, rfl⟩
+  | setVKA actor cell vk => exact ⟨execFullA_setVKA_authorized s s' actor cell vk h, rfl⟩
 
 /-- **`execFullTurnA_each_attests` — PROVED.** Step-completeness holds at EVERY action of a committed
 per-asset transaction, across all kinds: the per-node `fullActionInvA` witness threaded along the
@@ -1143,6 +1360,17 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_burnA_authorized
 #assert_axioms execFullA_attests_per_asset
 #assert_axioms execFullTurnA_each_attests
+-- META-FILL B Wave 1: the 5 PURE-STATE (field/log) effects on the per-asset dispatch.
+-- The balance-NEUTRALITY keystone (a field/log write moves NO asset's supply) + the per-effect
+-- authority gates + the (re-extended) per-asset spine arms all pinned kernel-clean.
+#assert_axioms writeField_recTotalAsset
+#assert_axioms stateStep_recTotalAsset
+#assert_axioms emitStep_recTotalAsset
+#assert_axioms emitStep_obsadvance
+#assert_axioms execFullA_setFieldA_authorized
+#assert_axioms execFullA_incrementNonceA_authorized
+#assert_axioms execFullA_setPermissionsA_authorized
+#assert_axioms execFullA_setVKA_authorized
 
 /-! ## §12 — Non-vacuity: each kind commits with the right invariant; unauthorized rejected.
 
@@ -1248,5 +1476,72 @@ def launderTurn : List FullActionA :=
 -- the per-asset ledger AFTER the launder turn: asset 0 fell to 55, asset 1 rose to 57 (CAUGHT):
 #eval (execFullTurnA fma0 launderTurn).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))   -- some (55, 57)
+
+/-! ## §13-state — Non-vacuity for the 5 PURE-STATE effects: the cell record/log moves, but
+`recTotalAsset` is UNCHANGED in EVERY asset (balance-NEUTRALITY witnessed); authority is REAL
+(an unauthorized field write fails-closed); `emitEvent` is authority-FREE. -/
+
+/-- A genuine 2-asset state whose cells ALSO carry a `nonce`/`status`/`permissions`/`verification_key`
+record (so the pure-state field writes are OBSERVABLE). Cell 0 holds 100 of asset 0 + 7 of asset 1;
+cell 1 holds 5 of asset 0. Empty cap table ⇒ authority is by OWNERSHIP (actor = cell). -/
+def fmaS : RecChainedState :=
+  { kernel :=
+      { accounts := {0, 1}
+        cell := fun c => if c = 0 then .record [("balance", .int 0), ("nonce", .int 0),
+                                                ("status", .int 0), ("permissions", .int 0),
+                                                ("verification_key", .int 0)]
+                         else .record [("balance", .int 0)]
+        caps := fun _ => []
+        bal := fun c a => if c = 0 then (if a = 0 then 100 else if a = 1 then 7 else 0)
+                          else if c = 1 then (if a = 0 then 5 else 0) else 0 }
+    log := [] }
+
+-- The pre-state per-asset supply: asset 0 = 105, asset 1 = 7.
+#eval (recTotalAsset fmaS.kernel 0, recTotalAsset fmaS.kernel 1)                     -- (105, 7)
+
+-- ★ THE KEYSTONE WITNESS: a `setFieldA` that changes cell 0's `nonce` field to 42 COMMITS,
+--   yet `recTotalAsset` is UNCHANGED at (105, 7) for BOTH assets (balance-NEUTRALITY):
+#eval (execFullA fmaS (.setFieldA 0 0 "nonce" 42)).isSome                            -- true
+#eval (execFullA fmaS (.setFieldA 0 0 "nonce" 42)).map
+        (fun s => fieldOf "nonce" (s.kernel.cell 0))                                 -- some 42 (CHANGED)
+#eval (execFullA fmaS (.setFieldA 0 0 "nonce" 42)).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7) (UNCHANGED)
+-- ...and grows the receipt chain by exactly one row (the metadata clock):
+#eval (execFullA fmaS (.setFieldA 0 0 "nonce" 42)).map (fun s => s.log.length)       -- some 1
+-- An UNAUTHORIZED actor (9 owns nothing, empty caps) cannot write cell 0's field (fail-closed):
+#eval (execFullA fmaS (.setFieldA 9 0 "nonce" 42)).isSome                            -- false
+
+-- IncrementNonce (Monotonic): bump cell 0's nonce 0→1, balance-neutral:
+#eval (execFullA fmaS (.incrementNonceA 0 0 1)).map (fun s => fieldOf "nonce" (s.kernel.cell 0))  -- some 1
+#eval (execFullA fmaS (.incrementNonceA 0 0 1)).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7)
+
+-- SetPermissions / SetVerificationKey (Neutral): field writes, balance-neutral:
+#eval (execFullA fmaS (.setPermissionsA 0 0 3)).map (fun s => fieldOf "permissions" (s.kernel.cell 0))  -- some 3
+#eval (execFullA fmaS (.setVKA 0 0 99)).map (fun s => fieldOf "verification_key" (s.kernel.cell 0))     -- some 99
+#eval (execFullA fmaS (.setVKA 0 0 99)).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7)
+
+-- EmitEvent: authority-FREE (even actor 9, who owns nothing, commits — dregg1 runs NO cap check),
+--   writes NO state, grows the chain by one, balance-neutral:
+#eval (execFullA fmaS (.emitEventA 9 0 7 123)).isSome                                -- true (authority-free)
+#eval (execFullA fmaS (.emitEventA 9 0 7 123)).map (fun s => s.log.length)           -- some 1
+#eval (execFullA fmaS (.emitEventA 9 0 7 123)).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7)
+
+-- A MIXED per-asset turn interleaving pure-state effects with a transfer: ALL balance-neutral
+--   (the transfer conserves; the field writes/emit move no asset) ⇒ (105, 7) preserved:
+def stateMixedTurn : List FullActionA :=
+  [ .setFieldA 0 0 "status" 5
+  , .balanceA ⟨0, 0, 1, 30⟩ 0     -- transfer 30 of asset 0, cell 0 → cell 1 (conserves)
+  , .incrementNonceA 0 0 1
+  , .emitEventA 0 0 1 0
+  , .setVKA 0 0 7 ]
+
+#eval (execFullTurnA fmaS stateMixedTurn).isSome                                     -- true (all commit)
+#eval (turnLedgerDeltaAsset stateMixedTurn 0, turnLedgerDeltaAsset stateMixedTurn 1) -- (0, 0)
+#eval (execFullTurnA fmaS stateMixedTurn).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7) (CONSERVED)
+#eval (execFullTurnA fmaS stateMixedTurn).map (fun s => s.log.length)                -- some 5 (chain grew by node count)
 
 end Dregg2.Exec.TurnExecutorFull

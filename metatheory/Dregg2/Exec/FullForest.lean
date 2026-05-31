@@ -335,13 +335,20 @@ v1: every node here runs under its own `execFullA` authority gate, and delegatio
 handoff modeled. -/
 
 /-- The target cell a `FullActionA` acts on (the `src` for a transfer, the `cell` for mint/burn, the
-delegator/holder for authority). The discriminant `sameTargetForest` reads. -/
+delegator/holder for authority, the written `cell` for the 5 pure-state field/log effects). The
+discriminant `sameTargetForest` reads. -/
 def targetOf : FullActionA → CellId
   | .balanceA t _       => t.src
   | .delegate del _ _   => del
   | .revoke holder _    => holder
   | .mintA _ cell _ _   => cell
   | .burnA _ cell _ _   => cell
+  -- §MA-state: the 5 pure-state effects act on their `cell` (the record/log they touch).
+  | .setFieldA _ cell _ _   => cell
+  | .emitEventA _ cell _ _  => cell
+  | .incrementNonceA _ cell _ => cell
+  | .setPermissionsA _ cell _ => cell
+  | .setVKA _ cell _        => cell
 
 mutual
 /-- **`sameTargetForest`** — the STRUCTURAL `DelegationMode::None` fidelity predicate: every child's
@@ -478,6 +485,45 @@ def strictEdge : List Auth × Cap := ([Auth.read], .endpoint 1 [Auth.read, Auth.
 -- `write` is conferred by the parent but NOT by the attenuated child (the dropped element):
 #eval (capAuthConferred strictEdge.2).contains Auth.write                   -- true
 #eval (capAuthConferred (attenuate strictEdge.1 strictEdge.2)).contains Auth.write  -- false (DROPPED)
+
+/-! ### §11-state — META-FILL B Wave 1: a TREE NODE carrying a PURE-STATE effect runs (the 5
+field/log effects inherit the forest executor automatically through `execFullA`/`lowerForestA` — no
+forest-spine edit). The whole tree is balance-NEUTRAL: `recTotalAsset` is UNCHANGED in BOTH assets,
+even though the cells' `status`/`nonce` fields are written. Actor 0 owns cell 0 (empty caps ⇒
+ownership). -/
+
+/-- **`stateFullForest`** — a 2-level tree whose nodes are PURE-STATE effects: the ROOT writes cell
+0's `status` field, the CHILD bumps cell 0's `nonce` (delegated, non-amplifying). NEITHER touches the
+`bal` ledger ⇒ the whole tree is balance-NEUTRAL in EVERY asset (per-asset net `0`). -/
+def stateFullForest : FullForestA :=
+  ⟨ .setFieldA 0 0 "status" 7
+  , [ { holder := 0, keep := [Auth.read], parentCap := .endpoint 0 [Auth.read, Auth.write]
+      , sub := ⟨ .incrementNonceA 0 0 1, [] ⟩ } ] ⟩
+
+#eval (execFullForestA fma0 stateFullForest).isSome                          -- true (pure-state tree commits)
+-- The pre-order lowering is the 2 pure-state node-actions:
+#eval (lowerForestA stateFullForest).length                                  -- 2
+-- The per-asset net is 0 in BOTH assets (pure-state effects move NO asset's supply):
+#eval (turnLedgerDeltaAsset (lowerForestA stateFullForest) 0,
+       turnLedgerDeltaAsset (lowerForestA stateFullForest) 1)                 -- (0, 0)
+-- The per-asset supply AFTER the pure-state tree: UNCHANGED at (105, 7) — balance-NEUTRALITY:
+#eval (execFullForestA fma0 stateFullForest).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))       -- some (105, 7)
+-- ...the written fields read back (status=7, nonce=1) — the metadata domain DID advance:
+#eval (execFullForestA fma0 stateFullForest).map
+        (fun s => (EffectsState.fieldOf "status" (s.kernel.cell 0),
+                   EffectsState.fieldOf "nonce" (s.kernel.cell 0)))           -- some (7, 1)
+-- ...the chain grew by exactly the node count (2):
+#eval (execFullForestA fma0 stateFullForest).map (fun s => s.log.length)      -- some 2
+
+/-- **`emitOnlyForest`** — a single-node tree carrying an authority-FREE `emitEventA` (dregg1
+`apply_emit_event` runs NO cap check), by an actor (5) who owns nothing: it STILL commits (the
+forest inherits the authority-free emit semantics). -/
+def emitOnlyForest : FullForestA := ⟨ .emitEventA 5 0 7 42, [] ⟩
+
+#eval (execFullForestA fma0 emitOnlyForest).isSome                            -- true (authority-free emit)
+#eval (execFullForestA fma0 emitOnlyForest).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))       -- some (105, 7)
 
 /-! ## §12 — OUTCOME.
 
