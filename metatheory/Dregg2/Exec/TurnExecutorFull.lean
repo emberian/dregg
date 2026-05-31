@@ -1047,9 +1047,107 @@ theorem exerciseStepA_factors {s s' : RecChainedState} {actor target : CellId}
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; exact ⟨hg, h.symm⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-- **The FULL per-asset op-set, as one sum.** `balanceA t a` (a per-asset transfer of asset `a`);
-`delegate`/`revoke` (authority, asset-orthogonal); `mintA`/`burnA` (the per-asset supply
-generators). The asset-typed analog of `FullAction`. -/
+/-! ### §MA-escrow — the COMBINED PER-ASSET holding-store on the executed dispatch (`META-FILL C`).
+
+dregg1's escrow/obligation/committed-escrow are NOT balance-conserving two-cell transfers: they DEBIT
+ONE cell and park the value in an off-ledger side-table, conserving only the COMBINED total across the
+create+settle PAIR (`RecordKernel §ESCROW`). On the per-asset `bal` ledger this is
+`RecordKernel.createEscrowKAsset`/`releaseEscrowKAsset`/`refundEscrowKAsset`, which conserve the
+COMBINED per-asset measure `recTotalAssetWithEscrow`. We re-found their CHAINED wrappers HERE (mirroring
+`attenuateStepA`/`exerciseStepA`, since `EffectsPaired` sits parallel and is not imported), and wire
+them into the executed `execFullA` dispatch. The escrow legs move the BARE `recTotalAsset` by ∓amount at
+the locked asset (`ledgerDeltaAsset`), but conserve the COMBINED measure (`combinedDeltaAsset = 0`).
+Note effects move SETS (nullifier/commitment), not `bal`, so both deltas are `0`. -/
+
+/-- The escrow receipt (a self-`Turn` on the actor, amount `0` — the metadata clock row; the parked
+amount/asset live in the off-ledger record, not the receipt). -/
+def escrowReceiptA (actor : CellId) : Turn := { actor := actor, src := actor, dst := actor, amt := 0 }
+
+/-- **Chained per-asset escrow create.** Run `RecordKernel.createEscrowKAsset` (single-cell, single-asset
+debit at `asset` + park the asset-typed record), and on success extend the receipt chain. -/
+def createEscrowChainA (s : RecChainedState) (id : Nat) (actor creator recipient : CellId)
+    (asset : AssetId) (amount : ℤ) : Option RecChainedState :=
+  match createEscrowKAsset s.kernel id actor creator recipient asset amount with
+  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+  | none    => none
+
+/-- **Chained per-asset escrow release** (single-cell credit to the recipient at the record's asset). -/
+def releaseEscrowChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
+  match releaseEscrowKAsset s.kernel id with
+  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+  | none    => none
+
+/-- **Chained per-asset escrow refund** (single-cell credit back to the creator at the record's asset). -/
+def refundEscrowChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
+  match refundEscrowKAsset s.kernel id with
+  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+  | none    => none
+
+/-- **Chained note-create** — grow the commitment SET (the §8 range-proof portal is the THEOREM-level
+hypothesis, like bridgeMint's foreign finality; the ledger move is the grow-only insert). Always
+commits at the ledger layer (a fresh commitment cannot conflict). -/
+def noteCreateChainA (s : RecChainedState) (cm : Nat) (actor : CellId) : RecChainedState :=
+  { kernel := noteCreateCommitment s.kernel cm, log := escrowReceiptA actor :: s.log }
+
+/-- **Chained note-spend** — the ledger-side double-spend gate (`noteSpendNullifier`, fail-closed on a
+repeated nullifier). The §8 STARK spending proof is the THEOREM-level portal. -/
+def noteSpendChainA (s : RecChainedState) (nf : Nat) (actor : CellId) : Option RecChainedState :=
+  match noteSpendNullifier s.kernel nf with
+  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+  | none    => none
+
+/-- **`createEscrowChainA_combined_neutral` — PROVED.** A committed per-asset escrow create conserves
+the COMBINED per-asset measure at EVERY asset `b` (the bal debit at `asset` is offset by the
+holding-store rise). Reads off `RecordKernel.escrow_create_conserves_combined_per_asset`. -/
+theorem createEscrowChainA_combined_neutral {s s' : RecChainedState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (h : createEscrowChainA s id actor creator recipient asset amount = some s') :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+  unfold createEscrowChainA at h
+  cases hc : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact escrow_create_conserves_combined_per_asset b hc
+
+/-- **`createEscrowChainA_bal_debits` — PROVED.** A committed per-asset escrow create DROPS the BARE
+per-asset ledger `recTotalAsset asset` by `amount` (a real per-asset debit) — the bare-bal delta the
+`ledgerDeltaAsset` arm discloses (combined-conserving, bare-debiting). -/
+theorem createEscrowChainA_bal_debits {s s' : RecChainedState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
+    (h : createEscrowChainA s id actor creator recipient asset amount = some s') :
+    recTotalAsset s'.kernel asset = recTotalAsset s.kernel asset - amount := by
+  unfold createEscrowChainA at h
+  cases hc : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact (escrow_create_debits_per_asset hc).1
+
+/-- The bare-bal per-asset delta of a committed escrow create, for an arbitrary asset `b`: `−amount` at
+`asset`, `0` elsewhere. (The other-asset legs of `createEscrowKAsset` are frame-untouched.) PROVED. -/
+theorem createEscrowChainA_bal_delta {s s' : RecChainedState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (h : createEscrowChainA s id actor creator recipient asset amount = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + (if b = asset then (-amount) else 0) := by
+  unfold createEscrowChainA at h
+  cases hc : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      unfold createEscrowKAsset at hc
+      by_cases hg : authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+          ∧ 0 ≤ amount ∧ amount ≤ s.kernel.bal creator asset ∧ creator ∈ s.kernel.accounts
+          ∧ ¬ (∃ r ∈ s.kernel.escrows, r.id = id)
+      · rw [if_pos hg] at hc; simp only [Option.some.injEq] at hc; subst hc
+        obtain ⟨_, _, _, hlive, _⟩ := hg
+        show (∑ x ∈ s.kernel.accounts, recBalCreditCell s.kernel.bal creator asset (-amount) x b) = _
+        have := recBalCreditCell_recTotalAsset s.kernel.accounts s.kernel.bal creator asset (-amount) hlive b
+        simpa [recTotalAsset] using this
+      · rw [if_neg hg] at hc; exact absurd hc (by simp)
+
+/-- The FULL per-asset op-set, as one sum (`META-FILL A`/`B`/`C`). The asset-typed analog of
+`FullAction`. -/
 inductive FullActionA where
   /-- A per-asset balance transfer: move asset `asset` per `turn`. -/
   | balanceA (turn : Turn) (asset : AssetId)
@@ -1126,13 +1224,51 @@ inductive FullActionA where
   so foreign finality is the §8 `Prop` carrier (off this executable layer); the LOCAL credit reuses the
   per-asset mint `recCMintAsset` verbatim. -/
   | bridgeMintA     (actor cell : CellId) (asset : AssetId) (value : ℤ)
+  -- §MA-escrow: the off-ledger holding-store + commitment/nullifier SET effects (`META-FILL C`,
+  -- closing `#121`). escrow/obligation/committed-escrow DEBIT one cell at one asset and PARK the value
+  -- (combined per-asset conserving, bare-bal debiting); notes move the nullifier/commitment SET (not
+  -- `bal`). The §8 crypto (committed-escrow opening, note range/spending proofs) is the THEOREM-level
+  -- portal (off this executable layer, exactly as bridgeMint's foreign finality).
+  /-- `CreateEscrow { id, creator, recipient, asset, amount }` (dregg1 `apply_create_escrow`): lock
+  `amount` of `asset` from `creator` into the off-ledger holding-store (single-cell debit + parked
+  record). Combined per-asset conserving; bare per-asset ledger DEBITED at `asset`. -/
+  | createEscrowA   (id : Nat) (actor creator recipient : CellId) (asset : AssetId) (amount : ℤ)
+  /-- `ReleaseEscrow { id }` (dregg1 `apply_release_escrow`): credit the recipient at the record's asset
+  + mark resolved. Combined per-asset conserving. -/
+  | releaseEscrowA  (id : Nat) (actor : CellId)
+  /-- `RefundEscrow { id }` (dregg1 `apply_refund_escrow`): credit the creator (refund target) + mark
+  resolved. Combined per-asset conserving. -/
+  | refundEscrowA   (id : Nat) (actor : CellId)
+  /-- `CreateObligation { id, obligor, beneficiary, stake }` (dregg1 `apply_create_obligation`): the
+  SAME holding-store as escrow (single-cell stake debit + parked record). Dispatch-ALIASED to
+  `createEscrowA` (obligor=creator, beneficiary=recipient, stake=amount). -/
+  | createObligationA (id : Nat) (actor obligor beneficiary : CellId) (asset : AssetId) (stake : ℤ)
+  /-- `NoteSpend { nullifier }` (dregg1 `apply_note_spend`): the nullifier-SET insert with double-spend
+  rejection (the ledger anti-replay gate). The §8 STARK spending proof is the THEOREM-level portal.
+  bal-NEUTRAL. -/
+  | noteSpendA      (nf : Nat) (actor : CellId)
+  /-- `NoteCreate { commitment }` (dregg1 `apply_note_create`): the grow-only commitment-SET insert (the
+  dual of noteSpend). The §8 range proof is the THEOREM-level portal. bal-NEUTRAL. -/
+  | noteCreateA     (cm : Nat) (actor : CellId)
+  /-- `CreateCommittedEscrow { id, …, asset, amount }` (`#121`): a PRIVACY escrow whose amount is hidden
+  behind a Pedersen commitment (the record `id` is the commitment key). The lock automaton is identical
+  to plain escrow, so it inherits the per-asset combined-conservation; the opening predicate is the §8
+  THEOREM-level portal. -/
+  | createCommittedEscrowA (id : Nat) (actor creator recipient : CellId) (asset : AssetId) (amount : ℤ)
+  /-- `ReleaseCommittedEscrow { id }` (`#121`): portal-gated release of a committed escrow. -/
+  | releaseCommittedEscrowA (id : Nat) (actor : CellId)
+  /-- `RefundCommittedEscrow { id }` (`#121`): portal-gated refund of a committed escrow. -/
+  | refundCommittedEscrowA  (id : Nat) (actor : CellId)
 
-/-- **The per-asset ledger delta of a `FullActionA`, indexed by asset `b`.** Transfer and authority
-are conservation-trivial (`0` for every asset); `mintA a` adds `amt` to asset `a` only; `burnA a`
-subtracts from asset `a` only. The 5 PURE-STATE effects (`setFieldA`/`emitEventA`/`incrementNonceA`/
-`setPermissionsA`/`setVKA`) write the `cell` record or the LOG, never the `bal` ledger — so their
-delta is `0` for EVERY asset (balance-NEUTRALITY). A FAMILY indexed by `AssetId` — never one
-aggregate scalar. -/
+/-- **The per-asset COMBINED ledger delta of a `FullActionA`, indexed by asset `b`** — the move of the
+COMBINED measure `recTotalAssetWithEscrow` (= `bal`-ledger + per-asset holding-store). Transfer and
+authority are conservation-trivial (`0` for every asset); `mintA a` adds `amt` to asset `a` only;
+`burnA a` subtracts from asset `a` only. The 5 PURE-STATE effects write the `cell` record / the LOG,
+never `bal` — so `0`. The escrow/obligation/committed-escrow legs DEBIT the bare `bal` ledger by
+∓amount at the locked asset BUT park exactly that into the per-asset holding-store, so their COMBINED
+delta is `0` (combined-conserving, even though the bare ledger genuinely moves — that bare debit is
+witnessed by `createEscrowChainA_bal_debits`). Notes move the nullifier/commitment SET, not `bal`, so
+`0`. A FAMILY indexed by `AssetId` — never one aggregate scalar. -/
 def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .balanceA _ _,        _ => 0
   | .delegate _ _ _,      _ => 0
@@ -1156,6 +1292,17 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .createCellA _ _,     _ => 0
   | .spawnA _ _ _,        _ => 0
   | .bridgeMintA _ _ a value, b => if b = a then value else 0
+  -- §MA-escrow: escrow/obligation/committed-escrow are COMBINED-conserving (bal debit offset by the
+  -- holding-store park), so their COMBINED delta is `0`; notes move SETs, not `bal`, so `0`.
+  | .createEscrowA _ _ _ _ _ _,   _ => 0
+  | .releaseEscrowA _ _,          _ => 0
+  | .refundEscrowA _ _,           _ => 0
+  | .createObligationA _ _ _ _ _ _, _ => 0
+  | .noteSpendA _ _,              _ => 0
+  | .noteCreateA _ _,             _ => 0
+  | .createCommittedEscrowA _ _ _ _ _ _, _ => 0
+  | .releaseCommittedEscrowA _ _, _ => 0
+  | .refundCommittedEscrowA _ _,  _ => 0
 
 /-- **The per-asset full executor.** Dispatch each kind to its chained per-asset primitive. ONE
 executor over the per-asset op-set; the asset-typed analog of `execFull`. The 5 pure-state effects
@@ -1186,16 +1333,37 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   | .createCellA actor newCell       => createCellChainA s actor newCell
   | .spawnA actor child target       => spawnChainA s actor child target
   | .bridgeMintA actor cell a value  => recCMintAsset s actor cell a value
+  -- §MA-escrow: escrow/obligation/committed route to the chained per-asset holding-store steps;
+  -- obligation/committed are dispatch-ALIASED to the escrow steps (same automaton, §8 portal at the
+  -- theorem layer). Notes route to the SET-insert steps.
+  | .createEscrowA id actor creator recipient asset amount =>
+      createEscrowChainA s id actor creator recipient asset amount
+  | .releaseEscrowA id actor          => releaseEscrowChainA s id actor
+  | .refundEscrowA id actor           => refundEscrowChainA s id actor
+  | .createObligationA id actor obligor beneficiary asset stake =>
+      createEscrowChainA s id actor obligor beneficiary asset stake
+  | .noteSpendA nf actor              => noteSpendChainA s nf actor
+  | .noteCreateA cm actor             => some (noteCreateChainA s cm actor)
+  | .createCommittedEscrowA id actor creator recipient asset amount =>
+      createEscrowChainA s id actor creator recipient asset amount
+  | .releaseCommittedEscrowA id actor => releaseEscrowChainA s id actor
+  | .refundCommittedEscrowA id actor  => refundEscrowChainA s id actor
 
-/-- **`execFullA_ledger_per_asset` — PROVED (the per-asset conservation vector).** Every committed
-`FullActionA` moves `recTotalAsset b` by EXACTLY `ledgerDeltaAsset fa b`, for EVERY asset `b`
-independently: `0` for transfer/authority (the moved asset cancels by
-`recKExecAsset_conserves_per_asset`; authority leaves `bal` fixed), `±amt` at the targeted asset for
-mint/burn, `0` at every other asset. THIS is the law a SCALAR kernel cannot state — it would let a
-mint of asset B net against a burn of asset A. The per-asset family forbids that laundering. -/
+/-- **`execFullA_ledger_per_asset` — PROVED (the COMBINED per-asset conservation VECTOR).** Every
+committed `FullActionA` moves the COMBINED per-asset measure `recTotalAssetWithEscrow b` (= `bal`-ledger
++ per-asset holding-store) by EXACTLY `ledgerDeltaAsset fa b`, for EVERY asset `b` independently: `0`
+for transfer/authority (the moved asset cancels; authority/notes leave `bal` AND `escrows` fixed), `±amt`
+at the targeted asset for mint/burn/bridge (escrows fixed ⇒ combined = bare-bal), and `0` for the
+escrow/obligation/committed-escrow legs — they DEBIT the bare `bal` by ∓amount but PARK exactly that into
+the per-asset holding-store, so the COMBINED measure is fixed (combined-conserving). THIS is the law a
+SCALAR kernel cannot state — it would let a mint of asset B net against a burn of asset A, or an escrow
+of asset A launder into asset B. The per-asset COMBINED family forbids both. -/
 theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (b : AssetId)
     (h : execFullA s fa = some s') :
-    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset fa b := by
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + ledgerDeltaAsset fa b := by
+  -- For the NON-holding-store kinds, the post-state leaves `escrows` fixed, so `escrowHeldAsset` is
+  -- unchanged and the combined move equals the bare-`bal` move; for the escrow/note legs we read the
+  -- combined-conservation off the per-asset holding-store lemmas (combined delta `0`).
   cases fa with
   | balanceA t a =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
@@ -1204,7 +1372,13 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | none => rw [hx] at h; exact absurd h (by simp)
       | some k' =>
           rw [hx] at h; simp only [Option.some.injEq] at h; subst h
-          rw [recKExecAsset_conserves_per_asset s.kernel k' t a hx b]; ring
+          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
+          rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
+                rw [show k' = { s.kernel with bal := recTransferBal s.kernel.bal t.src t.dst a t.amt } from by
+                      unfold recKExecAsset at hx; split at hx
+                      · simpa only [Option.some.injEq] using hx.symm
+                      · exact absurd hx (by simp)]; rfl,
+              recKExecAsset_conserves_per_asset s.kernel k' t a hx b]; ring
   | delegate del rec t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCDelegate at h
@@ -1212,17 +1386,15 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | none => rw [hd] at h; exact absurd h (by simp)
       | some k' =>
           rw [hd] at h; simp only [Option.some.injEq] at h; subst h
-          -- `recKDelegate` commits ⟹ it returns `{s.kernel with caps := grant …}` — `bal`/`accounts` fixed.
           unfold recKDelegate at hd
           by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
           · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-            simp only [recTotalAsset]; ring
+            simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
           · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | revoke holder t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [recCRevoke, Option.some.injEq] at h; subst h
-      -- `recKRevokeTarget` is `{s.kernel with caps := …}` — `bal`/`accounts` fixed.
-      simp only [recTotalAsset, recKRevokeTarget]; ring
+      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, recKRevokeTarget]; ring
   | mintA actor cell a amt =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCMintAsset at h
@@ -1230,7 +1402,13 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | none => rw [hm] at h; exact absurd h (by simp)
       | some k' =>
           rw [hm] at h; simp only [Option.some.injEq] at h; subst h
-          exact recKMintAsset_delta s.kernel k' actor cell a amt hm b
+          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + _
+          rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
+                rw [show k' = { s.kernel with bal := recBalCredit s.kernel.bal cell a amt } from by
+                      unfold recKMintAsset at hm; split at hm
+                      · simpa only [Option.some.injEq] using hm.symm
+                      · exact absurd hm (by simp)]; rfl,
+              recKMintAsset_delta s.kernel k' actor cell a amt hm b]; ring
   | burnA actor cell a amt =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCBurnAsset at h
@@ -1238,26 +1416,45 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | none => rw [hb] at h; exact absurd h (by simp)
       | some k' =>
           rw [hb] at h; simp only [Option.some.injEq] at h; subst h
-          exact recKBurnAsset_delta s.kernel k' actor cell a amt hb b
-  -- §MA-state: the 5 PURE-STATE effects are balance-NEUTRAL (`ledgerDeltaAsset = 0`) — they write
-  -- the `cell` record / the LOG, NEVER the `bal` ledger, so `recTotalAsset b` is UNCHANGED.
+          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + _
+          rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
+                rw [show k' = { s.kernel with bal := recBalCredit s.kernel.bal cell a (-amt) } from by
+                      unfold recKBurnAsset at hb; split at hb
+                      · simpa only [Option.some.injEq] using hb.symm
+                      · exact absurd hb (by simp)]; rfl,
+              recKBurnAsset_delta s.kernel k' actor cell a amt hb b]; ring
   | setFieldA actor cell f v =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [stateStep_recTotalAsset h b, add_zero]
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      show recTotalAsset (writeField s.kernel f cell (.int v)) b + escrowHeldAsset (writeField s.kernel f cell (.int v)) b
+         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel f cell (.int v) b,
+          show escrowHeldAsset (writeField s.kernel f cell (.int v)) b = escrowHeldAsset s.kernel b from rfl]; ring
   | emitEventA actor cell topic data =>
       simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
-      subst h; rw [emitStep_recTotalAsset s actor cell topic data b, add_zero]
+      subst h
+      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, emitStep]; ring
   | incrementNonceA actor cell n =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [stateStep_recTotalAsset h b, add_zero]
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      show recTotalAsset (writeField s.kernel nonceField cell (.int n)) b + escrowHeldAsset (writeField s.kernel nonceField cell (.int n)) b
+         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel nonceField cell (.int n) b,
+          show escrowHeldAsset (writeField s.kernel nonceField cell (.int n)) b = escrowHeldAsset s.kernel b from rfl]; ring
   | setPermissionsA actor cell p =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [stateStep_recTotalAsset h b, add_zero]
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      show recTotalAsset (writeField s.kernel permsField cell (.int p)) b + escrowHeldAsset (writeField s.kernel permsField cell (.int p)) b
+         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel permsField cell (.int p) b,
+          show escrowHeldAsset (writeField s.kernel permsField cell (.int p)) b = escrowHeldAsset s.kernel b from rfl]; ring
   | setVKA actor cell vk =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [stateStep_recTotalAsset h b, add_zero]
-  -- §MA-auth: the 6 authority effects are balance-NEUTRAL (`ledgerDeltaAsset = 0`) — they EDIT/CHECK
-  -- `caps` (or only the log), NEVER the `bal` ledger, so `recTotalAsset b` is UNCHANGED.
+      obtain ⟨_, hs'⟩ := stateStep_factors h; subst hs'
+      show recTotalAsset (writeField s.kernel vkField cell (.int vk)) b + escrowHeldAsset (writeField s.kernel vkField cell (.int vk)) b
+         = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
+      rw [writeField_recTotalAsset s.kernel vkField cell (.int vk) b,
+          show escrowHeldAsset (writeField s.kernel vkField cell (.int vk)) b = escrowHeldAsset s.kernel b from rfl]; ring
   | introduceA intro rec t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCDelegate at h
@@ -1268,21 +1465,20 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
           unfold recKDelegate at hd
           by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
           · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-            simp only [recTotalAsset]; ring
+            simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
           · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | attenuateA actor idx keep =>
       simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
       subst h
-      -- `attenuateStepA` edits ONLY `caps` — `bal`/`accounts` fixed, so `recTotalAsset` is unchanged.
-      simp only [attenuateStepA, recTotalAsset]; ring
+      simp only [attenuateStepA, recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
   | dropRefA holder t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [recCRevoke, Option.some.injEq] at h; subst h
-      simp only [recTotalAsset, recKRevokeTarget]; ring
+      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, recKRevokeTarget]; ring
   | revokeDelegationA holder t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       simp only [recCRevoke, Option.some.injEq] at h; subst h
-      simp only [recTotalAsset, recKRevokeTarget]; ring
+      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset, recKRevokeTarget]; ring
   | validateHandoffA intro rec t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCDelegate at h
@@ -1293,22 +1489,28 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
           unfold recKDelegate at hd
           by_cases hg : (s.kernel.caps intro).any (fun cap => confersEdgeTo t cap) = true
           · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
-            simp only [recTotalAsset]; ring
+            simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
           · rw [if_neg hg] at hd; exact absurd hd (by simp)
   | exerciseA actor t =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       obtain ⟨_, hs'⟩ := exerciseStepA_factors h; subst hs'
-      -- exercising leaves the kernel UNCHANGED (only the log grows) — `recTotalAsset` fixed.
-      simp only [recTotalAsset]; ring
-  -- §MA-supply: createCell/spawn are account-growth NEUTRAL (`ledgerDeltaAsset = 0`) — they grow
-  -- `accounts` but the fresh cell is born EMPTY, so `recTotalAsset b` is UNCHANGED (the fresh-insert
-  -- lemma). bridgeMint discloses `+value` at the targeted asset (`recKMintAsset_delta`).
+      simp only [recTotalAssetWithEscrow, recTotalAsset, escrowHeldAsset]; ring
   | createCellA actor newCell =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [createCellChainA_neutral b h, add_zero]
+      -- combined = recTotalAsset (escrows unchanged by the fresh-cell insert) + neutral recTotalAsset.
+      have hesc : escrowHeldAsset s'.kernel b = escrowHeldAsset s.kernel b := by
+        obtain ⟨_, _, hs'⟩ := createCellChainA_factors (by simpa only [execFullA] using h)
+        subst hs'; rfl
+      unfold recTotalAssetWithEscrow
+      rw [hesc, createCellChainA_neutral b (by simpa only [execFullA] using h)]; ring
   | spawnA actor child target =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
-      rw [spawnChainA_neutral b h, add_zero]
+      have hesc : escrowHeldAsset s'.kernel b = escrowHeldAsset s.kernel b := by
+        obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors (by simpa only [execFullA] using h)
+        subst hs'
+        obtain ⟨_, _, hc'⟩ := createCellChainA_factors hc; subst hc'; rfl
+      unfold recTotalAssetWithEscrow
+      rw [hesc, spawnChainA_neutral b (by simpa only [execFullA] using h)]; ring
   | bridgeMintA actor cell a value =>
       simp only [execFullA, ledgerDeltaAsset] at h ⊢
       unfold recCMintAsset at h
@@ -1316,7 +1518,79 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       | none => rw [hm] at h; exact absurd h (by simp)
       | some k' =>
           rw [hm] at h; simp only [Option.some.injEq] at h; subst h
-          exact recKMintAsset_delta s.kernel k' actor cell a value hm b
+          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + _
+          rw [show escrowHeldAsset k' b = escrowHeldAsset s.kernel b from by
+                rw [show k' = { s.kernel with bal := recBalCredit s.kernel.bal cell a value } from by
+                      unfold recKMintAsset at hm; split at hm
+                      · simpa only [Option.some.injEq] using hm.symm
+                      · exact absurd hm (by simp)]; rfl,
+              recKMintAsset_delta s.kernel k' actor cell a value hm b]; ring
+  -- §MA-escrow: the holding-store legs are COMBINED-conserving (combined delta `0`); notes are bal-NEUTRAL.
+  | createEscrowA id actor creator recipient asset amount =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [createEscrowChainA_combined_neutral b h, add_zero]
+  | releaseEscrowA id actor =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      simp only [releaseEscrowChainA] at h
+      cases hk : releaseEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+          show recTotalAssetWithEscrow k' b = _ + 0
+          rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
+  | refundEscrowA id actor =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      simp only [refundEscrowChainA] at h
+      cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+          show recTotalAssetWithEscrow k' b = _ + 0
+          rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
+  | createObligationA id actor obligor beneficiary asset stake =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [createEscrowChainA_combined_neutral b h, add_zero]
+  | noteSpendA nf actor =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      simp only [noteSpendChainA] at h
+      cases hk : noteSpendNullifier s.kernel nf with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+          -- noteSpend grows ONLY `nullifiers` — `bal` and `escrows` fixed.
+          show recTotalAsset k' b + escrowHeldAsset k' b = recTotalAsset s.kernel b + escrowHeldAsset s.kernel b + 0
+          rw [show k' = { s.kernel with nullifiers := nf :: s.kernel.nullifiers } from by
+                unfold noteSpendNullifier at hk; split at hk
+                · exact absurd hk (by simp)
+                · simpa only [Option.some.injEq] using hk.symm]
+          simp only [recTotalAsset, escrowHeldAsset]; ring
+  | noteCreateA cm actor =>
+      simp only [execFullA, ledgerDeltaAsset, Option.some.injEq] at h ⊢
+      subst h
+      -- noteCreate grows ONLY `commitments` — `bal` and `escrows` fixed.
+      simp only [noteCreateChainA, noteCreateCommitment, recTotalAssetWithEscrow, recTotalAsset,
+                 escrowHeldAsset]; ring
+  | createCommittedEscrowA id actor creator recipient asset amount =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [createEscrowChainA_combined_neutral b h, add_zero]
+  | releaseCommittedEscrowA id actor =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      simp only [releaseEscrowChainA] at h
+      cases hk : releaseEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+          show recTotalAssetWithEscrow k' b = _ + 0
+          rw [releaseEscrowKAsset_conserves_combined_per_asset b hk]; ring
+  | refundCommittedEscrowA id actor =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      simp only [refundEscrowChainA] at h
+      cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+          show recTotalAssetWithEscrow k' b = _ + 0
+          rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
 
 /-- **The per-asset full turn executor.** A transaction of `FullActionA`s, all-or-nothing. -/
 def execFullTurnA (s : RecChainedState) : List FullActionA → Option RecChainedState
@@ -1330,13 +1604,13 @@ def execFullTurnA (s : RecChainedState) : List FullActionA → Option RecChained
 def turnLedgerDeltaAsset (tt : List FullActionA) (b : AssetId) : ℤ :=
   (tt.map (fun fa => ledgerDeltaAsset fa b)).sum
 
-/-- **`execFullTurnA_ledger_per_asset` — PROVED (the transaction conservation vector).** A committed
-per-asset full-turn moves `recTotalAsset b` by exactly the net of all per-action deltas in asset `b`,
-for EVERY asset `b`. Proved by induction on the turn, reusing `execFullA_ledger_per_asset`. The
-asset-indexed analog of `execFullTurn_ledger`. -/
+/-- **`execFullTurnA_ledger_per_asset` — PROVED (the transaction COMBINED conservation vector).** A
+committed per-asset full-turn moves the COMBINED measure `recTotalAssetWithEscrow b` by exactly the net
+of all per-action deltas in asset `b`, for EVERY asset `b`. Proved by induction on the turn, reusing
+`execFullA_ledger_per_asset`. The asset-indexed analog of `execFullTurn_ledger`. -/
 theorem execFullTurnA_ledger_per_asset :
     ∀ (s s' : RecChainedState) (tt : List FullActionA) (b : AssetId), execFullTurnA s tt = some s' →
-      recTotalAsset s'.kernel b = recTotalAsset s.kernel b + turnLedgerDeltaAsset tt b
+      recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + turnLedgerDeltaAsset tt b
   | s, s', [], b, h => by
       simp only [execFullTurnA, Option.some.injEq] at h; subst h; simp [turnLedgerDeltaAsset]
   | s, s', a :: rest, b, h => by
@@ -1345,9 +1619,9 @@ theorem execFullTurnA_ledger_per_asset :
       | none => rw [ha] at h; exact absurd h (by simp)
       | some s1 =>
           rw [ha] at h
-          have hhead : recTotalAsset s1.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset a b :=
+          have hhead : recTotalAssetWithEscrow s1.kernel b = recTotalAssetWithEscrow s.kernel b + ledgerDeltaAsset a b :=
             execFullA_ledger_per_asset s s1 a b ha
-          have htail : recTotalAsset s'.kernel b = recTotalAsset s1.kernel b + turnLedgerDeltaAsset rest b :=
+          have htail : recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s1.kernel b + turnLedgerDeltaAsset rest b :=
             execFullTurnA_ledger_per_asset s1 s' rest b h
           rw [htail, hhead]
           simp only [turnLedgerDeltaAsset, List.map_cons, List.sum_cons]; ring
@@ -1359,7 +1633,7 @@ mint/burn nets out in EACH asset) conserves EVERY asset class. The `CONSERVATION
 transaction level. -/
 theorem execFullTurnA_conserves_per_asset (s s' : RecChainedState) (tt : List FullActionA) (b : AssetId)
     (h : execFullTurnA s tt = some s') (hzero : turnLedgerDeltaAsset tt b = 0) :
-    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
   rw [execFullTurnA_ledger_per_asset s s' tt b h, hzero, add_zero]
 
 /-! ## §MB — `execFullTurnA_append` + the per-asset PER-NODE attestation carrier.
@@ -1429,6 +1703,17 @@ def fullReceiptA : FullActionA → Turn
   | .createCellA actor newCell  => { actor := actor, src := newCell, dst := newCell, amt := 0 }
   | .spawnA actor child _       => { actor := actor, src := child, dst := child, amt := 0 }
   | .bridgeMintA actor cell _ value => { actor := actor, src := cell, dst := cell, amt := value }
+  -- §MA-escrow: every escrow/obligation/committed/note effect appends a self-`Turn` on the `actor`
+  -- (the metadata clock row; the parked amount/asset live in the off-ledger record/SET, not the receipt).
+  | .createEscrowA _ actor _ _ _ _   => escrowReceiptA actor
+  | .releaseEscrowA _ actor          => escrowReceiptA actor
+  | .refundEscrowA _ actor           => escrowReceiptA actor
+  | .createObligationA _ actor _ _ _ _ => escrowReceiptA actor
+  | .noteSpendA _ actor              => escrowReceiptA actor
+  | .noteCreateA _ actor             => escrowReceiptA actor
+  | .createCommittedEscrowA _ actor _ _ _ _ => escrowReceiptA actor
+  | .releaseCommittedEscrowA _ actor => escrowReceiptA actor
+  | .refundCommittedEscrowA _ actor  => escrowReceiptA actor
 
 /-- **`execFullA_chainlink` — PROVED.** A committed `FullActionA` extends the receipt chain by EXACTLY
 its `fullReceiptA`, newest-first, with no fork or rewrite. The per-action generalization across the
@@ -1510,6 +1795,50 @@ theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
       cases hm : recKMintAsset s.kernel actor cell a value with
       | none => rw [hm] at h; exact absurd h (by simp)
       | some k' => rw [hm] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  -- §MA-escrow: each escrow/note effect appends exactly its `escrowReceiptA` (the metadata clock row).
+  | createEscrowA id actor creator recipient asset amount =>
+      simp only [execFullA, createEscrowChainA, fullReceiptA] at h ⊢
+      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | releaseEscrowA id actor =>
+      simp only [execFullA, releaseEscrowChainA, fullReceiptA] at h ⊢
+      cases hk : releaseEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | refundEscrowA id actor =>
+      simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
+      cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | createObligationA id actor obligor beneficiary asset stake =>
+      simp only [execFullA, createEscrowChainA, fullReceiptA] at h ⊢
+      cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | noteSpendA nf actor =>
+      simp only [execFullA, noteSpendChainA, fullReceiptA] at h ⊢
+      cases hk : noteSpendNullifier s.kernel nf with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | noteCreateA cm actor =>
+      simp only [execFullA, noteCreateChainA, fullReceiptA, Option.some.injEq] at h ⊢
+      subst h; rfl
+  | createCommittedEscrowA id actor creator recipient asset amount =>
+      simp only [execFullA, createEscrowChainA, fullReceiptA] at h ⊢
+      cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | releaseCommittedEscrowA id actor =>
+      simp only [execFullA, releaseEscrowChainA, fullReceiptA] at h ⊢
+      cases hk : releaseEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | refundCommittedEscrowA id actor =>
+      simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
+      cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
 
 /-- **`execFullA_obsadvance` — PROVED.** A committed `FullActionA` grows the chain by exactly one
 row, so a replayed action (which would re-append the same receipt) is detectable. -/
@@ -1654,8 +1983,13 @@ theorem execFullA_bridgeMintA_discloses_per_asset (s s' : RecChainedState) (acto
     (a : AssetId) (value : ℤ) (b : AssetId)
     (h : execFullA s (.bridgeMintA actor cell a value) = some s') :
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b + (if b = a then value else 0) := by
-  have := execFullA_ledger_per_asset s s' (.bridgeMintA actor cell a value) b h
-  simpa only [ledgerDeltaAsset] using this
+  -- bridgeMint reuses the per-asset mint kernel step (`recKMintAsset_delta`) over the BARE `bal` ledger.
+  simp only [execFullA, recCMintAsset] at h
+  cases hm : recKMintAsset s.kernel actor cell a value with
+  | none => rw [hm] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hm] at h; simp only [Option.some.injEq] at h; subst h
+      exact recKMintAsset_delta s.kernel k' actor cell a value hm b
 
 /-! ### §MA-state authority obligations — the 4 field-writing pure-state effects WERE authorized;
 `emitEventA` is authority-FREE (dregg1 `apply_emit_event` runs NO cap check). The field-writing
@@ -1843,6 +2177,48 @@ theorem execFullA_exerciseA_graph_unchanged (s s' : RecChainedState) (actor t : 
   obtain ⟨_, hs'⟩ := exerciseStepA_factors (by simpa only [execFullA] using h)
   subst hs'; rfl
 
+/-! ### §MA-escrow authority/membership obligations — the create-side carries the REAL `authorizedB`
+creator gate (over the debited cell); noteSpend/noteCreate carry the genuine SET-membership witness. -/
+
+/-- **`execFullA_createEscrowA_authorized` — PROVED.** A committed escrow create required the actor to be
+authorized over the debited `creator` cell (the SAME `authorizedB` gate as `transfer`). -/
+theorem execFullA_createEscrowA_authorized (s s' : RecChainedState) (id : Nat)
+    (actor creator recipient : CellId) (asset : AssetId) (amount : ℤ)
+    (h : execFullA s (.createEscrowA id actor creator recipient asset amount) = some s') :
+    authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true := by
+  simp only [execFullA, createEscrowChainA] at h
+  cases hk : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+  | none => rw [hk] at h; exact absurd h (by simp)
+  | some k' => exact createEscrowKAsset_authorized hk
+
+/-- **`execFullA_createObligationA_authorized` — PROVED** (the obligation alias of the create gate). -/
+theorem execFullA_createObligationA_authorized (s s' : RecChainedState) (id : Nat)
+    (actor obligor beneficiary : CellId) (asset : AssetId) (stake : ℤ)
+    (h : execFullA s (.createObligationA id actor obligor beneficiary asset stake) = some s') :
+    authorizedB s.kernel.caps { actor := actor, src := obligor, dst := beneficiary, amt := stake } = true := by
+  simp only [execFullA, createEscrowChainA] at h
+  cases hk : createEscrowKAsset s.kernel id actor obligor beneficiary asset stake with
+  | none => rw [hk] at h; exact absurd h (by simp)
+  | some k' => exact createEscrowKAsset_authorized hk
+
+/-- **`execFullA_noteSpendA_inserts` — PROVED.** A committed noteSpend inserts `nf` into the nullifier
+SET (so a subsequent spend of `nf` fails-closed — the anti-replay teeth). -/
+theorem execFullA_noteSpendA_inserts (s s' : RecChainedState) (nf : Nat) (actor : CellId)
+    (h : execFullA s (.noteSpendA nf actor) = some s') : nf ∈ s'.kernel.nullifiers := by
+  simp only [execFullA, noteSpendChainA] at h
+  cases hk : noteSpendNullifier s.kernel nf with
+  | none => rw [hk] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hk] at h; simp only [Option.some.injEq] at h; subst h
+      exact note_spend_inserts hk
+
+/-- **`execFullA_noteCreateA_inserts` — PROVED.** A committed noteCreate inserts `cm` into the grow-only
+commitment SET. -/
+theorem execFullA_noteCreateA_inserts (s s' : RecChainedState) (cm : Nat) (actor : CellId)
+    (h : execFullA s (.noteCreateA cm actor) = some s') : cm ∈ s'.kernel.commitments := by
+  simp only [execFullA, noteCreateChainA, Option.some.injEq] at h
+  subst h; exact noteCreate_inserts s.kernel cm
+
 /-- **The per-`FullActionA` `StepInv`** — the per-asset analog of `fullActionInv`, true of every
 committed per-asset action across all kinds. Its **Ledger** conjunct is the full per-asset VECTOR (a
 `∀ b`, never an aggregate scalar — the FILL-1 carrier that forbids cross-asset laundering):
@@ -1854,8 +2230,11 @@ committed per-asset action across all kinds. Its **Ledger** conjunct is the full
     `authorizedB`; delegate ⇒ grounds in the source edge AND edits the graph by `addEdge`; revoke ⇒
     `removeEdge`; mintA/burnA ⇒ `mintAuthorizedB` AND the Generative/Annihilative disclosure. -/
 def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedState) : Prop :=
-  -- Ledger: the per-asset conservation VECTOR (∀ b — never one aggregate scalar).
-  (∀ b, recTotalAsset s'.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset fa b) ∧
+  -- Ledger: the per-asset COMBINED conservation VECTOR (∀ b — never one aggregate scalar). The UNIFORM
+  -- measure across ALL kinds is `recTotalAssetWithEscrow` (= `bal`-ledger + per-asset holding-store);
+  -- non-escrow kinds leave `escrows` fixed so their combined delta = bare-`bal` delta, escrow/note legs
+  -- are combined-conserving (combined delta `0`) — the FILL-1/META-FILL-C no-laundering carrier.
+  (∀ b, recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + ledgerDeltaAsset fa b) ∧
   -- ChainLink: exactly the kind's receipt, newest-first.
   (s'.log = fullReceiptA fa :: s.log) ∧
   -- ObsAdvance: exactly one row.
@@ -1945,7 +2324,33 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        (effectLinearity .spawnWithDelegation).is_disclosed_non_conservation = true
    | .bridgeMintA actor cell _ _ =>
        mintAuthorizedB s.kernel.caps actor cell = true ∧
-       (effectLinearity mintEffect).is_disclosed_non_conservation = true)
+       (effectLinearity mintEffect).is_disclosed_non_conservation = true
+   -- §MA-escrow: create-side obligations carry the REAL `authorizedB` creator gate (over the debited
+   -- cell) ∧ the `Conservative` coloring; the settle-side and notes carry the genuine SET/store
+   -- membership witness — every conjunct has teeth (NOT `True`).
+   | .createEscrowA _ actor creator recipient _ amount =>
+       authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true ∧
+       effectLinearity .createEscrow = LinearityClass.Conservative
+   | .releaseEscrowA _ _ =>
+       effectLinearity .releaseEscrow = LinearityClass.Conservative
+   | .refundEscrowA _ _ =>
+       effectLinearity .refundEscrow = LinearityClass.Conservative
+   | .createObligationA _ actor obligor beneficiary _ stake =>
+       authorizedB s.kernel.caps { actor := actor, src := obligor, dst := beneficiary, amt := stake } = true ∧
+       effectLinearity .createObligation = LinearityClass.Conservative
+   | .noteSpendA nf _ =>
+       -- anti-replay: the spent nullifier is now IN the set (a subsequent spend fails-closed).
+       nf ∈ s'.kernel.nullifiers ∧ effectLinearity .noteSpend = LinearityClass.Conservative
+   | .noteCreateA cm _ =>
+       -- the fresh commitment is now IN the grow-only commitment set.
+       cm ∈ s'.kernel.commitments ∧ effectLinearity .noteCreate = LinearityClass.Conservative
+   | .createCommittedEscrowA _ actor creator recipient _ amount =>
+       authorizedB s.kernel.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true ∧
+       effectLinearity .createEscrow = LinearityClass.Conservative
+   | .releaseCommittedEscrowA _ _ =>
+       effectLinearity .releaseEscrow = LinearityClass.Conservative
+   | .refundCommittedEscrowA _ _ =>
+       effectLinearity .refundEscrow = LinearityClass.Conservative)
 
 /-- **`execFullA_attests_per_asset` — THE PER-ASSET OP-SET IS STEP-COMPLETE BY CONSTRUCTION
 (PROVED).** Every committed `FullActionA` attests its full `StepInv` content: the per-asset ledger
@@ -2000,6 +2405,20 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
                Dregg2.CatalogEffects.g_spawnWithDelegation⟩
   | bridgeMintA actor cell a value =>
       exact ⟨execFullA_bridgeMintA_authorized s s' actor cell a value h, mint_discloses⟩
+  -- §MA-escrow: discharge the create-side `authorizedB` gate + Conservative coloring, the settle-side
+  -- coloring, and the noteSpend/noteCreate SET-membership witness.
+  | createEscrowA id actor creator recipient asset amount =>
+      exact ⟨execFullA_createEscrowA_authorized s s' id actor creator recipient asset amount h, rfl⟩
+  | releaseEscrowA id actor => exact rfl
+  | refundEscrowA id actor => exact rfl
+  | createObligationA id actor obligor beneficiary asset stake =>
+      exact ⟨execFullA_createObligationA_authorized s s' id actor obligor beneficiary asset stake h, rfl⟩
+  | noteSpendA nf actor => exact ⟨execFullA_noteSpendA_inserts s s' nf actor h, rfl⟩
+  | noteCreateA cm actor => exact ⟨execFullA_noteCreateA_inserts s s' cm actor h, rfl⟩
+  | createCommittedEscrowA id actor creator recipient asset amount =>
+      exact ⟨execFullA_createEscrowA_authorized s s' id actor creator recipient asset amount h, rfl⟩
+  | releaseCommittedEscrowA id actor => exact rfl
+  | refundCommittedEscrowA id actor => exact rfl
 
 /-- **`execFullTurnA_each_attests` — PROVED.** Step-completeness holds at EVERY action of a committed
 per-asset transaction, across all kinds: the per-node `fullActionInvA` witness threaded along the
@@ -2121,6 +2540,14 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_createCellA_grows_accounts
 #assert_axioms execFullA_spawnA_neutral_per_asset
 #assert_axioms execFullA_bridgeMintA_discloses_per_asset
+-- META-FILL C: the COMBINED per-asset escrow/note chained wrappers + the executed-dispatch obligations.
+#assert_axioms createEscrowChainA_combined_neutral
+#assert_axioms createEscrowChainA_bal_debits
+#assert_axioms createEscrowChainA_bal_delta
+#assert_axioms execFullA_createEscrowA_authorized
+#assert_axioms execFullA_createObligationA_authorized
+#assert_axioms execFullA_noteSpendA_inserts
+#assert_axioms execFullA_noteCreateA_inserts
 
 /-! ## §12 — Non-vacuity: each kind commits with the right invariant; unauthorized rejected.
 
@@ -2454,5 +2881,37 @@ def supplyMixedTurn : List FullActionA :=
 #eval (turnLedgerDeltaAsset supplyMixedTurn 0, turnLedgerDeltaAsset supplyMixedTurn 1)  -- (0, 40)
 #eval (execFullTurnA fmaSup supplyMixedTurn).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 47)
+
+/-! ### §MA-escrow #eval — the COMBINED per-asset holding-store on the executed dispatch (`META-FILL C`,
+closing `#121`): a committed-escrow lock+settle conserves `recTotalAssetWithEscrow` per-asset (with the
+held value genuinely non-zero at the locked asset, the OTHER asset untouched); noteCreate→noteSpend
+round-trip; double-spend fail-closed. -/
+
+-- ★ COMMITTED-ESCROW LOCK of 5 of ASSET 1 from cell 0 (holds 7 of asset 1) → recipient 1 (id 9),
+--   actor 9 authorized over 0: bare ledger DROPS at asset 1 (7→2), held RISES to 5, COMBINED FIXED at 7.
+#eval (execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5)).isSome                  -- true
+#eval (execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5)).map
+        (fun s => (recTotalAsset s.kernel 1, escrowHeldAsset s.kernel 1))             -- some (2, 5) — bare DOWN, held UP at asset 1
+-- ...the COMBINED per-asset measure is CONSERVED at asset 1 AND asset 0 (no cross-asset laundering):
+#eval (execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5)).map
+        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0))  -- some (7, 105) — CONSERVED both
+-- ...the COMBINED ledgerDeltaAsset is 0 at every asset (combined-conserving, NOT bare-bal-conserving):
+#eval (ledgerDeltaAsset (.createCommittedEscrowA 9 9 0 1 1 5) 0,
+       ledgerDeltaAsset (.createCommittedEscrowA 9 9 0 1 1 5) 1)                      -- (0, 0)
+-- ★ SETTLE (release to recipient 1, live): COMBINED stays (105, 7), held returns to 0.
+#eval ((execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5)).bind
+        (fun s => execFullA s (.releaseCommittedEscrowA 9 9))).map
+        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0,
+                   escrowHeldAsset s.kernel 1))                                       -- some (7, 105, 0) — round-trip CONSERVED
+-- ...the held value at asset 1 is GENUINELY non-zero mid-flight while asset 0 is untouched (guard):
+#eval (execFullA fmaSup (.createCommittedEscrowA 9 9 0 1 1 5)).map
+        (fun s => (escrowHeldAsset s.kernel 1, escrowHeldAsset s.kernel 0))           -- some (5, 0)
+-- ★ NOTE CREATE→SPEND round-trip: create grows commitments (42), spend grows nullifiers (77) — distinct sets;
+--   the executed dispatch is bal-NEUTRAL (combined fixed):
+#eval ((execFullA fmaSup (.noteCreateA 42 9)).bind (fun s => execFullA s (.noteSpendA 77 9))).map
+        (fun s => (s.kernel.commitments.contains 42, s.kernel.nullifiers.contains 77,
+                   recTotalAssetWithEscrow s.kernel 0, recTotalAssetWithEscrow s.kernel 1))  -- some (true, true, 105, 7)
+-- ★ DOUBLE-SPEND fail-closed: spending nullifier 77 twice on the executed dispatch REJECTS:
+#eval ((execFullA fmaSup (.noteSpendA 77 9)).bind (fun s => execFullA s (.noteSpendA 77 9))).isSome  -- false
 
 end Dregg2.Exec.TurnExecutorFull

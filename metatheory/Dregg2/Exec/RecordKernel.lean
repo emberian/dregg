@@ -79,6 +79,13 @@ structure EscrowRecord where
   amount    : ℤ
   /-- false until released/refunded; an unresolved record holds `amount` off-ledger. -/
   resolved  : Bool
+  /-- **The asset class of the locked value** (`META-FILL C`). dregg cells hold MANY assets, so an
+  escrow lock parks `amount` of a SPECIFIC asset — and the combined per-asset measure must move at
+  THAT asset only (`recTotalAssetWithEscrow r.asset`), every other asset literally untouched. Added
+  ADDITIVELY (`:= 0`) so every existing 5-field `EscrowRecord` literal stays compiling (the default
+  fills the 6th); the Wave-4 non-vacuity guard `#eval` LOCKS at a NON-ZERO asset to prove the default
+  does NOT collapse to a single-asset shadow. -/
+  asset     : AssetId := 0
 deriving DecidableEq, Repr
 
 /-- **Record kernel state:** the finite set of live `accounts`, a per-cell **content-addressed
@@ -104,6 +111,13 @@ structure RecordKernelState where
   escrows    : List EscrowRecord := []
   /-- The spent-note nullifier SET (`self.note_nullifiers`); DEFAULTS EMPTY. -/
   nullifiers : List Nat := []
+  /-- **The note COMMITMENT SET** (`META-FILL C`, closing `#121`): the grow-only dual of
+  `nullifiers`. dregg1's `apply_note_create` inserts a fresh Pedersen commitment into the off-ledger
+  commitment tree (a §8 CryptoPortal-gated range proof guards the hidden value). A `noteCreate` grows
+  THIS set (NOT `bal`, NOT `nullifiers`, NOT `escrows`) — so it is bal-NEUTRAL and genuinely distinct
+  from escrow/obligation/noteSpend (the `#121` de-conflation). DEFAULTS EMPTY (the additive
+  extension, exactly as `nullifiers` was added). -/
+  commitments : List Nat := []
   /-- **The genuine per-asset balance ledger** `bal c a` — the (ℤ-valued, debt-capable) amount of
   asset `a` held by cell `c`. dregg cells hold MANY assets; conservation is PER-ASSET
   (`EFFECT-ISA-DESIGN.md:315,320-323`), never one aggregate scalar. DEFAULTS to the empty ledger so
@@ -862,6 +876,420 @@ theorem note_spend_then_reject {k k' : RecordKernelState} {nf : Nat}
     (h : noteSpendNullifier k nf = some k') : noteSpendNullifier k' nf = none :=
   note_no_double_spend k' nf (note_spend_inserts h)
 
+/-! ## §ESCROW-PER-ASSET — the off-ledger holding-store on the GENUINE per-asset `bal` ledger (`META-FILL C`).
+
+The scalar escrow above (`createEscrowRaw`/`settleEscrowRaw`, `escrowHeld`/`recTotalWithEscrow`)
+moves the named `balance` FIELD — ONE asset. But dregg cells hold MANY assets, so an escrow lock
+parks `amount` of a SPECIFIC asset (`EscrowRecord.asset`), and the COMBINED conserved quantity must
+be PER-ASSET: a lock DROPS that asset's `bal`-ledger supply by `amount` AND RAISES the per-asset
+holding-store by `amount` (combined fixed AT that asset), with EVERY OTHER asset literally untouched.
+Folding all assets into one combined scalar would let an escrow swap asset A for asset B while the
+aggregate stays put — the cross-asset-laundering hole at the holding-store boundary.
+
+We re-found the escrow lifecycle onto the per-asset `bal` ledger via the single-cell `recBalCreditCell`
+(the per-asset analog of `recCredit`/`recDebit` — a single-cell, single-asset move), define the
+per-asset held sum + combined measure, and re-prove the four conserves-combined facts PER-ASSET as
+DROP-IN swaps of the scalar decomposition (the find?/markResolved list lockstep is ASSET-AGNOSTIC; we
+narrow the matched-record drop by `r.asset = b`). The scalar escrow stays as the legacy `cell`-view;
+these are NEW per-asset SIBLINGS, never a re-proof of the same statement. -/
+
+/-- **`recBalCreditCell` — single-cell, single-asset credit on the per-asset `bal` ledger.** Add `amt`
+to cell `c`'s asset `a` column, leaving every other (cell, asset) pair literally untouched. The
+per-asset analog of `recCredit` (which moved the scalar `balance` FIELD); `recBalCreditCell c a (-amt)`
+is the per-asset DEBIT. This is the per-asset escrow's single-cell move (dregg1's `set_balance`, but
+at a NAMED asset column rather than the scalar field). Lives HERE in `RecordKernel` (upstream of both
+`TurnExecutorFull` and `EffectsPaired`) so both the executed dispatch and the chained escrow can use
+it; it is definitionally the same shape as `TurnExecutorFull.recBalCredit`. -/
+def recBalCreditCell (bal : CellId → AssetId → ℤ) (c : CellId) (a : AssetId) (amt : ℤ) :
+    CellId → AssetId → ℤ :=
+  fun x b => if x = c ∧ b = a then bal x b + amt else bal x b
+
+/-- **The per-asset single-cell credit delta — PROVED.** A `recBalCreditCell c a amt` raises asset
+`a`'s supply by `amt` (when `c` is live) and leaves EVERY OTHER asset literally untouched. The
+per-asset analog of `recCredit_recTotal`, reusing `sum_indicator`. -/
+theorem recBalCreditCell_recTotalAsset (acc : Finset CellId) (bal : CellId → AssetId → ℤ)
+    (c : CellId) (a : AssetId) (amt : ℤ) (hc : c ∈ acc) (b : AssetId) :
+    (∑ x ∈ acc, recBalCreditCell bal c a amt x b)
+      = (∑ x ∈ acc, bal x b) + (if b = a then amt else 0) := by
+  by_cases hb : b = a
+  · rw [if_pos hb]
+    have key : (∑ x ∈ acc, recBalCreditCell bal c a amt x b) - (∑ x ∈ acc, bal x b) = amt := by
+      rw [← Finset.sum_sub_distrib]
+      have hg : ∀ x ∈ acc, recBalCreditCell bal c a amt x b - bal x b = (if x = c then amt else 0) := by
+        intro x _
+        unfold recBalCreditCell
+        by_cases hx : x = c
+        · rw [if_pos ⟨hx, hb⟩, if_pos hx]; ring
+        · rw [if_neg (by rintro ⟨h, _⟩; exact hx h), if_neg hx]; ring
+      rw [Finset.sum_congr rfl hg, sum_indicator acc c amt hc]
+    omega
+  · rw [if_neg hb, add_zero]
+    refine Finset.sum_congr rfl (fun x _ => ?_)
+    unfold recBalCreditCell; rw [if_neg (by rintro ⟨_, h⟩; exact hb h)]
+
+/-- The per-asset UNRESOLVED-record predicate: unresolved AND of asset `b` (a `Bool`, so it drives
+`List.filter` directly). The asset-filtered refinement of `fun r => !r.resolved`. -/
+def heldAssetPred (b : AssetId) (r : EscrowRecord) : Bool := !r.resolved && decide (r.asset = b)
+
+/-- **`escrowHeldAsset k b`** — the per-asset holding-store value: the sum of `amount` over the
+UNRESOLVED escrow records WHOSE `asset = b`. The per-asset analog of `escrowHeld`, indexed by
+`AssetId` (NEVER one combined scalar) — value parked off the `bal` ledger AT asset `b`. -/
+def escrowHeldAsset (k : RecordKernelState) (b : AssetId) : ℤ :=
+  (k.escrows.filter (heldAssetPred b)).foldr (fun r acc => r.amount + acc) 0
+
+/-- **`recTotalAssetWithEscrow k b`** — THE COMBINED PER-ASSET conserved quantity: asset `b`'s
+`bal`-ledger supply PLUS the value held off-ledger by unresolved escrows AT asset `b`. This — the
+per-asset refinement of `recTotalWithEscrow` — is what the per-asset create+settle pair conserves AT
+EACH ASSET independently. -/
+def recTotalAssetWithEscrow (k : RecordKernelState) (b : AssetId) : ℤ :=
+  recTotalAsset k b + escrowHeldAsset k b
+
+/-- The raw per-asset escrow-list filtered-sum (the unfolded `escrowHeldAsset`). -/
+def heldSumAsset (es : List EscrowRecord) (b : AssetId) : ℤ :=
+  (es.filter (heldAssetPred b)).foldr (fun r acc => r.amount + acc) 0
+
+theorem escrowHeldAsset_eq_heldSumAsset (k : RecordKernelState) (b : AssetId) :
+    escrowHeldAsset k b = heldSumAsset k.escrows b := rfl
+
+/-- **`escrowHeldAsset_cons_unresolved` — PROVED (the per-asset prepend delta).** Prepending an
+UNRESOLVED record raises `escrowHeldAsset b` by `r.amount` IFF `r.asset = b`, and by `0` otherwise.
+NON-VACUOUS: the `if r.asset = b` discriminant has teeth — prepending an asset-A record raises
+`escrowHeldAsset A` but leaves `escrowHeldAsset B` (B≠A) literally FIXED. The scalar `escrowHeld_cons`
+cannot state the b-indexed version (it has no asset to filter on). -/
+theorem escrowHeldAsset_cons_unresolved (k : RecordKernelState) (r : EscrowRecord) (b : AssetId)
+    (hr : r.resolved = false) :
+    escrowHeldAsset { k with escrows := r :: k.escrows } b
+      = escrowHeldAsset k b + (if r.asset = b then r.amount else 0) := by
+  unfold escrowHeldAsset
+  simp only [List.filter_cons]
+  by_cases hab : r.asset = b
+  · rw [show heldAssetPred b r = true from by simp [heldAssetPred, hr, hab]]
+    simp only [if_true, List.foldr_cons, if_pos hab]
+    omega
+  · rw [show heldAssetPred b r = false from by simp [heldAssetPred, hab]]
+    simp only [Bool.false_eq_true, if_false, if_neg hab, add_zero]
+
+/-- **`heldSumAsset_markResolved_found` — THE PER-ASSET PAIR-CONSERVATION CORE (PROVED by list
+induction).** Marking the FIRST unresolved record whose id matches `id` as resolved drops the per-asset
+held sum AT asset `b` by `r.amount` IFF the found record's `asset = b`, and by `0` otherwise. The
+find?/markResolved lockstep is ASSET-AGNOSTIC (it walks the same `id ∧ unresolved` predicate); the
+matched-record drop is narrowed by `r.asset = b`. NON-VACUOUS: settling an asset-A record drops
+`escrowHeldAsset A` by its amount and leaves every OTHER asset's held sum literally FIXED. Mirrors
+`heldSum_markResolved_found` with `heldSum` → `heldSumAsset · b` and the drop guarded by `r.asset = b`. -/
+theorem heldSumAsset_markResolved_found (id : Nat) (r : EscrowRecord) (b : AssetId) :
+    ∀ (es : List EscrowRecord),
+      es.find? (fun x => decide (x.id = id ∧ x.resolved = false)) = some r →
+      heldSumAsset (markResolved es id) b = heldSumAsset es b - (if r.asset = b then r.amount else 0) := by
+  intro es
+  induction es with
+  | nil => intro hfind; simp [List.find?] at hfind
+  | cons hd tl ih =>
+      intro hfind
+      simp only [List.find?_cons] at hfind
+      by_cases hmatch : (hd.id = id ∧ hd.resolved = false)
+      · -- head matches: it IS the found, unresolved record.
+        obtain ⟨hid, hres⟩ := hmatch
+        rw [show (decide (hd.id = id ∧ hd.resolved = false)) = true from by simp [hid, hres]] at hfind
+        simp only [Option.some.injEq] at hfind
+        subst hfind
+        unfold heldSumAsset markResolved
+        rw [if_pos ⟨hid, hres⟩]
+        simp only [List.filter_cons,
+                   show heldAssetPred b ({hd with resolved := true} : EscrowRecord) = false from by
+                     simp [heldAssetPred]]
+        by_cases hab : hd.asset = b
+        · -- found record is OF asset b: LHS drops it (now resolved ⇒ filtered OUT), RHS subtracts amount.
+          rw [show heldAssetPred b hd = true from by simp [heldAssetPred, hres, hab]]
+          simp only [Bool.false_eq_true, if_false, if_true, List.foldr_cons, if_pos hab]
+          omega
+        · -- found record is of ANOTHER asset: it was never IN `heldSumAsset b`, so no change.
+          rw [show heldAssetPred b hd = false from by simp [heldAssetPred, hab]]
+          simp only [Bool.false_eq_true, if_false, if_neg hab, sub_zero]
+      · -- head does NOT match: carried unchanged; recurse on the tail.
+        rw [show (decide (hd.id = id ∧ hd.resolved = false)) = false from by
+              simp [hmatch]] at hfind
+        have ihr := ih hfind
+        have hmr : markResolved (hd :: tl) id = hd :: markResolved tl id := by
+          conv_lhs => rw [markResolved]; rw [if_neg hmatch]
+        rw [hmr]
+        unfold heldSumAsset
+        simp only [List.filter_cons]
+        by_cases hhd : heldAssetPred b hd = true
+        · rw [hhd]
+          simp only [if_true, List.foldr_cons]
+          have ihr' : (List.filter (heldAssetPred b) (markResolved tl id)).foldr
+              (fun r acc => r.amount + acc) 0
+              = (List.filter (heldAssetPred b) tl).foldr (fun r acc => r.amount + acc) 0
+                - (if r.asset = b then r.amount else 0) := ihr
+          rw [ihr']; ring
+        · rw [show heldAssetPred b hd = false from by simpa using hhd]
+          simp only [Bool.false_eq_true, if_false]
+          have ihr' : (List.filter (heldAssetPred b) (markResolved tl id)).foldr
+              (fun r acc => r.amount + acc) 0
+              = (List.filter (heldAssetPred b) tl).foldr (fun r acc => r.amount + acc) 0
+                - (if r.asset = b then r.amount else 0) := ihr
+          rw [ihr']
+
+/-! ### The faithful PER-ASSET escrow lifecycle (over the `bal` ledger). -/
+
+/-- **`createEscrowRawAsset`** — the per-asset create: a SINGLE-cell, single-asset DEBIT of `amount`
+from `creator`'s asset `asset` column PLUS an insert of an unresolved `EscrowRecord` (carrying `asset`)
+into the off-ledger holding-store. The `bal`-ledger supply of `asset` DROPS by `amount`; the per-asset
+holding-store at `asset` RISES by `amount`; the COMBINED per-asset total at `asset` is preserved, every
+other asset untouched. The per-asset analog of `createEscrowRaw` (which moved the scalar `cell` field). -/
+def createEscrowRawAsset (k : RecordKernelState) (id creator recipient : CellId) (asset : AssetId)
+    (amount : ℤ) : RecordKernelState :=
+  { k with bal := recBalCreditCell k.bal creator asset (-amount)
+           escrows := { id := id, creator := creator, recipient := recipient,
+                        amount := amount, resolved := false, asset := asset } :: k.escrows }
+
+/-- **`settleEscrowRawAsset`** — the per-asset settle (release/refund body): a SINGLE-cell,
+single-asset CREDIT of `amount` to the settlement target at asset `asset` PLUS marking the record
+resolved. The `bal`-ledger supply of `asset` RISES by `amount`; the per-asset holding-store at `asset`
+DROPS by `amount`; the COMBINED per-asset total at `asset` is preserved. -/
+def settleEscrowRawAsset (k : RecordKernelState) (id target : CellId) (asset : AssetId) (amount : ℤ) :
+    RecordKernelState :=
+  { k with bal := recBalCreditCell k.bal target asset amount
+           escrows := markResolved k.escrows id }
+
+/-- **`createEscrowKAsset` (executable, fail-closed).** Commits only when the actor is authorized over
+the `creator` cell (same `authorizedB` gate as `transfer`), the amount is non-negative and available
+*in asset `asset`* (`amount ≤ k.bal creator asset`), the creator is a live account, and the `id` is
+NOT already in use. On commit: single-cell, single-asset debit + park the asset-typed record. -/
+def createEscrowKAsset (k : RecordKernelState) (id : Nat) (actor creator recipient : CellId)
+    (asset : AssetId) (amount : ℤ) : Option RecordKernelState :=
+  if authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal creator asset ∧ creator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id) then
+    some (createEscrowRawAsset k id creator recipient asset amount)
+  else none
+
+/-- **`releaseEscrowKAsset` (executable, fail-closed).** Looks up the unresolved record by `id`; on
+success single-cell credits the `recipient` AT the record's asset and marks resolved. **SETTLE-LIVENESS
+GATE** (`META-FILL C`, decision (7) hardened to a fail-closed gate rather than a carried hypothesis):
+the settlement target MUST be a LIVE account (`r.recipient ∈ k.accounts`) — crediting a non-account
+would silently DESTROY value (it vanishes from `recTotalAsset`, breaking combined conservation). This
+is dregg1-faithful (you cannot credit a non-existent cell) and makes the per-asset combined-conservation
+hold UNCONDITIONALLY (the keystone needs no carried `htgt`). -/
+def releaseEscrowKAsset (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
+  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | some r => if r.recipient ∈ k.accounts then some (settleEscrowRawAsset k id r.recipient r.asset r.amount)
+              else none
+  | none   => none
+
+/-- **`refundEscrowKAsset` (executable, fail-closed).** Looks up the unresolved record by `id`; on
+success single-cell credits the `creator` (refund target) AT the record's asset and marks resolved.
+**SETTLE-LIVENESS GATE** (the creator/refund target MUST be a LIVE account) — same rationale as
+`releaseEscrowKAsset`: unconditional combined-conservation, dregg1-faithful. -/
+def refundEscrowKAsset (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
+  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | some r => if r.creator ∈ k.accounts then some (settleEscrowRawAsset k id r.creator r.asset r.amount)
+              else none
+  | none   => none
+
+/-! ### The REAL per-asset combined-conservation invariants. -/
+
+/-- **`escrow_create_conserves_combined_per_asset` — THE HEADLINE (PROVED).** A committed per-asset
+`createEscrowKAsset` PRESERVES the COMBINED per-asset total `recTotalAssetWithEscrow b` for EVERY asset
+`b`: at the locked asset, the `bal`-ledger DROPS by `amount` (a real per-asset debit) while the
+holding-store RISES by `amount` (combined fixed); at every OTHER asset BOTH terms are literally
+unchanged. NON-VACUOUS: lock asset A and `recTotalAsset A` is genuinely lower while
+`recTotalAssetWithEscrow A` is unchanged; `recTotalAssetWithEscrow B` (B≠A) unchanged with A's held
+value non-zero — the no-cross-asset-laundering content at the escrow boundary. The per-asset drop-in of
+`escrow_create_conserves_combined`: `recDebit_recTotal` → `recBalCreditCell_recTotalAsset`;
+`escrowHeld_cons_unresolved` → `escrowHeldAsset_cons_unresolved`. -/
+theorem escrow_create_conserves_combined_per_asset {k k' : RecordKernelState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (h : createEscrowKAsset k id actor creator recipient asset amount = some k') :
+    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+  unfold createEscrowKAsset at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal creator asset ∧ creator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, _, hlive, _⟩ := hg
+    set newRec : EscrowRecord := { id := id, creator := creator, recipient := recipient,
+                                   amount := amount, resolved := false, asset := asset } with hnewRec
+    show recTotalAssetWithEscrow (createEscrowRawAsset k id creator recipient asset amount) b
+       = recTotalAssetWithEscrow k b
+    unfold recTotalAssetWithEscrow createEscrowRawAsset
+    have hbal : recTotalAsset { k with bal := recBalCreditCell k.bal creator asset (-amount),
+                                       escrows := newRec :: k.escrows } b
+        = recTotalAsset k b + (if b = asset then (-amount) else 0) := by
+      show (∑ x ∈ k.accounts, recBalCreditCell k.bal creator asset (-amount) x b) = _
+      exact recBalCreditCell_recTotalAsset k.accounts k.bal creator asset (-amount) hlive b
+    have hheld : escrowHeldAsset { k with bal := recBalCreditCell k.bal creator asset (-amount),
+                                          escrows := newRec :: k.escrows } b
+        = escrowHeldAsset k b + (if asset = b then amount else 0) := by
+      have hc := escrowHeldAsset_cons_unresolved
+        { k with bal := recBalCreditCell k.bal creator asset (-amount) } newRec b rfl
+      simpa [hnewRec] using hc
+    rw [hbal, hheld]
+    by_cases hba : b = asset
+    · subst hba; simp only [if_true, if_pos rfl]; ring
+    · rw [if_neg hba, if_neg (fun h => hba h.symm)]; ring
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`escrow_settle_conserves_combined_per_asset` — PROVED (the settle half, completing the pair).** A
+release/refund that settles the found record to `target` PRESERVES the COMBINED per-asset total
+`recTotalAssetWithEscrow b` for EVERY asset `b`: at the record's asset the `+amount` single-cell credit
+is offset by the holding-store DROP; every other asset is literally unchanged. NON-VACUOUS: the
+`target ∈ accounts` hypothesis has TEETH — a credit to a non-account vanishes from `recTotalAsset`,
+breaking conservation. The per-asset drop-in of `escrow_settle_conserves_combined`: `recCredit_recTotal`
+→ `recBalCreditCell_recTotalAsset`; `heldSum_markResolved_found` → `heldSumAsset_markResolved_found`. -/
+theorem escrow_settle_conserves_combined_per_asset (k : RecordKernelState) (id target : CellId)
+    (r : EscrowRecord) (b : AssetId) (htgt : target ∈ k.accounts)
+    (hfind : k.escrows.find? (fun x => decide (x.id = id ∧ x.resolved = false)) = some r) :
+    recTotalAssetWithEscrow (settleEscrowRawAsset k id target r.asset r.amount) b
+      = recTotalAssetWithEscrow k b := by
+  unfold recTotalAssetWithEscrow settleEscrowRawAsset
+  have hbal : recTotalAsset { k with bal := recBalCreditCell k.bal target r.asset r.amount,
+                                     escrows := markResolved k.escrows id } b
+      = recTotalAsset k b + (if b = r.asset then r.amount else 0) := by
+    show (∑ x ∈ k.accounts, recBalCreditCell k.bal target r.asset r.amount x b) = _
+    exact recBalCreditCell_recTotalAsset k.accounts k.bal target r.asset r.amount htgt b
+  have hheld : escrowHeldAsset { k with bal := recBalCreditCell k.bal target r.asset r.amount,
+                                        escrows := markResolved k.escrows id } b
+      = escrowHeldAsset k b - (if r.asset = b then r.amount else 0) := by
+    show heldSumAsset (markResolved k.escrows id) b = heldSumAsset k.escrows b - _
+    exact heldSumAsset_markResolved_found id r b k.escrows hfind
+  rw [hbal, hheld]
+  by_cases hba : b = r.asset
+  · subst hba; simp only [if_true, if_pos rfl]; ring
+  · rw [if_neg hba, if_neg (fun h => hba h.symm)]; ring
+
+/-- **`releaseEscrowKAsset` PRESERVES the COMBINED per-asset total — PROVED (UNCONDITIONAL).** The
+settle-liveness obligation is DISCHARGED by the fail-closed gate (`r.recipient ∈ k.accounts` is checked
+in the executor), so no carried `htgt` is needed — a committed release conserves the COMBINED per-asset
+total at EVERY asset. Reads off `escrow_settle_conserves_combined_per_asset` with the gate supplying the
+liveness premise. -/
+theorem releaseEscrowKAsset_conserves_combined_per_asset {k k' : RecordKernelState} {id : Nat}
+    (b : AssetId) (h : releaseEscrowKAsset k id = some k') :
+    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+  unfold releaseEscrowKAsset at h
+  cases hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | none => rw [hfind] at h; exact absurd h (by simp)
+  | some r =>
+      rw [hfind] at h; simp only at h
+      by_cases hlive : r.recipient ∈ k.accounts
+      · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h; subst h
+        exact escrow_settle_conserves_combined_per_asset k id r.recipient r b hlive hfind
+      · rw [if_neg hlive] at h; exact absurd h (by simp)
+
+/-- **`refundEscrowKAsset` PRESERVES the COMBINED per-asset total — PROVED (UNCONDITIONAL).** The refund
+half: value returns to the (LIVE, gate-checked) creator, the COMBINED per-asset total fixed at EVERY
+asset; no carried `htgt`. -/
+theorem refundEscrowKAsset_conserves_combined_per_asset {k k' : RecordKernelState} {id : Nat}
+    (b : AssetId) (h : refundEscrowKAsset k id = some k') :
+    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+  unfold refundEscrowKAsset at h
+  cases hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | none => rw [hfind] at h; exact absurd h (by simp)
+  | some r =>
+      rw [hfind] at h; simp only at h
+      by_cases hlive : r.creator ∈ k.accounts
+      · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h; subst h
+        exact escrow_settle_conserves_combined_per_asset k id r.creator r b hlive hfind
+      · rw [if_neg hlive] at h; exact absurd h (by simp)
+
+/-- **`escrow_create_debits_per_asset` — PROVED.** A committed per-asset create DROPS asset `asset`'s
+`bal`-ledger supply by `amount` (a real per-asset debit) and grows the holding-store by the asset-typed
+record. The per-asset contrast with the combined-conservation: the BARE per-asset ledger genuinely
+moves; only the COMBINED measure is fixed. -/
+theorem escrow_create_debits_per_asset {k k' : RecordKernelState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
+    (h : createEscrowKAsset k id actor creator recipient asset amount = some k') :
+    recTotalAsset k' asset = recTotalAsset k asset - amount ∧
+      k'.escrows = { id := id, creator := creator, recipient := recipient,
+                     amount := amount, resolved := false, asset := asset } :: k.escrows := by
+  unfold createEscrowKAsset at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal creator asset ∧ creator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, _, hlive, _⟩ := hg
+    refine ⟨?_, rfl⟩
+    show (∑ x ∈ k.accounts, recBalCreditCell k.bal creator asset (-amount) x asset) = _
+    have := recBalCreditCell_recTotalAsset k.accounts k.bal creator asset (-amount) hlive asset
+    simpa [recTotalAsset] using this
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`createEscrowKAsset_authorized` — PROVED.** A committed per-asset create required the actor to be
+authorized over the `creator` cell. -/
+theorem createEscrowKAsset_authorized {k k' : RecordKernelState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
+    (h : createEscrowKAsset k id actor creator recipient asset amount = some k') :
+    authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true := by
+  unfold createEscrowKAsset at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal creator asset ∧ creator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · exact hg.1
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-! ### §NOTE-CREATE — the grow-only COMMITMENT SET (faithful to dregg1's `apply_note_create`).
+
+dregg1's `apply_note_create` inserts a fresh Pedersen commitment into the off-ledger commitment tree;
+the §8 crypto (range proof on the hidden value) is a `CryptoPortal` carried at the effect layer. The
+note's hidden value's ASSET is OUT OF SCOPE here (behind the CryptoPortal) — `noteCreate` is
+bal-NEUTRAL: it grows the `commitments` SET only, NOT `bal`/`nullifiers`/`escrows`. (A fresh
+commitment is always fresh, so — unlike `noteSpend`'s double-spend gate — there is no rejection; the
+grow-only insert is the dual of the nullifier set.) -/
+
+/-- **`noteCreateCommitment` (executable)** — insert a fresh note commitment `cm` into the off-ledger
+commitment SET (the grow-only dual of `noteSpendNullifier`). bal-NEUTRAL: it touches NEITHER `bal` NOR
+`nullifiers` NOR `escrows`. Always commits (a fresh commitment cannot conflict). -/
+def noteCreateCommitment (k : RecordKernelState) (cm : Nat) : RecordKernelState :=
+  { k with commitments := cm :: k.commitments }
+
+/-- **`noteCreate_inserts` — PROVED.** A `noteCreateCommitment` actually inserts `cm` into the
+commitment set. -/
+theorem noteCreate_inserts (k : RecordKernelState) (cm : Nat) :
+    cm ∈ (noteCreateCommitment k cm).commitments := by
+  unfold noteCreateCommitment; simp
+
+/-- **`noteCreate_recTotalAsset` — PROVED (bal-NEUTRALITY).** A `noteCreateCommitment` leaves
+`recTotalAsset b` and `escrowHeldAsset b` (hence `recTotalAssetWithEscrow b`) UNCHANGED for EVERY asset
+`b`: it grows only the commitment SET, never the `bal` ledger nor the `escrows` store. -/
+theorem noteCreate_recTotalAsset (k : RecordKernelState) (cm : Nat) (b : AssetId) :
+    recTotalAsset (noteCreateCommitment k cm) b = recTotalAsset k b
+      ∧ escrowHeldAsset (noteCreateCommitment k cm) b = escrowHeldAsset k b := ⟨rfl, rfl⟩
+
+/-! ## §ESCROW-PER-ASSET runs (`#eval`) — the combined measure has teeth + the asset-isolation guard. -/
+
+/-- A 2-cell, 2-asset ledger for the per-asset escrow guard: cell 0 holds 100 of asset 1 (and 0 of
+asset 0); cell 1 holds 0 of everything. Cell 0 will lock 30 of asset 1 into escrow id 9 → recipient 1. -/
+def res0 : RecordKernelState :=
+  { accounts := {0, 1}
+    cell := fun _ => .record [("balance", .int 0)]
+    caps := fun l => if l = 0 then [Cap.node 1] else []
+    bal := fun c a => if c = 0 ∧ a = 1 then 100 else 0 }
+
+/-- Lock 30 of asset 1 from cell 0 to recipient 1, escrow id 9. -/
+def resLocked : Option RecordKernelState := createEscrowKAsset res0 9 0 0 1 1 30
+
+-- NON-VACUITY GUARD (locked at asset≠0): the held value MOVES at asset 1 ONLY.
+#eval (escrowHeldAsset res0 1, escrowHeldAsset res0 0)                       -- (0, 0) before
+#eval resLocked.map (fun k => (escrowHeldAsset k 1, escrowHeldAsset k 0))    -- some (30, 0) — held GENUINELY non-zero at asset 1, asset 0 UNTOUCHED
+-- the BARE per-asset ledger DROPS at asset 1 (a real debit); asset 0 untouched:
+#eval resLocked.map (fun k => (recTotalAsset k 1, recTotalAsset k 0))        -- some (70, 0)
+-- the COMBINED per-asset measure is CONSERVED at asset 1 AND asset 0:
+#eval (recTotalAssetWithEscrow res0 1, recTotalAssetWithEscrow res0 0)       -- (100, 0)
+#eval resLocked.map (fun k => (recTotalAssetWithEscrow k 1, recTotalAssetWithEscrow k 0))
+                                                                            -- some (100, 0) — CONSERVED both assets
+-- SETTLE (release to recipient 1): mirror — combined stays (100,0), held returns to 0, bal back to 100 at asset 1.
+#eval (resLocked.bind (fun k => releaseEscrowKAsset k 9)).map
+        (fun k => (recTotalAssetWithEscrow k 1, recTotalAssetWithEscrow k 0,
+                   escrowHeldAsset k 1, recTotalAsset k 1))                 -- some (100, 0, 0, 100)
+-- noteCreate round-trip + noteSpend independence; double-spend fail-closed.
+#eval (noteCreateCommitment res0 42).commitments                            -- [42]
+#eval (noteSpendNullifier res0 7).map (fun k => k.nullifiers)               -- some [7]
+#eval ((noteSpendNullifier res0 7).bind (fun k => noteSpendNullifier k 7)).isSome  -- false
+
 /-! ## Axiom-hygiene tripwires — pin the re-proved keystones over the content-addressed cell. -/
 
 #assert_axioms setBalance_balOf
@@ -894,6 +1322,18 @@ theorem note_spend_then_reject {k k' : RecordKernelState} {nf : Nat}
 #assert_axioms recKExecAsset_authorized
 #assert_axioms recKExecAsset_unauthorized_fails
 #assert_axioms recKExecAsset_no_cross_asset_leak
+-- The per-asset COMBINED escrow measure + note-commitment keystones (META-FILL C):
+#assert_axioms recBalCreditCell_recTotalAsset
+#assert_axioms escrowHeldAsset_cons_unresolved
+#assert_axioms heldSumAsset_markResolved_found
+#assert_axioms escrow_create_conserves_combined_per_asset
+#assert_axioms escrow_settle_conserves_combined_per_asset
+#assert_axioms releaseEscrowKAsset_conserves_combined_per_asset
+#assert_axioms refundEscrowKAsset_conserves_combined_per_asset
+#assert_axioms escrow_create_debits_per_asset
+#assert_axioms createEscrowKAsset_authorized
+#assert_axioms noteCreate_inserts
+#assert_axioms noteCreate_recTotalAsset
 
 /-! ## It runs (`#eval`) — an account cell as a record. -/
 

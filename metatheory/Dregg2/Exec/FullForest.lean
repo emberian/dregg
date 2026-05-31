@@ -212,7 +212,7 @@ pre-order lowering, for EVERY asset `b` independently. The tree generalization o
 could not state it (it would let a mint of asset B net against a burn of asset A). -/
 theorem execFullForestA_ledger_per_asset (s s' : RecChainedState) (f : FullForestA) (b : AssetId)
     (h : execFullForestA s f = some s') :
-    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + turnLedgerDeltaAsset (lowerForestA f) b := by
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b + turnLedgerDeltaAsset (lowerForestA f) b := by
   rw [execFullForestA_eq_execFullTurnA] at h
   exact execFullTurnA_ledger_per_asset s s' (lowerForestA f) b h
 
@@ -223,7 +223,7 @@ whose per-asset mint/burn nets out in EACH asset, conserves EVERY asset class. T
 `CONSERVATION_VECTOR` at the forest level. -/
 theorem execFullForestA_conserves_per_asset (s s' : RecChainedState) (f : FullForestA) (b : AssetId)
     (h : execFullForestA s f = some s') (hzero : turnLedgerDeltaAsset (lowerForestA f) b = 0) :
-    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
   rw [execFullForestA_ledger_per_asset s s' f b h, hzero, add_zero]
 
 /-! ## §6 — `execFullForestA_no_amplify`: delegated caps NEVER amplify (Granovetter across the forest).
@@ -360,6 +360,17 @@ def targetOf : FullActionA → CellId
   | .createCellA _ newCell  => newCell
   | .spawnA _ child _       => child
   | .bridgeMintA _ cell _ _ => cell
+  -- §MA-escrow: escrow/obligation/committed act on the debited `creator`/`obligor` cell; notes act on
+  -- the `actor` (the SET-touching node). The `targetOf` discriminant `sameTargetForest` reads.
+  | .createEscrowA _ _ creator _ _ _        => creator
+  | .releaseEscrowA _ actor                 => actor
+  | .refundEscrowA _ actor                  => actor
+  | .createObligationA _ _ obligor _ _ _    => obligor
+  | .noteSpendA _ actor                     => actor
+  | .noteCreateA _ actor                    => actor
+  | .createCommittedEscrowA _ _ creator _ _ _ => creator
+  | .releaseCommittedEscrowA _ actor        => actor
+  | .refundCommittedEscrowA _ actor         => actor
 
 mutual
 /-- **`sameTargetForest`** — the STRUCTURAL `DelegationMode::None` fidelity predicate: every child's

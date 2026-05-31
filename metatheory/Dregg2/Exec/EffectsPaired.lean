@@ -666,6 +666,339 @@ theorem escrow_obligation_note_are_distinct
       · rw [if_neg hin] at hN; simp only [Option.some.injEq] at hN; subst hN; rfl
     · rw [if_neg hp] at hN; exact absurd hN (by simp)
 
+/-! ## §2-PER-ASSET — the COMBINED PER-ASSET escrow chains + committed-escrow + noteCreate (`META-FILL C`,
+closing `#121`).
+
+The chains above (`createEscrowChain`/`release`/`refund`, `chainTotal := recTotalWithEscrow`) move the
+SCALAR `balance` field — ONE asset. dregg cells hold MANY assets, so we add PER-ASSET chain SIBLINGS
+founded on `RecordKernel`'s per-asset escrow kernel fns (`createEscrowKAsset`/`releaseEscrowKAsset`/
+`refundEscrowKAsset`, which debit/credit the genuine `bal` ledger at the record's `asset` and conserve
+the per-asset combined measure `recTotalAssetWithEscrow`). The scalar chains stay as the legacy
+`cell`-view; these are NEW per-asset siblings (never a re-proof of the same statement).
+
+`#121` (the coverage regression) is closed HERE: (a) COMMITTED-ESCROW — a privacy escrow whose locked
+amount is hidden behind a Pedersen commitment (the record `id` IS the commitment key, decision (6)),
+gated by a `CryptoPortal` (the opening predicate); the lock/settle automaton is identical to plain
+escrow so it inherits the per-asset combined-conservation. (b) NOTE-CREATE — `noteCreateChain` inserts
+into the grow-only `commitments` SET (the dual of `noteSpend`'s nullifier set) under a `CryptoPortal`
+(range proof), bal-NEUTRAL. (c) the de-conflation `escrow_obligation_committed_note_are_distinct`
+EXTENDS `escrow_obligation_note_are_distinct` to the COMMITTED triple + noteCreate — proving all four
+touch PAIRWISE-DISTINCT state components (the committed-escrow shadow `FID-ESCROW` left de-conflated). -/
+
+/-- The COMBINED per-asset conserved total of a chained state (per-asset `bal` ledger + per-asset
+escrow holding-store), at asset `b`. The per-asset refinement of `chainTotal`. -/
+@[reducible] def chainTotalAsset (s : RecChainedState) (b : AssetId) : ℤ :=
+  recTotalAssetWithEscrow s.kernel b
+
+/-- **`createEscrowChainAsset`** — the per-asset chained create: `RecordKernel.createEscrowKAsset`
+(single-cell, single-asset debit at `asset` + park the asset-typed record), extending the log. -/
+def createEscrowChainAsset (s : RecChainedState) (id : Nat) (actor creator recipient : CellId)
+    (asset : AssetId) (amount : ℤ) : Option RecChainedState :=
+  match createEscrowKAsset s.kernel id actor creator recipient asset amount with
+  | some k' => some { kernel := k', log := pairedTurn actor creator recipient amount :: s.log }
+  | none    => none
+
+/-- **`releaseEscrowChainAsset`** — the per-asset chained release (single-cell credit to the recipient
+at the record's asset + mark resolved). -/
+def releaseEscrowChainAsset (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
+  match releaseEscrowKAsset s.kernel id with
+  | some k' => some { kernel := k', log := pairedTurn actor 0 0 0 :: s.log }
+  | none    => none
+
+/-- **`refundEscrowChainAsset`** — the per-asset chained refund (single-cell credit back to the creator
+at the record's asset + mark resolved). -/
+def refundEscrowChainAsset (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
+  match refundEscrowKAsset s.kernel id with
+  | some k' => some { kernel := k', log := pairedTurn actor 0 0 0 :: s.log }
+  | none    => none
+
+/-- **`createEscrowAsset_conserves_combined_per_asset` — PROVED.** A committed per-asset chained create
+PRESERVES the COMBINED per-asset total at EVERY asset `b`: the `bal`-ledger `−amount` debit at `asset`
+is offset by the per-asset holding-store `+amount`; every other asset is literally unchanged. -/
+theorem createEscrowAsset_conserves_combined_per_asset {s s' : RecChainedState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (h : createEscrowChainAsset s id actor creator recipient asset amount = some s') :
+    chainTotalAsset s' b = chainTotalAsset s b := by
+  unfold createEscrowChainAsset at h
+  cases hc : createEscrowKAsset s.kernel id actor creator recipient asset amount with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact escrow_create_conserves_combined_per_asset b hc
+
+/-- **`releaseEscrowAsset_conserves_combined_per_asset` — PROVED (UNCONDITIONAL).** A committed
+per-asset chained release PRESERVES the COMBINED per-asset total at EVERY asset `b` — the settle-liveness
+obligation is discharged by the kernel's fail-closed gate (`r.recipient ∈ accounts`), so no carried
+`htgt`. -/
+theorem releaseEscrowAsset_conserves_combined_per_asset {s s' : RecChainedState} {id : Nat}
+    {actor : CellId} (b : AssetId)
+    (h : releaseEscrowChainAsset s id actor = some s') :
+    chainTotalAsset s' b = chainTotalAsset s b := by
+  unfold releaseEscrowChainAsset at h
+  cases hc : releaseEscrowKAsset s.kernel id with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact releaseEscrowKAsset_conserves_combined_per_asset b hc
+
+/-- **`refundEscrowAsset_conserves_combined_per_asset` — PROVED (UNCONDITIONAL).** The refund half:
+value returns to the (gate-checked LIVE) creator at its asset, the COMBINED per-asset total fixed at
+EVERY asset; no carried `htgt`. -/
+theorem refundEscrowAsset_conserves_combined_per_asset {s s' : RecChainedState} {id : Nat}
+    {actor : CellId} (b : AssetId)
+    (h : refundEscrowChainAsset s id actor = some s') :
+    chainTotalAsset s' b = chainTotalAsset s b := by
+  unfold refundEscrowChainAsset at h
+  cases hc : refundEscrowKAsset s.kernel id with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact refundEscrowKAsset_conserves_combined_per_asset b hc
+
+/-- **`escrow_conserves_across_pair_per_asset` — PROVED (the headline end-to-end per-asset invariant).**
+create-then-release is end-to-end COMBINED-per-asset conserving AT EVERY ASSET: the create parks
+`amount` of `asset` off-ledger (combined fixed at every asset) and the release returns it to a (gate-
+checked LIVE) recipient (combined fixed at every asset), so the composite conserves the per-asset
+measure in EVERY asset while NEITHER leg is bare-`bal`-Σ0 — the side-table is the per-asset in-flight
+accumulator. The chained per-asset analog of `escrow_conserves_across_pair`; UNCONDITIONAL (liveness
+discharged by the settle gate). -/
+theorem escrow_conserves_across_pair_per_asset {s s1 s2 : RecChainedState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (hcreate : createEscrowChainAsset s id actor creator recipient asset amount = some s1)
+    (hrelease : releaseEscrowChainAsset s1 id actor = some s2) :
+    chainTotalAsset s2 b = chainTotalAsset s b := by
+  rw [releaseEscrowAsset_conserves_combined_per_asset b hrelease,
+      createEscrowAsset_conserves_combined_per_asset b hcreate]
+
+/-! ### COMMITTED-ESCROW (`#121`): a privacy escrow whose amount is hidden behind a commitment. The
+record `id` IS the Pedersen-commitment key (decision (6)); a `CryptoPortal` carries the opening
+predicate. The lock/settle automaton is the per-asset escrow above, so it INHERITS the per-asset
+combined-conservation — committed-escrow is NOT a `pairedStep` two-cell shadow but a holding-store park
+of a commitment-typed record. -/
+
+/-- **`createCommittedEscrowChain`** — the per-asset committed-escrow create: portal-gated (the opening
+predicate) `createEscrowChainAsset`. The amount is committed (the `id`-keyed commitment); the
+holding-store park + per-asset debit are identical to plain escrow. -/
+def createCommittedEscrowChain (p : CryptoPortal) [Decidable p.verified] (s : RecChainedState)
+    (id : Nat) (actor creator recipient : CellId) (asset : AssetId) (amount : ℤ) :
+    Option RecChainedState :=
+  if p.verified then createEscrowChainAsset s id actor creator recipient asset amount else none
+
+/-- **`releaseCommittedEscrowChain`** — portal-gated per-asset release of a committed escrow. -/
+def releaseCommittedEscrowChain (p : CryptoPortal) [Decidable p.verified] (s : RecChainedState)
+    (id : Nat) (actor : CellId) : Option RecChainedState :=
+  if p.verified then releaseEscrowChainAsset s id actor else none
+
+/-- **`refundCommittedEscrowChain`** — portal-gated per-asset refund of a committed escrow. -/
+def refundCommittedEscrowChain (p : CryptoPortal) [Decidable p.verified] (s : RecChainedState)
+    (id : Nat) (actor : CellId) : Option RecChainedState :=
+  if p.verified then refundEscrowChainAsset s id actor else none
+
+/-- **`committedEscrow_fails_without_crypto` — PROVED.** No committed-escrow create commits without the
+§8 opening portal (the privacy boundary). -/
+theorem committedEscrow_fails_without_crypto {p : CryptoPortal} [Decidable p.verified]
+    {s : RecChainedState} {id : Nat} {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ}
+    (hp : ¬ p.verified) :
+    createCommittedEscrowChain p s id actor creator recipient asset amount = none := by
+  unfold createCommittedEscrowChain; rw [if_neg hp]
+
+/-- **`committedEscrow_conserves_combined_per_asset` — PROVED (THE `#121` HEADLINE).** A committed
+committed-escrow create (portal held) PRESERVES the COMBINED per-asset total at EVERY asset `b` — the
+hidden-amount privacy escrow conserves value per-asset exactly as plain escrow, via the holding-store.
+The committed-escrow inherits the per-asset combined-conservation; it is genuinely a holding-store park
+(NOT the old two-cell `pairedStep` shadow). -/
+theorem committedEscrow_conserves_combined_per_asset {p : CryptoPortal} [Decidable p.verified]
+    {s s' : RecChainedState} {id : Nat} {actor creator recipient : CellId} {asset : AssetId}
+    {amount : ℤ} (b : AssetId)
+    (h : createCommittedEscrowChain p s id actor creator recipient asset amount = some s') :
+    chainTotalAsset s' b = chainTotalAsset s b := by
+  unfold createCommittedEscrowChain at h
+  by_cases hp : p.verified
+  · rw [if_pos hp] at h
+    exact createEscrowAsset_conserves_combined_per_asset b h
+  · rw [if_neg hp] at h; exact absurd h (by simp)
+
+/-- **`committedEscrow_conserves_across_pair_per_asset` — PROVED.** lock-then-settle of a committed
+escrow is end-to-end COMBINED-per-asset conserving at EVERY asset (the privacy round-trip). -/
+theorem committedEscrow_conserves_across_pair_per_asset {p q : CryptoPortal}
+    [Decidable p.verified] [Decidable q.verified] {s s1 s2 : RecChainedState} {id : Nat}
+    {actor creator recipient : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (hcreate : createCommittedEscrowChain p s id actor creator recipient asset amount = some s1)
+    (hrelease : releaseCommittedEscrowChain q s1 id actor = some s2) :
+    chainTotalAsset s2 b = chainTotalAsset s b := by
+  have hc : createEscrowChainAsset s id actor creator recipient asset amount = some s1 := by
+    unfold createCommittedEscrowChain at hcreate
+    by_cases hp : p.verified
+    · rwa [if_pos hp] at hcreate
+    · rw [if_neg hp] at hcreate; exact absurd hcreate (by simp)
+  have hr : releaseEscrowChainAsset s1 id actor = some s2 := by
+    unfold releaseCommittedEscrowChain at hrelease
+    by_cases hq : q.verified
+    · rwa [if_pos hq] at hrelease
+    · rw [if_neg hq] at hrelease; exact absurd hrelease (by simp)
+  exact escrow_conserves_across_pair_per_asset b hc hr
+
+/-! ### NOTE-CREATE (`#121`): the grow-only COMMITMENT SET (the dual of noteSpend's nullifier set). -/
+
+/-- **`noteCreateChain` (faithful)** — §8-portal-gated commitment-SET insert: commit ONLY if the crypto
+portal (range proof on the hidden value) holds, then grow the `commitments` set (`noteCreateCommitment`).
+bal-NEUTRAL; the asset of the hidden value is OUT OF SCOPE (behind the portal). -/
+def noteCreateChain (p : CryptoPortal) [Decidable p.verified] (s : RecChainedState)
+    (cm : Nat) (actor : CellId) : Option RecChainedState :=
+  if p.verified then
+    some { kernel := noteCreateCommitment s.kernel cm, log := pairedTurn actor 0 0 0 :: s.log }
+  else none
+
+/-- **`noteCreate_fails_without_crypto` — PROVED.** No commitment is created without the §8 range-proof
+portal. -/
+theorem noteCreate_fails_without_crypto {p : CryptoPortal} [Decidable p.verified] {s : RecChainedState}
+    {cm : Nat} {actor : CellId} (hp : ¬ p.verified) : noteCreateChain p s cm actor = none := by
+  unfold noteCreateChain; rw [if_neg hp]
+
+/-- **`noteCreate_inserts_chain` — PROVED.** A committed `noteCreateChain` actually inserts `cm` into the
+commitment set. -/
+theorem noteCreate_inserts_chain {p : CryptoPortal} [Decidable p.verified] {s s' : RecChainedState}
+    {cm : Nat} {actor : CellId} (h : noteCreateChain p s cm actor = some s') :
+    cm ∈ s'.kernel.commitments := by
+  unfold noteCreateChain at h
+  by_cases hp : p.verified
+  · rw [if_pos hp] at h; simp only [Option.some.injEq] at h; subst h
+    exact Dregg2.Exec.noteCreate_inserts s.kernel cm
+  · rw [if_neg hp] at h; exact absurd h (by simp)
+
+/-- **`noteCreate_conserves_combined_per_asset` — PROVED.** A committed `noteCreateChain` is bal-NEUTRAL:
+it leaves the COMBINED per-asset total UNCHANGED at EVERY asset `b` (it grows only the commitment SET,
+never `bal`/`escrows`). The note's hidden-value asset is OUT OF SCOPE (the §8 portal). -/
+theorem noteCreate_conserves_combined_per_asset {p : CryptoPortal} [Decidable p.verified]
+    {s s' : RecChainedState} {cm : Nat} {actor : CellId} (b : AssetId)
+    (h : noteCreateChain p s cm actor = some s') :
+    chainTotalAsset s' b = chainTotalAsset s b := by
+  unfold noteCreateChain at h
+  by_cases hp : p.verified
+  · rw [if_pos hp] at h; simp only [Option.some.injEq] at h; subst h
+    show recTotalAssetWithEscrow (noteCreateCommitment s.kernel cm) b = recTotalAssetWithEscrow s.kernel b
+    unfold recTotalAssetWithEscrow
+    obtain ⟨h1, h2⟩ := Dregg2.Exec.noteCreate_recTotalAsset s.kernel cm b
+    rw [h1, h2]
+  · rw [if_neg hp] at h; exact absurd h (by simp)
+
+/-- **`noteCreate_then_spend_roundtrip` — PROVED.** A note CREATED (commitment inserted) can then be
+SPENT (its nullifier inserted): the create grows `commitments`, the spend grows `nullifiers` — distinct
+SETs, so the create does NOT block the spend. The create→spend privacy round-trip is well-formed. -/
+theorem noteCreate_then_spend_roundtrip {p q : CryptoPortal} [Decidable p.verified] [Decidable q.verified]
+    {s s1 : RecChainedState} {cm nf : Nat} {actor : CellId}
+    (hcreate : noteCreateChain p s cm actor = some s1)
+    (hnf : nf ∉ s1.kernel.nullifiers) (hq : q.verified) :
+    ∃ s2, noteSpendChain q s1 nf actor = some s2 ∧ nf ∈ s2.kernel.nullifiers
+      ∧ cm ∈ s2.kernel.commitments := by
+  -- the create inserted cm into commitments (so the spend, which only grows nullifiers, preserves it):
+  have hcm : cm ∈ s1.kernel.commitments := noteCreate_inserts_chain hcreate
+  -- the spend commits (portal held, nf fresh) and inserts nf, leaving commitments fixed:
+  unfold noteSpendChain noteSpendNullifier
+  rw [if_pos hq, if_neg hnf]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · simp
+  · simpa using hcm
+
+/-- **`escrow_obligation_committed_note_are_distinct` — PROVED (THE `#121` DE-CONFLATION, EXTENDED).**
+The FOUR effects write FOUR PAIRWISE-DISTINCT state components: plain/committed escrow + obligation →
+the `escrows` holding-store (a parked `EscrowRecord`); noteSpend → the `nullifiers` SET; noteCreate →
+the `commitments` SET. NOT the same `pairedStep` at different string constants. A committed createEscrow
+(or committed-escrow) grows `escrows` (leaving `nullifiers`/`commitments` fixed); a noteSpend grows
+`nullifiers` (leaving `escrows`/`commitments` fixed); a noteCreate grows `commitments` (leaving
+`escrows`/`nullifiers` fixed). This EXTENDS `escrow_obligation_note_are_distinct` to cover the COMMITTED
+triple + noteCreate — the de-conflation `FID-ESCROW`'s theorem was missing (`#121`). -/
+theorem escrow_obligation_committed_note_are_distinct
+    {p : CryptoPortal} [Decidable p.verified]
+    {sC sC' : RecChainedState} {idC : Nat} {aC cC rC : CellId} {asC : AssetId} {amtC : ℤ}
+    (hC : createCommittedEscrowChain p sC idC aC cC rC asC amtC = some sC')
+    {q : CryptoPortal} [Decidable q.verified] {sN sN' : RecChainedState} {nf : Nat} {aN : CellId}
+    (hN : noteSpendChain q sN nf aN = some sN')
+    {r : CryptoPortal} [Decidable r.verified] {sM sM' : RecChainedState} {cm : Nat} {aM : CellId}
+    (hM : noteCreateChain r sM cm aM = some sM') :
+    -- committed-escrow grows `escrows`, leaves `nullifiers`/`commitments` fixed:
+    sC'.kernel.escrows ≠ sC.kernel.escrows ∧ sC'.kernel.nullifiers = sC.kernel.nullifiers
+      ∧ sC'.kernel.commitments = sC.kernel.commitments ∧
+    -- noteSpend grows `nullifiers`, leaves `escrows`/`commitments` fixed:
+    nf ∈ sN'.kernel.nullifiers ∧ sN'.kernel.escrows = sN.kernel.escrows
+      ∧ sN'.kernel.commitments = sN.kernel.commitments ∧
+    -- noteCreate grows `commitments`, leaves `escrows`/`nullifiers` fixed:
+    cm ∈ sM'.kernel.commitments ∧ sM'.kernel.escrows = sM.kernel.escrows
+      ∧ sM'.kernel.nullifiers = sM.kernel.nullifiers := by
+  -- committed-escrow factors through `createEscrowChainAsset` (portal held):
+  have hCe : createEscrowChainAsset sC idC aC cC rC asC amtC = some sC' := by
+    unfold createCommittedEscrowChain at hC
+    by_cases hp : p.verified
+    · rwa [if_pos hp] at hC
+    · rw [if_neg hp] at hC; exact absurd hC (by simp)
+  -- the committed-escrow kernel post-state (escrows grew, nullifiers/commitments unchanged):
+  obtain ⟨sCkern, hCcommit, hCeq⟩ :
+      ∃ k', createEscrowKAsset sC.kernel idC aC cC rC asC amtC = some k' ∧
+        sC' = { kernel := k', log := pairedTurn aC cC rC amtC :: sC.log } := by
+    unfold createEscrowChainAsset at hCe
+    cases hk : createEscrowKAsset sC.kernel idC aC cC rC asC amtC with
+    | none => rw [hk] at hCe; exact absurd hCe (by simp)
+    | some k' => rw [hk] at hCe; simp only [Option.some.injEq] at hCe; exact ⟨k', rfl, hCe.symm⟩
+  have hCstore := escrow_create_debits_per_asset hCcommit
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- escrows strictly grow (cons ≠ tail).
+    subst hCeq; show sCkern.escrows ≠ sC.kernel.escrows
+    rw [hCstore.2]; exact List.cons_ne_self _ _
+  · -- committed-escrow leaves nullifiers fixed.
+    subst hCeq
+    unfold createEscrowKAsset at hCcommit
+    by_cases hg : authorizedB sC.kernel.caps { actor := aC, src := cC, dst := rC, amt := amtC } = true
+        ∧ 0 ≤ amtC ∧ amtC ≤ sC.kernel.bal cC asC ∧ cC ∈ sC.kernel.accounts
+        ∧ ¬ (∃ r ∈ sC.kernel.escrows, r.id = idC)
+    · rw [if_pos hg] at hCcommit; simp only [Option.some.injEq] at hCcommit; subst hCcommit; rfl
+    · rw [if_neg hg] at hCcommit; exact absurd hCcommit (by simp)
+  · -- committed-escrow leaves commitments fixed.
+    subst hCeq
+    unfold createEscrowKAsset at hCcommit
+    by_cases hg : authorizedB sC.kernel.caps { actor := aC, src := cC, dst := rC, amt := amtC } = true
+        ∧ 0 ≤ amtC ∧ amtC ≤ sC.kernel.bal cC asC ∧ cC ∈ sC.kernel.accounts
+        ∧ ¬ (∃ r ∈ sC.kernel.escrows, r.id = idC)
+    · rw [if_pos hg] at hCcommit; simp only [Option.some.injEq] at hCcommit; subst hCcommit; rfl
+    · rw [if_neg hg] at hCcommit; exact absurd hCcommit (by simp)
+  · -- noteSpend inserts nf.
+    unfold noteSpendChain at hN
+    by_cases hq : q.verified
+    · rw [if_pos hq] at hN
+      cases hns : noteSpendNullifier sN.kernel nf with
+      | none => rw [hns] at hN; exact absurd hN (by simp)
+      | some k' =>
+          rw [hns] at hN; simp only [Option.some.injEq] at hN; subst hN
+          exact Dregg2.Exec.note_spend_inserts hns
+    · rw [if_neg hq] at hN; exact absurd hN (by simp)
+  · -- noteSpend leaves escrows fixed.
+    unfold noteSpendChain noteSpendNullifier at hN
+    by_cases hq : q.verified
+    · rw [if_pos hq] at hN
+      by_cases hin : nf ∈ sN.kernel.nullifiers
+      · rw [if_pos hin] at hN; exact absurd hN (by simp)
+      · rw [if_neg hin] at hN; simp only [Option.some.injEq] at hN; subst hN; rfl
+    · rw [if_neg hq] at hN; exact absurd hN (by simp)
+  · -- noteSpend leaves commitments fixed.
+    unfold noteSpendChain noteSpendNullifier at hN
+    by_cases hq : q.verified
+    · rw [if_pos hq] at hN
+      by_cases hin : nf ∈ sN.kernel.nullifiers
+      · rw [if_pos hin] at hN; exact absurd hN (by simp)
+      · rw [if_neg hin] at hN; simp only [Option.some.injEq] at hN; subst hN; rfl
+    · rw [if_neg hq] at hN; exact absurd hN (by simp)
+  · -- noteCreate inserts cm.
+    exact noteCreate_inserts_chain hM
+  · -- noteCreate leaves escrows fixed.
+    unfold noteCreateChain at hM
+    by_cases hr : r.verified
+    · rw [if_pos hr] at hM; simp only [Option.some.injEq] at hM; subst hM; rfl
+    · rw [if_neg hr] at hM; exact absurd hM (by simp)
+  · -- noteCreate leaves nullifiers fixed.
+    unfold noteCreateChain at hM
+    by_cases hr : r.verified
+    · rw [if_pos hr] at hM; simp only [Option.some.injEq] at hM; subst hM; rfl
+    · rw [if_neg hr] at hM; exact absurd hM (by simp)
+
 /-! ## §3 — THE REMAINING Conservative effects: each instantiates the generic spine at its own
 metadata field. (Queues and the bridge's local Σδ = 0 phases ARE genuine two-cell cell-to-cell moves
 in dregg1 — a deposit into a real queue cell, a lock into a bridge-escrow cell — so the `pairedStep`
@@ -931,6 +1264,19 @@ Whitelist exactly `{propext, Classical.choice, Quot.sound}` — no `sorryAx`/`ad
 #assert_axioms noteSpend_then_reject
 -- The catalog DE-CONFLATION (escrow store vs obligation store vs nullifier set are DISTINCT):
 #assert_axioms escrow_obligation_note_are_distinct
+-- META-FILL C: the COMBINED per-asset escrow chains + committed-escrow + noteCreate + the #121 de-conflation.
+#assert_axioms createEscrowAsset_conserves_combined_per_asset
+#assert_axioms releaseEscrowAsset_conserves_combined_per_asset
+#assert_axioms refundEscrowAsset_conserves_combined_per_asset
+#assert_axioms escrow_conserves_across_pair_per_asset
+#assert_axioms committedEscrow_fails_without_crypto
+#assert_axioms committedEscrow_conserves_combined_per_asset
+#assert_axioms committedEscrow_conserves_across_pair_per_asset
+#assert_axioms noteCreate_fails_without_crypto
+#assert_axioms noteCreate_inserts_chain
+#assert_axioms noteCreate_conserves_combined_per_asset
+#assert_axioms noteCreate_then_spend_roundtrip
+#assert_axioms escrow_obligation_committed_note_are_distinct
 -- Queues:
 #assert_axioms queueEnqueue_conserves
 #assert_axioms queueEnqueue_forward_sim
@@ -1012,5 +1358,39 @@ instance : Decidable (badPortal.verified) := instDecidableFalse
 #eval (queueEnqueueStep ep0 9 0 1 30).isSome                                           -- false
 -- Overdraft (more than available) is rejected (availability gate).
 #eval (createEscrowChain ep0 7 1 1 2 999).isSome                                       -- false (overdraft)
+
+/-! ### §2-PER-ASSET non-vacuity (`META-FILL C`, `#121`): the COMBINED per-asset escrow + committed
+escrow + noteCreate, with the asset-isolation GUARD (a lock at asset 1 leaves asset 0 untouched). -/
+
+/-- A per-asset chained state: cell 0 holds 100 of asset 1 (and 0 of asset 0); cell 0 owns a node cap. -/
+def epa0 : RecChainedState :=
+  { kernel :=
+      { accounts := {0, 1}
+        cell := fun _ => .record [("balance", .int 0)]
+        caps := fun l => if l = 0 then [Dregg2.Authority.Cap.node 1] else []
+        bal := fun c a => if c = 0 ∧ a = 1 then 100 else 0 }
+    log := [] }
+
+-- PER-ASSET ESCROW: lock 30 of asset 1 → recipient 1; combined per-asset CONSERVED, asset 0 untouched.
+#eval (createEscrowChainAsset epa0 7 0 0 1 1 30).isSome                                -- true
+#eval (createEscrowChainAsset epa0 7 0 0 1 1 30).map
+        (fun s => (recTotalAsset s.kernel 1, escrowHeldAsset s.kernel 1))             -- some (70, 30) — bal DOWN, held UP at asset 1
+#eval (createEscrowChainAsset epa0 7 0 0 1 1 30).map
+        (fun s => (chainTotalAsset s 1, chainTotalAsset s 0))                         -- some (100, 0) — COMBINED conserved BOTH assets
+-- release: combined per-asset stays (100,0), held returns to 0, bal back to 100 at asset 1.
+#eval ((createEscrowChainAsset epa0 7 0 0 1 1 30).bind (fun s => releaseEscrowChainAsset s 7 0)).map
+        (fun s => (chainTotalAsset s 1, chainTotalAsset s 0, escrowHeldAsset s.kernel 1, recTotalAsset s.kernel 1))
+                                                                                      -- some (100, 0, 0, 100)
+-- COMMITTED ESCROW (#121): portal-gated; combined per-asset conserved; fail-closed without crypto.
+#eval (createCommittedEscrowChain okPortal epa0 9 0 0 1 1 30).map
+        (fun s => (chainTotalAsset s 1, chainTotalAsset s 0, escrowHeldAsset s.kernel 1))  -- some (100, 0, 30)
+#eval (createCommittedEscrowChain badPortal epa0 9 0 0 1 1 30).isSome                  -- false (no opening portal)
+-- NOTE CREATE (#121): grow-only commitment SET under the §8 portal; bal-NEUTRAL; fail-closed.
+#eval (noteCreateChain okPortal epa0 42 0).map (fun s => s.kernel.commitments.contains 42)  -- some true
+#eval (noteCreateChain okPortal epa0 42 0).map (fun s => (chainTotalAsset s 1, chainTotalAsset s 0))  -- some (100, 0) — NEUTRAL
+#eval (noteCreateChain badPortal epa0 42 0).isSome                                     -- false (no range proof)
+-- noteCreate→noteSpend round-trip: create grows commitments, spend grows nullifiers (distinct sets).
+#eval ((noteCreateChain okPortal epa0 42 0).bind (fun s => noteSpendChain okPortal s 7 0)).map
+        (fun s => (s.kernel.commitments.contains 42, s.kernel.nullifiers.contains 7))  -- some (true, true)
 
 end Dregg2.Exec.EffectsPaired
