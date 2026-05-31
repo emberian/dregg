@@ -371,28 +371,28 @@ structure Reclaimable (CellId FactoryId Digest : Type u) where
   /-- Its export lease — the temporal bound that replaces the impossible deadness proof. -/
   lease : Lease
 
+open Nat.Partrec (Code) in
+open Nat.Partrec.Code in
 /--
-**`distributed_death_not_co_witnessable` — the honest negative obligation (OPEN).**
+**`distributed_death_not_co_witnessable` — the honest negative obligation (PROVED).**
 
 Dual to `birthProvable`: there is NO uniform constructive co-witness of distributed
-deadness. We state it in `Liveness`'s own shape — no `decide : LivenessGraph → CellId →
-Bool` soundly-and-completely decides `Dead` — and DELEGATE it to `Liveness`'s standing
-impossibility rather than re-deriving it. The obstruction is the Turing/co-witnessability
-one already cited in `Dregg2.Liveness.dead_undecidable`: `reachable` is semi-decidable
-(a path is a finite `Verify`), so `Dead = ¬reachable` is co-semi-decidable at best, and
-under asynchrony + partition + tier-3 graph-privacy it is genuinely undecidable. This is
-the precise sense in which *creation is provable but distributed death is not*.
--/
-theorem distributed_death_not_co_witnessable :
-    ¬ ∃ decide : LivenessGraph → Liveness.CellId → Bool,
-        ∀ (g : LivenessGraph) (c : Liveness.CellId), decide g c = true ↔ Dead g c := by
-  -- OPEN: the genuine undecidability of distributed deadness. This is *exactly*
-  -- `Dregg2.Liveness.dead_undecidable` — the FIND-side of the verify/find seam — whose
-  -- discharge needs a computability/Turing model (diagonalization against every
-  -- `decide : … → Bool`) not present in the imported modules. We carry it as the same
-  -- honest `sorry`; it is the impossibility this whole §5 is organized around, and the
-  -- justification for the lease fallback below. (Provable alternative: `reclaim_by_lease`.)
-  sorry
+deadness. Stated in `Liveness`'s own shape — no **computable** decider soundly-and-
+completely decides `Dead` of the gadget cell across the `haltGraph`-of-halting family —
+and a one-line **DELEGATION** to `Liveness`'s standing impossibility,
+`Dregg2.Liveness.dead_undecidable`, rather than re-deriving it.
+
+The obstruction is computability, not a distributed adversary: `reachable` is semi-
+decidable (a path is a finite `Verify`), so `Dead = ¬reachable` is co-semi-decidable at
+best, and is in fact undecidable — `dead_undecidable` proves it by reducing the halting
+problem to deadness. (As `Liveness` records, the *arbitrary*-`Bool`-decider form is
+classically vacuous; the load-bearing claim is the absence of a *computable* decider.)
+This is the precise sense in which *creation is provable but distributed death is not*. -/
+theorem distributed_death_not_co_witnessable (n : ℕ) :
+    ¬ ∃ d : Code → Bool,
+        Computable d ∧
+        (∀ c : Code, d c = true ↔ Dead (haltGraph ((eval c n).Dom)) 1) :=
+  Dregg2.Liveness.dead_undecidable n
 
 /-- **`reclaimableByLease r now`** — the locally-decidable reclamation trigger: a cell
 is reclaimable at height `now` iff its lease has lapsed (`Liveness.leaseExpired`). This
@@ -448,9 +448,10 @@ end Lifecycle
 
 Pin the clean keystones: each must depend ONLY on the three standard kernel axioms
 (no `sorryAx`). These cover both classifier classifications, the terminal-object
-one-wayness, the creation↔termination duality, archival-as-fold, and the PROVED
-lease fallback. The single honest OPEN (`distributed_death_not_co_witnessable`) is
-DELIBERATELY *not* asserted clean — it carries the impossibility's `sorry`. -/
+one-wayness, the creation↔termination duality, archival-as-fold, the PROVED lease
+fallback, AND — now PROVED via the halting reduction in `Dregg2.Liveness` — the
+distributed-death undecidability (`distributed_death_not_co_witnessable`), which was
+formerly an honest OPEN and is now asserted clean alongside the rest. -/
 
 #assert_axioms Lifecycle.acceptsEffects_iff
 #assert_axioms Lifecycle.isTerminal_iff
@@ -461,6 +462,7 @@ DELIBERATELY *not* asserted clean — it carries the impossibility's `sorry`. -/
 #assert_axioms Lifecycle.creation_and_death_are_dual
 #assert_axioms Lifecycle.birthProvable
 #assert_axioms Lifecycle.archival_is_fold
+#assert_axioms Lifecycle.distributed_death_not_co_witnessable
 #assert_axioms Lifecycle.archived_still_live
 #assert_axioms Lifecycle.reclaim_by_lease
 #assert_axioms Lifecycle.creation_provable_death_temporal

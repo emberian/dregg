@@ -238,4 +238,84 @@ race-safe reason as §12), listed PROVED in `metatheory/CLAIMS.md`, re-enable af
 #assert_axioms Dregg2.Proof.refine_integrity
 #assert_axioms Dregg2.Proof.refine_integrity_intra
 
+/-! ## §18 — Session wave (2026-05-30): the VCG/WP program logic, the operational-LTS first
+stone, the 2nd §8 discharge (Pedersen), and the first-app Spec layer. These are whole NEW
+clean modules (zero `sorry`), so we pin them at the NAMESPACE level via the
+`#assert_namespace_axioms` command (Track C) rather than line-by-line — every theorem in each
+namespace is asserted kernel-clean at once. (Privacy Tier-3's de-vacuified keystones,
+`Crypto.Merkle`'s verifier-derivation, and `Exec.RecordKernel`'s record-cell `cexec_attests`
+are pinned in their HOME modules; the operational-LTS / Byzantine / death-undecidability OPENs
+remain listed in `metatheory/CLAIMS.md`, NOT here.) -/
+#assert_namespace_axioms Dregg2.Proof.WP
+#assert_namespace_axioms Dregg2.Proof.LTS
+#assert_namespace_axioms Dregg2.Crypto.Merkle
+#assert_namespace_axioms Dregg2.Crypto.Pedersen
+#assert_namespace_axioms Dregg2.Crypto.PredicateKernel
+#assert_namespace_axioms Dregg2.Protocol.WorkflowGuard
+
+/-! ## §19 — Autonomous wave (2026-05-30): honest-OPENs CLOSED + the authority-turn LTS.
+Four sorries that were OPEN are now PROVED — and THREE of them were FALSE/contradictory *as stated*
+(restated honestly, then proved): deadness-undecidability in its genuine **computable** form (via a
+`haltGraph` halting reduction; the old arbitrary-`Bool`-function form was classically vacuous), its
+`Lifecycle` + `CellLiveness` re-exports, the quorum-intersection pigeonhole (`hbound` restated to the
+honest union-cardinality bound), and GST-liveness (discharged from a NEW assumed `World.gst_liveness`
+oracle law, the `recv_mono` pattern — a class field, hence kernel-clean here). Plus the authority-turn
+executable transition completing the single-cell operational LTS (`Proof.LTS`'s `authAbsStep_forward`/
+`absStep'_forward` are auto-covered by §18's namespace pin). -/
+#assert_axioms Dregg2.Liveness.dead_undecidable
+#assert_axioms Dregg2.Spec.Lifecycle.distributed_death_not_co_witnessable
+#assert_axioms Dregg2.Exec.CellLiveness.death_not_decidable
+#assert_axioms Dregg2.World.quorum_intersection_safety
+#assert_axioms Dregg2.World.liveness_after_gst
+#assert_axioms Dregg2.Exec.recKDelegate_frame
+#assert_axioms Dregg2.Exec.recKRevokeTarget_frame
+#assert_axioms Dregg2.Exec.recKDelegate_execGraph
+#assert_axioms Dregg2.Exec.recKRevokeTarget_execGraph
+#assert_axioms Dregg2.Exec.recKDelegate_grounds
+
+/-! ## §20 — Autonomous wave 2 (2026-05-30): the last LTS-gated + framing OPENs closed.
+`deadlock_freedom_by_design` (was FALSE over initial projections — counterexample `deadlock_initial_counterexample`;
+restated + proved over the choreography reachable-config LTS `GStep`/`GReach`, on the `NoRec` fragment) and BOTH
+`Hyperedge` opens (`hyperedge_sound_bisim` was ill-posed over a free `Spec` — `hyperedge_sound_bisim_ill_posed`
+records the refutation; restated to the reflexive form; `hyper_not_all_admissible` was true, proved). Plus the
+THIRD §8 discharge, `Crypto.NonMembership` (sorted-tree neighbor-bracketing). All now sorry-free ⟹ pinnable at
+the namespace level. After this wave only 3 sorries remain, ALL by-design: `Core.conservation_step` +
+`Laws.search_sound` (interface primitives) and `Spec.VatBoundary.phi_functorial`-abstract (concrete witness beside it). -/
+#assert_namespace_axioms Dregg2.Crypto.NonMembership
+#assert_namespace_axioms Dregg2.Coordination
+#assert_namespace_axioms Dregg2.Hyperedge
+
+/-! ## §21 — Autonomous wave 3 (2026-05-30): papers collected → the hard problems' STRONG forms,
+two more §8 discharges, and the closed userspace-verification loop. The classics (FLP/DLS88/HotStuff)
++ modern quorum-systems paper were fetched into `pdfs/`; with them: `Crypto.Temporal`/`Crypto.Dfa`
+(4th/5th §8 discharges, both-direction bridges, no seam), `Proof.BFT` (O1 STRONG `bft_safety` via the
+honest-witness `n−f` quorum intersection — Malkhi–Reiter/Li–Lesani — + O2 reduced-assumption GST
+liveness; all adversary assumptions are structure FIELDS, not axioms), `Proof.CrossCellLTS`
+(the bilateral cross-cell forward-simulation square + a PROVED obstruction that it does NOT reduce to
+the single-cell squares — tensor-non-finality, operationally), and `Proof.WPCatalog` (the closed
+loop: eDSL program → vcg → fail-loud `vcg_discharge` → `vcg_run_sound` capstones). All sorry-free
+(their residuals are PROSE `-- OPEN:`s — Dfa reference kernel, BFT pacemaker, N-ary forest — not
+sorries), so namespace-pinnable. -/
+#assert_namespace_axioms Dregg2.Crypto.Temporal
+#assert_namespace_axioms Dregg2.Crypto.Dfa
+#assert_namespace_axioms Dregg2.Proof.BFT
+#assert_namespace_axioms Dregg2.Proof.CrossCellLTS
+#assert_namespace_axioms Dregg2.Proof.WPCatalog
+
+/-! ## §22 — Papers-in-hand wave (2026-05-30): the hard problems' deep forms.
+With FLP/DLS88/HotStuff/Streamlet + the quorum-systems/view-sync papers fetched: `Proof.BFTLiveness`
+(the O2 PACEMAKER closed — a GST round provably obtains from a DLS88+ELRS+HotStuff `Pacemaker`, all
+honest fields; `World.gst_liveness` now DERIVED), `Proof.ForestLTS` (the N-ary cross-cell forest
+square, Σ=0 binding hypothesis-routed; bilateral = `Fin 2` slice), `Proof.ContendedCrossCell` (the
+contention DICHOTOMY, BOTH poles PROVED: I-confluent ⇒ schedule-agnostic commit; coupled Σ=0 ⇒ `¬∃`
+schedule-agnostic commit, the BEC/CAP impossibility as a theorem), and `Crypto.Bridge` (the 6th §8
+discharge). All sorry-free (residuals — the randomized synchronizer construction, the coinductive
+unbounded-interleaving adversary, Custom/BlindedSet kinds — are PROSE `-- OPEN:`s). The actual-
+metatheory sibling `Metatheory/EpistemicConsensus.lean` (fault-tolerant distributed-knowledge-by-
+verification + a UC static-composition fragment) self-pins in its own file (verified standalone). -/
+#assert_namespace_axioms Dregg2.Proof.BFTLiveness
+#assert_namespace_axioms Dregg2.Proof.ForestLTS
+#assert_namespace_axioms Dregg2.Proof.ContendedCrossCell
+#assert_namespace_axioms Dregg2.Crypto.Bridge
+
 end Dregg2.Claims

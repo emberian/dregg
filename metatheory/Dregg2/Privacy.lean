@@ -478,8 +478,15 @@ namespace Reference
 
 /-- Reference graph-privacy kernel: concrete carriers chosen so every law is provable.
 `Indistinguishable := fun _ _ => True` (trivially symmetric/reflexive), `derivedFrom`/
-`LegalDerivation`/`UnlinkableToHolder := fun _ => True`, `nullifierOf := tag = seed`. -/
-instance graphRef : GraphPrivacyKernel where
+`LegalDerivation`/`UnlinkableToHolder := fun _ => True`, `nullifierOf := tag = seed`.
+
+**A `def`, NOT an `instance`** (hardening): this is the trivial TEST witness; making it a global
+`instance` would let typeclass resolution silently satisfy a real `[GraphPrivacyKernel]`
+obligation with this degenerate kernel (`Indistinguishable := True`). As a `def` it serves its
+one job — witnessing consistency/inhabitability (`#print axioms graphRef` = no axioms) — while
+forcing any genuine use to *name* the kernel it assumes (`@[reducible]` only silences the
+class-typed-`def` lint; it does NOT make this an auto-resolved instance). -/
+@[reducible] def graphRef : GraphPrivacyKernel where
   derivedFrom _ _ := True
   Indistinguishable _ _ := True
   LegalDerivation _ := True
@@ -492,7 +499,7 @@ instance graphRef : GraphPrivacyKernel where
 /-- Reference blinded-membership kernel over any `Elem`: `memberOf := fun _ _ => True`,
 `memberView := fun _ _ => 0`, `ViewIndistinguishable := fun _ _ => True`; the hiding law
 holds because both views are `0` and `True` is reflexive. -/
-instance memRef (Elem : Type u) : BlindedMembershipKernel Elem where
+@[reducible] def memRef (Elem : Type u) : BlindedMembershipKernel Elem where
   memberOf _ _ := True
   memberView _ _ := 0
   ViewIndistinguishable _ _ := True
@@ -502,13 +509,15 @@ instance memRef (Elem : Type u) : BlindedMembershipKernel Elem where
 is a lawful `GraphPrivacyKernel`, so the parametric theorem is not over an empty world. -/
 example (R : Recipient) (a a' : StealthAddr) :
     @GraphPrivacyKernel.Indistinguishable graphRef a a' :=
-  unlinkable R a a' trivial trivial
+  -- pass `graphRef` EXPLICITLY (it is a `def`, not an auto-resolved `instance`).
+  @unlinkable graphRef R a a' trivial trivial
 
 /-- Non-vacuity: `blinded_membership_hides_element` is inhabited at the reference kernel. -/
 example (sc : SetCommitment Nat) (e e' : Nat) :
     @BlindedMembershipKernel.ViewIndistinguishable Nat (memRef Nat)
-      (BlindedMembershipKernel.memberView e sc) (BlindedMembershipKernel.memberView e' sc) :=
-  blinded_membership_hides_element sc e e' trivial trivial
+      (@BlindedMembershipKernel.memberView Nat (memRef Nat) e sc)
+      (@BlindedMembershipKernel.memberView Nat (memRef Nat) e' sc) :=
+  @blinded_membership_hides_element Nat (memRef Nat) sc e e' trivial trivial
 
 end Reference
 

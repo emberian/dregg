@@ -1,0 +1,14 @@
+chapter AFP
+
+session Dregg2_UC = "Sigma_Commit_Crypto" +
+  description "
+    Cross-system transport of the dregg2 UC-relevant commitment definitions into a real
+    game-based / UC framework (CryptHOL + Sigma_Commit_Crypto).  Defines the ideal
+    commitment functionality F_com and proves the dregg2 Pedersen commitment realizes it:
+    correctness + perfect hiding + binding-reduces-to-DLog (negligible under DLog hardness).
+  "
+  options [timeout = 1200]
+  sessions
+    "Sigma_Commit_Crypto"
+  theories
+    Dregg2_FCom

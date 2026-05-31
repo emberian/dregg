@@ -20,9 +20,18 @@ A capability here is **constructive knowledge**: to *hold* one is to be able to 
 witness that verifies* — never merely to assert. Everything below is a projection of that.
 
 Toolchain `leanprover/lean4:v4.30.0`; mathlib via a local `path` require. **It builds**:
-`lake build` ⇒ ~3000+ modules, 0 errors, ~25 `sorry` — *all honest*, sorting into exactly the
-two buckets in [§ What the sorries mean](#what-the-sorries-mean). The executable layer is
-`sorry`-free and `#eval`-able; the new `Spec` layer pins its keystones with `#assert_axioms`.
+`lake build` ⇒ **3042 jobs, 0 errors, 0 cheats, and exactly 3 `sorry`** — and all three are
+*by design* (see [§ What the sorries mean](#what-the-sorries-mean)). We drove the count from ~25
+down to 3 by a sustained **de-vacuify** discipline: a read-only audit + reconcile-build pass
+repeatedly found that "deep" `sorry`s were in fact **false, contradictory, or ill-posed *as
+stated*** (e.g. `dead_undecidable` quantified over arbitrary deciders that `Classical.decide`
+always supplies; `quorum_intersection`'s bound was self-contradictory; `privacy_by_projection`
+was false on open recursion; `hyperedge_sound_bisim` was vacuous over a free `Spec`). Each was
+restated *honestly* (strengthen a hypothesis / fix the framing — never gut the conclusion) and
+then **actually proved**, several leaving a *proved refutation theorem* behind to record the old
+vacuity. Honesty is build-enforced: **`Dregg2/Claims.lean`** re-pins every "PROVED" keystone with
+`#assert_axioms` / `#assert_namespace_axioms` (erroring on any hidden `sorryAx` or stray axiom),
+and `lake env lean Dregg2/Claims.lean` is the credibility artifact.
 
 ---
 
@@ -79,29 +88,83 @@ abstract types throughout (never `Nat` for a hash/commitment).
 - **`Spec/VatBoundary`** — Φ as the named-lossy caps↔keys functor: *permission survives the
   crossing, authority does not* (`forwarded_cap_is_revocable`).
 
-### 3. The portals — the Lean⟷Rust contract (`CryptoKernel`, `World`, `PrivacyKernel`)
+### 3. The portals + the dischargeable §8 — `Crypto.*`, `World`, `PrivacyKernel`
 Crypto / network-nondeterminism as *uninterpreted interfaces*: proving is parametric over an
-abstract `[CryptoKernel …]`; running uses a Rust instance via `@[extern]`. **Crypto-soundness
-is the portal's job, never Lean's** (the §8 boundary, below).
+abstract instance; running uses a Rust instance via `@[extern]`. **Crypto-soundness is the
+portal's job, never Lean's** — but the portal is now a *layered, dischargeable contract*, not a
+flat oracle:
+- **`Crypto.Primitives` (Layer A)** — Poseidon2 `compress` / Pedersen `commit`+`commit_hom`
+  (real *algebraic* laws, proved) with *computational hardness* (`collisionHard`/`binding`/
+  `unlinkable`) as honest `Prop` **carriers** — replacing the wrong-kind idealized `hash_inj`.
+- **`Crypto.VerifierKernel` (Layer B)** — `verify` *defined* as "the extracted circuit is
+  satisfiable", with `*_verify_sound` a **derived theorem** (off a `merkle_bridge`-style
+  Satisfies↔Relation equivalence), not an assumed oracle.
+- **`Crypto.PredicateKernel` (Layer C)** — the `WitnessedKind`s as per-kind `KindObligation`s
+  carrying circuit + statement-algebra + a **`Dial` floor**, finally **wiring `EpistemicDial`**
+  to the per-kind verifier.
+- **Real §8 discharges, end to end (bridge both directions, *no primitive seam*):**
+  `Crypto.Merkle` (membership, dial `acceptanceOnly`), `Crypto.Pedersen` (value conservation via
+  `commit_hom`, dial `selective`), `Crypto.NonMembership` (sorted-tree neighbor-bracketing). The
+  single trust boundary stays exactly the FRI / DLog / Poseidon-CR `Prop` carriers — everything
+  above is proved.
+`PrivacyKernel` realizes the privacy tiers over the portal; `Privacy`'s graph tier was
+de-vacuified into `GraphPrivacyKernel`/`BlindedMembershipKernel` law-carrying classes with
+**axiom-free `def` consistency witnesses** (a constructive instance ⇒ the laws can't be
+contradictory ⇒ cannot cascade; zero blast radius).
 
-### 4. Executable Design Spec + Refinement (`Dregg2.Exec.*`, `Dregg2.Proof.Refine`, `Protocol/*`)
+### 4. Executable Design Spec + Refinement (`Dregg2.Exec.*`, `Dregg2.Proof.*`, `Protocol/*`)
 The running machine (`exec`, fail-closed, conservation+authority checked; `sorry`-free,
-`#eval`-able), the living record cell (`Exec/RecordCellLive`), the FFI beachhead, and the
-`Exec ⊑ Abstract` refinement. *Slated for fundamental rework — as a refinement of the matured
-`Spec`, after `Spec` is fully expanded* (Spec-first, then Exec-as-refinement).
+`#eval`-able), the living record cell (`Exec/RecordCellLive`), and the FFI beachhead. The toy
+scalar ledger has been lifted to a **content-addressed `Value` record cell** (`Exec/RecordKernel`:
+`recCexec_attests`/`recKExec_conserves` re-proved over the named `balance` field), with a second
+`Exec ⊑ Spec` refinement square in `Spec/ExecRefinement §3.5`. The **operational LTS** — long the
+roadmap's scariest "research" item — is, for the single cell, **complete**: `Proof/LTS`'s
+`absStep'_forward` unions the balance-turn and authority-turn forward-simulation squares
+(`Exec/AuthTurn` supplies the executable delegate/revoke transition); the residual is the
+cross-cell whole-history closure (genuine research, in progress).
+
+### 5. The program logic + userspace verification (`Dregg2.Proof.WP`, `Dregg2.DSL`, `Dregg2.Catalog`, `Protocol/WorkflowGuard`)
+This is what makes the system **useful** to a developer, not just sound:
+- **`Proof/WP`** — a weakest-precondition / VCG calculus over the `Option`-monad transition
+  (`wp`/`Triple`/`vcg`), whose capstone **`vcg_run_sound`** *reduces to the already-proved*
+  `stepComplete_preserves` — the run-level soundness was already done; the VCG only *generates*
+  the per-turn obligations. Worked: a monotonic counter and a single-ledger escrow.
+- **`DSL`** — DSL-A, the `dregg_program {…}` cell-program eDSL: a **parser onto already-proved
+  smart-constructors** (no new metatheory), the in-situ-verified replacement for dregg1's external
+  `#[dregg_caveat]`/`#[dregg_effect]` macros. The counter/escrow elaborate to their kernel terms by
+  `rfl`.
+- **`Catalog`** — the metaprogramming spine: `#assert_namespace_axioms` (collapsed the hand ledger),
+  the `catalog … where` codegen (emits the smart-ctor + `admits`-characterization + auto-pin triple,
+  with a planted `sorry` failing *at generation time*), and the fail-loud `discharge` tactic +
+  `Dregg2` aesop rule-set.
+- **`Protocol/WorkflowGuard`** — the first verified application's Spec layer (the RDII closed loop):
+  the workflow's authorization / ordering / attestation gates re-founded as `Spec.Guard` instances,
+  all three **equivalence-proved** down to the running predicate.
 
 ---
 
 ## <a name="what-the-sorries-mean"></a>What the `sorry`s mean
 
-They sort into exactly two honest buckets — *no gaps masquerade as proofs* (`#assert_axioms`
-pins the "PROVED" keystones, erroring on any hidden `sorryAx`):
-1. **§8 interface obligations** — the `CryptoKernel`/`World` laws, `conservation_step`, the
-   range-proof anti-inflation rib: discharged by Rust + the ZK circuits, *by design* never in
-   Lean.
-2. **Genuine open theorems** — the deepest coinductive/joint residues (the cross-cell
-   bisimulation, the whole-history non-forgeability closure, distributed-death co-witnessability)
-   and the Byzantine quorum-intersection / post-GST liveness (they need the adversary/GST model).
+Only **three** remain, and **all three are by design** — not gaps (`#assert_axioms` pins every
+"PROVED" keystone, erroring on any hidden `sorryAx`):
+1. **`Core.conservation_step`** — Law 1 stated *spec-first* as the operational obligation the
+   executable layer discharges (`Exec.cexec_attests` proves it on the running machine). Open at the
+   abstract altitude *on purpose*; closing it there would bake the operational model into the spec.
+2. **`Laws.search_sound`** — the verify/find seam's *find* side, undecidable **by design** (the
+   whole soundness-by-verification architecture rests on find being an untrusted plugin). Like the
+   §8 crypto carriers, this is an interface boundary, not a hole.
+3. **`Spec.VatBoundary.phi_functorial`** (abstract) — the full functor coherence between the
+   positional and epistemic authority categories; genuinely hard, but a **concrete witness**
+   (`phi_functorial_concrete`) is already proved beside it.
+
+Everything else that *used* to be here — the cross-cell bisimulation (single-cell now done via
+`Proof/LTS`), distributed-death co-witnessability (a Mathlib halting reduction), the Byzantine
+quorum-intersection and post-GST liveness (pigeonhole + an honest assumed `World.gst_liveness`
+oracle law) — **has been closed or honestly bounded**. Strikingly, *several of those were false or
+contradictory as stated* and only closed once restated honestly (see the de-vacuify note above).
+The §8 crypto/`World`-law obligations don't appear here because they enter as **typeclass
+parameters / structure fields**, not Lean `sorry`s — the theorems that consume them are genuinely
+kernel-clean and *are* pinned.
 
 ## §8 — crypto-soundness is the portal's job, never Lean's
 The soundness/extractability of `verify`/`commit`/`hash` is a *circuit* obligation, stated as

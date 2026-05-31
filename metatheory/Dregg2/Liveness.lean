@@ -42,11 +42,13 @@ The KEY HONEST FACTS this module encodes — including the impossibilities:
 
 Style: spec-first, grind up. Data that is computable and cheap (graphs, refcount,
 reachability, lease expiry) is *defined*; the load-bearing facts are stated as faithful
-`Prop`s with `sorry` bodies, each a real obligation.
+`Prop`s and discharged — including the undecidability of `Dead`, which is now PROVED by a
+halting reduction (`dead_undecidable`) rather than left as an obligation.
 -/
 import Dregg2.Core
 import Dregg2.Laws
 import Dregg2.Authority.Positional
+import Mathlib.Computability.Halting
 
 namespace Dregg2.Liveness
 
@@ -203,24 +205,80 @@ theorem reachable_semidecidable_witness
     reachable g c :=
   ⟨r, hr, hpath⟩
 
-/-- **`theorem dead_undecidable` — deadness is the FIND problem; NO `Decidable` instance.**
-There is no uniform decision procedure for `Dead`: we state this honestly as "there does
-NOT exist a function `decide : LivenessGraph → CellId → Bool` that soundly and completely
-decides `Dead` for all graphs." Intuition (`study-gc.md §3`): `reachable` is
-semi-decidable (witness a path), so `Dead = ¬reachable` is co-semi-decidable AT BEST, and
-under asynchrony + partition + graph-privacy it is genuinely undecidable — you cannot
-distinguish "dead" from "a partitioned holder will re-assert." This is the SAME shape as
-the `Laws` verify/find asymmetry: verifying reachability is the cheap gate; *finding* a
-proof of unreachability is the intractable, non-local search. Resolved operationally, not
-by decision, via `Lease`/`leaseExpired` below. -/
-theorem dead_undecidable :
-    ¬ ∃ decide : LivenessGraph → CellId → Bool,
-        ∀ (g : LivenessGraph) (c : CellId), decide g c = true ↔ Dead g c := by
-  -- OPEN: genuine undecidability — needs a machine model (Turing reduction from the
-  -- FIND-side halting/reachability search of `Laws`); `LivenessGraph.edge : _ → _ → Prop`
-  -- is an arbitrary undecidable relation, but refuting EVERY `decide : … → Bool` requires
-  -- diagonalization against a computability model not present in the imported modules.
-  sorry
+/-! ### The computability reduction: halting ↪ reachability ↪ deadness.
+
+The honest content of "deadness is undecidable" is a *computability* statement, not a
+distributed-adversary one (see `docs/rebuild/PHASE-DISTRIBUTED-ADVERSARY.md §4, O3`). We
+ground it from Mathlib's halting-problem development (`Mathlib.Computability.Halting`).
+
+**Why the original arbitrary-decider statement had to be sharpened.** The earlier form
+asserted `¬ ∃ decide : LivenessGraph → CellId → Bool, ∀ g c, …`. With `LivenessGraph.edge`
+a `Prop`-valued field, that quantifies over an *arbitrary* (not necessarily computable)
+function — and *classically every* `Prop`-predicate admits such a `Bool` decider
+(`fun g c => Classical.decide (Dead g c)`). So the bare-existence statement is classically
+**true**, i.e. its negation is unprovable: the original theorem was vacuous/false, not
+merely hard. The genuine, true claim is that **no *computable* procedure** decides
+deadness. We state and prove exactly that, by reducing the halting problem. -/
+
+/-- **`haltGraph P`** — the 2-cell reduction gadget: a root cell `0` whose single outgoing
+edge to the target cell `1` exists **iff `P` holds**. Thus `1` is reachable iff `P`, and
+`Dead (haltGraph P) 1 ↔ ¬P`. Instantiating `P` with a halting predicate
+`(eval c n).Dom` turns "decide deadness of cell `1`" into "decide halting of code `c`". -/
+noncomputable def haltGraph (P : Prop) : LivenessGraph where
+  edge a b := a = 0 ∧ b = 1 ∧ P
+  root a   := a = 0
+  vat _    := 0
+
+/-- Cell `1` is reachable in `haltGraph P` exactly when `P` holds (the gadget's edge fires
+iff `P`). The only path to `1` is the single root-edge `0 → 1`, present iff `P`. -/
+theorem haltGraph_reachable (P : Prop) : reachable (haltGraph P) 1 ↔ P := by
+  constructor
+  · rintro ⟨r, hr, hpath⟩
+    simp only [haltGraph] at hr
+    subst hr
+    cases hpath with
+    | step _ he => exact he.2.2
+  · intro hp
+    exact ⟨0, rfl, Reaches.step (Reaches.refl 0) ⟨rfl, rfl, hp⟩⟩
+
+/-- Hence cell `1` is `Dead` in `haltGraph P` exactly when `¬P` (deadness = unreachability,
+and reachability of `1` is `P`). This is the reduction's pivot. -/
+theorem haltGraph_dead (P : Prop) : Dead (haltGraph P) 1 ↔ ¬ P := by
+  unfold Dead; rw [haltGraph_reachable]
+
+open Nat.Partrec (Code) in
+open Nat.Partrec.Code in
+/-- **`theorem dead_undecidable` — deadness is undecidable (RESTATED-AND-PROVED).**
+Deadness is the FIND problem of the `Laws` verify/find seam: `reachable` is semi-decidable
+(exhibit a finite path — a `Verify`), so `Dead = ¬reachable` is co-semi-decidable AT BEST,
+and is in fact **not decidable by any algorithm**.
+
+The faithful, *true* formalization (the arbitrary-`Bool`-function form is classically
+vacuous — see the section note above): for every input `n`, there is **no computable**
+`d : Code → Bool` that soundly-and-completely decides deadness of the gadget cell across
+the `haltGraph`-of-halting family. Equivalently, *if* deadness were algorithmically
+decidable, the halting problem would be too. Proved by reduction:
+`d c = true ↔ Dead (haltGraph ((eval c n).Dom)) 1 ↔ ¬(eval c n).Dom`, so a computable `d`
+would make the halting-complement — hence halting itself — a `ComputablePred`,
+contradicting `ComputablePred.halting_problem`. Resolved operationally, never by decision,
+via `Lease`/`leaseExpired` below. -/
+theorem dead_undecidable (n : ℕ) :
+    ¬ ∃ d : Code → Bool,
+        Computable d ∧
+        (∀ c : Code, d c = true ↔ Dead (haltGraph ((eval c n).Dom)) 1) := by
+  rintro ⟨d, hcomp, hspec⟩
+  -- `fun c => d c = true` is a computable predicate (its indicator is `d`).
+  have hp : ComputablePred (fun c => d c = true) := by
+    apply Computable.computablePred
+    simpa using hcomp
+  -- It is iff-equal to the *complement* of halting (via the gadget reduction).
+  have hp2 : ComputablePred (fun c => ¬ (eval c n).Dom) :=
+    hp.of_eq (fun c => by rw [hspec c, haltGraph_dead])
+  -- Closure of computable predicates under negation gives halting itself computable.
+  have hp3 : ComputablePred (fun c => (eval c n).Dom) :=
+    hp2.not.of_eq (fun c => by simp)
+  -- …contradicting the undecidability of the halting problem.
+  exact ComputablePred.halting_problem n hp3
 
 /-- **`Lease`** — the operational liveness bound. Every export edge carries an
 `expires_at` (`capability.rs:56`) and a `last_activity`; `leaseExpired now` is the

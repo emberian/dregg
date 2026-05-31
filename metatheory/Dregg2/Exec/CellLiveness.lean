@@ -186,14 +186,19 @@ theorem crossvat_leak_reclaimed_by_lease
 -- `reachable` is witnessable (a path = a `Verify`), `Dead = ¬reachable` is the non-local FIND.
 -/
 
+open Nat.Partrec (Code) in
+open Nat.Partrec.Code in
 /-- We RE-EXPOSE the undecidability obligation under this module's namespace so a downstream reader
 sees, on the nose, that this executable layer does not (and provably cannot) ship a decision
-procedure for death — only the lease-timeout above. The proof is literally `Liveness`'s honest
-obligation; we add no new `sorry` and weaken nothing. -/
-theorem death_not_decidable :
-    ¬ ∃ decide : LivenessGraph → CellId → Bool,
-        ∀ (g : LivenessGraph) (c : CellId), decide g c = true ↔ Dead g c :=
-  dead_undecidable
+procedure for death — only the lease-timeout above. Mirrors `Liveness.dead_undecidable`'s genuine
+**computable**-undecidability form (the old arbitrary-`Bool`-function form was classically vacuous —
+`Classical.decide` always supplies such a function — so it is replaced, not merely re-typed); the
+proof is literally `Liveness`'s obligation, delegated. We add no new `sorry` and weaken nothing. -/
+theorem death_not_decidable (n : ℕ) :
+    ¬ ∃ d : Code → Bool,
+        Computable d ∧
+        (∀ c : Code, d c = true ↔ Dead (haltGraph ((eval c n).Dom)) 1) :=
+  dead_undecidable n
 
 /-! ## `#eval` demos — the operational story, made concrete
 

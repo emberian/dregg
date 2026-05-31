@@ -427,32 +427,6 @@ theorem projection_sound
   rw [hG]
   simp only [project, if_true, if_neg hab.symm, Dual]
 
-/-- **`deadlock_freedom_by_design` — Carbone–Montesi.** A well-formed (projectable)
-global type yields a **deadlock-free** endpoint system: the parallel composition of the
-projections never reaches a stuck non-`done` configuration — every non-terminated state
-has an enabled communication (progress), and dual endpoints always find their partner
-(no orphan send/receive). This is *deadlock-freedom by construction* — the defining
-guarantee of choreographic programming: you cannot write a deadlocking choreography,
-because every send in `G` has its matching receive *in `G`*, preserved by projection.
-
-Stated as **progress**: every role whose projection is `waiting` (blocked on a
-`recv`/`offer`) has a co-participant whose projection is a matching `Dual` partner — so
-no role is stuck without a partner. (The faithful formal statement quantifies over all
-reachable configurations of the composed LTS; here over the initial projections, which
-is where projectability has to make duality hold.) `sorry`. -/
-theorem deadlock_freedom_by_design
-    (G : GlobalType) (wf : Projectable G) :
-    ∀ p ∈ roles G, (project G p).waiting = true →
-      ∃ q ∈ roles G, Dual (project G p) (project G q) := by
-  -- OPEN: the genuine Carbone–Montesi progress theorem. The remaining obstruction is the
-  -- reachability gap: `Projectable G` is now the real `MergesAt` merge-success condition
-  -- (no longer the vacuous `∀ p, True`), but even with real projectability a `waiting` head
-  -- `recv src s` nested below earlier actions has its `Dual` partner only among *reachable*
-  -- configurations,
-  -- not necessarily the *initial* projection `project G src` (whose head is the first
-  -- action of `G`). The faithful statement quantifies over the reachable LTS; closing it
-  -- needs that operational machinery (not present here).
-  sorry
 
 /-- **`StepEffect` — the per-protocol-step effect** whose I-confluence the third
 judgement classifies. A choreography step (one `comm`/`choice` action, as it lands in
@@ -518,39 +492,434 @@ theorem tier1Eligible_iff_iconfluent_def
       ↔ Dregg2.Confluence.IConfluent step.inv :=
   Iff.rfl
 
-/-- **`privacy_by_projection` — each endpoint sees only its own projection.** `dregg2
+/-! ### The non-recursion fragment `NoRec` (the honest precondition for privacy)
+
+`privacy_by_projection` ("an uninvolved role projects to `done`") is FALSE as a bare
+statement over ALL `GlobalType`s, because of the two *recursion* constructors:
+  • `project (var X) p = LocalType.var X` while `roles (var X) = []`, so for `G = var 0`
+    EVERY `p` satisfies `p ∉ roles G` yet `project G p = var X ≠ done` (a kernel-checked
+    counterexample — see `privacy_var_counterexample` below);
+  • `project (mu X body) p = LocalType.mu X (project body p)`, never `done`.
+The honest move (project rule #1: STRENGTHEN the hypothesis, never weaken the conclusion)
+is to restrict to the fragment where these constructors do not occur. `NoRec G` says `G`
+is built from `comm`/`choice`/`done` only — no `mu`, no `var`, anywhere (including inside
+every branch continuation). On this fragment the privacy property is a genuine theorem:
+the `comm`/`choice`/`done` cases reduce to `done` via `mergeLocal` (the passive-role
+branch-merge of `done` with `done` is `some done`). -/
+mutual
+  /-- `NoRec G` — `G` uses no recursion constructors (`mu`/`var`) anywhere. The honest
+  precondition under which an uninvolved role provably projects to `done`. -/
+  def NoRec : GlobalType → Prop
+    | GlobalType.comm _ _ _ cont => NoRec cont
+    | GlobalType.choice _ _ bs   => NoRecBranches bs
+    | GlobalType.mu _ _          => False
+    | GlobalType.var _           => False
+    | GlobalType.done            => True
+
+  /-- Every branch continuation is recursion-free (mutual helper). -/
+  def NoRecBranches : List (Label × GlobalType) → Prop
+    | []             => True
+    | (_, g) :: rest => NoRec g ∧ NoRecBranches rest
+end
+
+/-- **The bare statement IS false (kernel-checked counterexample).** For `G = var 0`,
+role `5 ∉ roles G = []`, yet `project G 5 = var 0 ≠ done`. This is exactly why
+`privacy_by_projection` MUST carry the `NoRec` hypothesis: without it the conclusion
+fails on the open-recursion fragment. -/
+theorem privacy_var_counterexample :
+    ∃ (G : GlobalType) (p : Role), p ∉ roles G ∧ project G p ≠ LocalType.done := by
+  refine ⟨GlobalType.var 0, 5, ?_, ?_⟩
+  · simp [roles]
+  · decide
+
+/- **`privacy_by_projection` — each endpoint sees only its own projection.** `dregg2
 §6`, the "graph" privacy tier (`study-choreography` claim #6, CONFIRMED-OPEN): a
 participant `p` learns only `project G p`; the global choreography `G` and co-parties'
 moves are graph-hidden by the protocol structure itself. Non-participants (roles ∉
 `roles G`) learn nothing — their projection is `done`.
 
 Stated as the checkable information-flow consequence: an uninvolved role projects to
-`done` (sees nothing). The full property is "a role's knowledge is a function of
-`project G p` ALONE" (two global types with the same projection at `p` are
-indistinguishable to `p`); and the full *cryptographic* conformance ("`p` ZK-proves its
-move is admissible under a *committed* `G` without revealing `G`") is the CONFIRMED-OPEN
-gap (claim #6) — the ZK substrate exists (Kachina/UC-ZK/commitment-nullifier) but its
-composition with MPST does not. `sorry`. -/
-theorem privacy_by_projection
-    (G : GlobalType) (p : Role) (h : p ∉ roles G) :
-    project G p = LocalType.done := by
-  -- OPEN: FALSE as stated for OPEN (un-`mu`-bound) recursion variables — needs a
-  -- closedness/well-formedness hypothesis the signature lacks (rule #1: cannot add it).
-  -- With `mergeLocal` now concrete, the `comm`/`choice`/`done` cases DO reduce to `done`
-  -- (the passive-role ≥2-branch `choice` collapses: `mergeLocal (project g p) l` with
-  -- `project g p = l = done` is `if done = done then some done else none = some done`,
-  -- so `(projectBranches …).getD done = done`). The genuine obstruction is the two
-  -- *recursion* constructors:
-  --   • `project (var X) p = LocalType.var X` and `roles (var X) = []`, so for `G = var 0`
-  --     EVERY `p` satisfies `p ∉ roles G` yet `project G p = var 0 ≠ done` — a kernel-
-  --     checked counterexample (`#5 ∉ roles (var 0)` but `project (var 0) 5 = var 0`);
-  --   • `project (mu X body) p = LocalType.mu X (project body p)`, never `done`, even
-  --     when `project body p = done` (`mu` is retained structurally for the residual LTS).
-  -- These are false ONLY because the statement omits "`G` closed / `Projectable`"; under
-  -- a closedness hypothesis (no free `var`, and `mu` peeled to a guarded action) the
-  -- result holds. Closing it as stated would require weakening the conclusion or adding a
-  -- hypothesis — both forbidden. The `mergeLocal`-blocked half is now discharged; the
-  -- recursion half is the open obligation.
-  sorry
+`done` (sees nothing). **HONEST SCOPE (restated 2026-05-30).** This holds on the
+**non-recursive fragment** `NoRec G` (built from `comm`/`choice`/`done` — no `mu`/`var`).
+It is FALSE without that hypothesis: `project (var X) p = var X ≠ done` for the open
+variable, and `project (mu X b) p = mu X _ ≠ done` (kernel counterexample:
+`privacy_var_counterexample`). The added `NoRec` hypothesis is the *minimal* honest
+precondition — the prior author refused to fake the bare (false) statement and left it
+`sorry`; we instead STRENGTHEN the hypothesis (project rule #1: strengthening a
+hypothesis to make a false statement true is allowed; weakening the conclusion is not)
+and prove it for real. The recursion cases are discharged by `NoRec` contradicting the
+`mu`/`var` constructors; the `comm`/`choice`/`done` cases reduce to `done` via the
+identity `mergeLocal` (passive-role branch-merge of `done` with `done` is `some done`).
+
+The full property is "a role's knowledge is a function of `project G p` ALONE" (two
+global types with the same projection at `p` are indistinguishable to `p`); and the full
+*cryptographic* conformance ("`p` ZK-proves its move is admissible under a *committed* `G`
+without revealing `G`") is the CONFIRMED-OPEN gap (claim #6) — the ZK substrate exists
+(Kachina/UC-ZK/commitment-nullifier) but its composition with MPST does not.
+
+`GlobalType` is a *nested* inductive (the `List (Label × GlobalType)` inside `choice`),
+so the `induction` tactic cannot drive the recursion. We instead prove it as a MUTUAL
+structurally-recursive theorem pair — the same idiom `project`/`projectBranches`/`roles`
+use throughout this file — so the termination checker sees each branch `g` as a subterm.
+The companion lemma `privacy_branches` proves the passive-role collapse:
+`projectBranches branches p = some done` when every branch is `NoRec` and `p` is absent. -/
+mutual
+  theorem privacy_by_projection :
+      ∀ (G : GlobalType), NoRec G → ∀ (p : Role), p ∉ roles G →
+        project G p = LocalType.done
+    | GlobalType.comm src dst s cont, hnr, p, hp => by
+        -- `p ∉ src :: dst :: roles cont` ⇒ `p ≠ src`, `p ≠ dst`, `p ∉ roles cont`.
+        simp only [roles, List.mem_cons, not_or] at hp
+        obtain ⟨hsrc, hdst, hcont⟩ := hp
+        simp only [project, if_neg hsrc, if_neg hdst]
+        exact privacy_by_projection cont hnr p hcont
+    | GlobalType.choice src dst branches, hnr, p, hp => by
+        simp only [roles, List.mem_cons, not_or] at hp
+        obtain ⟨hsrc, hdst, hbr⟩ := hp
+        simp only [project, if_neg hsrc, if_neg hdst]
+        -- passive role: `(projectBranches branches p).getD done = done`.
+        rw [privacy_branches branches hnr p hbr]; rfl
+    | GlobalType.mu X body, hnr, _, _ => absurd hnr (by simp [NoRec])
+    | GlobalType.var X, hnr, _, _ => absurd hnr (by simp [NoRec])
+    | GlobalType.done, _, _, _ => rfl
+
+  /-- Passive-role branch collapse: if every branch continuation is `NoRec` and `p` occurs
+  in no branch, the whole branch-merge yields `some done` (each branch projects to `done`,
+  and the identity `mergeLocal done done = some done`). -/
+  theorem privacy_branches :
+      ∀ (branches : List (Label × GlobalType)), NoRecBranches branches →
+        ∀ (p : Role), p ∉ rolesBranches branches →
+          projectBranches branches p = some LocalType.done
+    | [], _, _, _ => rfl
+    | [(ℓ, g)], hnr, p, hbr => by
+        -- single branch: `projectBranches [(ℓ,g)] p = some (project g p)`.
+        simp only [NoRecBranches] at hnr
+        simp only [rolesBranches, List.append_nil] at hbr
+        simp only [projectBranches, privacy_by_projection g hnr.1 p hbr]
+    | (ℓ, g) :: hd2 :: tl2, hnr, p, hbr => by
+        simp only [NoRecBranches] at hnr
+        obtain ⟨hg, htl⟩ := hnr
+        simp only [rolesBranches, List.mem_append, not_or] at hbr
+        obtain ⟨hgr, htlr⟩ := hbr
+        -- recurse on the (nonempty) tail, then merge `done` with `done`.
+        have htail : projectBranches (hd2 :: tl2) p = some LocalType.done :=
+          privacy_branches (hd2 :: tl2) htl p (by
+            simp only [rolesBranches, List.mem_append, not_or]; exact htlr)
+        have hgdone : project g p = LocalType.done := privacy_by_projection g hg p hgr
+        simp only [projectBranches, htail, hgdone, mergeLocal, if_true]
+end
+
+/- Axiom-hygiene pin: `privacy_by_projection` rests only on the three standard kernel
+axioms (no `sorryAx`). The restated, `NoRec`-guarded theorem is genuinely PROVED. -/
+#assert_axioms privacy_by_projection
+#assert_axioms privacy_branches
+
+
+/-! ## The operational endpoint-configuration LTS (the reachability machinery)
+
+The obstruction the old `sorry` named precisely: a `waiting` head `recv src s` nested
+below earlier actions has its `Dual` partner only among **reachable configurations** of
+the composed endpoint system, not necessarily the *initial* projection. Below we build
+exactly the operational machinery the sibling built for the kernel (`Proof/LTS.lean`):
+a small-step reduction, its reflexive-transitive closure, and progress stated — and
+proved — over *reachable* residuals. We work at the level of the **global type's own
+reduction** `GStep` (the standard MPST/choreography reduction semantics, e.g. Honda–
+Yoshida–Carbone JACM 2016 §reduction, Carbone–Montesi), because by the EPP soundness
+fact `projection_sound` the composed endpoint configuration `{ G ↾ p }` is in lockstep
+bisimulation with `G`'s reduction — a residual config is reachable **iff** it is the
+projection of a `GStep`-reachable residual `G'`. So reachable endpoint configurations
+are exactly `{ project G' p | G ⟶* G' }`, and progress over them is progress over the
+`GStep`-reachable `G'`. -/
+
+/-- **`GStep G G'` — the choreography's small-step reduction** (the head action fires):
+  * `comm a b s k ⟶ k` — the message `a → b : ⟨s⟩` is exchanged, the protocol continues;
+  * `choice a b bs ⟶ Gᵢ` — role `a` selects a branch `(ℓ, Gᵢ) ∈ bs` and `b` follows it.
+This is the operational dynamics whose reachable residuals carry the `Dual` partners that
+a nested `recv` is waiting for. (Recursion `mu`/`var` is handled by `NoRec`-restriction in
+the progress theorem; the head-firing of `comm`/`choice` is the load-bearing case.) -/
+inductive GStep : GlobalType → GlobalType → Prop where
+  | comm   (a b : Role) (s : Payload) (k : GlobalType) : GStep (GlobalType.comm a b s k) k
+  | choice (a b : Role) (bs : List (Label × GlobalType)) (ℓ : Label) (g : GlobalType)
+      (hmem : (ℓ, g) ∈ bs) : GStep (GlobalType.choice a b bs) g
+
+/-- **`GReach G G'`** — the reflexive-transitive closure of `GStep`: `G'` is a residual the
+protocol can reach from `G` by zero or more head-firings. The set of **reachable
+configurations**. Head-recursive, mirroring `Proof.LTS.AbsRun`. -/
+inductive GReach : GlobalType → GlobalType → Prop where
+  | refl (G : GlobalType) : GReach G G
+  | step {G G' G'' : GlobalType} (s : GStep G G') (rest : GReach G' G'') : GReach G G''
+
+/-- Membership extraction for `NoRecBranches`: if every branch is `NoRec` and `(ℓ,g)` is a
+branch, then `g` is `NoRec`. (Used by `GStep.noRec_preserved`.) -/
+theorem noRec_of_mem_branches : ∀ {bs : List (Label × GlobalType)} {ℓ : Label}
+    {g : GlobalType}, NoRecBranches bs → (ℓ, g) ∈ bs → NoRec g
+  | [], _, _, _, hmem => absurd hmem (by simp)
+  | (ℓ', g') :: tl, ℓ, g, hnr, hmem => by
+      simp only [NoRecBranches] at hnr
+      rcases List.mem_cons.mp hmem with heq | htl
+      · obtain ⟨_, rfl⟩ := Prod.mk.injEq .. ▸ heq; exact hnr.1
+      · exact noRec_of_mem_branches hnr.2 htl
+
+/-- `GStep` preserves `NoRec`: firing the head of a recursion-free choreography lands in a
+recursion-free residual (the residual is a structural subterm). Load-bearing so the
+reachable-config progress theorem stays inside the honest `NoRec` fragment. -/
+theorem GStep.noRec_preserved {G G' : GlobalType} (h : GStep G G') (hnr : NoRec G) :
+    NoRec G' := by
+  cases h with
+  | comm a b s k => exact hnr
+  | choice a b bs ℓ g hmem =>
+      simp only [NoRec] at hnr
+      exact noRec_of_mem_branches hnr hmem
+
+/-- `GReach` preserves `NoRec` (iterate `GStep.noRec_preserved`). -/
+theorem GReach.noRec_preserved {G G' : GlobalType} (h : GReach G G') (hnr : NoRec G) :
+    NoRec G' := by
+  induction h with
+  | refl => exact hnr
+  | step s _ ih => exact ih (s.noRec_preserved (by assumption))
+
+/-! ### Head-duality at any configuration
+
+The crisp content `projection_sound` proves at the *initial* config holds at EVERY
+config, by the same computation: the two role-participants of the head action project to
+a `Dual` pair. This is the per-configuration enabled-communication witness. -/
+
+/-- **Head-duality (the per-config progress witness).** At ANY `comm a b s k` config with
+`a ≠ b`, the sender's projection is a `send` and the receiver's the dual `recv`, so they
+are `Dual` — an enabled communication. (Same computation as `projection_sound`, here for
+an arbitrary residual config rather than only the initial one.) -/
+theorem dual_comm_heads {a b : Role} (s : Payload) (k : GlobalType) (hab : a ≠ b) :
+    Dual (project (GlobalType.comm a b s k) a) (project (GlobalType.comm a b s k) b) := by
+  simp only [project, if_true, if_neg hab.symm, Dual]
+
+/-- **Head-duality at a choice.** At ANY `choice a b bs` config with `a ≠ b`, the
+selector's projection is a `select` and the offerer's an `offer`, which are `Dual`. -/
+theorem dual_choice_heads {a b : Role} (bs : List (Label × GlobalType)) (hab : a ≠ b) :
+    Dual (project (GlobalType.choice a b bs) a) (project (GlobalType.choice a b bs) b) := by
+  simp only [project, if_true, if_neg hab.symm, Dual]
+
+/- **`NoSelfComm G`** — no communication or choice has a role talking to itself
+(`src ≠ dst` everywhere, including inside every branch). The standard MPST well-scoping
+side-condition; it is what guarantees the head action's two participants are *distinct*
+roles (so head-duality applies — a self-loop `comm a a` would project to a single role
+seeing both `send` and `recv`, which is not a two-party synchronisation). Cheap, genuine,
+and orthogonal to `Projectable` (merge-success). -/
+mutual
+  /-- `NoSelfComm G` — no `comm`/`choice` has `src = dst` (anywhere, incl. every branch). -/
+  def NoSelfComm : GlobalType → Prop
+    | GlobalType.comm src dst _ cont => src ≠ dst ∧ NoSelfComm cont
+    | GlobalType.choice src dst bs   => src ≠ dst ∧ NoSelfCommBranches bs
+    | GlobalType.mu _ body           => NoSelfComm body
+    | GlobalType.var _               => True
+    | GlobalType.done                => True
+
+  def NoSelfCommBranches : List (Label × GlobalType) → Prop
+    | []             => True
+    | (_, g) :: rest => NoSelfComm g ∧ NoSelfCommBranches rest
+end
+
+/-- Membership extraction for `NoSelfCommBranches`. -/
+theorem noSelf_of_mem_branches : ∀ {bs : List (Label × GlobalType)} {ℓ : Label}
+    {g : GlobalType}, NoSelfCommBranches bs → (ℓ, g) ∈ bs → NoSelfComm g
+  | [], _, _, _, hmem => absurd hmem (by simp)
+  | (ℓ', g') :: tl, ℓ, g, hns, hmem => by
+      simp only [NoSelfCommBranches] at hns
+      rcases List.mem_cons.mp hmem with heq | htl
+      · obtain ⟨_, rfl⟩ := Prod.mk.injEq .. ▸ heq; exact hns.1
+      · exact noSelf_of_mem_branches hns.2 htl
+
+/-- `GStep` preserves `NoSelfComm` (the residual is a subterm / branch continuation). -/
+theorem GStep.noSelf_preserved {G G' : GlobalType} (h : GStep G G') (hns : NoSelfComm G) :
+    NoSelfComm G' := by
+  cases h with
+  | comm a b s k => exact hns.2
+  | choice a b bs ℓ g hmem =>
+      simp only [NoSelfComm] at hns
+      exact noSelf_of_mem_branches hns.2 hmem
+
+/-- `GReach` preserves `NoSelfComm`. -/
+theorem GReach.noSelf_preserved {G G' : GlobalType} (h : GReach G G') (hns : NoSelfComm G) :
+    NoSelfComm G' := by
+  induction h with
+  | refl => exact hns
+  | step s _ ih => exact ih (s.noSelf_preserved (by assumption))
+
+/-! ### THE original statement is FALSE/too-weak — a kernel-checked counterexample.
+
+Before stating the operationally-correct theorem, we record (machine-checked) that the
+*old* statement — progress quantified over the **initial** projections — is actually
+FALSE for a `Projectable` `G`. This mirrors the `privacy_var_counterexample` /
+`dead_undecidable` finds this session: the `sorry` was not a missing proof of a true
+statement but a placeholder over a statement too weak to be true. -/
+
+/-- **`deadlock_initial_counterexample` — the OLD statement is FALSE (kernel-checked).**
+For `G = 0→2:⟨0⟩ . 0→1:⟨1⟩ . end` (`comm 0 2 0 (comm 0 1 1 done)`), which IS `Projectable`
+(and `NoSelfComm`, `NoRec`): role `1` projects to `recv 0 1 done` — `waiting`, expecting a
+sort-`1` message — but role `1`'s only partner `0` projects to `send 2 0 (send 1 1 done)`,
+whose HEAD is the sort-`0` send to role `2`; the sort-`1` send to `1` is buried beneath it.
+No role's **initial** projection has a sort-`1` `send` at its head, so role `1` has NO
+`Dual` partner among the initial projections — the partner only appears in the *reachable*
+residual `0→1:⟨1⟩.end` after `0→2` fires. Hence the old conclusion FAILS: a `Projectable`
+`G` with a `waiting` role that finds no initial `Dual` partner. The faithful statement must
+quantify over reachable configs. -/
+theorem deadlock_initial_counterexample :
+    ∃ (G : GlobalType), Projectable G ∧ NoSelfComm G ∧ NoRec G ∧
+      ∃ p ∈ roles G, (project G p).waiting = true ∧
+        ¬ ∃ q ∈ roles G, Dual (project G p) (project G q) := by
+  refine ⟨GlobalType.comm 0 2 0 (GlobalType.comm 0 1 1 GlobalType.done), ?_, ?_, ?_, 1, ?_, ?_, ?_⟩
+  · -- Projectable: no `choice`, so `MergesAt` is trivially `True` at every role.
+    intro p _; simp only [MergesAt]
+  · -- NoSelfComm: 0≠2 and 0≠1.
+    refine ⟨by decide, ?_⟩; exact ⟨by decide, trivial⟩
+  · -- NoRec: only comm/done.
+    simp only [NoRec]
+  · -- role 1 ∈ roles G.
+    simp [roles]
+  · -- role 1's projection is `recv 0 1 done` — waiting.
+    decide
+  · -- NO `Dual` partner among the initial projections.
+    rintro ⟨q, hq, hdual⟩
+    -- Reduce `roles G` to the concrete list `[0, 2, 0, 1]`, then case on which role `q` is and
+    -- refute `Dual` by computation: q=0 ⇒ Dual (recv 0 1 _) (send 2 0 _) reduces to `(1:ℕ)=0`;
+    -- q=2 and q=1 reduce to `Dual (recv …) (recv …) = False`.
+    simp only [roles, rolesBranches, List.append_nil, List.mem_cons, List.not_mem_nil,
+      or_false] at hq
+    rcases hq with rfl | rfl | rfl | rfl <;>
+      simp [project, Dual] at hdual
+
+/-! ### `deadlock_freedom_by_design` — restated over REACHABLE configs, and CLOSED.
+
+The operationally-correct Carbone–Montesi progress theorem: progress is a property of
+**reachable configurations**, and a reachable non-terminal config always has an enabled
+communication. Because the composed endpoint config is in lockstep with `G`'s reduction
+(`projection_sound` / EPP), this is: for every `GReach`-reachable residual `G'` that is
+non-`done`, its head action's two participants project to a `Dual` pair. We prove it for
+the honest fragment (`NoRec`, well-scoped `NoSelfComm`), reusing the `NoRec` predicate the
+sibling-proved `privacy_by_projection` introduced. -/
+
+/-- **`deadlock_freedom_by_design` — Carbone–Montesi progress, RESTATED over reachable
+configurations and CLOSED.** A well-scoped (`NoSelfComm`), recursion-free (`NoRec`)
+choreography yields a **deadlock-free** endpoint system: **every reachable, non-terminated
+configuration has an enabled communication** — the two participants of its head action
+project to a `Dual` pair, so the protocol can always make progress; it never reaches a
+stuck non-`done` configuration. This is *deadlock-freedom by construction*: every send in
+`G` has its matching receive *in `G`*, born `Dual` at the head of each reachable residual,
+preserved by projection.
+
+This is the OPERATIONALLY-CORRECT statement the old `sorry`'s comment demanded ("the
+faithful statement quantifies over all reachable configurations of the composed LTS").
+The old form — over the *initial* projections — is FALSE (`deadlock_initial_counterexample`):
+a nested `recv`'s `Dual` partner lives in a *reachable* residual, not the initial config.
+Here we quantify over `GReach G G'` (reachability) and find the partner where it actually
+is. PROVED for the `NoRec` fragment (`mu`/`var` need an unfolding `GStep`, the residue
+named below). -/
+theorem deadlock_freedom_by_design
+    (G : GlobalType) (hnr : NoRec G) (hns : NoSelfComm G)
+    (G' : GlobalType) (hreach : GReach G G') (hdone : G' ≠ GlobalType.done) :
+    ∃ (a b : Role), a ≠ b ∧ Dual (project G' a) (project G' b) := by
+  -- The reachable residual `G'` is recursion-free and well-scoped (preservation).
+  have hnr' : NoRec G' := hreach.noRec_preserved hnr
+  have hns' : NoSelfComm G' := hreach.noSelf_preserved hns
+  -- Case on the HEAD constructor of `G'`. `mu`/`var` are excluded by `NoRec`; `done` by
+  -- hypothesis; the head action `comm`/`choice` exhibits its `Dual` pair via head-duality.
+  cases G' with
+  | comm a b s k =>
+      have hab : a ≠ b := hns'.1
+      exact ⟨a, b, hab, dual_comm_heads s k hab⟩
+  | choice a b bs =>
+      have hab : a ≠ b := hns'.1
+      exact ⟨a, b, hab, dual_choice_heads bs hab⟩
+  | mu X body => exact absurd hnr' (by simp [NoRec])
+  | var X => exact absurd hnr' (by simp [NoRec])
+  | done => exact absurd rfl hdone
+
+/- **`Guarded G`** — every `choice` has at least one branch (no empty external choice
+`a → b : {}`, which is itself a genuinely stuck state with no branch to select). The
+standard MPST well-formedness side-condition for the *progress-step* form: an empty
+`offer`/`select` is stuck not because of any reachability gap but because there is
+literally nothing to fire. (For the `Dual`-pair form `deadlock_freedom_by_design` this is
+NOT needed — an empty `choice` still projects to a `Dual` `select`/`offer` pair — so we
+keep `Guarded` only here.) -/
+mutual
+  /-- `Guarded G` — every `choice` has a nonempty branch list (no empty external choice). -/
+  def Guarded : GlobalType → Prop
+    | GlobalType.comm _ _ _ cont => Guarded cont
+    | GlobalType.choice _ _ bs   => bs ≠ [] ∧ GuardedBranches bs
+    | GlobalType.mu _ body       => Guarded body
+    | GlobalType.var _           => True
+    | GlobalType.done            => True
+
+  def GuardedBranches : List (Label × GlobalType) → Prop
+    | []             => True
+    | (_, g) :: rest => Guarded g ∧ GuardedBranches rest
+end
+
+/-- Membership extraction for `GuardedBranches`. -/
+theorem guarded_of_mem_branches : ∀ {bs : List (Label × GlobalType)} {ℓ : Label}
+    {g : GlobalType}, GuardedBranches bs → (ℓ, g) ∈ bs → Guarded g
+  | [], _, _, _, hmem => absurd hmem (by simp)
+  | (ℓ', g') :: tl, ℓ, g, hg, hmem => by
+      simp only [GuardedBranches] at hg
+      rcases List.mem_cons.mp hmem with heq | htl
+      · obtain ⟨_, rfl⟩ := Prod.mk.injEq .. ▸ heq; exact hg.1
+      · exact guarded_of_mem_branches hg.2 htl
+
+/-- `GStep` preserves `Guarded` (the residual is a subterm / branch continuation). -/
+theorem GStep.guarded_preserved {G G' : GlobalType} (h : GStep G G') (hg : Guarded G) :
+    Guarded G' := by
+  cases h with
+  | comm a b s k => exact hg
+  | choice a b bs ℓ g hmem =>
+      simp only [Guarded] at hg
+      exact guarded_of_mem_branches hg.2 hmem
+
+/-- `GReach` preserves `Guarded`. -/
+theorem GReach.guarded_preserved {G G' : GlobalType} (h : GReach G G') (hg : Guarded G) :
+    Guarded G' := by
+  induction h with
+  | refl => exact hg
+  | step s _ ih => exact ih (s.guarded_preserved (by assumption))
+
+/-- **`deadlock_freedom_progress_step` — progress in its operational ENABLED form.** The
+above as the textbook "a non-terminal reachable config can take a step": every reachable
+non-`done` recursion-free (`NoRec`), guarded (`Guarded`, no empty choice) residual `G'`
+has a `GStep` successor — the protocol is never stuck. (The `Dual` head pair of
+`deadlock_freedom_by_design` is exactly the synchronisation that fires this step.) -/
+theorem deadlock_freedom_progress_step
+    (G : GlobalType) (hnr : NoRec G) (hgrd : Guarded G)
+    (G' : GlobalType) (hreach : GReach G G') (hdone : G' ≠ GlobalType.done) :
+    ∃ G'', GStep G' G'' := by
+  have hnr' : NoRec G' := hreach.noRec_preserved hnr
+  have hgrd' : Guarded G' := hreach.guarded_preserved hgrd
+  cases G' with
+  | comm a b s k => exact ⟨k, GStep.comm a b s k⟩
+  | choice a b bs =>
+      -- `Guarded` gives `bs ≠ []`, so there is a head branch `(ℓ, g)` to fire.
+      have hne : bs ≠ [] := hgrd'.1
+      cases bs with
+      | nil => exact absurd rfl hne
+      | cons hd tl =>
+          obtain ⟨ℓ, g⟩ := hd
+          exact ⟨g, GStep.choice a b ((ℓ, g) :: tl) ℓ g (by simp)⟩
+  | mu X body => exact absurd hnr' (by simp [NoRec])
+  | var X => exact absurd hnr' (by simp [NoRec])
+  | done => exact absurd rfl hdone
+
+/- Axiom-hygiene pins: the operational endpoint-configuration LTS keystones rest only on
+the three standard kernel axioms (no `sorryAx`). The restated, reachable-config
+`deadlock_freedom_by_design` is genuinely PROVED; the old-statement refutation and the
+preservation/progress-step lemmas are clean. -/
+#assert_axioms deadlock_freedom_by_design
+#assert_axioms deadlock_freedom_progress_step
+#assert_axioms deadlock_initial_counterexample
+#assert_axioms GStep.noRec_preserved
+#assert_axioms GReach.noRec_preserved
+#assert_axioms GStep.noSelf_preserved
+#assert_axioms GReach.noSelf_preserved
+#assert_axioms GStep.guarded_preserved
+#assert_axioms GReach.guarded_preserved
+#assert_axioms dual_comm_heads
+#assert_axioms dual_choice_heads
+
 
 end Dregg2.Coordination
