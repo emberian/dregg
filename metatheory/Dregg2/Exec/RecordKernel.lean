@@ -385,6 +385,58 @@ theorem recKExecAsset_no_cross_asset_leak (k k' : RecordKernelState) (turn : Tur
     recTotalAsset k' b = recTotalAsset k b :=
   recKExecAsset_conserves_per_asset k k' turn a h b
 
+/-! ## Per-asset ACCOUNT-GROWTH: a fresh cell, born EMPTY in every asset (`META-FILL C`).
+
+dregg1's `Effect::CreateCell` (`turn/src/executor/apply.rs:748`) is a PRIVILEGED creation of a FRESH
+cell that — per `apply_create_cell`'s `CreateCellNonZeroBalance` rejection (`apply.rs:757`) — is born
+with `balance == 0` (`Cell::with_balance(.,.,0)`): conservation-NEUTRAL. We grow the per-asset ledger's
+index set (`accounts`) while keeping the conserved measure `recTotalAsset` UNCHANGED, by INSERTING the
+fresh cell AND resetting its `bal` column to `0` for every asset — so the new term in the sum is exactly
+`0`. The `bal`-reset is LOAD-BEARING: a freshly-inserted id that had EVER been credited (a re-inserted
+previously-credited id) would silently re-introduce supply on insert. Resetting unconditionally defends
+against that (neutrality is PROVED, not assumed). -/
+
+/-- **`createCellIntoAsset` — grow `accounts` by the fresh `newCell` AND reset its per-asset `bal`
+column to `0`.** The per-asset analog of `EffectsSupply.createCellInto`, over the `bal` ledger rather
+than the named `balance` field. The fresh cell is born EMPTY in EVERY asset (dregg1-faithful
+`balance == 0`), so it contributes exactly `0` to every `recTotalAsset b`. -/
+def createCellIntoAsset (k : RecordKernelState) (newCell : CellId) : RecordKernelState :=
+  { k with accounts := insert newCell k.accounts
+           bal := fun c a => if c = newCell then 0 else k.bal c a }
+
+/-- **`recTotalAsset_insert_fresh` — ACCOUNT-GROWTH IS CONSERVATION-NEUTRAL (PROVED).** Growing
+`accounts` by a FRESH `newCell` while resetting its `bal` column leaves `recTotalAsset k b` UNCHANGED
+for EVERY asset `b`. NON-VACUOUS: the conclusion is an equality of sums over a STRICTLY LARGER index set
+(`insert newCell k.accounts`) — it asserts the fresh cell contributes EXACTLY `0` (not that `accounts`
+is unchanged: it genuinely grew). The fresh term is `0` because the `bal`-reset wrote it `0`; every OLD
+cell is unchanged because `c ≠ newCell` (`hfresh`). Mirrors `EffectsSupply.createCellInto_recTotal`:
+`Finset.sum_insert hfresh` for the fresh term + `Finset.sum_congr` for the old cells. Without the
+`bal`-reset, a re-inserted previously-credited id would make this FALSE (the supply-amplification hole),
+so the reset is load-bearing. -/
+theorem recTotalAsset_insert_fresh (k : RecordKernelState) (newCell : CellId) (b : AssetId)
+    (hfresh : newCell ∉ k.accounts) :
+    recTotalAsset (createCellIntoAsset k newCell) b = recTotalAsset k b := by
+  unfold recTotalAsset createCellIntoAsset
+  rw [Finset.sum_insert hfresh]
+  -- the fresh cell's reset column is `0` (the structure projection beta-reduces the `if`):
+  simp only [if_pos, zero_add]
+  -- every OLD cell is unchanged (`c ≠ newCell`):
+  apply Finset.sum_congr rfl
+  intro c hc
+  have hcne : c ≠ newCell := fun heq => hfresh (heq ▸ hc)
+  simp only [if_neg hcne]
+
+/-- **`createCellIntoAsset_grows_accounts` — the GROWTH has teeth (PROVED).** After `createCellIntoAsset`,
+the new cell IS a live account: `newCell ∈ accounts`. Witnesses that the neutrality theorem is NOT a
+no-op — the index set genuinely grew. -/
+theorem createCellIntoAsset_grows_accounts (k : RecordKernelState) (newCell : CellId) :
+    newCell ∈ (createCellIntoAsset k newCell).accounts := by
+  unfold createCellIntoAsset; exact Finset.mem_insert_self _ _
+
+/-- **`createCellIntoAsset_caps` — caps framed (PROVED).** Account-growth never edits the cap table. -/
+theorem createCellIntoAsset_caps (k : RecordKernelState) (newCell : CellId) :
+    (createCellIntoAsset k newCell).caps = k.caps := rfl
+
 /-! ## Whole-execution conservation (the userspace-program layer). -/
 
 /-- The record kernel as an `Execution.System`: a step is any committed record turn. -/

@@ -356,6 +356,10 @@ def targetOf : FullActionA → CellId
   | .revokeDelegationA holder _ => holder
   | .validateHandoffA intro _ _ => intro
   | .exerciseA actor _      => actor
+  -- §MA-supply: createCell/spawn act on the fresh cell they mint; bridgeMint on the credited cell.
+  | .createCellA _ newCell  => newCell
+  | .spawnA _ child _       => child
+  | .bridgeMintA _ cell _ _ => cell
 
 mutual
 /-- **`sameTargetForest`** — the STRUCTURAL `DelegationMode::None` fidelity predicate: every child's

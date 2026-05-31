@@ -738,6 +738,155 @@ def recCBurnAsset (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt
   | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := -amt } :: s.log }
   | none    => none
 
+/-! ### §MA-supply — ACCOUNT-GROWTH on the per-asset dispatch: `createCell` (born EMPTY) + `spawn`.
+
+dregg1's `Effect::CreateCell` (`turn/src/executor/apply.rs:748`) is the PRIVILEGED creation of a FRESH
+cell, born with `balance == 0` (`apply.rs:757` rejects `CreateCellNonZeroBalance`) — so on the per-asset
+ledger it is conservation-NEUTRAL (`ledgerDeltaAsset = 0` for EVERY asset). `Effect::SpawnWithDelegation`
+(`apply.rs` / `EffectsSupply.spawnStep`) is `createCell` PLUS a delegated cap to the spawned child
+(`Cap.node target`); the create leg is neutral and the cap grant is bal-orthogonal, so spawn is neutral
+too. We reuse the `EffectsSupply` GATE shape verbatim (`mintAuthorizedB` — creation is privileged supply —
+AND the freshness gate `newCell ∉ accounts`), but found the growth on `RecordKernel.createCellIntoAsset`
+(grow `accounts` + RESET the fresh `bal` column to `0`), so neutrality is PROVED via
+`recTotalAsset_insert_fresh`, NOT assumed. -/
+
+/-- **`createCellChainA` — `CreateCell`'s per-asset chained semantics.** Fail-closed: an authorized
+creator (`mintAuthorizedB actor newCell` — creation coins a fresh cell, privileged like mint) AND a FRESH
+id (`newCell ∉ accounts`, the exact `hfresh` the conservation lemma consumes). On commit, insert the fresh
+cell (born EMPTY in every asset via `createCellIntoAsset`) and append the creation receipt (newest-first).
+The dregg1-faithful born-`balance == 0`: NO amount param, conservation-NEUTRAL. -/
+def createCellChainA (s : RecChainedState) (actor newCell : CellId) : Option RecChainedState :=
+  if mintAuthorizedB s.kernel.caps actor newCell = true ∧ newCell ∉ s.kernel.accounts then
+    some { kernel := createCellIntoAsset s.kernel newCell
+           log := { actor := actor, src := newCell, dst := newCell, amt := 0 } :: s.log }
+  else
+    none
+
+/-- **`createCellChainA` factors through its gate — PROVED.** A committed creation implies the two gate
+conjuncts held and pins the post-state. -/
+theorem createCellChainA_factors {s s' : RecChainedState} {actor newCell : CellId}
+    (h : createCellChainA s actor newCell = some s') :
+    mintAuthorizedB s.kernel.caps actor newCell = true ∧ newCell ∉ s.kernel.accounts ∧
+      s' = { kernel := createCellIntoAsset s.kernel newCell
+             log := { actor := actor, src := newCell, dst := newCell, amt := 0 } :: s.log } := by
+  unfold createCellChainA at h
+  by_cases hg : mintAuthorizedB s.kernel.caps actor newCell = true ∧ newCell ∉ s.kernel.accounts
+  · rw [if_pos hg, Option.some.injEq] at h; exact ⟨hg.1, hg.2, h.symm⟩
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`spawnChainA` — `SpawnWithDelegation`'s per-asset chained semantics.** Fail-closed via
+`createCellChainA` (the authorized, fresh-id child, born EMPTY), and on commit ALSO grant the child a
+delegated `Cap.node target` cap (the disclosed authority snapshot). The cap edit is bal-orthogonal — it
+touches `caps`, never `bal`/`accounts` — so the per-asset measure is unmoved (neutral). Reuses the
+`EffectsSupply.spawnStep` grant shape. -/
+def spawnChainA (s : RecChainedState) (actor child target : CellId) : Option RecChainedState :=
+  match createCellChainA s actor child with
+  | some s1 =>
+      some { s1 with kernel :=
+        { s1.kernel with caps := fun l => if l = child then Cap.node target :: s1.kernel.caps l
+                                          else s1.kernel.caps l } }
+  | none => none
+
+/-- **`spawnChainA` factors through `createCellChainA` — PROVED.** A committed spawn is a committed
+`createCellChainA` (into `s1`) followed by the child-cap grant. -/
+theorem spawnChainA_factors {s s' : RecChainedState} {actor child target : CellId}
+    (h : spawnChainA s actor child target = some s') :
+    ∃ s1, createCellChainA s actor child = some s1 ∧
+      s' = { s1 with kernel :=
+        { s1.kernel with caps := fun l => if l = child then Cap.node target :: s1.kernel.caps l
+                                          else s1.kernel.caps l } } := by
+  unfold spawnChainA at h
+  cases hc : createCellChainA s actor child with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some s1 => rw [hc] at h; simp only [Option.some.injEq] at h; exact ⟨s1, rfl, h.symm⟩
+
+/-- **`createCellChainA_neutral` — ACCOUNT-GROWTH IS CONSERVATION-NEUTRAL (PROVED).** A committed
+`createCellChainA` leaves `recTotalAsset` UNCHANGED for EVERY asset `b`: the index set `accounts`
+genuinely GREW (`createCellChainA_grows_accounts`), but the fresh cell is born EMPTY (`bal`-reset), so its
+contribution is exactly `0` (`recTotalAsset_insert_fresh`, with `hfresh` from the freshness gate). The
+account-growth neutrality the per-asset dispatch demands. -/
+theorem createCellChainA_neutral {s s' : RecChainedState} {actor newCell : CellId} (b : AssetId)
+    (h : createCellChainA s actor newCell = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
+  obtain ⟨_, hfresh, hs'⟩ := createCellChainA_factors h
+  subst hs'
+  exact recTotalAsset_insert_fresh s.kernel newCell b hfresh
+
+/-- **`createCellChainA_grows_accounts` — the GROWTH has teeth (PROVED).** After a committed
+`createCellChainA`, the new cell IS a live account (`newCell ∈ accounts`) — the index set genuinely grew,
+so the neutrality theorem is NOT a no-op. -/
+theorem createCellChainA_grows_accounts {s s' : RecChainedState} {actor newCell : CellId}
+    (h : createCellChainA s actor newCell = some s') : newCell ∈ s'.kernel.accounts := by
+  obtain ⟨_, _, hs'⟩ := createCellChainA_factors h
+  subst hs'; exact createCellIntoAsset_grows_accounts s.kernel newCell
+
+/-- **`createCellChainA_authorized` — PROVED (fail-closed integrity).** A committed creation implies the
+creator held the privileged creation authority over the new cell (`mintAuthorizedB` — bare ownership is
+NOT enough; creation coins a fresh cell). -/
+theorem createCellChainA_authorized {s s' : RecChainedState} {actor newCell : CellId}
+    (h : createCellChainA s actor newCell = some s') :
+    mintAuthorizedB s.kernel.caps actor newCell = true :=
+  (createCellChainA_factors h).1
+
+/-- **`createCellChainA_unauthorized_fails` — PROVED (fail-closed).** Without creation authority, no cell
+is minted. The confinement core. -/
+theorem createCellChainA_unauthorized_fails (s : RecChainedState) (actor newCell : CellId)
+    (h : mintAuthorizedB s.kernel.caps actor newCell = false) :
+    createCellChainA s actor newCell = none := by
+  unfold createCellChainA
+  rw [if_neg]; rintro ⟨ha, _⟩; rw [h] at ha; exact absurd ha (by simp)
+
+/-- **`createCellChainA_chainlink` — PROVED.** A committed creation extends the receipt chain by EXACTLY
+the (balance-`0`) creation row, newest-first. -/
+theorem createCellChainA_chainlink {s s' : RecChainedState} {actor newCell : CellId}
+    (h : createCellChainA s actor newCell = some s') :
+    s'.log = { actor := actor, src := newCell, dst := newCell, amt := 0 } :: s.log := by
+  obtain ⟨_, _, hs'⟩ := createCellChainA_factors h; subst hs'; rfl
+
+/-- The spawn cap grant is bal-orthogonal — it edits `caps`, never `bal`/`accounts` — so the per-asset
+measure is literally unchanged (PROVED). The per-asset analog of `EffectsSupply.spawn_grant_recTotal`. -/
+theorem spawnGrant_recTotalAsset (k : RecordKernelState) (child target : CellId) (b : AssetId) :
+    recTotalAsset { k with caps := fun l => if l = child then Cap.node target :: k.caps l else k.caps l } b
+      = recTotalAsset k b := rfl
+
+/-- **`spawnChainA_neutral` — PROVED.** A committed spawn leaves `recTotalAsset` UNCHANGED for EVERY asset:
+the create leg is neutral (born EMPTY), the cap grant is bal-orthogonal. -/
+theorem spawnChainA_neutral {s s' : RecChainedState} {actor child target : CellId} (b : AssetId)
+    (h : spawnChainA s actor child target = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
+  obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors h
+  subst hs'
+  rw [spawnGrant_recTotalAsset s1.kernel child target b]
+  exact createCellChainA_neutral b hc
+
+/-- **`spawnChainA_authorized` — PROVED.** A committed spawn implies the spawner held creation authority
+over the child. -/
+theorem spawnChainA_authorized {s s' : RecChainedState} {actor child target : CellId}
+    (h : spawnChainA s actor child target = some s') :
+    mintAuthorizedB s.kernel.caps actor child = true := by
+  obtain ⟨s1, hc, _⟩ := spawnChainA_factors h
+  exact createCellChainA_authorized hc
+
+/-- **`spawnChainA_provenance` (the DISCLOSED-AUTHORITY keystone — PROVED).** The spawned child carries
+EXACTLY the delegated snapshot cap `Cap.node target` at the head of its cap list (its disclosed authority
+provenance). The generative resource is created with disclosed authority. -/
+theorem spawnChainA_provenance {s s' : RecChainedState} {actor child target : CellId}
+    (h : spawnChainA s actor child target = some s') :
+    ∃ rest, s'.kernel.caps child = Cap.node target :: rest := by
+  obtain ⟨s1, _, hs'⟩ := spawnChainA_factors h
+  subst hs'
+  exact ⟨s1.kernel.caps child, by simp⟩
+
+/-- **`spawnChainA_chainlink` — PROVED.** A committed spawn extends the receipt chain by EXACTLY the
+child's (balance-`0`) creation row (the cap grant edits only `caps`, not the log). -/
+theorem spawnChainA_chainlink {s s' : RecChainedState} {actor child target : CellId}
+    (h : spawnChainA s actor child target = some s') :
+    s'.log = { actor := actor, src := child, dst := child, amt := 0 } :: s.log := by
+  obtain ⟨s1, hc, hs'⟩ := spawnChainA_factors h
+  subst hs'
+  show s1.log = { actor := actor, src := child, dst := child, amt := 0 } :: s.log
+  exact createCellChainA_chainlink hc
+
 /-! ### §MA-state — the 5 PURE-STATE (field/log) effects on the per-asset dispatch.
 
 dregg1's `turn/src/executor/apply.rs` runs FIVE effects that write the cell-RECORD (a named field)
@@ -959,6 +1108,24 @@ inductive FullActionA where
   `apply.rs:2441`): exercise a HELD cap. The cap graph is UNCHANGED (only connectivity begets
   connectivity); gated on `actor` HOLDING the edge to `target`. -/
   | exerciseA       (actor target : CellId)
+  -- §MA-supply: the 3 ACCOUNT-GROWTH / SUPPLY effects (`META-FILL C`). createCell/spawn GROW
+  -- `accounts` (born EMPTY ⇒ conservation-NEUTRAL, `ledgerDeltaAsset = 0`); bridgeMint is the §8
+  -- PORTAL inflow (disclosed `+value` at ONE asset).
+  /-- `CreateCell { public_key, token_id, balance }` (dregg1 `apply_create_cell`, `apply.rs:748`):
+  PRIVILEGED creation of a FRESH live cell, born `balance == 0` (`apply.rs:757` rejects
+  `CreateCellNonZeroBalance`) — born EMPTY in every asset, so conservation-NEUTRAL. NO amount param
+  (the dregg1-faithful choice); authority: `mintAuthorizedB actor newCell` + the freshness gate. -/
+  | createCellA     (actor newCell : CellId)
+  /-- `SpawnWithDelegation { … }` (dregg1 `apply_spawn_with_delegation`): `createCell` (born EMPTY) PLUS
+  a delegated `Cap.node target` cap to the spawned child — the disclosed authority snapshot. The create
+  leg is neutral; the cap grant is bal-orthogonal, so spawn is conservation-NEUTRAL too. -/
+  | spawnA          (actor child target : CellId)
+  /-- `BridgeMint { cell, value, asset_type, nullifier }` (dregg1 `apply_bridge_mint`, `apply.rs:1106`):
+  the §8 PORTAL inflow — credit `cell`'s asset `asset` by a disclosed `value` observed off a FOREIGN
+  chain. GENERATIVE (disclosed `+value` at asset `asset` ONLY). dregg2 cannot verify foreign consensus,
+  so foreign finality is the §8 `Prop` carrier (off this executable layer); the LOCAL credit reuses the
+  per-asset mint `recCMintAsset` verbatim. -/
+  | bridgeMintA     (actor cell : CellId) (asset : AssetId) (value : ℤ)
 
 /-- **The per-asset ledger delta of a `FullActionA`, indexed by asset `b`.** Transfer and authority
 are conservation-trivial (`0` for every asset); `mintA a` adds `amt` to asset `a` only; `burnA a`
@@ -984,6 +1151,11 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .revokeDelegationA _ _, _ => 0
   | .validateHandoffA _ _ _, _ => 0
   | .exerciseA _ _,       _ => 0
+  -- §MA-supply: createCell/spawn GROW `accounts` but the fresh cell is born EMPTY (bal-reset) — so `0`
+  -- for EVERY asset (account-growth NEUTRALITY). bridgeMint discloses `+value` at the targeted asset ONLY.
+  | .createCellA _ _,     _ => 0
+  | .spawnA _ _ _,        _ => 0
+  | .bridgeMintA _ _ a value, b => if b = a then value else 0
 
 /-- **The per-asset full executor.** Dispatch each kind to its chained per-asset primitive. ONE
 executor over the per-asset op-set; the asset-typed analog of `execFull`. The 5 pure-state effects
@@ -1008,6 +1180,12 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
   | .revokeDelegationA holder t      => some (recCRevoke s holder t)
   | .validateHandoffA intro rec t    => recCDelegate s intro rec t
   | .exerciseA actor t               => exerciseStepA s actor t
+  -- §MA-supply: createCell/spawn route to the account-growth chained steps (born EMPTY); bridgeMint
+  -- reuses the per-asset mint `recCMintAsset` verbatim (the §8 portal hypothesis is carried on the
+  -- conservation keystone, not checked here).
+  | .createCellA actor newCell       => createCellChainA s actor newCell
+  | .spawnA actor child target       => spawnChainA s actor child target
+  | .bridgeMintA actor cell a value  => recCMintAsset s actor cell a value
 
 /-- **`execFullA_ledger_per_asset` — PROVED (the per-asset conservation vector).** Every committed
 `FullActionA` moves `recTotalAsset b` by EXACTLY `ledgerDeltaAsset fa b`, for EVERY asset `b`
@@ -1122,6 +1300,23 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
       obtain ⟨_, hs'⟩ := exerciseStepA_factors h; subst hs'
       -- exercising leaves the kernel UNCHANGED (only the log grows) — `recTotalAsset` fixed.
       simp only [recTotalAsset]; ring
+  -- §MA-supply: createCell/spawn are account-growth NEUTRAL (`ledgerDeltaAsset = 0`) — they grow
+  -- `accounts` but the fresh cell is born EMPTY, so `recTotalAsset b` is UNCHANGED (the fresh-insert
+  -- lemma). bridgeMint discloses `+value` at the targeted asset (`recKMintAsset_delta`).
+  | createCellA actor newCell =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [createCellChainA_neutral b h, add_zero]
+  | spawnA actor child target =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [spawnChainA_neutral b h, add_zero]
+  | bridgeMintA actor cell a value =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      unfold recCMintAsset at h
+      cases hm : recKMintAsset s.kernel actor cell a value with
+      | none => rw [hm] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hm] at h; simp only [Option.some.injEq] at h; subst h
+          exact recKMintAsset_delta s.kernel k' actor cell a value hm b
 
 /-- **The per-asset full turn executor.** A transaction of `FullActionA`s, all-or-nothing. -/
 def execFullTurnA (s : RecChainedState) : List FullActionA → Option RecChainedState
@@ -1229,6 +1424,11 @@ def fullReceiptA : FullActionA → Turn
   | .revokeDelegationA holder _ => authReceipt holder
   | .validateHandoffA intro _ _ => authReceipt intro
   | .exerciseA actor _          => authReceipt actor
+  -- §MA-supply: createCell/spawn append the fresh cell's (balance-`0`) creation row; bridgeMint
+  -- appends a self-`Turn` carrying the disclosed `+value`.
+  | .createCellA actor newCell  => { actor := actor, src := newCell, dst := newCell, amt := 0 }
+  | .spawnA actor child _       => { actor := actor, src := child, dst := child, amt := 0 }
+  | .bridgeMintA actor cell _ value => { actor := actor, src := cell, dst := cell, amt := value }
 
 /-- **`execFullA_chainlink` — PROVED.** A committed `FullActionA` extends the receipt chain by EXACTLY
 its `fullReceiptA`, newest-first, with no fork or rewrite. The per-action generalization across the
@@ -1298,6 +1498,18 @@ theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
   | exerciseA actor t =>
       simp only [execFullA, fullReceiptA] at h ⊢
       obtain ⟨_, hs'⟩ := exerciseStepA_factors h; subst hs'; rfl
+  -- §MA-supply: createCell/spawn append the fresh cell's creation row; bridgeMint the disclosed credit.
+  | createCellA actor newCell =>
+      simp only [execFullA, fullReceiptA] at h ⊢
+      exact createCellChainA_chainlink h
+  | spawnA actor child target =>
+      simp only [execFullA, fullReceiptA] at h ⊢
+      exact spawnChainA_chainlink h
+  | bridgeMintA actor cell a value =>
+      simp only [execFullA, recCMintAsset, fullReceiptA] at h ⊢
+      cases hm : recKMintAsset s.kernel actor cell a value with
+      | none => rw [hm] at h; exact absurd h (by simp)
+      | some k' => rw [hm] at h; simp only [Option.some.injEq] at h; subst h; rfl
 
 /-- **`execFullA_obsadvance` — PROVED.** A committed `FullActionA` grows the chain by exactly one
 row, so a replayed action (which would re-append the same receipt) is detectable. -/
@@ -1382,6 +1594,68 @@ theorem execFullA_burnA_authorized (s s' : RecChainedState) (actor cell : CellId
   cases hb : recKBurnAsset s.kernel actor cell a amt with
   | none => rw [hb] at h; exact absurd h (by simp)
   | some k' => exact recKBurnAsset_authorized s.kernel k' actor cell a amt hb
+
+/-! ### §MA-supply authority obligations — `bridgeMint` is PRIVILEGED supply (`mintAuthorizedB`), the
+LOCAL gate independent of the §8 foreign-finality portal; `createCell`/`spawn` carry their privileged
+creation authority + the freshness gate (proved earlier as `createCellChainA_authorized` /
+`spawnChainA_authorized`). -/
+
+/-- **`execFullA_bridgeMintA_authorized` — PROVED.** A committed per-asset bridge-mint implies the
+privileged mint authority over `cell` (the LOCAL gate — the foreign finality is the §8 portal,
+discharged outside Lean). REUSES `recKMintAsset_authorized`. -/
+theorem execFullA_bridgeMintA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
+    (value : ℤ) (h : execFullA s (.bridgeMintA actor cell a value) = some s') :
+    mintAuthorizedB s.kernel.caps actor cell = true := by
+  simp only [execFullA, recCMintAsset] at h
+  cases hm : recKMintAsset s.kernel actor cell a value with
+  | none => rw [hm] at h; exact absurd h (by simp)
+  | some k' => exact recKMintAsset_authorized s.kernel k' actor cell a value hm
+
+/-- **`execFullA_bridgeMintA_unauthorized_fails` — PROVED (fail-closed).** Without mint authority, no
+bridge-mint commits (regardless of foreign finality). The confinement core. -/
+theorem execFullA_bridgeMintA_unauthorized_fails (s : RecChainedState) (actor cell : CellId)
+    (a : AssetId) (value : ℤ) (h : mintAuthorizedB s.kernel.caps actor cell = false) :
+    execFullA s (.bridgeMintA actor cell a value) = none := by
+  simp only [execFullA, recCMintAsset, recKMintAsset]
+  rw [if_neg]; rintro ⟨ha, _⟩; rw [h] at ha; exact absurd ha (by simp)
+
+/-- **`execFullA_createCellA_neutral_per_asset` — THE ACCOUNT-GROWTH NEUTRALITY KEYSTONE (PROVED).** A
+committed `createCellA` leaves `recTotalAsset` UNCHANGED for EVERY asset `b`. NON-VACUOUS: the index set
+`accounts` genuinely GREW (`execFullA_createCellA_grows_accounts` — the new cell IS live afterward), yet
+supply is conserved BECAUSE the fresh cell is born EMPTY (the `bal`-reset). This is the createCell
+account-growth neutrality META-FILL C demands — the dregg1-faithful `balance == 0` creation as a
+conservation-NEUTRAL move on the per-asset ledger. -/
+theorem execFullA_createCellA_neutral_per_asset (s s' : RecChainedState) (actor newCell : CellId)
+    (b : AssetId) (h : execFullA s (.createCellA actor newCell) = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
+  createCellChainA_neutral b (by simpa only [execFullA] using h)
+
+/-- **`execFullA_createCellA_grows_accounts` — the GROWTH has teeth (PROVED).** After a committed
+`createCellA`, the new cell IS a live account: `newCell ∈ s'.kernel.accounts`. Witnesses that the
+neutrality keystone is NOT a no-op — the conserved-measure index set genuinely grew. -/
+theorem execFullA_createCellA_grows_accounts (s s' : RecChainedState) (actor newCell : CellId)
+    (h : execFullA s (.createCellA actor newCell) = some s') :
+    newCell ∈ s'.kernel.accounts :=
+  createCellChainA_grows_accounts (by simpa only [execFullA] using h)
+
+/-- **`execFullA_spawnA_neutral_per_asset` — PROVED.** A committed `spawnA` (createCell born EMPTY + a
+bal-orthogonal cap grant) is likewise conservation-NEUTRAL for EVERY asset. -/
+theorem execFullA_spawnA_neutral_per_asset (s s' : RecChainedState) (actor child target : CellId)
+    (b : AssetId) (h : execFullA s (.spawnA actor child target) = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b :=
+  spawnChainA_neutral b (by simpa only [execFullA] using h)
+
+/-- **`execFullA_bridgeMintA_discloses_per_asset` — PROVED (the §8 portal disclosed delta).** A committed
+`bridgeMintA actor cell a value` raises asset `a`'s supply by EXACTLY the disclosed `value` and leaves
+EVERY OTHER asset literally UNCHANGED: `recTotalAsset s'.kernel b = recTotalAsset s.kernel b + (if b = a
+then value else 0)`. The disclosed generative inflow (NOT a conservation claim) — the per-asset
+no-cross-asset-laundering content at the bridge boundary. -/
+theorem execFullA_bridgeMintA_discloses_per_asset (s s' : RecChainedState) (actor cell : CellId)
+    (a : AssetId) (value : ℤ) (b : AssetId)
+    (h : execFullA s (.bridgeMintA actor cell a value) = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + (if b = a then value else 0) := by
+  have := execFullA_ledger_per_asset s s' (.bridgeMintA actor cell a value) b h
+  simpa only [ledgerDeltaAsset] using this
 
 /-! ### §MA-state authority obligations — the 4 field-writing pure-state effects WERE authorized;
 `emitEventA` is authority-FREE (dregg1 `apply_emit_event` runs NO cap check). The field-writing
@@ -1654,7 +1928,24 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
        -- authorized BY the held edge AND confers NO new authority (graph UNCHANGED).
        Dregg2.Spec.execGraph s.kernel.caps actor
          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
-       Dregg2.Spec.execGraph s'.kernel.caps = Dregg2.Spec.execGraph s.kernel.caps)
+       Dregg2.Spec.execGraph s'.kernel.caps = Dregg2.Spec.execGraph s.kernel.caps
+   -- §MA-supply: createCell/spawn carry the REAL privileged-creation gate (`mintAuthorizedB` — bare
+   -- ownership is NOT enough) AND the REAL freshness gate (`newCell ∉ accounts`, fail-closed: a
+   -- non-fresh id is rejected) AND the Generative disclosure coloring; bridgeMint carries the
+   -- privileged mint gate AND the §8 Generative disclosure. NOT `True` — every conjunct has teeth.
+   | .createCellA actor newCell =>
+       mintAuthorizedB s.kernel.caps actor newCell = true ∧
+       newCell ∉ s.kernel.accounts ∧
+       newCell ∈ s'.kernel.accounts ∧
+       (effectLinearity .createCell).is_disclosed_non_conservation = true
+   | .spawnA actor child target =>
+       mintAuthorizedB s.kernel.caps actor child = true ∧
+       child ∉ s.kernel.accounts ∧
+       (∃ rest, s'.kernel.caps child = Cap.node target :: rest) ∧
+       (effectLinearity .spawnWithDelegation).is_disclosed_non_conservation = true
+   | .bridgeMintA actor cell _ _ =>
+       mintAuthorizedB s.kernel.caps actor cell = true ∧
+       (effectLinearity mintEffect).is_disclosed_non_conservation = true)
 
 /-- **`execFullA_attests_per_asset` — THE PER-ASSET OP-SET IS STEP-COMPLETE BY CONSTRUCTION
 (PROVED).** Every committed `FullActionA` attests its full `StepInv` content: the per-asset ledger
@@ -1693,6 +1984,22 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
   | exerciseA actor t =>
       exact ⟨execFullA_exerciseA_authorized s s' actor t h,
              execFullA_exerciseA_graph_unchanged s s' actor t h⟩
+  -- §MA-supply: discharge createCell/spawn's (privileged-creation gate ∧ freshness ∧ growth/provenance
+  -- ∧ Generative disclosure) and bridgeMint's (privileged mint gate ∧ §8 Generative disclosure).
+  | createCellA actor newCell =>
+      simp only [execFullA] at h
+      obtain ⟨hauth, hfresh, _⟩ := createCellChainA_factors h
+      exact ⟨hauth, hfresh, createCellChainA_grows_accounts h,
+             Dregg2.CatalogEffects.generative_discloses .createCell Dregg2.CatalogEffects.g_createCell⟩
+  | spawnA actor child target =>
+      simp only [execFullA] at h
+      obtain ⟨s1, hc, _⟩ := spawnChainA_factors h
+      exact ⟨createCellChainA_authorized hc, (createCellChainA_factors hc).2.1,
+             spawnChainA_provenance (by simpa only [execFullA] using h),
+             Dregg2.CatalogEffects.generative_discloses .spawnWithDelegation
+               Dregg2.CatalogEffects.g_spawnWithDelegation⟩
+  | bridgeMintA actor cell a value =>
+      exact ⟨execFullA_bridgeMintA_authorized s s' actor cell a value h, mint_discloses⟩
 
 /-- **`execFullTurnA_each_attests` — PROVED.** Step-completeness holds at EVERY action of a committed
 per-asset transaction, across all kinds: the per-node `fullActionInvA` witness threaded along the
@@ -1789,6 +2096,31 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_validateHandoffA_non_amplifying
 #assert_axioms execFullA_exerciseA_authorized
 #assert_axioms execFullA_exerciseA_graph_unchanged
+-- META-FILL C Wave 3: accounts-GROWTH (`createCell`/`spawn`, born EMPTY ⇒ conservation-NEUTRAL) +
+-- the SUPPLY inflow (`bridgeMint`, §8-portal disclosed `+value` at ONE asset). The account-growth
+-- NEUTRALITY keystone (`recTotalAsset` unchanged BECAUSE the fresh cell is born empty, the index set
+-- genuinely grew) + the disclosed bridge inflow + the per-effect gates, all pinned kernel-clean. The
+-- keystone `execFullA_attests_per_asset` (re-extended above) carries ALL into the forest by
+-- construction (FullForestA spine UNCHANGED — only `targetOf` gains arms).
+#assert_axioms recTotalAsset_insert_fresh
+#assert_axioms createCellIntoAsset_grows_accounts
+#assert_axioms createCellChainA_factors
+#assert_axioms createCellChainA_neutral
+#assert_axioms createCellChainA_grows_accounts
+#assert_axioms createCellChainA_authorized
+#assert_axioms createCellChainA_unauthorized_fails
+#assert_axioms createCellChainA_chainlink
+#assert_axioms spawnChainA_factors
+#assert_axioms spawnChainA_neutral
+#assert_axioms spawnChainA_authorized
+#assert_axioms spawnChainA_provenance
+#assert_axioms spawnChainA_chainlink
+#assert_axioms execFullA_bridgeMintA_authorized
+#assert_axioms execFullA_bridgeMintA_unauthorized_fails
+#assert_axioms execFullA_createCellA_neutral_per_asset
+#assert_axioms execFullA_createCellA_grows_accounts
+#assert_axioms execFullA_spawnA_neutral_per_asset
+#assert_axioms execFullA_bridgeMintA_discloses_per_asset
 
 /-! ## §12 — Non-vacuity: each kind commits with the right invariant; unauthorized rejected.
 
@@ -2052,5 +2384,75 @@ def authMixedTurn : List FullActionA :=
 #eval (turnLedgerDeltaAsset authMixedTurn 0, turnLedgerDeltaAsset authMixedTurn 1)    -- (0, 0)
 #eval (execFullTurnA fmaA authMixedTurn).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))               -- some (105, 7) (CONSERVED)
+
+/-! ## §13-supply (META-FILL C Wave 3) — Non-vacuity for ACCOUNT-GROWTH + SUPPLY: `createCell` GROWS
+`accounts` yet `recTotalAsset` is UNCHANGED (born EMPTY ⇒ NEUTRAL); `bridgeMint` discloses `+value` at
+ONE asset and leaves every other asset FIXED (no cross-asset laundering); unauthorized create/mint
+FAIL-CLOSED. A 2-asset state where actor 9 holds the privileged `node 0`/`node 1`/`node 2` caps (can mint
+into live cells 0,1 and create the fresh cell 2). -/
+
+/-- The supply fixture: accounts {0,1}; cell 0 = 100 of asset 0 + 7 of asset 1, cell 1 = 5 of asset 0.
+Actor 9 holds `node 0`,`node 1`,`node 2` (create/mint authority over cells 0,1 and the fresh 2). -/
+def fmaSup : RecChainedState :=
+  { kernel :=
+      { accounts := {0, 1}
+        cell := fun _ => .record [("balance", .int 0)]
+        caps := fun l => if l = 9 then [Cap.node 0, Cap.node 1, Cap.node 2] else []
+        bal := fun c a => if c = 0 then (if a = 0 then 100 else if a = 1 then 7 else 0)
+                          else if c = 1 then (if a = 0 then 5 else 0) else 0 }
+    log := [] }
+
+-- The pre-state per-asset supply + account set: asset 0 = 105, asset 1 = 7, accounts {0,1}.
+#eval (recTotalAsset fmaSup.kernel 0, recTotalAsset fmaSup.kernel 1)                  -- (105, 7)
+#eval (decide (0 ∈ fmaSup.kernel.accounts), decide (1 ∈ fmaSup.kernel.accounts),
+       decide (2 ∈ fmaSup.kernel.accounts))                                          -- (true, true, false)
+
+-- ★ THE ACCOUNT-GROWTH WITNESS: actor 9 (holds `node 2`) creates the FRESH cell 2 — COMMITS,
+--   `accounts` GROWS {0,1} → {0,1,2} (cell 2 now live), YET `recTotalAsset` is UNCHANGED at (105, 7)
+--   for BOTH assets (born EMPTY ⇒ conservation-NEUTRAL):
+#eval (execFullA fmaSup (.createCellA 9 2)).isSome                                    -- true
+#eval (execFullA fmaSup (.createCellA 9 2)).map (fun s => decide (2 ∈ s.kernel.accounts))  -- some true (GREW)
+#eval (execFullA fmaSup (.createCellA 9 2)).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7) (NEUTRAL)
+-- ...and the fresh cell 2 is born EMPTY in every asset (bal-reset):
+#eval (execFullA fmaSup (.createCellA 9 2)).map (fun s => (s.kernel.bal 2 0, s.kernel.bal 2 1))  -- some (0, 0)
+-- ...and grows the receipt chain by exactly one row:
+#eval (execFullA fmaSup (.createCellA 9 2)).map (fun s => s.log.length)               -- some 1
+-- An UNAUTHORIZED creator (actor 0 holds no create cap) is REJECTED (fail-closed):
+#eval (execFullA fmaSup (.createCellA 0 2)).isSome                                    -- false
+-- A NON-FRESH id (cell 1 already live) is REJECTED (the freshness gate has TEETH):
+#eval (execFullA fmaSup (.createCellA 9 1)).isSome                                    -- false
+
+-- SPAWN: actor 9 spawns child 2 (born EMPTY) with a delegated `node 7` cap — COMMITS, NEUTRAL,
+--   and the child carries its disclosed authority snapshot (`node 7` at the head):
+#eval (execFullA fmaSup (.spawnA 9 2 7)).isSome                                       -- true
+#eval (execFullA fmaSup (.spawnA 9 2 7)).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 7) (NEUTRAL)
+#eval ((execFullA fmaSup (.spawnA 9 2 7)).map (fun s => s.kernel.caps 2)).getD []     -- [Cap.node 7]
+#eval (execFullA fmaSup (.spawnA 9 2 7)).map (fun s => decide (2 ∈ s.kernel.accounts))  -- some true (GREW)
+
+-- ★ THE BRIDGE-MINT DISCLOSURE WITNESS: actor 9 (holds `node 0`) bridge-mints +40 of ASSET 1 into the
+--   live cell 0 — COMMITS, asset 1 RISES by exactly 40 (7 → 47) while asset 0 is LEFT FIXED (105):
+#eval (execFullA fmaSup (.bridgeMintA 9 0 1 40)).isSome                               -- true
+#eval (execFullA fmaSup (.bridgeMintA 9 0 1 40)).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 47) (+40 at asset 1 ONLY)
+-- ...the disclosed delta is `+40` at asset 1, `0` everywhere else (no cross-asset laundering):
+#eval (ledgerDeltaAsset (.bridgeMintA 9 0 1 40) 0, ledgerDeltaAsset (.bridgeMintA 9 0 1 40) 1)  -- (0, 40)
+-- ...and the bridge receipt discloses the +40 inflow:
+#eval ((execFullA fmaSup (.bridgeMintA 9 0 1 40)).map (fun s => s.log.headD ⟨0,0,0,0⟩ |>.amt)).getD 0  -- 40
+-- An UNAUTHORIZED bridge-mint (actor 0, no mint cap) is REJECTED (the LOCAL gate, independent of the
+--   §8 foreign-finality portal):
+#eval (execFullA fmaSup (.bridgeMintA 0 0 1 40)).isSome                               -- false
+
+-- A MIXED supply turn: createCell 2 (neutral growth) + bridgeMint +40 of asset 1 into cell 0
+--   (disclosed) → asset 0 conserved (105), asset 1 rises by exactly 40 (7 → 47):
+def supplyMixedTurn : List FullActionA :=
+  [ .createCellA 9 2
+  , .bridgeMintA 9 0 1 40 ]
+
+#eval (execFullTurnA fmaSup supplyMixedTurn).isSome                                   -- true (all commit)
+#eval (turnLedgerDeltaAsset supplyMixedTurn 0, turnLedgerDeltaAsset supplyMixedTurn 1)  -- (0, 40)
+#eval (execFullTurnA fmaSup supplyMixedTurn).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))              -- some (105, 47)
 
 end Dregg2.Exec.TurnExecutorFull
