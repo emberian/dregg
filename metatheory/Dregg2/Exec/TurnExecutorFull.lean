@@ -611,6 +611,260 @@ theorem execFullTurn_each_attests :
           · subst hbeq; exact ⟨s, s1, ha, execFull_attests ha⟩
           · exact execFullTurn_each_attests s1 s' rest h b hbrest
 
+/-! ## §MA — The PER-ASSET full turn executor (the `CONSERVATION_VECTOR` wired into a transaction).
+
+§4–§10 conserve ONE scalar (`recTotal`, the `balance` field). The genuine per-asset law
+(`RecordKernel.recKExecAsset_conserves_per_asset`, §MULTI-ASSET) lives over `RecordKernelState.bal`.
+Here we build the full-turn executor over THAT ledger — `balanceA`/`delegate`/`revoke`/`mintA`/`burnA`
+— and prove the all-or-nothing transaction moves `recTotalAsset b` by EXACTLY the net per-asset
+ledger delta, for EVERY asset `b` independently. This is the executable turn whose FFI export
+(`dregg_exec_full_turn`) conserves PER-ASSET (`DREGG2-GAP-MAP.md FILL 1`), not the scalar. The
+`delegate`/`revoke` kinds are REUSED verbatim (`recCDelegate`/`recCRevoke`); authority is
+asset-orthogonal (it edits `caps`, leaving `bal` fixed), so it contributes `0` to every asset. -/
+
+/-- **Single-cell, single-asset credit** on the per-asset ledger: add `amt` to cell `cell`'s asset
+`a`, leaving every other (cell, asset) pair untouched. The per-asset analog of `recCreditCell`. -/
+def recBalCredit (bal : CellId → AssetId → ℤ) (cell : CellId) (a : AssetId) (amt : ℤ) :
+    CellId → AssetId → ℤ :=
+  fun c b => if c = cell ∧ b = a then bal c b + amt else bal c b
+
+/-- The per-asset ledger delta of a single-cell credit: asset `a`'s supply rises by `amt` (when
+`cell` is live), every OTHER asset is literally untouched. The per-asset analog of
+`recCreditCell_recTotal_delta`, reusing `sum_indicator`. PROVED. -/
+theorem recBalCredit_recTotalAsset (acc : Finset CellId) (bal : CellId → AssetId → ℤ)
+    (cell : CellId) (a : AssetId) (amt : ℤ) (hc : cell ∈ acc) (b : AssetId) :
+    (∑ c ∈ acc, recBalCredit bal cell a amt c b)
+      = (∑ c ∈ acc, bal c b) + (if b = a then amt else 0) := by
+  by_cases hb : b = a
+  · rw [if_pos hb]
+    have key : (∑ c ∈ acc, recBalCredit bal cell a amt c b) - (∑ c ∈ acc, bal c b) = amt := by
+      rw [← Finset.sum_sub_distrib]
+      have hg : ∀ c ∈ acc, recBalCredit bal cell a amt c b - bal c b = (if c = cell then amt else 0) := by
+        intro c _
+        unfold recBalCredit
+        by_cases hcc : c = cell
+        · rw [if_pos ⟨hcc, hb⟩, if_pos hcc]; ring
+        · rw [if_neg (by rintro ⟨h, _⟩; exact hcc h), if_neg hcc]; ring
+      rw [Finset.sum_congr rfl hg, sum_indicator acc cell amt hc]
+    omega
+  · rw [if_neg hb, add_zero]
+    refine Finset.sum_congr rfl (fun c _ => ?_)
+    unfold recBalCredit; rw [if_neg (by rintro ⟨_, h⟩; exact hb h)]
+
+/-- **The privileged per-asset MINT** over the `bal` ledger. Same `mintAuthorizedB` gate as the
+scalar mint (a `node`/`control` cap, not ownership); credits cell `cell`'s asset `a` by `amt`. -/
+def recKMintAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
+    Option RecordKernelState :=
+  if mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts then
+    some { k with bal := recBalCredit k.bal cell a amt }
+  else
+    none
+
+/-- **The privileged per-asset BURN** over the `bal` ledger. Debits cell `cell`'s asset `a` by `amt`
+(a credit of `-amt`), gated on availability *in that asset* + mint authority. -/
+def recKBurnAsset (k : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
+    Option RecordKernelState :=
+  if mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a ∧ cell ∈ k.accounts then
+    some { k with bal := recBalCredit k.bal cell a (-amt) }
+  else
+    none
+
+/-- **Per-asset mint inflow — PROVED.** A committed per-asset mint raises asset `a`'s supply by
+`amt` and leaves EVERY OTHER asset untouched: `recTotalAsset k' b = recTotalAsset k b + (if b = a
+then amt else 0)`. The per-asset refinement of `recKMint_delta` (which moved one scalar). -/
+theorem recKMintAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+    (h : recKMintAsset k actor cell a amt = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b + (if b = a then amt else 0) := by
+  unfold recKMintAsset at h
+  by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, hcell⟩ := hg
+    show (∑ c ∈ k.accounts, recBalCredit k.bal cell a amt c b)
+        = (∑ c ∈ k.accounts, k.bal c b) + (if b = a then amt else 0)
+    exact recBalCredit_recTotalAsset k.accounts k.bal cell a amt hcell b
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **Per-asset burn outflow — PROVED.** A committed per-asset burn lowers asset `a`'s supply by
+`amt` and leaves EVERY OTHER asset untouched: `recTotalAsset k' b = recTotalAsset k b + (if b = a
+then -amt else 0)`. -/
+theorem recKBurnAsset_delta (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
+    (h : recKBurnAsset k actor cell a amt = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b + (if b = a then (-amt) else 0) := by
+  unfold recKBurnAsset at h
+  by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+      ∧ cell ∈ k.accounts
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, _, hcell⟩ := hg
+    show (∑ c ∈ k.accounts, recBalCredit k.bal cell a (-amt) c b)
+        = (∑ c ∈ k.accounts, k.bal c b) + (if b = a then (-amt) else 0)
+    exact recBalCredit_recTotalAsset k.accounts k.bal cell a (-amt) hcell b
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- No per-asset mint without authority — PROVED. -/
+theorem recKMintAsset_authorized (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : recKMintAsset k actor cell a amt = some k') :
+    mintAuthorizedB k.caps actor cell = true := by
+  unfold recKMintAsset at h
+  by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ cell ∈ k.accounts
+  · exact hg.1
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **The chained per-asset transfer/mint/burn** (thread the receipt chain, newest-first, exactly as
+`recCexec`/`recCMint`/`recCBurn` do for the scalar kernel). -/
+def recCexecAsset (s : RecChainedState) (t : Turn) (a : AssetId) : Option RecChainedState :=
+  match recKExecAsset s.kernel t a with
+  | some k' => some { kernel := k', log := t :: s.log }
+  | none    => none
+
+/-- Chained per-asset mint. -/
+def recCMintAsset (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
+    Option RecChainedState :=
+  match recKMintAsset s.kernel actor cell a amt with
+  | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := amt } :: s.log }
+  | none    => none
+
+/-- Chained per-asset burn (the receipt discloses `-amt`). -/
+def recCBurnAsset (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) :
+    Option RecChainedState :=
+  match recKBurnAsset s.kernel actor cell a amt with
+  | some k' => some { kernel := k', log := { actor := actor, src := cell, dst := cell, amt := -amt } :: s.log }
+  | none    => none
+
+/-- **The FULL per-asset op-set, as one sum.** `balanceA t a` (a per-asset transfer of asset `a`);
+`delegate`/`revoke` (authority, asset-orthogonal); `mintA`/`burnA` (the per-asset supply
+generators). The asset-typed analog of `FullAction`. -/
+inductive FullActionA where
+  /-- A per-asset balance transfer: move asset `asset` per `turn`. -/
+  | balanceA (turn : Turn) (asset : AssetId)
+  /-- A Granovetter delegation (authority; bal-orthogonal). -/
+  | delegate (delegator recipient t : CellId)
+  /-- A target revocation (authority; bal-orthogonal). -/
+  | revoke   (holder t : CellId)
+  /-- A privileged per-asset supply mint. -/
+  | mintA    (actor cell : CellId) (asset : AssetId) (amt : ℤ)
+  /-- A privileged per-asset supply burn. -/
+  | burnA    (actor cell : CellId) (asset : AssetId) (amt : ℤ)
+
+/-- **The per-asset ledger delta of a `FullActionA`, indexed by asset `b`.** Transfer and authority
+are conservation-trivial (`0` for every asset); `mintA a` adds `amt` to asset `a` only; `burnA a`
+subtracts from asset `a` only. A FAMILY indexed by `AssetId` — never one aggregate scalar. -/
+def ledgerDeltaAsset : FullActionA → AssetId → ℤ
+  | .balanceA _ _,     _ => 0
+  | .delegate _ _ _,   _ => 0
+  | .revoke _ _,       _ => 0
+  | .mintA _ _ a amt,  b => if b = a then amt else 0
+  | .burnA _ _ a amt,  b => if b = a then (-amt) else 0
+
+/-- **The per-asset full executor.** Dispatch each kind to its chained per-asset primitive. ONE
+executor over the per-asset op-set; the asset-typed analog of `execFull`. -/
+def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
+  | .balanceA t a           => recCexecAsset s t a
+  | .delegate del rec t      => recCDelegate s del rec t
+  | .revoke holder t         => some (recCRevoke s holder t)
+  | .mintA actor cell a amt   => recCMintAsset s actor cell a amt
+  | .burnA actor cell a amt   => recCBurnAsset s actor cell a amt
+
+/-- **`execFullA_ledger_per_asset` — PROVED (the per-asset conservation vector).** Every committed
+`FullActionA` moves `recTotalAsset b` by EXACTLY `ledgerDeltaAsset fa b`, for EVERY asset `b`
+independently: `0` for transfer/authority (the moved asset cancels by
+`recKExecAsset_conserves_per_asset`; authority leaves `bal` fixed), `±amt` at the targeted asset for
+mint/burn, `0` at every other asset. THIS is the law a SCALAR kernel cannot state — it would let a
+mint of asset B net against a burn of asset A. The per-asset family forbids that laundering. -/
+theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (b : AssetId)
+    (h : execFullA s fa = some s') :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset fa b := by
+  cases fa with
+  | balanceA t a =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      unfold recCexecAsset at h
+      cases hx : recKExecAsset s.kernel t a with
+      | none => rw [hx] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hx] at h; simp only [Option.some.injEq] at h; subst h
+          rw [recKExecAsset_conserves_per_asset s.kernel k' t a hx b]; ring
+  | delegate del rec t =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      unfold recCDelegate at h
+      cases hd : recKDelegate s.kernel del rec t with
+      | none => rw [hd] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hd] at h; simp only [Option.some.injEq] at h; subst h
+          -- `recKDelegate` commits ⟹ it returns `{s.kernel with caps := grant …}` — `bal`/`accounts` fixed.
+          unfold recKDelegate at hd
+          by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
+          · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
+            simp only [recTotalAsset]; ring
+          · rw [if_neg hg] at hd; exact absurd hd (by simp)
+  | revoke holder t =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      simp only [recCRevoke, Option.some.injEq] at h; subst h
+      -- `recKRevokeTarget` is `{s.kernel with caps := …}` — `bal`/`accounts` fixed.
+      simp only [recTotalAsset, recKRevokeTarget]; ring
+  | mintA actor cell a amt =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      unfold recCMintAsset at h
+      cases hm : recKMintAsset s.kernel actor cell a amt with
+      | none => rw [hm] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hm] at h; simp only [Option.some.injEq] at h; subst h
+          exact recKMintAsset_delta s.kernel k' actor cell a amt hm b
+  | burnA actor cell a amt =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      unfold recCBurnAsset at h
+      cases hb : recKBurnAsset s.kernel actor cell a amt with
+      | none => rw [hb] at h; exact absurd h (by simp)
+      | some k' =>
+          rw [hb] at h; simp only [Option.some.injEq] at h; subst h
+          exact recKBurnAsset_delta s.kernel k' actor cell a amt hb b
+
+/-- **The per-asset full turn executor.** A transaction of `FullActionA`s, all-or-nothing. -/
+def execFullTurnA (s : RecChainedState) : List FullActionA → Option RecChainedState
+  | []        => some s
+  | a :: rest =>
+    match execFullA s a with
+    | some s' => execFullTurnA s' rest
+    | none    => none
+
+/-- The net per-asset ledger delta of a turn, for asset `b`: the SUM of the per-action deltas. -/
+def turnLedgerDeltaAsset (tt : List FullActionA) (b : AssetId) : ℤ :=
+  (tt.map (fun fa => ledgerDeltaAsset fa b)).sum
+
+/-- **`execFullTurnA_ledger_per_asset` — PROVED (the transaction conservation vector).** A committed
+per-asset full-turn moves `recTotalAsset b` by exactly the net of all per-action deltas in asset `b`,
+for EVERY asset `b`. Proved by induction on the turn, reusing `execFullA_ledger_per_asset`. The
+asset-indexed analog of `execFullTurn_ledger`. -/
+theorem execFullTurnA_ledger_per_asset :
+    ∀ (s s' : RecChainedState) (tt : List FullActionA) (b : AssetId), execFullTurnA s tt = some s' →
+      recTotalAsset s'.kernel b = recTotalAsset s.kernel b + turnLedgerDeltaAsset tt b
+  | s, s', [], b, h => by
+      simp only [execFullTurnA, Option.some.injEq] at h; subst h; simp [turnLedgerDeltaAsset]
+  | s, s', a :: rest, b, h => by
+      simp only [execFullTurnA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          have hhead : recTotalAsset s1.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset a b :=
+            execFullA_ledger_per_asset s s1 a b ha
+          have htail : recTotalAsset s'.kernel b = recTotalAsset s1.kernel b + turnLedgerDeltaAsset rest b :=
+            execFullTurnA_ledger_per_asset s1 s' rest b h
+          rw [htail, hhead]
+          simp only [turnLedgerDeltaAsset, List.map_cons, List.sum_cons]; ring
+
+/-- **`execFullTurnA_conserves_per_asset` — PROVED.** A committed per-asset full-turn whose net
+ledger delta is `0` *in asset `b`* preserves asset `b`'s total supply. Applied with `∀ b, … = 0`
+this gives FULL per-asset conservation: a transfer/authority-only turn (or one whose per-asset
+mint/burn nets out in EACH asset) conserves EVERY asset class. The `CONSERVATION_VECTOR` at the
+transaction level. -/
+theorem execFullTurnA_conserves_per_asset (s s' : RecChainedState) (tt : List FullActionA) (b : AssetId)
+    (h : execFullTurnA s tt = some s') (hzero : turnLedgerDeltaAsset tt b = 0) :
+    recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
+  rw [execFullTurnA_ledger_per_asset s s' tt b h, hzero, add_zero]
+
 /-! ## §11 — Axiom-hygiene tripwires (the honesty pins over the widened replacement's keystones). -/
 
 #assert_axioms recKMint_delta
@@ -636,6 +890,14 @@ theorem execFullTurn_each_attests :
 #assert_axioms execFullTurn_ledger
 #assert_axioms execFullTurn_conserves
 #assert_axioms execFullTurn_each_attests
+-- The PER-ASSET conservation-vector keystones (FILL 1, phase 2) over the executable turn:
+#assert_axioms recBalCredit_recTotalAsset
+#assert_axioms recKMintAsset_delta
+#assert_axioms recKBurnAsset_delta
+#assert_axioms recKMintAsset_authorized
+#assert_axioms execFullA_ledger_per_asset
+#assert_axioms execFullTurnA_ledger_per_asset
+#assert_axioms execFullTurnA_conserves_per_asset
 
 /-! ## §12 — Non-vacuity: each kind commits with the right invariant; unauthorized rejected.
 
@@ -708,5 +970,38 @@ def mixedTurn : List FullAction :=
 def badMixedTurn : List FullAction :=
   [ .mint 9 0 50, .burn 0 0 10 ]   -- second action unauthorized ⇒ whole turn none
 #eval (execFullTurn fs0 badMixedTurn).isSome                        -- false (rollback)
+
+/-! ## §13 — Non-vacuity for the PER-ASSET executor: conservation holds, laundering is CAUGHT. -/
+
+/-- A chained state with a genuine 2-asset `bal` ledger: cell 0 holds 100 of asset 0 and 7 of asset
+1; cell 1 holds 5 of asset 0. Actor 9 holds the privileged `node 0` mint cap over cell 0. -/
+def fma0 : RecChainedState :=
+  { kernel :=
+      { accounts := {0, 1}
+        cell := fun _ => .record [("balance", .int 0)]
+        caps := fun l => if l = 9 then [Cap.node 0] else []
+        bal := fun c a => if c = 0 then (if a = 0 then 100 else if a = 1 then 7 else 0)
+                          else if c = 1 then (if a = 0 then 5 else 0) else 0 }
+    log := [] }
+
+#eval recTotalAsset fma0.kernel 0     -- 105 (asset 0 supply)
+#eval recTotalAsset fma0.kernel 1     -- 7   (asset 1 supply)
+-- A pure per-asset TRANSFER of asset 0 (actor 0 owns src 0) conserves BOTH assets:
+#eval (execFullTurnA fma0 [.balanceA ⟨0, 0, 1, 30⟩ 0]).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))   -- some (105, 7)
+
+/-- The scalar-LAUNDERING turn a single-aggregate kernel would WRONGLY accept as conserving: mint 50
+of asset 1 while burning 50 of asset 0 (cell 0). Aggregate scalar delta = -50 + 50 = 0 ("conserved"
+— the BUG). The per-asset VECTOR delta is nonzero in EACH asset, so it cannot be passed off as a
+conservative turn. -/
+def launderTurn : List FullActionA :=
+  [ .mintA 9 0 1 50      -- +50 of asset 1
+  , .burnA 9 0 0 50 ]    -- -50 of asset 0
+
+#eval turnLedgerDeltaAsset launderTurn 0     -- -50 (NOT 0 — a scalar aggregate would hide this)
+#eval turnLedgerDeltaAsset launderTurn 1     -- 50  (NOT 0)
+-- the per-asset ledger AFTER the launder turn: asset 0 fell to 55, asset 1 rose to 57 (CAUGHT):
+#eval (execFullTurnA fma0 launderTurn).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))   -- some (55, 57)
 
 end Dregg2.Exec.TurnExecutorFull
