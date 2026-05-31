@@ -26,20 +26,34 @@ than reproving them:
 ## HONESTY LABEL — READ THIS. The `Verify` predicate here is a TOY.
 ================================================================================
 
-`hasConjunction` / `Verify` below are a **toy discrete-snapshot screen**: positions are
-single integers (a 1-D snapshot at one instant), and "conjunction" is "two objects within
-a threshold AT THAT SAMPLE". This is **NOT orbital-sound**. The genuine project — the
-substantive research that is *not* inherited (see `right-of-way-response.md` §"the deep
-one" / §"Honest scope") — is a *conservative* SGP4 / two-body screen that is provably sound
-against the **between-samples closest approach** (the discretization-error risk: a "clear"
-verdict on sampled times that misses a true closest approach between samples). That step
-and its step-completeness proof are **OUT OF SCOPE** for this demonstrator.
+`hasConjunction` / `Verify` in §2 below are a **toy discrete-snapshot screen** (kept as the
+simplest illustration of the seam): positions are single integers (a 1-D snapshot at one
+instant), and "conjunction" is "two objects within a threshold AT THAT SAMPLE" — **NOT
+orbital-sound**. BUT the substantive piece the response flagged as NOT inherited — a
+*conservative* screen provably sound against the **between-samples closest approach** — is now
+**BUILT**: see `Dregg2.Apps.OrbitalScreen` (`screen_clear_imp_continuous_clear`: a `clear`
+verdict is sound on the CONTINUOUS trajectory, not merely at samples). §9 below plugs that REAL
+screen into this exact referee seam, so `referee_sound_physics` carries genuine continuous-time
+physics, not a toy. The toy §2 screen remains only as the minimal demonstrator of the seam shape.
 
-What IS genuine here: the *seam* is real and proved. WHATEVER physics `Verify` you plug in
-(toy or a real conservative screen), the referee's adversary-proof soundness, the budget
-gate, the forced-trade exclusion, and the escalation requirement all hold — they are
-inherited theorems, not re-proved per-physics. The toy `Verify` is a placeholder at exactly
-one seam; everything around it is the proved dregg2 core.
+What IS genuine throughout: the *seam* is real and proved. WHATEVER physics `Verify` you plug in
+(the toy §2 screen OR the real `OrbitalScreen.screen`), the referee's adversary-proof soundness,
+the budget gate, the forced-trade exclusion, and the escalation requirement all hold — they are
+inherited theorems, not re-proved per-physics. §9 makes that concrete by instantiating the seam
+at the conservative screen.
+
+## THE FULL DEMONSTRATOR — four companion modules (all build green, all `#assert_axioms`-clean):
+
+  * `Dregg2.Apps.OrbitalScreen` — the REAL conservative continuous-time-sound physics screen
+    (`screen_clear_imp_continuous_clear`; the crossing-pair TEETH that the endpoint sampler misses).
+  * `Dregg2.Apps.WhoYields` — the graph-symmetry who-yields bridge (ported WL color-refinement from
+    `~/dev/graphplay`): `rigid_of_discrete` (asymmetric ⇒ forced role, no central authority),
+    `symmetric_needs_negotiation` (the teeth), `three_mutual_conflict_needs_three_roles` (the
+    round-cap floor), `outOfFuel_breaks_symmetry` (the forced-trade's second proof).
+  * `Dregg2.Apps.EpistemicSheaf` — the sheaf-of-verifiers frame: `consensus_on_clearance`
+    (H⁰ = global section), `byzantine_section_does_not_glue` (the fork = witnessed obstruction).
+  * `Dregg2.Apps.ConservationBridge` — the deep seed: `conservation_is_flow_balance` (Σδ=0 IS the
+    conjunction graph's flow-balance across the symmetry boundary — one law joining the two theories).
 
   * Fuel is modelled as a **SINK**: a single-cell debit on a `fuel` asset. There is NO
     constellation-wide conservation claim — a burn destroys Δv budget; it is not conserved
@@ -54,6 +68,7 @@ import Dregg2.Laws
 import Dregg2.Authority.Intent
 import Dregg2.Exec.JointCell
 import Dregg2.Confluence
+import Dregg2.Apps.OrbitalScreen
 
 namespace Dregg2.Apps.RightOfWay
 
@@ -362,13 +377,141 @@ out-of-fuel sat cannot burn; the forced-trade naive-ordering excluded. -/
 -- … while a real trade of any amount balances (here amt = 10 ⇒ -10 + 10 = 0).
 #eval (halfA burnB + halfB burnB)                       -- 0     (EqualAndOpposite)
 
+/-! ## 9. THE REAL-PHYSICS REFEREE — the same seam, now carrying CONTINUOUS-TIME-SOUND physics.
+
+This is the §"Honest scope" substantive piece, DISCHARGED: we plug the conservative orbital
+screen of `Dregg2.Apps.OrbitalScreen` (`screen_clear_imp_continuous_clear`) into the EXACT same
+`Intent.resolve` referee seam. The proposer (the LLM negotiation layer) is still the untrusted
+`Searchable`; the referee re-runs the *continuous-time-sound* screen. Now `referee_sound_physics`
+says: a committed maneuver is not merely "clear at a sampled instant" but **clear on the whole
+continuous maneuver step** — the between-samples closest approach is covered, by a theorem. The
+referee is a theorem AND the physics is real. -/
+
+open Dregg2.Apps.OrbitalScreen
+
+/-- **A physics screening problem** at the referee seam: a relative pair `(d0, v)` over step
+`[0,T]` at squared threshold `thrSq`. (The real-physics analog of the toy §1 `Scenario`.) -/
+structure PhysScenario where
+  /-- relative position of the pair at step start -/
+  d0    : Vec3
+  /-- relative velocity over the maneuver step -/
+  v     : Vec3
+  /-- maneuver-step length -/
+  T     : ℚ
+  /-- squared conjunction threshold -/
+  thrSq : ℚ
+deriving Repr
+
+/-- The witness the proposer offers (a "I ran the conservative screen, it's clear" token). The
+content is in `VerifyPhys` below — every checker RE-RUNS the screen; the token is never trusted. -/
+abbrev PhysWitness := Unit
+
+/-- **VERIFY (in TCB): re-run the CONSERVATIVE, continuous-time-sound orbital screen.** Unlike
+the toy §2 `Verify`, this is `OrbitalScreen.screen` — a `true` verdict is sound on the whole
+continuous step, not just at samples. The referee trusts only this. -/
+def VerifyPhys (s : PhysScenario) (_w : PhysWitness) : Bool :=
+  screen s.d0 s.v s.T s.thrSq
+
+/-- The verify side of the seam at the real screen. -/
+instance instVerifiablePhys : Verifiable PhysScenario PhysWitness where
+  Verify := VerifyPhys
+
+/-- The physics referee's intent: "find a clearance certificate for scenario `s`." -/
+def physRefereeIntent (s : PhysScenario) : Intent PhysScenario PhysWitness := { want := s }
+
+/-- **`physReferee` — the referee at the REAL screen.** Same propose-then-VERIFY shape
+(`Intent.resolve`), but VERIFY is the conservative continuous-time-sound screen. -/
+def physReferee [Searchable PhysScenario PhysWitness] (s : PhysScenario) : Option PhysWitness :=
+  (physRefereeIntent s).resolve
+
+/-- **`physReferee_screened` — a committed clearance was screen-discharging, EVEN vs an
+adversarial proposer (PROVED, inherited).** The same adversary-proof keystone as `referee_sound`,
+now at the physics screen: whatever the (possibly adversarial) negotiation layer proposes, a
+COMMITTED clearance has `screen s.d0 s.v s.T s.thrSq = true`. -/
+theorem physReferee_screened [Searchable PhysScenario PhysWitness]
+    (s : PhysScenario) (w : PhysWitness) (h : physReferee s = some w) :
+    screen s.d0 s.v s.T s.thrSq = true :=
+  Dregg2.Authority.intent_sound_against_adversary (physRefereeIntent s) w h
+
+/-- **`referee_sound_physics` — THE UPGRADED KEYSTONE: a committed maneuver is clear on the
+WHOLE CONTINUOUS STEP (PROVED).** Combining the adversary-proof seam (`physReferee_screened`)
+with the conservative screen's continuous-time soundness
+(`OrbitalScreen.screen_clear_imp_continuous_clear`): if the referee COMMITS a clearance for
+scenario `s` — even against an adversarial proposer — then at EVERY continuous time `t ∈ [0,T]`
+of the maneuver step the squared separation is at least the threshold. No between-samples
+conjunction. This is "the referee is a theorem" AND "the physics is real," in one statement —
+the substantive piece the response flagged as not-inherited, discharged. -/
+theorem referee_sound_physics [Searchable PhysScenario PhysWitness]
+    (s : PhysScenario) (w : PhysWitness) (h : physReferee s = some w)
+    (t : ℚ) (h0 : 0 ≤ t) (hT : t ≤ s.T) :
+    s.thrSq ≤ sepSq s.d0 s.v t :=
+  screen_clear_imp_continuous_clear s.d0 s.v s.T s.thrSq
+    (physReferee_screened s w h) t h0 hT
+
+/-! ### TEETH at the real screen — the crossing pair (clear at endpoints) is REJECTED.
+
+The adversarial proposer here is the *endpoint sampler*: it would accept the crossing pair
+(clear at `t=0` and `t=T`). The conservative referee rejects it, because the screen sees the
+mid-step closest approach. So even a "samples look clear" proposal does not escape. -/
+
+/-- The crossing scenario from `OrbitalScreen`: clear at both endpoints, a mid-step collision. -/
+def crossingScenario : PhysScenario :=
+  { d0 := crossingD0, v := crossingV, T := crossingT, thrSq := crossingThrSq }
+
+/-- A clear scenario: parallel tracks, never closing. -/
+def clearScenario : PhysScenario :=
+  { d0 := clearD0, v := clearV, T := 10, thrSq := 25 }
+
+/-- An ADVERSARIAL "endpoint-sampler" proposer: always claims clearance (returns the token),
+modelling a negotiation layer that checked only the endpoints. -/
+@[reducible] def samplerProposer : Searchable PhysScenario PhysWitness where
+  find := fun _ => some ()
+
+/-- **`physReferee` reduces to its screen-gated `if` (PROVED helper).** With the sampler
+proposer (always proposing the token), the referee is exactly "accept iff the screen clears." -/
+theorem physReferee_sampler_eq (s : PhysScenario) :
+    (@physReferee samplerProposer s) = (if VerifyPhys s () = true then some () else none) :=
+  rfl
+
+/-- **`physReferee_rejects_crossing` — the conservative referee REJECTS the crossing pair
+(PROVED).** Even though the endpoint-sampler proposer claims clearance, the referee's own
+continuous-time screen sees the mid-step closest approach and returns `none`. The
+"samples-look-clear" proposal does not escape — `referee_sound_physics` made concrete. -/
+theorem physReferee_rejects_crossing :
+    (@physReferee samplerProposer crossingScenario) = none := by
+  rw [physReferee_sampler_eq]
+  rw [show VerifyPhys crossingScenario () = false from screen_rejects_crossing]
+  simp
+
+/-- **`physReferee_accepts_clear` — the referee ACCEPTS a genuinely-clear scenario (PROVED).**
+Two-sided: the conservative screen is not fail-closed-on-everything; a real clearance passes. -/
+theorem physReferee_accepts_clear :
+    (@physReferee samplerProposer clearScenario) = some () := by
+  rw [physReferee_sampler_eq]
+  have hscr : VerifyPhys clearScenario () = true := by
+    show screen clearD0 clearV 10 25 = true
+    unfold screen tca vertex aCoef bCoef sepSq rel Vec3.add Vec3.smul Vec3.normSq
+      clearD0 clearV
+    norm_num
+  rw [hscr]
+  rfl
+
+/-! ### `#eval` — the real-physics referee, runnable. -/
+
+-- The conservative referee REJECTS the crossing pair (endpoint-sampler would have accepted):
+#eval (@physReferee samplerProposer crossingScenario)   -- none  (mid-step conjunction caught)
+-- … ACCEPTS a genuinely-clear scenario:
+#eval (@physReferee samplerProposer clearScenario)      -- some ()
+-- The underlying screen verdicts (the REAL continuous-time-sound physics):
+#eval VerifyPhys crossingScenario ()                    -- false (clear at samples, NOT continuously)
+#eval VerifyPhys clearScenario ()                       -- true  (clear on the whole step)
+
 /-! ## 8. Axiom-hygiene — every keystone pinned to the three standard kernel axioms.
 
 A `sorryAx` here would mean a silent `sorry` leaked into a "the referee is a theorem"
-keystone. None do. (The §8 physics oracle — a real conservative screen replacing the toy
-`Verify` — would enter as the `Verifiable` typeclass *parameter*, not an `axiom`-keyword
-declaration, so it does not appear in `collectAxioms` and correctly does not trip these
-pins; the toy `Verify` here is a concrete `def`, axiom-clean.) -/
+keystone. None do. The §9 physics screen enters via the `Verifiable` instance over the REAL
+`OrbitalScreen.screen` (a concrete `def`, axiom-clean), so the upgraded `referee_sound_physics`
+is `#assert_axioms`-clean too — the real physics adds no axioms. -/
 
 #assert_axioms referee_sound
 #assert_axioms garbage_rejected
@@ -380,5 +523,10 @@ pins; the toy `Verify` here is a concrete `def`, axiom-clean.) -/
 #assert_axioms forced_trade_excludes_naive
 #assert_axioms real_trade_balances
 #assert_axioms collisionSafety_must_escalate
+#assert_axioms physReferee_screened
+#assert_axioms referee_sound_physics
+#assert_axioms physReferee_sampler_eq
+#assert_axioms physReferee_rejects_crossing
+#assert_axioms physReferee_accepts_clear
 
 end Dregg2.Apps.RightOfWay
