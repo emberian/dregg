@@ -150,5 +150,8 @@ name = "seal_unseal_transfer"
 [[example]]
 name = "three_party_introduction"
 
+[[example]]
+name = "orchestration_demo"
+
 [lints]
 workspace = true
