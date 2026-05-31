@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dragon&rsquo;s Egg — the orchestration is a theorem</title>
+<style>
+  :root{
+    --bg:#0a0b0f; --bg2:#11131b; --panel:#151823; --line:#232737;
+    --tx:#ece9e2; --dim:#9b99a4; --faint:#6b6975;
+    --egg:#ffd166; --egg2:#f0a429; --mint:#4ade80; --cy:#56c8ff; --rose:#f87171; --violet:#b794f6;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);
+    font-size:18px;line-height:1.65;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  a{color:var(--cy);text-decoration:none} a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+  .wrap{max-width:980px;margin:0 auto;padding:0 28px}
+  section{padding:84px 0;border-top:1px solid var(--line);position:relative}
+  h2{font-size:clamp(28px,4.4vw,46px);line-height:1.08;margin:0 0 12px;letter-spacing:-.02em}
+  .kicker{font-family:var(--mono);font-size:13px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--egg);margin:0 0 16px}
+  .lead{font-size:clamp(19px,2.3vw,23px);color:var(--dim);max-width:54ch}
+  .dim{color:var(--dim)} .faint{color:var(--faint)}
+  .hl{color:var(--egg)} .hlc{color:var(--cy)} .hlm{color:var(--mint)}
+  .reveal{opacity:0;transform:translateY(20px);transition:opacity .7s ease,transform .7s ease}
+  .reveal.in{opacity:1;transform:none}
+  #bar{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--egg),var(--egg2));width:0;z-index:50}
+  nav{position:fixed;top:0;right:0;left:0;z-index:40;backdrop-filter:blur(8px);
+    background:rgba(10,11,15,.6);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;gap:18px;height:52px}
+  nav .brand{font-weight:700;letter-spacing:-.02em} nav .brand .egg{color:var(--egg)}
+  nav .links{margin-left:auto;display:flex;gap:20px;font-size:13px;font-family:var(--mono)}
+  nav .links a{color:var(--dim)} nav .links a:hover{color:var(--tx);text-decoration:none}
+  @media(max-width:720px){nav .links{display:none}}
+  /* hero */
+  .hero{padding:132px 0 84px;border-top:none;position:relative;overflow:hidden}
+  .hero .glow{position:absolute;inset:-40% -20% auto -20%;height:120%;z-index:0;
+    background:radial-gradient(60% 50% at 28% 18%,rgba(255,209,102,.15),transparent 70%),
+      radial-gradient(50% 40% at 82% 8%,rgba(86,200,255,.10),transparent 70%);
+    filter:blur(20px);pointer-events:none}
+  .hero .wrap{position:relative;z-index:1}
+  .h1{font-size:clamp(42px,7.4vw,80px);line-height:1.0;letter-spacing:-.035em;margin:0 0 22px;font-weight:790}
+  .h1 .g{background:linear-gradient(120deg,var(--egg),var(--egg2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .h1 .c{background:linear-gradient(120deg,var(--cy),var(--mint));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:clamp(19px,2.4vw,25px);color:var(--dim);max-width:46ch;margin:0 0 28px}
+  .pills{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
+  .pill{font-family:var(--mono);font-size:13px;padding:7px 13px;border:1px solid var(--line);
+    border-radius:999px;color:var(--dim);background:var(--panel)}
+  .pill b{color:var(--mint);font-weight:600} .pill.egg b{color:var(--egg)}
+  /* cards */
+  .grid{display:grid;gap:16px} .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:1fr 1fr}
+  @media(max-width:780px){.g2,.g3{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .card h3{font-size:18px;margin:0 0 5px;letter-spacing:-.01em;display:flex;gap:8px;align-items:center}
+  .card .n{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .card p{margin:.35em 0 0;color:var(--dim);font-size:15.5px}
+  .thm{font-family:var(--mono);font-size:13px;color:var(--cy)}
+  /* terminal */
+  .term{background:#07080c;border:1px solid var(--line);border-radius:14px;overflow:hidden;
+    margin-top:22px;box-shadow:0 24px 60px -30px rgba(0,0,0,.8)}
+  .term .bar{display:flex;align-items:center;gap:8px;padding:11px 15px;border-bottom:1px solid var(--line);
+    background:#0c0e15}
+  .term .bar i{width:11px;height:11px;border-radius:50%;display:inline-block}
+  .term .bar .r{background:#ff5f57}.term .bar .y{background:#febc2e}.term .bar .g{background:#28c840}
+  .term .bar span{margin-left:8px;font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .term pre{margin:0;padding:18px 20px;overflow:auto;font-family:var(--mono);font-size:13px;line-height:1.62;color:#cdd3e0;white-space:pre}
+  .term .hd{color:var(--violet);font-weight:600} .term .ok{color:var(--mint)} .term .no{color:var(--rose)}
+  .term .cy{color:var(--cy)} .term .ye{color:var(--egg)} .term .d{color:var(--faint)} .term .b{color:#fff;font-weight:600}
+  /* scene cards */
+  .scenes{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:24px}
+  @media(max-width:780px){.scenes{grid-template-columns:1fr}}
+  .scene{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .scene .t{font-family:var(--mono);font-size:12px;color:var(--egg);letter-spacing:.04em}
+  .scene h4{margin:4px 0 4px;font-size:16px;letter-spacing:-.01em}
+  .scene p{margin:0;color:var(--dim);font-size:14.5px}
+  .scene .thm{display:block;margin-top:8px;font-size:12px}
+  .scene.deny{border-color:rgba(248,113,113,.28)} .scene.deny .t{color:var(--rose)}
+  /* proof badges + stats */
+  .badges{display:flex;flex-wrap:wrap;gap:11px;margin-top:8px}
+  .badge{font-family:var(--mono);font-size:12.5px;border:1px solid var(--line);border-radius:10px;
+    padding:9px 13px;background:var(--panel);display:flex;gap:9px;align-items:center}
+  .badge .dot{width:8px;height:8px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint)}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-top:24px}
+  @media(max-width:780px){.stats{grid-template-columns:1fr 1fr}}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .stat .num{font-size:30px;font-weight:760;letter-spacing:-.02em;color:var(--egg)}
+  .stat .lab{font-size:13px;color:var(--dim);margin-top:2px}
+  .stat.cy .num{color:var(--cy)} .stat.mint .num{color:var(--mint)}
+  .note{border-left:2px solid var(--egg2);padding:8px 0 8px 18px;color:var(--dim);font-size:16px;margin:22px 0}
+  .big{font-size:clamp(23px,3.4vw,38px);line-height:1.18;letter-spacing:-.02em;font-weight:680;max-width:26ch}
+  .big .g{color:var(--egg)} .big .c{color:var(--cy)}
+  .step{display:flex;gap:16px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--line)}
+  .step:last-child{border-bottom:none}
+  .step .ic{font-family:var(--mono);color:var(--egg);font-size:13px;min-width:62px;padding-top:3px}
+  .step b{color:var(--tx)} .step span{color:var(--dim);font-size:16px}
+  footer{padding:58px 0 76px;border-top:1px solid var(--line);color:var(--faint);font-size:15px}
+  footer a{color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<nav><div class="wrap">
+  <span class="brand"><span class="egg">🥚</span> dregg</span>
+  <span class="dim mono" style="font-size:12px">Dragon&rsquo;s Egg</span>
+  <span class="links">
+    <a href="#problem">problem</a><a href="#demo">the demo</a><a href="#proof">why it&rsquo;s real</a><a href="#meta">built by agents</a>
+  </span>
+</div></nav>
+
+<!-- ============ HERO ============ -->
+<header class="hero">
+  <div class="glow"></div>
+  <div class="wrap">
+    <p class="kicker">🥚 Dragon&rsquo;s Egg &middot; formally verified agent authorization</p>
+    <h1 class="h1">The orchestration<br>is a <span class="g">theorem</span>.</h1>
+    <p class="sub">Give an AI agent enough authority to be useful &mdash; and <span class="hlc">prove, in Lean&nbsp;4</span>,
+      it can never exceed its mandate. The same file that <em>runs</em> the multi-agent orchestration
+      <em>proves</em> it sound.</p>
+    <div class="pills">
+      <span class="pill egg">🥚 a verified capability OS for <b>untrusted agents</b></span>
+      <span class="pill"><b>0</b> sorry &middot; axioms &sube; {propext, choice, quot}</span>
+      <span class="pill">built today &mdash; <b>by</b> orchestrating agents</span>
+    </div>
+  </div>
+</header>
+
+<!-- ============ PROBLEM ============ -->
+<section id="problem"><div class="wrap">
+  <p class="kicker reveal">The problem</p>
+  <h2 class="reveal">Agents act in the world.<br>Nobody bounds them.</h2>
+  <p class="lead reveal">An AI agent spends money, calls tools, spawns sub-agents, coordinates with other agents.
+    Authorization is the layer every framework <em>punts</em> &mdash; it&rsquo;s all-or-nothing, and the blast
+    radius lands on whoever deployed it.</p>
+  <div class="grid g3 reveal" style="margin-top:30px">
+    <div class="card"><h3>The model decides</h3><p>Function-calling has no permission model. The host hopes the agent stays in bounds.</p></div>
+    <div class="card"><h3>&ldquo;The host&rsquo;s problem&rdquo;</h3><p>Tool-use APIs explicitly punt authorization to the application. Unsolved by design.</p></div>
+    <div class="card"><h3>Trust the developer</h3><p>Frameworks give an agent <em>everything</em>, or nothing. No attenuation, no proof, no bound.</p></div>
+  </div>
+  <p class="reveal" style="margin-top:34px;font-size:21px">dregg is the missing layer: <span class="hl">cryptographically-enforced
+    least privilege for agents</span> &mdash; delegatable, attenuable, fail-closed &mdash; on a substrate whose
+    soundness is a <span class="hlc">machine-checked theorem</span>, not a hope.</p>
+</div></section>
+
+<!-- ============ THE DEMO ============ -->
+<section id="demo"><div class="wrap">
+  <p class="kicker reveal" style="color:var(--mint)">It runs &mdash; and every line is a theorem</p>
+  <h2 class="reveal">A multi-agent orchestration<br>that <span class="hlm">proves itself</span> sound.</h2>
+  <p class="lead reveal">One Lean file. An orchestrator spawns least-privilege workers, they run real per-asset
+    transfers, an out-of-scope worker is <em>provably</em> denied, value moves atomically through escrow, a
+    credential&#43;caveat gate fail-closes on a forgery &mdash; and the <b>whole run</b> is one call-forest
+    certified by the kernel. <span class="faint mono">Dregg2/Apps/AgentOrchestration.lean</span></p>
+
+  <div class="term reveal">
+    <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>lake env lean --run Dregg2/Apps/AgentOrchestration.lean</span></div>
+<pre><span class="hd">╔══════════════════════════════════════════════════════════════════╗
+║   dregg2 · VERIFIED MULTI-AGENT ORCHESTRATION                     ║
+║   "the orchestration is a theorem"                                ║
+╚══════════════════════════════════════════════════════════════════╝</span>
+    <span class="d">ledger: orchestrator(cell 0)=100·a0 + 7·a1, counterparty(cell 1)=5·a0</span>
+
+<span class="hd">━━ ①  SPAWN least-privilege workers — attenuated delegation ━━━━━━━━━━━</span>
+  <span class="cy">⇒</span> worker keeps only <span class="cy">[read]</span> of parent <span class="cy">[read, write]</span>   <span class="d">write LITERALLY dropped</span>
+  <span class="ok">✓ worker authority ⊆ orchestrator authority — no amplification</span>
+    <span class="d">└─ certified by</span> <span class="b">worker_authority_subset_orchestrator</span> <span class="d">(= derive_no_amplify)</span>
+
+<span class="hd">━━ ②  EXECUTE — workers run real per-asset transfers ━━━━━━━━━━━━━━━━━━━</span>
+  <span class="ok">✓ work forest committed: 2 agent actions ran</span>
+  <span class="ok">✓ every asset's total supply preserved — per-asset CONSERVATION VECTOR</span>
+    <span class="d">└─ certified by</span> <span class="b">workForest_conserves</span> <span class="d">(= execFullForestA_conserves_per_asset)</span>
+
+<span class="hd">━━ ③  DENIED — a worker acts OUTSIDE its scope (the money shot) ━━━━━━━━</span>
+  <span class="cy">⇒</span> delegated worker attempts mint +50·a1 — but holds NO mint cap
+  <span class="no">✗ DENIED  unauthorized mint rejected — whole forest rolls back (all-or-nothing)</span>
+    <span class="d">└─ certified by</span> <span class="b">badWorkerForest_fails_closed</span> <span class="d">(execFullForestA … = none, PROVED)</span>
+
+<span class="hd">━━ ④  ESCROW — atomic value-move between two agents ━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="ye">⛁</span> orchestrator LOCKS 5·a1 into escrow → counterparty   <span class="d">held(a1)=5, value PARKED</span>
+  <span class="ok">✓ COMBINED per-asset measure conserved — value parked, not created/destroyed</span>
+    <span class="d">└─ certified by</span> <span class="b">escrowLock_combined_conserves</span>
+
+<span class="hd">━━ ⑤  AUTH GATE — credential + caveat ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━</span>
+  <span class="ok">✓ gated forest commits ⇒ credential validated ∧ caveats discharged</span>
+  <span class="no">✗ DENIED  forged-credential node rejected   (credential-orthogonality)</span>
+  <span class="no">✗ DENIED  failing-caveat node rejected      (caveat-orthogonality)</span>
+    <span class="d">└─ certified by</span> <span class="b">gate_committed_implies_credential_and_caveats</span>
+
+<span class="hd">━━ ⑥  THE WHOLE ORCHESTRATION — assembled, run, certified ━━━━━━━━━━━━━━</span>
+  <span class="ok">✓ orchestration committed: 3 agent actions (mint / transfer / burn)</span>
+    <span class="d">per-asset net delta: a0=0, a1=0  ·  2 delegation edges, all non-amplifying</span>
+  <span class="ok">✓ ∀ asset conserved  ∧  ∀ edge non-amplifying  ∧  ∀ node attested its StepInv</span>
+    <span class="d">└─ certified by</span> <span class="b">orchestration_conserves ∧ _no_amplify ∧ _each_attests</span>
+
+<span class="ok">Every ✓ above is a Lean theorem, checked by the kernel — this file</span>
+<span class="ok">compiling IS the proof. The orchestration is sound by construction.</span></pre>
+  </div>
+
+  <div class="scenes reveal">
+    <div class="scene"><span class="t">① attenuation</span><h4>Least-privilege spawn</h4>
+      <p>Each sub-agent gets only a <em>narrowed</em> slice of the orchestrator&rsquo;s authority &mdash; <code>write</code> is literally dropped.</p>
+      <span class="thm">granted &sube; held (Granovetter)</span></div>
+    <div class="scene"><span class="t">② conservation</span><h4>Real transfers, ∀-asset</h4>
+      <p>Workers run genuine per-asset moves; <b>every</b> asset&rsquo;s supply is preserved &mdash; a vector a scalar couldn&rsquo;t state.</p>
+      <span class="thm">recTotalAssetWithEscrow · ∀ b</span></div>
+    <div class="scene deny"><span class="t">③ confinement</span><h4>Out-of-scope &rarr; DENIED</h4>
+      <p>A worker exceeding its grant isn&rsquo;t logged after the fact &mdash; the kernel returns <code>none</code> and the whole turn rolls back.</p>
+      <span class="thm">execFullForestA … = none (proved)</span></div>
+    <div class="scene"><span class="t">⑤ the auth gate</span><h4>Credential &#43; caveat</h4>
+      <p>A node commits iff the credential validates <em>and</em> the caveats discharge. Forge either &rarr; fail-closed.</p>
+      <span class="thm">committed ⇒ WHO ∧ caveats</span></div>
+  </div>
+</div></section>
+
+<!-- ============ WHY IT'S REAL ============ -->
+<section id="proof"><div class="wrap">
+  <p class="kicker reveal" style="color:var(--cy)">The part nobody else has</p>
+  <h2 class="reveal">It isn&rsquo;t a library.<br>It&rsquo;s a <span class="hlc">theorem</span>.</h2>
+  <p class="lead reveal">The agent runtime is an <em>executable</em> kernel in Lean&nbsp;4, and its safety properties are
+    <em>proved</em> &mdash; not tested. The primitives the demo runs are the ones the proofs are about.</p>
+
+  <div class="grid g2 reveal" style="margin-top:28px">
+    <div class="card"><h3>🟢 Non-amplification</h3>
+      <p>An agent can only ever delegate authority it already holds. A delegation that would <em>widen</em> authority is rejected. <span class="thm">granted &sube; held · derive_no_amplify</span></p></div>
+    <div class="card"><h3>🟢 Conservation, per-asset</h3>
+      <p>No agent conjures value from nothing &mdash; for <em>every</em> asset, even across the escrow holding-store. <span class="thm">execFullForestA_conserves_per_asset</span></p></div>
+    <div class="card"><h3>🟢 Fail-closed confinement</h3>
+      <p>Out-of-scope is <em>impossible</em>, not merely audited: the executor returns <code>none</code> and the all-or-nothing turn rolls back. <span class="thm">recKExecAsset_unauthorized_fails</span></p></div>
+    <div class="card"><h3>🟢 Caveats that read state &mdash; no TOCTOU</h3>
+      <p>An action can depend on a peer&rsquo;s state, checked atomically inside one joint turn (an equalizer over a shared id) &mdash; the construct legacy systems refused as too dangerous, now sound. <span class="thm">crossCaveat_sound · driftStable_composes</span></p></div>
+  </div>
+
+  <div class="note reveal" style="margin-top:28px">
+    <b class="hlc">The honest line.</b> We verify the <em>logic</em> of authorization in Lean; the cryptographic primitives
+    (signatures, STARK verify, HMAC) stay a stated <span class="mono">§8 portal</span> &mdash; the same trusted floor seL4
+    takes. You don&rsquo;t prove DLog-hardness; you prove the kernel that <em>uses</em> it, and that the gate fail-closes on a
+    forged credential.
+  </div>
+
+  <div class="badges reveal" style="margin-top:24px">
+    <span class="badge"><span class="dot"></span> zero <code>sorry</code> · zero <code>admit</code></span>
+    <span class="badge"><span class="dot"></span> CI-forbidden, forever</span>
+    <span class="badge"><span class="dot"></span> axioms &sube; {propext, Classical.choice, Quot.sound}</span>
+    <span class="badge"><span class="dot"></span> crypto = a stated §8 portal (the seL4 floor)</span>
+  </div>
+  <div class="stats reveal">
+    <div class="stat"><div class="num">16</div><div class="lab">theorems certifying the live demo</div></div>
+    <div class="stat cy"><div class="num">3460</div><div class="lab">proof jobs · green build</div></div>
+    <div class="stat mint"><div class="num">∀b</div><div class="lab">per-asset conservation vector</div></div>
+    <div class="stat"><div class="num">0</div><div class="lab">sorry · the kernel is the judge</div></div>
+  </div>
+</div></section>
+
+<!-- ============ BUILT BY AGENTS ============ -->
+<section id="meta"><div class="wrap">
+  <p class="kicker reveal" style="color:var(--violet)">The loop that closes</p>
+  <h2 class="reveal">We built it <span style="color:var(--violet)">by</span><br>orchestrating agents.</h2>
+  <p class="lead reveal">This verified metatheory was written by orchestrating swarms of LLM agents &mdash; and the only
+    reason that produced <em>trustworthy</em> output is the very discipline dregg gives <em>its</em> agents.</p>
+
+  <div class="reveal" style="margin-top:26px">
+    <div class="step"><span class="ic">design</span><span><b>Architect agents</b> survey the real code in parallel and propose a spec &mdash; structure, exact theorem statements, the reuse map.</span></div>
+    <div class="step"><span class="ic">build</span><span><b>A build agent</b> implements it as one coherent change, building green at every step.</span></div>
+    <div class="step"><span class="ic">verify</span><span><b>An adversarial verifier</b> tries to <em>reject</em> it: green-but-hollow? a vacuous theorem? a stub wearing a proof? It must fail to break it.</span></div>
+    <div class="step"><span class="ic">gate</span><span><b>The Lean kernel + a human</b> have the final word &mdash; <code>#assert_axioms</code>, the no-sorry guard, a read of the load-bearing bodies. Nothing is accepted on an agent&rsquo;s say-so.</span></div>
+  </div>
+
+  <p class="big reveal" style="margin-top:36px">Untrusted agents produced trustworthy output &mdash; because <span class="g">nothing was trusted</span>, <span class="c">everything was verified</span>.</p>
+  <p class="reveal dim" style="margin-top:18px;max-width:56ch">That is <em>exactly</em> dregg&rsquo;s thesis for agents in the world: <b class="hl">verify, never find</b>. The framework
+    that orchestrates untrusted cells, and the method that orchestrated untrusted LLMs to build it, are the
+    <span class="hl">same shape</span> &mdash; checking is cheap and trusted; search is untrusted. Constructive knowledge,
+    all the way down. 🥚</p>
+</div></section>
+
+<footer><div class="wrap">
+  <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:baseline;justify-content:space-between">
+    <span><span class="hl">🥚 dregg</span> &mdash; Dragon&rsquo;s Egg &middot; the orchestration is a theorem</span>
+    <span class="faint mono" style="font-size:13px">Lean&nbsp;4 metatheory &middot; built at AGI House &times; W&amp;B &middot; <a href="https://ember.software">ember.software</a></span>
+  </div>
+</div></footer>
+
+<script>
+  const bar=document.getElementById('bar');
+  const onScroll=()=>{const h=document.documentElement;const p=h.scrollTop/(h.scrollHeight-h.clientHeight);bar.style.width=(p*100)+'%';};
+  document.addEventListener('scroll',onScroll,{passive:true});onScroll();
+  const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}})},{rootMargin:'0px 0px -8% 0px',threshold:.06});
+  document.querySelectorAll('.reveal:not(.in)').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>
