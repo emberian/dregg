@@ -40,6 +40,13 @@ open scoped BigOperators
 not in the whole-state ℤ, but in this NAMED field of the content-addressed record. -/
 def balanceField : FieldName := "balance"
 
+/-- **An asset identity.** A dregg cell holds MANY assets, and conservation must be **per-asset**,
+never one aggregate scalar (`EFFECT-ISA-DESIGN.md:315,320-323`; `dregg2 §2.1`). A turn that moves
+5 of asset 0 must leave the supply of asset 1 *literally untouched* — folding all assets into one
+sum would let a cell silently swap one asset for another while the aggregate stays put. The
+conserved quantity is therefore a *family* indexed by `AssetId` (see `§MULTI-ASSET` below). -/
+abbrev AssetId : Type := Nat
+
 /-- **`balOf v`** — read a cell record's `balance` field as an `Int`, defaulting an
 absent/ill-typed field to `0` (fail-soft on the *measure*: a malformed record contributes `0` to
 the total, never crashes the sum — the data-tier shadow of `Value.flatten`'s zero-default). This
@@ -97,6 +104,14 @@ structure RecordKernelState where
   escrows    : List EscrowRecord := []
   /-- The spent-note nullifier SET (`self.note_nullifiers`); DEFAULTS EMPTY. -/
   nullifiers : List Nat := []
+  /-- **The genuine per-asset balance ledger** `bal c a` — the (ℤ-valued, debt-capable) amount of
+  asset `a` held by cell `c`. dregg cells hold MANY assets; conservation is PER-ASSET
+  (`EFFECT-ISA-DESIGN.md:315,320-323`), never one aggregate scalar. DEFAULTS to the empty ledger so
+  every existing construction/proof that ignores it is unaffected (the additive extension, exactly
+  as `escrows`/`nullifiers` were added). This is the destination conserved measure the per-asset
+  transition (`§MULTI-ASSET`) preserves; the scalar `balance` field is its legacy asset-view, and
+  the executable `FullAction` dispatch migrates onto `bal` (`DREGG2-GAP-MAP.md FILL 1`). -/
+  bal        : CellId → AssetId → ℤ := fun _ _ => 0
 
 /-- **The `balance`-domain measure** over the record cell-state: the total `balance` field across
 the live accounts. This is the conserved quantity — a domain measure over the named `balance`
@@ -247,6 +262,128 @@ theorem recKExec_frame (k k' : RecordKernelState) (turn : Turn)
       ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
   · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; rw [← h]; exact ⟨rfl, rfl⟩
   · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-! ## §MULTI-ASSET — the per-asset `CONSERVATION_VECTOR` over the REAL executable state + gate.
+
+`recKExec`/`recTotal` above conserve ONE scalar (the `balance` field). A dregg cell holds MANY
+assets, and conservation must be PER-ASSET — a committed turn moving asset `a` must leave EVERY
+other asset's supply *literally untouched*; folding all assets into one aggregate would let a cell
+silently swap asset A for asset B while the scalar stays put (`EFFECT-ISA-DESIGN.md:315,320-323`;
+`DREGG2-GAP-MAP.md FILL 1`, "the #1 soundness gap"). `Exec.MultiAsset` proved exactly this — but
+over a deliberately PARALLEL `MACellId`/`maAuthorizedB` toy that "cannot clash with `Kernel.CellId`"
+and is imported by nothing executable (a sibling law). Here we re-prove it over the REAL
+`RecordKernelState.bal` ledger and the REAL `authorizedB k.caps` gate — the SAME state type and
+authority the FFI's `execFullTurn` runs — so the per-asset law is no longer a sibling. (Migrating
+the executable `FullAction` dispatch onto `bal` + the negative differential is the next phase.) -/
+
+/-- The per-asset balance ledger after a transfer of asset `a`: debit `src`, credit `dst` in the
+`a` column ONLY; every other cell and **every other asset** is returned unchanged. The named-field
+`recTransfer`'s multi-asset analog, over the genuine `CellId → AssetId → ℤ` ledger. -/
+def recTransferBal (bal : CellId → AssetId → ℤ) (src dst : CellId) (a : AssetId) (amt : ℤ) :
+    CellId → AssetId → ℤ :=
+  fun c b =>
+    if b = a then
+      (if c = src then bal c b - amt else if c = dst then bal c b + amt else bal c b)
+    else bal c b
+
+/-- **The executable per-asset transition** over the real record state. Fail-closed: commits only
+when the actor is authorized over `src` (the SAME `authorizedB k.caps` gate as the scalar kernel —
+NOT `MultiAsset`'s `maAuthorizedB` toy), the amount is non-negative and available *in that asset*,
+`src ≠ dst`, and both cells are live accounts. Rewrites ONLY the `bal` ledger's `a` column. -/
+def recKExecAsset (k : RecordKernelState) (turn : Turn) (a : AssetId) : Option RecordKernelState :=
+  if authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
+      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts then
+    some { k with bal := recTransferBal k.bal turn.src turn.dst a turn.amt }
+  else
+    none
+
+/-- **Total supply of asset `a`** over the live accounts — the conserved family, indexed by
+`AssetId` (NOT collapsed to one scalar). The per-asset analog of `recTotal`. -/
+def recTotalAsset (k : RecordKernelState) (a : AssetId) : ℤ := ∑ c ∈ k.accounts, k.bal c a
+
+/-- Per-asset conservation core (moved asset): for the moved asset `a`, a transfer between two
+distinct live accounts preserves its column sum (debit and credit cancel). Reuses `sum_indicator`,
+the same single-point-cancellation the scalar kernel uses. -/
+theorem recTransferBal_sum_conserve_moved (acc : Finset CellId) (bal : CellId → AssetId → ℤ)
+    (src dst : CellId) (a : AssetId) (amt : ℤ) (hsrc : src ∈ acc) (hdst : dst ∈ acc) (hne : src ≠ dst) :
+    (∑ c ∈ acc, recTransferBal bal src dst a amt c a) = ∑ c ∈ acc, bal c a := by
+  rw [← sub_eq_zero, ← Finset.sum_sub_distrib]
+  have hg : ∀ c ∈ acc, recTransferBal bal src dst a amt c a - bal c a
+      = (if c = src then (-amt) else 0) + (if c = dst then amt else 0) := by
+    intro c _
+    unfold recTransferBal
+    rw [if_pos rfl]
+    rcases eq_or_ne c src with h1 | h1
+    · subst h1; rw [if_pos rfl, if_pos rfl, if_neg hne]; ring
+    · rcases eq_or_ne c dst with h2 | h2
+      · subst h2; rw [if_neg h1, if_pos rfl, if_neg h1, if_pos rfl]; ring
+      · rw [if_neg h1, if_neg h2, if_neg h1, if_neg h2]; ring
+  rw [Finset.sum_congr rfl hg, Finset.sum_add_distrib,
+      sum_indicator acc src (-amt) hsrc, sum_indicator acc dst amt hdst]
+  ring
+
+/-- Per-asset conservation core (untouched asset): for any asset `b ≠ a`, the transfer of asset `a`
+leaves the entire `b` column literally unchanged — pointwise, hence the sum. -/
+theorem recTransferBal_untouched (bal : CellId → AssetId → ℤ) (src dst : CellId)
+    (a b : AssetId) (amt : ℤ) (hb : b ≠ a) (c : CellId) :
+    recTransferBal bal src dst a amt c b = bal c b := by
+  unfold recTransferBal; rw [if_neg hb]
+
+/-- **THE KEYSTONE — per-asset conservation, PROVED of the EXECUTABLE record kernel over the REAL
+gate.** Every committed per-asset transfer preserves `recTotalAsset k b` for EVERY asset `b`: the
+moved asset by the debit/credit cancellation, every other asset because its column is untouched.
+This is the `CONSERVATION_VECTOR` (`DREGG2-GAP-MAP.md FILL 1`) on the real executable
+`RecordKernelState` — the multi-asset refinement of `recKExec_conserves`, no longer a `MultiAsset`
+sibling toy. -/
+theorem recKExecAsset_conserves_per_asset (k k' : RecordKernelState) (turn : Turn) (a : AssetId)
+    (h : recKExecAsset k turn a = some k') (b : AssetId) :
+    recTotalAsset k' b = recTotalAsset k b := by
+  unfold recKExecAsset at h
+  by_cases hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
+      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, _, hne, hsrc, hdst⟩ := hg
+    show (∑ c ∈ k.accounts, recTransferBal k.bal turn.src turn.dst a turn.amt c b)
+        = ∑ c ∈ k.accounts, k.bal c b
+    rcases eq_or_ne b a with hb | hb
+    · subst hb
+      exact recTransferBal_sum_conserve_moved k.accounts k.bal turn.src turn.dst b turn.amt
+        hsrc hdst hne
+    · exact Finset.sum_congr rfl
+        (fun c _ => recTransferBal_untouched k.bal turn.src turn.dst a b turn.amt hb c)
+  · rw [if_neg hg] at h
+    exact absurd h (by simp)
+
+/-- **No state change without authority — PROVED** for the per-asset kernel: it never moves a cell's
+resource on behalf of an unauthorized actor. The REAL `authorizedB` gate, not `MultiAsset`'s
+`maAuthorizedB` toy. -/
+theorem recKExecAsset_authorized (k k' : RecordKernelState) (turn : Turn) (a : AssetId)
+    (h : recKExecAsset k turn a = some k') : authorizedB k.caps turn = true := by
+  unfold recKExecAsset at h
+  by_cases hg : authorizedB k.caps turn = true ∧ 0 ≤ turn.amt ∧ turn.amt ≤ k.bal turn.src a
+      ∧ turn.src ≠ turn.dst ∧ turn.src ∈ k.accounts ∧ turn.dst ∈ k.accounts
+  · exact hg.1
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **Fail-closed — PROVED.** An unauthorized per-asset turn does NOT commit. -/
+theorem recKExecAsset_unauthorized_fails (k : RecordKernelState) (turn : Turn) (a : AssetId)
+    (h : authorizedB k.caps turn = false) : recKExecAsset k turn a = none := by
+  unfold recKExecAsset
+  rw [if_neg]
+  rintro ⟨ha, _⟩
+  rw [h] at ha; exact absurd ha (by simp)
+
+/-- **The cross-asset NON-LAUNDERING fact — PROVED.** A committed transfer of asset `a` CANNOT
+change asset `b ≠ a`'s total supply. This is exactly what a SCALAR kernel cannot guarantee: a
+scalar that sums one aggregate would accept a turn that mints asset B while burning an equal amount
+of asset A (aggregate-conserving, per-asset-VIOLATING). The per-asset ledger makes that laundering
+unrepresentable as a single conservative transfer — the soundness content of `CONSERVATION_VECTOR`. -/
+theorem recKExecAsset_no_cross_asset_leak (k k' : RecordKernelState) (turn : Turn) (a b : AssetId)
+    (h : recKExecAsset k turn a = some k') (_hb : b ≠ a) :
+    recTotalAsset k' b = recTotalAsset k b :=
+  recKExecAsset_conserves_per_asset k k' turn a h b
 
 /-! ## Whole-execution conservation (the userspace-program layer). -/
 
@@ -698,6 +835,13 @@ theorem note_spend_then_reject {k k' : RecordKernelState} {nf : Nat}
 #assert_axioms note_no_double_spend
 #assert_axioms note_spend_inserts
 #assert_axioms note_spend_then_reject
+-- The per-asset CONSERVATION_VECTOR keystones (FILL 1) over the REAL executable state + gate:
+#assert_axioms recTransferBal_sum_conserve_moved
+#assert_axioms recTransferBal_untouched
+#assert_axioms recKExecAsset_conserves_per_asset
+#assert_axioms recKExecAsset_authorized
+#assert_axioms recKExecAsset_unauthorized_fails
+#assert_axioms recKExecAsset_no_cross_asset_leak
 
 /-! ## It runs (`#eval`) — an account cell as a record. -/
 
@@ -721,5 +865,25 @@ def rtBad : Turn := { actor := 2, src := 0, dst := 1, amt := 30 }
 -- The non-balance field (`nonce`) survives the transfer on the content-addressed record:
 #eval (recKExec rs0 rt1).map (fun k => (k.cell 0).scalar "nonce")   -- some (some 0)
 #eval (recKExec rs0 rt1).map (fun k => balOf (k.cell 0))            -- some 70
+
+/-! ### §MULTI-ASSET runs (`#eval`) — the per-asset ledger conserves each asset class. -/
+
+/-- A 2-cell, 2-asset ledger: cell 0 holds 100 of asset 0 and 7 of asset 1; cell 1 holds 5 of
+asset 0. (The `cell`/`caps` carry trivially; `bal` is the genuine per-asset ledger.) -/
+def rms0 : RecordKernelState :=
+  { accounts := {0, 1}
+    cell := fun _ => .record [("balance", .int 0)]
+    caps := fun _ => []
+    bal := fun c a => if c = 0 then (if a = 0 then 100 else if a = 1 then 7 else 0)
+                      else if c = 1 then (if a = 0 then 5 else 0) else 0 }
+
+#eval recTotalAsset rms0 0                                            -- 105 (asset 0 supply)
+#eval recTotalAsset rms0 1                                            -- 7   (asset 1 supply)
+#eval (recKExecAsset rms0 rt1 0).map (fun k => recTotalAsset k 0)     -- some 105 (asset 0 conserved)
+#eval (recKExecAsset rms0 rt1 0).map (fun k => recTotalAsset k 1)     -- some 7   (asset 1 UNTOUCHED)
+#eval (recKExecAsset rms0 rtBad 0).isSome                             -- false   (unauthorized)
+-- moving asset 0 cannot inflate asset 1's supply — the scalar-laundering attack is unrepresentable:
+#eval (recKExecAsset rms0 rt1 0).map (fun k => (k.bal 0 0, k.bal 0 1, k.bal 1 0, k.bal 1 1))
+                                                                      -- some (70, 7, 35, 0)
 
 end Dregg2.Exec
