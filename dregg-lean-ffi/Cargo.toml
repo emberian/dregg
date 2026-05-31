@@ -20,5 +20,17 @@ path = "src/main.rs"
 name = "differential"
 path = "src/differential.rs"
 
+# The CIRCUIT-extraction differential: decodes the Lean-`emit`ted kernelCircuit
+# wire form and binds it to the Rust-native AIR by fingerprint. Does not call
+# Lean FFI itself, but links the same archive (build.rs is crate-global).
+[[bin]]
+name = "circuit_differential"
+path = "src/circuit_differential.rs"
+
+[dependencies]
+# Reproduces circuit::air_descriptor::fingerprint (BLAKE3-derive-key) so the
+# decoded-Lean AIR can be fingerprint-bound to the Rust-native AIR.
+blake3 = "1"
+
 [build-dependencies]
 cc = "1"
