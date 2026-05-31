@@ -1096,6 +1096,107 @@ def noteSpendChainA (s : RecChainedState) (nf : Nat) (actor : CellId) : Option R
   | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
   | none    => none
 
+/-! ### §MA-bridge — the cross-chain bridge lock/finalize/cancel on the SHARED escrow holding-store
+(Wave-5 `PHASE-BRIDGE`). The chained wrappers over `RecordKernel`'s `bridgeLockKAsset` (≈ escrow-create,
+combined-conserving), `bridgeFinalizeKAsset` (a no-credit resolve — the value LEFT for the other chain,
+COMBINED DROPS by the bridged amount, a disclosed OUTFLOW like burn) and `bridgeCancelKAsset` (≈
+escrow-refund, combined-conserving). bridgeMint (the inbound side) was already wired (reuses
+`recCMintAsset`). The §8 confirmation receipt (the destination signature) is the THEOREM-level portal,
+exactly as bridgeMint's foreign finality. -/
+
+/-- **Chained per-asset bridge LOCK.** Run `RecordKernel.bridgeLockKAsset` (single-cell, single-asset
+debit at `asset` + park the bridge-tagged record), and on success extend the receipt chain. -/
+def bridgeLockChainA (s : RecChainedState) (id : Nat) (actor originator destination : CellId)
+    (asset : AssetId) (amount : ℤ) : Option RecChainedState :=
+  match bridgeLockKAsset s.kernel id actor originator destination asset amount with
+  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+  | none    => none
+
+/-- **Chained per-asset bridge FINALIZE** (the §8 confirmation arrived — the no-credit resolve; the
+value LEFT for the other chain, COMBINED measure DROPS by the DISCLOSED bridged `(asset, amount)`; the
+executor gates on the parked record matching). -/
+def bridgeFinalizeChainA (s : RecChainedState) (id : Nat) (actor : CellId) (asset : AssetId) (amount : ℤ) :
+    Option RecChainedState :=
+  match bridgeFinalizeKAsset s.kernel id asset amount with
+  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+  | none    => none
+
+/-- **Chained per-asset bridge CANCEL** (timeout/failure — single-cell credit back to the originator at
+the record's asset; combined CONSERVED). -/
+def bridgeCancelChainA (s : RecChainedState) (id : Nat) (actor : CellId) : Option RecChainedState :=
+  match bridgeCancelKAsset s.kernel id with
+  | some k' => some { kernel := k', log := escrowReceiptA actor :: s.log }
+  | none    => none
+
+/-- **`bridgeLockChainA_combined_neutral` — PROVED.** A committed bridge lock conserves the COMBINED
+per-asset measure at EVERY asset `b` (the bal debit at `asset` is offset by the holding-store rise).
+Reads off `RecordKernel.bridge_lock_conserves_combined_per_asset`. -/
+theorem bridgeLockChainA_combined_neutral {s s' : RecChainedState} {id : Nat}
+    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (h : bridgeLockChainA s id actor originator destination asset amount = some s') :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+  unfold bridgeLockChainA at h
+  cases hc : bridgeLockKAsset s.kernel id actor originator destination asset amount with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact bridge_lock_conserves_combined_per_asset b hc
+
+/-- **`bridgeLockChainA_bal_debits` — PROVED.** A committed bridge lock DROPS the BARE per-asset ledger
+`recTotalAsset asset` by `amount` (a real per-asset debit — the value is now INACCESSIBLE in the lock,
+awaiting the other chain). -/
+theorem bridgeLockChainA_bal_debits {s s' : RecChainedState} {id : Nat}
+    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
+    (h : bridgeLockChainA s id actor originator destination asset amount = some s') :
+    recTotalAsset s'.kernel asset = recTotalAsset s.kernel asset - amount := by
+  unfold bridgeLockChainA at h
+  cases hc : bridgeLockKAsset s.kernel id actor originator destination asset amount with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact (bridge_lock_debits_per_asset hc).1
+
+/-- **`bridgeFinalizeChainA_burns_combined` — THE BRIDGE HEADLINE (PROVED).** A committed bridge finalize
+MOVES the COMBINED per-asset measure DOWN by EXACTLY the DISCLOSED `amount` at the disclosed `asset`
+(`b = asset`), leaving every OTHER asset LITERALLY FIXED — the value genuinely LEFT for the other chain.
+Reads off `RecordKernel.bridgeFinalizeKAsset_moves_combined_per_asset`. NON-VACUOUS: the drop is a
+per-asset DISCLOSED OUTFLOW guarded by `b = asset` (no cross-asset laundering at the bridge boundary). -/
+theorem bridgeFinalizeChainA_burns_combined {s s' : RecChainedState} {id : Nat} {actor : CellId}
+    {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (h : bridgeFinalizeChainA s id actor asset amount = some s') :
+    recTotalAssetWithEscrow s'.kernel b
+      = recTotalAssetWithEscrow s.kernel b - (if b = asset then amount else 0) := by
+  unfold bridgeFinalizeChainA at h
+  cases hc : bridgeFinalizeKAsset s.kernel id asset amount with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact bridgeFinalizeKAsset_moves_combined_per_asset b hc
+
+/-- **`bridgeCancelChainA_combined_neutral` — PROVED (the refund round-trip).** A committed bridge cancel
+conserves the COMBINED per-asset measure at EVERY asset (value returns to the LIVE, gate-checked
+originator). Reads off `RecordKernel.bridge_cancel_conserves_combined_per_asset`. -/
+theorem bridgeCancelChainA_combined_neutral {s s' : RecChainedState} {id : Nat} {actor : CellId}
+    (b : AssetId) (h : bridgeCancelChainA s id actor = some s') :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b := by
+  unfold bridgeCancelChainA at h
+  cases hc : bridgeCancelKAsset s.kernel id with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hc] at h; simp only [Option.some.injEq] at h; subst h
+      exact bridge_cancel_conserves_combined_per_asset b hc
+
+/-- **`bridgeLockChainA_authorized` — PROVED.** A committed bridge lock required the actor to be
+authorized over the debited originator cell (the SAME `authorizedB` gate as `transfer`). -/
+theorem bridgeLockChainA_authorized {s s' : RecChainedState} {id : Nat}
+    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
+    (h : bridgeLockChainA s id actor originator destination asset amount = some s') :
+    authorizedB s.kernel.caps { actor := actor, src := originator, dst := destination, amt := amount } = true := by
+  unfold bridgeLockChainA at h
+  cases hc : bridgeLockKAsset s.kernel id actor originator destination asset amount with
+  | none => rw [hc] at h; exact absurd h (by simp)
+  | some k' => exact bridgeLockKAsset_authorized hc
+
 /-- **`createEscrowChainA_combined_neutral` — PROVED.** A committed per-asset escrow create conserves
 the COMBINED per-asset measure at EVERY asset `b` (the bal debit at `asset` is offset by the
 holding-store rise). Reads off `RecordKernel.escrow_create_conserves_combined_per_asset`. -/
@@ -1259,6 +1360,31 @@ inductive FullActionA where
   | releaseCommittedEscrowA (id : Nat) (actor : CellId)
   /-- `RefundCommittedEscrow { id }` (`#121`): portal-gated refund of a committed escrow. -/
   | refundCommittedEscrowA  (id : Nat) (actor : CellId)
+  -- §MA-bridge: the cross-chain two-phase bridge (Wave-5 `PHASE-BRIDGE`) on the SHARED escrow
+  -- holding-store (a `bridge := true`-tagged record). bridgeMint (the INBOUND side) is already done
+  -- (`bridgeMintA`, above — reuses `recCMintAsset`). These are the OUTBOUND legs:
+  /-- `BridgeLock { nullifier, destination, value, asset_type, timeout_height, spending_proof }`
+  (dregg1 `apply_bridge_lock`, `cell/src/note_bridge.rs::initiate_bridge`): lock `amount` of `asset`
+  from `originator` into the off-ledger holding-store — value INACCESSIBLE, AWAITING the other-chain
+  confirmation (single-cell debit + parked bridge-tagged record). Combined per-asset CONSERVING; bare
+  per-asset ledger DEBITED at `asset` (≈ escrow create). The §8 spending proof is the THEOREM-level
+  portal. -/
+  | bridgeLockA     (id : Nat) (actor originator destination : CellId) (asset : AssetId) (amount : ℤ)
+  /-- `BridgeFinalize { nullifier, receipt }` (dregg1 `apply_bridge_finalize`,
+  `cell/src/note_bridge.rs::finalize_bridge`): the §8 confirmation receipt arrived (the
+  destination-federation signature — `verify_bridge_receipt`, the §8 portal); the lock RESOLVES and the
+  value LEAVES for the other chain — a BURN on this side (no credit). COMBINED per-asset measure DROPS by
+  the bridged amount (a disclosed OUTFLOW). The ONE holding-store resolution that does NOT conserve, and
+  honestly so. The receipt DISCLOSES the bridged `(asset, amount)` — carried on the action so the
+  per-asset conservation VECTOR can state the `-amount` move at `asset`; the executor gates on the parked
+  record's `(asset, amount)` MATCHING the disclosed pair (fail-closed otherwise, exactly as dregg1's
+  finalize checks the receipt against the pending bridge). -/
+  | bridgeFinalizeA (id : Nat) (actor : CellId) (asset : AssetId) (amount : ℤ)
+  /-- `BridgeCancel { nullifier }` (dregg1 `apply_bridge_cancel`,
+  `cell/src/note_bridge.rs::cancel_bridge`): the timeout was reached without a receipt; the note is
+  UNLOCKED and the value REFUNDED to the originator (single-cell credit + resolve). COMBINED per-asset
+  CONSERVING (≈ escrow refund). The timeout gate is carried at the theorem layer. -/
+  | bridgeCancelA   (id : Nat) (actor : CellId)
 
 /-- **The per-asset COMBINED ledger delta of a `FullActionA`, indexed by asset `b`** — the move of the
 COMBINED measure `recTotalAssetWithEscrow` (= `bal`-ledger + per-asset holding-store). Transfer and
@@ -1303,6 +1429,13 @@ def ledgerDeltaAsset : FullActionA → AssetId → ℤ
   | .createCommittedEscrowA _ _ _ _ _ _, _ => 0
   | .releaseCommittedEscrowA _ _, _ => 0
   | .refundCommittedEscrowA _ _,  _ => 0
+  -- §MA-bridge: LOCK is COMBINED-conserving (bal debit offset by the holding-store park), so its COMBINED
+  -- delta is `0`; CANCEL refunds the originator (combined fixed), so `0`; FINALIZE is the ONE disclosed
+  -- OUTFLOW — the value LEFT for the other chain, so the COMBINED measure DROPS by the DISCLOSED `amount`
+  -- at the disclosed `asset` ONLY (like burn, `-amount`), every other asset fixed.
+  | .bridgeLockA _ _ _ _ _ _,     _ => 0
+  | .bridgeFinalizeA _ _ a amount, b => if b = a then (-amount) else 0
+  | .bridgeCancelA _ _,           _ => 0
 
 /-- **The per-asset full executor.** Dispatch each kind to its chained per-asset primitive. ONE
 executor over the per-asset op-set; the asset-typed analog of `execFull`. The 5 pure-state effects
@@ -1348,6 +1481,12 @@ def execFullA (s : RecChainedState) : FullActionA → Option RecChainedState
       createEscrowChainA s id actor creator recipient asset amount
   | .releaseCommittedEscrowA id actor => releaseEscrowChainA s id actor
   | .refundCommittedEscrowA id actor  => refundEscrowChainA s id actor
+  -- §MA-bridge: lock/finalize/cancel route to the chained per-asset bridge steps over the SHARED escrow
+  -- holding-store. bridgeMint (the inbound side) routes to `recCMintAsset` (already done, above).
+  | .bridgeLockA id actor originator destination asset amount =>
+      bridgeLockChainA s id actor originator destination asset amount
+  | .bridgeFinalizeA id actor asset amount => bridgeFinalizeChainA s id actor asset amount
+  | .bridgeCancelA id actor                => bridgeCancelChainA s id actor
 
 /-- **`execFullA_ledger_per_asset` — PROVED (the COMBINED per-asset conservation VECTOR).** Every
 committed `FullActionA` moves the COMBINED per-asset measure `recTotalAssetWithEscrow b` (= `bal`-ledger
@@ -1591,6 +1730,18 @@ theorem execFullA_ledger_per_asset (s s' : RecChainedState) (fa : FullActionA) (
           rw [hk] at h; simp only [Option.some.injEq] at h; subst h
           show recTotalAssetWithEscrow k' b = _ + 0
           rw [refundEscrowKAsset_conserves_combined_per_asset b hk]; ring
+  -- §MA-bridge: lock/cancel are COMBINED-conserving (combined delta `0`); finalize is the disclosed
+  -- OUTFLOW (combined DROPS by `-amount` at the disclosed asset — the value LEFT for the other chain).
+  | bridgeLockA id actor originator destination asset amount =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [bridgeLockChainA_combined_neutral b h, add_zero]
+  | bridgeFinalizeA id actor asset amount =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [bridgeFinalizeChainA_burns_combined b h]
+      by_cases hba : b = asset <;> simp only [hba, if_true, if_false] <;> ring
+  | bridgeCancelA id actor =>
+      simp only [execFullA, ledgerDeltaAsset] at h ⊢
+      rw [bridgeCancelChainA_combined_neutral b h, add_zero]
 
 /-- **The per-asset full turn executor.** A transaction of `FullActionA`s, all-or-nothing. -/
 def execFullTurnA (s : RecChainedState) : List FullActionA → Option RecChainedState
@@ -1714,6 +1865,11 @@ def fullReceiptA : FullActionA → Turn
   | .createCommittedEscrowA _ actor _ _ _ _ => escrowReceiptA actor
   | .releaseCommittedEscrowA _ actor => escrowReceiptA actor
   | .refundCommittedEscrowA _ actor  => escrowReceiptA actor
+  -- §MA-bridge: each bridge leg appends a self-`Turn` on the `actor` (the metadata clock row; the
+  -- bridged amount/asset live in the off-ledger record / the disclosed action params, not the receipt).
+  | .bridgeLockA _ actor _ _ _ _     => escrowReceiptA actor
+  | .bridgeFinalizeA _ actor _ _     => escrowReceiptA actor
+  | .bridgeCancelA _ actor           => escrowReceiptA actor
 
 /-- **`execFullA_chainlink` — PROVED.** A committed `FullActionA` extends the receipt chain by EXACTLY
 its `fullReceiptA`, newest-first, with no fork or rewrite. The per-action generalization across the
@@ -1837,6 +1993,22 @@ theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
   | refundCommittedEscrowA id actor =>
       simp only [execFullA, refundEscrowChainA, fullReceiptA] at h ⊢
       cases hk : refundEscrowKAsset s.kernel id with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  -- §MA-bridge: each bridge leg appends exactly its `escrowReceiptA` (the metadata clock row).
+  | bridgeLockA id actor originator destination asset amount =>
+      simp only [execFullA, bridgeLockChainA, fullReceiptA] at h ⊢
+      cases hk : bridgeLockKAsset s.kernel id actor originator destination asset amount with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | bridgeFinalizeA id actor asset amount =>
+      simp only [execFullA, bridgeFinalizeChainA, fullReceiptA] at h ⊢
+      cases hk : bridgeFinalizeKAsset s.kernel id asset amount with
+      | none => rw [hk] at h; exact absurd h (by simp)
+      | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | bridgeCancelA id actor =>
+      simp only [execFullA, bridgeCancelChainA, fullReceiptA] at h ⊢
+      cases hk : bridgeCancelKAsset s.kernel id with
       | none => rw [hk] at h; exact absurd h (by simp)
       | some k' => rw [hk] at h; simp only [Option.some.injEq] at h; subst h; rfl
 
@@ -2219,6 +2391,51 @@ theorem execFullA_noteCreateA_inserts (s s' : RecChainedState) (cm : Nat) (actor
   simp only [execFullA, noteCreateChainA, Option.some.injEq] at h
   subst h; exact noteCreate_inserts s.kernel cm
 
+/-! ### §MA-bridge authority/portal obligations (Wave-5). The bridge LOCK carries the REAL `authorizedB`
+originator gate (over the debited cell — the §8 spending proof is the THEOREM-level portal); FINALIZE
+carries the disclosed OUTFLOW witness (combined DROPS by the disclosed `-amount` — the §8 confirmation
+receipt is the THEOREM-level portal, a genuine portal on a REACHABLE path, exactly as bridgeMint's foreign
+finality); CANCEL carries the refund-conservation witness. -/
+
+/-- **`execFullA_bridgeLockA_authorized` — PROVED.** A committed bridge lock required the actor to be
+authorized over the debited originator cell (the SAME `authorizedB` gate as `transfer`/escrow-create). The
+LOCAL gate independent of the §8 spending-proof portal (carried at the theorem layer). -/
+theorem execFullA_bridgeLockA_authorized (s s' : RecChainedState) (id : Nat)
+    (actor originator destination : CellId) (asset : AssetId) (amount : ℤ)
+    (h : execFullA s (.bridgeLockA id actor originator destination asset amount) = some s') :
+    authorizedB s.kernel.caps { actor := actor, src := originator, dst := destination, amt := amount } = true := by
+  simp only [execFullA] at h
+  exact bridgeLockChainA_authorized h
+
+/-- **`execFullA_bridgeLockA_unauthorized_fails` — PROVED (fail-closed).** Without authority over the
+originator, no bridge lock commits (regardless of the §8 spending proof). The confinement core: the value
+cannot be locked-and-bridged out of a cell the actor does not control. -/
+theorem execFullA_bridgeLockA_unauthorized_fails (s : RecChainedState) (id : Nat)
+    (actor originator destination : CellId) (asset : AssetId) (amount : ℤ)
+    (h : authorizedB s.kernel.caps { actor := actor, src := originator, dst := destination, amt := amount } = false) :
+    execFullA s (.bridgeLockA id actor originator destination asset amount) = none := by
+  simp only [execFullA, bridgeLockChainA, bridgeLockKAsset]
+  rw [if_neg (by rintro ⟨ha, _⟩; rw [h] at ha; exact absurd ha (by simp))]
+
+/-- **`execFullA_bridgeFinalizeA_burns_per_asset` — THE BRIDGE OUTFLOW WITNESS (PROVED).** A committed
+bridge finalize DROPS the COMBINED per-asset measure by EXACTLY the disclosed `amount` at the disclosed
+`asset` and leaves EVERY OTHER asset literally fixed — the value genuinely LEFT for the other chain (a
+disclosed OUTFLOW, NOT a conservation claim). The §8 confirmation receipt is the THEOREM-level portal. -/
+theorem execFullA_bridgeFinalizeA_burns_per_asset (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (asset : AssetId) (amount : ℤ) (b : AssetId)
+    (h : execFullA s (.bridgeFinalizeA id actor asset amount) = some s') :
+    recTotalAssetWithEscrow s'.kernel b
+      = recTotalAssetWithEscrow s.kernel b - (if b = asset then amount else 0) :=
+  bridgeFinalizeChainA_burns_combined b (by simpa only [execFullA] using h)
+
+/-- **`execFullA_bridgeCancelA_conserves_per_asset` — PROVED (the refund round-trip).** A committed bridge
+cancel conserves the COMBINED per-asset measure at EVERY asset (the value returns to the LIVE, gate-checked
+originator). The timeout gate is carried at the theorem layer. -/
+theorem execFullA_bridgeCancelA_conserves_per_asset (s s' : RecChainedState) (id : Nat) (actor : CellId)
+    (b : AssetId) (h : execFullA s (.bridgeCancelA id actor) = some s') :
+    recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b :=
+  bridgeCancelChainA_combined_neutral b (by simpa only [execFullA] using h)
+
 /-- **The per-`FullActionA` `StepInv`** — the per-asset analog of `fullActionInv`, true of every
 committed per-asset action across all kinds. Its **Ledger** conjunct is the full per-asset VECTOR (a
 `∀ b`, never an aggregate scalar — the FILL-1 carrier that forbids cross-asset laundering):
@@ -2350,7 +2567,23 @@ def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedStat
    | .releaseCommittedEscrowA _ _ =>
        effectLinearity .releaseEscrow = LinearityClass.Conservative
    | .refundCommittedEscrowA _ _ =>
-       effectLinearity .refundEscrow = LinearityClass.Conservative)
+       effectLinearity .refundEscrow = LinearityClass.Conservative
+   -- §MA-bridge: LOCK carries the REAL `authorizedB` originator gate (over the debited cell) ∧ the
+   -- `Conservative` coloring (combined-conserving lock). FINALIZE carries the genuine DISCLOSED-OUTFLOW
+   -- witness — the COMBINED measure MOVED DOWN by the disclosed `-amount` at the disclosed `asset`
+   -- (`∀ b`, the §8 confirmation portal having fired; NOT a `True`, the move has teeth) ∧ the
+   -- `Conservative` coloring. CANCEL carries the refund-CONSERVATION witness (combined fixed `∀ b`) ∧
+   -- the coloring. Every conjunct has teeth.
+   | .bridgeLockA _ actor originator destination _ amount =>
+       authorizedB s.kernel.caps { actor := actor, src := originator, dst := destination, amt := amount } = true ∧
+       effectLinearity .bridgeLock = LinearityClass.Conservative
+   | .bridgeFinalizeA _ _ asset amount =>
+       (∀ b, recTotalAssetWithEscrow s'.kernel b
+          = recTotalAssetWithEscrow s.kernel b - (if b = asset then amount else 0)) ∧
+       effectLinearity .bridgeFinalize = LinearityClass.Conservative
+   | .bridgeCancelA _ _ =>
+       (∀ b, recTotalAssetWithEscrow s'.kernel b = recTotalAssetWithEscrow s.kernel b) ∧
+       effectLinearity .bridgeCancel = LinearityClass.Conservative)
 
 /-- **`execFullA_attests_per_asset` — THE PER-ASSET OP-SET IS STEP-COMPLETE BY CONSTRUCTION
 (PROVED).** Every committed `FullActionA` attests its full `StepInv` content: the per-asset ledger
@@ -2419,6 +2652,14 @@ theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
       exact ⟨execFullA_createEscrowA_authorized s s' id actor creator recipient asset amount h, rfl⟩
   | releaseCommittedEscrowA id actor => exact rfl
   | refundCommittedEscrowA id actor => exact rfl
+  -- §MA-bridge: discharge LOCK's (authority ∧ Conservative coloring), FINALIZE's (disclosed-OUTFLOW
+  -- move ∧ coloring), CANCEL's (refund-conservation ∧ coloring).
+  | bridgeLockA id actor originator destination asset amount =>
+      exact ⟨execFullA_bridgeLockA_authorized s s' id actor originator destination asset amount h, rfl⟩
+  | bridgeFinalizeA id actor asset amount =>
+      exact ⟨fun b => execFullA_bridgeFinalizeA_burns_per_asset s s' id actor asset amount b h, rfl⟩
+  | bridgeCancelA id actor =>
+      exact ⟨fun b => execFullA_bridgeCancelA_conserves_per_asset s s' id actor b h, rfl⟩
 
 /-- **`execFullTurnA_each_attests` — PROVED.** Step-completeness holds at EVERY action of a committed
 per-asset transaction, across all kinds: the per-node `fullActionInvA` witness threaded along the
@@ -2548,6 +2789,27 @@ theorem execFullTurnA_each_attests :
 #assert_axioms execFullA_createObligationA_authorized
 #assert_axioms execFullA_noteSpendA_inserts
 #assert_axioms execFullA_noteCreateA_inserts
+-- Wave-5 PHASE-BRIDGE: the cross-chain bridge lock/finalize/cancel on the SHARED escrow holding-store.
+-- LOCK is COMBINED-conserving (bal debit offset by the holding-store park); FINALIZE is the disclosed
+-- OUTFLOW (COMBINED DROPS by the disclosed -amount at the bridged asset — the value LEFT for the other
+-- chain, like burn); CANCEL refunds the originator (combined conserved). The §8 confirmation receipt is
+-- the THEOREM-level portal. The keystone `execFullA_attests_per_asset` (re-extended above) carries ALL of
+-- these into the forest by construction (FullForestA spine UNCHANGED — only `targetOf` gains arms).
+#assert_axioms bridge_lock_conserves_combined_per_asset
+#assert_axioms bridge_lock_debits_per_asset
+#assert_axioms bridgeLockKAsset_authorized
+#assert_axioms bridge_finalize_moves_combined_per_asset
+#assert_axioms bridgeFinalizeKAsset_moves_combined_per_asset
+#assert_axioms bridge_cancel_conserves_combined_per_asset
+#assert_axioms bridgeLockChainA_combined_neutral
+#assert_axioms bridgeLockChainA_bal_debits
+#assert_axioms bridgeFinalizeChainA_burns_combined
+#assert_axioms bridgeCancelChainA_combined_neutral
+#assert_axioms bridgeLockChainA_authorized
+#assert_axioms execFullA_bridgeLockA_authorized
+#assert_axioms execFullA_bridgeLockA_unauthorized_fails
+#assert_axioms execFullA_bridgeFinalizeA_burns_per_asset
+#assert_axioms execFullA_bridgeCancelA_conserves_per_asset
 
 /-! ## §12 — Non-vacuity: each kind commits with the right invariant; unauthorized rejected.
 
@@ -2913,5 +3175,58 @@ round-trip; double-spend fail-closed. -/
                    recTotalAssetWithEscrow s.kernel 0, recTotalAssetWithEscrow s.kernel 1))  -- some (true, true, 105, 7)
 -- ★ DOUBLE-SPEND fail-closed: spending nullifier 77 twice on the executed dispatch REJECTS:
 #eval ((execFullA fmaSup (.noteSpendA 77 9)).bind (fun s => execFullA s (.noteSpendA 77 9))).isSome  -- false
+
+/-! ### §MA-bridge #eval (Wave-5 PHASE-BRIDGE) — the cross-chain bridge lock/finalize/cancel on the
+executed dispatch over the SHARED escrow holding-store. LOCK conserves the COMBINED measure (debit + park
+the bridge-tagged record); FINALIZE BURNS it (the value LEFT for the other chain — COMBINED DROPS by the
+disclosed amount at the bridged asset, the OTHER asset fixed); CANCEL refunds (combined conserved);
+unauthorized/double-finalize fail-closed. `fmaSup`: cell 0 holds 100 of asset 0 + 7 of asset 1; actor 9
+holds `node 0` (authority over cell 0). -/
+
+-- ★ BRIDGE LOCK of 30 of ASSET 1 from cell 0 → destination 1 (bridge id 7), actor 9 authorized over 0:
+--   bare ledger DROPS at asset 1 (7→ wait: cell0 has 7 of asset1, lock 5), held RISES, COMBINED FIXED.
+#eval (execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).isSome                              -- true
+#eval (execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).map
+        (fun s => (recTotalAsset s.kernel 1, escrowHeldAsset s.kernel 1))              -- some (2, 5) — bare DOWN, held UP at asset 1
+-- ...the COMBINED per-asset measure is CONSERVED at asset 1 AND asset 0 (the lock is combined-neutral):
+#eval (execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).map
+        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0))  -- some (7, 105) — CONSERVED both
+-- ...the parked record carries the BRIDGE tag (it is in the SHARED escrow store, tagged true):
+#eval (execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).map
+        (fun s => s.kernel.escrows.map (fun r => (r.id, r.amount, r.asset, r.bridge)))  -- some [(7, 5, 1, true)]
+-- ...the LOCK's COMBINED ledgerDeltaAsset is 0 at every asset (combined-conserving):
+#eval (ledgerDeltaAsset (.bridgeLockA 7 9 0 1 1 5) 0, ledgerDeltaAsset (.bridgeLockA 7 9 0 1 1 5) 1)  -- (0, 0)
+-- ★ LOCK then CANCEL (refund to originator 0, live): COMBINED stays (105, 7); held returns to 0; the
+--   bare bal at asset 1 returns to 7 (the value came BACK):
+#eval ((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).bind
+        (fun s => execFullA s (.bridgeCancelA 7 9))).map
+        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0,
+                   escrowHeldAsset s.kernel 1, recTotalAsset s.kernel 1))             -- some (7, 105, 0, 7) — REFUND round-trip CONSERVED
+-- ★ LOCK then FINALIZE (the §8 confirmation arrived — the value LEFT for the other chain): COMBINED
+--   DROPS by exactly 5 at asset 1 (7→2), asset 0 FIXED at 105; held drops to 0; bare bal stays at 2:
+#eval ((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).bind
+        (fun s => execFullA s (.bridgeFinalizeA 7 9 1 5))).map
+        (fun s => (recTotalAssetWithEscrow s.kernel 1, recTotalAssetWithEscrow s.kernel 0,
+                   escrowHeldAsset s.kernel 1, recTotalAsset s.kernel 1))             -- some (2, 105, 0, 2) — COMBINED -5 at asset 1, asset 0 FIXED
+-- ...the FINALIZE's disclosed delta is -5 at asset 1, 0 at asset 0 (the disclosed OUTFLOW, no laundering):
+#eval (ledgerDeltaAsset (.bridgeFinalizeA 7 9 1 5) 0, ledgerDeltaAsset (.bridgeFinalizeA 7 9 1 5) 1)  -- (0, -5)
+-- DOUBLE-FINALIZE fail-closed (the record is already resolved):
+#eval (((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).bind
+        (fun s => execFullA s (.bridgeFinalizeA 7 9 1 5))).bind
+        (fun s => execFullA s (.bridgeFinalizeA 7 9 1 5))).isSome                      -- false
+-- MISMATCHED-amount finalize fail-closed (disclosed 99 ≠ parked 5 — the receipt-vs-pending check):
+#eval ((execFullA fmaSup (.bridgeLockA 7 9 0 1 1 5)).bind
+        (fun s => execFullA s (.bridgeFinalizeA 7 9 1 99))).isSome                     -- false
+-- UNAUTHORIZED lock fail-closed (actor 0 holds no authority over... actually owns itself; use actor 5):
+#eval (execFullA fmaSup (.bridgeLockA 7 5 0 1 1 5)).isSome                             -- false (actor 5 unauthorized over cell 0)
+-- A MIXED bridge turn: lock 5 of asset 1 then finalize it → asset 1 net -5 (7→2), asset 0 conserved:
+def bridgeMixedTurn : List FullActionA :=
+  [ .bridgeLockA 7 9 0 1 1 5
+  , .bridgeFinalizeA 7 9 1 5 ]
+
+#eval (execFullTurnA fmaSup bridgeMixedTurn).isSome                                    -- true (all commit)
+#eval (turnLedgerDeltaAsset bridgeMixedTurn 0, turnLedgerDeltaAsset bridgeMixedTurn 1) -- (0, -5)
+#eval (execFullTurnA fmaSup bridgeMixedTurn).map
+        (fun s => (recTotalAssetWithEscrow s.kernel 0, recTotalAssetWithEscrow s.kernel 1))  -- some (105, 2) — asset 0 fixed, asset 1 -5
 
 end Dregg2.Exec.TurnExecutorFull

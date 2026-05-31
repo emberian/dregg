@@ -371,6 +371,11 @@ def targetOf : FullActionA → CellId
   | .createCommittedEscrowA _ _ creator _ _ _ => creator
   | .releaseCommittedEscrowA _ actor        => actor
   | .refundCommittedEscrowA _ actor         => actor
+  -- §MA-bridge: the bridge LOCK acts on the debited `originator` cell; finalize/cancel act on the
+  -- `actor` (the holding-store-touching node, like the escrow settle / notes).
+  | .bridgeLockA _ _ originator _ _ _       => originator
+  | .bridgeFinalizeA _ actor _ _            => actor
+  | .bridgeCancelA _ actor                  => actor
 
 mutual
 /-- **`sameTargetForest`** — the STRUCTURAL `DelegationMode::None` fidelity predicate: every child's

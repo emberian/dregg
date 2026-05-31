@@ -86,6 +86,17 @@ structure EscrowRecord where
   fills the 6th); the Wave-4 non-vacuity guard `#eval` LOCKS at a NON-ZERO asset to prove the default
   does NOT collapse to a single-asset shadow. -/
   asset     : AssetId := 0
+  /-- **The BRIDGE tag** (Wave-5 `PHASE-BRIDGE`). A cross-chain bridge lock shares the SAME off-ledger
+  holding-store as escrow — dregg1's `pending_bridges` is the bridge-shaped twin of `escrows`
+  (`cell/src/note_bridge.rs`: a `PendingBridge` parks `value`/`asset_type` while `Locked`, AWAITING the
+  other-chain confirmation). We reuse the escrow store with THIS additive tag (`:= false`, so every
+  existing 6-field `EscrowRecord` literal stays compiling — the default fills the 7th) rather than a
+  parallel side-table (least new machinery). The tag separates the two RESOLUTION semantics: an escrow
+  release/refund SETTLES back onto the ledger (combined CONSERVED), whereas a bridge FINALIZE BURNS the
+  locked value — it genuinely LEFT for the other chain, a disclosed outflow, so the COMBINED measure
+  DROPS by the bridged amount (modelled honestly as a no-credit resolve). A bridge CANCEL
+  (timeout/failure) refunds the originator (combined conserved, like escrow refund). -/
+  bridge    : Bool := false
 deriving DecidableEq, Repr
 
 /-- **Record kernel state:** the finite set of live `accounts`, a per-cell **content-addressed
@@ -1230,6 +1241,291 @@ theorem createEscrowKAsset_authorized {k k' : RecordKernelState} {id : Nat}
       ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
   · exact hg.1
   · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-! ## §BRIDGE — the cross-chain bridge lock/finalize/cancel on the SHARED escrow holding-store (Wave-5).
+
+dregg1's two-phase bridge (`turn/src/action.rs` `BridgeLock`/`BridgeFinalize`/`BridgeCancel`,
+`turn/src/executor/apply.rs:1258`/`:1290`/`:1317`, lowered to `cell/src/note_bridge.rs`
+`initiate_bridge`/`finalize_bridge`/`cancel_bridge`) is the bridge-shaped TWIN of escrow:
+
+  * **bridgeLock** (Phase 1, `initiate_bridge`): DEBIT the originator + PARK the value in a `Locked`
+    `PendingBridge` record — value inaccessible, AWAITING the other-chain confirmation. The off-ledger
+    record is the SAME holding-store as escrow (`PendingBridgeSet` ≈ `escrows`), so we reuse the escrow
+    store with a `bridge := true` tag. Double-lock REJECTED (`AlreadyLocked` — dregg1's `is_locked`).
+    Combined per-asset CONSERVED (the debit is offset by the held rise) — IDENTICAL to `createEscrow`.
+  * **bridgeFinalize** (Phase 3, `finalize_bridge`): the §8 confirmation receipt arrived and verified
+    (the destination-federation signature over the nullifier — `verify_bridge_receipt`, the §8 portal);
+    the lock resolves and the value LEAVES for the other chain. dregg1 marks the record `Finalized` AND
+    makes the nullifier permanent (a real BURN on this side). On the COMBINED measure this is a
+    no-credit resolve: the bare `bal` is untouched (the value already left the ledger at lock) but the
+    held value DROPS — so `recTotalAssetWithEscrow` DROPS by the bridged amount, a DISCLOSED OUTFLOW
+    (like burn). This is the ONE place the holding-store pair does NOT conserve — and honestly so.
+  * **bridgeCancel** (Phase 4, `cancel_bridge`): the timeout was reached without a receipt; the note is
+    UNLOCKED and the value REFUNDED to the originator. dregg1 marks the record `Cancelled`; the value
+    returns to the locker. On the COMBINED measure this is a SETTLE back to the creator (credit + resolve)
+    — combined per-asset CONSERVED, IDENTICAL to `refundEscrow`.
+
+We reuse `createEscrowRawAsset` (tagged `bridge := true`), `settleEscrowRawAsset` (for cancel/refund),
+`markResolved` (for finalize), and the per-asset held-sum lemmas verbatim — the bridge tag is INERT to
+the find?/markResolved lockstep (it filters on `id ∧ unresolved`, not on `bridge`), so all the proof
+spine carries. The §8 receipt is carried as a `Prop`-carrier hypothesis exactly as `bridgeMint`'s
+foreign finality. -/
+
+/-- **`createBridgeRawAsset`** — the per-asset bridge LOCK: a SINGLE-cell, single-asset DEBIT of `amount`
+from the originator's asset `asset` column PLUS an insert of an UNRESOLVED, `bridge := true`-tagged
+`EscrowRecord` into the SHARED off-ledger holding-store. The `bal`-ledger supply of `asset` DROPS by
+`amount`; the per-asset holding-store at `asset` RISES by `amount`; the COMBINED per-asset total at
+`asset` is preserved — IDENTICAL shape to `createEscrowRawAsset`, only the `bridge` tag differs. -/
+def createBridgeRawAsset (k : RecordKernelState) (id originator destination : CellId) (asset : AssetId)
+    (amount : ℤ) : RecordKernelState :=
+  { k with bal := recBalCreditCell k.bal originator asset (-amount)
+           escrows := { id := id, creator := originator, recipient := destination,
+                        amount := amount, resolved := false, asset := asset, bridge := true } :: k.escrows }
+
+/-- **`bridgeFinalizeRawAsset`** — the bridge FINALIZE body: mark the found record resolved WITHOUT a
+credit. The `bal`-ledger is LEFT UNTOUCHED (the value already left the ledger at lock and now leaves for
+the other chain — a BURN), but the per-asset holding-store DROPS by `amount` as the record leaves the
+unresolved set. So the COMBINED per-asset total DROPS by `amount` — a disclosed OUTFLOW (NOT a settle
+back onto the ledger). The honest contrast with `settleEscrowRawAsset` (which credits, conserving). -/
+def bridgeFinalizeRawAsset (k : RecordKernelState) (id : Nat) : RecordKernelState :=
+  { k with escrows := markResolved k.escrows id }
+
+/-- **`bridgeLockKAsset` (executable, fail-closed).** Commits only when the actor is authorized over the
+originator cell (same `authorizedB` gate as `transfer`/escrow-create), the amount is non-negative and
+available *in asset `asset`*, the originator is a live account, and the `id` is NOT already in use
+(dregg1's `AlreadyLocked` double-lock rejection — `is_locked`). On commit: single-cell debit + park the
+bridge-tagged record. The §8 spending proof is carried at the theorem layer. -/
+def bridgeLockKAsset (k : RecordKernelState) (id : Nat) (actor originator destination : CellId)
+    (asset : AssetId) (amount : ℤ) : Option RecordKernelState :=
+  if authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal originator asset ∧ originator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id) then
+    some (createBridgeRawAsset k id originator destination asset amount)
+  else none
+
+/-- **`bridgeFinalizeKAsset` (executable, fail-closed).** Looks up the unresolved record by `id` AND
+checks the parked record's `(asset, amount)` MATCH the receipt-DISCLOSED `(asset, amount)` (dregg1's
+finalize verifies the receipt against the pending bridge — `finalize_bridge` checks nullifier/destination
+consistency); on a match, marks it resolved WITHOUT a credit — the value LEFT for the other chain (the
+burn). The §8 confirmation receipt (the destination-federation signature, `verify_bridge_receipt`) is the
+THEOREM-level portal — here we model the LEDGER move gated on the record being present-and-unresolved (the
+`Locked`-state gate) AND matching the disclosed outflow. Rejects a missing/already-resolved/mismatched
+record. -/
+def bridgeFinalizeKAsset (k : RecordKernelState) (id : Nat) (asset : AssetId) (amount : ℤ) :
+    Option RecordKernelState :=
+  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | some r => if r.asset = asset ∧ r.amount = amount then some (bridgeFinalizeRawAsset k id) else none
+  | none   => none
+
+/-- **`bridgeCancelKAsset` (executable, fail-closed).** Looks up the unresolved record by `id`; on
+success single-cell credits the `creator` (the ORIGINATOR — the refund target) AT the record's asset and
+marks resolved (dregg1's `cancel_bridge` — note unlocked, value returned to the owner). **SETTLE-LIVENESS
+GATE** (the originator MUST be a LIVE account) — same rationale as `refundEscrowKAsset`: crediting a
+non-account would silently DESTROY value, breaking combined conservation; this makes the per-asset
+combined-conservation hold UNCONDITIONALLY. The timeout gate is carried at the effect/theorem layer. -/
+def bridgeCancelKAsset (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
+  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | some r => if r.creator ∈ k.accounts then some (settleEscrowRawAsset k id r.creator r.asset r.amount)
+              else none
+  | none   => none
+
+/-! ### The REAL bridge combined-measure invariants. -/
+
+/-- **`bridge_lock_conserves_combined_per_asset` — PROVED (the LOCK half).** A committed bridge LOCK
+PRESERVES the COMBINED per-asset total `recTotalAssetWithEscrow b` for EVERY asset `b`: at the locked
+asset the `bal`-ledger DROPS by `amount` while the holding-store RISES by `amount` (combined fixed); at
+every OTHER asset BOTH terms are unchanged. The bridge tag is INERT to the measure (`recTotalAssetWithEscrow`
+sums on `resolved`/`asset`, not `bridge`), so this is the per-asset escrow-create proof verbatim with
+`bridge := true` carried through. NON-VACUOUS: lock asset A and `recTotalAsset A` is genuinely lower while
+`recTotalAssetWithEscrow A` is unchanged — the value moved into the holding-store, not destroyed. -/
+theorem bridge_lock_conserves_combined_per_asset {k k' : RecordKernelState} {id : Nat}
+    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ} (b : AssetId)
+    (h : bridgeLockKAsset k id actor originator destination asset amount = some k') :
+    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+  unfold bridgeLockKAsset at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal originator asset ∧ originator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, _, hlive, _⟩ := hg
+    set newRec : EscrowRecord := { id := id, creator := originator, recipient := destination,
+                                   amount := amount, resolved := false, asset := asset, bridge := true } with hnewRec
+    show recTotalAssetWithEscrow (createBridgeRawAsset k id originator destination asset amount) b
+       = recTotalAssetWithEscrow k b
+    unfold recTotalAssetWithEscrow createBridgeRawAsset
+    have hbal : recTotalAsset { k with bal := recBalCreditCell k.bal originator asset (-amount),
+                                       escrows := newRec :: k.escrows } b
+        = recTotalAsset k b + (if b = asset then (-amount) else 0) := by
+      show (∑ x ∈ k.accounts, recBalCreditCell k.bal originator asset (-amount) x b) = _
+      exact recBalCreditCell_recTotalAsset k.accounts k.bal originator asset (-amount) hlive b
+    have hheld : escrowHeldAsset { k with bal := recBalCreditCell k.bal originator asset (-amount),
+                                          escrows := newRec :: k.escrows } b
+        = escrowHeldAsset k b + (if asset = b then amount else 0) := by
+      have hc := escrowHeldAsset_cons_unresolved
+        { k with bal := recBalCreditCell k.bal originator asset (-amount) } newRec b rfl
+      simpa [hnewRec] using hc
+    rw [hbal, hheld]
+    by_cases hba : b = asset
+    · subst hba; simp only [if_true, if_pos rfl]; ring
+    · rw [if_neg hba, if_neg (fun h => hba h.symm)]; ring
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`bridge_lock_debits_per_asset` — PROVED.** A committed bridge LOCK DROPS the locked asset's
+`bal`-ledger supply by `amount` (a real per-asset debit) and grows the holding-store by the bridge-tagged
+record — the bare per-asset ledger genuinely MOVES (the contrast with the combined-conservation; the
+value is now INACCESSIBLE in the lock, AWAITING the other chain). -/
+theorem bridge_lock_debits_per_asset {k k' : RecordKernelState} {id : Nat}
+    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
+    (h : bridgeLockKAsset k id actor originator destination asset amount = some k') :
+    recTotalAsset k' asset = recTotalAsset k asset - amount ∧
+      k'.escrows = { id := id, creator := originator, recipient := destination,
+                     amount := amount, resolved := false, asset := asset, bridge := true } :: k.escrows := by
+  unfold bridgeLockKAsset at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal originator asset ∧ originator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, _, hlive, _⟩ := hg
+    refine ⟨?_, rfl⟩
+    show (∑ x ∈ k.accounts, recBalCreditCell k.bal originator asset (-amount) x asset) = _
+    have := recBalCreditCell_recTotalAsset k.accounts k.bal originator asset (-amount) hlive asset
+    simpa [recTotalAsset] using this
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`bridgeLockKAsset_authorized` — PROVED.** A committed bridge LOCK required the actor to be
+authorized over the debited originator cell (the SAME `authorizedB` gate as `transfer`). -/
+theorem bridgeLockKAsset_authorized {k k' : RecordKernelState} {id : Nat}
+    {actor originator destination : CellId} {asset : AssetId} {amount : ℤ}
+    (h : bridgeLockKAsset k id actor originator destination asset amount = some k') :
+    authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true := by
+  unfold bridgeLockKAsset at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := originator, dst := destination, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ k.bal originator asset ∧ originator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · exact hg.1
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`bridge_finalize_moves_combined_per_asset` — THE BRIDGE HEADLINE (PROVED, the FINALIZE half).** A
+committed bridge FINALIZE MOVES the COMBINED per-asset total `recTotalAssetWithEscrow b` by EXACTLY the
+disclosed `-amount` at the bridged asset (`-r.amount` when `r.asset = b`), and leaves EVERY OTHER asset
+LITERALLY FIXED. The bare `bal` is untouched (no credit), and the held value DROPS as the record leaves
+the unresolved set (`heldSumAsset_markResolved_found`) — so the COMBINED measure drops by the bridged
+amount. This is the value genuinely LEAVING for the other chain — a disclosed OUTFLOW (like burn), NOT a
+conservation claim. The ONE holding-store resolution that does NOT conserve, and honestly so. NON-VACUOUS:
+the drop is GUARDED by `r.asset = b`, so the bridged asset falls by exactly `r.amount` while the OTHER
+asset is fixed — no cross-asset laundering at the bridge boundary. -/
+theorem bridge_finalize_moves_combined_per_asset (k : RecordKernelState) (id : Nat) (r : EscrowRecord)
+    (b : AssetId)
+    (hfind : k.escrows.find? (fun x => decide (x.id = id ∧ x.resolved = false)) = some r) :
+    recTotalAssetWithEscrow (bridgeFinalizeRawAsset k id) b
+      = recTotalAssetWithEscrow k b - (if r.asset = b then r.amount else 0) := by
+  unfold recTotalAssetWithEscrow bridgeFinalizeRawAsset
+  -- the `bal` ledger is untouched (no credit on finalize):
+  have hbal : recTotalAsset { k with escrows := markResolved k.escrows id } b = recTotalAsset k b := rfl
+  -- the held value drops by the found record's amount IFF its asset is `b`:
+  have hheld : escrowHeldAsset { k with escrows := markResolved k.escrows id } b
+      = escrowHeldAsset k b - (if r.asset = b then r.amount else 0) := by
+    show heldSumAsset (markResolved k.escrows id) b = heldSumAsset k.escrows b - _
+    exact heldSumAsset_markResolved_found id r b k.escrows hfind
+  rw [hbal, hheld]; ring
+
+/-- **`bridgeFinalizeKAsset_moves_combined_per_asset` — THE BRIDGE HEADLINE (PROVED).** A committed bridge
+finalize MOVES the COMBINED per-asset measure by EXACTLY the DISCLOSED `-amount` at the disclosed `asset`
+(`-amount` when `b = asset`, `0` elsewhere) — a function of the ACTION's disclosed `(asset, amount)`, NOT
+of the hidden record (the executor's match-gate ties them). The bridged value LEFT for the other chain: a
+disclosed OUTFLOW, no cross-asset laundering (the OTHER asset is literally fixed). The match-gate
+(`r.asset = asset ∧ r.amount = amount`) rewrites the record-amount drop of
+`bridge_finalize_moves_combined_per_asset` into the disclosed-amount drop. -/
+theorem bridgeFinalizeKAsset_moves_combined_per_asset {k k' : RecordKernelState} {id : Nat}
+    {asset : AssetId} {amount : ℤ} (b : AssetId) (h : bridgeFinalizeKAsset k id asset amount = some k') :
+    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b - (if b = asset then amount else 0) := by
+  unfold bridgeFinalizeKAsset at h
+  cases hfind : k.escrows.find? (fun x => decide (x.id = id ∧ x.resolved = false)) with
+  | none => rw [hfind] at h; exact absurd h (by simp)
+  | some r =>
+      rw [hfind] at h; simp only at h
+      by_cases hm : r.asset = asset ∧ r.amount = amount
+      · rw [if_pos hm] at h; simp only [Option.some.injEq] at h
+        obtain ⟨hra, hrm⟩ := hm
+        rw [← h, bridge_finalize_moves_combined_per_asset k id r b hfind]
+        -- rewrite the record's (asset, amount) into the disclosed (asset, amount):
+        rw [hra, hrm]
+        -- the remaining `if asset = b` vs `if b = asset` differ only by symmetry of `=`:
+        by_cases hba : b = asset
+        · rw [if_pos hba, if_pos hba.symm]
+        · rw [if_neg hba, if_neg (fun heq => hba heq.symm)]
+      · rw [if_neg hm] at h; exact absurd h (by simp)
+
+/-- **`bridge_cancel_conserves_combined_per_asset` — PROVED (the CANCEL half, the refund round-trip).** A
+committed bridge CANCEL PRESERVES the COMBINED per-asset total at EVERY asset: the value returns to the
+(LIVE, gate-checked) originator — the `+amount` credit is offset by the holding-store drop. The timeout
+having been reached is the effect-layer gate; here the LEDGER move conserves. UNCONDITIONAL (the
+settle-liveness obligation is discharged by the fail-closed `r.creator ∈ accounts` gate). Reads off
+`escrow_settle_conserves_combined_per_asset` (the bridge tag is inert to the settle). -/
+theorem bridge_cancel_conserves_combined_per_asset {k k' : RecordKernelState} {id : Nat}
+    (b : AssetId) (h : bridgeCancelKAsset k id = some k') :
+    recTotalAssetWithEscrow k' b = recTotalAssetWithEscrow k b := by
+  unfold bridgeCancelKAsset at h
+  cases hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | none => rw [hfind] at h; exact absurd h (by simp)
+  | some r =>
+      rw [hfind] at h; simp only at h
+      by_cases hlive : r.creator ∈ k.accounts
+      · rw [if_pos hlive] at h; simp only [Option.some.injEq] at h; subst h
+        exact escrow_settle_conserves_combined_per_asset k id r.creator r b hlive hfind
+      · rw [if_neg hlive] at h; exact absurd h (by simp)
+
+/-! ### §BRIDGE runs (`#eval`) — the lock/finalize/cancel triple has teeth on the combined measure. -/
+
+/-- A 2-cell, 2-asset bridge fixture: cell 0 holds 100 of asset 1; cell 1 holds 0. Actor 0 owns cell 0
+(`node 1` self-cap is not needed — ownership authorizes the lock over src 0). -/
+def brg0 : RecordKernelState :=
+  { accounts := {0, 1}
+    cell := fun _ => .record [("balance", .int 0)]
+    caps := fun l => if l = 0 then [Cap.node 1] else []
+    bal := fun c a => if c = 0 ∧ a = 1 then 100 else 0 }
+
+/-- Lock 30 of asset 1 from originator 0 → destination 1, bridge id 9. -/
+def brgLocked : Option RecordKernelState := bridgeLockKAsset brg0 9 0 0 1 1 30
+
+-- LOCK: bare ledger DROPS at asset 1 (100→70), held RISES to 30, COMBINED CONSERVED at (100, 0).
+#eval (recTotalAssetWithEscrow brg0 1, recTotalAssetWithEscrow brg0 0)                  -- (100, 0)
+#eval brgLocked.map (fun k => (recTotalAsset k 1, escrowHeldAsset k 1))                 -- some (70, 30) — bare DOWN, held UP
+#eval brgLocked.map (fun k => (recTotalAssetWithEscrow k 1, recTotalAssetWithEscrow k 0))  -- some (100, 0) — CONSERVED both
+-- the parked record carries the bridge tag (it is in the SHARED escrow store, tagged):
+#eval brgLocked.map (fun k => k.escrows.map (fun r => (r.id, r.amount, r.asset, r.bridge)))  -- some [(9, 30, 1, true)]
+-- LOCK then CANCEL (refund to originator 0): COMBINED stays (100, 0), held returns to 0, bal back to 100.
+#eval (brgLocked.bind (fun k => bridgeCancelKAsset k 9)).map
+        (fun k => (recTotalAssetWithEscrow k 1, recTotalAssetWithEscrow k 0,
+                   escrowHeldAsset k 1, recTotalAsset k 1))                             -- some (100, 0, 0, 100) — REFUND round-trip CONSERVED
+-- LOCK then FINALIZE (value LEFT for the other chain): COMBINED DROPS by 30 at asset 1 (100→70),
+--   asset 0 FIXED at 0; held drops to 0; the bare bal STAYS at 70 (the value already left, now burned).
+--   The finalize DISCLOSES the bridged (asset 1, amount 30) — the executor gates on the record matching.
+#eval (brgLocked.bind (fun k => bridgeFinalizeKAsset k 9 1 30)).map
+        (fun k => (recTotalAssetWithEscrow k 1, recTotalAssetWithEscrow k 0,
+                   escrowHeldAsset k 1, recTotalAsset k 1))                             -- some (70, 0, 0, 70) — COMBINED -30 at asset 1, asset 0 FIXED
+-- double-finalize fail-closed (the record is already resolved):
+#eval ((brgLocked.bind (fun k => bridgeFinalizeKAsset k 9 1 30)).bind
+        (fun k => bridgeFinalizeKAsset k 9 1 30)).isSome                                -- false
+-- MISMATCHED finalize fail-closed (disclosed amount 99 ≠ parked 30, the receipt-vs-pending check):
+#eval (brgLocked.bind (fun k => bridgeFinalizeKAsset k 9 1 99)).isSome                  -- false
+-- MISMATCHED-asset finalize fail-closed (disclosed asset 0 ≠ parked 1):
+#eval (brgLocked.bind (fun k => bridgeFinalizeKAsset k 9 0 30)).isSome                  -- false
+-- double-lock fail-closed (the id is already in use):
+#eval (brgLocked.bind (fun k => bridgeLockKAsset k 9 0 0 1 1 10)).isSome                -- false
+-- unauthorized lock fail-closed (actor 5 owns nothing):
+#eval (bridgeLockKAsset brg0 9 5 0 1 1 30).isSome                                       -- false
+
+#assert_axioms bridge_lock_conserves_combined_per_asset
+#assert_axioms bridge_lock_debits_per_asset
+#assert_axioms bridgeLockKAsset_authorized
+#assert_axioms bridge_finalize_moves_combined_per_asset
+#assert_axioms bridgeFinalizeKAsset_moves_combined_per_asset
+#assert_axioms bridge_cancel_conserves_combined_per_asset
 
 /-! ### §NOTE-CREATE — the grow-only COMMITMENT SET (faithful to dregg1's `apply_note_create`).
 
