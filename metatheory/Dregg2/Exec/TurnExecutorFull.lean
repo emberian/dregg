@@ -865,6 +865,238 @@ theorem execFullTurnA_conserves_per_asset (s s' : RecChainedState) (tt : List Fu
     recTotalAsset s'.kernel b = recTotalAsset s.kernel b := by
   rw [execFullTurnA_ledger_per_asset s s' tt b h, hzero, add_zero]
 
+/-! ## §MB — `execFullTurnA_append` + the per-asset PER-NODE attestation carrier.
+
+The forest lift in `Exec/FullForest.lean` rests on the same `execTurn_append` shape `TurnForest.lean`
+uses for the narrow executor — here re-founded for the per-asset `execFullTurnA`. We then build the
+per-asset analog of `fullActionInv` (`fullActionInvA`) whose **Ledger** conjunct is the full per-asset
+VECTOR (`∀ b, recTotalAsset … = … + ledgerDeltaAsset fa b`, never one aggregate scalar — the FILL-1
+no-laundering carrier), with ChainLink/ObsAdvance/KindObligation reused per-kind (these are
+asset-orthogonal: they edit the log / `caps`, not the `bal` ledger). `execFullTurnA_each_attests`
+then threads the per-node witness along the all-or-nothing fold, so the forest's per-node
+attestation (`FullForest.execFullForestA_each_attests`) lifts straight off the bridge. -/
+
+/-- **`execFullTurnA_append` — PROVED.** Running a concatenated per-asset turn equals running the
+prefix and, on success, the suffix (the `execTurn_append` shape for `execFullTurnA`). The
+associativity the forest pre-order flattening rests on. Mirrors `TurnForest.execTurn_append` verbatim
+with `recCexec`→`execFullA`, induction on `xs`. -/
+theorem execFullTurnA_append (s : RecChainedState) (xs ys : List FullActionA) :
+    execFullTurnA s (xs ++ ys)
+      = (match execFullTurnA s xs with
+         | some s' => execFullTurnA s' ys
+         | none    => none) := by
+  induction xs generalizing s with
+  | nil => rfl
+  | cons a rest ih =>
+      show execFullTurnA s (a :: (rest ++ ys))
+          = (match execFullTurnA s (a :: rest) with
+             | some s' => execFullTurnA s' ys
+             | none    => none)
+      rw [show execFullTurnA s (a :: (rest ++ ys))
+            = (match execFullA s a with
+               | some s1 => execFullTurnA s1 (rest ++ ys)
+               | none    => none) from rfl,
+          show execFullTurnA s (a :: rest)
+            = (match execFullA s a with
+               | some s1 => execFullTurnA s1 rest
+               | none    => none) from rfl]
+      cases execFullA s a with
+      | none    => rfl
+      | some s1 => exact ih s1
+
+/-- The receipt a committed `FullActionA` appends (newest-first): a per-asset transfer appends its
+`turn`; authority appends its `authReceipt`; mint/burn append a self-`Turn` carrying the disclosed
+per-asset supply delta. The per-asset analog of `fullReceipt`. -/
+def fullReceiptA : FullActionA → Turn
+  | .balanceA t _          => t
+  | .delegate del _ _      => authReceipt del
+  | .revoke holder _       => authReceipt holder
+  | .mintA actor cell _ amt  => { actor := actor, src := cell, dst := cell, amt := amt }
+  | .burnA actor cell _ amt  => { actor := actor, src := cell, dst := cell, amt := -amt }
+
+/-- **`execFullA_chainlink` — PROVED.** A committed `FullActionA` extends the receipt chain by EXACTLY
+its `fullReceiptA`, newest-first, with no fork or rewrite. The per-action generalization across the
+per-asset op-set (asset-orthogonal: it touches only the `log`). -/
+theorem execFullA_chainlink (s s' : RecChainedState) (fa : FullActionA)
+    (h : execFullA s fa = some s') : s'.log = fullReceiptA fa :: s.log := by
+  cases fa with
+  | balanceA t a =>
+      simp only [execFullA, recCexecAsset, fullReceiptA] at h ⊢
+      cases hx : recKExecAsset s.kernel t a with
+      | none => rw [hx] at h; exact absurd h (by simp)
+      | some k' => rw [hx] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | delegate del rec t =>
+      simp only [execFullA, recCDelegate, fullReceiptA] at h ⊢
+      cases hd : recKDelegate s.kernel del rec t with
+      | none => rw [hd] at h; exact absurd h (by simp)
+      | some k' => rw [hd] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | revoke holder t =>
+      simp only [execFullA, recCRevoke, fullReceiptA] at h ⊢
+      simp only [Option.some.injEq] at h; subst h; rfl
+  | mintA actor cell a amt =>
+      simp only [execFullA, recCMintAsset, fullReceiptA] at h ⊢
+      cases hm : recKMintAsset s.kernel actor cell a amt with
+      | none => rw [hm] at h; exact absurd h (by simp)
+      | some k' => rw [hm] at h; simp only [Option.some.injEq] at h; subst h; rfl
+  | burnA actor cell a amt =>
+      simp only [execFullA, recCBurnAsset, fullReceiptA] at h ⊢
+      cases hb : recKBurnAsset s.kernel actor cell a amt with
+      | none => rw [hb] at h; exact absurd h (by simp)
+      | some k' => rw [hb] at h; simp only [Option.some.injEq] at h; subst h; rfl
+
+/-- **`execFullA_obsadvance` — PROVED.** A committed `FullActionA` grows the chain by exactly one
+row, so a replayed action (which would re-append the same receipt) is detectable. -/
+theorem execFullA_obsadvance (s s' : RecChainedState) (fa : FullActionA)
+    (h : execFullA s fa = some s') : s'.log.length = s.log.length + 1 := by
+  rw [execFullA_chainlink s s' fa h]; simp
+
+/-- **Per-asset balance authorized — PROVED.** A committed per-asset transfer was authorized
+(`authorizedB` at the pre-state), via `recKExecAsset_authorized`. -/
+theorem execFullA_balance_authorized (s s' : RecChainedState) (t : Turn) (a : AssetId)
+    (h : execFullA s (.balanceA t a) = some s') : authorizedB s.kernel.caps t = true := by
+  simp only [execFullA, recCexecAsset] at h
+  cases hx : recKExecAsset s.kernel t a with
+  | none => rw [hx] at h; exact absurd h (by simp)
+  | some k' => exact recKExecAsset_authorized s.kernel k' t a hx
+
+/-- **Per-asset delegation grounds — PROVED.** A committed per-asset-turn delegation HOLDS the
+Granovetter source edge `delegator ⟶ ⟨t,()⟩` on `execGraph` (REUSES the same `recCDelegate`/
+`recKDelegate_grounds` the scalar executor does). -/
+theorem execFullA_delegate_grounds (s s' : RecChainedState) (del rec t : CellId)
+    (h : execFullA s (.delegate del rec t) = some s') :
+    Dregg2.Spec.execGraph s.kernel.caps del (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) := by
+  simp only [execFullA, recCDelegate] at h
+  cases hd : recKDelegate s.kernel del rec t with
+  | none => rw [hd] at h; exact absurd h (by simp)
+  | some k' => exact recKDelegate_grounds s.kernel k' del rec t hd
+
+/-- **Per-asset delegation IS `addEdge` — PROVED.** REUSES `recKDelegate_execGraph`. -/
+theorem execFullA_delegate_addEdge (s s' : RecChainedState) (del rec t : CellId)
+    (h : execFullA s (.delegate del rec t) = some s') :
+    Dregg2.Spec.execGraph s'.kernel.caps
+      = Dregg2.Spec.addEdge (Dregg2.Spec.execGraph s.kernel.caps) rec
+          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) := by
+  simp only [execFullA, recCDelegate] at h
+  cases hd : recKDelegate s.kernel del rec t with
+  | none => rw [hd] at h; exact absurd h (by simp)
+  | some k' =>
+      rw [hd] at h; simp only [Option.some.injEq] at h; subst h
+      unfold recKDelegate at hd
+      by_cases hg : (s.kernel.caps del).any (fun cap => confersEdgeTo t cap) = true
+      · rw [if_pos hg] at hd; simp only [Option.some.injEq] at hd; subst hd
+        exact recKDelegate_execGraph s.kernel.caps rec t
+      · rw [if_neg hg] at hd; exact absurd hd (by simp)
+
+/-- **Per-asset revocation IS `removeEdge` — PROVED.** REUSES `recKRevokeTarget_execGraph`. -/
+theorem execFullA_revoke_removeEdge (s s' : RecChainedState) (holder t : CellId)
+    (h : execFullA s (.revoke holder t) = some s') :
+    Dregg2.Spec.execGraph s'.kernel.caps
+      = Dregg2.Spec.removeEdge (Dregg2.Spec.execGraph s.kernel.caps) holder
+          (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) := by
+  simp only [execFullA, recCRevoke] at h
+  simp only [Option.some.injEq] at h; subst h
+  exact recKRevokeTarget_execGraph s.kernel.caps holder t
+
+/-- **Per-asset mint authorized — PROVED.** A committed per-asset mint implies the privileged mint
+authority (`recKMintAsset_authorized`). -/
+theorem execFullA_mintA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : execFullA s (.mintA actor cell a amt) = some s') :
+    mintAuthorizedB s.kernel.caps actor cell = true := by
+  simp only [execFullA, recCMintAsset] at h
+  cases hm : recKMintAsset s.kernel actor cell a amt with
+  | none => rw [hm] at h; exact absurd h (by simp)
+  | some k' => exact recKMintAsset_authorized s.kernel k' actor cell a amt hm
+
+/-- **`recKBurnAsset_authorized` — PROVED.** A committed per-asset burn implies the privileged mint
+authority (the per-asset analog of `recKBurn_authorized`). -/
+theorem recKBurnAsset_authorized (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : recKBurnAsset k actor cell a amt = some k') :
+    mintAuthorizedB k.caps actor cell = true := by
+  unfold recKBurnAsset at h
+  by_cases hg : mintAuthorizedB k.caps actor cell = true ∧ 0 ≤ amt ∧ amt ≤ k.bal cell a
+      ∧ cell ∈ k.accounts
+  · exact hg.1
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **Per-asset burn authorized — PROVED.** A committed per-asset burn implies the privileged mint
+authority over `cell`. -/
+theorem execFullA_burnA_authorized (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
+    (amt : ℤ) (h : execFullA s (.burnA actor cell a amt) = some s') :
+    mintAuthorizedB s.kernel.caps actor cell = true := by
+  simp only [execFullA, recCBurnAsset] at h
+  cases hb : recKBurnAsset s.kernel actor cell a amt with
+  | none => rw [hb] at h; exact absurd h (by simp)
+  | some k' => exact recKBurnAsset_authorized s.kernel k' actor cell a amt hb
+
+/-- **The per-`FullActionA` `StepInv`** — the per-asset analog of `fullActionInv`, true of every
+committed per-asset action across all kinds. Its **Ledger** conjunct is the full per-asset VECTOR (a
+`∀ b`, never an aggregate scalar — the FILL-1 carrier that forbids cross-asset laundering):
+  * **Ledger (vector)** — for EVERY asset `b`, `recTotalAsset … b` moved by EXACTLY `ledgerDeltaAsset
+    fa b` (`0` for transfer/authority, `±amt` at the targeted asset only for mint/burn);
+  * **ChainLink** — the chain extends by exactly `fullReceiptA fa` (newest-first), no fork/rewrite;
+  * **ObsAdvance** — the chain grew by exactly one row (replay-detectable);
+  * **KindObligation** — the kind-specific integrity content (asset-orthogonal): balanceA ⇒
+    `authorizedB`; delegate ⇒ grounds in the source edge AND edits the graph by `addEdge`; revoke ⇒
+    `removeEdge`; mintA/burnA ⇒ `mintAuthorizedB` AND the Generative/Annihilative disclosure. -/
+def fullActionInvA (s : RecChainedState) (fa : FullActionA) (s' : RecChainedState) : Prop :=
+  -- Ledger: the per-asset conservation VECTOR (∀ b — never one aggregate scalar).
+  (∀ b, recTotalAsset s'.kernel b = recTotalAsset s.kernel b + ledgerDeltaAsset fa b) ∧
+  -- ChainLink: exactly the kind's receipt, newest-first.
+  (s'.log = fullReceiptA fa :: s.log) ∧
+  -- ObsAdvance: exactly one row.
+  (s'.log.length = s.log.length + 1) ∧
+  -- KindObligation: the kind-specific authority/graph/disclosure content (asset-orthogonal).
+  (match fa with
+   | .balanceA t _       => authorizedB s.kernel.caps t = true
+   | .delegate del rec t =>
+       Dregg2.Spec.execGraph s.kernel.caps del
+         (⟨t, ()⟩ : Dregg2.Spec.Cap Label Dregg2.Spec.ExecRights) ∧
+       Dregg2.Spec.execGraph s'.kernel.caps
+         = Dregg2.Spec.addEdge (Dregg2.Spec.execGraph s.kernel.caps) rec ⟨t, ()⟩
+   | .revoke holder t    =>
+       Dregg2.Spec.execGraph s'.kernel.caps
+         = Dregg2.Spec.removeEdge (Dregg2.Spec.execGraph s.kernel.caps) holder ⟨t, ()⟩
+   | .mintA actor cell _ _  =>
+       mintAuthorizedB s.kernel.caps actor cell = true ∧
+       (effectLinearity mintEffect).is_disclosed_non_conservation = true
+   | .burnA actor cell _ _  =>
+       mintAuthorizedB s.kernel.caps actor cell = true ∧
+       (effectLinearity burnEffect).is_disclosed_non_conservation = true)
+
+/-- **`execFullA_attests_per_asset` — THE PER-ASSET OP-SET IS STEP-COMPLETE BY CONSTRUCTION
+(PROVED).** Every committed `FullActionA` attests its full `StepInv` content: the per-asset ledger
+VECTOR ∧ ChainLink ∧ ObsAdvance ∧ the kind-specific obligation. The per-asset analog of
+`execFull_attests`, carrying the conservation VECTOR (not the scalar). -/
+theorem execFullA_attests_per_asset {s s' : RecChainedState} {fa : FullActionA}
+    (h : execFullA s fa = some s') : fullActionInvA s fa s' := by
+  refine ⟨fun b => execFullA_ledger_per_asset s s' fa b h,
+          execFullA_chainlink s s' fa h, execFullA_obsadvance s s' fa h, ?_⟩
+  cases fa with
+  | balanceA t a => exact execFullA_balance_authorized s s' t a h
+  | delegate del rec t =>
+      exact ⟨execFullA_delegate_grounds s s' del rec t h, execFullA_delegate_addEdge s s' del rec t h⟩
+  | revoke holder t => exact execFullA_revoke_removeEdge s s' holder t h
+  | mintA actor cell a amt => exact ⟨execFullA_mintA_authorized s s' actor cell a amt h, mint_discloses⟩
+  | burnA actor cell a amt => exact ⟨execFullA_burnA_authorized s s' actor cell a amt h, burn_discloses⟩
+
+/-- **`execFullTurnA_each_attests` — PROVED.** Step-completeness holds at EVERY action of a committed
+per-asset transaction, across all kinds: the per-node `fullActionInvA` witness threaded along the
+all-or-nothing fold. The per-asset analog of `execFullTurn_each_attests` — the carrier the forest's
+per-node attestation (`FullForest.execFullForestA_each_attests`) lifts off the bridge. -/
+theorem execFullTurnA_each_attests :
+    ∀ (s s' : RecChainedState) (tt : List FullActionA), execFullTurnA s tt = some s' →
+      ∀ fa ∈ tt, ∃ sa sa', execFullA sa fa = some sa' ∧ fullActionInvA sa fa sa'
+  | _, _, [], _, fa, hfa => absurd hfa List.not_mem_nil
+  | s, s', a :: rest, h, b, hb => by
+      simp only [execFullTurnA] at h
+      cases ha : execFullA s a with
+      | none => rw [ha] at h; exact absurd h (by simp)
+      | some s1 =>
+          rw [ha] at h
+          rcases List.mem_cons.mp hb with hbeq | hbrest
+          · subst hbeq; exact ⟨s, s1, ha, execFullA_attests_per_asset ha⟩
+          · exact execFullTurnA_each_attests s1 s' rest h b hbrest
+
 /-! ## §11 — Axiom-hygiene tripwires (the honesty pins over the widened replacement's keystones). -/
 
 #assert_axioms recKMint_delta
@@ -898,6 +1130,19 @@ theorem execFullTurnA_conserves_per_asset (s s' : RecChainedState) (tt : List Fu
 #assert_axioms execFullA_ledger_per_asset
 #assert_axioms execFullTurnA_ledger_per_asset
 #assert_axioms execFullTurnA_conserves_per_asset
+-- The per-asset PER-NODE attestation carrier (the forest lift, §MB) keystones:
+#assert_axioms execFullTurnA_append
+#assert_axioms execFullA_chainlink
+#assert_axioms execFullA_obsadvance
+#assert_axioms execFullA_balance_authorized
+#assert_axioms execFullA_delegate_grounds
+#assert_axioms execFullA_delegate_addEdge
+#assert_axioms execFullA_revoke_removeEdge
+#assert_axioms execFullA_mintA_authorized
+#assert_axioms recKBurnAsset_authorized
+#assert_axioms execFullA_burnA_authorized
+#assert_axioms execFullA_attests_per_asset
+#assert_axioms execFullTurnA_each_attests
 
 /-! ## §12 — Non-vacuity: each kind commits with the right invariant; unauthorized rejected.
 
