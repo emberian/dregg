@@ -63,6 +63,7 @@ import Dregg2.Authority.Intent       -- intent = the ∃-resolver / inverse-vat-
 import Dregg2.Exec.MultiAsset        -- multi-asset conservation: maExec_conserves_per_asset (per-asset Σ_k; PROVED) + camera-FPU bridge
 import Dregg2.Exec.RecordCell        -- the RecordProgram IS the structure-map on a record cell: recExec_admitted (nothing commits the program rejects; PROVED)
 import Dregg2.Exec.JointCell         -- executable bilateral JointTurn: joint_cg5_conserves (cross-side conservation, no global ledger; PROVED) + binding-as-hypothesis
+import Dregg2.Exec.CrossCaveat       -- CROSS-CELL STATE CAVEATS as a FURTHER equalizer on the joint turn: jointApplyCaveated gates the bilateral turn on φ reading BOTH cells; crossCaveat_sound = CG-5 ∧ CG-2-equalizer (SharedBinding) ∧ φ; caveated_check_eq_use = NO TOCTOU (check+use are one atomic snapshot); crossCaveat_rejects + covenant_rejects_high (teeth). dregg1 REFUSED these (authorize.rs:1608); now sound — cost is the Agreement dial (free single-machine, blocking distributed)
 import Dregg2.Exec.CellFinality      -- finality tier on the cell: commit_at_join (max) + the I-confluence tier-1 eligibility GATE (PROVED, enforced not prose)
 import Dregg2.Exec.CellPrivacy       -- the value-rib: committed_transfer_conserves (conservation over Pedersen commitments / hidden amounts; PROVED)
 import Dregg2.Exec.CellUpgrade       -- anti-brick upgrade turn: execUpgrade_never_bricks + stale→owner-signature fallback (PROVED)
