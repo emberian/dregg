@@ -349,6 +349,13 @@ def targetOf : FullActionA → CellId
   | .incrementNonceA _ cell _ => cell
   | .setPermissionsA _ cell _ => cell
   | .setVKA _ cell _        => cell
+  -- §MA-auth: the 6 authority effects act on the introducer/holder/actor (the cap-graph node).
+  | .introduceA intro _ _   => intro
+  | .attenuateA actor _ _   => actor
+  | .dropRefA holder _      => holder
+  | .revokeDelegationA holder _ => holder
+  | .validateHandoffA intro _ _ => intro
+  | .exerciseA actor _      => actor
 
 mutual
 /-- **`sameTargetForest`** — the STRUCTURAL `DelegationMode::None` fidelity predicate: every child's
@@ -524,6 +531,35 @@ def emitOnlyForest : FullForestA := ⟨ .emitEventA 5 0 7 42, [] ⟩
 #eval (execFullForestA fma0 emitOnlyForest).isSome                            -- true (authority-free emit)
 #eval (execFullForestA fma0 emitOnlyForest).map
         (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))       -- some (105, 7)
+
+/-! ### §11-auth — META-FILL B Wave 2: a TREE NODE carrying a DISTINCT AUTHORITY effect runs (the 6
+authority effects inherit the forest executor AUTOMATICALLY through `execFullA`/`lowerForestA` — NO
+forest-spine edit, only the keystone `targetOf` arm). The whole tree is balance-NEUTRAL:
+`recTotalAsset` is UNCHANGED in BOTH assets, even though the cap GRAPH moves (an edge added then
+exercised). Actor 9 holds the `node 0` connectivity cap in `fma0`. -/
+
+/-- **`authFullForest`** — a 2-level tree whose nodes are AUTHORITY effects: the ROOT `introduceA`
+hands recipient 1 an edge to target 0 (actor 9 holds `node 0`); the CHILD `exerciseA` exercises
+9's held edge to 0 (delegated, non-amplifying). NEITHER touches the `bal` ledger ⇒ the whole tree is
+balance-NEUTRAL in EVERY asset (per-asset net `0`) — the cap graph moves, the supply does NOT. -/
+def authFullForest : FullForestA :=
+  ⟨ .introduceA 9 1 0
+  , [ { holder := 9, keep := [Auth.read], parentCap := .node 0
+      , sub := ⟨ .exerciseA 9 0, [] ⟩ } ] ⟩
+
+#eval (execFullForestA fma0 authFullForest).isSome                            -- true (authority tree commits)
+-- The pre-order lowering is the 2 authority node-actions:
+#eval (lowerForestA authFullForest).length                                    -- 2
+-- The per-asset net is 0 in BOTH assets (authority effects move NO asset's supply — balance-NEUTRAL):
+#eval (turnLedgerDeltaAsset (lowerForestA authFullForest) 0,
+       turnLedgerDeltaAsset (lowerForestA authFullForest) 1)                   -- (0, 0)
+-- The per-asset supply AFTER the authority tree: UNCHANGED at (105, 7) — balance-NEUTRALITY:
+#eval (execFullForestA fma0 authFullForest).map
+        (fun s => (recTotalAsset s.kernel 0, recTotalAsset s.kernel 1))        -- some (105, 7)
+-- ...recipient 1 GAINED the introduced `node 0` edge (the cap GRAPH DID advance — the authority domain):
+#eval (execFullForestA fma0 authFullForest).map (fun s => s.kernel.caps 1)     -- some [Cap.node 0]
+-- ...the chain grew by exactly the node count (2):
+#eval (execFullForestA fma0 authFullForest).map (fun s => s.log.length)        -- some 2
 
 /-! ## §12 — OUTCOME.
 
