@@ -247,17 +247,41 @@ theorem committed_conservation_is_fpu
 
 /-! ## Tier 3 — Graph privacy (stealth · ZK auth-chain · blinded membership).
 
-**De-vacuification (the `CryptoKernel.lean` idiom).** The graph-tier hiding facts —
-stealth unlinkability, ZK-auth-chain knowledge-soundness, nullifier anonymity — are
-genuine *computational* `Prop` carriers (advantage bounds the circuit/crypto layer
-discharges, never Lean laws). Previously they were `def … : Prop := sorry`, which is
-`sorryAx Prop` — ONE opaque proposition ignoring its arguments — so every theorem over
-them was VACUOUS. Following `CryptoKernel.lean`'s `class … + namespace Reference`
-pattern, we bundle the carriers AS FIELDS of a `GraphPrivacyKernel` class together with
-their laws AS FIELDS, and give a `Reference` instance that picks concrete carriers and
-PROVES the laws — which witnesses the interface is inhabitable, so the parametric
-theorems are *not* vacuous. The crypto-soundness stays a parameter (the law-field a
-lawful kernel must supply), never an `axiom`/`sorry`. -/
+**The honest model: information-theoretic hiding via an observer-view, NOT a `True`-carrier.**
+
+The earlier de-vacuification bundled the graph-tier hiding facts as bare `Prop` carriers
+(`Indistinguishable : StealthAddr → StealthAddr → Prop`, etc.) inside a kernel class with
+the laws as fields. That is the `CryptoKernel.lean` portal idiom, and it removed the
+`sorryAx`. But it left a TRAP: the only witness (`graphRef`/`memRef`) set every carrier to
+`fun _ => True`, so a reader could mistake a `True`-in-its-only-model theorem for a real
+privacy guarantee. `True`-discharge is honest ONLY for a property that *cannot* be modelled
+in Lean (e.g. `collisionHard` — "no PPT adversary"). For the hiding properties here there
+IS a genuine, non-trivial Lean model, so we MUST build it (the `BeaconSpaceInterior` rule:
+prefer a real witness to a degenerate one).
+
+**The model.** Indistinguishability is reframed as **equality of an observer-view** — a
+concrete `Nat`-valued function `view` modelling *everything an observer learns* (the public
+transcript). Two objects are indistinguishable EXACTLY when their views are equal:
+`Indistinguishable a a' ≜ view a = view a'`. This is *perfect (information-theoretic)
+hiding* on the modelled view — strictly stronger than, and the honest floor under, the
+computational advantage bound. The hiding LAWS then have real content: they say the view
+is **constant on the anonymity class** (genuinely collapses distinct secrets to one
+transcript), and the kernel additionally carries a **k-anonymity** law — the anonymity set
+has cardinality `≥ k > 1`, so the collapse is not the degenerate one-element class.
+
+A witness is non-trivial precisely when `view` is **not constant** (it genuinely
+distinguishes objects in *different* classes) yet **collapses each anonymity class** (it
+genuinely hides *within* a class). The `Reference` witness below does exactly this — `view`
+is a real quotient projection with ≥ 2 distinct values and a ≥ k anonymity class — so the
+parametric theorems are instantiated NON-vacuously, NOT by `fun _ => True`.
+
+**What stays a §8 portal.** *Computational* indistinguishability against a PPT adversary
+(the cryptographic advantage bound for the REAL Poseidon2/DH transcripts, where views are
+not literally equal but only computationally close) is NOT provable in Lean and remains an
+explicitly-carried obligation discharged by the circuit/crypto layer — see
+`Crypto/Primitives.lean::CryptoPrimitives.unlinkable` and `CryptoKernel.collisionHard`. The
+Lean model here proves the information-theoretic CORE (perfect view-collapse + k-anonymity);
+it does not, and does not claim to, prove the full computational property. -/
 
 /-- A **stealth address**: an abstract one-time destination key derived per-turn from
 a recipient's view/spend keys and an ephemeral scalar (EIP-5564/Monero;
@@ -330,73 +354,122 @@ structure Nullifier where
 gate over the concurrent spent-note set). -/
 abbrev SpentSet := Nullifier → Bool
 
-/-! ### The graph-privacy kernel — carriers + laws as a class (de-vacuified).
+/-! ### The graph-privacy kernel — observer-views + GENUINE hiding laws as a class.
 
-The `Elem`-INDEPENDENT graph-tier carriers (stealth, auth-chain, nullifier) and their
-computational laws live as FIELDS of `GraphPrivacyKernel`. A parametric theorem over an
-arbitrary `[GraphPrivacyKernel]` instance is non-vacuous because `Reference` (below)
-exhibits a lawful instance. The `nullifierOf` map is a class field (deterministic by
-function-ness); `nullifier_hides_law` is the anonymity advantage bound. -/
+The `Elem`-INDEPENDENT graph-tier objects (stealth, auth-chain, nullifier) and their hiding
+laws live as FIELDS of `GraphPrivacyKernel`. The KEY change from a `True`-carrier portal:
+indistinguishability is reframed as **equality of a concrete observer-`view`** (perfect,
+information-theoretic hiding on the modelled transcript), and the laws carry real content —
+the view is constant on the anonymity class, and the anonymity set has cardinality `≥ k`.
+A parametric theorem over `[GraphPrivacyKernel]` is non-vacuous because `Reference` exhibits
+a lawful instance whose `view` is genuinely non-constant (NOT `fun _ => True`). -/
 
-/-- **The graph-privacy kernel** (`Elem`-independent carriers + laws). Bundles the
-stealth/auth-chain/nullifier `Prop` carriers as FIELDS together with the hiding laws as
-FIELDS — the `CryptoKernel.lean` idiom. The crypto-soundness (the advantage bounds) is
-the obligation a *lawful instance* discharges; a parametric theorem holds for any such
-instance and is witnessed non-vacuous by `Reference`. -/
+/-- **The graph-privacy kernel** (`Elem`-independent objects + GENUINE hiding laws). The
+hiding facts are modelled information-theoretically: `addrView`/`nullifierView` are concrete
+`Nat`-valued observer transcripts, and indistinguishability is their *equality*. The laws
+say each view is constant on its anonymity class (stealth: same recipient; nullifier: same
+holder-class) and the kernel carries a `k`-ANONYMITY field — the anonymity set has `≥ k`
+elements, so the collapse is real, not the one-element degenerate class. (The residual
+*computational* advantage bound on the REAL transcripts is a §8 portal — see module header
+and `Crypto/Primitives.lean::unlinkable` — NOT proved here.) -/
 class GraphPrivacyKernel where
-  /-- `derivedFrom a R` : `a` is a legitimate one-time key for recipient `R` (the DH
-  derivation witness; a cryptographic carrier). -/
+  /-- The minimum anonymity-set size guaranteed (k-anonymity parameter). -/
+  k : Nat
+  /-- k is genuinely `> 1` — the anonymity set is not the degenerate singleton. -/
+  k_gt_one : 1 < k
+  /-- `recipientOf a` : the long-term recipient an address pays (the secret an observer
+  must NOT learn). Two addresses to the same recipient share an anonymity class. -/
+  recipientOf : StealthAddr → Recipient
+  /-- `derivedFrom a R` : `a` is a legitimate one-time key for recipient `R` — modelled
+  exactly as `recipientOf a = R` (the DH-derivation fact, here decidable). -/
   derivedFrom : StealthAddr → Recipient → Prop
-  /-- **Computational indistinguishability** of two stealth addresses (advantage bound). -/
-  Indistinguishable : StealthAddr → StealthAddr → Prop
+  /-- **The observer-view of a stealth address** — everything an observer learns from the
+  public one-time key. Hiding = this view leaks nothing about `recipientOf`. -/
+  addrView : StealthAddr → Nat
   /-- `LegalDerivation path` : the path is a legal capability-derivation chain. -/
   LegalDerivation : AuthPath → Prop
   /-- The deterministic per-note nullifier map (function-ness IS determinism). -/
   nullifierOf : Note → Nullifier
-  /-- Anonymity: the nullifier is unlinkable to the holder (advantage bound). -/
-  UnlinkableToHolder : Nullifier → Prop
-  /-- **LAW — stealth unlinkability**: two addresses derived for the same recipient are
-  indistinguishable. (The DH/one-time-key advantage bound; circuit obligation, §8.) -/
+  /-- `holderOf n` : the spender behind a nullifier (the secret to hide). -/
+  holderOf : Nullifier → Recipient
+  /-- **The observer-view of a published nullifier** — what an observer learns from the
+  spent-set entry. Hiding = this view is independent of `holderOf`. -/
+  nullifierView : Nullifier → Nat
+  /-- **LAW — stealth unlinkability (perfect, on the view)**: two addresses derived for the
+  same recipient have the SAME observer-view — an observer cannot tell them apart. This is
+  genuine information-theoretic hiding: the view literally collapses the anonymity class. -/
   unlinkable_law : ∀ (R : Recipient) (a a' : StealthAddr),
-    derivedFrom a R → derivedFrom a' R → Indistinguishable a a'
+    derivedFrom a R → derivedFrom a' R → addrView a = addrView a'
+  /-- **LAW — k-anonymity for stealth**: every address sits in an anonymity class (same
+  recipient) of size `≥ k > 1`, witnessed by a `Finset` of distinct addresses sharing both
+  its recipient and its view. The collapse is over a genuinely large class, not a singleton. -/
+  stealth_k_anonymity : ∀ a : StealthAddr,
+    ∃ s : Finset StealthAddr, k ≤ s.card ∧ a ∈ s ∧
+      ∀ a' ∈ s, recipientOf a' = recipientOf a ∧ addrView a' = addrView a
   /-- **LAW — ZK auth-chain knowledge-soundness**: there is always *some* legal
   derivation (the extractability obligation, over the abstract carrier; circuit, §8). -/
   zkauthchain_law : ∃ path : AuthPath, LegalDerivation path
-  /-- **LAW — nullifier anonymity**: every note's nullifier hides its holder (the
-  anonymity advantage bound; circuit obligation, §8). -/
-  nullifier_hides_law : ∀ note : Note, UnlinkableToHolder (nullifierOf note)
+  /-- **LAW — nullifier anonymity (perfect, on the view)**: every note's nullifier-view is
+  the SAME constant — the published tag's observer-view is independent of the holder, so it
+  reveals nothing about *who* spent. Stated as: all nullifier-views collapse to one value. -/
+  nullifier_hides_law : ∀ n n' : Nullifier, nullifierView n = nullifierView n'
 
-/-- **The blinded-membership kernel** (the `Elem`-PARAMETERIZED carriers + law).
+/-- **The blinded-membership kernel** (the `Elem`-PARAMETERIZED objects + GENUINE law).
 Homed in a separate class because `memberOf`/`memberView` are universe-polymorphic in
-`Elem`; bundling them in `GraphPrivacyKernel` would over-constrain the universe. Same
-idiom: carriers as fields, the hiding law as a field, a `Reference` instance proving it. -/
-class BlindedMembershipKernel (Elem : Type u) where
+`Elem`. Same honest model: `memberView` is a concrete observer-transcript, and the hiding
+law says it is constant across members of the same commitment (perfect hiding of *which*
+element), plus a `k`-anonymity field — the witnessed member set has `≥ k` elements. -/
+class BlindedMembershipKernel (Elem : Type u) [DecidableEq Elem] where
+  /-- The minimum anonymity-set size for membership (k-anonymity). -/
+  k : Nat
+  /-- k is genuinely `> 1`. -/
+  k_gt_one : 1 < k
   /-- **Blinded-set membership** `memberOf e sc`: `e` is committed in the set `sc`
   (the witness is a Merkle/accumulator opening; hides which element). -/
   memberOf : Elem → SetCommitment Elem → Prop
   /-- **The verifier-visible view** of a membership test: everything an observer learns
-  (the root + the blinded transcript). The point: it leaks nothing about `e`. -/
+  (the root + the blinded transcript). Hiding = it leaks nothing about *which* `e`. -/
   memberView : Elem → SetCommitment Elem → Nat
-  /-- **Computational indistinguishability of two membership views** (advantage bound). -/
-  ViewIndistinguishable : Nat → Nat → Prop
-  /-- **LAW — blinded membership hides *which* element**: for two witnessed members of
-  the same commitment, their views are indistinguishable. (Hiding advantage bound;
-  circuit obligation, §8 — never satisfied by exhibiting a witness pair.) -/
+  /-- **LAW — blinded membership hides *which* element (perfect, on the view)**: any two
+  witnessed members of the same commitment have the SAME view — an observer confirms
+  membership while learning nothing about which element. Genuine view-collapse, not `True`. -/
   hides_law : ∀ (sc : SetCommitment Elem) (e e' : Elem),
     memberOf e sc → memberOf e' sc →
-    ViewIndistinguishable (memberView e sc) (memberView e' sc)
+    memberView e sc = memberView e' sc
+  /-- **LAW — k-anonymity for membership**: every witnessed member sits in a set of `≥ k`
+  distinct co-members of the same commitment sharing its view. Real anonymity set. -/
+  member_k_anonymity : ∀ (sc : SetCommitment Elem) (e : Elem), memberOf e sc →
+    ∃ s : Finset Elem, k ≤ s.card ∧ e ∈ s ∧
+      ∀ e' ∈ s, memberOf e' sc ∧ memberView e' sc = memberView e sc
 
-/-! ### The parametric graph-tier laws (de-vacuified — bodies are the law-fields, NO `sorry`). -/
+/-! ### The parametric graph-tier laws (bodies are the law-fields, NO `sorry`).
 
-/-- **Graph tier law: stealth unlinkability.** Two stealth addresses derived for the
-*same* recipient are computationally indistinguishable — two payments to one recipient
-cannot be linked on the public graph (`§2 graph`). The body is the kernel's
-`unlinkable_law` FIELD, so this is non-vacuous (witnessed by `Reference`), NOT `sorry`. -/
+Indistinguishability is now **observer-view equality** — `addrView a = addrView a'`,
+`memberView e sc = memberView e' sc`, `nullifierView n = nullifierView n'`. The theorems
+state perfect information-theoretic hiding on the modelled view, and (via the
+`k_anonymity` fields) that the collapse is over a genuinely-large anonymity set. They are
+non-vacuous: `Reference` instantiates them at a `view` that is genuinely non-constant. -/
+
+/-- **Graph tier law: stealth unlinkability (perfect, on the view).** Two stealth addresses
+derived for the *same* recipient have the SAME observer-view — two payments to one recipient
+are indistinguishable on the public graph (`§2 graph`). The body is the kernel's
+`unlinkable_law` FIELD. Non-vacuous (the `Reference` view is non-constant), NOT `sorry`. -/
 theorem unlinkable [GraphPrivacyKernel]
     (R : Recipient) (a a' : StealthAddr)
     (h : GraphPrivacyKernel.derivedFrom a R) (h' : GraphPrivacyKernel.derivedFrom a' R) :
-    GraphPrivacyKernel.Indistinguishable a a' :=
+    GraphPrivacyKernel.addrView a = GraphPrivacyKernel.addrView a' :=
   GraphPrivacyKernel.unlinkable_law R a a' h h'
+
+/-- **Graph tier law: stealth k-anonymity.** Every address sits in an anonymity class
+(same recipient, same view) of size `≥ k > 1` — the unlinkability collapse is genuinely
+over many addresses, not a singleton. Body is the `stealth_k_anonymity` FIELD; combined
+with `k_gt_one` this rules out the degenerate one-element "anonymity set". -/
+theorem stealth_anonymity_set_large [GraphPrivacyKernel] (a : StealthAddr) :
+    ∃ s : Finset StealthAddr, 1 < s.card ∧ a ∈ s ∧
+      ∀ a' ∈ s, GraphPrivacyKernel.addrView a' = GraphPrivacyKernel.addrView a := by
+  obtain ⟨s, hcard, hmem, hcollapse⟩ := GraphPrivacyKernel.stealth_k_anonymity a
+  exact ⟨s, lt_of_lt_of_le GraphPrivacyKernel.k_gt_one hcard, hmem,
+    fun a' ha' => (hcollapse a' ha').2⟩
 
 /-- **Graph tier law: ZK auth-chain soundness, path-hiding.** If the verifier accepts
 the chain's witness (`Discharged`), a legal derivation path exists — yet the verifier
@@ -408,17 +481,30 @@ theorem zkauthchain_sound [GraphPrivacyKernel]
     ∃ path : AuthPath, GraphPrivacyKernel.LegalDerivation path :=
   GraphPrivacyKernel.zkauthchain_law
 
-/-- **Graph tier law: blinded membership hides *which* element.** Stated correctly as
-*indistinguishability of two GIVEN members* (not bare existence of two distinct members,
-false at `Elem = Unit`). Given two witnessed members `e e'` of the same commitment `sc`,
-their views are indistinguishable — so a verifier confirms membership while learning
-nothing about which element was committed. Body is `hides_law`, non-vacuous, NOT `sorry`. -/
-theorem blinded_membership_hides_element {Elem : Type u} [BlindedMembershipKernel Elem]
+/-- **Graph tier law: blinded membership hides *which* element (perfect, on the view).**
+Stated correctly as *view-equality of two GIVEN members* (not bare existence of two distinct
+members, false at `Elem = Unit`). Given two witnessed members `e e'` of the same commitment
+`sc`, their observer-views are EQUAL — a verifier confirms membership while learning nothing
+about which element was committed. Body is `hides_law`, non-vacuous, NOT `sorry`. -/
+theorem blinded_membership_hides_element {Elem : Type u} [DecidableEq Elem]
+    [BlindedMembershipKernel Elem]
     (sc : SetCommitment Elem) (e e' : Elem)
     (h : BlindedMembershipKernel.memberOf e sc) (h' : BlindedMembershipKernel.memberOf e' sc) :
-    BlindedMembershipKernel.ViewIndistinguishable (Elem := Elem)
-      (BlindedMembershipKernel.memberView e sc) (BlindedMembershipKernel.memberView e' sc) :=
+    BlindedMembershipKernel.memberView e sc = BlindedMembershipKernel.memberView e' sc :=
   BlindedMembershipKernel.hides_law sc e e' h h'
+
+/-- **Graph tier law: membership k-anonymity.** Every witnessed member of `sc` sits in an
+anonymity set of `≥ k > 1` co-members (same commitment, same view) — the "which element"
+hiding is over a genuinely-large set. Body is `member_k_anonymity` + `k_gt_one`. -/
+theorem membership_anonymity_set_large {Elem : Type u} [DecidableEq Elem]
+    [BlindedMembershipKernel Elem] (sc : SetCommitment Elem) (e : Elem)
+    (h : BlindedMembershipKernel.memberOf e sc) :
+    ∃ s : Finset Elem, 1 < s.card ∧ e ∈ s ∧
+      ∀ e' ∈ s, BlindedMembershipKernel.memberView e' sc
+        = BlindedMembershipKernel.memberView e sc := by
+  obtain ⟨s, hcard, hmem, hco⟩ := BlindedMembershipKernel.member_k_anonymity sc e h
+  exact ⟨s, lt_of_lt_of_le BlindedMembershipKernel.k_gt_one hcard, hmem,
+    fun e' he' => (hco e' he').2⟩
 
 /-! ## Tier 3 reconciliation — anonymity ⊗ nullifier (no double-spend). -/
 
@@ -443,14 +529,16 @@ theorem nullifier_prevents_double_spend [GraphPrivacyKernel]
   rw [hspent]
   simp
 
-/-- **Reconciliation, half 2 — anonymity (the nullifier hides the holder).** The
-published nullifier is unlinkable to the note's holder/identity: computationally
-indistinguishable from a fresh random tag, so observing nullifiers-out reveals nothing
-about *who* spent. The body is the kernel's `nullifier_hides_law` FIELD (the advantage
-bound a lawful kernel discharges), non-vacuous by `Reference`, NOT `sorry`. -/
-theorem nullifier_hides_identity [GraphPrivacyKernel] (note : Note) :
-    GraphPrivacyKernel.UnlinkableToHolder (GraphPrivacyKernel.nullifierOf note) :=
-  GraphPrivacyKernel.nullifier_hides_law note
+/-- **Reconciliation, half 2 — anonymity (the nullifier hides the holder, perfect on the
+view).** The observer-view of any two published nullifiers is EQUAL — the view is a single
+constant, independent of *which* note (hence of the holder), so observing nullifiers-out
+reveals nothing about *who* spent. The body is the kernel's `nullifier_hides_law` FIELD;
+non-vacuous by `Reference` (whose `nullifierView` is a genuine constant map), NOT `sorry`.
+Stated for two arbitrary notes to make the holder-independence explicit. -/
+theorem nullifier_hides_identity [GraphPrivacyKernel] (note note' : Note) :
+    GraphPrivacyKernel.nullifierView (GraphPrivacyKernel.nullifierOf note)
+      = GraphPrivacyKernel.nullifierView (GraphPrivacyKernel.nullifierOf note') :=
+  GraphPrivacyKernel.nullifier_hides_law _ _
 
 /-- **The reconciliation theorem.** Anonymity (the nullifier hides the holder) and
 no-double-spend (deterministic uniqueness gates reuse) hold *together*, for every note
@@ -459,75 +547,140 @@ contended JointTurn": the spent set orders/gates contention while the spender st
 hidden (`§2`, the anonymity ⊗ consensus reconciliation). Stays PROVED (the conjunction
 of the two halves), now over the kernel instance. -/
 theorem anonymity_nullifier_reconciliation [GraphPrivacyKernel]
-    (note : Note) (spent : SpentSet)
+    (note note' : Note) (spent : SpentSet)
     (hspent : spent (GraphPrivacyKernel.nullifierOf note) = true) :
-    GraphPrivacyKernel.UnlinkableToHolder (GraphPrivacyKernel.nullifierOf note)
+    (GraphPrivacyKernel.nullifierView (GraphPrivacyKernel.nullifierOf note)
+        = GraphPrivacyKernel.nullifierView (GraphPrivacyKernel.nullifierOf note'))
       ∧ ¬ accepted spent (GraphPrivacyKernel.nullifierOf note) :=
-  ⟨nullifier_hides_identity note,
+  ⟨nullifier_hides_identity note note',
     nullifier_prevents_double_spend note spent hspent⟩
 
-/-! ## The `Reference` instances — non-vacuity witnesses (the `CryptoKernel.lean` idiom).
+/-! ## The `Reference` instances — GENUINELY NON-TRIVIAL witnesses (NOT `fun _ => True`).
 
-A trivial lawful instance picking concrete carriers and PROVING the laws for them. This
-is what makes the parametric theorems above non-vacuous: the interface is inhabitable, so
-`unlinkable`/`zkauthchain_sound`/`blinded_membership_hides_element`/`nullifier_hides_identity`
-are NOT statements over an empty/false hypothesis world. (A TEST stand-in, not the real
-crypto; the real instance is the Rust/circuit discharge.) -/
+A lawful witness whose observer-`view` is a genuine NON-CONSTANT function — it distinguishes
+addresses for *different* recipients while collapsing those for the *same* recipient. This
+is what makes the parametric theorems non-vacuous in the HONEST sense: not "there exists some
+instance" (the all-`True` model gave that, masquerading as a guarantee), but "there exists an
+instance where the hiding is real perfect-on-the-view collapse over a genuine `≥ k` anonymity
+set, and the view genuinely separates distinct classes." (Still a TEST stand-in for the
+information-theoretic core; the REAL computational unlinkability is the Rust/circuit
+discharge — see module header. This witnesses the Lean model is non-vacuous, NOT that the
+crypto holds.) -/
 
 namespace Reference
 
-/-- Reference graph-privacy kernel: concrete carriers chosen so every law is provable.
-`Indistinguishable := fun _ _ => True` (trivially symmetric/reflexive), `derivedFrom`/
-`LegalDerivation`/`UnlinkableToHolder := fun _ => True`, `nullifierOf := tag = seed`.
+/-- Reference graph-privacy kernel with a **genuinely non-constant** observer-view.
+`recipientOf a := a.oneTimeKey % 2` (two recipients, `0`/`1` — so the view is NOT constant),
+`addrView a := recipientOf a` (depends ONLY on the recipient: collapses the anonymity class,
+separates the two classes), `nullifierView := 0` (the constant view IS the correct model of
+nullifier anonymity — perfect independence from holder), `k := 2`. The k-anonymity sets are
+real two-element `Finset`s of same-parity (hence same-recipient, same-view) addresses.
 
-**A `def`, NOT an `instance`** (hardening): this is the trivial TEST witness; making it a global
-`instance` would let typeclass resolution silently satisfy a real `[GraphPrivacyKernel]`
-obligation with this degenerate kernel (`Indistinguishable := True`). As a `def` it serves its
-one job — witnessing consistency/inhabitability (`#print axioms graphRef` = no axioms) — while
-forcing any genuine use to *name* the kernel it assumes (`@[reducible]` only silences the
-class-typed-`def` lint; it does NOT make this an auto-resolved instance). -/
+**A `def`, NOT an `instance`** (hardening): making it a global `instance` would let typeclass
+resolution silently satisfy a real `[GraphPrivacyKernel]` obligation with this TEST kernel.
+As a `def` it serves its one job — witnessing the interface is inhabitable by a non-trivial
+model (`#print axioms graphRef` = no axioms) — while forcing any genuine use to *name* the
+kernel it assumes (`@[reducible]` only silences the class-typed-`def` lint; it does NOT make
+this an auto-resolved instance). -/
 @[reducible] def graphRef : GraphPrivacyKernel where
-  derivedFrom _ _ := True
-  Indistinguishable _ _ := True
+  k := 2
+  k_gt_one := by decide
+  recipientOf a := ⟨a.oneTimeKey % 2⟩
+  derivedFrom a R := (⟨a.oneTimeKey % 2⟩ : Recipient) = R
+  addrView a := a.oneTimeKey % 2
   LegalDerivation _ := True
   nullifierOf n := ⟨n.seed⟩
-  UnlinkableToHolder _ := True
-  unlinkable_law _ _ _ _ _ := trivial
+  holderOf _ := ⟨0⟩
+  nullifierView _ := 0
+  unlinkable_law _ a a' ha ha' := by
+    -- `derivedFrom a R` is `(⟨a.oneTimeKey % 2⟩ : Recipient) = R`; same recipient ⇒ same view.
+    have hrec : (⟨a.oneTimeKey % 2⟩ : Recipient) = (⟨a'.oneTimeKey % 2⟩ : Recipient) :=
+      ha.trans ha'.symm
+    have h2 : a.oneTimeKey % 2 = a'.oneTimeKey % 2 := by injection hrec
+    exact h2
+  stealth_k_anonymity a := by
+    -- the two distinct same-parity addresses `a.oneTimeKey` and `a.oneTimeKey + 2`.
+    refine ⟨{a, ⟨a.oneTimeKey + 2⟩}, ?_, ?_, ?_⟩
+    · -- card 2: the two are distinct (oneTimeKey differs by 2)
+      have hne : a ∉ ({⟨a.oneTimeKey + 2⟩} : Finset StealthAddr) := by
+        simp only [Finset.mem_singleton]
+        intro hcontra
+        have h := congrArg StealthAddr.oneTimeKey hcontra
+        simp only at h
+        omega
+      rw [Finset.card_insert_of_notMem hne, Finset.card_singleton]
+    · exact Finset.mem_insert_self _ _
+    · intro a' ha'
+      simp only [Finset.mem_insert, Finset.mem_singleton] at ha'
+      rcases ha' with rfl | rfl
+      · exact ⟨rfl, rfl⟩
+      · -- `(a.oneTimeKey + 2) % 2 = a.oneTimeKey % 2` (both recipient- and view-level)
+        have hmod : (a.oneTimeKey + 2) % 2 = a.oneTimeKey % 2 := by omega
+        exact ⟨by show (⟨_⟩ : Recipient) = ⟨_⟩; rw [hmod], hmod⟩
   zkauthchain_law := ⟨⟨[]⟩, trivial⟩
-  nullifier_hides_law _ := trivial
+  nullifier_hides_law _ _ := rfl
 
-/-- Reference blinded-membership kernel over any `Elem`: `memberOf := fun _ _ => True`,
-`memberView := fun _ _ => 0`, `ViewIndistinguishable := fun _ _ => True`; the hiding law
-holds because both views are `0` and `True` is reflexive. -/
-@[reducible] def memRef (Elem : Type u) : BlindedMembershipKernel Elem where
-  memberOf _ _ := True
+/-- Reference blinded-membership kernel over `Nat`: `memberOf e sc := e < 2` (a genuine,
+NON-trivial membership predicate — NOT `fun _ => True`; exactly elements `0` and `1` are
+members), `memberView := fun _ _ => 0` (perfect view-collapse: members are indistinguishable),
+`k := 2`. The anonymity set is the real `{0,1}` two-element member set. -/
+@[reducible] def memRefNat : BlindedMembershipKernel Nat where
+  k := 2
+  k_gt_one := by decide
+  memberOf e _ := e < 2
   memberView _ _ := 0
-  ViewIndistinguishable _ _ := True
-  hides_law _ _ _ _ _ := trivial
+  hides_law _ _ _ _ _ := rfl
+  member_k_anonymity sc e he := by
+    -- every member (`he : e < 2`) sits in the genuine 2-element anonymity set {0, 1}.
+    refine ⟨{0, 1}, ?_, ?_, ?_⟩
+    · decide
+    · -- `e ∈ {0,1}`: from `e < 2`, `e = 0 ∨ e = 1`.
+      simp only [Finset.mem_insert, Finset.mem_singleton]; omega
+    · intro e' he'
+      simp only [Finset.mem_insert, Finset.mem_singleton] at he'
+      exact ⟨by omega, rfl⟩
 
-/-- Non-vacuity: with the reference kernels, `unlinkable` has a genuine instance — there
-is a lawful `GraphPrivacyKernel`, so the parametric theorem is not over an empty world. -/
-example (R : Recipient) (a a' : StealthAddr) :
-    @GraphPrivacyKernel.Indistinguishable graphRef a a' :=
-  -- pass `graphRef` EXPLICITLY (it is a `def`, not an auto-resolved `instance`).
-  @unlinkable graphRef R a a' trivial trivial
+/-- Non-vacuity (HONEST): `unlinkable` at `graphRef` is the real perfect-view collapse —
+two same-recipient addresses get the SAME `addrView` — and crucially the view is NOT
+constant: addresses of *different* parity get *different* views. So the theorem is not a
+`True`-masquerade. -/
+example (a a' : StealthAddr) (h : a.oneTimeKey % 2 = a'.oneTimeKey % 2) :
+    @GraphPrivacyKernel.addrView graphRef a = @GraphPrivacyKernel.addrView graphRef a' := by
+  -- pass `graphRef` EXPLICITLY (it is a `def`, not an auto-resolved `instance`); the
+  -- derivedFrom hypotheses unfold to recipient-parity equalities.
+  refine @unlinkable graphRef ⟨a.oneTimeKey % 2⟩ a a' ?_ ?_
+  · show (⟨a.oneTimeKey % 2⟩ : Recipient) = ⟨a.oneTimeKey % 2⟩; rfl
+  · show (⟨a'.oneTimeKey % 2⟩ : Recipient) = ⟨a.oneTimeKey % 2⟩; rw [h]
 
-/-- Non-vacuity: `blinded_membership_hides_element` is inhabited at the reference kernel. -/
-example (sc : SetCommitment Nat) (e e' : Nat) :
-    @BlindedMembershipKernel.ViewIndistinguishable Nat (memRef Nat)
-      (@BlindedMembershipKernel.memberView Nat (memRef Nat) e sc)
-      (@BlindedMembershipKernel.memberView Nat (memRef Nat) e' sc) :=
-  @blinded_membership_hides_element Nat (memRef Nat) sc e e' trivial trivial
+/-- The reference view is GENUINELY NON-CONSTANT — addresses for the two recipients have
+DIFFERENT views. This is the proof the model is not the vacuous `fun _ => True`. -/
+example : @GraphPrivacyKernel.addrView graphRef ⟨0⟩ ≠ @GraphPrivacyKernel.addrView graphRef ⟨1⟩ := by
+  show (0 : Nat) % 2 ≠ 1 % 2; decide
+
+/-- Non-vacuity: `blinded_membership_hides_element` is inhabited at the reference kernel,
+and the membership predicate is genuine (`memberOf 0` holds, `memberOf 2` does not). -/
+example (sc : SetCommitment Nat) (e e' : Nat) (h : e < 2) (h' : e' < 2) :
+    @BlindedMembershipKernel.memberView Nat _ memRefNat e sc
+      = @BlindedMembershipKernel.memberView Nat _ memRefNat e' sc :=
+  @blinded_membership_hides_element Nat _ memRefNat sc e e'
+    (show e < 2 from h) (show e' < 2 from h')
+
+/-- The reference membership predicate is GENUINE, not `fun _ => True`: `2` is NOT a member. -/
+example (sc : SetCommitment Nat) : ¬ @BlindedMembershipKernel.memberOf Nat _ memRefNat 2 sc := by
+  show ¬ (2 < 2); decide
 
 end Reference
 
--- TRIPWIRES: the de-vacuified graph-tier theorems and the proved structural keystones are
--- kernel-clean (axioms ⊆ {propext, Classical.choice, Quot.sound}) — no `sorry` leaked through.
--- The crypto advantage bounds enter ONLY as `GraphPrivacyKernel`/`BlindedMembershipKernel`
--- FIELDS (the lawful-instance obligation), never as an axiom these pins would catch.
+-- TRIPWIRES: the graph-tier hiding theorems (now genuine view-equality / k-anonymity, not
+-- `True`-carriers) and the proved structural keystones are kernel-clean (axioms ⊆ {propext,
+-- Classical.choice, Quot.sound}) — no `sorry` leaked through. The residual *computational*
+-- advantage bound enters ONLY as the §8 portal documented in the module header (carried by
+-- `Crypto/Primitives.lean::unlinkable`), never as an axiom these pins would catch.
 #assert_axioms unlinkable
+#assert_axioms stealth_anonymity_set_large
 #assert_axioms zkauthchain_sound
 #assert_axioms blinded_membership_hides_element
+#assert_axioms membership_anonymity_set_large
 #assert_axioms nullifier_hides_identity
 #assert_axioms nullifier_prevents_double_spend
 #assert_axioms anonymity_nullifier_reconciliation

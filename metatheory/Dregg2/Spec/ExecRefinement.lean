@@ -243,12 +243,18 @@ def execGraph (caps : Caps) : Graph Label ExecRights :=
        | _ => false)) = true
 
 /-- **`exec_owns_self_confers` (PROVED)** — the authority object the ownership branch lands on
-is the **reflexive self-conferral**. When a turn is admitted via ownership
-(`turn.actor = turn.src`), the self-cap `⟨turn.src, ⊤⟩` confers itself: the ownership hypothesis
-`hown` is load-bearing — it is what collapses the two endpoints to one, so this is
-`Authority.confers`-reflexivity specialised to the self-edge. (NB: this does NOT by itself witness
-the executable gate's *acceptance* — that is `exec_authz_grounds_in_graph` below, which consumes
-`authorizedB`; this lemma names only the authority object, not the refinement of the gate.) -/
+is the **reflexive self-conferral**, a CONNECTIVITY-skeleton fact (rights = `ExecRights = Unit`).
+When a turn is admitted via ownership (`turn.actor = turn.src`), the self-cap `⟨turn.src, ⊤⟩` confers
+itself: the ownership hypothesis `hown` is load-bearing — it is what collapses the two endpoints to
+one, so this is `Authority.confers`-reflexivity specialised to the self-edge.
+
+SCOPE (honesty): this is a connectivity statement — the rights conjunct is the trivial `⊤ ≤ ⊤` over
+the `Unit` skeleton, NOT a genuine rights non-amplification. The GENUINE rights non-amplification —
+`granted ⊆ held` over the REAL `List Auth` lattice, with teeth (an amplifying grant rejected) — lives
+in `Dregg2.Exec.EffectsAuthority.introduce_non_amplifying`/`amplifying_grant_rejected` (via
+`Caps.attenuate_subset`) and in `AuthModes.captp_granted_le_held`. This lemma names ONLY the
+connectivity object (it does NOT witness the gate's acceptance — that is `exec_authz_grounds_in_graph`
+below, which consumes `authorizedB`). -/
 theorem exec_owns_self_confers (turn : Turn) (hown : turn.actor = turn.src) :
     confers (⟨turn.actor, (⊤ : ExecRights)⟩ : Cap Label ExecRights)
             (⟨turn.src, (⊤ : ExecRights)⟩ : Cap Label ExecRights) := by

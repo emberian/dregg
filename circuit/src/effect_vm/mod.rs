@@ -179,8 +179,8 @@ mod tests;
 
 // ---- Re-export column layout (preserves pre-decomp paths) ----
 pub use columns::{
-    AUX_BASE, EFFECT_VM_WIDTH, NUM_AUX, NUM_EFFECTS, NUM_PARAMS, PARAM_BASE, STATE_AFTER_BASE,
-    STATE_BEFORE_BASE, aux_off, param, sel, state,
+    AUX_BASE, BAL_LIMB_BITS, EFFECT_VM_WIDTH, NUM_AUX, NUM_EFFECTS, NUM_PARAMS, PARAM_BASE,
+    STATE_AFTER_BASE, STATE_BEFORE_BASE, aux_off, param, sel, state,
 };
 
 // ---- Re-export types ----
@@ -194,7 +194,7 @@ pub use helpers::{
 };
 // Re-export so sibling modules can write `use super::fill_reserved_bits`
 // (mirrors the pre-decomp module-level visibility).
-pub(crate) use helpers::fill_reserved_bits;
+pub(crate) use helpers::{fill_balance_limb_bits, fill_reserved_bits};
 
 // ---- Re-export AIR ----
 pub use air::{AIR_DESCRIPTOR, EffectVmAir};

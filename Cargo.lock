@@ -2717,6 +2717,7 @@ dependencies = [
  "bulletproofs",
  "chacha20poly1305",
  "curve25519-dalek",
+ "dregg-cell",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dsl-runtime",

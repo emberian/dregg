@@ -200,6 +200,7 @@ pub mod effect_vm_p3_air;
 pub mod membership_adjacency_air;
 
 pub mod backends;
+pub mod proof_forest;
 pub mod proof_tier;
 
 #[cfg(test)]

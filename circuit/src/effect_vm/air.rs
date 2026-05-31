@@ -7,8 +7,8 @@ use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
 use crate::stark::{BoundaryConstraint, StarkAir};
 
 use super::{
-    AUX_BASE, EFFECT_VM_WIDTH, NUM_EFFECTS, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
-    aux_off, param, pi, sel, state,
+    AUX_BASE, BAL_LIMB_BITS, EFFECT_VM_WIDTH, NUM_EFFECTS, PARAM_BASE, STATE_AFTER_BASE,
+    STATE_BEFORE_BASE, aux_off, param, pi, sel, state,
 };
 
 /// The Effect VM AIR's shape descriptor (VK v2; see
@@ -276,7 +276,14 @@ pub const AIR_DESCRIPTOR: crate::air_descriptor::AirDescriptor =
         // for commitments / balance limbs / sovereign teeth, bilateral
         // aggregation accumulators. Number is a stable property of the AIR
         // shape — when constraints are added/removed, this bumps.
-        constraint_polynomial_count: NUM_EFFECTS + 1 + NUM_EFFECTS,
+        //
+        // W9-RANGECHECK adds CONSTRAINT GROUP 2a: an in-circuit balance-limb
+        // range / underflow proof contributing
+        //   2 * BAL_LIMB_BITS booleanity + 2 recomposition
+        // unconditional constraints. We fold its presence into the descriptor
+        // count (+1 for the group) so the VK-v2 fingerprint binds the new AIR
+        // shape; the per-bit constraints are an internal property of the group.
+        constraint_polynomial_count: NUM_EFFECTS + 1 + NUM_EFFECTS + 1,
         // 32 prior + 8 (γ.2 #131/#132: 4 FEDERATION_ID + 4 OWNER_CELL_ID
         // row-0 boundary bindings).
         boundary_constraint_count: 40,
@@ -419,6 +426,66 @@ impl StarkAir for EffectVmAir {
         // STARBRIDGE-FOLLOWUP-03: Same blocked status as range-checks above
         // (§5.2). Executor-side defense is the current Silver posture.
         // ====================================================================
+
+        // ====================================================================
+        // CONSTRAINT GROUP 2a: IN-CIRCUIT balance-limb range / underflow proof
+        // (W9-RANGECHECK — closes o1vm audit findings #1 and #3 in-circuit).
+        //
+        // The SECURITY NOTE above documented that the limbs were range-checked
+        // only by the OFF-circuit executor. This group lifts that guard INTO
+        // the AIR via a per-row bit-decomposition of the *new* balance limbs:
+        //
+        //   balance_lo = Σ_{i=0}^{29} lo_bit_i * 2^i,   each lo_bit_i ∈ {0,1}
+        //   balance_hi = Σ_{i=0}^{29} hi_bit_i * 2^i,   each hi_bit_i ∈ {0,1}
+        //
+        // Both recomposed sums are < 2^30 < p (BabyBear prime), so the
+        // decomposition is UNIQUE and the in-field recomposition cannot wrap.
+        //
+        // SOUNDNESS (underflow / finding #3): the Transfer / NoteCreate /
+        // CreateEscrow / CreateObligation / Burn / … debit constraints set
+        //   new_bal_lo = old_bal_lo - amount   (in the field).
+        // If amount > old_bal_lo this WRAPS to a field element ≥ 2^30 (e.g.
+        // the `p - 1` witness proved satisfiable in
+        // metatheory/Dregg2/Spike/TransferAirSoundness.lean). Such a value has
+        // NO 30-bit boolean decomposition, so constraint (2) below fails and
+        // the STARK verifier rejects — no executor re-derivation required.
+        //
+        // Enforced UNCONDITIONALLY on every row (mirrors the reserved-bit
+        // decomposition for SetField), so the new limbs of *every* effect's
+        // post-state are pinned in range. Degree: booleanity is degree 2,
+        // recomposition is degree 1 — both well under the degree-9 budget.
+        // ====================================================================
+        {
+            // -- balance_lo decomposition --
+            let mut recomposed_lo = BabyBear::ZERO;
+            for i in 0..BAL_LIMB_BITS {
+                let bit = local[AUX_BASE + aux_off::NEW_BAL_LO_BIT_BASE + i];
+                // (1) booleanity.
+                let c_bool = bit * (bit - BabyBear::ONE);
+                combined = combined + alpha_pow * c_bool;
+                alpha_pow = alpha_pow * alpha;
+                recomposed_lo = recomposed_lo + bit * BabyBear::new(1u32 << i);
+            }
+            // (2) recomposition pins new_bal_lo into [0, 2^30).
+            let c_recompose_lo =
+                recomposed_lo - local[STATE_AFTER_BASE + state::BALANCE_LO];
+            combined = combined + alpha_pow * c_recompose_lo;
+            alpha_pow = alpha_pow * alpha;
+
+            // -- balance_hi decomposition --
+            let mut recomposed_hi = BabyBear::ZERO;
+            for i in 0..BAL_LIMB_BITS {
+                let bit = local[AUX_BASE + aux_off::NEW_BAL_HI_BIT_BASE + i];
+                let c_bool = bit * (bit - BabyBear::ONE);
+                combined = combined + alpha_pow * c_bool;
+                alpha_pow = alpha_pow * alpha;
+                recomposed_hi = recomposed_hi + bit * BabyBear::new(1u32 << i);
+            }
+            let c_recompose_hi =
+                recomposed_hi - local[STATE_AFTER_BASE + state::BALANCE_HI];
+            combined = combined + alpha_pow * c_recompose_hi;
+            alpha_pow = alpha_pow * alpha;
+        }
 
         let s_noop = local[sel::NOOP];
         let s_transfer = local[sel::TRANSFER];

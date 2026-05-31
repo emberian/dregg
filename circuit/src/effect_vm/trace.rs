@@ -9,7 +9,8 @@ use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
 
 use super::{
     AUX_BASE, CellState, EFFECT_VM_WIDTH, Effect, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
-    aux_off, compute_effects_hash, compute_effects_hash_4, fill_reserved_bits, param, pi, sel,
+    aux_off, compute_effects_hash, compute_effects_hash_4, fill_balance_limb_bits,
+    fill_reserved_bits, param, pi, sel,
     split_u64, u64_to_4_limbs_16,
 };
 
@@ -1295,6 +1296,10 @@ pub fn generate_effect_vm_trace_ext(
             current_state.mode_flag,
         );
 
+        // W9-RANGECHECK: bit-decompose the new (state_after) balance limbs so
+        // the per-row in-circuit range / underflow constraint is satisfied.
+        fill_balance_limb_bits(&mut row, new_state.balance);
+
         // Write state_after.
         let state_after_cols = new_state.to_trace_cols();
         for (i, &val) in state_after_cols.iter().enumerate() {
@@ -1395,6 +1400,10 @@ pub fn generate_effect_vm_trace_ext(
             current_state.sealed_field_mask,
             current_state.mode_flag,
         );
+
+        // W9-RANGECHECK: NoOp pad rows pass balance through unchanged, so
+        // state_after.balance == current_state.balance — decompose it.
+        fill_balance_limb_bits(&mut row, current_state.balance);
 
         trace.push(row);
         // current_state stays the same for padding.

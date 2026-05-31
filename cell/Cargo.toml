@@ -13,6 +13,16 @@ description = "Agent cell model — capability-secure isolated execution context
 default = ["crypto"]
 crypto = ["dep:bulletproofs", "dep:chacha20poly1305", "dep:curve25519-dalek", "dep:ed25519-dalek", "dep:getrandom", "dep:merlin", "dep:x25519-dalek", "dep:zeroize"]
 zkvm = ["dep:dregg-circuit", "dep:dregg-commit", "dep:dregg-dsl-runtime"]
+# SOUNDNESS GATE — DO NOT ENABLE IN PRODUCTION.
+#
+# `test-stubs` arms the *accept* path of `StubVerifier` (predicate.rs), which
+# otherwise FAILS CLOSED on every proof. Without this feature (and outside
+# `#[cfg(test)]`), `WitnessedPredicateRegistry::with_stubs()` installs verifiers
+# that reject every proof — so a misconfigured host that selects the stub
+# registry can never authorize a forged witness. Downstream *test* crates that
+# rely on the permissive stub behavior enable `dregg-cell/test-stubs` in their
+# `[dev-dependencies]`; production builds never set it.
+test-stubs = []
 
 [dependencies]
 blake3 = "1"
@@ -34,6 +44,11 @@ zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# Integration tests under `cell/tests/` compile the crate as a normal
+# dependency (so `cfg(test)` is NOT set for the library), so they arm the
+# fail-closed `StubVerifier` accept path via the `test-stubs` feature. This is
+# scoped to dev/test builds and is never enabled in production.
+dregg-cell = { path = ".", features = ["test-stubs"] }
 
 [lints]
 workspace = true

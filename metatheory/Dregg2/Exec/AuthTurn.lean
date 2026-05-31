@@ -111,6 +111,35 @@ def recKDelegate (k : RecordKernelState) (delegator recipient t : Label) :
   else
     none
 
+/-! ### §3.RIGHTS — The RIGHTS-CARRYING delegation (the genuine `is_attenuation` mirror).
+
+`recKDelegate` above grants a `node t` connectivity cap — faithful to the connectivity skeleton
+but rights-blind. dregg1's `apply_introduce` does more: it looks up the introducer's HELD cap to
+the target (`lookup_by_target`), checks `is_attenuation(held.permissions, granted)`
+(`apply.rs:2829`, i.e. `granted ⊆ held`), and grants the recipient an attenuated copy
+(`grant_with_expiry(target, permissions)`). We mirror THAT: locate the introducer's held cap to
+`t`, attenuate it to `keep`, and grant the recipient the attenuated `endpoint` cap. The granted
+cap's REAL conferred rights are then `⊆` the held cap's — `attenuate_confRights_le`, the genuine
+`granted.rights ≤ held.rights` over the `ExecAuth` lattice, NOT a `()≤()` collapse. -/
+
+/-- **`heldCapTo caps h t`** — the introducer's HELD cap conferring an edge to `t` (the executable
+`lookup_by_target`): the first cap in `h`'s slot that `confersEdgeTo t`, or `Cap.null` if none.
+This is the cap whose rights `is_attenuation` bounds the grant against. -/
+def heldCapTo (caps : Caps) (h t : Label) : Cap :=
+  ((caps h).find? (fun cap => confersEdgeTo t cap)).getD Cap.null
+
+/-- **`recKDelegateAtten k delegator recipient t keep`** — the RIGHTS-CARRYING Granovetter
+delegation (the faithful `apply_introduce`): on commit (the delegator holds a cap to `t`), grant
+`recipient` the delegator's held cap to `t` ATTENUATED to `keep` (`attenuate keep (heldCapTo …)`).
+The granted cap carries REAL rights `⊆` the held cap's (`attenuate_confRights_le`) — the executable
+`is_attenuation(held, granted)`. Fail-closed: no held cap to `t` ⇒ no delegation. -/
+def recKDelegateAtten (k : RecordKernelState) (delegator recipient t : Label) (keep : List Auth) :
+    Option RecordKernelState :=
+  if (k.caps delegator).any (fun cap => confersEdgeTo t cap) = true then
+    some { k with caps := grant k.caps recipient (attenuate keep (heldCapTo k.caps delegator t)) }
+  else
+    none
+
 /-- **`recKRevokeTarget k holder t`** — the executable revocation authority turn: the `holder`
 drops EVERY cap conferring an edge to `t` (so its `execGraph` edge to `t` is gone — matching the
 abstract single-edge `removeEdge`). Always commits (revocation needs no further authority — it only
@@ -291,6 +320,81 @@ theorem recKDelegate_grounds (k k' : RecordKernelState) (delegator recipient t :
     rw [execGraph_eq_any]; exact hg
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
+/-! ### §6.RIGHTS — the rights-delegation grounds in a GENUINELY-HELD cap, and ATTENUATES it.
+
+The faithful `apply_introduce` content: when `recKDelegateAtten` commits, (a) the held cap
+`heldCapTo` it attenuates against is genuinely IN the delegator's slot and confers an edge to `t`
+(the executable `lookup_by_target` succeeds), and (b) the granted cap's REAL conferred rights are
+`⊆` that held cap's — `is_attenuation(held, granted)` over the `ExecAuth` lattice. This is the
+de-vacuified non-amplification: granted-vs-HELD (two different caps), not a cap vs itself. -/
+
+/-- **`heldCapTo_mem` (PROVED)** — when the delegator holds *some* cap conferring an edge to `t`,
+`heldCapTo` returns an actual member of its slot that `confersEdgeTo t`. The executable
+`lookup_by_target` succeeds and names a genuinely-held cap (the introducer's own authority to the
+target — the `held_cap` of `apply.rs:2817`). -/
+theorem heldCapTo_mem (caps : Caps) (delegator t : Label)
+    (hg : (caps delegator).any (fun cap => confersEdgeTo t cap) = true) :
+    heldCapTo caps delegator t ∈ caps delegator
+      ∧ confersEdgeTo t (heldCapTo caps delegator t) = true := by
+  unfold heldCapTo
+  rw [List.any_eq_true] at hg
+  obtain ⟨c, hmem, hconf⟩ := hg
+  -- `find?` with a satisfied predicate returns `some`, and the result satisfies the predicate.
+  cases hfind : (caps delegator).find? (fun cap => confersEdgeTo t cap) with
+  | none =>
+      -- impossible: `c` satisfies the predicate, so `find?` cannot be `none`.
+      rw [List.find?_eq_none] at hfind
+      exact absurd hconf (by simpa using hfind c hmem)
+  | some d =>
+      simp only [Option.getD_some]
+      exact ⟨List.mem_of_find?_eq_some hfind, List.find?_some hfind⟩
+
+/-- **`recKDelegateAtten_non_amplifying` (PROVED) — THE de-vacuified HEADLINE.** A committed
+rights-delegation grants `recipient` a cap whose REAL conferred authority is `⊆` the introducer's
+HELD cap to the target: `confRights granted ≤ confRights held`, where `granted := attenuate keep
+(heldCapTo …)` is the recipient's NEW cap and `held := heldCapTo …` is the introducer's EXISTING
+cap. This is `is_attenuation(held, granted)` (`apply.rs:2829`) over the `ExecAuth` lattice — the
+genuine granted-vs-held inequality, proved via `attenuate_confRights_le`, NOT `le_refl` self-vs-self.
+The recipient cannot exert any authority the introducer could not. -/
+theorem recKDelegateAtten_non_amplifying (caps : Caps) (delegator t : Label) (keep : List Auth) :
+    confRights (attenuate keep (heldCapTo caps delegator t))
+      ≤ confRights (heldCapTo caps delegator t) :=
+  attenuate_confRights_le keep (heldCapTo caps delegator t)
+
+/-- **`recKDelegateAtten_grants` (PROVED)** — on commit, the recipient genuinely HOLDS the granted
+(attenuated) cap in its slot, and the granted cap is exactly `attenuate keep` of the held cap. The
+executable `grant_with_expiry` landed the attenuated permission. -/
+theorem recKDelegateAtten_grants (k k' : RecordKernelState) (delegator recipient t : Label)
+    (keep : List Auth) (h : recKDelegateAtten k delegator recipient t keep = some k') :
+    attenuate keep (heldCapTo k.caps delegator t) ∈ k'.caps recipient := by
+  unfold recKDelegateAtten at h
+  by_cases hg : (k.caps delegator).any (fun cap => confersEdgeTo t cap) = true
+  · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h
+    exact grant_adds k.caps recipient (attenuate keep (heldCapTo k.caps delegator t))
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`recKDelegateAtten_frame` (PROVED)** — the rights-delegation is conservation-trivial: it edits
+only `caps`, so `recTotal`/`accounts`/`cell` are FIXED (the dual frame, mirroring
+`recKDelegate_frame`). -/
+theorem recKDelegateAtten_frame (k k' : RecordKernelState) (delegator recipient t : Label)
+    (keep : List Auth) (h : recKDelegateAtten k delegator recipient t keep = some k') :
+    recTotal k' = recTotal k ∧ k'.accounts = k.accounts ∧ k'.cell = k.cell := by
+  unfold recKDelegateAtten at h
+  by_cases hg : (k.caps delegator).any (fun cap => confersEdgeTo t cap) = true
+  · rw [if_pos hg] at h; simp only [Option.some.injEq] at h; subst h; exact ⟨rfl, rfl, rfl⟩
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`recKDelegateAtten_grounds` (PROVED)** — a committed rights-delegation HOLDS the abstract
+source edge (`delegator ⟶ ⟨t,()⟩` on the connectivity `execGraph`): the introducer could already
+reach `t`. The Granovetter connectivity premise, unchanged by the rights refinement. -/
+theorem recKDelegateAtten_grounds (k k' : RecordKernelState) (delegator recipient t : Label)
+    (keep : List Auth) (h : recKDelegateAtten k delegator recipient t keep = some k') :
+    execGraph k.caps delegator (⟨t, ()⟩ : Spec.Cap Label ExecRights) := by
+  unfold recKDelegateAtten at h
+  by_cases hg : (k.caps delegator).any (fun cap => confersEdgeTo t cap) = true
+  · rw [execGraph_eq_any]; exact hg
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
 /-! ## §7 — Axiom-hygiene tripwires (the CLOSED keystones).
 
 The dual frame, the graph-change `addEdge`/`removeEdge` matches, and the grounding lemma are all
@@ -304,6 +408,11 @@ image IS a `Spec.AuthStep` edit — closing the named missing transition `Proof/
 #assert_axioms recKDelegate_grounds
 #assert_axioms confersEdgeTo_unique
 #assert_axioms specCap_eq_iff_target
+#assert_axioms heldCapTo_mem
+#assert_axioms recKDelegateAtten_non_amplifying
+#assert_axioms recKDelegateAtten_grants
+#assert_axioms recKDelegateAtten_frame
+#assert_axioms recKDelegateAtten_grounds
 
 /-! ## §8 — It runs (`#eval`). -/
 

@@ -313,6 +313,97 @@ theorem synchronizer_round_obtains_over_beacon (B : BeaconSpace) (gst t : Nat) :
   obtain ⟨r', ht, hg, hh⟩ := Synchronizer.synchronizer_round_obtains R gst t hhit
   exact ⟨R, r', ht, hg, hh⟩
 
+/-! ## 4½. The beacon DERIVES the `Pacemaker.synchronizes` honest-leader field.
+
+`BFTLiveness.Pacemaker.synchronizes : ∀ t, ∃ r, t ≤ r ∧ gst ≤ r ∧ honestLeader r` carries, as its
+honest-leader conjunct, the *existence of an honest-leader synchronization round*. That conjunct is
+exactly what the measure-0 tail proves almost surely and `honestLeader_index_exists_ge` materialises
+as a concrete index. Defining the pacemaker's honest-leader predicate as "some beacon stream has an
+honest leader at view `r`", the beacon DISCHARGES `synchronizes` — turning that field from an
+assumption that honest-leader rounds exist into a CONSEQUENCE of the beacon measure (the honest
+fraction `h > 2/3`'s almost-sure hit). This is the §1 brief's wiring: the honest-leader content of
+the liveness premise is now the beacon's hit, not an assumed field. -/
+
+/-- **The beacon's honest-leader predicate** — "some beacon stream elects an honest leader at view
+`r`". The `Pacemaker.synchronizes` honest-leader conjunct is discharged via this predicate (below).
+It is a property of the view index alone, materialised from the measure-`1` hit event. -/
+def beaconHonestLeader (r : ℕ) : Prop := ∃ ω : ℕ → Bool, honestLeader r ω
+
+/-- **The beacon DERIVES `Pacemaker.synchronizes` (PROVED).** For any `gst` and any round `t`, there
+is a later synchronization round `r ≥ t` past GST whose leader is honest under the beacon
+(`beaconHonestLeader r`). The honest-leader conjunct is `honestLeader_index_exists_ge` at threshold
+`max t gst` (the measure-0 tail's constructive hit); the arithmetic skeleton (`t ≤ r ∧ gst ≤ r`) is
+the bound on the hit index. So the `synchronizes` field's honest-leader content is a CONSEQUENCE of
+the beacon's honest fraction, not an assumption. -/
+theorem synchronizes_derived_from_beacon (B : BeaconSpace) (gst : ℕ) :
+    ∀ t : ℕ, ∃ r : ℕ, t ≤ r ∧ gst ≤ r ∧ beaconHonestLeader r := by
+  intro t
+  obtain ⟨ω, r, hbr, hr⟩ := honestLeader_index_exists_ge B (max t gst)
+  exact ⟨r, le_trans (le_max_left _ _) hbr, le_trans (le_max_right _ _) hbr, ⟨ω, hr⟩⟩
+
+/-- **A full `BFTLiveness.Pacemaker` BUILT over the beacon (PROVED), given the legitimate delivery
+primitives.** This is the capstone the §1 brief asks for: the pacemaker whose honest-leader
+synchronization (`synchronizes`) is DERIVED from the beacon's almost-sure hit
+(`synchronizes_derived_from_beacon`), and whose remaining inputs are exactly the legitimate
+BFT/DLS88 primitives — NOT "the quorum forms":
+
+  * `block` — the leader's proposal per round (HotStuff's leader proposal);
+  * `honestEndorsers` — the honest endorser count per round;
+  * `honest_quorum` — the BFT honest-supermajority assumption (`n > 3f` / `h > 2/3`): in an
+    honest-leader round, the honest endorsers number `≥ cfg.threshold` (the honest set is a quorum);
+  * `honest_le_delivered` — HotStuff Thm 4 @ DLS88 Δ-delivery: in an honest-leader round past GST,
+    the honest endorsers' votes are *delivered* (delivered voter count `≥ honest endorsers`).
+
+The honest-leader predicate is the beacon's `beaconHonestLeader`, so `synchronizes` needs NO
+assumption beyond the beacon measure. Feeding this to `BFTLiveness.gstRound_obtains` (next) DERIVES
+the quorum threshold by `cfg.threshold ≤ honestEndorsers ≤ delivered` — the conclusion is proved
+from honest-majority + GST-delivery, never assumed. -/
+noncomputable def pacemakerOfBeacon (B : BeaconSpace)
+    (votesOf : List Msg → List Vote) (cfg : Finality.Config)
+    (gst : ℕ) (block : ℕ → ℕ) (honestEndorsers : ℕ → ℕ)
+    (honest_quorum : ∀ r : ℕ, beaconHonestLeader r → cfg.threshold ≤ honestEndorsers r)
+    (honest_le_delivered : ∀ r : ℕ, gst ≤ r → beaconHonestLeader r →
+      honestEndorsers r ≤ (Dregg2.World.votersFor (votesOf (Dregg2.World.World.recv r)) (block r)).length) :
+    BFTLiveness.Pacemaker Msg votesOf cfg where
+  gst := gst
+  block := block
+  honestLeader := beaconHonestLeader
+  honestEndorsers := honestEndorsers
+  synchronizes := synchronizes_derived_from_beacon B gst
+  honest_quorum := honest_quorum
+  honest_le_delivered := honest_le_delivered
+
+/-- **GST round DERIVED over the beacon (PROVED), with the honest-leader content from the measure.**
+Composing `pacemakerOfBeacon` with `BFTLiveness.gstRound_obtains`: given the beacon (honest fraction
+`h > 2/3`) and the legitimate delivery primitives (BFT honest-supermajority + HotStuff Thm 4 @ DLS88
+Δ-delivery), a `GSTRound` PROVABLY obtains — the honest-leader synchronization round is the beacon's
+almost-sure hit, the quorum is the *derived* `cfg.threshold ≤ honestEndorsers ≤ delivered`. The
+liveness premise is now honest-majority + GST-delivery (the legitimate BFT/DLS88 assumptions), not
+"the quorum forms". -/
+theorem gstRound_obtains_over_beacon (B : BeaconSpace)
+    (votesOf : List Msg → List Vote) (cfg : Finality.Config)
+    (gst : ℕ) (block : ℕ → ℕ) (honestEndorsers : ℕ → ℕ)
+    (honest_quorum : ∀ r : ℕ, beaconHonestLeader r → cfg.threshold ≤ honestEndorsers r)
+    (honest_le_delivered : ∀ r : ℕ, gst ≤ r → beaconHonestLeader r →
+      honestEndorsers r ≤ (Dregg2.World.votersFor (votesOf (Dregg2.World.World.recv r)) (block r)).length) :
+    ∃ r block, BFT.GSTRound (Msg := Msg) votesOf cfg block r :=
+  BFTLiveness.gstRound_obtains votesOf cfg
+    (pacemakerOfBeacon B votesOf cfg gst block honestEndorsers honest_quorum honest_le_delivered)
+
+/-- **τ-BFT liveness DERIVED over the beacon (PROVED).** End-to-end: from the beacon + the
+legitimate primitives, *some* block is `committedByQuorum`. The full descent
+"honest-fraction beacon ⇒ honest-leader round ⇒ honest set is a quorum ⇒ delivered ⇒ committed" is
+machine-checked, with the quorum DERIVED, not assumed. -/
+theorem liveness_over_beacon (B : BeaconSpace)
+    (votesOf : List Msg → List Vote) (cfg : Finality.Config)
+    (gst : ℕ) (block : ℕ → ℕ) (honestEndorsers : ℕ → ℕ)
+    (honest_quorum : ∀ r : ℕ, beaconHonestLeader r → cfg.threshold ≤ honestEndorsers r)
+    (honest_le_delivered : ∀ r : ℕ, gst ≤ r → beaconHonestLeader r →
+      honestEndorsers r ≤ (Dregg2.World.votersFor (votesOf (Dregg2.World.World.recv r)) (block r)).length) :
+    ∃ r block, Dregg2.World.committedByQuorum (Msg := Msg) votesOf r cfg block :=
+  BFTLiveness.liveness_of_pacemaker votesOf cfg
+    (pacemakerOfBeacon B votesOf cfg gst block honestEndorsers honest_quorum honest_le_delivered)
+
 /-! ## 5. Non-vacuity — a concrete `BeaconSpace` inhabits the structure.
 
 Building the canonical Bernoulli(`h`)-per-view independent product `Measure.infinitePi (bernoulli h)`
@@ -404,5 +495,8 @@ unbuilt module. The exact lemma the interior witness wants is
 #assert_axioms honestLeader_index_exists
 #assert_axioms synchronizer_hhit_discharged
 #assert_axioms synchronizer_round_obtains_over_beacon
+#assert_axioms synchronizes_derived_from_beacon
+#assert_axioms gstRound_obtains_over_beacon
+#assert_axioms liveness_over_beacon
 
 end Dregg2.Proof.BeaconSpace

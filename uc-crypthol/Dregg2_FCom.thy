@@ -3,7 +3,7 @@
 
     CROSS-SYSTEM TRANSPORT of the dregg2 commitment functionality F_com into a
     real game-based / UC framework (CryptHOL + Sigma_Commit_Crypto on
-    Isabelle2025-RC3).
+    Isabelle2025-2 + AFP 2025-2).
 
     WHAT IS TRANSPORTED.
     The dregg2 Lean interface `Dregg2.Crypto.CryptoPrimitives`
@@ -131,12 +131,17 @@ subsection\<open>The single-group F_com realization bundle (named for the Lean b
 text\<open>The dregg2 Pedersen commitment realizes F_com in a single prime-order group: correct,
 perfectly hiding, and binding-advantage equal to the DLog advantage of the reduction. This is
 the theorem the Lean bridge @{text UCBridge.lean} cites as
-\<open>Dregg2_UC.pedersen.dregg2_pedersen_realizes_F_com\<close>.\<close>
+\<open>Dregg2_UC.pedersen.dregg2_pedersen_realizes_F_com\<close>.
+
+The hiding and binding games take DISTINCT adversary types in @{theory_text Commitment_Schemes}
+(@{typ "(_,_,_,_) hid_adv"} = a state-passing pair vs @{typ "(_,_,_,_) bind_adversary"} = a single
+opening-producing function), so the bundle quantifies a hiding adversary \<open>\<A>\<close> and a binding
+adversary \<open>\<B>\<close> separately — they cannot be the same object.\<close>
 
 theorem dregg2_pedersen_realizes_F_com:
   shows "ped_commit.correct"                                                \<comment> \<open>correctness\<close>
     and "ped_commit.perfect_hiding_ind_cpa \<A>"                              \<comment> \<open>`unlinkable`\<close>
-    and "ped_commit.bind_advantage \<A> = discrete_log.advantage (dis_log_\<A> \<A>)"  \<comment> \<open>`binding`\<close>
+    and "ped_commit.bind_advantage \<B> = discrete_log.advantage (dis_log_\<A> \<B>)"  \<comment> \<open>`binding`\<close>
     by (simp_all add: abstract_correct abstract_perfect_hiding pedersen_bind)
 
 end
@@ -181,8 +186,8 @@ theorem dregg2_binding_under_dlog:
 theorem dregg2_F_com_realizes:
   shows "ped_commit.correct n"                                  \<comment> \<open>F_com correctness\<close>
     and "ped_commit.perfect_hiding_ind_cpa n (\<A> n)"            \<comment> \<open>`unlinkable` discharged\<close>
-    and "negligible (\<lambda>n. discrete_log.advantage n (dis_log_\<A> n (\<A> n)))
-           \<Longrightarrow> negligible (\<lambda>n. ped_commit.bind_advantage n (\<A> n))"  \<comment> \<open>`binding` under DLog\<close>
+    and "negligible (\<lambda>n. discrete_log.advantage n (dis_log_\<A> n (\<B> n)))
+           \<Longrightarrow> negligible (\<lambda>n. ped_commit.bind_advantage n (\<B> n))"  \<comment> \<open>`binding` under DLog\<close>
   by (simp_all add: dregg2_F_com_correct_asymp dregg2_F_com_hiding_asymp
                     dregg2_binding_under_dlog)
 
@@ -191,8 +196,8 @@ text\<open>Alias matching the Lean bridge's cited name
 
 theorem dregg2_pedersen_realizes_F_com_asymp:
   shows "ped_commit.perfect_hiding_ind_cpa n (\<A> n)"
-    and "negligible (\<lambda>n. ped_commit.bind_advantage n (\<A> n))
-           \<longleftrightarrow> negligible (\<lambda>n. discrete_log.advantage n (dis_log_\<A> n (\<A> n)))"
+    and "negligible (\<lambda>n. ped_commit.bind_advantage n (\<B> n))
+           \<longleftrightarrow> negligible (\<lambda>n. discrete_log.advantage n (dis_log_\<A> n (\<B> n)))"
   by (simp_all add: dregg2_F_com_hiding_asymp dregg2_F_com_binding_asymp)
 
 end

@@ -27,10 +27,35 @@ path = "src/differential.rs"
 name = "circuit_differential"
 path = "src/circuit_differential.rs"
 
+# The STATE differential: marshals a real `Value` record `RecordKernelState` (not a
+# scalar) across the FFI, runs the verified `recKExec` via the C string bridge
+# (dregg_record_kernel_step_str), and diffs it against a Rust reference. This is the
+# cascade SWAP-enabler — the node calls the dregg2 record kernel over real cell-state.
+[[bin]]
+name = "state_differential"
+path = "src/state_differential.rs"
+
+# The FULL-TURN differential (E6 / Path A): marshals a whole
+# (RecChainedState, List FullAction) across the FFI, runs the verified `execFullTurn`
+# (the all-or-nothing transaction) via `dregg_exec_full_turn_str`, and diffs it against a
+# Rust reference reimplementation — INCLUDING the all-or-nothing rollback case. This is the
+# turn-decision swap-enabler (the executor that replaces authorize.rs).
+[[bin]]
+name = "full_turn_differential"
+path = "src/full_turn_differential.rs"
+
 [dependencies]
 # Reproduces circuit::air_descriptor::fingerprint (BLAKE3-derive-key) so the
 # decoded-Lean AIR can be fingerprint-bound to the Rust-native AIR.
 blake3 = "1"
+# The REAL adversarial fuzzer (E6): proptest drives generated adversarial full-turns
+# (overflow/underflow amounts, unauthorized delegates, double-mints, empty/huge lists,
+# malformed orderings) through BOTH the Lean FFI oracle and the Rust reference, asserting
+# agreement on accept/reject + final state across many minimized cases. Used as a normal
+# dependency (not dev) because the fuzzer runs inside the `full_turn_differential` BINARY,
+# which performs the one-time Lean runtime init (`dregg_ffi_init`) before driving proptest's
+# `TestRunner` — a `#[test]` cannot guarantee the single-init ordering the FFI requires.
+proptest = "1"
 
 [build-dependencies]
 cc = "1"

@@ -46,10 +46,46 @@ the total, never crashes the sum — the data-tier shadow of `Value.flatten`'s z
 is the named-field measure that replaces `KernelState.bal`'s whole-state scalar. -/
 def balOf (v : Value) : Int := (v.scalar balanceField).getD 0
 
+/-! ### The OFF-LEDGER holding-store: the escrow side-table (dregg1's `self.escrows`).
+
+dregg1's `apply_create_escrow` (`turn/src/executor/apply.rs:1674`) does NOT do a balance-conserving
+two-cell transfer. It does a SINGLE-cell debit (`set_balance(creator − amount)`, :1766) and inserts
+an `EscrowRecord` into an **off-ledger side-table** `self.escrows` (:1770), keyed by `escrow_id`,
+carrying `{creator, recipient, amount, resolved}`. `apply_release_escrow` (:1959) credits the
+recipient single-handedly and marks the record `resolved`; `apply_refund_escrow` (:2030) credits the
+creator single-handedly and marks resolved. So per-effect Σδ ≠ 0 on the cell ledger — conservation
+holds only ACROSS the create+release/refund PAIR, with the side-table accounting for the in-flight
+amount. We model that side-table faithfully here. -/
+
+/-- **`EscrowRecord`** — one entry of dregg1's off-ledger `escrows` side-table (`apply.rs:1773`),
+keyed by `id`, carrying the locked `amount`, the `creator` (refund target) and `recipient` (release
+target), and the `resolved` flag (set true once released/refunded). An UNRESOLVED record holds
+`amount` of value OUT of the cell ledger — that is the holding-store value the pair conserves. -/
+structure EscrowRecord where
+  /-- the escrow id (dregg1's `[u8;32]` escrow_id, modelled as a `Nat` key). -/
+  id        : Nat
+  /-- the creator cell whose balance was debited at create (the refund target). -/
+  creator   : CellId
+  /-- the recipient cell credited on release. -/
+  recipient : CellId
+  /-- the locked amount held off-ledger while unresolved. -/
+  amount    : ℤ
+  /-- false until released/refunded; an unresolved record holds `amount` off-ledger. -/
+  resolved  : Bool
+deriving DecidableEq, Repr
+
 /-- **Record kernel state:** the finite set of live `accounts`, a per-cell **content-addressed
 record** state (`cell : CellId → Value`, each a `Value.record` carrying at least a `balance`
-field), and the capability table. This is `KernelState` with `bal : CellId → ℤ` lifted to
-`cell : CellId → Value` — the concrete dregg2 cell. -/
+field), and the capability table — PLUS dregg1's two off-ledger side-tables, both DEFAULTING EMPTY
+so every existing construction/proof that ignores them is unaffected (the additive extension):
+
+  * `escrows` — the off-ledger escrow holding-store (`self.escrows`); unresolved records hold value
+    out of the cell ledger (`apply.rs:1770`);
+  * `nullifiers` — the spent-note nullifier SET (`self.note_nullifiers`, `apply.rs:941`); a
+    `NoteSpend` inserts its nullifier and is rejected fail-closed if already present (double-spend).
+
+This is `KernelState` with `bal : CellId → ℤ` lifted to `cell : CellId → Value`, additively extended
+with the two holding stores — the concrete dregg2 cell + dregg1's real side-table accounting. -/
 structure RecordKernelState where
   /-- The finite set of live cells whose balances are tracked / conserved. -/
   accounts : Finset CellId
@@ -57,6 +93,10 @@ structure RecordKernelState where
   cell     : CellId → Value
   /-- The capability table (lift of l4v `Caps`). -/
   caps     : Caps
+  /-- The off-ledger escrow holding-store (`self.escrows`); DEFAULTS EMPTY. -/
+  escrows    : List EscrowRecord := []
+  /-- The spent-note nullifier SET (`self.note_nullifiers`); DEFAULTS EMPTY. -/
+  nullifiers : List Nat := []
 
 /-- **The `balance`-domain measure** over the record cell-state: the total `balance` field across
 the live accounts. This is the conserved quantity — a domain measure over the named `balance`
@@ -290,6 +330,349 @@ theorem recChained_run_conserves {s s' : RecChainedState} (hrun : Run recChained
       (by intro a b _ ha hinv; rw [hinv.1]; exact ha) hrun rfl
   exact this
 
+/-! ## §ESCROW — the OFF-LEDGER holding-store semantics (faithful to dregg1's `apply.rs`).
+
+The `recKExec` transfer above is balance-CONSERVING (the `transfer` effect, Σδ = 0). But dregg1's
+escrow is NOT a transfer: `apply_create_escrow` debits ONE cell and parks the value in the off-ledger
+`escrows` side-table; `apply_release_escrow`/`apply_refund_escrow` credit ONE cell and mark the
+record resolved. So per-effect Σδ ≠ 0 on the cell ledger; the conserved quantity is the COMBINED
+total (cell-ledger + the value held by unresolved escrows). This section models that faithfully and
+proves the REAL invariant: value is conserved ACROSS the create+release/refund pair, with the
+side-table accounting for the in-flight amount. -/
+
+/-- **Single-cell credit** — add `amt` to one cell's `balance` field, leaving all other cells and the
+side-tables untouched. The named-field realization of dregg1's `set_balance(old + amount)`
+(`apply.rs:1964`/`:2035`) — a SINGLE-cell move, NOT a two-cell transfer. -/
+def recCredit (cell : CellId → Value) (c : CellId) (amt : ℤ) : CellId → Value :=
+  fun x => if x = c then setBalance (cell x) (balOf (cell x) + amt) else cell x
+
+/-- **Single-cell debit** — subtract `amt` from one cell's `balance` field. dregg1's
+`set_balance(old − amount)` (`apply.rs:1766`) at create — a SINGLE-cell move. -/
+def recDebit (cell : CellId → Value) (c : CellId) (amt : ℤ) : CellId → Value :=
+  fun x => if x = c then setBalance (cell x) (balOf (cell x) - amt) else cell x
+
+/-- A single-cell credit shifts the cell-ledger total by `+amt` (the live account `c`'s `balance`
+rises by `amt`; every other account is untouched). PROVED. -/
+theorem recCredit_recTotal (acc : Finset CellId) (cell : CellId → Value) (c : CellId) (amt : ℤ)
+    (hc : c ∈ acc) :
+    (∑ x ∈ acc, balOf (recCredit cell c amt x)) = (∑ x ∈ acc, balOf (cell x)) + amt := by
+  have key : (∑ x ∈ acc, balOf (recCredit cell c amt x)) - (∑ x ∈ acc, balOf (cell x)) = amt := by
+    rw [← Finset.sum_sub_distrib]
+    have hg : ∀ x ∈ acc, balOf (recCredit cell c amt x) - balOf (cell x)
+        = (if x = c then amt else 0) := by
+      intro x _
+      unfold recCredit
+      by_cases hx : x = c
+      · rw [if_pos hx, setBalance_balOf, if_pos hx]; ring
+      · rw [if_neg hx, if_neg hx]; ring
+    rw [Finset.sum_congr rfl hg, sum_indicator acc c amt hc]
+  omega
+
+/-- A single-cell debit shifts the cell-ledger total by `−amt`. PROVED. -/
+theorem recDebit_recTotal (acc : Finset CellId) (cell : CellId → Value) (c : CellId) (amt : ℤ)
+    (hc : c ∈ acc) :
+    (∑ x ∈ acc, balOf (recDebit cell c amt x)) = (∑ x ∈ acc, balOf (cell x)) - amt := by
+  have key : (∑ x ∈ acc, balOf (recDebit cell c amt x)) - (∑ x ∈ acc, balOf (cell x)) = -amt := by
+    rw [← Finset.sum_sub_distrib]
+    have hg : ∀ x ∈ acc, balOf (recDebit cell c amt x) - balOf (cell x)
+        = (if x = c then (-amt) else 0) := by
+      intro x _
+      unfold recDebit
+      by_cases hx : x = c
+      · rw [if_pos hx, setBalance_balOf, if_pos hx]; ring
+      · rw [if_neg hx, if_neg hx]; ring
+    rw [Finset.sum_congr rfl hg, sum_indicator acc c (-amt) hc]
+  omega
+
+/-! ### The holding-store value measure + the COMBINED conserved total. -/
+
+/-- **`escrowHeld k`** — the total value currently parked in the off-ledger holding-store: the sum of
+`amount` over the UNRESOLVED escrow records. This is the value held OUT of the cell ledger between a
+create and its release/refund. -/
+def escrowHeld (k : RecordKernelState) : ℤ :=
+  (k.escrows.filter (fun r => !r.resolved)).foldr (fun r acc => r.amount + acc) 0
+
+/-- **`recTotalWithEscrow k`** — the COMBINED conserved quantity: the cell-ledger `balance` total
+PLUS the value held off-ledger by unresolved escrows. This — not the per-cell `recTotal` — is what
+the create+release/refund pair conserves, exactly as dregg1's side-table accounting demands. -/
+def recTotalWithEscrow (k : RecordKernelState) : ℤ := recTotal k + escrowHeld k
+
+/-- Prepending an UNRESOLVED record raises `escrowHeld` by its `amount`. PROVED (definitional unfold
+of the filtered fold). -/
+theorem escrowHeld_cons_unresolved (k : RecordKernelState) (r : EscrowRecord) (hr : r.resolved = false) :
+    escrowHeld { k with escrows := r :: k.escrows } = escrowHeld k + r.amount := by
+  unfold escrowHeld
+  simp only [List.filter_cons, show (!r.resolved) = true from by simp [hr],
+             Bool.false_eq_true, if_true, List.foldr_cons]
+  omega
+
+/-! ### The faithful escrow lifecycle: create (debit + park), release/refund (credit + resolve). -/
+
+/-- **`createEscrowRaw`** — dregg1's `apply_create_escrow` (`apply.rs:1674`) at the state level:
+a SINGLE-cell debit of `amount` from `creator` PLUS an insert of an unresolved `EscrowRecord` into the
+off-ledger holding-store. NOT a two-cell transfer. The cell-ledger total DROPS by `amount`; the
+holding-store value RISES by `amount`; the COMBINED total is preserved. -/
+def createEscrowRaw (k : RecordKernelState) (id creator recipient : CellId) (amount : ℤ) :
+    RecordKernelState :=
+  { k with cell := recDebit k.cell creator amount
+           escrows := { id := id, creator := creator, recipient := recipient,
+                        amount := amount, resolved := false } :: k.escrows }
+
+/-- Mark the FIRST unresolved escrow record with the given `id` resolved (dregg1's
+`escrows.get_mut(escrow_id).resolved = true`, `apply.rs:1969`/`:2040` — a HashMap keyed by id, so
+exactly ONE entry is mutated). Records before it, after it, and with other ids are untouched. -/
+def markResolved (escrows : List EscrowRecord) (id : Nat) : List EscrowRecord :=
+  match escrows with
+  | []      => []
+  | r :: rs => if r.id = id ∧ r.resolved = false then { r with resolved := true } :: rs
+               else r :: markResolved rs id
+
+/-- **`settleEscrowRaw`** — the shared body of `apply_release_escrow`/`apply_refund_escrow`: a
+SINGLE-cell credit of `amount` to the settlement target (`recipient` on release, `creator` on refund)
+PLUS marking the record resolved. The cell-ledger total RISES by `amount`; the holding-store value
+DROPS by `amount` (the record leaves the unresolved set); the COMBINED total is preserved. -/
+def settleEscrowRaw (k : RecordKernelState) (id target : CellId) (amount : ℤ) : RecordKernelState :=
+  { k with cell := recCredit k.cell target amount
+           escrows := markResolved k.escrows id }
+
+/-- **`createEscrow` (executable, fail-closed).** Commits only when the actor is authorized over the
+`creator` cell (same `authorizedB` gate as `transfer`), the amount is non-negative and available in
+the creator's `balance`, the creator is a live account, and the `id` is NOT already in use (dregg1's
+"escrow_id already exists" check, `apply.rs:1736`). On commit: single-cell debit + park the record. -/
+def createEscrowK (k : RecordKernelState) (id : Nat) (actor creator recipient : CellId) (amount : ℤ) :
+    Option RecordKernelState :=
+  if authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ balOf (k.cell creator) ∧ creator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id) then
+    some (createEscrowRaw k id creator recipient amount)
+  else none
+
+/-- **`releaseEscrow` (executable, fail-closed).** Looks up the unresolved record by `id`; on success
+single-cell credits the `recipient` and marks resolved. Rejects a missing or already-resolved record
+(dregg1's "escrow not found" / "already resolved", `apply.rs:1812`/`:1820`). The crypto/condition
+check (proof/signatures) is the §8 portal carried at the effect layer — here we model the state move
+gated on the record being present-and-unresolved. -/
+def releaseEscrowK (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
+  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | some r => some (settleEscrowRaw k id r.recipient r.amount)
+  | none   => none
+
+/-- **`refundEscrow` (executable, fail-closed).** Looks up the unresolved record by `id`; on success
+single-cell credits the `creator` (refund target) and marks resolved (dregg1's `apply_refund_escrow`,
+`apply.rs:1976`). The timeout gate is carried at the effect layer. -/
+def refundEscrowK (k : RecordKernelState) (id : Nat) : Option RecordKernelState :=
+  match k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | some r => some (settleEscrowRaw k id r.creator r.amount)
+  | none   => none
+
+/-! ### The REAL escrow invariants. -/
+
+/-- **`escrow_create_debits` — PROVED.** A committed `createEscrow` is a SINGLE-cell debit: the
+cell-ledger total `recTotal` DROPS by exactly `amount`, and the holding-store grows by the new
+record (it is NOT a balance-conserving transfer on the cell ledger). This is the faithful contrast
+with the old paired shadow. -/
+theorem escrow_create_debits {k k' : RecordKernelState} {id : Nat} {actor creator recipient : CellId}
+    {amount : ℤ} (h : createEscrowK k id actor creator recipient amount = some k') :
+    recTotal k' = recTotal k - amount ∧
+      k'.escrows = { id := id, creator := creator, recipient := recipient,
+                     amount := amount, resolved := false } :: k.escrows := by
+  unfold createEscrowK at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ balOf (k.cell creator) ∧ creator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, _, hlive, _⟩ := hg
+    refine ⟨?_, rfl⟩
+    simp only [recTotal, createEscrowRaw]
+    exact recDebit_recTotal k.accounts k.cell creator amount hlive
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- **`escrow_create_conserves_combined` — PROVED.** A committed `createEscrow` PRESERVES the COMBINED
+total (cell-ledger + holding-store): the `−amount` cell-ledger debit is exactly offset by the
+`+amount` rise in the off-ledger holding-store. Value MOVES into the side-table; nothing is created
+or destroyed. -/
+theorem escrow_create_conserves_combined {k k' : RecordKernelState} {id : Nat}
+    {actor creator recipient : CellId} {amount : ℤ}
+    (h : createEscrowK k id actor creator recipient amount = some k') :
+    recTotalWithEscrow k' = recTotalWithEscrow k := by
+  unfold createEscrowK at h
+  by_cases hg : authorizedB k.caps { actor := actor, src := creator, dst := recipient, amt := amount } = true
+      ∧ 0 ≤ amount ∧ amount ≤ balOf (k.cell creator) ∧ creator ∈ k.accounts
+      ∧ ¬ (∃ r ∈ k.escrows, r.id = id)
+  · rw [if_pos hg] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    obtain ⟨_, _, _, hlive, _⟩ := hg
+    set newRec : EscrowRecord := { id := id, creator := creator, recipient := recipient,
+                                   amount := amount, resolved := false } with hnewRec
+    show recTotalWithEscrow (createEscrowRaw k id creator recipient amount)
+       = recTotalWithEscrow k
+    unfold recTotalWithEscrow createEscrowRaw
+    -- The post-state's cell-ledger total: a single-cell debit.
+    have hcell : recTotal { k with cell := recDebit k.cell creator amount,
+                                   escrows := newRec :: k.escrows }
+        = recTotal k - amount := by
+      show (∑ x ∈ k.accounts, balOf (recDebit k.cell creator amount x)) = _
+      simpa [recTotal] using recDebit_recTotal k.accounts k.cell creator amount hlive
+    -- The post-state's holding-store value: the parked record raises it.
+    have hheld : escrowHeld { k with cell := recDebit k.cell creator amount,
+                                     escrows := newRec :: k.escrows }
+        = escrowHeld k + amount := by
+      have hc := escrowHeld_cons_unresolved
+        { k with cell := recDebit k.cell creator amount } newRec rfl
+      simpa [hnewRec] using hc
+    rw [hcell, hheld]; ring
+  · rw [if_neg hg] at h; exact absurd h (by simp)
+
+/-- The raw escrow-list filtered-sum (the unfolded `escrowHeld`). -/
+def heldSum (es : List EscrowRecord) : ℤ :=
+  (es.filter (fun r => !r.resolved)).foldr (fun r acc => r.amount + acc) 0
+
+theorem escrowHeld_eq_heldSum (k : RecordKernelState) : escrowHeld k = heldSum k.escrows := rfl
+
+/-- **The pair-conservation CORE (PROVED by list induction).** Marking the FIRST unresolved record
+whose id matches `id` as resolved drops the unresolved-held sum by exactly that record's `amount`.
+The faithful side-table accounting: when a release/refund resolves the in-flight record, the value it
+held leaves the off-ledger store by precisely its amount. `markResolved` and `find?` walk the list in
+lockstep on the same `id ∧ unresolved` predicate, so the dropped amount is exactly the found record's. -/
+theorem heldSum_markResolved_found (id : Nat) (r : EscrowRecord) :
+    ∀ (es : List EscrowRecord),
+      es.find? (fun x => decide (x.id = id ∧ x.resolved = false)) = some r →
+      heldSum (markResolved es id) = heldSum es - r.amount := by
+  intro es
+  induction es with
+  | nil => intro hfind; simp [List.find?] at hfind
+  | cons hd tl ih =>
+      intro hfind
+      simp only [List.find?_cons] at hfind
+      by_cases hmatch : (hd.id = id ∧ hd.resolved = false)
+      · -- head matches the predicate: it IS the found, unresolved record.
+        obtain ⟨hid, hres⟩ := hmatch
+        rw [show (decide (hd.id = id ∧ hd.resolved = false)) = true from by simp [hid, hres]] at hfind
+        simp only [Option.some.injEq] at hfind
+        -- hfind : hd = r ; rewrite the goal's `r` back to `hd`.
+        subst hfind
+        unfold heldSum markResolved
+        rw [if_pos ⟨hid, hres⟩]
+        -- LHS: head now resolved ⇒ filtered OUT; RHS: head was unresolved ⇒ filtered IN.
+        simp only [List.filter_cons,
+                   show (!({hd with resolved := true} : EscrowRecord).resolved) = false from by simp,
+                   show (!hd.resolved) = true from by simp [hres],
+                   Bool.false_eq_true, if_false, if_true, List.foldr_cons]
+        omega
+      · -- head does NOT match the predicate: carried unchanged; recurse on the tail.
+        rw [show (decide (hd.id = id ∧ hd.resolved = false)) = false from by
+              simp [decide_eq_false_iff_not, hmatch]] at hfind
+        have ihr := ih hfind
+        -- markResolved (hd::tl) id = hd :: markResolved tl id (head doesn't match).
+        have hmr : markResolved (hd :: tl) id = hd :: markResolved tl id := by
+          conv_lhs => rw [markResolved]
+          rw [if_neg hmatch]
+        rw [hmr]
+        -- Both heldSums share the same head `hd`; the tail delta is `ihr`.
+        unfold heldSum
+        simp only [List.filter_cons]
+        by_cases hhdres : hd.resolved = false
+        · rw [show (!hd.resolved) = true from by simp [hhdres]]
+          simp only [Bool.false_eq_true, if_true, List.foldr_cons]
+          have ihr' : (List.filter (fun r => !r.resolved) (markResolved tl id)).foldr
+              (fun r acc => r.amount + acc) 0
+              = (List.filter (fun r => !r.resolved) tl).foldr (fun r acc => r.amount + acc) 0
+                - r.amount := ihr
+          rw [ihr']; ring
+        · rw [show (!hd.resolved) = false from by simp [hhdres]]
+          simp only [Bool.false_eq_true, if_false]
+          have ihr' : (List.filter (fun r => !r.resolved) (markResolved tl id)).foldr
+              (fun r acc => r.amount + acc) 0
+              = (List.filter (fun r => !r.resolved) tl).foldr (fun r acc => r.amount + acc) 0
+                - r.amount := ihr
+          rw [ihr']
+
+/-- **`escrow_settle_conserves_combined` — PROVED.** A release/refund that settles the found record
+to `target` (`recipient` on release, `creator` on refund) PRESERVES the COMBINED total: the `+amount`
+single-cell credit is exactly offset by the holding-store DROP as the record leaves the unresolved
+set. Value moves OUT of the side-table back onto the ledger; the combined total is fixed. -/
+theorem escrow_settle_conserves_combined (k : RecordKernelState) (id target : CellId) (r : EscrowRecord)
+    (htgt : target ∈ k.accounts)
+    (hfind : k.escrows.find? (fun x => decide (x.id = id ∧ x.resolved = false)) = some r) :
+    recTotalWithEscrow (settleEscrowRaw k id target r.amount) = recTotalWithEscrow k := by
+  have hcell : recTotal (settleEscrowRaw k id target r.amount) = recTotal k + r.amount := by
+    show (∑ x ∈ k.accounts, balOf (recCredit k.cell target r.amount x)) = _
+    simpa [recTotal] using recCredit_recTotal k.accounts k.cell target r.amount htgt
+  have hheld : escrowHeld (settleEscrowRaw k id target r.amount) = escrowHeld k - r.amount := by
+    show heldSum (markResolved k.escrows id) = heldSum k.escrows - r.amount
+    exact heldSum_markResolved_found id r k.escrows hfind
+  show recTotal (settleEscrowRaw k id target r.amount) + escrowHeld (settleEscrowRaw k id target r.amount)
+     = recTotal k + escrowHeld k
+  rw [hcell, hheld]; ring
+
+/-- **`releaseEscrow` PRESERVES the COMBINED total — PROVED** (the headline pair-conservation fact for
+release). Reads off `escrow_settle_conserves_combined`. -/
+theorem releaseEscrow_conserves_combined {k k' : RecordKernelState} {id : Nat}
+    (htgt : ∀ r, k.escrows.find? (fun x => decide (x.id = id ∧ x.resolved = false)) = some r →
+      r.recipient ∈ k.accounts)
+    (h : releaseEscrowK k id = some k') :
+    recTotalWithEscrow k' = recTotalWithEscrow k := by
+  unfold releaseEscrowK at h
+  cases hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | none => rw [hfind] at h; exact absurd h (by simp)
+  | some r =>
+      rw [hfind] at h; simp only [Option.some.injEq] at h; subst h
+      exact escrow_settle_conserves_combined k id r.recipient r (htgt r hfind) hfind
+
+/-- **`refundEscrow` PRESERVES the COMBINED total — PROVED** (the headline pair-conservation fact for
+refund: value returns to the creator, combined fixed). -/
+theorem refundEscrow_conserves_combined {k k' : RecordKernelState} {id : Nat}
+    (htgt : ∀ r, k.escrows.find? (fun x => decide (x.id = id ∧ x.resolved = false)) = some r →
+      r.creator ∈ k.accounts)
+    (h : refundEscrowK k id = some k') :
+    recTotalWithEscrow k' = recTotalWithEscrow k := by
+  unfold refundEscrowK at h
+  cases hfind : k.escrows.find? (fun r => decide (r.id = id ∧ r.resolved = false)) with
+  | none => rw [hfind] at h; exact absurd h (by simp)
+  | some r =>
+      rw [hfind] at h; simp only [Option.some.injEq] at h; subst h
+      exact escrow_settle_conserves_combined k id r.creator r (htgt r hfind) hfind
+
+/-! ### §NULLIFIER — the spent-note SET (faithful to dregg1's `note_nullifiers`, `apply.rs:941`).
+
+dregg1's `apply_note_spend` does NOT set a `"nullifier_spent"=1` scalar field. It inserts the
+nullifier into an off-ledger SET `self.note_nullifiers` with DOUBLE-SPEND REJECTION: if the nullifier
+is already present, the turn fails-closed ("double-spend: nullifier already in note_nullifiers set",
+`apply.rs:945`). We model that set faithfully and prove no nullifier can be spent twice. -/
+
+/-- **`noteSpendNullifier` (executable, fail-closed).** Insert `nf` into the nullifier set IF it is
+NOT already present; reject (fail-closed `none`) on a double-spend (`apply.rs:942`). The crypto
+(STARK spending proof + nullifier derivation) is the §8 portal carried at the effect layer; here we
+model the ledger-side double-spend gate, which is what prevents replay. -/
+def noteSpendNullifier (k : RecordKernelState) (nf : Nat) : Option RecordKernelState :=
+  if nf ∈ k.nullifiers then none
+  else some { k with nullifiers := nf :: k.nullifiers }
+
+/-- **`note_no_double_spend` — PROVED.** A nullifier already in the spent set CANNOT be spent again:
+`noteSpendNullifier` fails-closed. This is the real anti-replay invariant (the SET prevents it), NOT
+a scalar flag. -/
+theorem note_no_double_spend (k : RecordKernelState) (nf : Nat) (h : nf ∈ k.nullifiers) :
+    noteSpendNullifier k nf = none := by
+  unfold noteSpendNullifier; rw [if_pos h]
+
+/-- **`note_spend_inserts` — PROVED.** A committed `noteSpendNullifier` actually inserts `nf` into the
+set (so a SUBSEQUENT spend of the same `nf` is rejected by `note_no_double_spend`). -/
+theorem note_spend_inserts {k k' : RecordKernelState} {nf : Nat}
+    (h : noteSpendNullifier k nf = some k') : nf ∈ k'.nullifiers := by
+  unfold noteSpendNullifier at h
+  by_cases hin : nf ∈ k.nullifiers
+  · rw [if_pos hin] at h; exact absurd h (by simp)
+  · rw [if_neg hin] at h; simp only [Option.some.injEq] at h; subst h; simp
+
+/-- **`note_spend_then_reject` — PROVED (the composed anti-replay).** After a committed spend of `nf`,
+a second spend of the SAME `nf` on the resulting state fails-closed. Double-spend is impossible. -/
+theorem note_spend_then_reject {k k' : RecordKernelState} {nf : Nat}
+    (h : noteSpendNullifier k nf = some k') : noteSpendNullifier k' nf = none :=
+  note_no_double_spend k' nf (note_spend_inserts h)
+
 /-! ## Axiom-hygiene tripwires — pin the re-proved keystones over the content-addressed cell. -/
 
 #assert_axioms setBalance_balOf
@@ -302,6 +685,19 @@ theorem recChained_run_conserves {s s' : RecChainedState} (hrun : Run recChained
 #assert_axioms recCexec_attests
 #assert_axioms recChained_sound
 #assert_axioms recChained_run_conserves
+-- The faithful escrow holding-store + nullifier-set keystones:
+#assert_axioms recCredit_recTotal
+#assert_axioms recDebit_recTotal
+#assert_axioms escrowHeld_cons_unresolved
+#assert_axioms escrow_create_debits
+#assert_axioms escrow_create_conserves_combined
+#assert_axioms heldSum_markResolved_found
+#assert_axioms escrow_settle_conserves_combined
+#assert_axioms releaseEscrow_conserves_combined
+#assert_axioms refundEscrow_conserves_combined
+#assert_axioms note_no_double_spend
+#assert_axioms note_spend_inserts
+#assert_axioms note_spend_then_reject
 
 /-! ## It runs (`#eval`) — an account cell as a record. -/
 

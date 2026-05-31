@@ -32,6 +32,10 @@ x25519-dalek = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 sha2 = "0.10"
+# Arm the `StubVerifier` accept path for plumbing tests only. The feature is
+# fail-closed in production builds; enabling it here scopes the permissive stub
+# behavior to `cargo test`/dev builds of this crate.
+dregg-cell = { path = "../cell", features = ["test-stubs"] }
 
 [lints]
 workspace = true

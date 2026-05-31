@@ -9,15 +9,20 @@
 > result into the dregg2 `binding` / `unlinkable` carriers — **without** ever claiming Lean proved
 > UC.
 >
-> **Honest caveat on the Isabelle GREEN BUILD:** the theory file is complete and references only
-> real, proven AFP theorems, BUT the local `isabelle build Dregg2_UC` was **not** brought to exit 0
-> on this machine, because the only AFP checkout here (`afp-devel`) is an Isabelle-*dev* revision
-> incompatible with **Isabelle2025-RC3** at the ML/proof-automation level (cascade of distinct
-> failures across `applicative.ML`, `Monomorphic_Monad`, `Landau_Symbols`). The green build needs
-> the RC3-matched AFP, which is not available here. Full detail + the exact obstruction + the build
-> command for a correctly-matched host are in §3 "BUILD STATUS". The Pedersen *security itself* is
-> not in question — it is long-proven in `Sigma_Commit_Crypto`; what is blocked is recompiling that
-> AFP under this specific Isabelle release candidate.
+> **GREEN BUILD (resolved 2026-05-31):** the version skew is fixed. The machine now has the final
+> stable **Isabelle2025-2** (January 2026) matched with **AFP release 2025-2** (`~/isabelle/afp-2026-05-29`,
+> `etc/version` → `VERSION=2025-2`, registered via `isabelle components -u`). `isabelle build CryptHOL`
+> and `isabelle build Dregg2_UC` both reach **real exit 0** (`Finished CryptHOL`, `Finished Dregg2_UC`;
+> the full dependency chain HOL-Analysis → HOL-Probability → Probabilistic_While → CryptHOL →
+> Sigma_Commit_Crypto → Dregg2_UC compiles clean, with **no** manual AFP patches — the entire
+> afp-devel/RC3 failure cascade evaporated once Isabelle and AFP versions matched). Bringing the
+> build to exit 0 exposed **one real bug** in `Dregg2_FCom.thy`: the three realization-*bundle*
+> theorems reused a single adversary `\<A>` for both the hiding conjunct and the binding conjunct,
+> but `hid_adv` and `bind_adversary` are distinct types in `Commitment_Schemes` — fixed by
+> quantifying a separate binding adversary `\<B>` (the standalone per-property theorems were always
+> well-typed). The theory is sorry-/oops-free and references only the real proven AFP Pedersen
+> lemmas. Detail in §3 "BUILD STATUS". The Pedersen *security itself* was never in question — it is
+> long-proven in `Sigma_Commit_Crypto`.
 
 ## 0. Why this exists — the §8-boundary made concrete
 
@@ -93,61 +98,56 @@ Proved (no `sorry`/`oops`):
 
 ## 3. Build commands
 
-CryptHOL / Sigma_Commit_Crypto are AFP-devel sessions, not registered components — pass the AFP
-dir with `-d`. Heaps cache in `~/.isabelle`.
+The toolchain on this machine is now **version-matched**: **Isabelle2025-2** (the final stable
+release, January 2026 — supersedes Isabelle2025-1, and is newer than the RC3 candidate previously
+used) at `~/Applications/Isabelle2025-2.app`, with the matching **AFP release 2025-2** at
+`~/isabelle/afp-2026-05-29` (`etc/version` → `VERSION=2025-2`). The AFP is registered as a
+component (`isabelle components -u ~/isabelle/afp-2026-05-29/thys`), so `CryptHOL` /
+`Sigma_Commit_Crypto` resolve; heaps cache in `~/.isabelle`. (The old `afp-devel-branch-default`
+checkout — the source of the skew — is no longer used.)
 
 ```sh
-# (one-time) build the CryptHOL heap (slow; cached after):
-isabelle build -d ~/isabelle/afp-devel-branch-default/thys -b CryptHOL
+ISA=~/Applications/Isabelle2025-2.app/bin/isabelle
+AFP=~/isabelle/afp-2026-05-29/thys
+
+# (one-time) build the CryptHOL heap (~14 min cold incl. HOL-Analysis; cached after):
+$ISA build -d $AFP -b CryptHOL
 
 # verify the transport theory (exit 0 ⇒ all theorems kernel-checked):
-isabelle build -d ~/isabelle/afp-devel-branch-default/thys \
-               -d ~/dev/breadstuffs/uc-crypthol  Dregg2_UC
+$ISA build -d $AFP -d ~/dev/breadstuffs/uc-crypthol Dregg2_UC
 ```
 
-### BUILD STATUS — BLOCKED by AFP/Isabelle version skew (honest)
+### BUILD STATUS — GREEN (resolved 2026-05-31)
 
-The deliverable theory `Dregg2_FCom.thy` is **written and references only real, existing,
-machine-checked AFP theorems** (`pedersen.abstract_correct`, `pedersen.abstract_perfect_hiding`,
-`pedersen.pedersen_bind`, `pedersen_asymp.pedersen_bind_asym`, plus `cyclic_group_commute` /
-`group_comm_groupI` from `Cyclic_Group_Ext` / `HOL-Algebra` — all verified present). The local
-`isabelle build` of `Dregg2_UC` was, however, **NOT brought to exit 0**, because the only AFP
-checkout on this machine — `~/isabelle/afp-devel-branch-default` — is an **afp-devel** revision
-that tracks **Isabelle-dev**, which has diverged from **Isabelle2025-RC3** at the ML/proof-API
-level. Building the CryptHOL dependency from scratch surfaces a *cascade* of distinct skews:
+Both sessions reach **real exit 0**:
 
-1. `HOL-Library.Adhoc_Overloading` relocated into Pure (resolved by a shim theory in the
-   distribution's `src/HOL/Library`, registered in the `HOL-Library` ROOT).
-2. `Probabilistic_While/Fast_Dice_Roll.thy` (~line 358): a real-arithmetic `by(auto …)` no longer
-   closed under RC3 automation — replaced with an explicit structured `log`/`ceiling` calculation.
-   (This fix built green: `Finished Probabilistic_While`.)
-3. `Applicative_Lifting/applicative.ML`: multiple ML-API removals/renames vs RC3 —
-   `Logic.incr_indexes` 3-tuple → 2-tuple, `Local_Theory.declaration` now needs a `pos` field
-   (both patched), and then **`Term_Subst.map_types_same` no longer exists** (line 95) — not
-   trivially patchable.
-4. `Monomorphic_Monad.thy` (~line 62): `Undefined fact "fBall.rep_eq"` (lifting/transfer API drift).
-5. `Landau_Symbols/Landau_Real_Products.thy` (~line 860): a proof no longer closes under RC3.
+- `Finished CryptHOL` (full chain HOL-Analysis → HOL-Probability → Probabilistic_While → CryptHOL,
+  `EXIT=0`, zero `***` errors). Notably **no manual AFP patches were needed** — the entire
+  afp-devel/RC3 failure cascade documented in earlier drafts of this section (`Adhoc_Overloading`
+  relocation, `Fast_Dice_Roll` real-arithmetic, `applicative.ML` / `Term_Subst.map_types_same`,
+  `Monomorphic_Monad` `fBall.rep_eq`, `Landau_Real_Products`) was purely an artifact of the
+  afp-devel-vs-Isabelle-version mismatch and disappeared once Isabelle and the AFP versions were
+  matched.
+- `Finished Dregg2_UC` (`EXIT=0`). `Dregg2_FCom.thy` is sorry-/oops-free and references only the
+  real proven AFP theorems (`pedersen.abstract_correct`, `abstract_perfect_hiding`, `pedersen_bind`,
+  `pedersen_asymp.pedersen_bind_asym`, `cyclic_group_commute`, `group_comm_groupI`).
 
-These are spread across many AFP entries and reflect that **afp-devel ≠ the AFP release matching
-Isabelle2025-RC3**. The correct remedy is the RC3-matched AFP (an `afp-2025` / RC3-tagged AFP
-revision), which is **not available on this machine** and whose stable release tarball is not yet
-published (`isa-afp.org/release/afp-2025-LATEST` → 404; RC3 is a release *candidate*). Patching
-afp-devel entry-by-entry to RC3 is out of scope and not swarm-safe.
+**One real bug fixed** to reach green (it had been masked because afp-devel never built far enough
+to typecheck our theory): the three realization-*bundle* theorems
+(`dregg2_pedersen_realizes_F_com`, `dregg2_F_com_realizes`, `dregg2_pedersen_realizes_F_com_asymp`)
+reused a single adversary `𝒜` for both the hiding conjunct and the binding conjunct. But in
+`Commitment_Schemes`, `hid_adv` (a state-passing pair) and `bind_adversary` (a single
+opening-producing function) are **distinct types** — so `perfect_hiding_ind_cpa 𝒜` and
+`bind_advantage 𝒜` cannot share one `𝒜` (Isabelle: *"Clash of types `_ × _` and `_ ⇒ _`"*). Fixed
+by quantifying a separate binding adversary `ℬ` in each bundle. The standalone per-property
+theorems (`dregg2_F_com_hiding`, `dregg2_F_com_binding`, `dregg2_binding_under_dlog`, …) were always
+well-typed and unchanged.
 
-**To obtain the green build (the intended verification), on a host with the RC3-matched AFP:**
-
-```sh
-isabelle build -d <afp-matching-Isabelle2025-RC3>/thys -b CryptHOL          # build the heap (cached)
-isabelle build -d <afp-matching-Isabelle2025-RC3>/thys \
-               -d ~/dev/breadstuffs/uc-crypthol  Dregg2_UC                   # exit 0 ⇒ kernel-checked
-```
-
-The theory should build unchanged there: it adds only the transport lemma `dregg2_commit_hom`
-(proved from `cyclic_group_commute` + `group_comm_groupI`, both stable HOL-Algebra/AFP API) and
-re-exports the already-proven Pedersen security theorems under dregg2 names. The honest status of
-this pass is therefore: **definitions + stated security theorems faithfully transported into a real
-UC framework (CryptHOL/Sigma_Commit_Crypto), referencing real proven theorems; local green build
-blocked by an AFP-revision/Isabelle-version mismatch, with the precise obstruction recorded above.**
+The honest status of this pass is therefore: **definitions + stated security theorems faithfully
+transported into a real UC framework (CryptHOL/Sigma_Commit_Crypto) and kernel-checked GREEN
+(`Dregg2_UC` exit 0) on a version-matched Isabelle2025-2 + AFP 2025-2.** The cross-system transport
+*fidelity* caveat (§5.3 — the human-checked Lean↔Isabelle correspondence) is unchanged; what is now
+removed is the build-blocker.
 
 ## 4. The Lean bridge — `Dregg2/Crypto/UCBridge.lean`
 

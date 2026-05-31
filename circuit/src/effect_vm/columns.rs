@@ -65,7 +65,14 @@
 /// IncrementNonce lane: 118 (+ 1 selector for explicit nonce-only turns).
 /// γ.2 federation+owner binding (#131/#132): 126 (+ 8 aux cols:
 /// 4 FEDERATION_ID + 4 OWNER_CELL_ID, row-0-pinned to the matching PI slots).
-pub const EFFECT_VM_WIDTH: usize = 126;
+/// W9-RANGECHECK (in-circuit balance range/underflow): 186 (+ 60 aux cols:
+/// 30-bit bit-decomposition of new_balance_lo + 30-bit bit-decomposition of
+/// new_balance_hi, enforced UNCONDITIONALLY on every row via booleanity +
+/// recomposition. Closes the o1vm audit finding #1 (limb range) and #3
+/// (modular-subtraction underflow): a wrapped debit `old - amount` mod p lands
+/// outside [0, 2^30) and cannot be bit-decomposed, so the STARK rejects it
+/// IN-circuit rather than relying on the off-circuit executor.)
+pub const EFFECT_VM_WIDTH: usize = 186;
 
 /// Number of effect types (selectors).
 pub const NUM_EFFECTS: usize = 54;
@@ -297,7 +304,22 @@ pub const AUX_BASE: usize = STATE_AFTER_BASE + state::SIZE; // 44 + 14 = 58
 /// Stage 2: 23 (+ 8 reserved bits + 1 mode flag + 2 ResizeQueue sign/mag).
 /// Sovereign-witness teeth: 28 (+ 4 WITNESS_KEY_COMMIT + 1 WITNESS_SEQUENCE).
 /// γ.2 federation+owner binding (#131/#132): 36 (+ 4 FEDERATION_ID + 4 OWNER_CELL_ID).
-pub const NUM_AUX: usize = 36;
+/// W9-RANGECHECK: 96 (+ 30 NEW_BAL_LO_BIT + 30 NEW_BAL_HI_BIT).
+pub const NUM_AUX: usize = 96;
+
+/// Bit-width of each balance limb's in-circuit range proof. Both limbs are
+/// decomposed into `BAL_LIMB_BITS` boolean aux columns and recomposed; the
+/// recomposed value is `< 2^30 < p`, so the decomposition is UNIQUE and the
+/// in-field recomposition CANNOT wrap. A debit whose modular subtraction
+/// underflowed (`old - amount` ≡ p - k) would land at a field element
+/// ≥ 2^30 that has no 30-bit boolean decomposition — the recomposition
+/// constraint then fails, so the STARK rejects the wrap in-circuit.
+///
+/// 30 bits covers every honest balance limb (init limbs are asserted
+/// `< 2^30` at trace generation; balances thus span `[0, 2^60)`), and keeps
+/// the recomposition strictly below the BabyBear prime so there is exactly
+/// one satisfying witness per field value.
+pub const BAL_LIMB_BITS: usize = 30;
 
 /// Auxiliary column offsets for state commitment tree intermediates.
 pub mod aux_off {
@@ -374,6 +396,19 @@ pub mod aux_off {
     pub const OWNER_CELL_ID_1: usize = 33;
     pub const OWNER_CELL_ID_2: usize = 34;
     pub const OWNER_CELL_ID_3: usize = 35;
+
+    // ---- W9-RANGECHECK: in-circuit balance-limb range / underflow proof ----
+    /// Base offset (within AUX) of the 30 boolean columns decomposing
+    /// `state_after.balance_lo`. Bit i lives at `NEW_BAL_LO_BIT_BASE + i`,
+    /// i ∈ {0..30}. The AIR enforces (unconditionally, every row):
+    ///   (1) each bit is boolean,
+    ///   (2) `Σ_{i=0}^{29} bit_i * 2^i == state_after.balance_lo`.
+    /// Together these prove `balance_lo ∈ [0, 2^30)` IN-circuit and, because
+    /// a wrapped (underflowed) debit lands ≥ 2^30, reject the wrap directly.
+    pub const NEW_BAL_LO_BIT_BASE: usize = 36;
+    /// Base offset of the 30 boolean columns decomposing
+    /// `state_after.balance_hi`. Same two constraints as the lo limb.
+    pub const NEW_BAL_HI_BIT_BASE: usize = 36 + super::BAL_LIMB_BITS; // 66
 }
 
 /// Effect parameter meanings per effect type.

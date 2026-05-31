@@ -168,6 +168,11 @@ pub fn verify_kimchi_proof(
     public_inputs: &[Fp],
     public_count: usize,
 ) -> Result<bool, String> {
+    // Fail-closed: this backend is unsound and broken. No kimchi proof may ever
+    // be ACCEPTED outside the crate's own test suite. This is the universal
+    // verification choke point, so guarding here disables every verify_* entry
+    // point regardless of how it is reached. See `production_guard`.
+    production_guard()?;
     let index = kimchi::prover_index::testing::new_index_for_test::<FULL_ROUNDS, Vesta>(
         gates,
         public_count,
@@ -298,11 +303,49 @@ fn hex_short(b: &[u8; 32]) -> String {
     b[..8].iter().map(|x| format!("{:02x}", x)).collect()
 }
 
+/// Fail-closed production guard for the native Kimchi backend.
+///
+/// **This backend is UNSOUND and BROKEN (see the module-level soundness
+/// warning and `crate::proof_tier::kimchi_native_tier`).** Two independent
+/// defects make it unusable for any authorization decision:
+///
+/// 1. **No copy constraints (AUDIT-circuit.md P0-2).** Every Generic gate uses
+///    `Wire::for_row(r)`, so binding gates never thread gadget outputs and a
+///    malicious prover can satisfy them with arbitrary matching values.
+/// 2. **Prover/verifier circuit-shape disagreement.** The verifier rebuilds
+///    the canonical circuit from a *placeholder* template witness whose shape
+///    (number of body atoms, presence of merkle proofs / equal / gte checks,
+///    …) does not match the prover's data-dependent `build_circuit`, so even
+///    honest proofs fail the `circuit_hash` binding. Several circuits also
+///    fail to construct a valid permutation argument (`Permutation("final
+///    value")`) and cannot produce honest proofs at all.
+///
+/// The live turn-authorization path does NOT use this backend — the node
+/// proves turns with `dregg_circuit::stark::try_prove(EffectVmAir)`. To make
+/// sure the unsound gates can never be relied upon by accident, every
+/// `prove_*` / `verify_*` entry point fails closed here unless the caller is
+/// the crate's own test suite (`cfg!(test)`).
+fn production_guard() -> Result<(), String> {
+    if cfg!(test) {
+        return Ok(());
+    }
+    Err(
+        "kimchi-native backend is disabled: it is UNSOUND (no copy constraints, \
+         AUDIT-circuit.md P0-2) and BROKEN (prover/verifier circuit-shape \
+         disagreement). It MUST NOT be used for any authorization decision. \
+         The live path uses stark::try_prove(EffectVmAir). See \
+         crate::proof_tier::kimchi_native_tier and the kimchi_native module \
+         soundness warning."
+            .to_string(),
+    )
+}
+
 pub struct KimchiNativeBackend;
 impl KimchiNativeBackend {
     pub fn prove_derivation(
         witness: &derivation::KimchiDerivationWitness,
     ) -> Result<KimchiNativeProof, String> {
+        production_guard()?;
         derivation::KimchiDerivationCircuit::new(witness.clone()).prove()
     }
     pub fn verify_derivation(
@@ -310,6 +353,7 @@ impl KimchiNativeBackend {
         esr: &Fp,
         edh: &Fp,
     ) -> Result<bool, String> {
+        production_guard()?;
         if proof.circuit_type != KimchiNativeCircuitType::Derivation {
             return Err("Expected derivation proof".into());
         }
@@ -376,6 +420,7 @@ impl KimchiNativeBackend {
         coeffs: &[Fp],
         root: Fp,
     ) -> Result<KimchiNativeProof, String> {
+        production_guard()?;
         non_membership::KimchiNonMembershipCircuit::new(elements.to_vec(), coeffs.to_vec(), root)?
             .prove()
     }
@@ -438,6 +483,7 @@ impl KimchiNativeBackend {
         removals: Vec<fold::KimchiFoldRemoval>,
         cc: Fp,
     ) -> Result<KimchiNativeProof, String> {
+        production_guard()?;
         fold::KimchiFoldCircuit::new(fold::KimchiFoldWitness {
             old_root,
             new_root,
@@ -510,6 +556,7 @@ impl KimchiNativeBackend {
     pub fn prove_arithmetic_predicate(
         w: &predicates::KimchiArithmeticPredicateWitness,
     ) -> Result<KimchiNativeProof, String> {
+        production_guard()?;
         predicates::KimchiArithmeticPredicateCircuit::new(w.clone()).prove()
     }
     pub fn verify_arithmetic_predicate(
@@ -564,6 +611,7 @@ impl KimchiNativeBackend {
     pub fn prove_relational_predicate(
         w: &predicates::KimchiRelationalPredicateWitness,
     ) -> Result<KimchiNativeProof, String> {
+        production_guard()?;
         predicates::KimchiRelationalPredicateCircuit::new(w.clone()).prove()
     }
     pub fn verify_relational_predicate(
@@ -617,6 +665,7 @@ impl KimchiNativeBackend {
     pub fn prove_temporal_predicate(
         w: &predicates::KimchiTemporalPredicateWitness,
     ) -> Result<KimchiNativeProof, String> {
+        production_guard()?;
         predicates::KimchiTemporalPredicateCircuit::new(w.clone()).prove()
     }
     pub fn verify_temporal_predicate(
@@ -678,6 +727,7 @@ impl KimchiNativeBackend {
     pub fn prove_compound_predicate(
         w: &predicates::KimchiCompoundPredicateWitness,
     ) -> Result<KimchiNativeProof, String> {
+        production_guard()?;
         predicates::KimchiCompoundPredicateCircuit::new(w.clone()).prove()
     }
     pub fn verify_compound_predicate(
@@ -743,6 +793,7 @@ impl KimchiNativeBackend {
         "kimchi-native"
     }
     pub fn prove_ivc(steps: &[ivc::KimchiFoldStep]) -> Result<ivc::KimchiIvcProof, String> {
+        production_guard()?;
         if steps.is_empty() {
             return Err("Cannot prove empty IVC chain".into());
         }
@@ -830,6 +881,7 @@ impl KimchiNativeBackend {
     pub fn prove_presentation(
         w: &presentation::KimchiPresentationWitness,
     ) -> Result<presentation::KimchiPresentationProof, String> {
+        production_guard()?;
         let proof = presentation::KimchiPresentationCircuit::new(w.clone()).prove()?;
         let rfc = presentation::compute_revealed_facts_commitment(&w.revealed_facts);
         let blinded_leaf = presentation::compute_blinded_leaf(w.issuer_key_hash, w.blinding_factor);

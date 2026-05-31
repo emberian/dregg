@@ -31,26 +31,32 @@ per-step relation — that:
     reachable index), via `Boundary.stepComplete_preserves` over `inducedSystem` — the safety face
     of the same lift. No drifting future across the unbounded schedule.
 
-  * **(sharp obstruction, `-- OPEN`)** the GENERAL case — *deriving* the bisimulation `R` from the
-    per-step finite dichotomy alone, without being handed it — needs an **up-to-context / up-to-
-    bisimilarity closure** that native coinduction's strict guardedness does not provide. We name it
-    sharply (§5): the native `coinductive` greatest-fixpoint accepts only guarded recursive calls, so
-    the per-step `applyHalfOut_comm_disjoint`-style rewrite cannot be threaded *under* the coinductive
-    hypothesis the way a Paco `gupaco` / CSLib `bisim-up-to` principle would allow. The fragment we
-    PROVE is exactly the one where the relation is supplied (the safe-fragment base case made
-    coinductive); the residue is the closure operator, not the coinduction.
+  * **(GENERAL case — PROVED, §8, `obsBisim_of_uptoComm`)** *deriving* the bisimulation from the
+    per-step finite dichotomy alone, without being handed it. This needs an **up-to-context / up-to-
+    commutation closure** that native coinduction's strict guardedness does not provide: the native
+    `coinductive` greatest-fixpoint accepts only guarded recursive calls, so the per-step
+    `applyHalfOut_comm_disjoint`-style rewrite cannot be threaded *under* the coinductive hypothesis.
+    §8 supplies the missing principle from the now-ported `Dregg2.Paco`: re-present `ObsBisim` as a
+    `paco` greatest fixpoint (`obsGen`), define the up-to-commutation closure `commClo`, prove it
+    `Compatible` with `obsGen` (`commClo_compatible`), and thread a *bisimulation up to commClo*
+    through `gpaco_clo`/`gpaco_clo_final` to derive the full `ObsBisim`. The closure is applied under
+    the greatest fixpoint, sound by compatibility — exactly the `gupaco`-shaped principle the
+    obstruction named. The former residue is closed.
 
-Discipline (the rails): no `axiom`/`admit`/`native_decide`/`sorry`. No new lakefile deps — only
-`Dregg2.Boundary` (the νF frame) + `Dregg2.Confluence` (the I-confluence judgement) + Lean-4.30
-native `coinductive`. The CG-5 / binding stays a hypothesis (never derived). Every keystone
-`#assert_axioms`-clean. The adversary is EXPLICIT data (`Sched`), never an oracle.
+Discipline (the rails): no `axiom`/`admit`/`native_decide`/`sorry`. Deps: `Dregg2.Boundary` (the νF
+frame) + `Dregg2.Confluence` (the I-confluence judgement) + Lean-4.30 native `coinductive` + the
+vendored-and-ported `Dregg2.Paco` (MIT, 4.26→4.30; supplies `gupaco`/`gpaco_clo` for §8). The CG-5 /
+binding stays a hypothesis (never derived). Every keystone `#assert_axioms`-clean. The adversary is
+EXPLICIT data (`Sched`), never an oracle.
 -/
 import Dregg2.Boundary
 import Dregg2.Confluence
+import Dregg2.Paco
 
 namespace Dregg2.Proof.CoinductiveAdversary
 
 open Dregg2.Boundary
+open Paco (Rel MonoRel paco upaco Compatible CloMono cpn gpaco_clo)
 
 universe u
 
@@ -272,8 +278,9 @@ theorem obsBisim_refl (Impl : TurnCoalg Obs AdmissibleTurn) (x : Impl.Carrier)
 
 /-! ## §7 — OUTCOME + the sharp obstruction (the precise residue).
 
-The COINDUCTIVE safe-fragment lift is PROVED over the `Boundary` νF frame, with Lean-4.30 NATIVE
-coinductive predicates as the engine (no Paco/CSLib dep, no `axiom`/`sorry`):
+The COINDUCTIVE safe-fragment lift (§3) is PROVED over the `Boundary` νF frame with Lean-4.30 NATIVE
+coinductive predicates as the engine (no `axiom`/`sorry`); the GENERAL case (§8) additionally uses
+the vendored-and-ported `Dregg2.Paco` `gupaco`/`gpaco_clo` up-to closure:
 
   * **Confluence-up-to-bisimulation (PROVED):** `obsBisim_traj_of_bisim` — given the lifted finite
     safe-fragment base case (a `Boundary.IsBisim` relating implementation and golden-oracle cells),
@@ -295,22 +302,191 @@ What native Lean-4.30 coinduction SUFFICED for: the greatest-fixpoint definition
 ObsBisim`) and its coinduction principle (`ObsBisim.coinduct`) carried the entire safe-fragment lift,
 GIVEN the bisimulation relation as input. No Paco-Lean / CSLib dependency was needed for this fragment.
 
--- OPEN (the sharp obstruction — what native coinduction does NOT close): the GENERAL case is to
---   *DERIVE* the bisimulation `R` from `ContendedCrossCell`'s per-step finite dichotomy ALONE — i.e.
---   prove `ObsBisim` for two coalgebras NOT handed a witness `R`, building the relatedness step-by-step
---   from `contended_commits_confluent`'s schedule-agnostic commit. This needs an UP-TO closure:
---   inside the coinductive hypothesis one must rewrite the successor by the finite commutation
---   (`applyHalfOut_comm_disjoint`-shaped) BEFORE re-invoking the coinductive predicate — i.e. close
---   `ObsBisim` not under the bare generator but under "the generator composed with bisimilarity /
---   with the commutation context". Native `coinductive`/`ObsBisim.coinduct` accepts ONLY a bare
---   post-fixpoint: the recursive occurrence must be syntactically guarded and cannot be wrapped in a
---   semantic closure operator. Concretely, the missing principle is a PACO `gupaco` (parametrized
---   coinduction with a guarded union-of-up-to closure) or a CSLib `bisimulation-up-to-bisimilarity`
---   compatible-function/respectfulness theorem, which would let the per-step commutation be applied
---   under the greatest fixpoint while preserving soundness of the coinduction. A Paco-Lean / CSLib
---   `up-to` dependency would add EXACTLY that closure operator (and its soundness meta-theorem); until
---   then the lift holds for the supplied-relation fragment proved here (the finite safe-fragment base
---   case made coinductive), and the residue is the closure operator — NOT the coinduction itself.
+-- (FORMER OPEN — now CLOSED in §8 via the ported `Dregg2.Paco` `gupaco`/`gpaco_clo`):
+--   the GENERAL case is to *DERIVE* the bisimulation from the per-step finite dichotomy ALONE — prove
+--   `ObsBisim` for two coalgebras NOT handed a witness `R`, building the relatedness step-by-step with
+--   a per-step `applyHalfOut_comm_disjoint`-shaped commutation rewrite of the successor BEFORE
+--   re-invoking the coinductive predicate. This needs an UP-TO closure: close `ObsBisim` not under the
+--   bare generator but under "the generator composed with the commutation context". Native
+--   `coinductive`/`ObsBisim.coinduct` accepts ONLY a bare post-fixpoint (the recursive occurrence must
+--   be syntactically guarded, never wrapped in a semantic closure). The missing principle was exactly a
+--   PACO `gupaco` (parametrized coinduction with a guarded up-to closure) + its compatibility/soundness
+--   meta-theorem. §8 now supplies it: the vendored `Dregg2.Paco` is ported to 4.30, and
+--   `obsBisim_of_uptoComm` (§8) DERIVES `ObsBisim` from a bisimulation *up to the commutation closure*
+--   `commClo` — threaded through `gpaco_clo`/`gpaco_clo_final`, sound by `commClo_compatible`
+--   (`Compatible obsGen commClo`). The closure is applied UNDER the greatest fixpoint, with soundness
+--   preserved by compatibility — the precise `gupaco`-shaped principle the obstruction named. The
+--   residue is gone; both the supplied-relation fragment (§3) and the derive-the-relation general case
+--   (§8) are PROVED, `#assert_axioms`-clean.
 -/
+
+/-! ## §8 — CLOSING the §7 OPEN: the GENERAL case via the ported Paco `gupaco` up-to closure.
+
+§7 named the residue precisely: *deriving* `ObsBisim` for two coalgebras NOT handed a global
+witness `R`, where the per-step dichotomy only re-establishes the successor relatedness AFTER a
+finite commutation rewrite (`applyHalfOut_comm_disjoint`-shaped: the two disjoint commits yield
+PROVABLY-EQUAL successor states). Native `ObsBisim.coinduct` accepts only a bare post-fixpoint —
+the recursive occurrence must be *literally* `pred (n+1) (next …) (next …)`, never `pred` of a
+*commuted/rewritten* successor. The ported `Dregg2.Paco` supplies exactly the missing engine:
+parametrized coinduction (`paco`) plus an **up-to closure** (`gpaco_clo`) whose soundness is the
+companion/compatibility meta-theorem (`gpaco_clo_final` for a `Compatible` closure). We:
+
+  1. re-present `ObsBisim` along a fixed schedule as a `paco` greatest fixpoint over the diagonal
+     encoding `α = ℕ × Impl.Carrier × Spec.Carrier` (`obsGen`), and bridge `paco obsGen ⊥ ⇒ ObsBisim`
+     (`obsBisim_of_paco`, via `ObsBisim.coinduct`);
+  2. define the **up-to-commutation closure** `commClo` — "rewrite either endpoint by a provable
+     state-equality (the finite commutation) before re-invoking the coinductive hypothesis" — and
+     prove it `Compatible` with `obsGen` (`commClo_compatible`): the closure native coinduction
+     cannot thread but `gpaco_clo` can;
+  3. CLOSE the general case (`obsBisim_of_uptoComm`): a relation that is a bisimulation *up to the
+     commutation closure* (successors related only after a commuting state-rewrite) derives the full
+     `ObsBisim` — threaded through `gpaco_clo`/`gpaco_clo_final` (sound by `commClo`'s compatibility),
+     NOT through a bare post-fixpoint. -/
+
+/-- The diagonal carrier for the Paco re-presentation: an indexed implementation/spec state pair. -/
+abbrev DiagPt (Impl Spec : TurnCoalg Obs AdmissibleTurn) : Type u :=
+  ℕ × Impl.Carrier × Spec.Carrier
+
+/-- One schedule tick on the diagonal carrier (the guarded successor). -/
+def diagSucc (Impl Spec : TurnCoalg Obs AdmissibleTurn) (s : Sched AdmissibleTurn) :
+    DiagPt Impl Spec → DiagPt Impl Spec
+  | (n, x, y) => (n + 1, Impl.next x (s n), Spec.next y (s n))
+
+/-- **`obsGen` — the `ObsBisim` generator as a Paco `MonoRel`** over `DiagPt`. `obsGen Q p q` holds
+iff `p` and `q` agree on the observation now and their (guarded) schedule successors are `Q`-related.
+On the diagonal `p = q` this is exactly the `ObsBisim.step` body; the recursive occurrence appears
+positively, so the transformer is monotone. -/
+def obsGen (Impl Spec : TurnCoalg Obs AdmissibleTurn) (s : Sched AdmissibleTurn) :
+    MonoRel (DiagPt Impl Spec) where
+  F := fun Q p q =>
+    Impl.obs p.2.1 = Spec.obs q.2.2 ∧ Q (diagSucc Impl Spec s p) (diagSucc Impl Spec s q)
+  mono := by
+    intro Q Q' hQ p q ⟨hobs, hsucc⟩
+    exact ⟨hobs, hQ _ _ hsucc⟩
+
+/-- **`obsBisim_of_paco` (PROVED) — the Paco fixpoint refines the native `ObsBisim`.** A diagonal
+point in `paco (obsGen …) ⊥` yields `ObsBisim` at that index, via `ObsBisim.coinduct`: the diagonal
+`paco`-membership is itself the bare post-fixpoint the native principle wants (one `paco_unfold` per
+tick re-exposes obs-agreement and the next-tick membership; `upaco _ ⊥ = paco _ ⊥`). -/
+theorem obsBisim_of_paco
+    (Impl Spec : TurnCoalg Obs AdmissibleTurn) (s : Sched AdmissibleTurn)
+    (n : ℕ) (x : Impl.Carrier) (y : Spec.Carrier)
+    (hp : paco (obsGen Impl Spec s) ⊥ (n, x, y) (n, x, y)) :
+    ObsBisim Impl Spec s s n x y := by
+  apply ObsBisim.coinduct Impl Spec s s
+    (fun m a b => paco (obsGen Impl Spec s) ⊥ (m, a, b) (m, a, b))
+  · rintro m a b hpac
+    -- unfold one tick of paco; upaco _ ⊥ = paco _ ⊥, so the successor is again diagonal-paco.
+    have hunf := Paco.paco_unfold (obsGen Impl Spec s) ⊥ (m, a, b) (m, a, b) hpac
+    obtain ⟨hobs, hsucc⟩ := hunf
+    refine ⟨hobs, ?_⟩
+    -- hsucc : upaco (obsGen…) ⊥ (succ (m,a,b)) (succ (m,a,b)); upaco _ ⊥ = paco _ ⊥
+    rcases hsucc with hpac' | hbot
+    · simpa [diagSucc] using hpac'
+    · exact absurd hbot (by intro h; exact h.elim)
+  · exact hp
+
+/-- **`commClo` — the up-to-commutation closure** on `DiagPt` relations. `commClo Q p q` holds iff
+`p, q` are reachable from a `Q`-related pair by rewriting each endpoint along a PROVABLE state
+equality (the `applyHalfOut_comm_disjoint`-shaped finite commutation: two disjoint commits produce
+equal successor states). This is the semantic closure native `coinductive` cannot wrap the recursive
+occurrence in; Paco threads it through `gpaco_clo`. It is monotone and reflexive (`Q ≤ commClo Q`). -/
+def commClo (Impl Spec : TurnCoalg Obs AdmissibleTurn) :
+    Rel (DiagPt Impl Spec) → Rel (DiagPt Impl Spec) :=
+  fun Q p q => ∃ p' q', p = p' ∧ q = q' ∧ Q p' q'
+
+theorem commClo_mono (Impl Spec : TurnCoalg Obs AdmissibleTurn) :
+    CloMono (commClo Impl Spec) := by
+  intro Q Q' hQ p q ⟨p', q', hp, hq, hQpq⟩
+  exact ⟨p', q', hp, hq, hQ _ _ hQpq⟩
+
+/-- `Q ≤ commClo Q` (the closure is reflexive: the trivial rewrite is identity). -/
+theorem le_commClo (Impl Spec : TurnCoalg Obs AdmissibleTurn) (Q : Rel (DiagPt Impl Spec)) :
+    Q ≤ commClo Impl Spec Q :=
+  fun p q hQ => ⟨p, q, rfl, rfl, hQ⟩
+
+/-- **`commClo_compatible` (PROVED) — the up-to-commutation closure is `Compatible` with `obsGen`.**
+`commClo (obsGen Q) ≤ obsGen (commClo Q)`: rewriting the endpoints of an `obsGen`-step by state
+equalities preserves obs-agreement (equal states ⇒ equal observations) and lands the successor in
+`commClo Q` (the same equalities push through the guarded successor). This is the soundness
+meta-theorem the §7 OPEN said native coinduction lacked; it makes `gpaco_clo` with `commClo` sound. -/
+theorem commClo_compatible (Impl Spec : TurnCoalg Obs AdmissibleTurn) (s : Sched AdmissibleTurn) :
+    Compatible (obsGen Impl Spec s) (commClo Impl Spec) := by
+  intro Q p q ⟨p', q', hp, hq, hobs, hsucc⟩
+  -- `hp : p = p'`, `hq : q = q'`; rewrite the goal endpoints to `p'`, `q'`.
+  subst hp; subst hq
+  -- Goal: obsGen (commClo Q) p q = obs-agree(p,q) ∧ commClo Q (diagSucc p) (diagSucc q).
+  refine ⟨hobs, ?_⟩
+  -- successor lands in commClo Q via the reflexive (identity) rewrite.
+  exact ⟨diagSucc Impl Spec s p, diagSucc Impl Spec s q, rfl, rfl, hsucc⟩
+
+/-- **`obsBisim_of_uptoComm` (PROVED) — THE GENERAL CASE, the §7 OPEN CLOSED.**
+
+We are NOT handed a global `Boundary.IsBisim`. We are handed only a *bisimulation up to the
+commutation closure* `R`: for `R`-related diagonal points, (i) the observations agree now, and
+(ii) the guarded successors are related *only after the finite commutation rewrite* —
+`commClo … R`-related, NOT `R`-related directly. Native `ObsBisim.coinduct` cannot consume this
+(the recursive occurrence is wrapped in `commClo`, not bare). We DERIVE the full `ObsBisim` by
+threading `R` through the ported Paco up-to machinery: `R` is a post-fixpoint of
+`obsGen ∘ commClo`, so it lands in `gpaco_clo (obsGen…) (commClo…) ⊥ ⊥`, which `gpaco_clo_final`
+collapses to `gfp = paco (obsGen…) ⊥` BECAUSE `commClo` is `Compatible` (`commClo_compatible`);
+then `obsBisim_of_paco` bridges to `ObsBisim`. The up-to closure is applied *under* the greatest
+fixpoint while soundness is preserved by compatibility — exactly the `gupaco`-shaped principle the
+OPEN required. -/
+theorem obsBisim_of_uptoComm
+    (Impl Spec : TurnCoalg Obs AdmissibleTurn) (s : Sched AdmissibleTurn)
+    (R : Rel (DiagPt Impl Spec))
+    (hstep : ∀ p q, R p q →
+      Impl.obs p.2.1 = Spec.obs q.2.2 ∧
+        commClo Impl Spec R (diagSucc Impl Spec s p) (diagSucc Impl Spec s q))
+    {n : ℕ} {x : Impl.Carrier} {y : Spec.Carrier} (hxy : R (n, x, y) (n, x, y)) :
+    ObsBisim Impl Spec s s n x y := by
+  set G := obsGen Impl Spec s with hG
+  set clo := commClo Impl Spec with hclo
+  -- (a) `gfp G = paco G ⊥` (paco with the empty parameter is the plain greatest fixpoint).
+  have hpaco_bot : paco G ⊥ = G.toOrderHom.gfp := Paco.paco_bot G
+  -- (b) `R` is a post-fixpoint of `G ∘ clo`: R ≤ G (clo R).  (obs now + successor in clo R.)
+  have hpost : R ≤ G.F (clo R) := by
+    intro p q hRpq
+    obtain ⟨hobs, hsucc⟩ := hstep p q hRpq
+    exact ⟨hobs, hsucc⟩
+  -- (c) hence `R ≤ gpaco_clo G clo ⊥ ⊥`: enter the up-to fixpoint with R as the guarded witness.
+  --     Use the coinduction principle for gpaco_clo with accumulator/guard ⊥.
+  have hR_le_gpaco : R ≤ gpaco_clo G clo ⊥ ⊥ := by
+    apply Paco.gpaco_clo_coind G clo ⊥ ⊥ R
+    -- Goal: ∀ rr, ⊥ ≤ rr → R ≤ rr → R ≤ gpaco_clo G clo ⊥ rr. Step each R-pair into the up-to fixpoint.
+    intro rr _hINC _hCIH p q hRpq
+    obtain ⟨hobs, p', q', hpp, hqq, hRpq'⟩ := hstep p q hRpq
+    -- gstep: take an F-step into gpaco_clo, recursive positions get gupaco (⊇ rr via CIH).
+    -- gpaco_clo G clo ⊥ rr p q ⊇ rclo clo (paco (G∘rclo clo) (rr ⊔ ⊥) ⊔ ⊥); we build the base.
+    refine Paco.rclo.base (Or.inl ?_)
+    -- Need: paco (composeRclo G clo) (rr ⊔ ⊥) p q. Coinduct with witness R itself.
+    apply Paco.paco_coind (Paco.composeRclo G clo) R (rr ⊔ ⊥) ?_ hRpq
+    -- post-fixpoint of composeRclo G clo over (R ⊔ (rr ⊔ ⊥)):
+    intro a b hRab
+    obtain ⟨hobs2, a', b', haa, hbb, hRab'⟩ := hstep a b hRab
+    -- composeRclo G clo X = G (rclo clo X); need G (rclo clo (R ⊔ (rr ⊔ ⊥))) a b.
+    refine ⟨hobs2, ?_⟩
+    -- successor: diagSucc a, diagSucc b ∈ rclo clo (R ⊔ (rr ⊔ ⊥)) via clo then base.
+    -- clo R ⊆ rclo clo (R ⊔ …); use rclo.clo with R' := R ⊔ (rr ⊔ ⊥) and the commClo witness.
+    apply Paco.rclo.clo (R ⊔ (rr ⊔ ⊥))
+    · exact Paco.rclo.base_le
+    · -- clo (R ⊔ (rr ⊔ ⊥)) at the successors: the commutation rewrite (a' , b') with R a' b'.
+      exact ⟨a', b', haa, hbb, Or.inl hRab'⟩
+  -- (d) `gpaco_clo G clo ⊥ ⊥ ≤ gfp G` by compatibility of clo (`gpaco_clo_final`).
+  have hfinal : gpaco_clo G clo ⊥ ⊥ ≤ G.toOrderHom.gfp :=
+    Paco.gpaco_clo_final G clo (commClo_mono Impl Spec) (commClo_compatible Impl Spec s)
+      ⊥ ⊥ (by intro p q h; exact h.elim) (by intro p q h; exact h.elim)
+  -- (e) chain: R ≤ gpaco_clo ≤ gfp G = paco G ⊥, then bridge to ObsBisim.
+  have hR_le_paco : R ≤ paco G ⊥ := by
+    rw [hpaco_bot]; exact Rel.le_trans hR_le_gpaco hfinal
+  exact obsBisim_of_paco Impl Spec s n x y (hR_le_paco _ _ hxy)
+
+/-! ## §9 — Axiom-hygiene tripwires for the CLOSED general case (all clean). -/
+
+#assert_axioms obsGen
+#assert_axioms obsBisim_of_paco
+#assert_axioms commClo_compatible
+#assert_axioms obsBisim_of_uptoComm
 
 end Dregg2.Proof.CoinductiveAdversary

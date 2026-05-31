@@ -1238,13 +1238,41 @@ impl WitnessedPredicateVerifier for StubVerifier {
         _input: &PredicateInput<'_>,
         proof_bytes: &[u8],
     ) -> Result<(), WitnessedPredicateError> {
-        if proof_bytes.is_empty() {
+        // SOUNDNESS GATE. The accept path of this stub exists ONLY in test
+        // builds (`cfg(test)`) or builds explicitly compiled with the
+        // `test-stubs` feature. In any other build — i.e. every production
+        // binary — `StubVerifier::verify` is FAIL-CLOSED: it rejects every
+        // proof regardless of its bytes. This makes it structurally
+        // impossible for a misconfigured host that selects the stub registry
+        // (`WitnessedPredicateRegistry::with_stubs()`) to authorize a forged
+        // witness, because the stub never returns `Ok(())` outside a test
+        // build. See the `test-stubs` feature in `cell/Cargo.toml`.
+        #[cfg(not(any(test, feature = "test-stubs")))]
+        {
+            let _ = proof_bytes;
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: self.name,
-                reason: "stub verifier requires non-empty proof bytes".into(),
+                reason: "StubVerifier is fail-closed in non-test builds: \
+                         it never accepts a proof unless the crate is \
+                         compiled with `cfg(test)` or the `test-stubs` \
+                         feature. A real verifier for this kind must be \
+                         installed via `register_builtin`."
+                    .into(),
             });
         }
-        Ok(())
+
+        // Test-only accept path: non-empty proof bytes pass, empty ones are
+        // rejected so plumbing tests can exercise both arms.
+        #[cfg(any(test, feature = "test-stubs"))]
+        {
+            if proof_bytes.is_empty() {
+                return Err(WitnessedPredicateError::Rejected {
+                    kind_name: self.name,
+                    reason: "stub verifier requires non-empty proof bytes".into(),
+                });
+            }
+            Ok(())
+        }
     }
 }
 

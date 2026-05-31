@@ -55,6 +55,12 @@ pub enum HandoffError {
     DeserializationFailed(String),
     /// The nonce has already been seen (replay attempt).
     ReplayDetected,
+    /// The certificate grants MORE authority than the introducer holds on the
+    /// target (the swiss-registered entry). This is an authority-amplification
+    /// attempt and violates the Granovetter discipline (only connectivity
+    /// begets connectivity): `granted ⊄ held`. Mirrors the Lean
+    /// `Exec/CapTP.lean::handoff_non_amplifying` spec (`granted ≤ held`).
+    Amplification,
 }
 
 impl std::fmt::Display for HandoffError {
@@ -80,6 +86,10 @@ impl std::fmt::Display for HandoffError {
                 write!(f, "handoff deserialization failed: {msg}")
             }
             HandoffError::ReplayDetected => write!(f, "replay detected: nonce already seen"),
+            HandoffError::Amplification => write!(
+                f,
+                "handoff amplifies authority: granted permissions exceed introducer's held swiss entry"
+            ),
         }
     }
 }
@@ -366,11 +376,26 @@ pub struct HandoffAcceptance {
 /// 1. Verify introducer signature on certificate
 /// 2. Verify recipient signature on presentation
 /// 3. Check introducer is a known/trusted federation
-/// 4. Check swiss number is valid in our swiss table
-/// 5. Check certificate is not expired
+/// 4. Check certificate is not expired
+/// 5. Check swiss number is valid in our swiss table (and enliven it)
+/// 6. **Non-amplification (Granovetter):** check the granted permissions and
+///    effect mask are an *attenuation* (subset) of what the introducer actually
+///    holds — the swiss entry the introducer registered at this target. The
+///    handoff certificate's `permissions`/`allowed_effects` are introducer-
+///    asserted and could claim arbitrary authority; the swiss entry is the
+///    target federation's own authoritative record of what it granted the
+///    introducer for this cell. A handoff must not confer MORE than that.
+///
+/// The held authority is read from the swiss entry returned by `enliven`
+/// (`SwissEntry::permissions` / `SwissEntry::allowed_effects`), NOT from the
+/// certificate — so an attacker who forges/inflates the certificate's
+/// permissions cannot escalate beyond the introducer's registered rights.
+/// This enforces the Lean spec `Exec/CapTP.lean::handoff_non_amplifying`
+/// (`cert.granted.rights ≤ cert.held.rights`), where `held` is the swiss entry.
 ///
 /// On success, enlivens the swiss entry and returns a `HandoffAcceptance` with
-/// a routing token for ongoing access.
+/// a routing token for ongoing access. The returned `permissions`/
+/// `allowed_effects` are the certificate's granted (attenuated) authority.
 pub fn validate_handoff(
     presentation: &HandoffPresentation,
     introducer_pk: &PublicKey,
@@ -400,14 +425,53 @@ pub fn validate_handoff(
         return Err(HandoffError::Expired);
     }
 
-    // 5. Check and enliven the swiss number
-    let _entry = swiss_table
+    // 5. Check and enliven the swiss number. The returned entry IS the
+    //    introducer's HELD authority on the target cell — the rights the
+    //    target federation recorded when the introducer registered this swiss
+    //    number. This is the authoritative `held` for the non-amplification
+    //    check below (the certificate's own `permissions` are introducer-
+    //    asserted and must not be trusted as an upper bound on themselves).
+    let held = swiss_table
         .enliven(&cert.swiss, current_height)
         .map_err(|e| match e {
             crate::sturdy::EnlivenError::NotFound => HandoffError::SwissNotFound,
             crate::sturdy::EnlivenError::Expired => HandoffError::Expired,
             crate::sturdy::EnlivenError::ExhaustedUses => HandoffError::MaxUsesExhausted,
         })?;
+
+    // 6. Non-amplification (Granovetter): granted ⊆ held.
+    //
+    //    a) Permission lattice: the granted `AuthRequired` must be narrower
+    //       than or equal to the held `AuthRequired`. `is_narrower_or_equal`
+    //       is the rights-lattice ⊆ check (Impossible ≤ Proof/Signature ≤
+    //       Either ≤ None; Custom comparable only to identical Custom). A
+    //       handoff that loosens the requirement (e.g. held `Signature` but
+    //       granted `None`) amplifies authority and is rejected.
+    if !cert.permissions.is_narrower_or_equal(&held.permissions) {
+        return Err(HandoffError::Amplification);
+    }
+
+    //    b) Effect facet mask: the granted effect mask must be a bitwise
+    //       subset of the held effect mask. `None` means "unrestricted" (all
+    //       effects the cell itself permits). A granted `None` is therefore
+    //       only non-amplifying when the held mask is also `None`; any
+    //       concrete held mask is narrower than unrestricted, so granting
+    //       unrestricted over a restricted hold is amplification. When both
+    //       are concrete, `is_facet_attenuation(held, granted)` requires every
+    //       granted bit to be present in held.
+    let amplifies_effects = match (cert.allowed_effects, held.allowed_effects) {
+        // held unrestricted: any granted mask attenuates (or equals) it.
+        (_, None) => false,
+        // held restricted, granted unrestricted: amplification.
+        (None, Some(_)) => true,
+        // both restricted: granted must be a subset of held.
+        (Some(granted_mask), Some(held_mask)) => {
+            !dregg_cell::is_facet_attenuation(held_mask, granted_mask)
+        }
+    };
+    if amplifies_effects {
+        return Err(HandoffError::Amplification);
+    }
 
     // Generate a routing token for the recipient
     let mut routing_token = [0u8; 32];
@@ -677,6 +741,160 @@ mod tests {
         assert!(cert_with_expiry.is_valid(499));
         assert!(cert_with_expiry.is_valid(500)); // at expiry height: still valid
         assert!(!cert_with_expiry.is_valid(501)); // past expiry: invalid
+    }
+
+    // ── Non-amplification (Granovetter: granted ≤ held) ─────────────────────
+    //
+    // These exercise the §6 check in `validate_handoff`. The HELD authority is
+    // the swiss entry the introducer registered at the target (its `permissions`
+    // / `allowed_effects`); the GRANTED authority is the certificate's
+    // `permissions` / `allowed_effects`. The Lean spec
+    // `Exec/CapTP.lean::handoff_non_amplifying` proves `granted ≤ held`; these
+    // confirm the Rust validator enforces it.
+
+    /// Helper: full handoff where held (swiss) and granted (cert) auth/effects
+    /// are specified independently, so we can construct attenuating, equal, and
+    /// amplifying scenarios.
+    #[allow(clippy::too_many_arguments)]
+    fn handoff_with_auth(
+        held_perm: AuthRequired,
+        held_effects: Option<EffectMask>,
+        granted_perm: AuthRequired,
+        granted_effects: Option<EffectMask>,
+    ) -> (
+        HandoffPresentation,
+        PublicKey,    // introducer pk
+        FederationId, // introducer federation
+        SwissTable,   // target's swiss table (held entry registered)
+    ) {
+        let (intro_sk, intro_pk, intro_fed) = setup_introducer();
+        let (recip_sk, recip_pk) = setup_recipient();
+        let target_fed = FederationId([0xDD; 32]);
+        let target_cell = CellId([0xEE; 32]);
+
+        // Introducer registers the swiss entry recording what IT holds.
+        let mut swiss_table = SwissTable::new();
+        let swiss = swiss_table.export_with_options(
+            target_cell,
+            held_perm,
+            100,
+            None,
+            held_effects,
+            None,
+        );
+
+        // Introducer creates a certificate granting (possibly inflated) authority.
+        let cert = HandoffCertificate::create(
+            &intro_sk,
+            intro_fed,
+            target_fed,
+            target_cell,
+            recip_pk.0,
+            granted_perm,
+            granted_effects,
+            None,
+            None,
+            swiss,
+        );
+
+        let presentation = HandoffPresentation::create(cert, &recip_sk);
+        (presentation, intro_pk, intro_fed, swiss_table)
+    }
+
+    #[test]
+    fn attenuating_handoff_passes() {
+        // Held = Either; granted = Signature (strictly narrower). Must pass.
+        let (presentation, intro_pk, intro_fed, mut swiss_table) =
+            handoff_with_auth(AuthRequired::Either, None, AuthRequired::Signature, None);
+        let known = vec![intro_fed];
+        let result = validate_handoff(&presentation, &intro_pk, &mut swiss_table, &known, 150);
+        let acceptance = result.expect("attenuating handoff must be accepted");
+        assert_eq!(acceptance.permissions, AuthRequired::Signature);
+    }
+
+    #[test]
+    fn equal_rights_handoff_passes() {
+        // Held = Signature; granted = Signature (equal). Must pass.
+        let (presentation, intro_pk, intro_fed, mut swiss_table) =
+            handoff_with_auth(AuthRequired::Signature, None, AuthRequired::Signature, None);
+        let known = vec![intro_fed];
+        let result = validate_handoff(&presentation, &intro_pk, &mut swiss_table, &known, 150);
+        assert!(result.is_ok(), "equal-rights handoff must be accepted");
+    }
+
+    #[test]
+    fn amplifying_handoff_rejected() {
+        // Held = Signature; granted = None (LOOSER requirement = MORE authority).
+        // The introducer only holds a signature-gated cap but tries to gift an
+        // unauthenticated (None) cap. This is amplification and must be rejected.
+        let (presentation, intro_pk, intro_fed, mut swiss_table) =
+            handoff_with_auth(AuthRequired::Signature, None, AuthRequired::None, None);
+        let known = vec![intro_fed];
+        let result = validate_handoff(&presentation, &intro_pk, &mut swiss_table, &known, 150);
+        assert_eq!(
+            result.unwrap_err(),
+            HandoffError::Amplification,
+            "granting None over held Signature must be rejected as amplification"
+        );
+    }
+
+    #[test]
+    fn amplifying_handoff_from_impossible_rejected() {
+        // Held = Impossible (the introducer holds NOTHING usable); granted =
+        // Signature. The most extreme amplification: conjuring authority from a
+        // locked cap. Must be rejected.
+        let (presentation, intro_pk, intro_fed, mut swiss_table) = handoff_with_auth(
+            AuthRequired::Impossible,
+            None,
+            AuthRequired::Signature,
+            None,
+        );
+        let known = vec![intro_fed];
+        let result = validate_handoff(&presentation, &intro_pk, &mut swiss_table, &known, 150);
+        assert_eq!(result.unwrap_err(), HandoffError::Amplification);
+    }
+
+    #[test]
+    fn effect_mask_attenuating_handoff_passes() {
+        use dregg_cell::{EFFECT_EMIT_EVENT, EFFECT_TRANSFER};
+        // Held = {transfer, emit}; granted = {emit} (subset). Must pass.
+        let held = Some(EFFECT_TRANSFER | EFFECT_EMIT_EVENT);
+        let granted = Some(EFFECT_EMIT_EVENT);
+        let (presentation, intro_pk, intro_fed, mut swiss_table) =
+            handoff_with_auth(AuthRequired::Signature, held, AuthRequired::Signature, granted);
+        let known = vec![intro_fed];
+        let result = validate_handoff(&presentation, &intro_pk, &mut swiss_table, &known, 150);
+        assert!(
+            result.is_ok(),
+            "effect-mask subset handoff must be accepted"
+        );
+    }
+
+    #[test]
+    fn effect_mask_amplifying_handoff_rejected() {
+        use dregg_cell::{EFFECT_EMIT_EVENT, EFFECT_TRANSFER};
+        // Held = {emit}; granted = {transfer, emit} (superset — adds transfer).
+        // Granting an effect bit the introducer doesn't hold is amplification.
+        let held = Some(EFFECT_EMIT_EVENT);
+        let granted = Some(EFFECT_TRANSFER | EFFECT_EMIT_EVENT);
+        let (presentation, intro_pk, intro_fed, mut swiss_table) =
+            handoff_with_auth(AuthRequired::Signature, held, AuthRequired::Signature, granted);
+        let known = vec![intro_fed];
+        let result = validate_handoff(&presentation, &intro_pk, &mut swiss_table, &known, 150);
+        assert_eq!(result.unwrap_err(), HandoffError::Amplification);
+    }
+
+    #[test]
+    fn effect_mask_unrestricted_grant_over_restricted_hold_rejected() {
+        use dregg_cell::EFFECT_EMIT_EVENT;
+        // Held = {emit} (restricted); granted = None (unrestricted = all effects).
+        // Granting unrestricted authority over a faceted hold is amplification.
+        let held = Some(EFFECT_EMIT_EVENT);
+        let (presentation, intro_pk, intro_fed, mut swiss_table) =
+            handoff_with_auth(AuthRequired::Signature, held, AuthRequired::Signature, None);
+        let known = vec![intro_fed];
+        let result = validate_handoff(&presentation, &intro_pk, &mut swiss_table, &known, 150);
+        assert_eq!(result.unwrap_err(), HandoffError::Amplification);
     }
 
     #[test]

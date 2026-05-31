@@ -838,11 +838,28 @@ fn test_section5_assertion_rejects_mismatch() {
     );
     assert!(result.is_ok(), "Honest proof must verify");
 
-    // DISHONEST witness: w[0] != w[1]
-    // The Kimchi prover panics (rather than returning Err) when the witness
-    // fails the gate check. We use catch_unwind to verify it rejects.
+    // DISHONEST witness: w[0] != w[1].
+    //
+    // SOUNDNESS PROPERTY (the real one): a witness that violates the assertion
+    // gate must NOT yield a proof that the verifier accepts. There are two ways
+    // the Kimchi machinery enforces this, depending on build profile:
+    //
+    //   * debug builds: the prover's `check_constraint!` debug-assertions fire
+    //     and the prover *panics* before emitting a proof.
+    //   * release builds (`debug_assertions` off): the prover does NOT panic —
+    //     it computes a quotient that does not divide the vanishing polynomial
+    //     and emits a *malformed* proof. The constraint is still enforced
+    //     cryptographically: the VERIFIER rejects that proof.
+    //
+    // The earlier version of this test only asserted the prover panics, which
+    // is a debug-only behavior and gave a false failure under `--release`. The
+    // sound property is "dishonest witness => no accepted proof", which we now
+    // assert directly: EITHER the prover fails/panics, OR (if it produced a
+    // proof) the verifier rejects it. A dishonest proof being *accepted* is the
+    // only outcome that indicates the assertion gates are not constraining.
     let gates_clone = gates.clone();
-    let dishonest_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let group_map_dishonest = <Vesta as CommitmentCurve>::Map::setup();
+    let dishonest_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut witness_bad: [Vec<Fp>; COLUMNS] = std::array::from_fn(|_| vec![Fp::zero(); row]);
         witness_bad[0][0] = Fp::from(1u64); // public input
         witness_bad[0][1] = Fp::from(42u64);
@@ -854,9 +871,8 @@ fn test_section5_assertion_rejects_mismatch() {
             gates_clone,
             public_count,
         );
-        let group_map2 = <Vesta as CommitmentCurve>::Map::setup();
         ProverProof::<Vesta, VestaOpeningProof, FULL_ROUNDS>::create::<BaseSponge, ScalarSponge, _>(
-            &group_map2,
+            &group_map_dishonest,
             witness_bad,
             &[],
             &index2,
@@ -864,11 +880,32 @@ fn test_section5_assertion_rejects_mismatch() {
         )
     }));
 
-    assert!(
-        dishonest_result.is_err(),
-        "Dishonest prover with mismatched coordinates must FAIL (panic). \
-         If this passes, the assertion gates are not constraining."
-    );
+    match dishonest_outcome {
+        // Prover panicked (debug builds) or returned Err: dishonest witness
+        // never produced a proof. Sound.
+        Err(_) | Ok(Err(_)) => {}
+        // Prover produced a proof (release builds): it MUST NOT verify.
+        Ok(Ok(bad_proof)) => {
+            let bad_public_inputs = vec![Fp::from(1u64)];
+            let verify_result = verifier::verify::<
+                FULL_ROUNDS,
+                Vesta,
+                BaseSponge,
+                ScalarSponge,
+                VestaOpeningProof,
+            >(
+                &group_map_dishonest,
+                &verifier_index,
+                &bad_proof,
+                &bad_public_inputs,
+            );
+            assert!(
+                verify_result.is_err(),
+                "SOUNDNESS BREAK: dishonest witness (w[0] != w[1]) produced a proof \
+                 that the verifier ACCEPTED. The assertion gates are not constraining."
+            );
+        }
+    }
 }
 
 #[test]

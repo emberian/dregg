@@ -600,4 +600,105 @@ mod tests {
             h.0
         );
     }
+
+    /// Cross-implementation known-answer test (conformance KAT).
+    ///
+    /// This is the *genuine* conformance check, not a frozen self-snapshot: it
+    /// runs the SAME input through BOTH dregg's `Poseidon2State::permute` AND
+    /// Plonky3's independently-audited `default_babybear_poseidon2_16()`
+    /// (`p3-baby-bear` rev 82cfad73 pinned in the workspace Cargo.toml), then
+    /// asserts the full 16-element output state is byte-for-byte identical.
+    ///
+    /// Both implementations use the standard BabyBear Poseidon2 instance:
+    ///   - width 16, S-box x^7, R_F = 8 (4 + 4), R_P = 13
+    ///   - external round constants BABYBEAR_POSEIDON2_RC_16_EXTERNAL_{INITIAL,FINAL}
+    ///   - internal round constants BABYBEAR_POSEIDON2_RC_16_INTERNAL
+    ///   - internal diagonal V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4,
+    ///                            1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27]
+    ///
+    /// dregg's constants (RC_EXT_INIT / RC_EXT_FINAL / RC_INTERNAL / INTERNAL_DIAG)
+    /// are transcribed from these exact Plonky3 tables, so a match establishes real
+    /// conformance to the reference. A mismatch would be a critical finding (a
+    /// constant/round/matrix divergence in the crypto TCB).
+    ///
+    /// Note: Plonky3's `permute_mut` applies the initial external linear layer
+    /// then the rounds, identical to dregg's `permute`, so the raw permutation is
+    /// the correct unit of comparison (no domain-separation padding involved).
+    #[test]
+    fn poseidon2_plonky3_cross_check_kat() {
+        use crate::field::BABYBEAR_P;
+        use crate::plonky3_prover::{from_p3, to_p3};
+        use p3_baby_bear::default_babybear_poseidon2_16;
+        use p3_baby_bear::BabyBear as P3BabyBear;
+        use p3_symmetric::Permutation;
+
+        let perm = default_babybear_poseidon2_16();
+
+        // Test vectors covering edge cases + structured + pseudo-random inputs.
+        // Each is 16 canonical u32 values (already < BABYBEAR_P).
+        let p = BABYBEAR_P;
+        let vectors: Vec<[u32; WIDTH]> = vec![
+            // all-zeros
+            [0; WIDTH],
+            // all-ones
+            [1; WIDTH],
+            // sequential 0..15
+            std::array::from_fn(|i| i as u32),
+            // sequential 1..16
+            std::array::from_fn(|i| (i as u32) + 1),
+            // all p-1 (largest canonical value)
+            [p - 1; WIDTH],
+            // alternating 0 / p-1
+            std::array::from_fn(|i| if i % 2 == 0 { 0 } else { p - 1 }),
+            // fixed pseudo-random vector (xorshift-derived, seed 0xD2E66, reduced mod p)
+            {
+                let mut s: u32 = 0xD2E66;
+                std::array::from_fn(|_| {
+                    s ^= s << 13;
+                    s ^= s >> 17;
+                    s ^= s << 5;
+                    s % p
+                })
+            },
+            // second fixed pseudo-random vector (seed 0x5EED1)
+            {
+                let mut s: u32 = 0x5EED1;
+                std::array::from_fn(|_| {
+                    s ^= s << 13;
+                    s ^= s >> 17;
+                    s ^= s << 5;
+                    s % p
+                })
+            },
+            // powers of two (exercises the inverse-power-of-2 diagonal entries)
+            std::array::from_fn(|i| 1u32 << (i % 31)),
+        ];
+
+        for (vi, raw) in vectors.iter().enumerate() {
+            // dregg permutation
+            let mut dregg_input = [BabyBear::ZERO; WIDTH];
+            for i in 0..WIDTH {
+                dregg_input[i] = BabyBear::new(raw[i]);
+            }
+            let mut dregg_state = Poseidon2State { state: dregg_input };
+            dregg_state.permute();
+
+            // Plonky3 reference permutation on the identical input
+            let mut p3_input: [P3BabyBear; WIDTH] =
+                std::array::from_fn(|i| to_p3(BabyBear::new(raw[i])));
+            perm.permute_mut(&mut p3_input);
+
+            // Assert byte-for-byte (canonical-value) equality across all 16 lanes.
+            for i in 0..WIDTH {
+                let dregg_out = dregg_state.state[i].canonical_val();
+                let p3_out = from_p3(p3_input[i]).0;
+                assert_eq!(
+                    dregg_out, p3_out,
+                    "Poseidon2 conformance MISMATCH on vector {vi} at lane {i}: \
+                     dregg={dregg_out}, plonky3={p3_out} (input[{i}]={})",
+                    raw[i]
+                );
+            }
+        }
+    }
 }

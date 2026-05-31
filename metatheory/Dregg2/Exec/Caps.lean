@@ -29,10 +29,41 @@ Pure executable Lean, `#eval`-able. Reuses `Authority` + `Exec.Kernel`; edits ne
 import Dregg2.Authority.Positional
 import Dregg2.Exec.Kernel
 import Dregg2.Tactics
+import Mathlib.Data.Finset.Lattice.Basic
+import Mathlib.Data.Fintype.Basic
 
 namespace Dregg2.Exec
 
 open Dregg2.Authority Dregg2.Laws
+
+/-! ## §0 — The REAL executable rights lattice (`Finset Auth`, ordered by `⊆`).
+
+The executable cap carries a genuine permission list (`capAuthConferred : Cap → List Auth`).
+Until now the Spec-side authority graph abstracted those rights to `Unit` (the connectivity
+skeleton), which made every "non-amplification" claim phrased on rights collapse to `() ≤ ()`.
+Here we expose the rights as the REAL lattice the `*_non_amplifying` headlines must compare:
+`ExecAuth := Finset Auth`, with `≤` literally `⊆` and `⊤` the full authority set. This is the
+SAME `List Auth ⊆` order `attenuate_subset` already narrows along — now as a bona-fide
+`SemilatticeInf`/`OrderTop` rights carrier the `Spec.confers`/`Introduce` discipline can read.
+`is_attenuation(held, granted) := granted ⊆ held` (`cell/src/capability.rs:461`) becomes the
+genuine `granted.rights ≤ held.rights` over this lattice. -/
+
+/-- The complete finite enumeration of `Auth` — gives `Finset Auth` its `⊤` (= `univ`,
+the full authority) and hence the `OrderTop` the `Spec.Authority` discipline expects. -/
+instance : Fintype Auth where
+  elems := {Auth.read, Auth.write, Auth.grant, Auth.call, Auth.reply, Auth.reset, Auth.control}
+  complete := by intro a; cases a <;> decide
+
+/-- **`ExecAuth`** — the executable rights lattice: a `Finset Auth`, ordered by `⊆` (`a ≤ b ↔
+a ⊆ b`, definitionally), with `⊤ = Finset.univ` (full authority). The real attenuation order
+the executable caps live in, replacing the `Unit` rights-collapse of the connectivity skeleton. -/
+abbrev ExecAuth := Finset Auth
+
+/-- **`confRights c`** — the REAL authority a cap confers, as the rights-lattice element: the
+`capAuthConferred` permission list lifted into `ExecAuth = Finset Auth`. This is the rights a
+delegated/granted cap actually carries; `is_attenuation` is `confRights granted ≤ confRights
+held` over the genuine `⊆` order. -/
+def confRights (c : Cap) : ExecAuth := (capAuthConferred c).toFinset
 
 /-! ## Executable capability operations over the `Caps` table -/
 
@@ -94,6 +125,18 @@ holder gains nothing it could not already have been granted directly, and never 
 theorem derive_no_amplify (keep : List Auth) (c : Cap) :
     capAuthConferred (attenuate keep c) ⊆ capAuthConferred c :=
   attenuate_subset keep c
+
+/-- **`attenuate_confRights_le` — PROVED.** Attenuation narrows the REAL conferred rights in the
+`ExecAuth` lattice: `confRights (attenuate keep c) ≤ confRights c`. This is `attenuate_subset`
+lifted from `List Auth ⊆` to the `Finset Auth` `≤` — the genuine non-amplification inequality
+(`is_attenuation`, `granted ⊆ held`), NOT a `()≤()` collapse. -/
+theorem attenuate_confRights_le (keep : List Auth) (c : Cap) :
+    confRights (attenuate keep c) ≤ confRights c := by
+  rw [Finset.le_iff_subset]
+  intro a ha
+  rw [confRights, List.mem_toFinset] at ha
+  rw [confRights, List.mem_toFinset]
+  exact attenuate_subset keep c ha
 
 /-- **`revoke_removes` — PROVED.** After `revoke caps holder c`, the holder no longer holds
 `c` in its slot. (The fail-closed counterpart of `grant`: removed authority is gone.) -/

@@ -152,6 +152,35 @@ pub(crate) fn fill_reserved_bits(row: &mut [BabyBear], sealed_mask: u32, mode_fl
     row[AUX_BASE + aux_off::RESERVED_MODE] = BabyBear::new(mode_flag & 1);
 }
 
+/// W9-RANGECHECK: bit-decompose the *new* (state_after) balance limbs into
+/// the `NEW_BAL_LO_BIT_BASE` / `NEW_BAL_HI_BIT_BASE` aux columns so the AIR's
+/// per-row range / underflow constraint (booleanity + recomposition) is
+/// satisfiable for honest traces.
+///
+/// `new_balance` is the post-effect cell balance. We split it the same way
+/// `split_u64` does (lo = low 30 bits, hi = balance >> 30) and write 30
+/// boolean bits per limb. The AIR enforces `Σ bit_i 2^i == balance_{lo,hi}`,
+/// which pins each limb into `[0, 2^30)` and — because a wrapped (underflowed)
+/// debit lands ≥ 2^30 — rejects modular-subtraction underflow in-circuit.
+///
+/// Honest balances always fit (init limbs asserted `< 2^30` at trace gen, so
+/// every limb stays `< 2^30`). A malicious prover that writes a wrapped limb
+/// cannot produce a consistent 30-bit decomposition; the AIR then rejects.
+pub(crate) fn fill_balance_limb_bits(row: &mut [BabyBear], new_balance: u64) {
+    let lo = (new_balance & 0x3FFF_FFFF) as u32; // low 30 bits
+    let hi = (new_balance >> 30) as u64; // remaining bits
+    debug_assert!(
+        (hi as u64) < (1u64 << super::BAL_LIMB_BITS),
+        "balance_hi {} exceeds 2^{} — out of the in-circuit range proof",
+        hi,
+        super::BAL_LIMB_BITS
+    );
+    for i in 0..super::BAL_LIMB_BITS {
+        row[AUX_BASE + aux_off::NEW_BAL_LO_BIT_BASE + i] = BabyBear::new((lo >> i) & 1);
+        row[AUX_BASE + aux_off::NEW_BAL_HI_BIT_BASE + i] = BabyBear::new(((hi >> i) & 1) as u32);
+    }
+}
+
 /// Compute the effects hash for a sequence of effects.
 /// Returns (lo, hi) BabyBear elements.
 pub fn compute_effects_hash(effects: &[Effect]) -> (BabyBear, BabyBear) {

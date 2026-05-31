@@ -133,6 +133,75 @@ fn detect_equivocation_same_seq() {
     assert!(lace.equivocators().contains(&creator));
 }
 
+#[test]
+fn detect_equivocation_incomparable_different_seq() {
+    // The NEW case that the old `(creator, seq, id≠)` heuristic MISSED:
+    // an equivocator forks its virtual chain and extends ONE branch, so the two
+    // tip blocks have DIFFERENT seq numbers yet are mutually non-preceding
+    // (incomparable). Under the paper's content-independent Def 4.2 this is an
+    // equivocation; under the old same-seq heuristic it slips through.
+    //
+    // Construct:
+    //   base (seq 1, no preds)                      ← genesis of the chain
+    //   branch_a (seq 2, preds = [base])            ← honest-looking extension
+    //   branch_b (seq 3, preds = [base])            ← FORK: extends base, NOT branch_a
+    // branch_a (seq 2) and branch_b (seq 3) are by the same creator, distinct,
+    // and neither is in the other's causal past (both only see `base`).
+    let key = random_key();
+    let creator = key.verifying_key().to_bytes();
+
+    let base = Block::new(&key, 1, Payload::Data(b"base".to_vec()), vec![]);
+    let base_id = base.id();
+    let branch_a = Block::new(&key, 2, Payload::Data(b"branch A".to_vec()), vec![base_id]);
+    // FORK at a *different* seq than branch_a, pointing only at `base`.
+    let branch_b = Block::new(&key, 3, Payload::Data(b"branch B".to_vec()), vec![base_id]);
+
+    let mut lace = Blocklace::new_simple(random_key());
+    lace.receive_block(base).unwrap();
+    lace.receive_block(branch_a).unwrap(); // honest extension: NOT an equivocation
+    assert!(
+        !lace.equivocators().contains(&creator),
+        "a single chain extension must not be flagged"
+    );
+
+    // Receiving branch_b (different seq, incomparable with branch_a) MUST be
+    // detected as an equivocation. The old same-seq heuristic would have
+    // returned Ok here (no other block at seq 3).
+    let result = lace.receive_block(branch_b);
+    match result {
+        Err(BlockError::Equivocation { creator: c, .. }) => assert_eq!(c, creator),
+        other => panic!("expected different-seq incomparable equivocation, got: {other:?}"),
+    }
+    assert!(lace.equivocators().contains(&creator));
+}
+
+#[test]
+fn causally_ordered_blocks_not_flagged() {
+    // The no-false-positive case: two blocks by ONE author where one observes
+    // the other (a genuine honest virtual chain) must NOT be flagged. seq 1 →
+    // seq 2 → seq 3, each acking the previous tip, are pairwise comparable.
+    let key = random_key();
+    let creator = key.verifying_key().to_bytes();
+
+    let b1 = Block::new(&key, 1, Payload::Data(b"1".to_vec()), vec![]);
+    let b1_id = b1.id();
+    let b2 = Block::new(&key, 2, Payload::Data(b"2".to_vec()), vec![b1_id]);
+    let b2_id = b2.id();
+    let b3 = Block::new(&key, 3, Payload::Data(b"3".to_vec()), vec![b2_id]);
+
+    let mut lace = Blocklace::new_simple(random_key());
+    lace.receive_block(b1).unwrap();
+    lace.receive_block(b2).unwrap();
+    lace.receive_block(b3).unwrap();
+
+    assert!(
+        !lace.equivocators().contains(&creator),
+        "a straight-line virtual chain (each block observes its predecessor) \
+         must never be flagged as equivocation"
+    );
+    assert_eq!(lace.equivocators().len(), 0);
+}
+
 // ─── Closure Enforcement ─────────────────────────────────────────────────────
 
 #[test]

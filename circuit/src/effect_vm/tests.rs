@@ -1891,6 +1891,62 @@ fn test_soundness_wrapped_balance_different_commitment() {
     );
 }
 
+/// W9-RANGECHECK adversarial test: the IN-CIRCUIT balance-limb range gadget
+/// (CONSTRAINT GROUP 2a) rejects an underflow-wrapped `balance_lo` directly,
+/// at the constraint-evaluation level — NOT merely via the commitment or the
+/// Transfer-lo arithmetic. This is the property metatheory's
+/// `TransferAirSoundness.transfer_underflow_attack` proves is otherwise
+/// admissible, now CLOSED in-circuit.
+///
+/// We forge the hardest-to-catch trace: an outgoing transfer of `amount` from
+/// `old < amount`, where the prover sets `new_bal_lo` to the wrapped field
+/// value `p - (amount - old)`. Crucially, this value SATISFIES the Transfer-lo
+/// constraint (the wrap is exactly what `old - amount` evaluates to in the
+/// field). The ONLY thing standing between this forgery and acceptance is the
+/// new range gadget: `p - k ≥ 2^30` has no 30-bit boolean decomposition, so
+/// the recomposition constraint is non-zero no matter what bits the prover
+/// writes.
+#[test]
+fn test_soundness_range_gadget_rejects_wrapped_lo() {
+    const BABYBEAR_P: u64 = 2013265921;
+
+    // Honest trace from a balance large enough that trace gen does not panic;
+    // we then forge row 0 to model the (50 - 100) underflow wrap.
+    let honest_start = make_initial_state(150);
+    let effects = vec![Effect::Transfer {
+        amount: 100,
+        direction: 1, // outgoing
+    }];
+    let (mut trace, public_inputs) = generate_effect_vm_trace(&honest_start, &effects);
+
+    // The field value that an underflow of (50 - 100) would produce.
+    let wrapped_lo_u64 = BABYBEAR_P - 50; // = p - (100 - 50)
+    let wrapped_lo = BabyBear::new((wrapped_lo_u64 % BABYBEAR_P) as u32);
+
+    // Make the Transfer-lo constraint itself SATISFIED by the wrap:
+    //   new_bal_lo == old_bal_lo - amount  (in the field) with old=50, amt=100.
+    trace[0][STATE_BEFORE_BASE + state::BALANCE_LO] = BabyBear::new(50);
+    trace[0][STATE_AFTER_BASE + state::BALANCE_LO] = wrapped_lo;
+
+    // Best-effort prover decomposition: the low 30 bits of the wrapped value.
+    // No 30-bit decomposition recomposes to the full field element `p - 50`,
+    // so the recomposition constraint must still fire.
+    let low30 = (wrapped_lo_u64 & 0x3FFF_FFFF) as u32;
+    for i in 0..BAL_LIMB_BITS {
+        trace[0][AUX_BASE + aux_off::NEW_BAL_LO_BIT_BASE + i] = BabyBear::new((low30 >> i) & 1);
+    }
+
+    // The range gadget MUST make the combined constraint non-zero at row 0.
+    let air = EffectVmAir::new(trace.len());
+    let alpha = BabyBear::new(101);
+    let c = air.eval_constraints(&trace[0], &trace[1], &public_inputs, alpha);
+    assert_ne!(
+        c,
+        BabyBear::ZERO,
+        "SOUNDNESS BUG: in-circuit range gadget accepted a wrapped (>=2^30) balance_lo"
+    );
+}
+
 /// Adversarial test (Gap 1): Verify that verify_balance_limb_ranges catches
 /// out-of-range balance limbs that could result from modular wrapping.
 #[test]

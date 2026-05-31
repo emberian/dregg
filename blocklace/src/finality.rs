@@ -791,12 +791,50 @@ impl Blocklace {
 
     /// Check if a block equivocates against existing blocks in the blocklace.
     ///
-    /// Equivocation: same creator + same seq + different content.
+    /// Equivocation (paper Almog–Lewis–Naor–Shapiro arXiv:2402.08068 Def 4.2,
+    /// Lean spec `Dregg2/Authority/Blocklace.lean::Equivocation`): two *distinct*
+    /// blocks `a, b` by the **same creator** that are **incomparable** under the
+    /// happened-before (`≺`, observe) relation — i.e. neither block is in the
+    /// other's causal past (`a ⊀ b ∧ b ⊀ a`). The pair is a fork in the
+    /// creator's virtual chain.
+    ///
+    /// This is the *content-independent* definition: it does NOT require the two
+    /// blocks to share a sequence number. The earlier `(creator, seq, id≠)`
+    /// heuristic is a strict *subset* of this — an equivocator can produce two
+    /// incomparable blocks at *different* seq numbers (e.g. fork the chain and
+    /// extend one branch) that the seq heuristic misses entirely. We use the
+    /// sound incomparability check, reusing the existing `causal_past`
+    /// (`≺`) machinery, so every fork is caught regardless of seq.
+    ///
+    /// Note: a same-seq, same-creator, different-id pair is always incomparable
+    /// (two seq-`n` blocks cannot observe each other along an honest virtual
+    /// chain, where observation strictly increases seq), so the old cases remain
+    /// detected.
     pub fn detect_equivocation(&self, block: &Block) -> Option<EquivocationProof> {
         let id = block.id();
+
+        // The block being ingested is (in general) not yet in `self.blocks`, so
+        // `causal_past` cannot resolve it by id. Compute the incoming block's
+        // causal past directly from its declared predecessors — these are
+        // already present (closure is enforced before detection).
+        let block_past = self.causal_past_from_preds(&block.predecessors);
+
         for (existing_id, existing) in &self.blocks {
-            if existing.creator == block.creator && existing.seq == block.seq && *existing_id != id
-            {
+            if existing.creator != block.creator || *existing_id == id {
+                continue;
+            }
+
+            // Incomparability test (paper `a ∥ b ≡ a ⊀ b ∧ b ⊀ a`):
+            //   existing ≺ block  ⟺  existing ∈ causal_past(block)
+            //   block    ≺ existing ⟺ block ∈ causal_past(existing)
+            // If EITHER direction holds the two blocks are causally ordered
+            // (honest chain extension), so this is NOT an equivocation.
+            let existing_observed_by_block = block_past.contains(existing_id);
+            let block_observed_by_existing = self.causal_past(existing_id).contains(&id);
+
+            if !existing_observed_by_block && !block_observed_by_existing {
+                // Same creator, distinct, mutually non-preceding ⇒ incomparable
+                // ⇒ equivocation (the EquivocationProof witness pair).
                 return Some(EquivocationProof {
                     creator: block.creator,
                     block_a: existing.clone(),
@@ -805,6 +843,30 @@ impl Blocklace {
             }
         }
         None
+    }
+
+    /// Compute the causal past of a (possibly not-yet-inserted) block given its
+    /// declared predecessor ids. This is `causal_past` with the seed frontier
+    /// supplied directly rather than looked up by block id, so it works for a
+    /// block that is mid-ingest and therefore not yet in `self.blocks`.
+    fn causal_past_from_preds(&self, predecessors: &[BlockId]) -> HashSet<BlockId> {
+        let mut visited = HashSet::new();
+        let mut queue: VecDeque<BlockId> = predecessors.iter().copied().collect();
+
+        while let Some(current) = queue.pop_front() {
+            if !visited.insert(current) {
+                continue;
+            }
+            if let Some(block) = self.blocks.get(&current) {
+                for pred in &block.predecessors {
+                    if !visited.contains(pred) {
+                        queue.push_back(*pred);
+                    }
+                }
+            }
+        }
+
+        visited
     }
 
     // ─── Query Operations ────────────────────────────────────────────────
@@ -875,9 +937,14 @@ impl Blocklace {
     /// Check if `block` observes `target` without observing any equivocation
     /// by `target`'s creator.
     ///
-    /// "Observes" means target is in block's causal past.
-    /// "Without observing equivocation" means the causal past does not contain
-    /// two blocks by the same creator with the same seq.
+    /// "Observes" means target is in block's causal past (`target ≺ block`).
+    /// "Without observing equivocation" means the causal past does not contain a
+    /// pair of **incomparable** blocks by the same creator (paper Def 4.2 / Lean
+    /// `Blocklace.lean::seesBoth` + `observer_detects`). This is the
+    /// content-independent definition: two same-creator blocks in the past that
+    /// do not observe each other are a fork, *regardless of sequence number*.
+    /// (The earlier same-seq heuristic was a strict subset and missed
+    /// different-seq forks.)
     pub fn approved_by(&self, block_id: &BlockId, target_id: &BlockId) -> bool {
         let past = self.causal_past(block_id);
 
@@ -892,11 +959,32 @@ impl Blocklace {
             None => return false,
         };
 
-        // Check that no equivocation by target's creator is visible in the causal past.
-        let mut seqs_seen: HashSet<u64> = HashSet::new();
-        for id in &past {
-            if let Some(b) = self.blocks.get(id) {
-                if b.creator == target_creator && !seqs_seen.insert(b.seq) {
+        // Gather the target-creator's blocks visible in the causal past, then
+        // check no two of them are incomparable (a fork). Caching each block's
+        // causal past avoids recomputing it in the inner loop.
+        let creator_blocks: Vec<BlockId> = past
+            .iter()
+            .filter(|id| {
+                self.blocks
+                    .get(id)
+                    .is_some_and(|b| b.creator == target_creator)
+            })
+            .copied()
+            .collect();
+
+        let pasts: Vec<HashSet<BlockId>> = creator_blocks
+            .iter()
+            .map(|id| self.causal_past(id))
+            .collect();
+
+        for i in 0..creator_blocks.len() {
+            for j in (i + 1)..creator_blocks.len() {
+                let a = &creator_blocks[i];
+                let b = &creator_blocks[j];
+                // incomparable: a ⊀ b ∧ b ⊀ a (neither in the other's past).
+                let a_observes_b = pasts[i].contains(b);
+                let b_observes_a = pasts[j].contains(a);
+                if !a_observes_b && !b_observes_a {
                     return false;
                 }
             }

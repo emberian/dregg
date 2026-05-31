@@ -3,8 +3,9 @@
 expected-O(1)-views-to-an-honest-leader bound (closing BFTLiveness's probabilistic residual).
 
 **What this file closes.** `Dregg2.Proof.BFTLiveness` (read-only sibling) proved that *given* a
-`Pacemaker` whose `synchronizes` / `responsive_quorum` fields hold (ELRS Def. 3.1 carried as
-honest hypotheses), a `GSTRound` and hence τ-BFT liveness PROVABLY obtain. It named the genuine
+`Pacemaker` whose `synchronizes` (honest-leader round) + `honest_quorum` (BFT supermajority) +
+`honest_le_delivered` (HotStuff Thm 4 @ DLS88 Δ-delivery) fields hold — none of which is "the quorum
+forms" — a `GSTRound` and hence τ-BFT liveness PROVABLY obtain (the quorum DERIVED). It named the genuine
 one-layer-deeper residual:
 
   > The *construction* of the synchronizer itself — DLS88/ELRS/Cogsworth's randomized `Relay(r,k)`
@@ -216,11 +217,12 @@ theorem synchronizer_round_obtains (R : LeaderRotation Msg) (gst t : Nat)
   exact ⟨r, le_trans (le_max_left _ _) hr, le_trans (le_max_right _ _) hr, hhonest⟩
 
 /-- **The `Pacemaker.synchronizes` arithmetic skeleton is discharged unconditionally (PROVED).**
-The `synchronizes` field's *type* is the pure-arithmetic existence `∀ t, ∃ r, t ≤ r ∧ gst ≤ r`
-(its honest-leader content lives in `responsive_quorum`'s applicability). That skeleton holds for
-any `gst` by `r := max t gst`. Combined with `synchronizer_round_obtains` (which supplies the
-honest-leader witness from the relay), the randomized synchronizer discharges *both* the
-arithmetic skeleton and the honest-leader content `responsive_quorum` then consumes. -/
+The `synchronizes` field's arithmetic skeleton is the pure existence `∀ t, ∃ r, t ≤ r ∧ gst ≤ r`
+(its honest-leader conjunct `honestLeader r` is supplied separately, by the relay/beacon hit). That
+skeleton holds for any `gst` by `r := max t gst`. Combined with `synchronizer_round_obtains` (which
+supplies the honest-leader witness from the relay), the randomized synchronizer discharges *both*
+the arithmetic skeleton and the honest-leader content the pacemaker's `honest_quorum` /
+`honest_le_delivered` then consume to DERIVE the quorum (the quorum is never assumed). -/
 theorem synchronizes_skeleton (gst : Nat) :
     ∀ t : Nat, ∃ r : Nat, t ≤ r ∧ gst ≤ r :=
   fun t => ⟨max t gst, le_max_left _ _, le_max_right _ _⟩

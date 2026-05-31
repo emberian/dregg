@@ -318,4 +318,156 @@ verification + a UC static-composition fragment) self-pins in its own file (veri
 #assert_namespace_axioms Dregg2.Proof.ContendedCrossCell
 #assert_namespace_axioms Dregg2.Crypto.Bridge
 
+/-! ## §23 — Cascade-integration wave (2026-05-31): the replacement reaches the wire + the coinductive
+OPEN closes. The cascade is REPLACE-not-certify (the verified kernel swaps in for dregg1's busted
+executor). `Exec.TurnExecutor` (`execTurn_attests` = all 4 StepInv conjuncts over a linear multi-Action
+turn, step-complete by construction) + `Exec.Forest` (`execForest_attests` — the nested delegated
+call-forest, Granovetter-preserving via `derive_no_amplify`, N-ary Σ=0 conservation) = the replacement
+turn-executor. `Exec.CircuitEmit` (`emittedMerkle_bridge`/`emitA_faithful`/`merkleC1_position_valid` —
+the kernel + Merkle + algebraic ConstraintExpr circuits emit faithfully to the fingerprint-bound Rust
+backend). `Proof.CoinductiveAdversary` (`obsBisim_of_uptoComm`) CLOSES the last coinductive research
+residue via the VENDORED+PORTED Paco (`namespace Paco`, hxrts/paco-lean MIT, 4.26→4.30, 23 modules)'s
+gupaco up-to-context closure. (FFI caps-marshalling + record-state are Rust-side / dregg-lean-ffi,
+differential-validated, not pinned here.) -/
+#assert_namespace_axioms Dregg2.Exec.TurnExecutor
+#assert_namespace_axioms Dregg2.Exec.Forest
+#assert_namespace_axioms Dregg2.Exec.CircuitEmit
+#assert_namespace_axioms Dregg2.Proof.CoinductiveAdversary
+#assert_namespace_axioms Paco
+
+/-! ## §24 — Widening wave (2026-05-31): full op-set + cross-cell forest + runtime-character + eDSL-C +
+schema-migration + §8-gadgets-to-wire. The replacement executor covers EVERY dregg1 turn kind
+(`TurnExecutorFull.execFull_attests`); the nested forest spans cells (`CrossCellForest`, Σ=0
+binding-carried); the Robigalia OS payoff is theorems (`CellRuntime`: checkpoint/replay/time-travel);
+the eDSL trilogy is complete (`DSLEffect`); cells migrate schemas without bricking
+(`StateMigration.migrate_*`); and the other §8 gadget circuits emit to the wire (`CircuitEmitGadgets`,
+each composing emit-faithfulness with its gadget bridge — the Rust decoder fingerprint-matched native
+for Merkle in dregg-lean-ffi). -/
+#assert_namespace_axioms Dregg2.Exec.TurnExecutorFull
+#assert_namespace_axioms Dregg2.Exec.CrossCellForest
+#assert_namespace_axioms Dregg2.Exec.CellRuntime
+#assert_namespace_axioms Dregg2.Exec.CircuitEmitGadgets
+#assert_namespace_axioms Dregg2.DSLEffect
+#assert_axioms Dregg2.Exec.migrate_conforms
+#assert_axioms Dregg2.Exec.migrate_conserves
+#assert_axioms Dregg2.Exec.migrate_anti_brick
+
+/-! ## §25 — Open-loops wave (2026-05-31): gas-metering as a fail-closed liveness guard +
+the CANONICAL interior-h probabilistic-oracle witness. `Gas` layers a `Nat`-valued resource bound
+beside `execFullTurn` (`gas_exhaustion_fails_closed`: over-budget ⇒ none with no partial mutation;
+`gas_sufficient_runs`: when affordable the metered state EQUALS the un-metered one — a pure guard;
+`gas_conserves`/`gas_preserves_attests`: removes no safety, orthogonal to ℤ-conservation).
+`BeaconSpaceInterior` supersedes the Dirac-`h=1` boundary witness with `Measure.infinitePi
+(Bernoulli 3/4)^ℕ` at strictly-interior `h=3/4`, discharging `indep_block` via genuine cross-view
+independence (`Measure.infinitePi_pi`) — the BeaconSpace abstraction is non-vacuously instantiable at
+a real interior honest-fraction (the ProductMeasure "obstruction" was a stale uncompiled olean, now built). -/
+#assert_namespace_axioms Dregg2.Exec.Gas
+#assert_namespace_axioms Dregg2.Proof.BeaconSpaceInterior
+
+/-! ## §26 — Wave 10 (2026-05-31): the executor axis begins + the proof-carrying forest.
+`ProofForest` packages the ship-the-tree architecture: per-node `StepProofValid` (the §8 circuit
+seam, an explicit hypothesis) × `Linked` (prev.newCommit = next.oldCommit) ⇒ the whole forest attests
+StepInv (reusing `execForest_attests`) — aggregation/recursion is deferred PERF, not correctness.
+`TriDomain` (E1) extends conservation from balance-only to the three domains dregg1 enforces
+(balance+authority+metadata), each conserving independently. `AuthModes` (E2) gives the 6 real
+authorization modes with witness dispatch + per-mode soundness — incl. `captp_granted_le_held`, the
+non-amplification the dregg1 Rust was missing (now also fixed in captp/handoff.rs). `EffectTransfer`
+(E3) is the vertical-slice reference template (exec→conserves→authorized→metadata→forward-sim) that
+the other 50 effects instantiate. `TransferAir` (Spike) formalizes the REAL air.rs:473 constraint over
+BabyBear: field-constraint+range ⇒ ℤ balance update, AND `transfer_underflow_attack` — the off-circuit
+wrap gap as a theorem (since closed in-circuit by the RANGECHECK Rust lane, width 126→186). -/
+#assert_namespace_axioms Dregg2.Exec.ProofForest
+#assert_namespace_axioms Dregg2.Exec.TriDomain
+#assert_namespace_axioms Dregg2.Exec.AuthModes
+#assert_namespace_axioms Dregg2.Exec.EffectTransfer
+#assert_namespace_axioms Dregg2.Spike.TransferAir
+
+/-! ## §27 — Wave 11: E3-breadth, the full effect catalog via the EffectTransfer template.
+Each cluster instantiates exec→conserves→authorized→metadata→forward-sim across its regime:
+`EffectsPaired` (Conservative Σδ=0 — escrow/notes/obligations/queues/bridge-lock-phases; crypto via
+§8 Prop-portal), `EffectsSupply` (Generative disclosed-supply — CreateCell/Factory/Spawn/BridgeMint;
+foreign-finality §8-portal), `EffectsAuthority` (cap-graph edits — each carrying NON-AMPLIFICATION,
+granted≤held), `EffectsState` (Neutral/Monotonic/Terminal field+lifecycle, via the generic field-write
++ balance/authority non-interference). With EffectTransfer + TurnExecutorFull's mint/burn/grant/revoke,
+this covers dregg1's full effect catalog at the executor (E3 complete). -/
+#assert_namespace_axioms Dregg2.Exec.EffectsPaired
+#assert_namespace_axioms Dregg2.Exec.EffectsSupply
+#assert_namespace_axioms Dregg2.Exec.EffectsAuthority
+#assert_namespace_axioms Dregg2.Exec.EffectsState
+
+/-! ## §28 — Wave 12: executor axis E4–E6 complete. `ExecRefinementFull` (E5) closes the general
+forward simulation — a unified `AbsStep` LTS + `exec_full_refines_spec` (every execFull step over all
+5 kinds is a permitted abstract step) + the full operational square `exec_full_step_refines`; the
+whole-history `only_connectivity_begets_connectivity` closure is isolated as the named hypothesis
+`OnlyConnectivityCloses` (NOT a sorry). `ConditionalTurn` (E4) makes dregg1's conditional/await turns
+executable: `execConditionalTurn` (finite Kahn topo-sort + EventualRef slots) with
+conserves/atomic/dependency-sound/forward-sim, the EventualRef read identified with `Await.Op.await`.
+(E6 = the `@[export] dregg_exec_full_turn` FFI lives in Exec/FFI.lean, an export module verified
+standalone + archive-rebuilt; cross-validated by the 9000-case multi-action+adversarial differential.)
+With E1–E6 + the full effect catalog, the verified executor models dregg1's turn semantics and runs. -/
+#assert_namespace_axioms Dregg2.Spec.ExecRefinementFull
+#assert_namespace_axioms Dregg2.Exec.ConditionalTurn
+
+/-! ## §29 — Magnesium-axis first increments. `Spike.EffectVmConstraints` formalizes 7 MORE real
+EffectVmAir constraints over BabyBear (selector exactly-one, NoOp identity, transfer hi/dir, balance-lo
+range-check soundness, nonce tick) — the headline `underflow_now_impossible` proves the in-circuit
+range proof (W9-RANGECHECK) makes the wrap the Transfer spike exhibited IMPOSSIBLE in-circuit (no
+executor re-derivation). `Proof.CordialMiners` models dregg1's ACTUAL consensus (the DAG-BFT
+wave/leader/ratify/super-ratify commit rule from blocklace/ordering.rs) and proves `cordial_agreement`
+(no two conflicting committed leaders per wave) by transferring the `n>3f` quorum-intersection core
+from `Proof.BFT` + the equivocation read from `Authority.Blocklace`; liveness/GST/dissemination/Stingray
+are named OPENs (not sorries). -/
+#assert_namespace_axioms Dregg2.Spike.EffectVmConstraints
+#assert_namespace_axioms Dregg2.Proof.CordialMiners
+
+/-! ## §30 — De-vacuification wave (post faithfulness-audit). The audit (docs/rebuild/
+FAITHFULNESS-AUDIT.md) found systematic over-claims (kernel-clean but vacuous); this wave fixes the
+load-bearing ones. (1) `EffectsAuthority` rights non-amplification was `(⟨t,()⟩).rights ≤ itself`
+(`le_refl`, vacuous over `ExecRights := Unit`); NOW genuine over the real `List Auth` lattice —
+`IsNonAmplifying held granted := capAuthConferred granted ⊆ capAuthConferred held`, with
+`introduce_non_amplifying`/`exercise_non_amplifying` comparing granted-vs-held (two caps) via
+`attenuate_subset`, and `amplifying_grant_rejected` proving teeth (a `node` cap conferring `[control]`
+over a held `endpoint [read,write]` is rejected). `revokeDelegation_authorized` given a load-bearing
+held-edge premise (was a no-premise alias). (2) `TriDomain` authority measure now folds the REAL cap
+table (`authMeasure` over `s.kernel.caps`), so the authority-conservation conjunct is graph-tied, not
+free-param `x=x`. (3) `ConditionalTurn.CondAbsStep` now `conservedInDomain Domain.balance [a'−a]`
+(teeth: `not_condAbsStep_of_ne`), was the always-true `∃δ,a'=a+δ`. (4) `CordialMiners`
+`SuperRatification` now DERIVED from the lace (`ratifyingVoters` over `S.lace`), not assumed fields —
+`cordial_agreement_from_lace`. (5) `EffectVmConstraints2` adds SetField-gating + hi-limb range +
+commitment-shape, and exposes `setfield_aux_honesty_gap` (a new off-circuit gap, as a theorem). -/
+#assert_namespace_axioms Dregg2.Spike.EffectVmConstraints2
+
+/-! ## §31 — Carry-forward wave: the CAVEAT + ATTESTATION faces, faithful to the REAL Rust
+(docs/rebuild/CARRY-FORWARD-SYNTHESIS.md). The turn is a 3-faced generator (effects ⊕ caveats ⊕
+attestation); we had built the effect face deeply while the caveat/attestation faces were thin/shadow
+and the Rust was the richer ground truth. These ADDITIVE modules carry the real semantics:
+`Authority.CaveatChain` = the macaroon HMAC append-only chain (verify_iff_wellTagged, append_narrows,
+integrity_tail_binds, forgery_requires_mac_query reducing forge⇒break-HMAC, removal_breaks_tail) — NOT
+the old `Ctx→Bool`; `Authority.ThirdParty` = the real 3P discharge (accepts_iff over ticket/VID
+key-recovery ∧ bind-to-parent ∧ freshness ∧ predicate, with stale/unbound/cross-bound rejection teeth)
+— NOT a Bool flip; `Authority.SelectiveDisclosure` = hidden-attribute predicate proofs + selective
+reveal + anonymous unlinkable multi-show wired to credentials; `Authority.DV` = THE REPUDIATION FIX —
+a verifier-indexed `DischargedFor` + the transferability DIAL (public = ∀V ⇒ non-repudiable; designated
+= V₀-only ⇒ deniable via the simulator property), the new attestation-face axis. Crypto (HMAC/AEAD/
+ZK/DV-ZK) stays an honest §8 Prop-portal throughout (MacKernel/DischargeCrypto), never faked. -/
+#assert_namespace_axioms Dregg2.Authority.CaveatChain
+#assert_namespace_axioms Dregg2.Authority.ThirdParty
+#assert_namespace_axioms Dregg2.Authority.SelectiveDisclosure
+#assert_namespace_axioms Dregg2.Authority.DV
+
+/-! ## §32 — The SOUNDNESS WITNESS (consistency + non-vacuity). The worry: do the Prop-carrying
+typeclasses hide a vacuous (assumptions unsatisfiable ⇒ vacuous theorems) or contradictory (conjunction
+derives False) system? `Dregg2.Consistency` answers NO at the system level: `dregg_consistent_nonempty`
+exhibits a single axiom-clean `SystemModel` jointly instantiating all 11 system-level Prop-carriers,
+each with a DISCRIMINATING (non-trivial) witness, with cluster lemmas confirming the interacting
+carriers (World⊗BFT⊗Pacemaker, BFT⊗SuperRatification, anonymity⊗membership) co-instantiate without
+deriving False. The audit's single TRIVIAL-ONLY finding (Crypto/BlindedSet HolderAnonymity, the all-True
+shape) is given a non-trivial witness here + the library de-vacuification is queued. The 3 by-design
+sorries are isolated + counterparted (conservation_step REALIZED as Exec.conservation_step_realized;
+search_sound re-Verified at consumers; phi_functorial_concrete proved). The ~15 crypto-standard carriers
+are the honest §8 boundary (necessarily Lean-trivial — that is 'assume DLog is hard', not vacuity), NOT
+counted as the non-vacuity evidence. This proves CONSISTENCY + NON-VACUITY, distinct from FAITHFULNESS
+(the Rust-grounding axis). -/
+#assert_namespace_axioms Dregg2.Consistency
+
 end Dregg2.Claims

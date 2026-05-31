@@ -21,7 +21,10 @@ __wip_tests = ["dep:dregg-bridge"]
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 dregg-turn = { path = "../turn" }
-dregg-cell = { path = "../cell" }
+# This is the workspace's dedicated test-harness crate, so it arms the
+# fail-closed `StubVerifier` accept path via `test-stubs` for its plumbing
+# tests. Production crates never enable this feature.
+dregg-cell = { path = "../cell", features = ["test-stubs"] }
 dregg-sdk = { path = "../sdk" }
 dregg-types = { path = "../types" }
 dregg-verifier = { path = "../verifier" }
