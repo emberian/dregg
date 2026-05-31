@@ -27,6 +27,32 @@ theorems that take them as hypotheses are genuinely kernel-clean and ARE pinned.
 NOTE: keystones are referenced here by their FULLY-QUALIFIED names (the home modules pin
 them bare, from inside their own `namespace`). A wrong name is an `unknownConstant` build
 error — which is, deliberately, the point.
+
+## The two-layer zero-sorry guard (be honest about which is which).
+
+There are TWO complementary, deliberately-different guards keeping the corpus at ZERO sorry:
+
+  (b) THIS LEDGER (`#assert_axioms` per-decl, `#assert_namespace_axioms` per-namespace).
+      STRONGER but TARGETED: it catches a sorry even when it is *transitively inherited*
+      through a renamed/aliased lemma — `collectAxioms` follows the whole dependency DAG and
+      rejects any `sorryAx`. BUT its reach is exactly its PIN LIST. `#assert_axioms` is
+      per-declaration; `#assert_namespace_axioms` is per-namespace. Neither is whole-corpus:
+      a sorry in an UNPINNED decl in an UNPINNED namespace would NOT trip this layer. (We pin
+      aggressively, but the pin list is, by construction, an enumeration — not a closure.)
+
+  (a) THE TEXTUAL CI GREP (`scripts/no-sorry-metatheory.sh`, wired as the CI job
+      `metatheory-no-sorry`). WEAKER per-decl (purely textual; it does not chase transitive
+      inheritance — that is (b)'s job) but COMPREHENSIVE: it runs the whole `lake build` and
+      FAILS on ANY `declaration uses \`sorry\`` warning, which Lean emits for EVERY declaration
+      closed with `sorry`, `admit`, or `sorryAx` — pinned or not, named or anonymous, in any
+      module. No enumeration is needed to stay total. This is the real whole-corpus net.
+
+So: (b) is the deep-but-targeted transitive-inheritance tripwire; (a) is the broad textual
+whole-corpus floor. They are NOT redundant — each covers what the other cannot. The honest
+summary: the comprehensive "there is no sorry ANYWHERE" guarantee is (a), the CI grep; this
+ledger (b) is the stronger guarantee that the SPECIFICALLY-PINNED keystones additionally carry
+no INHERITED sorry. (Lean has no first-class whole-corpus `#assert_no_sorry` command, so (a)
+necessarily lives outside the build, in CI, as the textual net.)
 -/
 import Dregg2
 
@@ -38,12 +64,31 @@ namespace Dregg2.Claims
 #assert_axioms Dregg2.Conserve.sum_conserve_of_deltas_zero
 #assert_axioms Dregg2.Conserve.sum_transfer_conserve
 
+/-! ## §0a — The abstract `Core` Law-1 + `Laws` find/verify seam — both formerly `sorry`'d,
+now carried as TYPECLASS FIELDS (the `CryptoKernel` Prop-portal idiom) and recovered as
+kernel-clean lemmas. `Core.conservation_step` accesses `ConservesStep.step` (discharged by the
+executable kernel, §1); `Laws.search_sound` accesses `SoundSearchable.find_sound` (the genuine,
+non-trivial plugin contract — `Authority.goodSoundMatcher` satisfies it, `evilMatcher_not_sound`
+proves a returns-7 plugin CANNOT). Both are now PINNED: they carry NO `sorry`. -/
+#assert_axioms Dregg2.Core.conservation_step
+#assert_axioms Dregg2.Core.conservation_ordinary
+#assert_axioms Dregg2.Core.mint_delta
+#assert_axioms Dregg2.Core.burn_delta
+#assert_axioms Dregg2.Core.withholding_no_free_copy
+#assert_axioms Dregg2.Laws.search_sound
+#assert_axioms Dregg2.Authority.goodSoundMatcher
+#assert_axioms Dregg2.Authority.evilMatcher_not_sound
+
 /-! ## §1 — The executable spine (Phase 2): cexec is step-complete, the cell lives.
-`cexec_attests` realizes the abstract `Core.conservation_step` primitive AS A THEOREM
-about the executable machine; `livingCell_sound` is the genuine
+`cexec_attests` realizes the abstract `Core.ConservesStep` class field AS A THEOREM
+about the executable machine; `conservation_step_realizes_balance` discharges the abstract
+Law-1 balance from it, providing the `instConservesStepExec` instance (so the abstract
+`Core` corollaries auto-resolve their `[ConservesStep]` constraint against the running kernel —
+a real proof, never a re-`sorry`). `livingCell_sound` is the genuine
 bisimulation-to-golden-oracle. (`Dregg2.Exec.*`) -/
 #assert_axioms Dregg2.Exec.cexec_attests
 #assert_axioms Dregg2.Exec.conservation_step_realized
+#assert_axioms Dregg2.Exec.conservation_step_realizes_balance
 #assert_axioms Dregg2.Exec.livingCell_sound
 
 /-! ## §1b — The record cell GROWS νF life (de-toy): conservation over name-keyed records. -/
@@ -157,7 +202,10 @@ bisimulation-to-golden-oracle. (`Dregg2.Exec.*`) -/
 #assert_axioms Dregg2.Spec.Conditional.await_two_faces
 #assert_axioms Dregg2.Spec.Conditional.temporal_face_is_await_discharge
 
-/-! ## §11 — Spec.VatBoundary: Φ the named-lossy caps↔keys functor (functoriality OPEN). -/
+/-! ## §11 — Spec.VatBoundary: Φ the named-lossy caps↔keys functor. `phi_functorial` is now
+PROVED (and PINNED) under its explicit `NonDegenerate` hypothesis (the honest residual is that
+named hypothesis, NOT a `sorry`); `nonDegenerate_concrete` proves the hypothesis is satisfiable,
+and `phi_functorial_concrete` is `phi_functorial` applied to it — all axiom-clean. -/
 #assert_axioms Dregg2.Spec.phi_admits_iff_discharged
 #assert_axioms Dregg2.Spec.cross_vat_needs_witness
 #assert_axioms Dregg2.Spec.phi_drops_confinement
@@ -168,6 +216,9 @@ bisimulation-to-golden-oracle. (`Dregg2.Exec.*`) -/
 #assert_axioms Dregg2.Spec.phi_domain_is_exactly_biscuit
 #assert_axioms Dregg2.Spec.phi_composes_with_attenuation
 #assert_axioms Dregg2.Spec.phi_attenuation_factors_through_confers
+#assert_axioms Dregg2.Spec.phi_functorial
+#assert_axioms Dregg2.Spec.nonDegenerate_concrete
+#assert_axioms Dregg2.Spec.phi_functorial_concrete
 
 /-! ## §12 — Spec.Coherence: the cross-subsystem weave (one order; guard=authority meet).
 
@@ -279,8 +330,11 @@ restated + proved over the choreography reachable-config LTS `GStep`/`GReach`, o
 `Hyperedge` opens (`hyperedge_sound_bisim` was ill-posed over a free `Spec` — `hyperedge_sound_bisim_ill_posed`
 records the refutation; restated to the reflexive form; `hyper_not_all_admissible` was true, proved). Plus the
 THIRD §8 discharge, `Crypto.NonMembership` (sorted-tree neighbor-bracketing). All now sorry-free ⟹ pinnable at
-the namespace level. After this wave only 3 sorries remain, ALL by-design: `Core.conservation_step` +
-`Laws.search_sound` (interface primitives) and `Spec.VatBoundary.phi_functorial`-abstract (concrete witness beside it). -/
+the namespace level. (HISTORICAL: this wave left 3 by-design sorries — `Core.conservation_step`,
+`Laws.search_sound`, `Spec.VatBoundary.phi_functorial`-abstract. The ZERO-SORRY wave then RETIRED all three:
+the first two became typeclass FIELDS — `Core.ConservesStep.step` / `Laws.SoundSearchable.find_sound` — recovered
+as kernel-clean lemmas (§0a) and discharged/witnessed; `phi_functorial` became PROVED under an explicit
+`NonDegenerate` hypothesis (§11). The corpus is now at ZERO `sorry`.) -/
 #assert_namespace_axioms Dregg2.Crypto.NonMembership
 #assert_namespace_axioms Dregg2.Coordination
 #assert_namespace_axioms Dregg2.Hyperedge
@@ -462,12 +516,27 @@ exhibits a single axiom-clean `SystemModel` jointly instantiating all 11 system-
 each with a DISCRIMINATING (non-trivial) witness, with cluster lemmas confirming the interacting
 carriers (World⊗BFT⊗Pacemaker, BFT⊗SuperRatification, anonymity⊗membership) co-instantiate without
 deriving False. The audit's single TRIVIAL-ONLY finding (Crypto/BlindedSet HolderAnonymity, the all-True
-shape) is given a non-trivial witness here + the library de-vacuification is queued. The 3 by-design
-sorries are isolated + counterparted (conservation_step REALIZED as Exec.conservation_step_realized;
-search_sound re-Verified at consumers; phi_functorial_concrete proved). The ~15 crypto-standard carriers
+shape) is given a non-trivial witness here + the library de-vacuification is queued. The 3 formerly
+by-design sorries are now RETIRED to ZERO as typeclass FIELDS / a proved-under-hypothesis theorem
+(conservation_step = the Core.ConservesStep field, discharged by Exec.conservation_step_realizes_balance;
+search_sound = the Laws.SoundSearchable.find_sound field, witnessed by goodSoundMatcher with
+evilMatcher_not_sound as teeth; phi_functorial PROVED under NonDegenerate, satisfiable by
+nonDegenerate_concrete). The ~15 crypto-standard carriers
 are the honest §8 boundary (necessarily Lean-trivial — that is 'assume DLog is hard', not vacuity), NOT
 counted as the non-vacuity evidence. This proves CONSISTENCY + NON-VACUITY, distinct from FAITHFULNESS
 (the Rust-grounding axis). -/
 #assert_namespace_axioms Dregg2.Consistency
+
+/-! ## §33 — The handler-transformer DISCOVERY (higher-order frontier, honest first-order win).
+`Dregg2.HandlerTransformer`: a real first-order unification — `SafeStep` (the safe-composition
+preorder), `instSafeStepFpu` (the camera frame-preserving update IS a `SafeStep` instance),
+`safe_transformer_composes` (the general composition law), `conservation_is_safe_transformer`
+(facet 2 is an instance), and `overshare_rejected` (TEETH — an over-sharing transformer is genuinely
+refused). This makes 'a safe handler-transformer = a frame-preserving update' a theorem with a rejecting
+witness (= the Iris handler frame-rule, de Vilhena–Pottier POPL'21, instantiated). HONEST OPENs (named,
+not sorries): the Fpu=sheaf-gluing weld (camera and proof-forest share no carrier — `proofForest_sheaf_sound`
+composes over chainLinked, not SafeStep) and the comodel-morphism / sheaf-of-handlers / recursive-camera
+higher-order tier (the stalks are verdicts, not handlers). -/
+#assert_namespace_axioms Dregg2.HandlerTransformer
 
 end Dregg2.Claims

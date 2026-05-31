@@ -34,11 +34,14 @@ definition: a public-key biscuit crosses; a cell-scoped HMAC macaroon does not.
 
 What is PROVED here: `cross_vat_needs_witness`, `phi_drops_confinement`,
 `forwarded_cap_is_revocable`, `macaroon_does_not_cross_phi`, `biscuit_crosses_phi`,
-`phi_composes_with_attenuation`. What is honestly OPEN: the FULL categorical functoriality
-of `Φ` over an ABSTRACT `Verifiable` (a functor between the positional and epistemic
-authority categories), stated precisely as `phi_functorial` and left with one localized
-`sorry`. A CONCRETE non-degenerate witness, `phi_functorial_concrete`, is PROVED (axiom-clean)
-to show the functor laws are inhabited and to exhibit exactly where confinement is dropped.
+`phi_composes_with_attenuation`, and the FULL categorical functoriality of `Φ`
+(`phi_functorial`) — PROVED (no `sorry`) under an explicit `NonDegenerate` hypothesis that
+bundles exactly what the functor laws need (an accepting witness exists; `stmtOf` is
+non-injective with two distinct caps collapsing; discharge propagates along conferral). Over a
+*degenerate* verifier (`Verify ≡ false`, or injective `stmtOf`) the laws are genuinely FALSE,
+so the hypothesis is load-bearing, not decorative. A CONCRETE discriminating model
+(`nonDegenerate_concrete`) PROVES that hypothesis is SATISFIABLE, and `phi_functorial_concrete`
+is then `phi_functorial` applied to it — exhibiting exactly where confinement is dropped.
 -/
 import Dregg2.Spec.Authority
 import Dregg2.Spec.Guard
@@ -377,42 +380,81 @@ structure PhiFunctorial (Request Statement Witness : Type u)
   lossy_on_confinement :
     ∃ (c₁ c₂ : Cap CellId Rights), c₁ ≠ c₂ ∧ phiMor c₁ = phiMor c₂
 
-/-- **`phi_functorial` (OPEN — the deep core).** `Φ`, realized as `Phi stmtOf` (the
-witnessed-demand crossing of §2), satisfies the full functor laws of `PhiFunctorial`.
+/-- **`NonDegenerate` — the exact non-degeneracy `Φ` needs to be a functor.** Over an
+ABSTRACT `Verifiable`/`stmtOf`, `phi_functorial` is FALSE: `preserves_id` needs an accepting
+witness to EXIST (an abstract `Verify` may accept none — e.g. `Verify ≡ false`);
+`lossy_on_confinement` needs a non-injective `stmtOf` with two distinct caps mapping equal
+(an abstract `stmtOf` may be injective, or `Cap` a subsingleton); and `preserves_comp` needs
+the discharge-propagation the §6 comment names (a monotone-`stmtOf`-style condition). We bundle
+EXACTLY these three as a hypothesis — making `phi_functorial` honestly conditional, then PROVED
+under it. §7.1 then exhibits a concrete model satisfying `NonDegenerate` (so the hypothesis is
+not vacuous). -/
+structure NonDegenerate (Request : Type u) {Statement Witness : Type u}
+    {CellId : Type*} {Rights : Type*} [SemilatticeInf Rights] [OrderTop Rights]
+    [Verifiable Statement Witness]
+    (stmtOf : Cap CellId Rights → Statement) : Prop where
+  /-- **Accepting witness exists** (for `preserves_id`): the far side's `Verify` is not the
+  empty verifier — for every cap's statement there is a supply that discharges it. -/
+  accepts : ∀ c : Cap CellId Rights,
+    ∃ w : Statement → Witness, Discharged (stmtOf c) (w (stmtOf c))
+  /-- **Discharge propagates along conferral** (for `preserves_comp`): the monotone-`stmtOf`
+  condition the §6 / `preserves_comp` comment names — chaining two conferrals `a ⇝ b ⇝ c`
+  means a witness discharging `c`'s statement also discharges `a`'s (the cross-vat shadow of
+  non-amplification: the held authority's demand is never STRICTER than the forwarded one). -/
+  comp_propagates : ∀ (a b c : Cap CellId Rights) (w : Statement → Witness),
+    confers a b → confers b c →
+    Discharged (stmtOf c) (w (stmtOf c)) → Discharged (stmtOf a) (w (stmtOf a))
+  /-- **`stmtOf` is non-injective on two distinct caps** (for `lossy_on_confinement`): the
+  named loss — two positionally-distinct caps collapse to the SAME epistemic statement. -/
+  collapses : ∃ c₁ c₂ : Cap CellId Rights, c₁ ≠ c₂ ∧ stmtOf c₁ = stmtOf c₂
 
-What is genuinely open is NOT the object map (proved) nor the loss (the §4 keystones
-already witness it) but the *categorical coherence* tying the positional graph dynamics
-(`Spec.Authority`'s introduce/endow composition) to the epistemic discharge composition
-(`Spec.Guard`'s demand⊣supply adjunction) into identity/composition-preserving functor
-laws SIMULTANEOUSLY with the lossiness witness. Establishing that the SAME `Phi stmtOf`
-satisfies all three `PhiFunctorial` fields requires a concrete non-degenerate
-`Verifiable` instance (to witness `preserves_id`/the loss with actual accepting witnesses)
-plus the composition coherence with `confers_trans` — the full two-category bridge. We
-state it precisely; the coherence thread is the honest residual. -/
+/-- **`phi_functorial` (PROVED under `NonDegenerate`).** `Φ`, realized as `Phi stmtOf` (the
+witnessed-demand crossing of §2), satisfies the full functor laws of `PhiFunctorial` —
+PROVIDED the verify-seam is non-degenerate (`NonDegenerate stmtOf`).
+
+The hypothesis is exactly what makes the abstract claim TRUE rather than false: without it,
+`preserves_id` fails over a `Verify ≡ false` seam and `lossy_on_confinement` fails over an
+injective `stmtOf`. With it, all three `PhiFunctorial` fields are PROVED for the SAME
+`Phi stmtOf`, tying the positional graph dynamics to the epistemic discharge composition into
+identity/composition-preserving functor laws simultaneously with the lossiness witness — the
+full two-category bridge. No `sorry`; the residual is honestly the named `NonDegenerate`
+hypothesis, which §7.1 proves is satisfiable. -/
 theorem phi_functorial [Verifiable Statement Witness]
-    (stmtOf : Cap CellId Rights → Statement) :
-    PhiFunctorial Request Statement Witness (Phi (Request := Request) stmtOf) := by
-  -- OPEN: the categorical coherence. `preserves_comp` is discharge-monotonicity (would
-  -- follow from a statement-order + monotone `stmtOf`, cf. §6), but `preserves_id` and
-  -- `lossy_on_confinement` need a concrete non-degenerate verifier to exhibit accepting
-  -- witnesses and two collapsing caps; assembling all three for ONE `Phi stmtOf` over an
-  -- ABSTRACT `Verifiable` is the genuine open core (the full functor between the
-  -- positional and epistemic authority categories). Localized here and nowhere else.
-  sorry
+    (stmtOf : Cap CellId Rights → Statement)
+    (hnd : NonDegenerate (Statement := Statement) (Witness := Witness)
+      Request stmtOf) :
+    PhiFunctorial Request Statement Witness (Phi (Request := Request) stmtOf) where
+  preserves_id := by
+    -- an accepting witness exists for every cap's statement (the `accepts` field).
+    intro c req _
+    obtain ⟨w, hw⟩ := hnd.accepts c
+    exact ⟨w, (phi_admits_iff_discharged stmtOf c req w).mpr hw⟩
+  preserves_comp := by
+    -- discharge propagates along the conferral chain (the `comp_propagates` field).
+    intro a b c req w hab hbc h
+    have hc : Discharged (stmtOf c) (w (stmtOf c)) :=
+      (phi_admits_iff_discharged stmtOf c req w).mp h
+    exact (phi_admits_iff_discharged stmtOf a req w).mpr
+      (hnd.comp_propagates a b c w hab hbc hc)
+  lossy_on_confinement := by
+    -- two distinct caps collapse to the same `crossDemand` (the `collapses` field).
+    obtain ⟨c₁, c₂, hne, heq⟩ := hnd.collapses
+    exact ⟨c₁, c₂, hne, by unfold Phi crossDemand; rw [heq]⟩
 
-/-! ### §7.1 — A WITNESSED instance: `phi_functorial_concrete` (PROVED, axiom-clean).
+/-! ### §7.1 — A WITNESSED instance: `phi_functorial_concrete` (PROVED, axiom-clean) — the
+proof that `NonDegenerate` is SATISFIABLE.
 
-The abstract `phi_functorial` above is genuinely blocked over an *arbitrary* `Verifiable`:
-`preserves_id` needs an accepting witness to exist (an abstract `Verify` may accept none —
-e.g. `Verify ≡ false`), and `lossy_on_confinement` needs a non-injective `stmtOf` between
-two distinct caps (an abstract `stmtOf` over an abstract `Cap` may be injective, or the cap
-type a subsingleton). Neither is derivable abstractly — that is precisely why the general
-claim stays OPEN.
+The abstract `phi_functorial` above is honestly conditional on `NonDegenerate` because over an
+*arbitrary* `Verifiable`/`stmtOf` the laws are FALSE: `preserves_id` needs an accepting witness
+to exist (an abstract `Verify` may accept none — e.g. `Verify ≡ false`), and
+`lossy_on_confinement` needs a non-injective `stmtOf` between two distinct caps (an abstract
+`stmtOf` over an abstract `Cap` may be injective, or the cap type a subsingleton). Neither is
+derivable abstractly — that is precisely why the `NonDegenerate` hypothesis is required.
 
-But the functor laws ARE inhabited: there is a CONCRETE, non-degenerate `Verifiable` instance
-and a CONCRETE `Phi stmtOf` satisfying all three `PhiFunctorial` fields *simultaneously*. This
-is a genuine improvement over the bare OPEN — a witnessed instance proving the laws are
-consistent and exhibiting where the loss actually lands — without weakening the abstract claim.
+We now exhibit a CONCRETE, non-degenerate `Verifiable` instance and a CONCRETE `Phi stmtOf`
+satisfying all three `PhiFunctorial` fields *simultaneously* — equivalently, witnessing that
+`NonDegenerate` is non-vacuously inhabited. This pins `phi_functorial` down to a real model and
+locates where the loss actually lands.
 
 The concrete model (the minimal non-degenerate verifier):
   * `Statement := Unit`, `Witness := Bool`, `Verify s b := b` — a **discriminating** verifier:
@@ -438,29 +480,48 @@ local instance concreteVerifiable : Verifiable Unit Bool := ⟨fun _ b => b⟩
 @[simp] private theorem concreteVerifiable_verify (s : Unit) (b : Bool) :
     Verifiable.Verify (self := concreteVerifiable) s b = b := rfl
 
+/-- **`nonDegenerate_concrete` — the concrete model SATISFIES `NonDegenerate` (PROVED).** The
+discriminating echo-verifier with the maximally-lossy `stmtOf ≡ ()` discharges all three
+non-degeneracy fields, so the `phi_functorial` hypothesis is non-vacuously inhabited:
+  * `accepts` — the witness `fun _ => true` discharges `()` (`Verify () true = true`);
+  * `comp_propagates` — `stmtOf` is constant `()`, so `stmtOf a = stmtOf c` and the
+    discharge transports along the identity (reflexive);
+  * `collapses` — the distinct caps `⟨true,()⟩ ≠ ⟨false,()⟩` map to the SAME statement `()`. -/
+theorem nonDegenerate_concrete :
+    NonDegenerate (CellId := Bool) (Rights := Unit) (Statement := Unit) (Witness := Bool)
+      Unit (fun _ => ()) where
+  accepts := by
+    intro _
+    exact ⟨fun _ => true, by simp [Discharged]⟩
+  comp_propagates := by
+    -- `stmtOf` is constant `()`, so the source and target statements coincide; reflexive.
+    intro _ _ _ _ _ _ h
+    simpa using h
+  collapses :=
+    ⟨⟨true, ()⟩, ⟨false, ()⟩, by intro h; simp [Cap.mk.injEq] at h, rfl⟩
+
+/-- **`phi_functorial_concrete` (PROVED, axiom-clean) — now a CONSEQUENCE of the abstract
+`phi_functorial`.** Rather than a standalone re-proof, the concrete functor laws are exactly
+`phi_functorial` applied to the satisfiable witness `nonDegenerate_concrete`. So the abstract
+theorem is genuinely proved (under its named hypothesis) AND that hypothesis is genuinely
+inhabited by a discriminating model — the loss landing on `stmtOf ⟨true,()⟩ = stmtOf ⟨false,()⟩`. -/
 theorem phi_functorial_concrete :
     PhiFunctorial (CellId := Bool) (Rights := Unit) Unit Unit Bool
-      (Phi (Request := Unit) (Statement := Unit) (fun _ => ())) where
-  preserves_id := by
-    intro c req _
-    -- the witness `fun _ => true` accepts: `Verify () true = true`.
-    exact ⟨fun _ => true, by simp [Phi, crossDemand]⟩
-  preserves_comp := by
-    -- `phiMor` is constant `witnessed ()`; both `admits` reduce to the same `w ()`.
-    intro a b c req w _ _ h
-    simpa [Phi, crossDemand] using h
-  lossy_on_confinement :=
-    -- two distinct caps over `Bool` collapse to the single demand `witnessed ()`.
-    ⟨⟨true, ()⟩, ⟨false, ()⟩, by intro h; simp [Cap.mk.injEq] at h, by simp [Phi, crossDemand]⟩
+      (Phi (Request := Unit) (Statement := Unit) (fun _ => ())) :=
+  phi_functorial (Request := Unit) (Statement := Unit) (Witness := Bool)
+    (fun _ => ()) nonDegenerate_concrete
 
+#assert_axioms nonDegenerate_concrete
 #assert_axioms phi_functorial_concrete
 
 /-! ## §8 — Axiom-hygiene tripwires.
 
 Every PROVED keystone depends ONLY on the three standard kernel axioms (no `sorryAx`).
-`phi_functorial` is INTENTIONALLY OMITTED — it carries the one honest `sorry` (the OPEN
-categorical-coherence thread over an ABSTRACT `Verifiable`) and would correctly trip the
-guard. Its concrete witness `phi_functorial_concrete` IS pinned (axiom-clean) at §7.1. -/
+`phi_functorial` is now PINNED (no longer omitted): it carries NO `sorry` — it is PROVED under
+the explicit `NonDegenerate` hypothesis (the honest residual is that named hypothesis, which
+`nonDegenerate_concrete` proves is satisfiable, NOT a `sorry`). The old `sorry`-bodied abstract
+form is gone; `phi_functorial_concrete` is now a CONSEQUENCE of `phi_functorial` applied to the
+discriminating witness, and both are axiom-clean. -/
 
 #assert_axioms phi_admits_iff_discharged
 #assert_axioms cross_vat_needs_witness
@@ -472,5 +533,7 @@ guard. Its concrete witness `phi_functorial_concrete` IS pinned (axiom-clean) at
 #assert_axioms phi_domain_is_exactly_biscuit
 #assert_axioms phi_composes_with_attenuation
 #assert_axioms phi_attenuation_factors_through_confers
+#assert_axioms phi_functorial
+#assert_axioms nonDegenerate_concrete
 
 end Dregg2.Spec

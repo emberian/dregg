@@ -9,8 +9,11 @@ matcher / solver). The metatheory commits ONLY to the verify side; the search si
 is contracted to be *sound by verification* and nothing more (no completeness, no
 termination — see `Authority/Positional.lean` and the README §matcher).
 
-"Spec-first": the adjunction laws are `sorry`'d obligations to be discharged against
-`Order.GaloisConnection` once the `Predicate`/`Witness` orders are fixed.
+"Spec-first": the adjunction laws are discharged against `Order.GaloisConnection` (the
+fully-provable `polarity_galois` once the `Predicate`/`Witness` orders are fixed). The
+find/verify soundness *contract* is not provable in-module — it is the external plugin's
+obligation — so it is carried as the `SoundSearchable.find_sound` typeclass FIELD (the
+`CryptoKernel` Prop-portal idiom), NOT a `sorry`; `search_sound` recovers it as a lemma.
 -/
 import Mathlib.Order.GaloisConnection.Basic
 import Mathlib.Order.Heyting.Basic
@@ -44,20 +47,38 @@ instance [Verifiable P W] (p : P) (w : W) : Decidable (Discharged p w) := by
 /-- **The opaque search side (the prover plugin).** Given a predicate, *try* to
 produce a discharging witness. Modelled as a partial function (`Option`) because
 the search may be undecidable / nonterminating; the metatheory makes NO promise
-about when it returns `some`. -/
+about when it returns `some`. This class is the UNTRUSTED plugin: a `Searchable`
+instance may return garbage — an adversarial `find` that returns a non-discharging
+witness is a *legal* instance (see `Authority.Intent.evilMatcher`). Soundness is NOT a
+field here precisely because that would forbid such adversarial plugins; consumers
+re-`Verify` whatever `find` returns and never trust it. -/
 class Searchable (P : Type*) (W : Type*) where
   find : P → Option W
 
-/-- **Soundness-by-verification contract.** The ONLY guarantee demanded of any
-search plugin: whatever it returns must verify. (No completeness; no termination.) -/
+/-- **The soundness-by-verification CONTRACT, as a typeclass field (the `CryptoKernel`
+Prop-portal idiom).** A `SoundSearchable` is a search plugin that COMES WITH a soundness
+guarantee `find_sound`: whatever it returns must verify. This is genuinely an *assumption*
+about the (external, untrusted-by-default) plugin — there is no in-module relation between
+an arbitrary `find` and `Verify` from which to derive it (that is exactly why the untrusted
+`Searchable` above does NOT carry it, and why `Authority.Intent` re-`Verify`s instead of
+appealing to the contract). Carried as a Prop field, the assumption is explicit and
+auto-resolved at call sites that demand a CONTRACTED plugin; never a `sorry`. -/
+class SoundSearchable (P : Type*) (W : Type*) [Verifiable P W] extends Searchable P W where
+  /-- **Soundness-by-verification.** The ONLY guarantee a contracted plugin owes: whatever
+  it returns must verify. (No completeness; no termination — `find` may still return `none`
+  for a satisfiable predicate.) -/
+  find_sound : ∀ (p : P) (w : W), find p = some w → Discharged p w
+
+/-- **Soundness-by-verification — the contract, recovered as a lemma.** For any plugin that
+CARRIES the contract (`[SoundSearchable P W]`), whatever it returns verifies. This is the
+former `sorry`'d `search_sound` primitive, now discharged by the `SoundSearchable.find_sound`
+field — an honest assumption made explicit, not an unprovable claim. (For a bare untrusted
+`Searchable`, no such guarantee exists, by design; consumers re-`Verify`.) -/
 theorem search_sound
-    [Verifiable P W] [Searchable P W] (p : P) (w : W)
+    [Verifiable P W] [SoundSearchable P W] (p : P) (w : W)
     (h : Searchable.find p = some w) :
-    Discharged p w := by
-  -- PRIMITIVE: `Searchable.find` is an opaque oracle (the prover/matcher plugin).
-  -- Soundness-by-verification is a *contract* on that external plugin; there is no
-  -- relation between the typeclass's `find` and `Verify` in-module to derive it from.
-  sorry
+    Discharged p w :=
+  SoundSearchable.find_sound p w h
 
 /-- **The polarity Galois connection induced by an arbitrary relation.**
 

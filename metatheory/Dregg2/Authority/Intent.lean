@@ -311,6 +311,42 @@ def demoIntent : Intent DivBy3 Fill := { want := DivBy3.mult3 }
 @[reducible] def emptyMatcher : Searchable DivBy3 Fill where
   find := fun _ => none
 
+/-! ### A discriminating witness that `Laws.SoundSearchable`'s `find_sound` contract is
+non-vacuous. The `goodMatcher` (proposes `6`) SATISFIES the soundness-by-verification
+contract — every fill it returns verifies — so it lifts to a `SoundSearchable`. The
+`evilMatcher` (proposes `7`) does NOT (`7 % 3 ≠ 0`), which we prove below: the contract has
+teeth, it is a genuine constraint that not every untrusted `Searchable` meets. -/
+
+/-- **`goodMatcher` IS a contracted plugin (`SoundSearchable`).** Its only return `6`
+verifies (`6 % 3 == 0`), so the soundness-by-verification field is provable: a discriminating
+witness that the `find_sound` assumption is satisfiable (not vacuous). -/
+instance goodSoundMatcher : SoundSearchable DivBy3 Fill where
+  find := goodMatcher.find
+  find_sound := fun p w h => by
+    -- `goodMatcher.find p` reduces to `some 6`, so `h : some 6 = some w` gives `w = 6`;
+    -- `Discharged mult3 6` unfolds to `Verify mult3 6 = true`, i.e. `(6 % 3 == 0) = true`.
+    have hw : (6 : Fill) = w := Option.some.inj h
+    rw [← hw]
+    unfold Discharged
+    rfl
+
+/-- **TEETH — `evilMatcher` CANNOT be a contracted plugin.** No `SoundSearchable` instance
+agreeing with `evilMatcher.find` can exist: it returns `7`, which does NOT verify
+(`7 % 3 ≠ 0`), so any `find_sound` for it would prove the false `Discharged mult3 7`. The
+soundness contract is therefore a genuine (non-trivial) constraint — exactly the honest
+content of "FIND is untrusted; the contract is an assumption a real plugin must EARN." -/
+theorem evilMatcher_not_sound
+    (s : SoundSearchable DivBy3 Fill) (hagree : s.find = evilMatcher.find) :
+    False := by
+  have hfound : s.find DivBy3.mult3 = some 7 := by rw [hagree]; rfl
+  have hd : Discharged DivBy3.mult3 7 := s.find_sound DivBy3.mult3 7 hfound
+  -- `Discharged mult3 7` IS (defeq) `Verify mult3 7 = true`; but `Verify mult3 7` computes to
+  -- `false` (`7 % 3 = 1 ≠ 0`), so `hd : false = true` — absurd.
+  have hd2 : Verifiable.Verify DivBy3.mult3 (7 : Fill) = true := hd
+  have hfalse : Verifiable.Verify DivBy3.mult3 (7 : Fill) = false := rfl
+  rw [hfalse] at hd2
+  exact Bool.false_ne_true hd2
+
 -- The good matcher proposes 6, a genuine fill: ACCEPTED → `some 6`.
 #eval (@Intent.resolve DivBy3 Fill demoVerifiable goodMatcher demoIntent)   -- some 6
 -- The adversarial matcher proposes 7, NOT a multiple of 3: REJECTED by VERIFY → `none`.

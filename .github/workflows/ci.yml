@@ -78,3 +78,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/no-unchecked-auth.sh
+
+  metatheory-no-sorry:
+    name: Metatheory zero-sorry guard
+    runs-on: ubuntu-latest
+    # Pin the Lean toolchain via metatheory/lean-toolchain (leanprover/lean4:v4.30.0).
+    # mathlib is a *local-path* require (../../../src/mathlib4); CI reconstructs
+    # that checkout at the pinned rev, then pulls the prebuilt mathlib cache so
+    # the job builds the dregg2 corpus only (not all of mathlib).
+    env:
+      MATHLIB_REV: 1c2b90b13009c65b090d95a83c98e248deafb6f1
+    steps:
+      - uses: actions/checkout@v4
+
+      # Install elan + the toolchain named in metatheory/lean-toolchain.
+      - name: Install elan (Lean toolchain manager)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            -o elan-init.sh
+          bash elan-init.sh -y --default-toolchain "$(cat metatheory/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      # The lakefile's mathlib require is `path = ../../../src/mathlib4`,
+      # resolved relative to the `metatheory/` package dir — i.e. two levels
+      # ABOVE the repo root. Reconstruct it at the pinned rev.
+      - name: Fetch pinned mathlib4
+        run: |
+          MATHLIB_DIR="$(cd "$GITHUB_WORKSPACE/../.." && pwd)/src/mathlib4"
+          mkdir -p "$MATHLIB_DIR"
+          git clone https://github.com/leanprover-community/mathlib4 "$MATHLIB_DIR"
+          git -C "$MATHLIB_DIR" checkout "$MATHLIB_REV"
+          # Pull the prebuilt .olean cache so we don't recompile mathlib.
+          ( cd "$MATHLIB_DIR" && ~/.elan/bin/lake exe cache get )
+
+      # The guard itself: build the corpus and FAIL on ANY `declaration uses
+      # \`sorry\`` warning (covers sorry/admit/sorryAx, since admit & sorryAx
+      # emit the same warning). See scripts/no-sorry-metatheory.sh for the
+      # two-layer design (this textual net + the Claims.lean #assert_axioms
+      # ledger). The corpus must remain at ZERO sorry forever.
+      - name: Zero-sorry guard
+        run: bash scripts/no-sorry-metatheory.sh

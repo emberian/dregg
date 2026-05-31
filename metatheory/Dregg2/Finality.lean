@@ -316,7 +316,8 @@ At every tier, `conservedAtTier` holds for an arbitrary turn — because it unfo
 cross-tier statement to real conservation content (so it is not agreement between two
 vacuous predicates): the shared verdict is exactly the resource-balance law. -/
 theorem conservedAtTier_holds {M : Type u} [AddCommMonoid M]
-    (cons : Core.Conservation M) (t : Tier) {A B : Core.Cell} (f : Core.Turn A B) :
+    (cons : Core.Conservation M) [Core.ConservesStep cons]
+    (t : Tier) {A B : Core.Cell} (f : Core.Turn A B) :
     conservedAtTier cons t f := by
   unfold conservedAtTier
   exact Core.conservation_step cons f

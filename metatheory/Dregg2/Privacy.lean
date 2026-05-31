@@ -220,7 +220,7 @@ counts. This is `committed_conservation` specialised to the single-note image of
 `Core` turn: the value tier riding `Core.Conservation`. -/
 theorem committed_conservation_of_core
     {V B C : Type u} [AddCommMonoid V] [AddCommMonoid B] [AddCommMonoid C]
-    (scheme : Commitment V B C) (cons : Core.Conservation V)
+    (scheme : Commitment V B C) (cons : Core.Conservation V) [Core.ConservesStep cons]
     {A A' : Core.Cell} (f : Core.Turn A A') (h : f.tag = Core.TurnTag.ordinary)
     (r : B) :
     scheme.commit (cons.count A) r = scheme.commit (cons.count A') r := by
@@ -236,7 +236,7 @@ the `committed_conservation` equality, read in the camera tier (`Resource.Fpu`,
 theorem committed_conservation_is_fpu
     {V B C : Type u} [AddCommMonoid V] [AddCommMonoid B] [AddCommMonoid C]
     [Resource.ResourceAlgebra C]
-    (scheme : Commitment V B C) (cons : Core.Conservation V)
+    (scheme : Commitment V B C) (cons : Core.Conservation V) [Core.ConservesStep cons]
     {A A' : Core.Cell} (f : Core.Turn A A') (h : f.tag = Core.TurnTag.ordinary)
     (r : B) :
     Resource.ConservesResource

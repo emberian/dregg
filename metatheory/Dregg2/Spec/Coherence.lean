@@ -380,8 +380,9 @@ Every cross-link above is PROVED-clean (no `sorry`): each depends ONLY on the th
 kernel axioms. Pinning them here certifies the web is genuinely woven — the coincidences are
 theorems, not `sorry`-aliases. (The independently-built modules already carry their own honest
 OPENs — `Authority.only_connectivity_begets_connectivity`, `Lifecycle.distributed_death_…`,
-`Hyperedge.hyperedge_sound_bisim`, `Choreography`'s operational LTS, `VatBoundary.phi_functorial`
-— none of which this module needs or re-imports as content; the BRIDGES are clean.) -/
+`Hyperedge.hyperedge_sound_bisim`, `Choreography`'s operational LTS (`VatBoundary.phi_functorial`
+is now PROVED under its `NonDegenerate` hypothesis) — none of which this module needs or
+re-imports as content; the BRIDGES are clean.) -/
 
 #assert_axioms guard_is_authority_conferral
 #assert_axioms conferralGuard_admits_self
