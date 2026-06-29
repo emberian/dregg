@@ -630,6 +630,28 @@ impl NodeState {
         let db_path = data_dir.join("dregg.redb");
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
+        // Boot crash-recovery: a torn/poisoned commit-log tail (e.g. a process
+        // killed between the input-turn config write and the commit-record txn, or
+        // an unclean power-cycle) leaves the log's head inconsistent with its
+        // durably-recorded finalized root, so the convergence check below would
+        // REFUSE the whole image and strand the node (observed 2026-06-29 after a
+        // homelab PSU swap). Truncate any divergent tail to the last commit ordinal
+        // whose reconstructed root matches; peers backfill the dropped turn(s) via
+        // normal blocklace sync. No-op (returns 0) when already consistent; a
+        // genuinely divergent image with NO matching prefix still Errs (fail-closed
+        // on tampering). Uses the existing `PersistentStore::recover_to_last_consistent`
+        // (persist/src/commit_log.rs); mirrors starbridge `World::open_recovering`.
+        match store.recover_to_last_consistent() {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!(
+                truncated = n,
+                "boot recovery: truncated {n} divergent commit-log record(s) to the \
+                 last-consistent ordinal (torn-tail crash recovery); peers will backfill"
+            ),
+            Err(e) => {
+                return Err(format!("boot recovery (recover_to_last_consistent) failed: {e}"));
+            }
+        }
 
         // Resolve key file path: absolute paths are used as-is,
         // relative paths are resolved from the data directory.
@@ -908,6 +930,28 @@ impl NodeState {
         let db_path = data_dir.join("dregg.redb");
         let store =
             PersistentStore::open(&db_path).map_err(|e| format!("failed to open store: {e}"))?;
+        // Boot crash-recovery: a torn/poisoned commit-log tail (e.g. a process
+        // killed between the input-turn config write and the commit-record txn, or
+        // an unclean power-cycle) leaves the log's head inconsistent with its
+        // durably-recorded finalized root, so the convergence check below would
+        // REFUSE the whole image and strand the node (observed 2026-06-29 after a
+        // homelab PSU swap). Truncate any divergent tail to the last commit ordinal
+        // whose reconstructed root matches; peers backfill the dropped turn(s) via
+        // normal blocklace sync. No-op (returns 0) when already consistent; a
+        // genuinely divergent image with NO matching prefix still Errs (fail-closed
+        // on tampering). Uses the existing `PersistentStore::recover_to_last_consistent`
+        // (persist/src/commit_log.rs); mirrors starbridge `World::open_recovering`.
+        match store.recover_to_last_consistent() {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!(
+                truncated = n,
+                "boot recovery: truncated {n} divergent commit-log record(s) to the \
+                 last-consistent ordinal (torn-tail crash recovery); peers will backfill"
+            ),
+            Err(e) => {
+                return Err(format!("boot recovery (recover_to_last_consistent) failed: {e}"));
+            }
+        }
 
         let cclerk = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(key_bytes));
         let (witnessed_receipts, witnessed_receipt_order) = load_witnessed_receipts(&store);
