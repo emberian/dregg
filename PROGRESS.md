@@ -27,8 +27,18 @@ never touch main/WIP, no history rewrite).
       `deco_authenticates_payment`. Wired at `stripeKind vk` via `StripeAttest.stripe_deco_attest_sound`;
       toy `refVerifier`/`refRegistry` RETIRED; whole Stripe chain builds green. The DECO verification is
       now a CONSTRUCTED relation, not an opaque oracle — surviving trust base = STARK + §8 primitives +
-      external Web-PKI/Stripe floor). NEXT: **D3** recursive-aggregate fold — emit the payment facts as
-      public inputs in `compileBridgeMint` + the gated VK epoch (T2/G1).
+      external Web-PKI/Stripe floor).
+- [~] Phase D — **D3 / G1 LANDED GREEN (staged additively).** `Circuit/Emit/EffectVmEmitBridgeMintDeco`:
+      `decoBridgeMintVmDescriptor` = the deployed `bridgeMintVmDescriptor` PLUS two `.piBinding .first`
+      welds publishing the payment commitment (`mint_hash`) + minted value as NEW public inputs — a gated
+      VK epoch (distinct AIR name ⇒ distinct VK; the DEPLOYED descriptor is UNTOUCHED). Proved:
+      `decoBridgeMint_to_base` (deployed keystones lift verbatim), `decoBridgeMint_full_sound` (ledger
+      credit + committed post-state unchanged), `decoBridgeMint_publishes` (first row pins the facts to the
+      PIs), `decoBridgeMint_rejects_mismatched_commit` (the tooth). `Verify/StripeLightClient`:
+      `stripe_light_client_witnesses_payment` (G1) joins the circuit weld to the DECO relation — a light
+      client reading only the aggregate PIs witnesses the mint credits EXACTLY the Stripe-attested non-zero
+      amount, backed by an accepted DECO proof. All #assert_axioms kernel-clean. REMAINING (deployment, not
+      Lean): the Rust wide-leg tuple emission + swapping the deployed VK to the gated epoch.
 - [ ] Phase E — integration + live sandbox attested-flow demo + light-client demo + docs
 
 ## Anchors (Dregg2 recon — Phase A) — primitives largely ALREADY PROVED; this is composition
