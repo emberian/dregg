@@ -72,14 +72,17 @@ theorem stripe_release_discharges_claim (reg : Registry Claim Wit) (vk : Nat)
   · exact stripe_attest_sound reg vk (encClaim (escrowCondition k e)) (encWit witness) hg.2
   · rw [if_neg hg] at h; exact absurd h (by simp)
 
-/-! ## Non-vacuity: the Stripe gate accepts the matching attestation, rejects a wrong one. -/
+/-! ## Non-vacuity: the CONSTRUCTED DECO gate accepts a valid payment, rejects a zero one. -/
+
+-- The DECO reference kernel is a `def`, not a global instance; make it local for the demo.
+attribute [local instance] Dregg2.Crypto.Deco.Reference.refKernel
 
 private def encC : Int → Claim :=
-  fun c => { amountCents := 0, currency := 0, recipient := 0, paymentIntentId := c.toNat }
-private def encW : Int → Nat := fun w => w.toNat
+  fun c => { amountCents := c.toNat, currency := 0, recipient := 0, paymentIntentId := 0 }
+private def encW : Int → Unit := fun _ => ()
 
-#guard (stripeGate (refRegistry 7) 7 encC encW 99 99)     -- attestation binds pi=99 → accept (mint)
-#guard (! stripeGate (refRegistry 7) 7 encC encW 88 99)   -- wrong witness → reject (no mint)
-#guard (! stripeGate (refRegistry 8) 7 encC encW 99 99)   -- wrong kind/vk → fail-closed
+#guard (stripeGate (stripeDecoReg 7 (11 : Int) emptyBase) 7 encC encW 0 40)   -- amount 40 ≥ 1 → accept
+#guard (! stripeGate (stripeDecoReg 7 (11 : Int) emptyBase) 7 encC encW 0 0)  -- amount 0 → reject
+#guard (! stripeGate (stripeDecoReg 8 (11 : Int) emptyBase) 7 encC encW 0 40) -- wrong kind/vk → fail-closed
 
 end Dregg2.Verify.StripeBridge

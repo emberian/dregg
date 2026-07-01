@@ -184,40 +184,44 @@ theorem stripe_mint_is_provisional (reg : Registry Claim Wit) (vk : Nat) (encCla
   · intro k'' hr
     exact refunded_then_no_fulfill c k' k'' hfunded hpos hr
 
-/-! ## §4 — NON-VACUITY: attestation present ⇒ mint admits + conserves + locks; absent ⇒ refused.
+/-! ## §4 — NON-VACUITY: a valid attested payment ⇒ mint admits + conserves + locks; zero ⇒ refused.
 
 Built on the lifecycle demo world (`demoState`: publisher cell 1 holds 100; escrow cell 2 fresh;
-`demoContract`: 1 →40→ escrow 2) and the K1 toy registry (`refRegistry`; the DECO §8 oracle plugs in
-HERE later). The toy verifier accepts `w` iff it equals the claim's `paymentIntentId`. -/
+`demoContract`: 1 →40→ escrow 2) and the CONSTRUCTED DECO registry (`stripeDecoReg` at the DECO
+reference kernel, server key 11). The DECO verifier accepts iff the disclosed payment is non-zero
+(`1 ≤ amountCents`) — the "payment succeeded" gate of `DecoRelation`. -/
 
-/-- A toy claim encoder: the condition slot IS the payment-intent id (other facts 0). -/
+-- The DECO reference kernel is a `def`, not a global instance; make it local for the demo world.
+attribute [local instance] Dregg2.Crypto.Deco.Reference.refKernel
+
+/-- A claim encoder: the condition slot IS the disclosed amount (cents); other facts 0. -/
 def encC : Int → Claim :=
-  fun c => { amountCents := 0, currency := 0, recipient := 0, paymentIntentId := c.toNat }
-/-- A toy witness encoder (the DECO proof value carried as a `Nat`). -/
-def encW : Int → Nat := fun w => w.toNat
+  fun c => { amountCents := c.toNat, currency := 0, recipient := 0, paymentIntentId := 0 }
+/-- The DECO proof witness (the reference kernel's `Unit` proof; the DECO §8 verify oracle carries it). -/
+def encW : Int → Unit := fun _ => ()
 
-/-- A concrete provisional mint over the demo ledger/contract at the toy Stripe registry (vk 7),
-supplying `witness` against the encoded claim `condition`. -/
-def demoMint (witness condition : Int) : Option RecordKernelState :=
-  stripeProvisionalMint (refRegistry 7) 7 encC encW demoContract demoState condition witness
+/-- A concrete provisional mint over the demo ledger/contract at the CONSTRUCTED DECO registry (vk 7,
+Stripe server key 11), disclosing a payment of `amountCond` cents. -/
+def demoMint (amountCond : Int) : Option RecordKernelState :=
+  stripeProvisionalMint (stripeDecoReg 7 (11 : Int) emptyBase) 7 encC encW demoContract demoState amountCond 0
 
--- ATTESTATION PRESENT (witness 99 discharges the encoded claim 99) ⇒ the mint ADMITS:
-#guard (demoMint 99 99).isSome
+-- VALID ATTESTED PAYMENT (amount 40 ≥ 1, the DECO "succeeded" gate) ⇒ the mint ADMITS:
+#guard (demoMint 40).isSome
 -- ...and CONSERVES asset-0 total supply (publish moves the backing, mints nothing on the hard column):
-#guard ((demoMint 99 99).map (fun s => recTotalAsset s 0)) == some (recTotalAsset demoState 0)
+#guard ((demoMint 40).map (fun s => recTotalAsset s 0)) == some (recTotalAsset demoState 0)
 -- ...and the minted credit is LOCKED-PROVISIONAL: the escrow cell (2) holds EXACTLY the funded 40:
-#guard ((demoMint 99 99).map (fun s => s.bal 2 0)) == some 40
--- ATTESTATION ABSENT (wrong witness 88 ≠ claim 99) ⇒ the mint is REFUSED (fail-closed, no credit):
-#guard (! (demoMint 88 99).isSome)
+#guard ((demoMint 40).map (fun s => s.bal 2 0)) == some 40
+-- ZERO/NON-SUCCEEDED PAYMENT (amount 0 fails `1 ≤ amountCents`) ⇒ the mint is REFUSED (fail-closed):
+#guard (! (demoMint 0).isSome)
 -- WRONG kind/vk (registry installed under vk 8, queried at vk 7) ⇒ fail-closed:
-#guard (! (stripeProvisionalMint (refRegistry 8) 7 encC encW demoContract demoState 99 99).isSome)
+#guard (! (stripeProvisionalMint (stripeDecoReg 8 (11 : Int) emptyBase) 7 encC encW demoContract demoState 40 0).isSome)
 
 /-- Non-vacuity at the PROOF level: on the demo world an attested mint's escrow cell (2) ends
 holding exactly the funded `40` — the provisional locked state, read off `stripe_mint_is_provisional`. -/
-example : ∀ k', demoMint 99 99 = some k' → k'.bal 2 0 = 40 := by
+example : ∀ k', demoMint 40 = some k' → k'.bal 2 0 = 40 := by
   intro k' h
-  have hp := stripe_mint_is_provisional (refRegistry 7) 7 encC encW demoContract
-    (k := demoState) (k' := k') (condition := 99) (witness := 99) h
+  have hp := stripe_mint_is_provisional (stripeDecoReg 7 (11 : Int) emptyBase) 7 encC encW demoContract
+    (k := demoState) (k' := k') (condition := 40) (witness := 0) h
     (by decide) (by decide) (by decide)
   simpa [demoContract] using hp.2.1
 
