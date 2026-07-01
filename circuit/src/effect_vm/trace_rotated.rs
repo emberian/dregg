@@ -3630,6 +3630,76 @@ pub fn generate_rotated_custom_wide(
     Ok((trace, dpis))
 }
 
+/// **THE BRIDGE-MINT WIDENED-LEG generator (the RIGHT G1 payment binding).** The narrow-family twin of
+/// the custom PI-exposure fill: the deployed rotated bridge-mint descriptor `mintVmDescriptor2R24` was
+/// widened (Lean `EffectVmEmitRotationV3.mintV3` / `bridgeTuplePiExposure`) to APPEND 26 columns pinned
+/// to public inputs `[46..72)` — the bridge-action tuple `(nullifier[8] ‖ recipient[8] ‖
+/// dest_federation[8] ‖ amount_lo ‖ amount_hi)`. This generator lays those 26 columns (at
+/// `[trace_width-26 .. trace_width)`, the exact `.piBinding .first` offset the descriptor emits) from the
+/// typed `BridgeActionWitness` and pushes them as the 26 tuple PIs, so the per-turn fold's dual-expose
+/// leg (`prove_descriptor_leaf_dual_expose_at(46,26)`) reads the ACTUAL payment fields and the segmented
+/// binding node connects them to the `prove_bridge_leaf_tuple_claim` sub-proof — no hash-gadget seam.
+///
+/// The prover (`trace_with_chip_lanes`) fills the graduated chip lanes (all `< trace_width-26`) and
+/// leaves these 26 appended columns intact, so `trace[0][trace_width-26+k] == public_inputs[46+k]` holds
+/// by construction. `trace_width` is the widened descriptor's `trace_width` (the 26-column append). NOT
+/// the wide family — no `append_wide_carriers` (that parks its 8-felt carriers at `[46..62)`, colliding).
+pub fn generate_rotated_bridge_mint_trace(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    backing: &crate::bridge_action_air::BridgeActionWitness,
+    trace_width: usize,
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
+    if !matches!(effects.first(), Some(Effect::BridgeMint { .. })) {
+        return Err(
+            "bridge-mint wide generator: the lead effect must be Effect::BridgeMint (the widened \
+             mintVmDescriptor2R24 leg publishes the 26-felt tuple at PI [46..72))"
+                .into(),
+        );
+    }
+    let tuple = backing.public_inputs(); // nullifier[8] ++ recipient[8] ++ dest_federation[8] ++ [lo, hi]
+    if tuple.len() != crate::bridge_action_air::BRIDGE_ACTION_PI_COUNT {
+        return Err(format!(
+            "bridge-mint wide generator: BridgeActionWitness PI len {} != {}",
+            tuple.len(),
+            crate::bridge_action_air::BRIDGE_ACTION_PI_COUNT
+        ));
+    }
+    let tuple_len = tuple.len(); // 26
+    let base = trace_width.checked_sub(tuple_len).ok_or_else(|| {
+        format!("bridge-mint wide generator: descriptor trace_width {trace_width} < tuple len {tuple_len}")
+    })?;
+    let (mut trace, mut dpis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if dpis.len() != ROT_PI_COUNT {
+        return Err(format!(
+            "bridge-mint wide generator: base PI vector {} != {ROT_PI_COUNT} (a BridgeMint lead \
+             carries the bare rotated vector — no grow-gate/record-pin offset)",
+            dpis.len()
+        ));
+    }
+    // Lay the 26 tuple columns at the descriptor's appended offset on EVERY row (the pin is `.first`,
+    // but a canonical trace carries the constant tuple on all rows), growing each row to trace_width.
+    for row in trace.iter_mut() {
+        if row.len() < trace_width {
+            row.resize(trace_width, BabyBear::ZERO);
+        }
+        for k in 0..tuple_len {
+            row[base + k] = tuple[k];
+        }
+    }
+    // Push the 26 tuple PIs at slots [46..72), matching the descriptor's `bridgeTuplePiExposure` pins.
+    for k in 0..tuple_len {
+        dpis.push(tuple[k]);
+    }
+    debug_assert_eq!(dpis.len(), ROT_PI_COUNT + tuple_len); // 46 + 26 = 72
+    debug_assert_eq!(trace[0][base], tuple[0]); // the .piBinding .first invariant, row 0
+    Ok((trace, dpis))
+}
+
 /// **THE CAP-WRITE WIDE producer witness (the cap-open weld for the WIDE leg).** A cap-WRITE family
 /// lead (attenuate / revokeCapability) advances its AFTER cap-root through an in-circuit cap-tree
 /// `map_op` write the bare transfer-shape route leaves UNSAT; this carries the witness that write

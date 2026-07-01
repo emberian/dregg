@@ -855,6 +855,92 @@ impl RotatedParticipantLeg {
         })
     }
 
+    /// **THE BRIDGE-MINT WIDENED-LEG mint (the RIGHT G1 payment binding).** The narrow-family twin of
+    /// [`RotatedParticipantLeg::mint_custom_wide_from_block_witnesses`]: mints the WIDENED narrow
+    /// `mintVmDescriptor2R24` leg (855-wide / 72-PI) whose 26 appended columns publish the bridge-action
+    /// tuple `(nullifier, recipient, dest_federation, amount)` at PI `[46..72)`, laid from the bundle's
+    /// `BridgeActionWitness` via `generate_rotated_bridge_mint_trace`, and retains the bundle so the chain
+    /// prover folds the bridge sub-proof leaf + segmented binding node for this turn — the ACTUAL payment
+    /// fields bound for a pure light client, no hash-gadget seam.
+    pub fn mint_bridge_from_block_witnesses(
+        initial_state: &dregg_circuit::effect_vm::CellState,
+        effects: &[dregg_circuit::effect_vm::Effect],
+        before: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        after: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        turn_id: Option<BabyBear>,
+        bundle: BridgeWitnessBundle,
+    ) -> Result<RotatedParticipantLeg, String> {
+        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+        use dregg_circuit::descriptor_ir2::{
+            MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
+            prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
+        };
+        use dregg_circuit::effect_vm::Effect;
+        use dregg_circuit::effect_vm::trace_rotated::{
+            empty_caveat_manifest, generate_rotated_bridge_mint_trace,
+        };
+        use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
+
+        if !matches!(effects.first(), Some(Effect::BridgeMint { .. })) {
+            return Err(format!(
+                "mint_bridge: lead effect must be Effect::BridgeMint (got {:?})",
+                effects.first()
+            ));
+        }
+        // Resolve the WIDENED rotated bridge-mint descriptor (mintVmDescriptor2R24, 855-wide / 72-PI).
+        let json = V3_STAGED_REGISTRY_TSV
+            .lines()
+            .find_map(|line| {
+                let mut it = line.splitn(3, '\t');
+                if it.next() == Some("mintVmDescriptor2R24") {
+                    let _name = it.next();
+                    it.next()
+                } else {
+                    None
+                }
+            })
+            .ok_or("mint_bridge: mintVmDescriptor2R24 not in staged rotated registry")?;
+        let desc = parse_vm_descriptor2(json)
+            .map_err(|e| format!("mint_bridge: rotated descriptor parse: {e}"))?;
+
+        let (trace, mut dpis) = generate_rotated_bridge_mint_trace(
+            initial_state,
+            effects,
+            before,
+            after,
+            &empty_caveat_manifest(),
+            &bundle.backing,
+            desc.trace_width,
+        )
+        .map_err(|e| format!("mint_bridge: bridge-mint trace generation failed: {e}"))?;
+
+        if let Some(tid) = turn_id {
+            dpis[pi::TURN_HASH_BASE] = tid;
+        }
+
+        let config = ir2_leaf_wrap_config();
+        let proof = prove_vm_descriptor2_for_config(
+            &desc,
+            &trace,
+            &dpis,
+            &MemBoundaryWitness::default(),
+            &[],
+            &UMemBoundaryWitness::default(),
+            &config,
+        )
+        .map_err(|e| format!("mint_bridge: IR-v2 bridge-mint batch prove failed: {e}"))?;
+        verify_vm_descriptor2_with_config(&desc, &proof, &dpis, &config)
+            .map_err(|e| format!("mint_bridge: minted bridge-mint proof self-verify failed: {e}"))?;
+
+        Ok(RotatedParticipantLeg {
+            proof,
+            descriptor: desc,
+            public_inputs: dpis,
+            custom_witness: None,
+            bridge_witness: Some(bundle),
+        })
+    }
+
     /// The rotated OLD-state commitment (PI 34 — the row-0 before-block `state_commit`).
     pub fn old_root(&self) -> BabyBear {
         self.public_inputs[dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT]
