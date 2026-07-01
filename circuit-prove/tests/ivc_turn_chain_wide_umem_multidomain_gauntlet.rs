@@ -215,6 +215,7 @@ fn multidomain_forged_post_commit_refused_per_verb() {
             descriptor,
             mut public_inputs,
             custom_witness: _,
+            bridge_witness: _,
         } = rotated;
         let last = public_inputs.len() - 1;
         public_inputs[last] = public_inputs[last] + BabyBear::ONE;
@@ -223,6 +224,7 @@ fn multidomain_forged_post_commit_refused_per_verb() {
             descriptor,
             public_inputs,
             custom_witness: None,
+            bridge_witness: None,
         }));
         let turns = [t0, forged];
         match fold_wide_welded_umem_turn_chain_staged(&turns) {

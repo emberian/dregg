@@ -2558,8 +2558,28 @@ both crediting `param1`; the tick gate is the same `EffectVmEmitTransfer.gNonce`
 BridgeMint equals the source descriptor. The registry routing through `mintV3` is the same circuit. -/
 theorem mintTickFace_eq_source : mintTickFace = EffectVmEmitMint.mintVmDescriptor := rfl
 
-/-- **`mintV3`** — the rotated tick-faced BridgeMint (the `mintVmDescriptor2R24` registry member). -/
-def mintV3 : EffectVmDescriptor2 := v3OfFrozen mintTickFace
+/-- **The 26-felt bridge-action tuple exposure** — pins 26 APPENDED columns (`nullifier[8] ‖
+recipient[8] ‖ dest_federation[8] ‖ amount_lo ‖ amount_hi`, laid by the prover's
+`generate_rotated_bridgemint_wide` from the `BridgeActionWitness`) to PI slots `[46 .. 72)` on the
+FIRST row, so the per-turn bridge FOLD can `connect` the `prove_bridge_leaf_tuple_claim` sub-proof's
+genuine tuple to THIS leg's published one (a forged leg claim no sub-proof backs ⇒ UNSAT ⇒ no root).
+The bridge twin of `customPiExposure`. `w` is the pre-exposure rotated width (the tuple columns append
+past it), `pc` the pre-exposure PI count (46, the four rotated commit pins). -/
+def bridgeTuplePiExposure (w pc : Nat) : List VmConstraint2 :=
+  (List.range 26).map (fun k => .base (.piBinding .first (w + k) (pc + k)))
+
+/-- **`mintV3`** — the rotated tick-faced BridgeMint (the `mintVmDescriptor2R24` registry member),
+WIDENED (the VK epoch) to publish the 26-felt bridge-action tuple at PI `[46..72)` so a pure light
+client witnesses the payment binding via the per-turn fold. The 26 tuple columns append past the
+rotated width; the prover's `generate_rotated_bridgemint_wide` lays them from the `BridgeActionWitness`.
+Unlike the compressed `mint_hash` the substrate row carries, these are the ACTUAL payment fields the
+fold binds — no hash-gadget seam. -/
+def mintV3 : EffectVmDescriptor2 :=
+  let d := v3OfFrozen mintTickFace
+  { d with
+    traceWidth  := d.traceWidth + 26
+    piCount     := d.piCount + 26
+    constraints := d.constraints ++ bridgeTuplePiExposure d.traceWidth d.piCount }
 
 /-- **`supplyMintV3`** — the DEDICATED-SELECTOR supply-mint member (SUPPLY-MODEL.md Stage 2b).
 The SAME proven credit/tick/freeze body as `mintV3`/`mintVmDescriptor2R24` (`mintTickFace`,
@@ -2645,11 +2665,12 @@ theorem mintP1_rejects_wrong_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (
 #guard (setFieldV3 0).traceWidth ==
   EFFECT_VM_WIDTH + APPENDIX_SPAN + (CHIP_OUT_LANES - 1) *
     (rotateV3FrozenAuthority (setFieldTickFace 0)).hashSites.length
+-- mintV3 is WIDENED by the 26-felt bridge-action tuple exposure (the VK epoch): +26 columns, +26 PIs.
 #guard mintV3.traceWidth ==
   EFFECT_VM_WIDTH + APPENDIX_SPAN + (CHIP_OUT_LANES - 1) *
-    (rotateV3FrozenAuthority mintTickFace).hashSites.length
+    (rotateV3FrozenAuthority mintTickFace).hashSites.length + 26
 #guard (setFieldV3 0).piCount == 42 + 4
-#guard mintV3.piCount == 42 + 4
+#guard mintV3.piCount == 42 + 4 + 26
 -- The swap is a ONE-gate change: the tick-faced constraint list has the SAME length as the
 -- per-effect descriptor's (a gate replaced a gate, none added or removed).
 #guard (setFieldTickFace 0).constraints.length

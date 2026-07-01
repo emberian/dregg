@@ -123,6 +123,16 @@ pub struct RotatedParticipantLeg {
     /// client verifies (the wire `dregg_turn::CustomProgramProof` keeps only finished bytes + PIs);
     /// the `Clone`/postcard round-trip below clones it directly (the proof is the heavy part).
     pub custom_witness: Option<CustomWitnessBundle>,
+    /// **PROVER-SIDE-ONLY bridge-action tuple witness** (the deployed bridge-binding thread, the
+    /// bridge twin of [`RotatedParticipantLeg::custom_witness`]). For a `BridgeMint` turn whose widened
+    /// `mintVmDescriptor2R24` leg publishes the 26-felt `(nullifier, recipient, dest_federation, amount)`
+    /// tuple at IR2 PI `[46..72)`, this carries the [`dregg_circuit::bridge_action_air::BridgeActionWitness`]
+    /// + its 26-felt PI vector needed to RE-PROVE the bridge-action binding as a recursion-foldable leaf
+    /// ([`crate::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim`]) so the chain prover can fold it
+    /// under [`crate::joint_turn_recursive::prove_bridge_binding_node_segmented`], binding the claimed
+    /// tuple for a PURE LIGHT CLIENT. `None` for every non-bridge-mint turn. Prover-side witness data
+    /// ONLY — NEVER serialized onto the on-wire artifact a light client verifies.
+    pub bridge_witness: Option<BridgeWitnessBundle>,
 }
 
 /// The prover-side re-provable witness for a `Custom` turn's external sub-proof — exactly the four
@@ -144,6 +154,23 @@ pub struct CustomWitnessBundle {
     pub public_inputs: Vec<BabyBear>,
 }
 
+/// The prover-side re-provable witness for a `BridgeMint` turn's foreign-payment binding — the two
+/// arguments [`crate::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim`] consumes to re-prove the
+/// `BridgeActionAir` binding as a recursion-foldable IR-v2 leaf exposing the 26-felt
+/// `(nullifier, recipient, dest_federation, amount)` tuple. Retained on
+/// [`RotatedParticipantLeg::bridge_witness`] so the deployed chain prover can mint the bridge sub-proof
+/// leaf and fold it in with the segmented binding node, binding the leg's published tuple for a PURE
+/// LIGHT CLIENT. NEVER sent to the light client.
+#[derive(Clone)]
+pub struct BridgeWitnessBundle {
+    /// The typed foreign-payment binding (nullifier/recipient/dest_federation/amount) the sub-proof
+    /// re-proves — the same limbs the executor's `apply_bridge_mint` validates off-AIR.
+    pub backing: dregg_circuit::bridge_action_air::BridgeActionWitness,
+    /// The 26-felt tuple PI vector (`backing.public_inputs()`), equal by construction to the widened
+    /// leg's published `[46..72)` PI slots.
+    pub public_inputs: Vec<BabyBear>,
+}
+
 impl Clone for RotatedParticipantLeg {
     /// `Ir2BatchProof` (the p3 `BatchProof`) is `Serialize`/`Deserialize` but NOT
     /// `Clone`, so the leg cannot `#[derive(Clone)]`. Round-trip the proof through
@@ -160,6 +187,7 @@ impl Clone for RotatedParticipantLeg {
             descriptor: self.descriptor.clone(),
             public_inputs: self.public_inputs.clone(),
             custom_witness: self.custom_witness.clone(),
+            bridge_witness: self.bridge_witness.clone(),
         }
     }
 }
@@ -170,6 +198,14 @@ impl RotatedParticipantLeg {
     /// prover reads it to mint the custom sub-proof leaf + segmented binding node for this turn.
     pub fn with_custom_witness(mut self, bundle: CustomWitnessBundle) -> Self {
         self.custom_witness = Some(bundle);
+        self
+    }
+
+    /// Attach the prover-side bridge-action tuple witness (the deployed bridge-binding thread, the twin
+    /// of [`RotatedParticipantLeg::with_custom_witness`]). Builder-style; the chain prover reads it to
+    /// mint the bridge sub-proof leaf + segmented binding node for this bridge-mint turn.
+    pub fn with_bridge_witness(mut self, bundle: BridgeWitnessBundle) -> Self {
+        self.bridge_witness = Some(bundle);
         self
     }
 }
@@ -307,6 +343,7 @@ impl RotatedParticipantLeg {
             descriptor: wide_desc,
             public_inputs: dpis,
             custom_witness: None,
+            bridge_witness: None,
         })
     }
 
@@ -448,6 +485,7 @@ impl RotatedParticipantLeg {
             descriptor: welded,
             public_inputs: dpis,
             custom_witness: None,
+            bridge_witness: None,
         })
     }
     /// **THE WIDE WELDED ROTATED+UMEM LEG (STAGED, VK-RISK-FREE) — the IVC half of the genuine flip
@@ -575,6 +613,7 @@ impl RotatedParticipantLeg {
             descriptor: welded,
             public_inputs: dpis,
             custom_witness: None,
+            bridge_witness: None,
         })
     }
 
@@ -716,6 +755,7 @@ impl RotatedParticipantLeg {
             descriptor: welded,
             public_inputs: dpis,
             custom_witness: None,
+            bridge_witness: None,
         })
     }
 
@@ -811,6 +851,7 @@ impl RotatedParticipantLeg {
             descriptor: desc,
             public_inputs: dpis,
             custom_witness: Some(bundle),
+            bridge_witness: None,
         })
     }
 

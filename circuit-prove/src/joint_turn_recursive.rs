@@ -695,6 +695,13 @@ pub fn prove_custom_binding_node_segmented(
 /// 8 nullifier ++ 8 recipient ++ 8 dest_federation ++ 2 amount).
 pub const BRIDGE_TUPLE_LEN: usize = 26;
 
+/// The rotated bridge-mint descriptor's tuple-exposure PI slot start (Lean `EffectVmEmitRotationV3.mintV3`
+/// pins the 26 tuple columns to PI `[46..72)` — the first slots past the four rotated commit pins, exactly
+/// as the custom commitment sits at `CUSTOM_COMMIT_PI_LO = 46`). The dual-expose leg re-exposes
+/// `descriptor_pis[BRIDGE_TUPLE_PI_LO .. +BRIDGE_TUPLE_LEN)` and the segmented binding node connects it to
+/// the `prove_bridge_leaf_tuple_claim` sub-proof's genuine tuple.
+pub const BRIDGE_TUPLE_PI_LO: usize = 46;
+
 /// **THE BRIDGE-BINDING MECHANISM NODE (the minimal fold tooth — no segment).** Aggregate a bridge
 /// turn's leg leaf (which must RE-EXPOSE its CLAIMED 26-slot tuple as an `expose_claim`, via
 /// [`crate::ivc_turn_chain::prove_descriptor_leaf_with_pi_slice_expose`]) WITH the bridge sub-proof

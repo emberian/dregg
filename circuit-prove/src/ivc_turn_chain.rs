@@ -2883,8 +2883,8 @@ fn prove_chain_core_rotated(
     // `CustomBindingFromFold.custom_binding_from_fold` is now TRUE on the deployed path).
     for (i, t) in turns.iter().enumerate() {
         let leg = &t.participant.rotated;
-        let wrapped = match &leg.custom_witness {
-            Some(bundle) => {
+        let wrapped = match (&leg.custom_witness, &leg.bridge_witness) {
+            (Some(bundle), _) => {
                 let dual = prove_descriptor_leaf_dual_expose(
                     &leg.descriptor,
                     &leg.proof,
@@ -2913,7 +2913,45 @@ fn prove_chain_core_rotated(
                     reason: format!("segmented custom-binding node failed: {e:?}"),
                 })?
             }
-            None => prove_descriptor_leaf_rotated_with_segment(
+            // BRIDGE-BINDING DEPLOYED WIRE (the bridge twin of the custom arm): a `BridgeMint` turn
+            // whose widened `mintVmDescriptor2R24` leg publishes the 26-felt `(nullifier, recipient,
+            // dest_federation, amount)` tuple at IR2 PI [46..72) gets a DUAL-EXPOSE leaf (segment ++ the
+            // claimed tuple) folded against the RE-PROVEN bridge-action sub-proof leaf through
+            // `prove_bridge_binding_node_segmented` — binding the leg's claimed tuple to the sub-proof's
+            // genuine in-circuit tuple IN the recursion tree (a forged claim with no backing sub-proof is
+            // UNSAT), and re-exposing the SAME segment so it folds into `aggregate_tree` like any segment
+            // leaf. This makes the payment binding REAL for a pure light client — the ACTUAL fields, no
+            // hash-gadget seam.
+            (None, Some(bundle)) => {
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    crate::joint_turn_recursive::BRIDGE_TUPLE_PI_LO,
+                    crate::joint_turn_recursive::BRIDGE_TUPLE_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let bridge_leaf = crate::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim(
+                    &bundle.backing,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("bridge sub-proof leaf mint failed: {reason}"),
+                })?;
+                crate::joint_turn_recursive::prove_bridge_binding_node_segmented(
+                    &dual,
+                    &bridge_leaf,
+                    &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented bridge-binding node failed: {e:?}"),
+                })?
+            }
+            (None, None) => prove_descriptor_leaf_rotated_with_segment(
                 &leg.descriptor,
                 &leg.proof,
                 &leg.public_inputs,
