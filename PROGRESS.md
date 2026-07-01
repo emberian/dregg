@@ -37,8 +37,19 @@ never touch main/WIP, no history rewrite).
       PIs), `decoBridgeMint_rejects_mismatched_commit` (the tooth). `Verify/StripeLightClient`:
       `stripe_light_client_witnesses_payment` (G1) joins the circuit weld to the DECO relation — a light
       client reading only the aggregate PIs witnesses the mint credits EXACTLY the Stripe-attested non-zero
-      amount, backed by an accepted DECO proof. All #assert_axioms kernel-clean. REMAINING (deployment, not
-      Lean): the Rust wide-leg tuple emission + swapping the deployed VK to the gated epoch.
+      amount, backed by an accepted DECO proof. All #assert_axioms kernel-clean.
+- [~] Phase D — **RUST-SIDE descriptor-emit LANDED GREEN (staged additively).** The gated
+      `decoBridgeMintVmDescriptor` is emitted to `circuit/descriptors/dregg-effectvm-bridgemint-deco-v1.json`
+      (byte-exact from the verified Lean emit via `EmitAllJson.lean`) and registered in the Rust
+      `ALL_DESCRIPTORS` registry (`effect_vm_descriptors.rs`) with its sha256 FP — name-only, ADDITIVE (the
+      deployed `BRIDGE_MINT` selector still maps to `bridgemint-v1`, untouched). It publishes the payment
+      commitment (`mint_hash`, col 68) → PI[42] and minted value (col 69) → PI[43]; piCount 44. Test
+      `bridgemint_deco_is_additive_payment_emit` verifies the additive-prefix + pin structure (Rust mirror
+      of Lean `decoBridgeMint_base_prefix`/`_publishes`). The bridge FOLD it feeds (`bridge_leaf_adapter` +
+      `prove_bridge_binding_node` + `bridge_binding_mechanism.rs` teeth) is already built + tested. REMAINING
+      is the deployment CUTOVER (a breaking VK change, needs go-ahead): flip the deployed `BRIDGE_MINT`
+      selector to the gated descriptor + supply the 2 new PIs in the production PI computation + attach the
+      minter `bridge_witness`. (Pre-existing unrelated drift: `wide_umem_weld_registry` FP predates this.)
 - [ ] Phase E — integration + live sandbox attested-flow demo + light-client demo + docs
 
 ## Anchors (Dregg2 recon — Phase A) — primitives largely ALREADY PROVED; this is composition
