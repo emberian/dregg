@@ -116,7 +116,8 @@ impl EscrowSchema {
 /// the funds (no `Transfer` is implied — escrow value lives in the cell's state
 /// slots, paid out by the app's own settlement convention), nor that the escrow
 /// was ≤ the listing ceiling (the TRUSTLINE invariant — a separate `FieldLteField`
-/// the executor enforces; add a ceiling slot to check it here too).
+/// the executor enforces). For that `≤` ceiling — `Σ provisional-exposure ≤
+/// reserve` — see [`check_exposure_bound`], the `≤` analogue of this `==` check.
 pub fn check_escrow_conservation(
     forest: &CallForest,
     schema: &EscrowSchema,
@@ -191,6 +192,151 @@ pub fn check_escrow_conservation(
                     ),
                 });
             }
+        }
+    }
+
+    Verdict::from_findings(findings)
+}
+
+// ─── exposure bound (the `≤` ceiling: Σ provisional-exposure ≤ reserve) ──────
+
+/// The reserve schema for the provisional-exposure ceiling check: the cell that
+/// holds the reserve and the slot the reserve ceiling `R` lives in.
+///
+/// This is the `≤`-side twin of [`EscrowSchema`]. Where escrow conservation is
+/// an `==` over three value slots, the exposure bound is a `≤` of a single
+/// tracked accumulator against one ceiling slot. The reserve is the Trustline
+/// `Line.ceiling` (immutable, disclosed); the exposure is the `drawn`
+/// spent-provisional column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExposureSchema {
+    /// The cell the reserve ceiling lives on (the money-in reserve well).
+    pub cell: CellId,
+    /// The slot holding the reserve ceiling `R` — the immutable, disclosed
+    /// bound `Σ exposure` may not exceed.
+    pub reserve_slot: usize,
+}
+
+impl ExposureSchema {
+    /// A reserve schema for `cell` with the reserve ceiling in `reserve_slot`.
+    pub fn new(cell: CellId, reserve_slot: usize) -> Self {
+        ExposureSchema { cell, reserve_slot }
+    }
+}
+
+/// **Exposure bound — `Σ provisional-exposure ≤ reserve`, statically.**
+///
+/// The `≤` analogue of [`check_escrow_conservation`]'s `==`. It folds the
+/// forest's provisional-supply moves into a single signed `exposure`
+/// accumulator and asserts it does not exceed the disclosed reserve ceiling:
+///
+///   * `Effect::Mint { amount, .. }` RAISES exposure by `amount` (the cap-gated
+///     supply entry — provisional credit conjured against the reserve),
+///   * `Effect::BridgeMint { portable_proof }` RAISES exposure by
+///     `portable_proof.value` (the cross-federation mint's claimed value),
+///   * `Effect::Burn { amount, .. }` LOWERS exposure by `amount` (provisional
+///     credit retired / refunded).
+///
+/// These are exactly the three Generative/Annihilative verbs
+/// [`crate::check_conservation`] DROPS at its `_ => {}` (they are disclosed
+/// non-conservation, not within-forest moves) — so outstanding provisional
+/// supply gets its own tracked column here, the `drawn` exposure counter,
+/// surfaced to a light client. The ceiling is the Trustline
+/// `draw_within_line` bound: `exposure ≤ R`.
+///
+/// The reserve `R` is resolved from `schema.reserve_slot` on `schema.cell`
+/// (the last in-forest `SetField` write wins, as in the executor), falling back
+/// to `prior_reserve` when the forest does not itself write the reserve (the
+/// common case: the reserve was bound by an earlier funding turn, and this
+/// forest only mints/burns against it). Pass `None` when the forest writes the
+/// reserve slot.
+///
+/// THE BOUNDARY: this proves the *planned* mint/burn fold stays within the
+/// reserve *ceiling* it can resolve. It does NOT prove the reserve is actually
+/// FUNDED — that hard collateral really backs the ceiling on the live cell is a
+/// live-state question (exactly as a `BridgeMint`'s value is trusted from its
+/// portable proof, not re-derived here). A within-ceiling turn can still be
+/// rejected if the reserve fund is not really there. See [`crate::boundary`].
+pub fn check_exposure_bound(
+    forest: &CallForest,
+    schema: &ExposureSchema,
+    prior_reserve: Option<u64>,
+) -> Verdict {
+    // Fold the provisional-supply moves check_conservation drops into a signed
+    // exposure column (i128 to dodge wrap on a large mint sum). Mint / BridgeMint
+    // RAISE outstanding provisional supply; Burn RETIRES it — the `drawn` counter.
+    let mut exposure: i128 = 0;
+    walk(forest, |_path, node| {
+        for eff in &node.action.effects {
+            match eff {
+                Effect::Mint { amount, .. } => exposure += *amount as i128,
+                Effect::BridgeMint { portable_proof } => {
+                    exposure += portable_proof.value as i128;
+                }
+                Effect::Burn { amount, .. } => exposure -= *amount as i128,
+                _ => {}
+            }
+        }
+    });
+
+    // Resolve the reserve ceiling: prefer the in-forest write to the reserve
+    // slot, else the prior-committed reserve. No default — an unresolved reserve
+    // is REPORTED, never treated as an implicit 0 (which would fail every nonzero
+    // mint / pass every net burn vacuously).
+    let writes = last_field_writes(forest, schema.cell);
+    let reserve = resolve_amount(&writes, schema.reserve_slot, prior_reserve);
+
+    let mut findings = Vec::new();
+
+    // A non-decodable reserve write is its own finding (a hash in an amount slot
+    // is a construction bug the ceiling arithmetic cannot compare against).
+    if let Some((path, raw)) = writes.get(&schema.reserve_slot)
+        && decode_u64_field(raw).is_none()
+    {
+        findings.push(Finding {
+            guarantee: "exposure (reserve bound)".to_string(),
+            locus: Locus::node(path.clone()),
+            message: format!(
+                "reserve slot {} is written with a non-integer field (leading bytes \
+                 nonzero — looks like a hash, not an amount); the exposure ceiling \
+                 cannot compare against it",
+                schema.reserve_slot
+            ),
+        });
+    }
+
+    match reserve {
+        Some(r) => {
+            if exposure > r as i128 {
+                findings.push(Finding {
+                    guarantee: "exposure (reserve bound)".to_string(),
+                    locus: Locus::node(vec![])
+                        .at_asset(format!("reserve:{}", short_cell(&schema.cell))),
+                    message: format!(
+                        "provisional exposure exceeds the reserve: Σ exposure ({exposure}) \
+                         > reserve ({r}) — the mint/burn fold conjures more provisional \
+                         supply than the disclosed reserve backs (the Trustline \
+                         draw_within_line ceiling the executor gates at; a spend past R is \
+                         fail-closed). A solvent turn needs Σ exposure ≤ reserve."
+                    ),
+                });
+            }
+        }
+        None => {
+            // Could not resolve the reserve (no in-forest write, no prior given) —
+            // report it rather than vacuously pass.
+            findings.push(Finding {
+                guarantee: "exposure (reserve bound)".to_string(),
+                locus: Locus::node(vec![])
+                    .at_asset(format!("reserve:{}", short_cell(&schema.cell))),
+                message: format!(
+                    "cannot check the exposure bound: the reserve ceiling (slot {}) is \
+                     neither written in this forest nor supplied as a prior-committed \
+                     value. Pass the committed reserve via `prior_reserve` when analyzing \
+                     a mint/burn turn against a reserve bound by an earlier turn.",
+                    schema.reserve_slot
+                ),
+            });
         }
     }
 
