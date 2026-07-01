@@ -35,13 +35,20 @@ never touch main/WIP, no history rewrite).
       fine here, so it was the wrong tradeoff. Deleted (`EffectVmEmitBridgeMintDeco.lean`,
       `StripeLightClient.lean`, the gated descriptor + Rust registration + `prove_bridge_mint_commitment_node`
       + tests). `Crypto/Deco.lean` (the DECO relation, Tier 1) is unaffected and kept.
-- [ ] Phase D — **D3 / G1 (the RIGHT thing, in progress):** widen the DEPLOYED rotated bridge-mint
-      descriptor (`mintVmDescriptor2R24`, Lean `EffectVmEmitRotationV3` — NOT the v1 `bridgeMintVmDescriptor`)
-      to carry + emit the 26-felt payment tuple (nullifier[8]‖recipient[8]‖dest_federation[8]‖amount[2]) as
-      PIs at `BRIDGE_TUPLE_PI_LO..`; add a `bridge_witness` on the leg mirroring `custom_witness`; wire the
-      chain prover branch (`prove_descriptor_leaf_dual_expose_at` + `prove_bridge_leaf_tuple_claim` +
-      `prove_bridge_binding_node_segmented` — all already built + tested); regen VK/FP. The light client then
-      reads the ACTUAL payment fields off the aggregate PIs — no hash-gadget seam.
+- [~] Phase D — **D3 / G1 (the RIGHT thing — 26-felt tuple, in progress; commit `e04a93124`):**
+      DONE: (1) widened the DEPLOYED rotated bridge-mint descriptor `mintV3` (= `mintVmDescriptor2R24`,
+      Lean `EffectVmEmitRotationV3`) with `bridgeTuplePiExposure` — 26 `.piBinding .first` pins publishing
+      the tuple (nullifier[8]‖recipient[8]‖dest_federation[8]‖amount[2]) on 26 APPENDED columns at PI
+      [46..72), piCount 46→72, mirroring `customPiExposure`; #guards green. (2) Full Rust plumbing:
+      `BridgeWitnessBundle` + `bridge_witness` on `RotatedParticipantLeg` (+ Clone/builder/all literals) +
+      the chain-prover `(None, Some(bundle))` branch in `prove_chain_core_rotated`
+      (`prove_descriptor_leaf_dual_expose_at(46,26)` + `prove_bridge_leaf_tuple_claim` +
+      `prove_bridge_binding_node_segmented`) + `const BRIDGE_TUPLE_PI_LO = 46`. circuit-prove COMPILES.
+      REMAINING: `generate_rotated_bridgemint_wide` (lay the 26 tuple columns in the v3-staged mint trace +
+      fill PIs 46..71 — being mapped: the v3-staged 829-wide vs the 789-wide family) +
+      `mint_bridge_wide_from_block_witnesses` + the turn wrapper; regen the JSON registry
+      (`rotation-v3-staged-registry.tsv` + `V3_STAGED_REGISTRY_FP` + the wide-registry cover); end-to-end
+      fold test. NOT yet regenerated ⇒ Lean widened but JSON stale (drift check would flag until regen).
 - [ ] Phase E — integration + live sandbox attested-flow demo + light-client demo + docs
 
 ## Anchors (Dregg2 recon — Phase A) — primitives largely ALREADY PROVED; this is composition
