@@ -563,6 +563,61 @@ pub fn mint_custom_wide_rotated_participant_leg(
     )
 }
 
+/// **THE BRIDGE-MINT WIDENED-LEG minting recipe (the RIGHT G1 payment binding).** The bridge twin of
+/// [`mint_custom_wide_rotated_participant_leg`]: converts the before/after `Cell`s into rotated block
+/// witnesses and mints the WIDENED narrow `mintVmDescriptor2R24` leg (855-wide / 72-PI) that publishes
+/// the bridge-action tuple `(nullifier, recipient, dest_federation, amount)` at PI `[46..72)`, retaining
+/// the `BridgeWitnessBundle` so the chain prover folds the bridge sub-proof + segmented binding node —
+/// the ACTUAL payment fields bound for a pure light client, no hash-gadget seam.
+pub fn mint_bridge_rotated_participant_leg(
+    initial_state: &dregg_circuit::effect_vm::CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_cell: &Cell,
+    after_cell: &Cell,
+    nullifier_root: &[u8; 32],
+    commitments_root: &[u8; 32],
+    receipt_log: &[[u8; 32]],
+    turn_id: Option<BabyBear>,
+    bundle: dregg_circuit_prove::joint_turn_aggregation::BridgeWitnessBundle,
+) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
+    use dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness;
+    use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(after_cell.clone()).map_err(|e| {
+        format!("mint_bridge_rotated_participant_leg: ledger seed failed: {e:?}")
+    })?;
+
+    let before_w = produce(
+        before_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let after_w = produce(
+        after_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).map_err(|e| {
+            format!("mint_bridge_rotated_participant_leg: rotated block witness: {e}")
+        })
+    };
+
+    RotatedParticipantLeg::mint_bridge_from_block_witnesses(
+        initial_state,
+        effects,
+        &bridge(&before_w)?,
+        &bridge(&after_w)?,
+        turn_id,
+        bundle,
+    )
+}
+
 /// **THE WELDED ROTATED+UMEM LEG MINTING RECIPE (STAGED, VK-RISK-FREE) — the IVC half of the
 /// flag-day weld.** Like [`mint_rotated_participant_leg`], but the minted leg carries the WELDED
 /// rotated+umem descriptor: it derives the SAME turn's universal-memory touch (the pre→post
