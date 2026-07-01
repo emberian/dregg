@@ -18,7 +18,6 @@ import Dregg2.Circuit.Emit.EffectVmEmit
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
 import Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
-import Dregg2.Circuit.Emit.EffectVmEmitBridgeMintDeco
 import Dregg2.Circuit.Emit.EffectVmEmitBurn
 import Dregg2.Circuit.Emit.EffectVmEmitCellDestroy
 import Dregg2.Circuit.Emit.EffectVmEmitCellSeal
@@ -63,10 +62,6 @@ def allEntries : List Entry :=
   [ ⟨"transferVmDescriptor",            EffectVmEmitTransfer.transferVmDescriptor⟩
   , ⟨"attenuateVmDescriptor",           EffectVmEmitAttenuateA.attenuateVmDescriptor⟩
   , ⟨"bridgeMintVmDescriptor",          EffectVmEmitBridgeMint.bridgeMintVmDescriptor⟩
-    -- G1 (staged additively): the gated bridge-mint descriptor that PUBLISHES the payment commitment
-    -- + minted value as public inputs (`.piBinding .first`), so a light client witnesses the payment.
-    -- Distinct AIR name ⇒ distinct VK; the deployed `bridgeMintVmDescriptor` is untouched.
-  , ⟨"decoBridgeMintVmDescriptor",      EffectVmEmitBridgeMintDeco.decoBridgeMintVmDescriptor⟩
   , ⟨"burnVmDescriptor",                EffectVmEmitBurn.burnVmDescriptor⟩
   , ⟨"cellDestroyVmDescriptor",         EffectVmEmitCellDestroy.cellDestroyVmDescriptor⟩
   , ⟨"cellSealVmDescriptor",            EffectVmEmitCellSeal.cellSealVmDescriptor⟩
