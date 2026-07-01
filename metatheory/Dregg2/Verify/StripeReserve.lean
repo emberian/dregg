@@ -10,11 +10,11 @@ doc §4.2, "Route α"). The symbol binding:
   * reserve fund remaining               = `escrow = R − settled`
 
 Every solvency property is a symbol-binding INSTANCE of the PROVED Trustline theorems — no new proof
-of the core. Soundness is adversarial-oracle: for ANY attest/reverse/spend/finalize schedule
-(`SSched`), dregg's realized loss never exceeds the disclosed R (`net ≥ −R`) and the reserve fund is
-never negative. The zkTLS payment attestation stays the opaque `StripeAttest.stripe_attest_sound`
-gate (see `StripeBridgeV2`); Stripe-semantic fidelity buys only liveness + a tighter R, never
-soundness. R is a named, disclosed risk parameter that absorbs the entire model↔reality gap.
+of the core. The guarantee is unconditional over the dynamics: for ANY attest/reverse/spend/finalize
+schedule (`SSched`), dregg's realized loss never exceeds the reserve R (`net ≥ −R`) and the reserve
+fund is never negative — a proved theorem about the reserve `R` (real collateral). The payment
+attestation is the `StripeAttest.stripe_attest_sound` gate (see `StripeBridgeV2`), an explicit
+hypothesis (the §8 verify predicate).
 -/
 import Dregg2.Apps.Trustline
 

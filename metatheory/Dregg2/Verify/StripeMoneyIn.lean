@@ -1,8 +1,7 @@
 /-
 # Dregg2.Verify.StripeMoneyIn — the END-TO-END money-in bridge.
 
-Closes the "labeled abstraction" gap (independent codex soundness review, Critical/High/Medium):
-it connects the Stripe-attested provisional MINT to the reserve `ChannelC` by making the money-in
+Connects the Stripe-attested provisional MINT to the reserve `ChannelC` by making the money-in
 operations FORMALLY the `ChannelC` `SOp`s, so the apex loss-bound lands on the ACTUAL attested
 money-in schedule rather than an abstract channel schedule.
 
@@ -14,8 +13,9 @@ The interpretation (`MIOp.toSOp`), which IS the model↔claim bridge:
 
 `miTraj_eq_trajC` proves money-in dynamics ARE `ChannelC` dynamics; `stripe_money_in_loss_bounded_e2e`
 then instantiates the reserve apex on the real money-in trajectory: for ANY schedule of attested
-mints / finalizes / reverses, dregg's realized loss `settled ≤ R` (net ≥ −R). The §8 zkTLS crypto
-behind the attestation stays the `CryptoKernel` oracle (the acknowledged residual), not a Lean law.
+mints / finalizes / reverses, dregg's realized loss `settled ≤ R` (net ≥ −R). The attestation is an
+explicit hypothesis (the §8 `CryptoKernel` verify predicate); the money-in dynamics are proved
+unconditionally given it.
 -/
 import Dregg2.Verify.StripeReserve
 import Dregg2.Verify.StripeAttest

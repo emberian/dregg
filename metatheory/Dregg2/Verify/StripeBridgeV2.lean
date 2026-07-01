@@ -21,8 +21,9 @@ Anchors reused verbatim (NOT re-proved here):
 
 The mint anchor is the `Intent/Lifecycle.publish`-gated-by-attestation model (the dregg-native
 "book the obligation as a real conserved balance" shape): `publish_conserves` carries conservation
-and the one-shot teeth carry exactly-once. The §8 zkTLS crypto stays the `CryptoKernel` oracle
-(the opaque witness routed through the registered verifier), NEVER a Lean law.
+and the one-shot teeth carry exactly-once. The attestation enters as an EXPLICIT HYPOTHESIS — the
+registered-verifier accept, via `stripe_attest_sound` — the standard cryptographic-primitive
+assumption, discharged by the `CryptoKernel` verify predicate (§8 portal).
 
 Creates ONE new file; edits nothing else. K2 (attested transition) + K3 (gated lifecycle),
 re-welded onto the provisional mint per theorem 17.

@@ -6,10 +6,12 @@ A `Claim` (the bound payment facts) is discharged by a witness the registry ACCE
 Stripe kind — `stripe_attest_sound` is the K1 soundness-by-verification, composing the proved
 `Authority.Predicate.registry_sound`.
 
-The witness itself is a DECO zkTLS proof of Stripe's TLS-authenticated API; its CRYPTO soundness
-is the §8 `CryptoKernel.verify` oracle, NEVER a Lean law (per `Authority.Predicate`'s §8 portal).
-This module models DISPATCH + soundness-by-verification only; the concrete DECO verifier (K5)
-plugs in as the registered `Verifier` and is verified by the crypto oracle.
+The witness is a DECO zkTLS proof of Stripe's TLS-authenticated API. Its verification enters every
+downstream theorem as an EXPLICIT HYPOTHESIS — the registry-accept premise `registryVerify … = true`
+of `stripe_attest_sound` — i.e. the standard cryptographic-primitive soundness assumption, discharged
+operationally by the `CryptoKernel.verify` predicate (per `Authority.Predicate`'s §8 portal). This
+module PROVES the dispatch + soundness-by-verification: a witness the registry accepts discharges the
+payment `Claim`; the concrete DECO verifier (K5) plugs in as the registered `Verifier`.
 
 K1 of `docs/STRIPE-KERNEL-BUILD-PLAN.md`; composes with `Apps.BridgeCell`'s proved
 finalize/cancel lifecycle (the `witnessed(vk)` finality-gate IS this discharge).
