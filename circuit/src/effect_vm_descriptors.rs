@@ -821,7 +821,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "60beddb40247270bad03e89b6f82a4d6bed61c83f36cdd633566ece219ed1b29";
+    "bd90cae4f5a46ef04f39c2d46acdad583945d1bf2594692bdd0a615046b2e1eb";
 
 /// **THE UMEM-FORM COHORT REGISTRY (STAGED, VK-RISK-FREE).** The 9 per-effect FIXED-cohort umem
 /// descriptors — `setFieldUMem` · `setHeapUMem` · `grantUMem` · `attenuateUMem` ·
@@ -1203,7 +1203,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "f49d155b329a6d491444428a01cd818b6d6c99909e69f2197cef9176459b774f";
+    "c8eefa1218bf3c8c3e9bf933ee0c88eb4c07e4551d19a49f93be1e179cff4ef8";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -1229,7 +1229,7 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "9adb6ce1a79b35571055e1817303a72a32b30a6e8523c675def7e05e1bef2924";
+    "b4718acfb01edfc5f2daeed4109ae05be1bbd6853a3fa2574afe09c8b66df3d9";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -2397,6 +2397,23 @@ mod tests {
                     "custom: 8 fold-binding pins weld proof_commitment (PARAM_BASE+4..7)→PI[46..49] \
                      + program_vk_hash (PARAM_BASE+0..3)→PI[50..53]"
                 );
+            } else if key == "mintVmDescriptor2R24" {
+                // Bridge-mint tuple exposure (`EffectVmEmitRotationV3.mintV3` / `bridgeTuplePiExposure`):
+                // the WIDENED bridge-mint leg publishes the 26-felt bridge-action tuple
+                // (nullifier[8]‖recipient[8]‖dest_federation[8]‖amount[2]) on the LAST 26 of its 28
+                // appended columns (26 tuple + 2 chip-lane-alignment pad) → PI[46..72), on the FIRST row
+                // (fold-enforced, like custom). So it carries 72 PIs (46 rotated + 26 tuple).
+                assert_eq!(
+                    d.public_input_count, 72,
+                    "bridge-mint: rotated 46-PI + the 26-felt bridge-action tuple exposure (46..72)"
+                );
+                let base = d.trace_width - 26; // the tuple rides the last 26 columns
+                let expected: Vec<(usize, usize)> =
+                    (0..26).map(|k| (base + k, pi_base + 4 + k)).collect();
+                assert_eq!(
+                    nullifier_pins, expected,
+                    "bridge-mint: 26 tuple pins weld the last 26 columns → PI[46..72)"
+                );
             } else {
                 assert_eq!(
                     d.public_input_count, 46,
@@ -2487,9 +2504,10 @@ mod tests {
             // `host.piCount + 16`. The host widths in play are 801 (custom/setFieldDyn → 1169), 815
             // (heapWrite splice → 1183), 829 (the rotated cohort → 1197), 1039 (cap-open → 1407) and
             // 1041 (the turn-identity-pinned transfer cap-open → 1409): every wide width is `host + 368`.
+            // 1225 = the WIDENED bridge-mint (mintVmDescriptor2R24, host 857 = 829 + 28 tuple/pad) → +368.
             assert!(
-                matches!(d.trace_width, 1169 | 1183 | 1197 | 1407 | 1409),
-                "{key}: wide width {} is a known wide geometry (1169 / 1183 / 1197 / 1407 / 1409)",
+                matches!(d.trace_width, 1169 | 1183 | 1197 | 1225 | 1407 | 1409),
+                "{key}: wide width {} is a known wide geometry (1169 / 1183 / 1197 / 1225 / 1407 / 1409)",
                 d.trace_width
             );
             // Every wide member carries the 16 wide-commit PIs (the 8-felt ~124-bit before/after
