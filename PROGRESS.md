@@ -28,37 +28,20 @@ never touch main/WIP, no history rewrite).
       toy `refVerifier`/`refRegistry` RETIRED; whole Stripe chain builds green. The DECO verification is
       now a CONSTRUCTED relation, not an opaque oracle — surviving trust base = STARK + §8 primitives +
       external Web-PKI/Stripe floor).
-- [~] Phase D — **D3 / G1 LANDED GREEN (staged additively).** `Circuit/Emit/EffectVmEmitBridgeMintDeco`:
-      `decoBridgeMintVmDescriptor` = the deployed `bridgeMintVmDescriptor` PLUS two `.piBinding .first`
-      welds publishing the payment commitment (`mint_hash`) + minted value as NEW public inputs — a gated
-      VK epoch (distinct AIR name ⇒ distinct VK; the DEPLOYED descriptor is UNTOUCHED). Proved:
-      `decoBridgeMint_to_base` (deployed keystones lift verbatim), `decoBridgeMint_full_sound` (ledger
-      credit + committed post-state unchanged), `decoBridgeMint_publishes` (first row pins the facts to the
-      PIs), `decoBridgeMint_rejects_mismatched_commit` (the tooth). `Verify/StripeLightClient`:
-      `stripe_light_client_witnesses_payment` (G1) joins the circuit weld to the DECO relation — a light
-      client reading only the aggregate PIs witnesses the mint credits EXACTLY the Stripe-attested non-zero
-      amount, backed by an accepted DECO proof. All #assert_axioms kernel-clean.
-- [~] Phase D — **RUST-SIDE descriptor-emit LANDED GREEN (staged additively).** The gated
-      `decoBridgeMintVmDescriptor` is emitted to `circuit/descriptors/dregg-effectvm-bridgemint-deco-v1.json`
-      (byte-exact from the verified Lean emit via `EmitAllJson.lean`) and registered in the Rust
-      `ALL_DESCRIPTORS` registry (`effect_vm_descriptors.rs`) with its sha256 FP — name-only, ADDITIVE (the
-      deployed `BRIDGE_MINT` selector still maps to `bridgemint-v1`, untouched). It publishes the payment
-      commitment (`mint_hash`, col 68) → PI[42] and minted value (col 69) → PI[43]; piCount 44. Test
-      `bridgemint_deco_is_additive_payment_emit` verifies the additive-prefix + pin structure (Rust mirror
-      of Lean `decoBridgeMint_base_prefix`/`_publishes`).
-- [~] Phase D — **RUST-SIDE FOLD LANDED GREEN + FIRES (staged additively).**
-      `circuit-prove/src/joint_turn_recursive.rs::prove_bridge_mint_commitment_node` — the compact
-      mint_hash-commitment fold (Design M, the term-for-term analog of `prove_custom_binding_node`) that
-      CONSUMES the gated descriptor's payment emit: it `connect`s the bridge-mint leg's claimed
-      `[mint_hash, value]` (PI[42..44], re-exposed) to a payment sub-proof leaf's genuine claim. This
-      matches the COMPACT commitment the substrate `BridgeMint` row actually carries (mint_hash binds
-      nullifier/root/dest/asset), NOT the 26-felt tuple (which needs a widened trace). Integration test
-      `circuit-prove/tests/bridge_mint_commitment_fold.rs` FIRES it end-to-end over real recursion: HONEST
-      folds + binds (verified 182s), FORGED mint_hash REJECTED (connect conflict ⇒ UNSAT ⇒ no root). Additive
-      — nothing deployed touched. REMAINING is the production integration: the minter producing a REAL
-      mint_hash sub-proof (the in-AIR `mint_hash = H(nullifier,root,dest,asset)` binding) + wiring the node
-      into `prove_chain_core_rotated` (like the custom path). (Pre-existing unrelated drift:
-      `wide_umem_weld_registry` FP predates this.)
+- [~] Phase D — **D3 / G1: the COMPACT (mint_hash-commitment) path was BUILT then RIPPED OUT as busted.**
+      It bound a compressed `mint_hash` commitment instead of the real 26-felt payment tuple — a strictly
+      weaker duplicate of the existing `prove_bridge_binding_node` design that ALSO manufactured a new
+      in-AIR `mint_hash = H(tuple)` seam the full-tuple design doesn't need. Non-back-compat/VK regen is
+      fine here, so it was the wrong tradeoff. Deleted (`EffectVmEmitBridgeMintDeco.lean`,
+      `StripeLightClient.lean`, the gated descriptor + Rust registration + `prove_bridge_mint_commitment_node`
+      + tests). `Crypto/Deco.lean` (the DECO relation, Tier 1) is unaffected and kept.
+- [ ] Phase D — **D3 / G1 (the RIGHT thing, in progress):** widen the DEPLOYED rotated bridge-mint
+      descriptor (`mintVmDescriptor2R24`, Lean `EffectVmEmitRotationV3` — NOT the v1 `bridgeMintVmDescriptor`)
+      to carry + emit the 26-felt payment tuple (nullifier[8]‖recipient[8]‖dest_federation[8]‖amount[2]) as
+      PIs at `BRIDGE_TUPLE_PI_LO..`; add a `bridge_witness` on the leg mirroring `custom_witness`; wire the
+      chain prover branch (`prove_descriptor_leaf_dual_expose_at` + `prove_bridge_leaf_tuple_claim` +
+      `prove_bridge_binding_node_segmented` — all already built + tested); regen VK/FP. The light client then
+      reads the ACTUAL payment fields off the aggregate PIs — no hash-gadget seam.
 - [ ] Phase E — integration + live sandbox attested-flow demo + light-client demo + docs
 
 ## Anchors (Dregg2 recon — Phase A) — primitives largely ALREADY PROVED; this is composition
