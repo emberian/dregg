@@ -18,9 +18,12 @@ human-readable confirmation for every transaction before signing, and talks only
 to the dregg node the user configures. It is the wallet equivalent of MetaMask
 for the dregg protocol.
 
-NO ACCOUNT / LOGIN NEEDED — IT IS SELF-CUSTODY
-There is no sign-up, no server account, and no credentials to give you. The
-wallet is created locally on first run. To test:
+NO MANDATORY ACCOUNT — IT IS SELF-CUSTODY
+There is no sign-up, no username, and no password to give you. The wallet is
+created locally on first run. An OPTIONAL cap-account login lets the user sign
+into the dregg network by proving they hold a key (a one-time challenge is
+signed on-device); it is pseudonymous, requires no personal data, and is not
+needed to evaluate the wallet. To test:
 
 1. Install the extension and click the toolbar icon to open the popup.
 2. Onboarding runs automatically. You will be asked to:
@@ -38,6 +41,14 @@ wallet is created locally on first run. To test:
 5. Lock/unlock: locking wipes the in-memory key; unlocking requires the
    passphrase from step 2a. (Keep the recovery phrase from step 2b — it is the
    only way to restore the wallet.)
+6. Optional cap-account login: the Cipherclerk tab has a "Cloud Session" section
+   with a "Log in to the dregg network" button. Clicking it fetches a one-time
+   challenge from the cloud, signs it with the active profile's key, and shows
+   the signed-in cap-account (dregg:…); "Log out" drops the session. It needs a
+   reachable cloud endpoint; without one it simply reports the connection error.
+   The exact request/response contract is documented in LOGIN-CONTRACT.md and
+   covered by the unit test in test/login.test.mjs (a stub-cloud handshake), so
+   the flow is verifiable without a live server.
 
 You do not need funds or a live counterparty to evaluate the security model: the
 key generation, encryption-at-rest, lock/unlock, and the signing-confirmation UI

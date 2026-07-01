@@ -290,6 +290,20 @@ impl Session {
         })
     }
 
+    /// **Restore this session's prior consumption at re-attach** — pre-charge the
+    /// meter by the account's persisted cumulative consumed total so the budget
+    /// ceiling SPANS SSH detach/re-attach instead of resetting to full on every
+    /// reconnect (the unbounded-spend hole otherwise). The host loads the persisted
+    /// per-account consumed from the durable [`crate::session_store`] and calls this
+    /// ONCE, right after [`open`](Session::open) and before the first goal. See
+    /// [`AgentCloud::restore_consumed`] for the semantics (clamped to the ceiling; a
+    /// genesis carryover receipt keeps [`verify`](Session::verify) holding on a bare
+    /// re-attach). A no-op for `prior_consumed <= 0`.
+    pub fn restore_consumed(&mut self, prior_consumed: i64) {
+        self.cloud
+            .restore_consumed(&self.handle, &mut self.state, prior_consumed);
+    }
+
     /// **Run one typed goal** through the session: drive `brain` (a live model, a
     /// confined Hermes harness, or a recorded transport) against `toolkit` (the
     /// real shell / fs / http / Stripe tools), bounded by the session's *remaining*
@@ -480,6 +494,95 @@ mod tests {
         assert!(sess.exhausted());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── the budget PERSISTS across SSH detach/re-attach (F2 fix) ──────────────
+    // Each fresh attach process opens a fresh in-memory meter; without restore the
+    // ceiling would silently RESET to full on every reconnect (unbounded spend).
+    // Restoring the persisted per-account consumed keeps the ceiling drawn down and
+    // refuses over-budget ACROSS the reconnect.
+    #[test]
+    fn the_budget_persists_across_reattach_and_over_budget_is_refused() {
+        let dir = wd();
+        let tk = echo_toolkit(&dir);
+        let spec = AgentSpec::new("ignored", 10).with_shell();
+
+        // First attach: spend 8 of the 10¢ ceiling, then "detach" (drop the session).
+        let mut s1 = Session::open_seeded([31u8; 32], "dga1_persist", spec.clone()).unwrap();
+        s1.run_goal(
+            "spend eight",
+            &mut shell_plan(&["a", "b", "c", "d", "e", "f", "g", "h"]),
+            &tk,
+        );
+        assert_eq!(s1.consumed(), 8);
+        assert_eq!(s1.headroom(), 2);
+        let persisted = s1.consumed();
+        drop(s1); // the SSH connection drops — the in-memory meter is gone.
+
+        // Re-attach: a BRAND-NEW session (fresh cloud + fresh in-memory meter). The
+        // host reloads the persisted consumed and restores it.
+        let mut s2 = Session::open_seeded([32u8; 32], "dga1_persist", spec).unwrap();
+        assert_eq!(
+            s2.consumed(),
+            0,
+            "a fresh attach process starts with a fresh meter (the hole, pre-restore)"
+        );
+        s2.restore_consumed(persisted);
+        assert_eq!(
+            s2.consumed(),
+            8,
+            "the budget is NOT reset — the drawdown persists"
+        );
+        assert_eq!(
+            s2.headroom(),
+            2,
+            "only the remaining 2¢ headroom after re-attach"
+        );
+
+        // A runaway after the reconnect: only the remaining 2¢ admit; the rest are
+        // refused in-band by the SESSION ceiling — no full-budget-again on reconnect.
+        let many: Vec<&str> = (0..50).map(|_| "x").collect();
+        let g = s2.run_goal("runaway after reconnect", &mut shell_plan(&many), &tk);
+        assert_eq!(
+            g.admitted, 2,
+            "only the remaining headroom admits across the reconnect"
+        );
+        assert!(
+            g.budget_refused >= 1,
+            "over-budget refused across the reconnect"
+        );
+        assert_eq!(s2.consumed(), 10, "the ceiling holds across reconnect");
+        assert!(s2.exhausted());
+
+        // The re-attached session still re-witnesses as one artifact.
+        s2.verify().expect("the re-attached session re-witnesses");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── a bare re-attach (restore, no new action) still verifies ──────────────
+    #[test]
+    fn a_restored_session_verifies_with_no_new_actions() {
+        let spec = AgentSpec::new("ignored", 10).with_shell();
+        let mut s = Session::open_seeded([34u8; 32], "dga1_bare", spec).unwrap();
+        s.restore_consumed(7);
+        assert_eq!(s.consumed(), 7, "the carryover is reflected");
+        assert_eq!(s.headroom(), 3);
+        // The genesis carryover receipt keeps the chain consistent with the meter.
+        let v = s.verify().expect("a bare re-attach re-witnesses");
+        assert_eq!(v.consumed, 7);
+    }
+
+    // ── a corrupt/over-ceiling stored value can never exceed the bound ────────
+    #[test]
+    fn restore_clamps_to_the_ceiling() {
+        let spec = AgentSpec::new("ignored", 10).with_shell();
+        let mut s = Session::open_seeded([35u8; 32], "dga1_clamp", spec).unwrap();
+        s.restore_consumed(9999); // corrupt store: absurdly high
+        assert_eq!(s.consumed(), 10, "clamped to the ceiling");
+        assert_eq!(s.headroom(), 0);
+        assert!(s.exhausted());
+        s.verify().expect("still re-witnesses");
     }
 
     // ── the receipt chain ACCUMULATES + re-witnesses as ONE artifact ──────────

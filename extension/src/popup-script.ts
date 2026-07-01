@@ -243,6 +243,7 @@ profileSelect.addEventListener("change", async () => {
   }
   await loadProfiles();
   await loadReceipts();
+  await loadLoginStatus();
 });
 
 createProfileBtn.addEventListener("click", async () => {
@@ -258,6 +259,79 @@ createProfileBtn.addEventListener("click", async () => {
   }
   newProfileName.value = "";
   await loadProfiles();
+});
+
+// ---------------------------------------------------------------------------
+// Cap-account login (challenge -> sign -> session). Log the wallet into the
+// live cloud with the active profile's key. No username, no password.
+// ---------------------------------------------------------------------------
+
+interface LoginStatus {
+  loggedIn: boolean;
+  subject: string | null;
+  accountId: string | null;
+  profile: string | null;
+  cloudUrl: string;
+  expiresAt: number;
+  expired: boolean;
+}
+
+const loginCloudUrl = document.getElementById("loginCloudUrl")!;
+const loginLoggedOut = document.getElementById("loginLoggedOut")!;
+const loginLoggedIn = document.getElementById("loginLoggedIn")!;
+const loginBtn = document.getElementById("loginBtn") as HTMLButtonElement;
+const logoutBtn = document.getElementById("logoutBtn") as HTMLButtonElement;
+const loginSubject = document.getElementById("loginSubject")!;
+const loginProfile = document.getElementById("loginProfile")!;
+const loginError = document.getElementById("loginError")!;
+
+function showLoginError(text: string): void {
+  loginError.textContent = text;
+  loginError.style.display = text ? "block" : "none";
+}
+
+function renderLoginStatus(status: LoginStatus | undefined): void {
+  if (!status) return;
+  loginCloudUrl.textContent = status.cloudUrl || "(unset)";
+  if (status.loggedIn) {
+    loginLoggedOut.classList.add("hidden");
+    loginLoggedIn.classList.remove("hidden");
+    loginSubject.textContent = status.subject || "(unknown)";
+    const expires = status.expiresAt > 0
+      ? ` · expires ${new Date(status.expiresAt * 1000).toLocaleString()}`
+      : "";
+    loginProfile.textContent = `profile: ${status.profile || "?"}${expires}`;
+  } else {
+    loginLoggedIn.classList.add("hidden");
+    loginLoggedOut.classList.remove("hidden");
+    if (status.expired) showLoginError("Session expired — log in again.");
+  }
+}
+
+async function loadLoginStatus(): Promise<void> {
+  const status = await sendMessage<LoginStatus>("dregg:getLoginStatus");
+  renderLoginStatus(status);
+}
+
+loginBtn.addEventListener("click", async () => {
+  showLoginError("");
+  loginBtn.disabled = true;
+  loginBtn.textContent = "Signing challenge...";
+  const result = await sendMessage<LoginStatus & { error?: string }>("dregg:capLogin");
+  loginBtn.disabled = false;
+  loginBtn.textContent = "Log in to the dregg network";
+  if (!result || result.error) {
+    showLoginError(result?.error || "Login failed.");
+    return;
+  }
+  renderLoginStatus(result);
+});
+
+logoutBtn.addEventListener("click", async () => {
+  logoutBtn.disabled = true;
+  const result = await sendMessage<LoginStatus>("dregg:capLogout");
+  logoutBtn.disabled = false;
+  renderLoginStatus(result);
 });
 
 // ---------------------------------------------------------------------------
@@ -317,6 +391,7 @@ lockBtn.addEventListener("click", async () => {
   await loadLog();
   await loadProfiles();
   await loadReceipts();
+  await loadLoginStatus();
 });
 
 // ---------------------------------------------------------------------------
@@ -812,6 +887,71 @@ async function loadLiveRefs(): Promise<void> {
   }));
 }
 
+// Powerbox: grant an ATTENUATED bearer capability to a target cell, scoped to
+// one action + expiry. The wasm `create_bearer_cap` primitive binds the grant
+// to (delegator key, target cell, action, expiry); it can only be narrowed
+// further, never amplified — the no-amplify story made visible.
+const grantCellInput = document.getElementById("grantCellInput") as HTMLInputElement;
+const grantActionInput = document.getElementById("grantActionInput") as HTMLInputElement;
+const grantExpiryInput = document.getElementById("grantExpiryInput") as HTMLInputElement;
+const grantCapBtn = document.getElementById("grantCapBtn") as HTMLButtonElement;
+const grantError = document.getElementById("grantError")!;
+const grantResult = document.getElementById("grantResult")!;
+const grantResultToken = document.getElementById("grantResultToken")!;
+const grantResultScope = document.getElementById("grantResultScope")!;
+const copyGrantBtn = document.getElementById("copyGrantBtn")!;
+
+function showGrantError(text: string): void {
+  grantError.textContent = text;
+  grantError.style.display = text ? "block" : "none";
+}
+
+grantCapBtn.addEventListener("click", async () => {
+  showGrantError("");
+  grantResult.style.display = "none";
+  const targetCellHex = grantCellInput.value.trim();
+  const action = grantActionInput.value.trim();
+  if (!/^[0-9a-fA-F]{64}$/.test(targetCellHex)) {
+    showGrantError("Target cell must be a 64-char hex cell ID.");
+    return;
+  }
+  if (!action) {
+    showGrantError("Enter the action to grant (e.g. read, transfer).");
+    return;
+  }
+  const minutes = parseInt(grantExpiryInput.value, 10);
+  // Bearer-cap expiry is a Unix-seconds deadline; 0 = no expiry.
+  const expiry = Number.isFinite(minutes) && minutes > 0
+    ? Math.floor(Date.now() / 1000) + minutes * 60
+    : 0;
+  grantCapBtn.disabled = true;
+  grantCapBtn.textContent = "Granting...";
+  const result = await sendMessage<{ bearerTokenHex?: string; targetCell?: string; action?: string; error?: string }>(
+    "dregg:createBearerCap",
+    { targetCellHex, action, expiry },
+  );
+  grantCapBtn.disabled = false;
+  grantCapBtn.textContent = "Grant attenuated capability";
+  if (!result || result.error || !result.bearerTokenHex) {
+    showGrantError(result?.error || "Could not create the grant (wallet locked?).");
+    return;
+  }
+  grantResultToken.textContent = `dregg-cap:${result.bearerTokenHex}`;
+  const scope = expiry > 0
+    ? `action "${action}" · expires ${new Date(expiry * 1000).toLocaleString()}`
+    : `action "${action}" · no expiry`;
+  grantResultScope.textContent = scope;
+  grantResult.style.display = "block";
+});
+
+copyGrantBtn.addEventListener("click", () => {
+  const token = grantResultToken.textContent || "";
+  navigator.clipboard.writeText(token).then(() => {
+    copyGrantBtn.textContent = "Copied!";
+    setTimeout(() => { copyGrantBtn.textContent = "Copy token"; }, 2000);
+  });
+});
+
 acceptCapBtn.addEventListener("click", async () => {
   const uri = acceptUriInput.value.trim();
   if (!uri) return;
@@ -968,3 +1108,4 @@ refresh();
 loadLog();
 loadProfiles();
 loadReceipts();
+loadLoginStatus();

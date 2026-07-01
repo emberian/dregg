@@ -35,6 +35,12 @@ export interface NodeConfig {
   wssUrl: string;
   wsUrl: string;
   devnetKey: string;
+  /**
+   * Base URL of the cap-account cloud (the webauth control plane the wallet
+   * logs into). Empty string means "same host as the node" — most deployments
+   * serve `/auth/*` from the node host.
+   */
+  cloudUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +164,10 @@ export type MessageType =
   | "dregg:listProfiles"
   | "dregg:createProfile"
   | "dregg:useProfile"
+  // Cap-account login to the live cloud (challenge → sign → session)
+  | "dregg:capLogin"
+  | "dregg:capLogout"
+  | "dregg:getLoginStatus"
   // Receipt stream (node SSE /api/events/stream)
   | "dregg:getRecentReceipts"
   // Node configuration

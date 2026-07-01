@@ -180,6 +180,20 @@ fn cmd_verify(args: &[String]) -> ExitCode {
     match verify_live(&run) {
         Ok(v) => {
             println!("   GOAL: {}", run.goal);
+            // Surface the brain provenance so a reader knows whether the model was
+            // actually called (live) or its decisions were replayed from a recording.
+            // The tools ran for real either way — this only marks the model provenance.
+            if run.brain_mode == "replay" {
+                println!(
+                    "   • brain    REPLAY (recorded model decisions; tools ran for real) — model {} @ {}",
+                    run.model, run.endpoint
+                );
+            } else {
+                println!(
+                    "   • brain    live — model {} @ {}",
+                    run.model, run.endpoint
+                );
+            }
             println!(
                 "   ✓ chain    {} action(s), signed + unbroken + tamper-evident",
                 v.actions
@@ -529,10 +543,21 @@ mod live {
             ),
             _ => (model, base),
         };
+        // Brain provenance: the replay arm (a recorded brain) is only taken when NOT
+        // hermes-cli AND a --replay record was supplied. Stamp it into the artifact so
+        // `run.json` is honest standalone (the model/endpoint fields carry the live
+        // defaults even under --replay).
+        let brain_mode = if brain_kind != BrainKind::HermesCli && replay.is_some() {
+            "replay"
+        } else {
+            "live"
+        }
+        .to_string();
         let live_run = LiveRun {
             goal,
             model: rec_model,
             endpoint: rec_endpoint,
+            brain_mode,
             funding,
             budget_cents: budget,
             caps: handle.caps.clone(),
@@ -906,6 +931,7 @@ mod repl {
     use dregg_agent::agent::AgentBrain;
     use dregg_agent::brain::{OpenAICompatBrain, ProviderKey, RecordedOpenAICaller};
     use dregg_agent::session::{CapBundle, Confinement, Session, parse_caps_confined};
+    use dregg_agent::session_store::ConsumedStore;
     use dregg_agent::toolkit::Toolkit;
     use dregg_agent::tools::OperatorTools;
     use serde_json::Value;
@@ -971,6 +997,16 @@ mod repl {
                 BrainSource::Live { model, base, .. } => format!("live model {model} @ {base}"),
             }
         }
+        /// The brain provenance stamped into `LiveRun.brain_mode` — `"replay"` for a
+        /// recorded transport, `"live"` for the BYO-key model path — so the session
+        /// artifact is honest standalone about whether the model was actually called.
+        fn brain_mode(&self) -> String {
+            match self {
+                BrainSource::Replay { .. } => "replay".into(),
+                #[cfg(feature = "live-brain")]
+                BrainSource::Live { .. } => "live".into(),
+            }
+        }
     }
 
     /// `dregg-agent session` / `dregg-agent attach`.
@@ -988,18 +1024,31 @@ mod repl {
             .and_then(|s| s.parse().ok())
             .unwrap_or(500);
 
+        // `--os-isolation` is REFUSED (fail-closed). It used to flip a hosted session
+        // back to the local posture — re-granting a raw `shell` on the operator-key-
+        // holding host — on the mere ASSERTION that a per-tenant OS jail was present.
+        // But the jail (`dreggnet-agent-host`'s `JailSpec`/`bwrap`) is not wired into
+        // any run path: setting the flag never actually confined anything, so it was a
+        // security mechanism presented as enforced that ran nowhere. Until the jail is
+        // genuinely wired (the attach process re-execs inside `bwrap`), a hosted shell
+        // must be REFUSED, never handed out behind a decorative flag. So the flag hard-
+        // errors rather than silently restoring the dangerous capability.
+        if has(args, "--os-isolation") {
+            eprintln!(
+                "--os-isolation is not available: per-tenant OS isolation (the bwrap jail) is \
+                 not wired into the run path, so it cannot safely restore a raw shell on the \
+                 key-holding host. A hosted session stays shell-disabled (the safe default). \
+                 Run locally for a raw shell. See DreggNet/docs/HOSTED-ISOLATION.md."
+            );
+            return ExitCode::FAILURE;
+        }
         // The confinement posture. `attach` is the hosted SSH/portal drop-in and is
         // ALWAYS hosted (it runs on shared infra that holds the operator's keys);
         // `session` is local by default but `--hosted`/`--untrusted` forces the
-        // hosted posture (no raw shell). `--os-isolation` asserts a per-tenant OS
-        // jail is present (a dedicated unprivileged user + namespace whose FS does
-        // not contain the operator keys — see HOSTED-ISOLATION.md), which restores
-        // the local posture (shell is safe again). `attach` honors `--os-isolation`
-        // too so the agent-host can re-grant shell once the jail is wired.
-        let os_isolation = has(args, "--os-isolation");
+        // hosted posture (no raw shell — a raw shell can read the operator's keys).
         let forced_hosted =
             mode == Mode::Attach || has(args, "--hosted") || has(args, "--untrusted");
-        let confinement = if forced_hosted && !os_isolation {
+        let confinement = if forced_hosted {
             Confinement::Hosted
         } else {
             Confinement::Local
@@ -1055,6 +1104,15 @@ mod repl {
             }
         };
 
+        // Restore the account's PERSISTED cumulative spend so the budget ceiling
+        // spans SSH detach/re-attach. Each attach process opens a fresh in-memory
+        // meter; without this the ceiling would silently reset to full on every
+        // reconnect (an unbounded-spend hole). The durable store is keyed by account
+        // id under a stable state dir ($DREGG_AGENT_STATE_DIR or ~/.dregg-agent/state).
+        let store = ConsumedStore::open_default();
+        let prior_consumed = store.load_consumed(&account);
+        sess.restore_consumed(prior_consumed);
+
         let brain_src = match build_brain_source(args) {
             Ok(s) => s,
             Err(e) => {
@@ -1080,7 +1138,7 @@ mod repl {
         match confinement {
             Confinement::Hosted => println!(
                 "  CONFINE hosted — lexically-confined tools only (no raw shell; the host holds \
-                 operator keys). Restore shell with per-tenant OS isolation (--os-isolation)."
+                 operator keys). Run locally for a raw shell."
             ),
             Confinement::Local => println!(
                 "  CONFINE local — full toolkit incl. raw shell (this is your own machine)."
@@ -1102,6 +1160,7 @@ mod repl {
                     step_cap,
                     &toolkit,
                 );
+                persist_consumed(&store, &account, &sess);
                 finish(&sess, &brain_src, &workdir_s, &out);
                 return ExitCode::SUCCESS;
             }
@@ -1132,6 +1191,10 @@ mod repl {
                 }
                 _ => {
                     run_one_goal(&mut sess, g, &bundle, &brain_src, step_cap, &toolkit);
+                    // Persist the drawdown after EVERY goal so a detach at any point
+                    // (incl. an abrupt SSH drop) leaves the ceiling correct for the
+                    // next attach — the budget can never be reset by reconnecting.
+                    persist_consumed(&store, &account, &sess);
                     if sess.exhausted() {
                         println!(
                             "  [budget exhausted — the session ceiling is fully drawn; further \
@@ -1141,8 +1204,23 @@ mod repl {
                 }
             }
         }
+        persist_consumed(&store, &account, &sess);
         finish(&sess, &brain_src, &workdir_s, &out);
         ExitCode::SUCCESS
+    }
+
+    /// Persist the session's cumulative consumed to the durable per-account store so
+    /// the budget ceiling spans SSH detach/re-attach. Best-effort: a write failure is
+    /// logged (fail-loud) but does not abort the session — the in-band meter still
+    /// bounds THIS process; the risk a failed write carries is only the reset-on-
+    /// reconnect hole, which the operator sees on stderr.
+    fn persist_consumed(store: &ConsumedStore, account: &str, sess: &Session) {
+        if let Err(e) = store.save_consumed(account, sess.consumed(), sess.budget()) {
+            eprintln!(
+                "warning: could not persist the session budget for {account}: {e} — the spend \
+                 ceiling may not hold across re-attach"
+            );
+        }
     }
 
     /// Pick the brain source from the args: `--replay` → recorded (std-only);
@@ -1385,6 +1463,7 @@ mod repl {
         if let Some(path) = out {
             let report = sess.report();
             let (model, endpoint) = src.model_endpoint();
+            let brain_mode = src.brain_mode();
             let goals: Vec<String> = sess.history().iter().map(|g| g.goal.clone()).collect();
             let live = dregg_agent::live::LiveRun {
                 goal: if goals.is_empty() {
@@ -1394,6 +1473,7 @@ mod repl {
                 },
                 model,
                 endpoint,
+                brain_mode,
                 funding: format!(
                     "hosted session budget of {}¢ (the ceiling the whole session draws from)",
                     sess.budget()

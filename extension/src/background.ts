@@ -10,6 +10,21 @@ import { explainTurn } from "./explain";
 import { createSseParser } from "./sse";
 import { mnemonicConfirmed, walletPassphraseOk } from "./onboarding";
 import { defaultNodeUrl, defaultNodeWssUrl } from "./endpoints";
+import {
+  AUTH_CHALLENGE_PATH,
+  AUTH_LOGIN_PATH,
+  AUTH_LOGOUT_PATH,
+  bytesToHex as loginBytesToHex,
+  challengeRequestBody,
+  cloudBaseUrl,
+  loginRequestBody,
+  parseChallengeResponse,
+  parseLoginResponse,
+  statusFromSession,
+  utf8Bytes,
+  type CapLoginSession,
+  type CapLoginStatus,
+} from "./login";
 import type {
   AuthorizeRequest,
   AuthorizeResult,
@@ -96,6 +111,10 @@ const RECEIPT_STREAM_MAX_BACKOFF_MS = 60_000;
 // profile's mnemonic stays at MNEMONIC_KEY for migration compatibility).
 const PROFILE_MNEMONICS_KEY = "dregg_profile_mnemonics_encrypted";
 const DEFAULT_PROFILE_NAME = "default";
+// Cap-account cloud session (challenge–response login). The bearer session
+// token is kept in memory-only `chrome.storage.session` where available (never
+// persisted to disk), falling back to local storage otherwise.
+const CAP_SESSION_KEY = "dregg_cap_session";
 
 // ---------------------------------------------------------------------------
 // Node configuration
@@ -1470,6 +1489,130 @@ async function useProfile(name: string): Promise<{ active?: string; error?: stri
 async function listProfiles(): Promise<ProfileInfo[]> {
   const cc = await loadState();
   return profileInfos(cc);
+}
+
+// ---------------------------------------------------------------------------
+// Cap-account login — log the wallet into the live cloud (console / attach)
+//
+// A cap-account is a pseudonymous identity: a key you hold, not a username +
+// password. Login proves possession of the selected profile's Ed25519 key
+// against a server-issued nonce (the SESSION-LOGIN.md §2.1 challenge–response
+// floor), then holds the returned session. The wire-shaping + validation is
+// the pure `src/login.ts` module; here we own the two impure steps — the fetch
+// and the signature. We implement the CLIENT half only; the server (the
+// cap-auth lane's webauth control plane) owns account-id derivation + session
+// minting.
+// ---------------------------------------------------------------------------
+
+/** Memory-only session store where available; disk-backed local otherwise. */
+function capSessionStore(): chrome.storage.StorageArea {
+  const anyChrome = chrome.storage as unknown as { session?: chrome.storage.StorageArea };
+  return anyChrome.session ?? chrome.storage.local;
+}
+
+async function loadCapSession(): Promise<CapLoginSession | null> {
+  const stored = await capSessionStore().get(CAP_SESSION_KEY);
+  return (stored[CAP_SESSION_KEY] as CapLoginSession | undefined) ?? null;
+}
+
+async function saveCapSession(session: CapLoginSession | null): Promise<void> {
+  if (session) {
+    await capSessionStore().set({ [CAP_SESSION_KEY]: session });
+  } else {
+    await capSessionStore().remove(CAP_SESSION_KEY);
+  }
+}
+
+/** The cloud base URL the login handshake targets. */
+function cloudUrlBase(): string {
+  return cloudBaseUrl(nodeConfig.nodeUrl, nodeConfig.cloudUrl ?? null);
+}
+
+/** Public login status for the popup. */
+async function getLoginStatus(): Promise<CapLoginStatus> {
+  const session = await loadCapSession();
+  const status = statusFromSession(session, cloudUrlBase(), Math.floor(Date.now() / 1000));
+  // Drop a stored-but-expired session so we don't present a stale token.
+  if (session && status.expired) await saveCapSession(null);
+  return status;
+}
+
+/**
+ * Log the wallet into the live cloud: fetch a challenge, sign it with the
+ * selected profile's key, exchange the signed challenge for a session.
+ */
+async function capLogin(profileName?: string): Promise<CapLoginStatus | { error: string }> {
+  const cc = await loadState();
+  if (cc.uninitialized) return { error: "Create a wallet before logging in." };
+  if (cc.locked) return { error: "Unlock the wallet before logging in." };
+  requireWasm("capLogin");
+  const w = wasm!;
+
+  const profile = profileName
+    ? cc.profiles.find(p => p.name === profileName)
+    : cc.profiles.find(p => p.name === cc.activeProfile);
+  if (!profile) return { error: `Profile "${profileName ?? cc.activeProfile}" not found.` };
+  if (!profile.secretKey) return { error: "Profile signing key unavailable (locked?)." };
+
+  const pubkeyHex = loginBytesToHex(profile.publicKey);
+  const cloud = cloudUrlBase();
+  const cloudCfg: NodeConfig = { ...nodeConfig, nodeUrl: cloud };
+
+  // 1. Challenge.
+  const chResp = await nodeRequest<Record<string, unknown>>(cloudCfg, AUTH_CHALLENGE_PATH, {
+    method: "POST",
+    body: JSON.stringify(challengeRequestBody(pubkeyHex)),
+  });
+  if (!chResp.ok) return { error: `Could not reach the cloud login: ${chResp.error}` };
+  const challenge = parseChallengeResponse(chResp.data);
+  if ("error" in challenge) return { error: challenge.error };
+
+  // 2. Sign the challenge bytes with the profile's Ed25519 key.
+  let signatureHex: string;
+  try {
+    const sig = w.sign_message(new Uint8Array(profile.secretKey), utf8Bytes(challenge.challenge));
+    signatureHex = loginBytesToHex(sig);
+  } catch (e: unknown) {
+    return { error: `Could not sign the login challenge: ${(e as Error).message}` };
+  }
+
+  // 3. Exchange the signed challenge for a session.
+  const loginResp = await nodeRequest<Record<string, unknown>>(cloudCfg, AUTH_LOGIN_PATH, {
+    method: "POST",
+    body: JSON.stringify(loginRequestBody(pubkeyHex, challenge.challenge, signatureHex, profile.name)),
+  });
+  if (!loginResp.ok) return { error: `Cloud rejected the login: ${loginResp.error}` };
+  const session = parseLoginResponse(loginResp.data, {
+    publicKeyHex: pubkeyHex,
+    cloudUrl: cloud,
+    profile: profile.name,
+    nowMs: Date.now(),
+  });
+  if ("error" in session) return { error: session.error };
+
+  await saveCapSession(session);
+  resetLockTimer();
+  notifySubscribers("login", statusFromSession(session, cloud, Math.floor(Date.now() / 1000)));
+  return statusFromSession(session, cloud, Math.floor(Date.now() / 1000));
+}
+
+/** Log out: best-effort revoke on the server, then discard the local session. */
+async function capLogout(): Promise<CapLoginStatus> {
+  const session = await loadCapSession();
+  if (session) {
+    const cloudCfg: NodeConfig = { ...nodeConfig, nodeUrl: session.cloudUrl };
+    // Best-effort: tell the server to drop the session. A network failure here
+    // must not strand the local session, so ignore the result.
+    await nodeRequest(cloudCfg, AUTH_LOGOUT_PATH, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.token}` },
+      body: "{}",
+    }).catch(() => undefined);
+  }
+  await saveCapSession(null);
+  const status = statusFromSession(null, cloudUrlBase(), Math.floor(Date.now() / 1000));
+  notifySubscribers("login", status);
+  return status;
 }
 
 // ---------------------------------------------------------------------------
@@ -3041,6 +3184,7 @@ const POPUP_ONLY_METHODS = new Set<MessageType>([
   "dregg:nodeIdentity", "dregg:faucetFund", "dregg:submitJsonTurn",
   "dregg:listProfiles", "dregg:createProfile", "dregg:useProfile",
   "dregg:getRecentReceipts",
+  "dregg:capLogin", "dregg:capLogout", "dregg:getLoginStatus",
 ]);
 
 async function handleMessage(message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<Record<string, unknown>> {
@@ -3861,6 +4005,18 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       resetLockTimer();
       return { id: message.id, result };
     }
+
+    // Cap-account login to the live cloud (challenge → sign → session).
+    case "dregg:getLoginStatus":
+      return { id: message.id, result: await getLoginStatus() };
+
+    case "dregg:capLogin": {
+      const result = await capLogin(message.profile ? String(message.profile) : undefined);
+      return { id: message.id, result };
+    }
+
+    case "dregg:capLogout":
+      return { id: message.id, result: await capLogout() };
 
     // Recent receipts from the node's SSE stream; reading clears the badge.
     case "dregg:getRecentReceipts":

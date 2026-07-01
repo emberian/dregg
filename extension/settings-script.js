@@ -8,6 +8,7 @@ const DEFAULT_NODE_WS_URL = 'ws://localhost:8420/ws';
 const nodeUrlInput = document.getElementById('nodeUrl');
 const wssUrlInput = document.getElementById('wssUrl');
 const wsUrlInput = document.getElementById('wsUrl');
+const cloudUrlInput = document.getElementById('cloudUrl');
 const devnetKeyInput = document.getElementById('devnetKey');
 const saveBtn = document.getElementById('saveBtn');
 const resetBtn = document.getElementById('resetBtn');
@@ -28,6 +29,7 @@ async function loadSettings() {
   nodeUrlInput.value = config.nodeUrl || DEFAULT_NODE_URL;
   wssUrlInput.value = config.wssUrl || DEFAULT_NODE_WSS_URL;
   wsUrlInput.value = config.wsUrl || DEFAULT_NODE_WS_URL;
+  cloudUrlInput.value = config.cloudUrl || '';
   devnetKeyInput.value = config.devnetKey || '';
 }
 
@@ -36,8 +38,19 @@ saveBtn.addEventListener('click', async () => {
     nodeUrl: nodeUrlInput.value.trim() || DEFAULT_NODE_URL,
     wssUrl: wssUrlInput.value.trim() || DEFAULT_NODE_WSS_URL,
     wsUrl: wsUrlInput.value.trim() || DEFAULT_NODE_WS_URL,
+    cloudUrl: cloudUrlInput.value.trim(),
     devnetKey: devnetKeyInput.value.trim(),
   };
+
+  // Validate the optional cloud URL if present.
+  if (config.cloudUrl) {
+    try {
+      new URL(config.cloudUrl);
+    } catch (_) {
+      showStatus('Invalid Cloud login URL format.', 'error');
+      return;
+    }
+  }
 
   // Validate URLs.
   try {
@@ -101,6 +114,7 @@ resetBtn.addEventListener('click', async () => {
   nodeUrlInput.value = DEFAULT_NODE_URL;
   wssUrlInput.value = DEFAULT_NODE_WSS_URL;
   wsUrlInput.value = DEFAULT_NODE_WS_URL;
+  cloudUrlInput.value = '';
   devnetKeyInput.value = '';
   showStatus('Fields reset to defaults. Click Save to apply.', 'info');
 });

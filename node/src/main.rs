@@ -1061,26 +1061,49 @@ async fn run_node(
         }
     }
 
-    // ── MARSHAL-ONLY STARTUP TRIPWIRE ─────────────────────────────────────────
+    // ── MARSHAL-ONLY STARTUP TRIPWIRE (fail-CLOSED refusal) ───────────────────
     // A binary linked WITHOUT the verified Lean executor archive (libdregg_lean.a)
     // runs the UN-verified Rust executor: `dregg_lean_ffi::lean_available()` is false.
     // Such a build must NEVER deploy silently as if it were the verified node — a
     // stale or gitignored Lean seed degrades the whole executor to marshal-only with
-    // no other visible signal. Surface it LOUDLY here, unconditionally, before any
-    // role logic, so a marshal-only artifact cannot masquerade as verified. The
-    // verified-consensus hard-check below then decides whether a verified-role
-    // (full BFT) node may actually proceed. (See docs/BUILD-LEAN-LINKED-NODE.md.)
-    if !dregg_lean_ffi::lean_available() {
-        error!(
-            "MARSHAL-ONLY BUILD DETECTED: `dregg_lean_ffi::lean_available()` is false — this \
-             binary was linked WITHOUT the verified Lean executor archive (libdregg_lean.a) and \
-             is running the UN-VERIFIED Rust executor. This is a DEGRADED build and must not be \
-             deployed as a verified node. Rebuild against a closure-complete, HEAD-matching Lean \
-             archive: `./scripts/bootstrap.sh` (and set DREGG_REQUIRE_LEAN=1 in CI/distribution \
-             builds so a marshal-only degrade fails the build instead of shipping silently). A \
-             stale or gitignored seed silently degrades to marshal-only — see \
-             docs/BUILD-LEAN-LINKED-NODE.md."
-        );
+    // no other visible signal. Historically this tripwire was LOG-ONLY (an `error!`),
+    // so a *solo* node whose logs were ignored could still serve its API presenting as
+    // verified. It is now fail-CLOSED: any node (solo OR full) REFUSES to start
+    // (`exit(1)`) when the verified executor is not linked, UNLESS the operator
+    // explicitly accepts the un-verified executor with `DREGG_ALLOW_UNVERIFIED_CONSENSUS=1`
+    // (the same escape hatch the verified-consensus hard-check below uses). This makes an
+    // unverified node a DELIBERATE opt-in, never a silent default. (See
+    // docs/BUILD-LEAN-LINKED-NODE.md.)
+    let lean_available = dregg_lean_ffi::lean_available();
+    let allow_unverified = env_allow_unverified(
+        std::env::var("DREGG_ALLOW_UNVERIFIED_CONSENSUS")
+            .ok()
+            .as_deref(),
+    );
+    if !lean_available {
+        if !marshal_only_must_refuse(lean_available, allow_unverified) {
+            tracing::warn!(
+                "MARSHAL-ONLY BUILD OVERRIDDEN: `dregg_lean_ffi::lean_available()` is false — this \
+                 binary was linked WITHOUT the verified Lean executor archive (libdregg_lean.a) and \
+                 is running the UN-VERIFIED Rust executor. DREGG_ALLOW_UNVERIFIED_CONSENSUS is set, \
+                 so the node will proceed on the un-verified executor. Its state transitions are NOT \
+                 shadowed by the proved Lean kernel — do not present this node as verified."
+            );
+        } else {
+            error!(
+                "REFUSING TO START: `dregg_lean_ffi::lean_available()` is false — this binary was \
+                 linked WITHOUT the verified Lean executor archive (libdregg_lean.a) and would run \
+                 the UN-VERIFIED Rust executor. A node (solo OR full) MUST NOT serve as if verified \
+                 while running the un-verified executor. Rebuild against a closure-complete, \
+                 HEAD-matching Lean archive: `./scripts/bootstrap.sh` (and set DREGG_REQUIRE_LEAN=1 \
+                 in CI/distribution builds so a marshal-only degrade fails the build instead of \
+                 shipping silently — a --release build now defaults that gate ON). To deliberately \
+                 run an un-verified node, set DREGG_ALLOW_UNVERIFIED_CONSENSUS=1. A stale or \
+                 gitignored seed silently degrades to marshal-only — see \
+                 docs/BUILD-LEAN-LINKED-NODE.md."
+            );
+            std::process::exit(1);
+        }
     } else {
         info!(
             "verified-executor archive linked: `dregg_lean_ffi::lean_available()` is true — this \
@@ -1106,12 +1129,8 @@ async fn run_node(
     // a marshal-only archive). It is opt-IN — the default for a full-mode node is to
     // refuse.
     if !is_solo_mode && !dregg_lean_ffi::tau_order_available() {
-        let allow_unverified = matches!(
-            std::env::var("DREGG_ALLOW_UNVERIFIED_CONSENSUS")
-                .ok()
-                .as_deref(),
-            Some("1") | Some("true") | Some("TRUE") | Some("on") | Some("ON")
-        );
+        // Reuses the `allow_unverified` escape hatch parsed above (the same
+        // DREGG_ALLOW_UNVERIFIED_CONSENSUS variable governs both gates).
         if allow_unverified {
             tracing::warn!(
                 "VERIFIED-CONSENSUS HARD-CHECK OVERRIDDEN: this node is in FULL (multi-party BFT) \
@@ -1941,6 +1960,25 @@ fn solo_should_auto_upgrade(is_solo_mode: bool, has_peers: bool, committee_size:
     is_solo_mode && (has_peers || committee_size > 1)
 }
 
+/// Parse the `DREGG_ALLOW_UNVERIFIED_CONSENSUS` escape hatch (shared by the
+/// marshal-only startup tripwire and the verified-consensus hard-check). Running an
+/// un-verified executor / ordering is a DELIBERATE opt-in — this returns `true` only
+/// when the operator explicitly set the variable to a truthy value.
+fn env_allow_unverified(val: Option<&str>) -> bool {
+    matches!(
+        val,
+        Some("1") | Some("true") | Some("TRUE") | Some("on") | Some("ON")
+    )
+}
+
+/// Whether a node must REFUSE to start because it would run the UN-verified Rust
+/// executor (`lean_available()==false`) without the explicit operator opt-in. Any
+/// node — solo OR full — refuses unless the escape hatch is set, so an unverified
+/// node is never a silent default.
+fn marshal_only_must_refuse(lean_available: bool, allow_unverified: bool) -> bool {
+    !lean_available && !allow_unverified
+}
+
 /// Wait for a shutdown signal to trigger a graceful, checkpoint-then-exit stop.
 ///
 /// Handles BOTH SIGINT (Ctrl-C) and SIGTERM. `docker stop` (and systemd) send
@@ -2012,6 +2050,31 @@ mod shutdown_and_federation_tests {
         // (the helper only fires when currently solo).
         assert!(!solo_should_auto_upgrade(false, true, 5));
         assert!(!solo_should_auto_upgrade(false, false, 1));
+    }
+
+    // ── MARSHAL-ONLY startup refusal (fail-closed unless explicit opt-in) ──────
+
+    #[test]
+    fn env_allow_unverified_only_on_explicit_truthy() {
+        for v in ["1", "true", "TRUE", "on", "ON"] {
+            assert!(env_allow_unverified(Some(v)), "expected {v:?} to allow");
+        }
+        for v in ["0", "false", "off", "no", "", "yes", "2"] {
+            assert!(!env_allow_unverified(Some(v)), "expected {v:?} to refuse");
+        }
+        // Unset (the default) never allows an un-verified executor.
+        assert!(!env_allow_unverified(None));
+    }
+
+    #[test]
+    fn marshal_only_refuses_unless_escape_set() {
+        // A verified build (lean linked) never refuses, regardless of the escape.
+        assert!(!marshal_only_must_refuse(true, false));
+        assert!(!marshal_only_must_refuse(true, true));
+        // A marshal-only build REFUSES by default (no silent unverified default)…
+        assert!(marshal_only_must_refuse(false, false));
+        // …and only proceeds when the operator explicitly opts in.
+        assert!(!marshal_only_must_refuse(false, true));
     }
 
     // ── BUG 4: graceful shutdown wires SIGTERM (docker stop) ───────────────────

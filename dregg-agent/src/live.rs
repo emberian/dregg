@@ -17,6 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::{ActionOutcome, AgentRunReport, verify_agent_run};
 
+/// The serde default for [`LiveRun::brain_mode`]: a record written before the field
+/// existed predates the recorded-brain provenance marker, so it is treated as `"live"`.
+fn default_brain_mode() -> String {
+    "live".to_string()
+}
+
 /// One narrated step of the reason → act → observe loop (derived from the signed
 /// run log + receipts — every line traces to a receipt or a refusal).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,6 +48,16 @@ pub struct LiveRun {
     pub model: String,
     /// The provider endpoint (no key — the key never enters the record).
     pub endpoint: String,
+    /// The **brain provenance** of this run: `"live"` (the model was actually called
+    /// over HTTP) or `"replay"` (the model *decisions* came from a recorded
+    /// transcript). The TOOLS execute for real in either case, so the receipt chain
+    /// and [`verify_live`] hold regardless of provenance — but a `--replay` artifact
+    /// still stamps the live default `model`/`endpoint`, so this field is what makes
+    /// `run.json` honest *standalone*: a judge reading the file alone (not the
+    /// ephemeral `[mode] REPLAY …` stdout banner) can tell a recorded run from a live
+    /// one. Serde-defaults to `"live"` for older artifacts written before this field.
+    #[serde(default = "default_brain_mode")]
+    pub brain_mode: String,
     /// How the budget was funded — an honest source note (operator allowance, or a
     /// real Stripe test PaymentIntent when a test key is present).
     pub funding: String,
@@ -199,6 +215,7 @@ mod tests {
             goal: "say hi".into(),
             model: "test".into(),
             endpoint: "test".into(),
+            brain_mode: "live".into(),
             funding: "operator allowance".into(),
             budget_cents: 100,
             caps: handle.caps.clone(),
@@ -216,5 +233,34 @@ mod tests {
         run.run.receipts[0].tool_ok = Some(false);
         assert!(verify_live(&run).is_err(), "the tamper is caught");
         std::fs::remove_dir_all(&wd).ok();
+    }
+
+    #[test]
+    fn brain_mode_is_honest_standalone_and_back_compatible() {
+        // An artifact written before the field existed (no `brain_mode`) parses as
+        // "live" — the serde default — so it round-trips without loss.
+        let legacy = r#"{
+            "goal":"g","model":"m","endpoint":"e","funding":"f","budget_cents":0,
+            "caps":[],"workdir":"w",
+            "run":{"agent":"a","asset":"USD-CENTS","budget":0,"consumed":0,
+                   "headroom":0,"admitted":0,"cap_refused":0,"budget_refused":0,
+                   "receipts":[],"log":[],
+                   "signer":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                   "cells":{}},
+            "subagent_run":null,"transcript":[]
+        }"#;
+        let parsed: LiveRun = serde_json::from_str(legacy).expect("legacy run parses");
+        assert_eq!(parsed.brain_mode, "live", "missing field defaults to live");
+
+        // A recorded-brain run is stamped "replay" and survives a round-trip, so the
+        // provenance is honest even when the file is read standalone.
+        let replayed = LiveRun {
+            brain_mode: "replay".into(),
+            ..parsed
+        };
+        let json = serde_json::to_string(&replayed).expect("serializes");
+        assert!(json.contains("\"brain_mode\":\"replay\""));
+        let back: LiveRun = serde_json::from_str(&json).expect("re-parses");
+        assert_eq!(back.brain_mode, "replay");
     }
 }

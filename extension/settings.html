@@ -79,6 +79,11 @@
     <label for="wsUrl">WebSocket Fallback (ws://, localhost only)</label>
     <input type="url" id="wsUrl" placeholder="ws://localhost:8420/ws">
     <div class="help">Insecure WebSocket fallback. Only used when the node is on localhost and wss:// fails.</div>
+
+    <label for="cloudUrl">Cloud login URL (optional)</label>
+    <input type="url" id="cloudUrl" placeholder="(same host as the node)">
+    <div class="help">Base URL of the cap-account cloud you log in to (the
+      <code>/auth/*</code> control plane). Leave blank to use the node host above.</div>
   </div>
 
   <div class="section">

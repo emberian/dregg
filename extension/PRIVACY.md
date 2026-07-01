@@ -28,6 +28,12 @@ Stored locally:
 - Identity profile names and their public keys.
 - Capability tokens, recently observed receipts, an activity log, per-origin
   permission grants, and your node endpoint configuration.
+- If you log into the dregg network, the returned **session token** — a
+  revocable, expiring bearer token, not a password — is held in the browser's
+  in-memory session storage (cleared when the browser closes) where available,
+  or local extension storage otherwise. The cap-account you sign in as is a
+  pseudonymous identifier derived from your public key; there is no email,
+  username, or password involved.
 
 The decrypted private key exists only in the background service worker's memory
 while the wallet is unlocked, and is wiped on lock or timeout. It is never
@@ -47,6 +53,11 @@ When you use the wallet, the following may be sent to your configured node:
   listings, capability resolution).
 - A subscription to the node's receipt event stream, filtered by your cell id,
   so the wallet can show receipts relevant to you.
+- If you choose to log in, a login handshake with the cloud control plane: your
+  public key, a one-time challenge signed by your key, and (on logout) the
+  session token. Your private key is never sent — only a signature over the
+  challenge. The cloud login URL defaults to your configured node host and can
+  be pointed elsewhere in settings.
 
 You can change or remove the node endpoint at any time in the extension's node
 settings. Connecting to a local development node is an explicit, optional

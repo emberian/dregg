@@ -186,6 +186,31 @@
       </div>
       <div id="profileError" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
     </div>
+    <!-- Cap-account login: prove possession of the active profile's key to the
+         live cloud (challenge -> sign -> session). No username, no password. -->
+    <div class="section">
+      <div class="section-title">Cloud Session</div>
+      <div class="stat" style="align-items:center;">
+        <span>Cloud</span>
+        <span class="stat-value" id="loginCloudUrl" style="font-size:10px;word-break:break-all;">--</span>
+      </div>
+      <div id="loginLoggedOut">
+        <div class="ref-meta" style="color:#6b7280;font-size:10px;margin:4px 0 8px;">
+          Log in with the active profile. Your key signs a one-time challenge —
+          it never leaves this device, and there is no password.
+        </div>
+        <button id="loginBtn" style="background:#a78bfa;color:#1a1a2e;">Log in to the dregg network</button>
+        <div id="loginError" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+      </div>
+      <div id="loginLoggedIn" class="hidden">
+        <div class="stat" style="align-items:center;">
+          <span>Signed in</span>
+          <span class="stat-value" id="loginSubject" style="font-size:10px;word-break:break-all;color:#6ee7b7;">--</span>
+        </div>
+        <div class="ref-meta" id="loginProfile" style="color:#6b7280;font-size:10px;padding:2px 12px;"></div>
+        <button id="logoutBtn" style="background:#16213e;color:#e0e0e0;border:1px solid #374151;margin-top:6px;">Log out</button>
+      </div>
+    </div>
     <div class="section">
       <div class="section-title">Recent Receipts</div>
       <div id="receiptsContainer">
@@ -287,6 +312,30 @@
 
   <!-- Capabilities tab -->
   <div class="tab-content" id="tab-capabilities">
+    <!-- Powerbox: grant an ATTENUATED capability to a site/app. The grant is
+         bounded to one action + one target cell + an expiry; it can only ever
+         be narrowed further, never amplified (the no-amplify story). -->
+    <div class="section">
+      <div class="section-title">Grant Capability (Powerbox)</div>
+      <div class="ref-meta" style="color:#6b7280;font-size:10px;margin-bottom:6px;">
+        Hand a site or app a narrowed, bearer capability. It is scoped to exactly
+        the action, cell, and expiry you choose — and can only be attenuated
+        further, never amplified.
+      </div>
+      <input type="text" id="grantCellInput" class="accept-input" placeholder="Target cell ID (64-char hex)">
+      <input type="text" id="grantActionInput" class="accept-input" placeholder="Action to grant (e.g. read, transfer)">
+      <input type="number" id="grantExpiryInput" class="accept-input" placeholder="Expires in (minutes; 0 = no expiry)" min="0">
+      <button id="grantCapBtn" style="background:#a78bfa;color:#1a1a2e;margin-bottom:8px;">Grant attenuated capability</button>
+      <div id="grantError" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+      <div id="grantResult" style="display:none;margin-top:4px;">
+        <div class="ref-item">
+          <div class="ref-meta" style="color:#6ee7b7;">Granted — bounded, cannot be amplified:</div>
+          <div class="ref-cell" id="grantResultToken" style="word-break:break-all;"></div>
+          <div class="ref-meta" id="grantResultScope" style="color:#fbbf24;margin-top:2px;"></div>
+          <button class="small-btn" id="copyGrantBtn" style="margin-top:4px;">Copy token</button>
+        </div>
+      </div>
+    </div>
     <div class="section">
       <div class="section-title">Live References</div>
       <div id="liveRefsContainer">

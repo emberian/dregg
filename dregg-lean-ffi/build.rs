@@ -1321,29 +1321,54 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_direct_present)");
 
     // ── FAIL-LOUD GATE (DREGG_REQUIRE_LEAN) — see docs/BUILD-LEAN-LINKED-NODE.md ─────────────
-    // A distribution / CI / validator build sets `DREGG_REQUIRE_LEAN=1` to REFUSE a silent
-    // degrade to the marshal-only shell (`lean_available()==false`, the UN-verified Rust
-    // executor). Historically every marshal-only degrade below emitted only a `cargo:warning=…`,
-    // which is trivially lost in a release/CI log — so a build whose Lean seed was stale or
-    // gitignored could ship as if verified. When this env var is set, each such degrade becomes a
-    // hard build FAILURE (panic) naming the exact cause. Unset (the default) preserves the
-    // historical warn-and-degrade behavior for dev boxes and wasm/zkvm/no-lean-link targets.
+    // A distribution / CI / validator build REFUSES a silent degrade to the marshal-only shell
+    // (`lean_available()==false`, the UN-verified Rust executor). Historically every marshal-only
+    // degrade below emitted only a `cargo:warning=…`, which is trivially lost in a release/CI log —
+    // so a build whose Lean seed was stale or gitignored could ship as if verified.
+    //
+    // The gate now has TWO tiers:
+    //
+    //   * EXPLICIT (`DREGG_REQUIRE_LEAN=1`) — `require_lean`: forces EVERY marshal-only degrade to
+    //     a hard build FAILURE, INCLUDING the platform-incapable targets (wasm32 / zkvm /
+    //     windows-msvc / no-lean-link). Use it to assert "this build must be a verified node" and
+    //     fail loudly if the target can't be one.
+    //
+    //   * RELEASE-DEFAULT — `require_lean_native`: for a NATIVE, archive-linkable target, a
+    //     `--release` (distribution) build defaults the fail-loud gate ON so a release binary can
+    //     never SILENTLY ship marshal-only. This covers the archive-absent / sysroot-unresolvable
+    //     degrades (the real "ships as verified but isn't" cases). It does NOT fire on the
+    //     platform-incapable early return (those targets legitimately can't link Lean; only the
+    //     EXPLICIT tier forces them). The opt-out for a deliberately-marshal-only release build
+    //     (dev / benchmarks / a non-node crate) is `DREGG_REQUIRE_LEAN=0` (or `false`/`off`).
+    //
+    // Debug/dev builds keep the historical warn-and-degrade behavior unless `DREGG_REQUIRE_LEAN=1`.
     println!("cargo:rerun-if-env-changed=DREGG_REQUIRE_LEAN");
+    println!("cargo:rerun-if-env-changed=PROFILE");
+    let require_lean_env = std::env::var("DREGG_REQUIRE_LEAN").ok();
     let require_lean = matches!(
-        std::env::var("DREGG_REQUIRE_LEAN").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("on") | Ok("ON")
+        require_lean_env.as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("on") | Some("ON")
     );
-    let degrade_guard = |reason: &str| {
-        if require_lean {
+    let require_lean_off = matches!(
+        require_lean_env.as_deref(),
+        Some("0") | Some("false") | Some("FALSE") | Some("off") | Some("OFF")
+    );
+    // Cargo sets PROFILE to "release" for `--release` (and any release-profile) builds.
+    let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
+    // Native-target release builds fail loud on a marshal-only degrade unless explicitly opted out.
+    let require_lean_native = require_lean || (is_release && !require_lean_off);
+    let degrade_guard = |forced: bool, reason: &str| {
+        if forced {
             panic!(
-                "dregg-lean-ffi: DREGG_REQUIRE_LEAN=1 but this build would degrade to \
-                 MARSHAL-ONLY (lean_available()==false): {reason}. A marshal-only binary runs the \
-                 UN-verified Rust executor and must NEVER ship as a verified node. Fix the cause \
-                 (usually: install elan+lake and the mathlib pin, and (re)seed a HEAD-matching \
-                 dregg-lean-ffi/libdregg_lean.a via ./scripts/bootstrap.sh — the seed must match \
-                 the current Lean HEAD or the closure link fails; see \
-                 docs/BUILD-LEAN-LINKED-NODE.md), or unset DREGG_REQUIRE_LEAN to allow the \
-                 (degraded) marshal-only build."
+                "dregg-lean-ffi: the Lean-required gate is ACTIVE (DREGG_REQUIRE_LEAN=1, or a \
+                 --release/distribution build on a native archive-linkable target) but this build \
+                 would degrade to MARSHAL-ONLY (lean_available()==false): {reason}. A marshal-only \
+                 binary runs the UN-verified Rust executor and must NEVER ship as a verified node. \
+                 Fix the cause (usually: install elan+lake and the mathlib pin, and (re)seed a \
+                 HEAD-matching dregg-lean-ffi/libdregg_lean.a via ./scripts/bootstrap.sh — the seed \
+                 must match the current Lean HEAD or the closure link fails; see \
+                 docs/BUILD-LEAN-LINKED-NODE.md), or set DREGG_REQUIRE_LEAN=0 to allow a \
+                 deliberately-marshal-only (degraded) build."
             );
         }
     };
@@ -1382,11 +1407,16 @@ fn main() {
     let gate_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
     let windows_msvc = gate_os == "windows" && gate_env != "gnu";
     if no_lean_link || gate_arch == "wasm32" || gate_os == "zkvm" || windows_msvc {
-        degrade_guard(&format!(
-            "target {gate_arch}/{gate_os} (env {gate_env}) cannot link libdregg_lean.a \
+        // Platform-incapable targets legitimately cannot link Lean — only the EXPLICIT tier
+        // (DREGG_REQUIRE_LEAN=1) forces a failure here, NOT the release-default.
+        degrade_guard(
+            require_lean,
+            &format!(
+                "target {gate_arch}/{gate_os} (env {gate_env}) cannot link libdregg_lean.a \
              (no-lean-link feature / wasm32 / zkvm / windows-msvc) — a verified node must be \
              built for a native archive-linkable target"
-        ));
+            ),
+        );
         return;
     }
 
@@ -1474,7 +1504,10 @@ fn main() {
              verifies the link). Afterwards plain `cargo build` copies the seed into OUT_DIR and \
              keeps its Dregg2 slice fresh automatically."
         );
+        // The real "ships as verified but isn't" case on a native target — the release-default
+        // tier fails loud here so a distribution binary can never silently be marshal-only.
         degrade_guard(
+            require_lean_native,
             "libdregg_lean.a absent — no seed and no prior per-OUT_DIR working archive (run \
              ./scripts/bootstrap.sh to lake-build + seed the Lean archive)",
         );
@@ -1493,6 +1526,7 @@ fn main() {
              and teaches the fix), or set DREGG_LEAN_SYSROOT to the toolchain root."
         );
         degrade_guard(
+            require_lean_native,
             "the Lean sysroot could not be resolved (no DREGG_LEAN_SYSROOT and `lake env` failed) \
              — install elan + the pinned toolchain so the archive can be linked",
         );

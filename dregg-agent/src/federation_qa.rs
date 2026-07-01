@@ -14,18 +14,33 @@
 //!
 //! ## The fix: a quorum of independent operators
 //!
-//! The QA verdict is submitted to the live federation (the n=4 nodes —
-//! `edge` · `persvati` · `snoopy-lean` · `snoopy-rust`). **Each independent
+//! The QA verdict is submitted to a quorum of independent operators. **Each
 //! operator re-executes the bound `(command, code_root)` on its OWN substrate**,
 //! gets its own `(exit, output_digest)`, and **signs that result**. A quorum
-//! (threshold-3 of the n=4) agreeing on the *same* `(exit, output_digest)` is the
+//! (e.g. threshold-3 of n=4) agreeing on the *same* `(exit, output_digest)` is the
 //! **attested verdict** — a [`QuorumCert`], the same shape as the turn-finality
-//! quorum certificate (`qc_votes` over a checkpoint in
-//! the live node API). Because the operators are independent, a single
-//! lying operator's forged/divergent result is **outvoted** by the honest
-//! majority *and* **detected** (its signed-but-divergent attestation is evidence,
-//! not noise). `snoopy-lean` and `snoopy-rust` re-running the same QA and agreeing
-//! is the **rust↔lean differential** cross-check carried down to the QA layer.
+//! quorum certificate (`qc_votes` over a checkpoint in the live node API). Because
+//! the operators are independent, a single lying operator's forged/divergent result
+//! is **outvoted** by the honest majority *and* **detected** (its signed-but-divergent
+//! attestation is evidence, not noise). Two operators backed by the rust and lean
+//! executors respectively re-running the same QA and agreeing carries the
+//! **rust↔lean differential** cross-check down to the QA layer.
+//!
+//! ## What this is TODAY — a primitive, not yet wired to remote nodes
+//!
+//! This module is the **quorum-QA primitive**: the signed-attestation type
+//! ([`OperatorAttestation`]), the operator identity + re-exec oracle ([`Operator`]),
+//! the quorum tally, and the fail-closed [`verify_quorum_cert`]. The verify LOGIC is
+//! real and non-vacuous (ed25519-per-vote, threshold, dissenter naming). What does
+//! **not** exist yet is the **remote wiring**: there is no code path that constructs a
+//! [`Federation`] against real nodes over the network — [`Operator`]'s re-exec oracle is
+//! an in-process closure, and the standalone census maps the intended federation onto
+//! four node names (`edge` · `persvati` · `snoopy-lean` · `snoopy-rust`). The named
+//! wiring step — an `Operator::remote(node_url, key)` that POSTs the [`WitnessedRun`] to
+//! each node's re-exec endpoint and collects its signed `(exit, output_digest)` — is the
+//! seam that turns this primitive into a live cross-machine quorum. Until then the quorum
+//! is exercised in-process (the module's own tests build N keypairs + N oracles in one
+//! process).
 //!
 //! So [`verify_quorum_cert`] proves: *a quorum of independent operators each
 //! re-ran the declared tests on the declared code and agreed the result* —
@@ -118,12 +133,13 @@ pub struct OperatorAttestation {
 /// re-execution oracle (its substrate). [`re_execute`](Operator::re_execute) re-runs
 /// a submitted [`WitnessedRun`] on this operator's substrate and signs the result.
 ///
-/// In production the oracle is the operator's local tier run
-/// (`rewitness_run_tests` riding `crate::run_workload`) on its own node; in the
-/// std/test path it is a supplied closure. A *lying* operator is modelled by an
-/// oracle that returns a divergent [`ReWitness`] — and it signs that divergence
-/// honestly (a valid signature over a false result), exactly as a rigged substrate
-/// would.
+/// The oracle is a supplied closure. The intended production oracle is the operator's
+/// local tier run (`rewitness_run_tests` riding `crate::run_workload`) on its own node,
+/// reached via the named-but-not-yet-built `Operator::remote(node_url, key)` wiring step
+/// (see the module header) — today every caller (the crate's tests) supplies an
+/// in-process closure. A *lying* operator is modelled by an oracle that returns a
+/// divergent [`ReWitness`] — and it signs that divergence honestly (a valid signature
+/// over a false result), exactly as a rigged substrate would.
 pub struct Operator {
     name: String,
     signer: ReceiptSigner,

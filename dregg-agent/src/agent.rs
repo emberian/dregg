@@ -1353,6 +1353,63 @@ impl AgentCloud {
         self.report_snapshot(handle, state)
     }
 
+    /// **Restore a session's prior consumption at re-attach.** A hosted session is
+    /// rented per SSH connection, but each fresh attach process opens a fresh
+    /// in-memory meter — so without this the budget silently RESETS to full on every
+    /// reconnect and a tenant can spend unbounded across detach/re-attach. The host
+    /// loads the account's persisted cumulative consumed total (the durable
+    /// [`crate::session_store`]) and calls this once, right after [`deploy`], to
+    /// pre-charge the meter by `prior_consumed` so the ceiling is drawn down exactly
+    /// as it was at detach and an over-budget draw is refused ACROSS the reconnect.
+    ///
+    /// It also seeds a genesis "carryover" receipt so the re-attached chain's final
+    /// `consumed_after` agrees with the meter's `consumed` even before the first new
+    /// action (so [`crate::session::Session::verify`] holds on a bare re-attach).
+    /// `prior_consumed` is clamped to the ceiling — a corrupt stored value can never
+    /// exceed the bound. A no-op for `prior_consumed <= 0`.
+    ///
+    /// [`deploy`]: AgentCloud::deploy
+    pub fn restore_consumed(
+        &self,
+        handle: &AgentHandle,
+        state: &mut SessionState,
+        prior_consumed: i64,
+    ) {
+        let prior = prior_consumed.clamp(0, handle.budget);
+        if prior == 0 {
+            return;
+        }
+        // Pre-charge the meter under the reserved carryover key (a negative period
+        // that can never collide with an in-session per-action draw key, `seq >= 0`)
+        // so `drawn_total` reflects the prior spend and every subsequent draw is
+        // gated against the already-drawn-down headroom — over-budget refused across
+        // the reconnect, exactly as if the tenant never detached.
+        let _ = self.meter.draw(
+            &MeterKey::new(&handle.id, CARRYOVER_PERIOD),
+            prior,
+            handle.block,
+        );
+        // Seed a genesis carryover receipt so the chain's final `consumed_after`
+        // equals the reported consumed total even with zero new actions this attach.
+        let consumed = self.meter.drawn_total(&handle.id);
+        let mut receipt = AgentReceipt {
+            seq: state.seq,
+            agent: handle.id.clone(),
+            action: "carryover:prior-session-spend".to_string(),
+            cost: 0,
+            consumed_after: consumed,
+            headroom_after: (handle.budget - consumed).max(0),
+            cell_root: cell_root(&state.cells),
+            tool_ok: None,
+            tool_summary: None,
+            witnessed: None,
+            attestation: None,
+        };
+        receipt.attestation = Some(state.chain.seal(receipt.body_hash(), state.seq, None));
+        state.receipts.push(receipt);
+        state.seq += 1;
+    }
+
     /// A fresh, host-untrusted report snapshot from the persistent `state` — the
     /// cumulative receipt chain + the current bound (drawn so far vs the ceiling).
     fn report_snapshot(&self, handle: &AgentHandle, state: &SessionState) -> AgentRunReport {
@@ -1616,6 +1673,11 @@ impl SessionState {
         self.budget_refused
     }
 }
+
+/// The reserved meter period for the carried-over prior consumption restored at
+/// SSH re-attach ([`AgentCloud::restore_consumed`]). Negative so it can never
+/// collide with an in-session per-action draw key (`MeterKey` period `= seq >= 0`).
+const CARRYOVER_PERIOD: i64 = -1;
 
 /// Derive a deterministic 32-byte receipt-chain seed from an agent id, so a run is
 /// reproducible and the chain identity is bound to the agent.

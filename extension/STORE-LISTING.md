@@ -67,12 +67,21 @@ between named profiles, each with its own Ed25519 key. Recovery uses standard
 BIP39, and key derivation matches the dregg CLI and SDK, so a profile is portable
 across tools.
 
+LOG IN WITH YOUR WALLET — NO PASSWORD
+Log into the live dregg network with a profile instead of a username and
+password. The clerk fetches a one-time challenge from the cloud, signs it with
+your selected key on-device, and holds the returned session — you are signed in
+as a pseudonymous cap-account (dregg:…) derived from your key. Your key never
+leaves the device, there is nothing to phish, and logging out drops the session.
+
 RECEIPTS AND CAPABILITIES
 The clerk tails the node's receipt stream and surfaces committed receipts —
 transaction hash, effect kinds, finality, proof status — with a toolbar badge.
 It holds capability tokens (attenuable, expiring grants), lets you accept and
 share scoped capabilities, and evaluates authorization against the tokens you
-hold.
+hold. A powerbox grant ceremony lets you hand a site or app a NARROWED bearer
+capability — bounded to one action, one cell, and an expiry you choose — that
+can only ever be attenuated further, never amplified.
 
 PRIVACY — PROVE IT WITHOUT REVEALING IT
 Selective disclosure lets you respond to an authorization request three ways:
@@ -194,6 +203,10 @@ same in free text on submission.
    - `extension/store-assets/03-identity-receipts.png`
    - `extension/store-assets/04-capabilities.png`
    - `extension/store-assets/05-zk-disclosure.png`
+   - *(planned, regenerate via `make-screenshots.mjs`)* `06-cloud-login.png` — the
+     Cloud Session panel, signed in as a `dregg:…` cap-account (no password shown).
+   - *(planned)* `07-powerbox-grant.png` — the powerbox granting a narrowed,
+     action-scoped, expiring capability with the "cannot be amplified" note.
 4. **Name / short description / detailed description**: paste from the sections above.
 5. **Category**: Developer Tools. **Privacy policy URL**: as above. Fill the
    per-permission justifications and the Privacy-practices answers from above.

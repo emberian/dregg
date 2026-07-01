@@ -61,6 +61,8 @@ pub mod live;
 
 // ── the hosted, persistent, multi-goal session (the SSH/portal attach unit) ───
 pub mod session;
+// ── the durable per-account consumed-budget store (ceiling spans re-attach) ───
+pub mod session_store;
 pub mod stripe;
 
 // ── the SPEND rail: the real Stripe Skills for Hermes (provision + pay CLIs) ───
