@@ -2576,10 +2576,13 @@ Unlike the compressed `mint_hash` the substrate row carries, these are the ACTUA
 fold binds — no hash-gadget seam. -/
 def mintV3 : EffectVmDescriptor2 :=
   let d := v3OfFrozen mintTickFace
+  -- Append 28 columns (the 26-felt tuple at the LAST 26 + 2 leading alignment-pad columns) so the
+  -- registry's chip-lane shape guard (surplus past the base ÷ (CHIP_OUT_LANES-1) = 7) still holds:
+  -- 26 is not ÷7, 28 = 4·7 is. The pad columns are unconstrained zeros; the tuple rides `[d.traceWidth+2 ..)`.
   { d with
-    traceWidth  := d.traceWidth + 26
+    traceWidth  := d.traceWidth + 28
     piCount     := d.piCount + 26
-    constraints := d.constraints ++ bridgeTuplePiExposure d.traceWidth d.piCount }
+    constraints := d.constraints ++ bridgeTuplePiExposure (d.traceWidth + 2) d.piCount }
 
 /-- **`supplyMintV3`** — the DEDICATED-SELECTOR supply-mint member (SUPPLY-MODEL.md Stage 2b).
 The SAME proven credit/tick/freeze body as `mintV3`/`mintVmDescriptor2R24` (`mintTickFace`,
@@ -2665,10 +2668,11 @@ theorem mintP1_rejects_wrong_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (
 #guard (setFieldV3 0).traceWidth ==
   EFFECT_VM_WIDTH + APPENDIX_SPAN + (CHIP_OUT_LANES - 1) *
     (rotateV3FrozenAuthority (setFieldTickFace 0)).hashSites.length
--- mintV3 is WIDENED by the 26-felt bridge-action tuple exposure (the VK epoch): +26 columns, +26 PIs.
+-- mintV3 is WIDENED by the 26-felt bridge-action tuple exposure (the VK epoch): +28 columns
+-- (26 tuple + 2 chip-lane-alignment pad, so the surplus stays ÷7), +26 PIs.
 #guard mintV3.traceWidth ==
   EFFECT_VM_WIDTH + APPENDIX_SPAN + (CHIP_OUT_LANES - 1) *
-    (rotateV3FrozenAuthority mintTickFace).hashSites.length + 26
+    (rotateV3FrozenAuthority mintTickFace).hashSites.length + 28
 #guard (setFieldV3 0).piCount == 42 + 4
 #guard mintV3.piCount == 42 + 4 + 26
 -- The swap is a ONE-gate change: the tick-faced constraint list has the SAME length as the
@@ -4287,7 +4291,7 @@ theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) 
 def v3Registry : List (String × EffectVmDescriptor2) :=
   [ ("transferVmDescriptor2R24", v3OfFrozen EffectVmEmitTransfer.transferVmDescriptor)
   , ("burnVmDescriptor2R24", v3OfFrozen EffectVmEmitBurn.burnVmDescriptor)
-  , ("mintVmDescriptor2R24", withSelectorGate EffectVmEmitMint.selM.MINT (v3OfFrozen mintTickFace))
+  , ("mintVmDescriptor2R24", withSelectorGate EffectVmEmitMint.selM.MINT mintV3)
   , ("noteSpendVmDescriptor2R24", noteSpendV3)
   , ("noteCreateVmDescriptor2R24", noteCreateV3)
   , ("cellSealVmDescriptor2R24", cellSealV3)
