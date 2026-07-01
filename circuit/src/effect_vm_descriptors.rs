@@ -85,6 +85,14 @@ pub const DREGG_EFFECTVM_BRIDGEMINT_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-bridgemint-v1.json");
 pub const DREGG_EFFECTVM_BRIDGEMINT_V1_FP: &str =
     "7fd4ed0d7021982a771030a86d53fa5b3539b0c75a88fbdb25bc33b370853db8";
+// G1 (staged additively): the gated bridge-mint descriptor that PUBLISHES the payment commitment
+// (mint_hash, prmCol 0) + minted value (prmCol 1) as two NEW public inputs (`pi_binding first`),
+// so a light client witnesses the payment. Distinct AIR name ⇒ distinct VK; the deployed
+// bridgemint-v1 above is UNTOUCHED. Lean source `EffectVmEmitBridgeMintDeco.decoBridgeMintVmDescriptor`.
+pub const DREGG_EFFECTVM_BRIDGEMINT_DECO_V1_JSON: &str =
+    include_str!("../descriptors/dregg-effectvm-bridgemint-deco-v1.json");
+pub const DREGG_EFFECTVM_BRIDGEMINT_DECO_V1_FP: &str =
+    "79dbcb93841e27ff1669744d8a3e59aaf6ef73ef889cb491c41dc660a32b2375";
 pub const DREGG_EFFECTVM_BURN_V1_JSON: &str =
     include_str!("../descriptors/dregg-effectvm-burn-v1.json");
 pub const DREGG_EFFECTVM_BURN_V1_FP: &str =
@@ -1276,6 +1284,11 @@ pub const ALL_DESCRIPTORS: &[(&str, &str, &str)] = &[
         DREGG_EFFECTVM_BRIDGEMINT_V1_FP,
     ),
     (
+        "dregg-effectvm-bridgemint-deco-v1",
+        DREGG_EFFECTVM_BRIDGEMINT_DECO_V1_JSON,
+        DREGG_EFFECTVM_BRIDGEMINT_DECO_V1_FP,
+    ),
+    (
         "dregg-effectvm-burn-v1",
         DREGG_EFFECTVM_BURN_V1_JSON,
         DREGG_EFFECTVM_BURN_V1_FP,
@@ -1560,7 +1573,7 @@ mod tests {
     /// `scripts/check-descriptor-drift.sh`, not a self-consistent FP rehash.)
     #[test]
     fn all_descriptors_parse() {
-        assert_eq!(ALL_DESCRIPTORS.len(), 27, "expected 27 unique descriptors");
+        assert_eq!(ALL_DESCRIPTORS.len(), 28, "expected 28 unique descriptors");
         for (name, json, _fp) in ALL_DESCRIPTORS {
             let desc = parse_vm_descriptor(json)
                 .unwrap_or_else(|e| panic!("descriptor {name} failed to parse: {e}"));
@@ -1570,6 +1583,57 @@ mod tests {
                 desc.name
             );
             assert!(desc.trace_width > 0, "descriptor {name}: zero trace_width");
+        }
+    }
+
+    /// G1: the gated bridge-mint descriptor (`decoBridgeMintVmDescriptor`) is a CORRECT ADDITIVE
+    /// payment-fact emit — the deployed `bridgemint-v1` PLUS two `PiBinding{First}` welds publishing the
+    /// payment commitment (`mint_hash`, prmCol 0 = col 68) and minted value (prmCol 1 = col 69) as two
+    /// NEW public inputs (PI[42], PI[43]). Distinct AIR name ⇒ distinct VK; the deployed descriptor is
+    /// byte-for-byte an untouched PREFIX. The Rust mirror of Lean `decoBridgeMint_base_prefix` /
+    /// `decoBridgeMint_publishes` — the descriptor-emit the READY bridge fold consumes.
+    #[test]
+    fn bridgemint_deco_is_additive_payment_emit() {
+        use crate::lean_descriptor_air::{VmConstraint, VmRow};
+        let base = parse_vm_descriptor(DREGG_EFFECTVM_BRIDGEMINT_V1_JSON).expect("base parses");
+        let deco = parse_vm_descriptor(DREGG_EFFECTVM_BRIDGEMINT_DECO_V1_JSON).expect("deco parses");
+
+        // Distinct AIR name ⇒ distinct VK; the trace width is unchanged (reuses existing columns).
+        assert_ne!(deco.name, base.name, "gated descriptor must carry a distinct AIR name (VK)");
+        assert_eq!(deco.name, "dregg-effectvm-bridgemint-deco-v1");
+        assert_eq!(deco.trace_width, base.trace_width, "trace width unchanged (188)");
+
+        // Exactly TWO new public inputs (the payment commitment + the minted value).
+        assert_eq!(base.public_input_count, 42);
+        assert_eq!(deco.public_input_count, 44, "42 base PIs + 2 payment PIs");
+
+        // ADDITIVE: the gated constraints are the base constraints ++ the two payment pins (a prefix).
+        assert_eq!(
+            deco.constraints.len(),
+            base.constraints.len() + 2,
+            "deco = base + exactly two payment pins"
+        );
+        assert_eq!(
+            &deco.constraints[..base.constraints.len()],
+            base.constraints.as_slice(),
+            "the deployed bridgemint-v1 constraints are an UNTOUCHED prefix of the gated descriptor"
+        );
+
+        // The two payment pins: mint_hash (col 68 = prmCol 0) -> PI[42], value (col 69 = prmCol 1) -> PI[43].
+        let commit_pin = VmConstraint::PiBinding { row: VmRow::First, col: 68, pi_index: 42 };
+        let value_pin = VmConstraint::PiBinding { row: VmRow::First, col: 69, pi_index: 43 };
+        assert!(deco.constraints.contains(&commit_pin), "publishes the payment commitment as PI[42]");
+        assert!(deco.constraints.contains(&value_pin), "publishes the minted value as PI[43]");
+
+        // The deployed descriptor does NOT publish the payment facts (untouched — no such pins).
+        assert!(!base.constraints.contains(&commit_pin), "deployed bridgemint-v1 stays untouched");
+        assert!(!base.constraints.contains(&value_pin));
+
+        // Every PI index is in range (< public_input_count) — a valid, provable descriptor.
+        for c in &deco.constraints {
+            if let VmConstraint::PiBinding { pi_index, .. } = c {
+                assert!(*pi_index < deco.public_input_count, "PI index {pi_index} out of range");
+            }
         }
     }
 
