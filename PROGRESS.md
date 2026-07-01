@@ -45,11 +45,20 @@ never touch main/WIP, no history rewrite).
       deployed `BRIDGE_MINT` selector still maps to `bridgemint-v1`, untouched). It publishes the payment
       commitment (`mint_hash`, col 68) → PI[42] and minted value (col 69) → PI[43]; piCount 44. Test
       `bridgemint_deco_is_additive_payment_emit` verifies the additive-prefix + pin structure (Rust mirror
-      of Lean `decoBridgeMint_base_prefix`/`_publishes`). The bridge FOLD it feeds (`bridge_leaf_adapter` +
-      `prove_bridge_binding_node` + `bridge_binding_mechanism.rs` teeth) is already built + tested. REMAINING
-      is the deployment CUTOVER (a breaking VK change, needs go-ahead): flip the deployed `BRIDGE_MINT`
-      selector to the gated descriptor + supply the 2 new PIs in the production PI computation + attach the
-      minter `bridge_witness`. (Pre-existing unrelated drift: `wide_umem_weld_registry` FP predates this.)
+      of Lean `decoBridgeMint_base_prefix`/`_publishes`).
+- [~] Phase D — **RUST-SIDE FOLD LANDED GREEN + FIRES (staged additively).**
+      `circuit-prove/src/joint_turn_recursive.rs::prove_bridge_mint_commitment_node` — the compact
+      mint_hash-commitment fold (Design M, the term-for-term analog of `prove_custom_binding_node`) that
+      CONSUMES the gated descriptor's payment emit: it `connect`s the bridge-mint leg's claimed
+      `[mint_hash, value]` (PI[42..44], re-exposed) to a payment sub-proof leaf's genuine claim. This
+      matches the COMPACT commitment the substrate `BridgeMint` row actually carries (mint_hash binds
+      nullifier/root/dest/asset), NOT the 26-felt tuple (which needs a widened trace). Integration test
+      `circuit-prove/tests/bridge_mint_commitment_fold.rs` FIRES it end-to-end over real recursion: HONEST
+      folds + binds (verified 182s), FORGED mint_hash REJECTED (connect conflict ⇒ UNSAT ⇒ no root). Additive
+      — nothing deployed touched. REMAINING is the production integration: the minter producing a REAL
+      mint_hash sub-proof (the in-AIR `mint_hash = H(nullifier,root,dest,asset)` binding) + wiring the node
+      into `prove_chain_core_rotated` (like the custom path). (Pre-existing unrelated drift:
+      `wide_umem_weld_registry` FP predates this.)
 - [ ] Phase E — integration + live sandbox attested-flow demo + light-client demo + docs
 
 ## Anchors (Dregg2 recon — Phase A) — primitives largely ALREADY PROVED; this is composition
