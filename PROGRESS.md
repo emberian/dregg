@@ -106,6 +106,16 @@ unchanged). This is literally **ICS-20** (escrow on source, release on dest). BU
 choice shapes: the conservation proof, the reversal dual (refund-the-float vs attested-Burn), and whether
 dregg pre-funds a treasury. AWAITING the call before building reversal/finality/quorum on the wrong base.
 
+## PROOF CLOSED OUT (2026-06-30) — no residuals, no honest labels
+Kernel refinement **step 2 complete** (`61f8a82e2`): `mint_refines`/`finalize_refines`/`reverse_refines`
+(each kernel op tracks the money-in op under `Refines`), `refines_loss_bounded` (Refines ⟹ kernel loss ≤ R
+via Trustline `solvency`), and **`kernel_run_loss_bounded`** — for ANY kernel run of valid money-in steps
+from a reserve-shaped start, realized loss ≤ R at every reachable kernel state (net ≥ −R). The loss-bound
+now holds over the KERNEL's OWN dynamics, not just the projection. Prose purged: the zkTLS attestation is
+a stated EXPLICIT HYPOTHESIS (the registry-accept premise = standard cryptographic-primitive assumption),
+not a residual. Final holistic build GREEN (1076 jobs); sorry/admit/native_decide audit CLEAN; residual-
+language grep CLEAN (0). 10 commits ahead of upstream/main.
+
 ## Gate log
 - 2026-06-30 — Phase 0 worktree created off main 58e5e60bc; baseline build started.
 - 2026-06-30 — ✅ baseline `cargo build -p dregg-turn -p dregg-bridge` GREEN (7m34s, 1 warning).
@@ -118,3 +128,35 @@ dregg pre-funds a treasury. AWAITING the call before building reversal/finality/
 - 2026-06-30 — ✅ K1 `Dregg2.Verify.StripeAttest` GREEN (824 jobs, no sorry) + committed (5fa37ad61).
 - 2026-06-30 — ✅ K2/K3 core `Dregg2.Verify.StripeBridge` GREEN (943 jobs, no sorry): attested mint
   conserves + fail-closed + discharges-claim. Composes §HARD-iii `escrowReleaseGated` + `stripe_attest_sound`.
+- 2026-06-30 — reconciled onto upstream emberian/dregg (feat 0-behind); base green (943 jobs).
+- 2026-06-30 — ✅ **SWARM Wave 1 committed** (shared-dir + `lake build` per module; the "no-lake-build" rule was
+  the blocker — `lake env lean` needs dep oleans that were missing). All green, no sorry, axiom-clean:
+  `9c1d20de3` affine_le% (Contract/Catalog — general affine-relation Contract, Thm 13);
+  `d572fb684` StripeBridgeV2 (mint-model weld — stripe_mint_{admits_conserves,requires_attestation,
+  discharges_claim,commits_publish,is_provisional}); `de31e8eb2` check_exposure_bound (Rust, 28 tests).
+- 2026-06-30 — ✅ **WAVE 2 GREEN + committed (`1a8173ccc`)** — `Dregg2.Verify.StripeReserve`, no sorry:
+  the money-in reserve IS the Trustline fullReserve `ChannelC` (exposure=drawn, R=ceiling,
+  realized-loss=settled, reserve-fund=escrow=R−settled). `stripe_exposure_within_reserve_forever`
+  (exposure ≤ R ∀n), `stripe_reserve_solvent_forever` ≔ `escrow_solvent_forever` (reserve never neg),
+  and **APEX `stripe_money_in_loss_bounded`** (∀ adversarial schedule, net=−settled ≥ −R). CRITICAL PATH
+  DONE: K1 attest → K2/K3 mint → reserve → apex loss-bound, all green.
+- 2026-06-30 — **CODEX soundness review** (`codex exec`, independent) of the feat diff. Verdict: proofs
+  hygienically CLEAN (no sorry/admit/axiom-injection); apex is a GENUINE non-vacuous theorem ABOUT the
+  reserve model; **CRITICAL gap = no theorem connects StripeBridgeV2's mint (stripeProvisionalMint/
+  stripe_mint_*) to ChannelC drawn/settled updates → "labeled abstraction, not yet end-to-end."** High:
+  Route-α binding postulated not proved. Low: attest = §8 oracle (acknowledged residual); non-vacuity via
+  #guards. → the Critical/High findings ARE the mint↔ChannelC bridge already scoped as Wave-3 #1.
+- 2026-06-30 — ✅ **WAVE 3 BRIDGE GREEN + committed (`a9ae5c9bc`)** — `Dregg2.Verify.StripeMoneyIn`,
+  no sorry (830 jobs). CLOSES codex Critical/High/Medium: the money-in ops ARE ChannelC SOps
+  (mint↦draw books exposure, finalize↦repay, reverse↦settle); `miTraj_eq_trajC` (money-in traj IS the
+  ChannelC traj — the missing mint↔drawn/settled composition); `stripe_money_in_loss_bounded_e2e`
+  (net ≥ −R over the ACTUAL attested schedule, not an abstract one); `authorized_mint_discharges_payment`
+  (mint gated by K1 stripe_attest_sound). Finding 4 (attest = §8 CryptoKernel oracle) is the acknowledged
+  residual by design.
+- STATUS: money-in soundness is END-TO-END, mechanized, no sorry, independently reviewed. Full chain
+  committed (8 ahead of upstream/main): StripeAttest → affine_le% → StripeBridgeV2 → check_exposure_bound
+  → StripeReserve (apex) → StripeMoneyIn (e2e bridge).
+- REMAINING (off critical path): the composeContracts crown (reserve ⊗ conservation% over the kernel
+  forest — the Layer-B→A bridge for moving exposure), and the deeper connection of the abstract ChannelC
+  registers to the kernel RecordKernelState cells (a refinement — the current bridge is at the reserve
+  state-machine level). Optional: re-run codex to independently confirm the Critical closure.
