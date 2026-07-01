@@ -184,6 +184,48 @@ def assetConservedKF (s0 : RecChainedState) (a : AssetId) : Contract where
     exact h
   shape := .constant
 
+/-! ### Affine-relation contracts — the general `⋈ ∈ {=, ≤, ≥}` generalization of `assetConservedKF`.
+
+`assetConservedKF` pins a SINGLE ledger column (`cellObsA · a = cellObsA s0 a`). But `cellObsA_next`
+gives equality of the WHOLE per-asset observation vector across a living-cell step, so ANY affine
+functional `Σ cᵢ · cellObsA · aᵢ` is equal across a step too. `affineRelKF` packages that: a list of
+`(coefficient, asset)` terms defines the functional `affineObs`, and — because the functional is
+step-invariant — a comparison `cmp (affineObs terms s) (affineObs terms s0)` against its FIXED baseline
+value is preserved for ANY `cmp`. So `cmp := (· = ·)` recovers a multi-column conservation law,
+`cmp := (· ≤ ·)` gives a reserve/exposure ceiling `Σ exposure ≤ reserve` as an instance
+(design doc Theorem 13), and `cmp := (· ≥ ·)` a floor — all discharged by the SAME `affineObs_next`
+rewrite. (This is strictly cleaner than the per-term `congrFun (cellObsA_next ..) aᵢ` + `omega` route of
+`automaton_inv%`: since the WHOLE column vector is fixed across a step, the whole functional — hence the
+whole comparison — is fixed, so the carried hypothesis discharges the step directly.) -/
+
+/-- **`affineObs terms s`** — the affine functional `Σ (cᵢ · cellObsA s aᵢ)` over the tracked ledger
+columns, `terms : List (coefficient × asset)`. `affineObs [(1, a)] s = cellObsA s a`; `affineObs
+[(1, a), (1, b)] s = cellObsA s a + cellObsA s b` (the `automaton_inv%` two-field sum). -/
+def affineObs (terms : List (ℤ × AssetId)) (s : RecChainedState) : ℤ :=
+  (terms.map (fun p => p.1 * cellObsA s p.2)).sum
+
+/-- One-step invariance of EVERY affine functional: `cellObsA_next` equates the whole observation
+vector across a living-cell step, so any `Σ cᵢ · cellObsA · aᵢ` is equal across the step too. This is
+the one lemma the affine-relation `step_ob` reuses (the `cellObsA_next` generalization of `congrFun`). -/
+theorem affineObs_next (terms : List (ℤ × AssetId)) (s : RecChainedState) (cf : ConservingForest) :
+    affineObs terms (cellNextA s cf) = affineObs terms s := by
+  simp only [affineObs, cellObsA_next]
+
+/-- **`affineRelKF terms cmp s0` — the general affine-relation contract** (the `⋈ ∈ {=, ≤, ≥}`
+generalization). `Inv s := cmp (affineObs terms s) (affineObs terms s0)`: the affine functional at `s`,
+compared against its fixed baseline value at `s0` by ANY relation `cmp`. `step_ob` rewrites the
+functional across the step (`affineObs_next`), reducing the goal to the SAME comparison at the
+predecessor — closed by the carried hypothesis, for every `cmp` uniformly. `assetConservedKF s0 a` is
+the instance `affineRelKF [(1, a)] (· = ·) s0`; a reserve invariant `Σ exposure ≤ reserve` is
+`affineRelKF signedTerms (· ≤ ·) s0`. -/
+def affineRelKF (terms : List (ℤ × AssetId)) (cmp : ℤ → ℤ → Prop) (s0 : RecChainedState)
+    (shape : SafetyShape := .other) : Contract where
+  Inv s := cmp (affineObs terms s) (affineObs terms s0)
+  step_ob a' cf h := by
+    rw [CellExecutor.kernelForest_next_eq, affineObs_next]
+    exact h
+  shape := shape
+
 def revokedPersists (x : Nat) : Contract where
   Inv s := x ∈ s.kernel.revoked
   step_ob a cf h := by
@@ -261,6 +303,14 @@ noncomputable def conserved (s0 : RecChainedState) : Contract :=
 
 noncomputable def assetConserved (s0 : RecChainedState) (a : AssetId) : Contract :=
   liftFromKernelForest (KernelForest.assetConservedKF s0 a)
+
+/-- **`affineRel terms cmp s0`** — the production lift of `KernelForest.affineRelKF`: an affine
+functional `Σ cᵢ · cellObsA · aᵢ` compared to its baseline value at `s0` by `cmp ∈ {=, ≤, ≥, …}`,
+carried along `trajG`. Strictly generalizes `assetConserved` (which is `affineRel [(1, a)] (· = ·) s0`)
+to arbitrary linear combinations AND to the `≤`/`≥` reserve/exposure relations (design doc Theorem 13). -/
+noncomputable def affineRel (terms : List (ℤ × AssetId)) (cmp : ℤ → ℤ → Prop) (s0 : RecChainedState)
+    (shape : SafetyShape := .other) : Contract :=
+  liftFromKernelForest (KernelForest.affineRelKF terms cmp s0 shape)
 
 noncomputable def revokedPersists (x : Nat) : Contract :=
   liftFromKernelForest (KernelForest.revokedPersists x)
@@ -357,6 +407,20 @@ theorem asset_conserved_forever_production (s0 : RecChainedState) (a : AssetId) 
     ∀ n, cellObsA (trajG s0 sched n) a = cellObsA s0 a :=
   (assetConserved s0 a).forever rfl sched
 
+/-- **`affine_le_forever_production` — the reserve/exposure `≤` crown (design doc Theorem 13).** A
+signed affine functional `Σ cᵢ · cellObsA · aᵢ` stays `≤` its baseline value at every `trajG` index —
+the `Σ exposure ≤ reserve` reserve invariant as a production crown. Since the functional is
+step-invariant, `le_refl` at the baseline seeds the entire adversarial trajectory. -/
+theorem affine_le_forever_production (terms : List (ℤ × AssetId)) (s0 : RecChainedState) (sched : SchedG) :
+    ∀ n, KernelForest.affineObs terms (trajG s0 sched n) ≤ KernelForest.affineObs terms s0 :=
+  (affineRel terms (· ≤ ·) s0).forever (le_refl _) sched
+
+/-- **`affine_ge_forever_production`** — the mirror `≥` (floor) crown; same functional, opposite
+comparator, same `affineObs_next` discharge (`≥`-reflexivity seeds it). -/
+theorem affine_ge_forever_production (terms : List (ℤ × AssetId)) (s0 : RecChainedState) (sched : SchedG) :
+    ∀ n, KernelForest.affineObs terms (trajG s0 sched n) ≥ KernelForest.affineObs terms s0 :=
+  (affineRel terms (· ≥ ·) s0).forever (le_refl _) sched
+
 theorem log_mono_forever_production (s : RecChainedState) (sched : SchedG) :
     ∀ n, s.log.length ≤ (trajG s sched n).log.length :=
   (logAppendOnly s).forever (le_refl _) sched
@@ -434,6 +498,11 @@ contracts carry three DISTINCT `SafetyShape`s, so the tag is real classifying da
 #assert_axioms Production.liftFromKernelForest
 #assert_axioms logAppendOnly
 #assert_axioms conserved
+#assert_axioms KernelForest.affineObs_next
+#assert_axioms KernelForest.affineRelKF
+#assert_axioms affineRel
+#assert_axioms affine_le_forever_production
+#assert_axioms affine_ge_forever_production
 #assert_axioms revokedPersists
 #assert_axioms nullifierPersists
 #assert_axioms nameRegisteredContract

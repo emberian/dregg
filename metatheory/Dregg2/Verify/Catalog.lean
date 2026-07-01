@@ -194,6 +194,39 @@ macro_rules
               omega
             shape := .other } : KernelForest.Contract)))
 
+/-! ## §4b — `affine_rel% terms cmp` / `affine_le% terms` — the general affine-relation shape.
+
+`automaton_inv% a b` conserves the UNIT-coefficient two-column sum `cellObsA · a + cellObsA · b`. But
+`cellObsA_next` equates the WHOLE observation vector across a step, so ANY affine functional
+`Σ cᵢ · cellObsA · aᵢ` — arbitrary coefficients, arbitrarily many columns — is equal across a step, and
+hence ANY comparison `cmp (functional s) (functional s0)` against a fixed baseline is preserved for
+`cmp ∈ {=, ≤, ≥, …}`. `affine_rel% terms cmp` / `affine_le% terms` (and `affine_ge%`, `affine_eq%`)
+expand to the PRODUCTION `Contract` `affineRel terms cmp`, awaiting the baseline `s0` (mirroring how
+`conservation%`/`automaton_inv%` surface `s0`). This is a STRICT generalization of §4:
+`automaton_inv% a b` is `affine_eq% [(1, a), (1, b)]`, and the reserve/exposure ceiling
+`Σ exposure ≤ reserve` (design doc Theorem 13) is `affine_le%` on the signed exposure/reserve terms. -/
+
+/-- **`affine_rel% terms cmp`** — the general affine-relation contract (production), parametric in the
+baseline `s0`: the affine functional `Σ cᵢ · cellObsA · aᵢ` (`terms : List (ℤ × AssetId)`) compared to
+its `s0` value by `cmp ∈ {=, ≤, ≥, …}`. Expands to `fun s0 => affineRel terms cmp s0`. -/
+syntax (name := affineRelStx) "affine_rel% " term:max ppSpace term:max : term
+/-- **`affine_le% terms`** — the reserve/exposure ceiling shape: `Σ cᵢ · cellObsA · aᵢ ≤` its baseline. -/
+syntax (name := affineLeStx) "affine_le% " term:max : term
+/-- **`affine_ge% terms`** — the floor shape: `Σ cᵢ · cellObsA · aᵢ ≥` its baseline. -/
+syntax (name := affineGeStx) "affine_ge% " term:max : term
+/-- **`affine_eq% terms`** — the multi-column conservation shape (generalizes `automaton_inv%`). -/
+syntax (name := affineEqStx) "affine_eq% " term:max : term
+
+macro_rules
+  | `(affine_rel% $terms:term $cmp:term) =>
+    `((fun (s0 : RecChainedState) => affineRel $terms $cmp s0))
+  | `(affine_le% $terms:term) =>
+    `((fun (s0 : RecChainedState) => affineRel $terms (· ≤ ·) s0))
+  | `(affine_ge% $terms:term) =>
+    `((fun (s0 : RecChainedState) => affineRel $terms (· ≥ ·) s0))
+  | `(affine_eq% $terms:term) =>
+    `((fun (s0 : RecChainedState) => affineRel $terms (· = ·) s0))
+
 /-! ## §5 — THE GATE: each macro elaborates to a BUILDING `CellContract` at its canonical field.
 
 These `def`s/`example`s force elaboration of each macro and show the contract is real (its `.forever`
@@ -262,6 +295,33 @@ example (sched : SchedA) :
     ∀ n, cellObsA (trajA fma0 sched n) 0 + cellObsA (trajA fma0 sched n) 1
        = cellObsA fma0 0 + cellObsA fma0 1 :=
   ((automaton_inv% (0 : AssetId) (1 : AssetId)) fma0).forever rfl sched
+
+/-- **GATE (4b) — `affine_le%` builds.** A 2-term signed affine `≤`-ceiling contract, baseline `fma0`:
+`2·obs 0 + 3·obs 1 ≤` its baseline value. The functional is `affineObs_next`-invariant, so `≤` against
+its own baseline holds forever — the `Σ exposure ≤ reserve` shape (design doc Theorem 13). -/
+noncomputable def gateAffineLe : Production.Contract :=
+  (affine_le% [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))]) fma0
+
+/-- **GATE (4b, payoff) — the reserve/exposure `≤` invariant carried forever on `trajG`.** The affine
+functional `2·obs 0 + 3·obs 1` never rises above its baseline value at every index of every trajectory
+— a `Σ exposure ≤ reserve` reserve ceiling as a one-liner `.forever`. -/
+example (sched : SchedG) :
+    ∀ n, KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] (trajG fma0 sched n)
+       ≤ KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] fma0 :=
+  ((affine_le% [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))]) fma0).forever (le_refl _) sched
+
+/-- **GATE (4b′) — the `≥` floor variant builds + carries forever** (same functional, `affine_ge%`). -/
+example (sched : SchedG) :
+    ∀ n, KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] (trajG fma0 sched n)
+       ≥ KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] fma0 :=
+  ((affine_ge% [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))]) fma0).forever (le_refl _) sched
+
+/-- **GATE (4b″) — the `=` variant reproduces multi-column conservation** (`affine_eq%`, generalizing
+`automaton_inv%` to arbitrary coefficients: here `2·obs 0 + 3·obs 1`). -/
+example (sched : SchedG) :
+    ∀ n, KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] (trajG fma0 sched n)
+       = KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] fma0 :=
+  ((affine_eq% [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))]) fma0).forever rfl sched
 
 /-! ## §5b — Production payoffs (`trajG` / `SchedG`): the **public Hatchery API**.
 
@@ -333,6 +393,19 @@ And the four macros emit three distinct `SafetyShape`s (`.membership`, `.constan
 #guard (((conservation% (0 : AssetId)) fma0).shape == SafetyShape.constant)
 #guard (((automaton_inv% (0 : AssetId) (1 : AssetId)) fma0).shape == SafetyShape.other)
 #guard ((monotone_registry% revoked 42).shape ≠ ((conservation% (0 : AssetId)) fma0).shape)
+-- `affine_le%`: the 2-term functional `2·obs 0 + 3·obs 1 = 2·105 + 3·7 = 231` is a genuine moving
+-- combination; a real transfer step preserves it, so `≤`, `≥`, `=` against the baseline all decide `true`.
+#guard (KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] fma0 == 231)
+#guard ((execFullForestA fma0 transferCF.1).map (fun s' => decide
+          (KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] s'
+            ≤ KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] fma0)) == some true)
+#guard ((execFullForestA fma0 transferCF.1).map (fun s' => decide
+          (KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] s'
+            ≥ KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] fma0)) == some true)
+#guard ((execFullForestA fma0 transferCF.1).map (fun s' => decide
+          (KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] s'
+            = KernelForest.affineObs [((2 : ℤ), (0 : AssetId)), ((3 : ℤ), (1 : AssetId))] fma0)) == some true)
+#guard ((KernelForest.affineRelKF [((1 : ℤ), (0 : AssetId))] (· ≤ ·) fma0).shape == SafetyShape.other)
 example : (eventually% gatedLogGoal).Goal = gatedLogGoal := rfl
 
 /-! ## §7 — Axiom hygiene — the macro-emitted contracts + their payoff, kernel-triple clean.
@@ -345,5 +418,6 @@ ordinary kernel-checked terms. -/
 #assert_axioms gateConserved
 #assert_axioms gateConfined
 #assert_axioms gateAutomaton
+#assert_axioms gateAffineLe
 
 end Dregg2.Verify
