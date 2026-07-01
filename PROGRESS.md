@@ -83,6 +83,29 @@ as a `Turn.Attest` (disclosure/transferability) instance + its verify predicate 
   (import StripeAttest+EscrowFactoryProbe; `stripeGate`/`stripeAttestedRelease` + the composed soundness
   theorems + #guards). `Exec/BlindedQueue.lean` is the `Custom`-vk precedent if needed.
 
+## DESIGN SETTLED (2026-06-30) — reserve design + proof strategy
+Canonical doc: `superintelligent-DreggNet/docs/STRIPE-RESERVE-DESIGN-AND-PROOF-STRATEGY.md` (from 4 explorers +
+a visionary-scholar). RESULT: money-in soundness = **loss-bounded under an adversarial oracle** (NOT
+Stripe-faithful). The apex `stripe_money_in_loss_bounded` (`∀n net ≥ −R`) is a symbol-binding INSTANCE of
+`Apps/Trustline.escrow_solvent_forever` (:1362, `settled≤drawn≤ceiling`) ⊗ `conservation%` — ZERO new proof
+for the core bound. Provisional lifecycle = `Intent/Lifecycle` publish/fulfill/refund + finalized-XOR-burned
+(:294/:311). zkTLS witness = the committed `stripe_attest_sound` (opaque observation). NEW content only:
+(1) `affine_le%` catalog macro [G] (generalize `automaton_inv%` `=`→`⋈`); (2) Stripe reserve instantiation
+[Route α, 0 new proof]; (3) gated-spend `step_ob` (`draw_within_line` recipe); (4) **StripeBridge v2 —
+re-weld K2/K3 onto the MINT model** (current escrow-release StripeBridge is superseded; K1 StripeAttest reused);
+(5) Rust `check_exposure_bound` + FFI. The Layer-B→A bridge is the only new KERNEL theorem and is OFF critical
+path. BUILD ORDER = the doc's 19-theorem list. Supersedes the earlier float-vs-mint fork (mint model chosen).
+
+## SURFACED to Ember/Alif (guardrail-#2 — load-bearing fork, 2026-06-30)
+**Conservation MODEL: ICS-20 float (escrow-release) vs Effect::Mint (issuer-well).** The K2/K3 weld
+(`StripeBridge`) proved conservation via `escrowReleaseGated`→`escrowSettle` — i.e. the bridge-pot
+*pre-holds a float* and RELEASES it to the recipient against the attestation (conserves by MOVE; total
+unchanged). This is literally **ICS-20** (escrow on source, release on dest). BUT the current Rust
+(`bridge/src/stripe_mirror.rs` + `turn/.../bridge_ledger.rs`) uses **`Effect::Mint`** (issuer-well debit
+— credit CREATED, backed by the payment). Two different conservation mechanisms / economic models. The
+choice shapes: the conservation proof, the reversal dual (refund-the-float vs attested-Burn), and whether
+dregg pre-funds a treasury. AWAITING the call before building reversal/finality/quorum on the wrong base.
+
 ## Gate log
 - 2026-06-30 — Phase 0 worktree created off main 58e5e60bc; baseline build started.
 - 2026-06-30 — ✅ baseline `cargo build -p dregg-turn -p dregg-bridge` GREEN (7m34s, 1 warning).
