@@ -20,7 +20,15 @@ never touch main/WIP, no history rewrite).
       `stripe_release_requires_attestation` + `stripe_release_discharges_claim`, no sorry, committed).
       NEXT: at-most-once (no-double mint) + reversal dual (`cancelBridge`) + retirement law; then finality tier.
 - [ ] Phase C — K4 quorum unify + K6 consume-once + rollback mechanized
-- [ ] Phase D — K5 DECO zkTLS predicate; **D3** recursive-aggregate fold (T2)
+- [~] Phase D — K5 DECO zkTLS predicate **LANDED GREEN** (`Dregg2.Crypto.Deco`: `DecoRelation` — the
+      4-link session-auth chain + amount range gadget — with `deco_bridge` (Satisfies↔Relation, honest
+      range gadget, #assert_axioms clean), `deco_verify_sound`, `deco_binds_payment` (§8 trust base
+      named: ed25519 EUF-CMA + HMAC), `deco_commitment_binds` (Poseidon2 CR), and the capstone
+      `deco_authenticates_payment`. Wired at `stripeKind vk` via `StripeAttest.stripe_deco_attest_sound`;
+      toy `refVerifier`/`refRegistry` RETIRED; whole Stripe chain builds green. The DECO verification is
+      now a CONSTRUCTED relation, not an opaque oracle — surviving trust base = STARK + §8 primitives +
+      external Web-PKI/Stripe floor). NEXT: **D3** recursive-aggregate fold — emit the payment facts as
+      public inputs in `compileBridgeMint` + the gated VK epoch (T2/G1).
 - [ ] Phase E — integration + live sandbox attested-flow demo + light-client demo + docs
 
 ## Anchors (Dregg2 recon — Phase A) — primitives largely ALREADY PROVED; this is composition

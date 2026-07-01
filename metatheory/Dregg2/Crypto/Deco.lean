@@ -301,6 +301,36 @@ theorem deco_verify_sound {Dg Proof : Type} [K : DecoVerifierKernel Dg Proof]
 
 #assert_axioms deco_verify_sound
 
+/-! ## The capstone — `deco_authenticates_payment`: the whole zkTLS soundness in one statement.
+
+Composes `deco_verify_sound` (STARK extractability: accept ⟹ the DECO relation) with `deco_binds_payment`
+(the §8 gate carriers: the runnable gates lift to the genuine `Signed`/`Tagged` facts). Given the DECO
+kernel's gate oracles ARE the §8 ed25519 / HMAC oracles (`hsigEq`/`hmacEq` — definitional in a real
+deployment), an accepting DECO proof PROVES a genuine Stripe-authenticated payment: Stripe's key signed
+the session key, the response transcript was MAC'd under it, and the transcript opens to the encoding of
+exactly the disclosed non-zero facts. Every hypothesis is a named §8 carrier or the coincidence of the
+kernel's gates with the §8 oracles; the conclusion is the real payment binding. THE discharge of the
+DECO/zkTLS verification, modulo the §8 floor + the external Web-PKI/Stripe floor. -/
+theorem deco_authenticates_payment {Dg Proof : Type}
+    [KD : DecoVerifierKernel Dg Proof] [SK : SignatureKernel Dg Dg Dg] [MK : MacKernelE Dg Dg Dg]
+    (hsigEq : KD.sigVerify = SK.sigVerify) (hmacEq : KD.macVerify = MK.verifyTag)
+    (hext : KD.extractable) (hsig : SK.unforgeable) (hmac : MK.unforgeable)
+    (stmt : Statement Dg) (proof : Proof) (haccept : KD.verify stmt proof = true) :
+    ∃ w : CircuitIR Dg,
+      -- Stripe's key genuinely signed the session key (ed25519 EUF-CMA):
+      SK.Signed stmt.serverKey w.sessionKey ∧
+      -- the response transcript was genuinely MAC'd under it (HMAC unforgeability):
+      MK.Tagged w.sessionKey w.transcriptCommit w.tag ∧
+      -- and the committed transcript opens to the encoding of exactly the disclosed facts:
+      w.transcriptCommit = KD.compress (KD.encode stmt.facts) w.salt ∧
+      -- with a non-zero amount (the payment succeeded):
+      1 ≤ stmt.facts.amountCents := by
+  obtain ⟨w, hrel⟩ := deco_verify_sound hext stmt proof haccept
+  rw [hsigEq, hmacEq] at hrel
+  exact ⟨w, deco_binds_payment KD.compress KD.encode hsig hmac stmt w hrel⟩
+
+#assert_axioms deco_authenticates_payment
+
 /-! ## Layer C — the registry cascade at the open `custom (vk)` extension point.
 
 The DECO kind is a `custom vk` registration (Stripe's DECO verification key). We install the §8 `verify`
@@ -406,6 +436,37 @@ accepts iff the disclosed facts are non-zero and encode/open canonically against
       refine ⟨?_, rfl, rfl, rfl, hamt⟩
       show decide (stmt.serverKey = stmt.serverKey) = true; simp
     exact deco_complete refSig refMac refCompress refEncode stmt _ hrel
+
+/-- A toy ed25519 `SignatureKernel` over `ℤ` whose oracle IS the reference DECO sig gate (`refSig`).
+`Signed pk m := pk = m`; `unforgeable` is the GENUINE EUF-CMA-shaped soundness Prop over this oracle. -/
+@[reducible] def refSigKernel : SignatureKernel Int Int Int where
+  Signed pk m := pk = m
+  sigVerify := refSig
+  unforgeable := ∀ pk m s, refSig pk m s = true → pk = m
+  sigVerify_sound := fun h => h
+
+/-- A toy HMAC `MacKernelE` over `ℤ` whose oracle IS the reference DECO mac gate (`refMac`, accept-all
+toy). `Tagged` is `True` for the toy; the real kernel is the §8 HMAC extern. -/
+@[reducible] def refMacKernel : MacKernelE Int Int Int where
+  mac _ _ := 0
+  Tagged _ _ _ := True
+  verifyTag := refMac
+  unforgeable := True
+  verifyTag_sound := fun _ _ _ _ _ => trivial
+
+/-- Non-vacuity of the CAPSTONE `deco_authenticates_payment`: at the reference kernels (DECO + toy
+ed25519 + toy HMAC), an accepting proof yields the genuine payment binding — Stripe's key signed the
+session key, the transcript is tagged, and it opens to the encoded non-zero facts. -/
+theorem reference_authenticates_payment :
+    ∃ w : CircuitIR Int,
+      refSigKernel.Signed sampleStmt.serverKey w.sessionKey ∧
+      refMacKernel.Tagged w.sessionKey w.transcriptCommit w.tag ∧
+      w.transcriptCommit = refKernel.compress (refKernel.encode sampleStmt.facts) w.salt ∧
+      1 ≤ sampleStmt.facts.amountCents :=
+  deco_authenticates_payment (KD := refKernel) (SK := refSigKernel) (MK := refMacKernel)
+    rfl rfl trivial (fun _ _ _ h => of_decide_eq_true h) trivial sampleStmt () (by decide)
+
+#print axioms reference_authenticates_payment
 
 /-- The empty base registry over the toy `ℤ` DECO statement / `Unit` proof. -/
 def base : Registry (Statement Int) Unit := fun _ => none
