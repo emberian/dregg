@@ -861,6 +861,95 @@ pub fn prove_bridge_binding_node_segmented(
     })
 }
 
+/// Width of the COMPACT bridge-mint payment claim (2 felts: the `mint_hash` commitment ++ the minted
+/// `value`) — the payment facts the gated `decoBridgeMintVmDescriptor` publishes at PI[42..44] (Lean
+/// `EffectVmEmitBridgeMintDeco`, `PI_PAYMENT_COMMIT`/`PI_PAYMENT_VALUE`).
+pub const BRIDGE_MINT_CLAIM_LEN: usize = 2;
+
+/// The gated bridge-mint descriptor's payment-claim PI slot start (Lean `PI_PAYMENT_COMMIT = 42`).
+pub const BRIDGE_MINT_CLAIM_PI_LO: usize = 42;
+
+/// **THE COMPACT BRIDGE-MINT PAYMENT-BINDING NODE (Design M — the mint_hash-commitment fold).** The
+/// bridge-mint twin of [`prove_custom_binding_node`]: aggregate a bridge-mint LEG leaf (which must
+/// RE-EXPOSE its CLAIMED payment claim `[mint_hash, value]` — the slots the gated
+/// `decoBridgeMintVmDescriptor` publishes at PI[42..44], re-exposed via
+/// [`crate::ivc_turn_chain::prove_descriptor_leaf_with_pi_slice_expose`] with `pi_lo=42, len=2`) WITH a
+/// bridge payment SUB-PROOF leaf (whose `expose_claim` is the GENUINE payment claim in lanes
+/// `[0 .. BRIDGE_MINT_CLAIM_LEN)`), CONNECTING the two claims in-circuit lane by lane and re-exposing the
+/// now-bound claim as the parent claim.
+///
+/// THE TOOTH: if the leg claims a `[mint_hash, value]` the sub-proof does not back, the per-lane
+/// `connect` is a conflict ⇒ the aggregation is UNSAT ⇒ no root. This is the COMPACT (commitment-based)
+/// design that matches what the substrate `BridgeMint` row actually carries — `mint_hash` binds
+/// `(nullifier, root, dest_federation, asset_type)`, `value_lo` the amount — the term-for-term analog of
+/// the 26-felt [`prove_bridge_binding_node`] over the deployed mint_hash digest rather than the
+/// full-fidelity tuple. It is the fold the gated bridge-mint descriptor feeds (no trace widening).
+///
+/// `config` must be [`crate::ivc_turn_chain::ir2_leaf_wrap_config`].
+pub fn prove_bridge_mint_commitment_node(
+    leg_claim_leaf: &RecursionOutput<DreggRecursionConfig>,
+    payment_subproof_leaf: &RecursionOutput<DreggRecursionConfig>,
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, JointAggError> {
+    use crate::ivc_turn_chain::expose_claim_instance_index;
+    use crate::plonky3_recursion_impl::recursive::create_recursion_backend;
+    use p3_circuit::CircuitBuilder;
+    use p3_recursion::{Target, build_and_prove_aggregation_layer_with_expose};
+
+    type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
+
+    let leg_idx = expose_claim_instance_index(&leg_claim_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason: "bridge-mint leg leaf carries no re-exposed payment claim (expose_claim) table — \
+                     it must be wrapped via prove_descriptor_leaf_with_pi_slice_expose (pi_lo=42, len=2)"
+                .to_string(),
+        }
+    })?;
+    let cs_idx = expose_claim_instance_index(&payment_subproof_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason: "bridge payment sub-proof leaf carries no exposed claim (expose_claim) table"
+                .to_string(),
+        }
+    })?;
+
+    let left = leg_claim_leaf.into_recursion_input::<BatchOnly>();
+    let right = payment_subproof_leaf.into_recursion_input::<BatchOnly>();
+
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+
+    let expose = move |cb: &mut CircuitBuilder<RecursionChallenge>,
+                       left_apt: &[Vec<Target>],
+                       right_apt: &[Vec<Target>]| {
+        let lg = left_apt
+            .get(leg_idx)
+            .expect("bridge-mint leg's re-exposed claim instance present");
+        let cs = right_apt
+            .get(cs_idx)
+            .expect("bridge payment sub-proof's exposed claim instance present");
+        debug_assert!(lg.len() >= BRIDGE_MINT_CLAIM_LEN && cs.len() >= BRIDGE_MINT_CLAIM_LEN);
+        // THE BINDING TOOTH, IN-CIRCUIT: the leg's CLAIMED payment claim (mint_hash ++ value) must
+        // equal the sub-proof's GENUINE claim, lane by lane. A forged claim with no backing is a
+        // conflict here ⇒ UNSAT ⇒ no root.
+        for k in 0..BRIDGE_MINT_CLAIM_LEN {
+            cb.connect(lg[k], cs[k]);
+        }
+        let bound: Vec<Target> = (0..BRIDGE_MINT_CLAIM_LEN).map(|k| lg[k]).collect();
+        cb.expose_as_public_output(&bound);
+    };
+
+    build_and_prove_aggregation_layer_with_expose::<
+        DreggRecursionConfig,
+        BatchOnly,
+        BatchOnly,
+        _,
+        D,
+    >(&left, &right, config, &backend, &params, None, Some(&expose))
+    .map_err(|e| JointAggError::AggregationProofInvalid {
+        reason: format!("bridge-mint payment-binding aggregation node failed: {e:?}"),
+    })
+}
+
 /// **THE SEGMENT-PRESERVING SOVEREIGN BINDING NODE (the sovereign analog of
 /// [`prove_custom_binding_node_segmented`]).** Aggregate a sovereign turn's DUAL-EXPOSE effect-vm leg
 /// leaf (whose single `expose_claim` carries the chain SEGMENT in lanes `[0 .. SEG_WIDTH)` and the
