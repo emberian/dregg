@@ -30,6 +30,7 @@ schema — those two facts are the external floor, carried by the registration, 
 import Dregg2.Crypto.PortalFloor
 import Dregg2.Exec.RecordCircuit
 import Dregg2.Authority.Predicate
+import Metatheory.EpistemicDial
 import Dregg2.Tactics
 
 namespace Dregg2.Crypto.Deco
@@ -338,7 +339,7 @@ oracle at `custom vk` and prove the cascade: an accepting proof both `Discharged
 (`registry_sound`) and proves the DECO relation (`deco_verify_sound`). Single trust boundary: `extractable`
 (plus the §8 gate carriers surfaced in `deco_binds_payment`). -/
 
-open Dregg2.Authority.Predicate Dregg2.Laws
+open Dregg2.Authority.Predicate Dregg2.Laws Metatheory
 
 section Wiring
 
@@ -371,9 +372,80 @@ theorem deco_registry_cascade [K : DecoVerifierKernel Dg P] (vk : Nat)
   simp only [↓reduceIte]
   exact haccept
 
+/-! ### The epistemic dial — `DiscloseAt` at the DECO kind's `selective` floor.
+
+The disclosed statement (Stripe's server key + the payment facts) is public; the session key, transcript,
+and opening salt are the hidden witness. So the DECO proof sits at the `selective` floor — chosen facts
+(the payment) plus the conclusion, above the `acceptanceOnly` ZK bottom and below `fullDisclosure` (which
+would reveal the session internals). We wire `EpistemicDial.DiscloseAt` to the verifier at that floor,
+exactly as the other §8 kinds do. -/
+
+/-- **`KindObligation`** for the DECO kind — statement algebra `Statement Dg`, dial floor = `selective`
+(the payment facts + server key disclosed; the session witness hidden). -/
+structure KindObligation (Dg : Type) where
+  /-- The public-input algebra: the disclosed server key + payment facts. -/
+  Statement : Type
+  /-- The dial floor — `selective` for DECO. -/
+  dialFloor : Dial
+
+/-- The DECO kind's obligation: statement = the disclosed server key + facts, floor = `selective`. -/
+def decoKindObligation (Dg : Type) : KindObligation Dg where
+  Statement := Statement Dg
+  dialFloor := Dial.selective
+
+@[simp] theorem decoKindObligation_floor (Dg : Type) :
+    (decoKindObligation Dg).dialFloor = Dial.selective := rfl
+
+/-- `selective` is strictly above the ZK floor: the DECO proof discloses the payment facts, more than a
+blinded acceptance bit. -/
+theorem deco_floor_above_bot (Dg : Type) :
+    (⊥ : Dial) < (decoKindObligation Dg).dialFloor := by
+  show Dial.acceptanceOnly < Dial.selective
+  exact Dial.acceptanceOnly_lt_selective
+
+/-- The `Verifiable` seam this kind dispatches through (explicit `base`, not auto-synthesized). -/
+@[reducible] def decoSeam [DecoVerifierKernel Dg P] (vk : Nat)
+    (base : Registry (Statement Dg) P) : Verifiable (Statement Dg) P :=
+  verifiableOfRegistry (decoReg vk base) (.custom vk)
+
+/-- **`decoDisclose` — the dial pinned to the DECO verifier.** `accepts d` is the position-independent
+`Discharged stmt proof`; `accepts_eq := fun _ => Iff.rfl`. Realizes "instantiate `DiscloseAt` at the
+`selective` floor (the payment facts + server key disclosed, the session witness blinded)". -/
+def decoDisclose [DecoVerifierKernel Dg P] (vk : Nat)
+    (base : Registry (Statement Dg) P) (stmt : Statement Dg) (proof : P) :
+    @DiscloseAt Unit (Statement Dg) P _ (decoSeam vk base) :=
+  letI : Verifiable (Statement Dg) P := decoSeam vk base
+  { leaked := fun _ => ()
+    mono := fun _ _ _ => le_refl _
+    pred := stmt
+    wit := proof
+    accepts := fun _ => Discharged stmt proof
+    accepts_eq := fun _ => Iff.rfl }
+
+/-- **`deco_dial_wired`** — the DECO kind's floor is `selective` (payment facts + server key disclosed,
+session witness hidden), the dial's bottom notch IS the DECO verifier's `Discharged` bit, and an
+accepting proof proves the DECO relation. Dial pinned to the per-`vk` verifier. -/
+theorem deco_dial_wired [K : DecoVerifierKernel Dg P] (vk : Nat)
+    (hext : K.extractable)
+    (base : Registry (Statement Dg) P) (stmt : Statement Dg) (proof : P) :
+    -- (1) the floor is selective:
+    (decoKindObligation Dg).dialFloor = Dial.selective ∧
+    -- (2) the dial's bottom notch accepts IFF the DECO verifier discharges:
+    (@DiscloseAt.accepts Unit (Statement Dg) P _ (decoSeam vk base)
+        (decoDisclose vk base stmt proof) (⊥ : Dial)
+      ↔ @Discharged (Statement Dg) P (decoSeam vk base) stmt proof) ∧
+    -- (3) and an accepting proof PROVES the DECO relation (the cascade):
+    (K.verify stmt proof = true →
+      ∃ w : CircuitIR Dg, DecoRelation K.sigVerify K.macVerify K.compress K.encode stmt w) := by
+  refine ⟨rfl, ?_, ?_⟩
+  · exact @DiscloseAt.accepts_bot_iff_discharged Unit (Statement Dg) P _ (decoSeam vk base)
+      (decoDisclose vk base stmt proof)
+  · exact fun haccept => deco_verify_sound hext stmt proof haccept
+
 end Wiring
 
 #assert_axioms deco_registry_cascade
+#assert_axioms deco_dial_wired
 
 /-! ## `Reference` — a concrete kernel + non-vacuity witnesses over `ℤ`.
 
@@ -488,6 +560,11 @@ theorem reference_cascade_nonvacuous :
 -- Non-vacuity axiom footprint: rests only on the standard kernel axioms.
 #print axioms reference_cascade_nonvacuous
 
+/-- Non-vacuity of the dial wiring: the DECO kind's floor is `selective`, the dial's bottom notch is the
+verifier's bit, and an accepting proof proves the DECO relation. -/
+example : (decoKindObligation Int).dialFloor = Dial.selective :=
+  (deco_dial_wired (K := refKernel) 42 trivial base sampleStmt ()).1
+
 end Reference
 
 -- The amount comparison is fully proved via `range_iff` (no primitive seam); the chain gates are
@@ -496,6 +573,8 @@ end Reference
 #assert_axioms deco_bridge
 #assert_axioms deco_verify_sound
 #assert_axioms deco_binds_payment
+#assert_axioms deco_authenticates_payment
 #assert_axioms deco_registry_cascade
+#assert_axioms deco_dial_wired
 
 end Dregg2.Crypto.Deco
