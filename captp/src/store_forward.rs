@@ -752,11 +752,13 @@ impl BlocklaceEnvelope {
     /// cannot be deserialized.
     pub fn from_payload(payload: &[u8]) -> Option<Self> {
         if payload.len() < 4 || payload[..4] != Self::MAGIC {
-            // Quick check: raw postcard doesn't have the magic as a prefix,
-            // but the serialized struct does (it's the first field).
-            // Try deserializing anyway.
+            return None;
         }
-        postcard::from_bytes(payload).ok()
+        let envelope: Self = postcard::from_bytes(payload).ok()?;
+        if envelope.magic != Self::MAGIC {
+            return None;
+        }
+        Some(envelope)
     }
 
     /// Check if this envelope is addressed to us.
@@ -1336,6 +1338,22 @@ mod tests {
         assert_eq!(results[0], (0, b"msg-zero".to_vec()));
         assert_eq!(results[1], (1, b"msg-one".to_vec()));
         assert_eq!(results[2], (2, b"msg-two".to_vec()));
+    }
+
+    #[test]
+    fn blocklace_bad_magic_is_skipped_without_decrypt_error() {
+        let (bob_secret, bob_public) = test_x25519_keypair();
+        let (alice_secret, _) = test_x25519_keypair();
+
+        let mut payload_bytes =
+            queue_via_blocklace(fed_bob(), b"secret", &bob_public, &alice_secret, 7);
+        payload_bytes[0] ^= 0x01;
+
+        assert!(BlocklaceEnvelope::from_payload(&payload_bytes).is_none());
+
+        let results = scan_and_decrypt_blocklace(&[payload_bytes], &fed_bob(), &bob_secret)
+            .expect("bad magic should be skipped before decrypt");
+        assert!(results.is_empty());
     }
 
     #[test]

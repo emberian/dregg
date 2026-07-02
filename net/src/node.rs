@@ -48,6 +48,7 @@ pub struct PeerNode {
     node_id: NodeId,
     local_addr: SocketAddr,
     cert_der: Vec<u8>,
+    key_der: Vec<u8>,
     /// Maximum concurrent connections enforced by this node.
     max_connections: usize,
     /// Rate limiter for incoming connections.
@@ -209,6 +210,7 @@ impl PeerNode {
             node_id,
             local_addr,
             cert_der,
+            key_der,
             max_connections: config.max_connections,
             rate_limiter,
         })
@@ -397,9 +399,10 @@ impl PeerNode {
     /// is in the provided allowlist. Use `AllowlistVerifier::allow_node()` to pre-authorize
     /// peers before connecting.
     pub fn build_client_config_with_allowlist(
+        &self,
         verifier: &AllowlistVerifier,
     ) -> Result<ClientConfig, PeerError> {
-        verifier.build_client_config()
+        verifier.build_client_config_with_cert(&self.cert_der, &self.key_der)
     }
 
     /// Build a client config for the gossip layer that presents a fresh ephemeral
@@ -725,8 +728,16 @@ impl AllowlistVerifier {
         self.allowed_node_ids.read().unwrap().contains(node_id)
     }
 
-    /// Build a `ClientConfig` that verifies peers against this allowlist.
-    pub fn build_client_config(&self) -> Result<ClientConfig, PeerError> {
+    /// Build a `ClientConfig` that presents the caller's certificate and
+    /// verifies peers against this allowlist.
+    fn build_client_config_with_cert(
+        &self,
+        cert_der: &[u8],
+        key_der: &[u8],
+    ) -> Result<ClientConfig, PeerError> {
+        let cert = CertificateDer::from(cert_der.to_vec());
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der.to_vec()));
+
         let mut client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
@@ -734,14 +745,16 @@ impl AllowlistVerifier {
         .map_err(|e| PeerError::Tls(e.to_string()))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(self.clone()))
-        .with_no_client_auth();
+        .with_client_auth_cert(vec![cert], key)
+        .map_err(|e| PeerError::Tls(e.to_string()))?;
 
         client_crypto.alpn_protocols = vec![DREGG_ALPN.to_vec()];
 
-        let client_config = ClientConfig::new(Arc::new(
+        let mut client_config = ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto)
                 .map_err(|e| PeerError::Tls(e.to_string()))?,
         ));
+        client_config.transport_config(peer_transport_config());
         Ok(client_config)
     }
 }
@@ -818,7 +831,7 @@ impl rustls::client::danger::ServerCertVerifier for AllowlistVerifier {
 /// - No identity pinning (peer rotation is allowed)
 ///
 /// **To enable certificate pinning for gossip**, use:
-/// `PeerNode::build_client_config_with_allowlist(&verifier)` instead of
+/// `peer_node.build_client_config_with_allowlist(&verifier)` instead of
 /// `PeerNode::build_client_config_static()`.
 #[derive(Debug)]
 struct GossipCertVerifier;
@@ -978,6 +991,67 @@ mod tests {
         verifier.deny_node(&node_id);
         let result = verifier.verify_server_cert(&cert, &[], &server_name, &[], UnixTime::now());
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn allowlisted_quic_peer_presents_client_cert_and_connects() {
+        let server = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let client = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+
+        let verifier = AllowlistVerifier::new([server.node_id()]);
+        let client_config = client
+            .build_client_config_with_allowlist(&verifier)
+            .unwrap();
+        let connecting = client
+            .endpoint()
+            .connect_with(client_config, server.local_addr(), "dregg.local")
+            .unwrap();
+
+        let (client_result, server_result) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(connecting, server.accept())
+            })
+            .await
+            .expect("allowlisted mTLS connection should complete");
+
+        let client_connection =
+            client_result.expect("client should accept allowlisted server cert");
+        let server_connection = server_result.expect("server should accept client cert");
+
+        assert_eq!(
+            extract_remote_id(&client_connection).unwrap(),
+            server.node_id()
+        );
+        assert_eq!(server_connection.remote_id(), client.node_id());
+
+        client_connection.close(0u8.into(), b"done");
+        server_connection.close();
+        client.close();
+        server.close();
+    }
+
+    #[tokio::test]
+    async fn non_allowlisted_quic_peer_is_rejected() {
+        let server = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let server_addr = server.local_addr();
+        let client = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+
+        let verifier = AllowlistVerifier::empty();
+        let client_config = client
+            .build_client_config_with_allowlist(&verifier)
+            .unwrap();
+        let accept_task = tokio::spawn(async move { server.accept().await });
+        let connecting = client
+            .endpoint()
+            .connect_with(client_config, server_addr, "dregg.local")
+            .unwrap();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), connecting)
+            .await
+            .expect("non-allowlisted peer should fail promptly");
+        assert!(result.is_err());
+        accept_task.abort();
+        client.close();
     }
 
     #[test]
