@@ -50,14 +50,43 @@ step "Checking the mathlib path dependency"
 
 MATHLIB_REL="$(sed -n 's/^path = "\(.*\)"/\1/p' "$META/lakefile.toml" | head -1)"
 [ -n "$MATHLIB_REL" ] || die "could not read the mathlib path from $META/lakefile.toml"
-MATHLIB_DIR="$META/$MATHLIB_REL"
+# An absolute pin must not be joined onto $META — "$META//abs/path" exists on nobody's
+# machine (the FATAL a repointed-to-absolute lakefile used to produce here). Relative
+# pins resolve against metatheory/, matching lake.
+case "$MATHLIB_REL" in
+  /*) MATHLIB_DIR="$MATHLIB_REL" ;;
+  *)  MATHLIB_DIR="$META/$MATHLIB_REL" ;;
+esac
 # The pinned revision is named in the lakefile comment (a 40-hex sha).
 MATHLIB_REV="$(grep -oE '[0-9a-f]{40}' "$META/lakefile.toml" | head -1 || true)"
 
+# lake resolves the dependency from lake-manifest.json, NOT the lakefile: a lakefile
+# repoint with a stale manifest passes every check below and then fails the lake build
+# with a path this script never looked at ("package directory not found: <old pin>").
+# Catch the disagreement here, where the fix can be taught.
+MANIFEST="$META/lake-manifest.json"
+if [ -f "$MANIFEST" ]; then
+  MANIFEST_DIR="$(awk '/"name": "mathlib"/{f=1} f && /"dir":/{sub(/.*"dir": "/,""); sub(/",?.*/,""); print; exit}' "$MANIFEST")"
+  if [ -n "$MANIFEST_DIR" ] && [ "$MANIFEST_DIR" != "$MATHLIB_REL" ]; then
+    die "mathlib path DISAGREEMENT between the lakefile and the lake manifest:
+      metatheory/lakefile.toml       pins   path = \"$MATHLIB_REL\"
+      metatheory/lake-manifest.json  locks  \"dir\": \"$MANIFEST_DIR\"
+
+  lake resolves the dependency from the MANIFEST, so the lakefile pin alone never
+  takes effect — the lake build below would fail with:
+      error: mathlib: package directory not found: $MANIFEST_DIR
+
+  Fix: point BOTH files at the same mathlib checkout (edit the \"dir\" of the mathlib
+  entry in metatheory/lake-manifest.json to match the lakefile), then re-run."
+  fi
+fi
+
 if [ ! -f "$MATHLIB_DIR/lakefile.lean" ]; then
   die "mathlib checkout MISSING at: $MATHLIB_DIR
-  (metatheory/lakefile.toml pins mathlib as the local path '$MATHLIB_REL', resolved
-  relative to metatheory/. Nothing Lean builds until it exists.)
+  (metatheory/lakefile.toml pins mathlib as the local path '$MATHLIB_REL' — relative
+  pins resolve against metatheory/. With the repo's default pin that expects the
+  sibling layout <root>/src/dregg + <root>/src/mathlib4; an absolute pin is honored
+  as-is. Nothing Lean builds until it exists.)
 
   Put it there at the pinned revision:
       git clone https://github.com/leanprover-community/mathlib4 \"$MATHLIB_DIR\"
