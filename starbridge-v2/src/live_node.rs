@@ -37,7 +37,7 @@
 //!
 //! gpui-free. The pure layer compiles + tests under just `embedded-executor`.
 
-use crate::model::{CellListEntry, NodeStatus, ReceiptEvent};
+use crate::model::{CellListEntry, NodeStatus, ReceiptEvent, VatEntry};
 use crate::reflect::{Field, FieldValue, Inspectable, ObjectKind};
 
 // ===========================================================================
@@ -259,6 +259,66 @@ impl LiveReflection {
             subtitle: format!(
                 "live · #{} · h{} · {}",
                 ev.chain_index, ev.height, ev.finality
+            ),
+            fields,
+        }
+    }
+
+    /// Project a **Dregg Computer** (a `GET /v1/vats` roster row) into an
+    /// [`Inspectable`] — the vat rendered with the SAME field tree every other
+    /// object gets, because the vat IS a cell (`ObjectKind::Image`: a whole
+    /// World checkpointable to one committed root, not a single ledger cell).
+    /// The subtitle carries the one-glance rental truths: lifecycle, funded
+    /// admission, settle count, and the witness discipline.
+    pub fn reflect_vat_entry(v: &VatEntry) -> Inspectable {
+        let mode = if v.witness_mode.is_empty() {
+            "full" // unknown wire value decodes to the safe default, like WitnessMode::from_u8
+        } else {
+            v.witness_mode.as_str()
+        };
+        let mut fields = vec![
+            Field {
+                key: "cell_id".into(),
+                value: FieldValue::Id(hex32(&v.cell_id)),
+            },
+            Field::text("name", v.name.clone()),
+            Field::text("owner", v.owner.clone()),
+            Field::text("state", v.state.clone()),
+            Field::boolean("funded", v.funded),
+            Field::count("paid_periods", v.paid_periods),
+            Field::text("witness_mode", mode.to_string()),
+            Field::text(
+                "cap_scope",
+                format!("vat:{}", crate::model::short_id(&v.cell_id)),
+            ),
+        ];
+        match &v.endpoint {
+            Some(url) => fields.push(Field::text("endpoint", url.clone())),
+            None => fields.push(Field::text("endpoint", "(not reachable)".to_string())),
+        }
+        if let Some(root) = &v.checkpoint_root {
+            fields.push(Field {
+                key: "checkpoint_root".into(),
+                value: FieldValue::Hash(hex32(root)),
+            });
+        }
+        Inspectable {
+            kind: ObjectKind::Image,
+            title: format!(
+                "Dregg Computer '{}' {}",
+                if v.name.is_empty() { "?" } else { &v.name },
+                crate::model::short_id(&v.cell_id)
+            ),
+            subtitle: format!(
+                "{} · {} · {} period(s) settled · {}",
+                if v.state.is_empty() {
+                    "unknown"
+                } else {
+                    &v.state
+                },
+                if v.funded { "funded" } else { "UNFUNDED" },
+                v.paid_periods,
+                mode,
             ),
             fields,
         }
@@ -558,5 +618,44 @@ mod tests {
             .fields
             .iter()
             .any(|f| matches!(f.value, FieldValue::Hash(_))));
+    }
+
+    /// A vat reflects into the SAME uniform Inspectable — a running one carries
+    /// its endpoint, a sleeping one its committed checkpoint root, and an empty
+    /// witness_mode decodes to the safe "full" default (the `WitnessMode::from_u8`
+    /// discipline held on the string wire form too).
+    #[test]
+    fn vat_reflection_carries_the_rental_truths() {
+        let vats = crate::client::mock::vats();
+        let running = LiveReflection::reflect_vat_entry(&vats[0]);
+        assert_eq!(running.kind, ObjectKind::Image);
+        assert!(running.title.contains("mybox"));
+        assert!(running.subtitle.contains("funded"));
+        assert!(running.fields.iter().any(|f| f.key == "endpoint"
+            && matches!(&f.value, FieldValue::Text(t) if t.starts_with("http"))));
+        assert!(
+            running.fields.iter().any(|f| f.key == "cap_scope"
+                && matches!(&f.value, FieldValue::Text(t) if t.starts_with("vat:"))),
+            "the vat names its own capability scope"
+        );
+
+        let sleeping = LiveReflection::reflect_vat_entry(&vats[1]);
+        assert!(
+            sleeping
+                .fields
+                .iter()
+                .any(|f| f.key == "checkpoint_root" && matches!(f.value, FieldValue::Hash(_))),
+            "a sleeping vat IS its committed root"
+        );
+
+        let unknown_mode = LiveReflection::reflect_vat_entry(&crate::model::VatEntry {
+            cell_id: "aa".repeat(32),
+            ..Default::default()
+        });
+        assert!(
+            unknown_mode.fields.iter().any(|f| f.key == "witness_mode"
+                && matches!(&f.value, FieldValue::Text(t) if t == "full")),
+            "an unknown witness mode defaults SAFE (full), never symbolic"
+        );
     }
 }

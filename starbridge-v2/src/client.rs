@@ -18,7 +18,16 @@
 use crate::model::{
     BlockInfo, CellListEntry, FederationInfo, NodeStatus, ReceiptEvent, SubmitSignedTurnResponse,
     SubmitTurnRequest, SubmitTurnResponse, TurnActionSpec, TurnEffectSpec, UnlockResponse,
+    VatEntry,
 };
+
+/// THE NAMED SEAM to the DreggNet gateway's vat roster — the designed
+/// `GET /v1/vats` route (DREGG-COMPUTER.md build order #3: gateway handlers
+/// over `ServerFleet`, behind the funded-lease admission gate). The desktop's
+/// "My Dregg Computers" surface reads [`NodeClient::vats`] against this path;
+/// until the gateway lands on the DreggNet side, the `Mock` backend's
+/// [`mock::vats`] fixture carries the same wire shape.
+pub const VATS_ROUTE: &str = "/v1/vats";
 
 /// Where the shell gets its data.
 #[derive(Clone)]
@@ -146,6 +155,23 @@ impl NodeClient {
         match self {
             NodeClient::Mock => Ok(mock::blocks()),
             NodeClient::Http { base_url, .. } => http_get(base_url, "/api/blocklace/blocks"),
+        }
+    }
+
+    /// The vats this account can reach — **your Dregg Computers** — off the
+    /// gateway's designed [`VATS_ROUTE`] (`GET /v1/vats`). Carries the client's
+    /// bearer when it has one: the live gateway gates the roster on the account
+    /// credential (a `dga1_…` token whose caps resolve the subject), so an
+    /// unauthed read against a real gateway surfaces an honest 401 rather than
+    /// someone else's fleet. The `Mock` backend returns the [`mock::vats`]
+    /// fixture — the same wire shape, no network — which is the v0 stand-in
+    /// until the DreggNet gateway route lands (the named seam).
+    pub fn vats(&self) -> anyhow::Result<Vec<VatEntry>> {
+        match self {
+            NodeClient::Mock => Ok(mock::vats()),
+            NodeClient::Http { base_url, bearer } => {
+                http_get_authed(base_url, VATS_ROUTE, bearer.as_deref())
+            }
         }
     }
 
@@ -302,6 +328,31 @@ fn http_get<T: serde::de::DeserializeOwned>(base: &str, path: &str) -> anyhow::R
     Ok(serde_json::from_str(&body)?)
 }
 
+/// Blocking JSON GET with an optional `Bearer` credential — the read twin of
+/// [`http_post_json`] for routes the gateway gates on the ACCOUNT credential
+/// (the `/v1/vats` roster: your fleet, resolved from your caps, nobody
+/// else's). A non-2xx status folds the body text into the error so a 401 says
+/// "missing/expired credential" rather than an opaque status code.
+#[cfg(feature = "live-node")]
+fn http_get_authed<T: serde::de::DeserializeOwned>(
+    base: &str,
+    path: &str,
+    bearer: Option<&str>,
+) -> anyhow::Result<T> {
+    let url = format!("{base}{path}");
+    let mut builder = reqwest::blocking::Client::new().get(&url);
+    if let Some(token) = bearer {
+        builder = builder.bearer_auth(token);
+    }
+    let resp = builder.send()?;
+    let status = resp.status();
+    let body = resp.text()?;
+    if !status.is_success() {
+        anyhow::bail!("GET {path} -> HTTP {status}: {body}");
+    }
+    Ok(serde_json::from_str(&body)?)
+}
+
 /// Blocking JSON POST returning a typed response, with an optional `Bearer`
 /// operator token (the unlocked-node write credential `require_auth` checks).
 ///
@@ -368,6 +419,15 @@ fn http_post_octet<R: serde::de::DeserializeOwned>(
 // build. (In practice both `native-full` and `sel4-thin` enable `live-node`.)
 #[cfg(not(feature = "live-node"))]
 fn http_get<T: serde::de::DeserializeOwned>(_base: &str, _path: &str) -> anyhow::Result<T> {
+    anyhow::bail!("live-node feature is off (no reqwest); only NodeClient::Mock is available")
+}
+
+#[cfg(not(feature = "live-node"))]
+fn http_get_authed<T: serde::de::DeserializeOwned>(
+    _base: &str,
+    _path: &str,
+    _bearer: Option<&str>,
+) -> anyhow::Result<T> {
     anyhow::bail!("live-node feature is off (no reqwest); only NodeClient::Mock is available")
 }
 
@@ -468,6 +528,57 @@ pub mod mock {
                 has_proof: false,
                 finality: "committed".into(),
                 timestamp: 1_718_000_042,
+            },
+        ]
+    }
+
+    /// The `/v1/vats` roster fixture — three Dregg Computers in the three
+    /// honest lifecycle postures the designed gateway reports (the SAME wire
+    /// shape [`super::VATS_ROUTE`] will carry):
+    ///
+    ///   * **`mybox`** — RUNNING and reachable: an endpoint to attach to,
+    ///     funded, three periods settled, full (proof-as-you-go) witnessing.
+    ///   * **`nightshift`** — SLEEPING as a cell: no endpoint (nothing is
+    ///     listening), but a committed `checkpoint_root` it wakes from — the
+    ///     computer IS its commitment while it sleeps. Symbolic (cheap,
+    ///     verify-later) witnessing.
+    ///   * **`scratch`** — CREATED but never funded: the admission gate read
+    ///     the reserve and refused to launch. No endpoint, no periods — the
+    ///     roster shows it honestly rather than pretending a machine exists.
+    pub fn vats() -> Vec<VatEntry> {
+        vec![
+            VatEntry {
+                cell_id: "dc".repeat(32),
+                name: "mybox".into(),
+                owner: "acct:renter".into(),
+                endpoint: Some("http://127.0.0.1:8730".into()),
+                state: "running".into(),
+                funded: true,
+                paid_periods: 3,
+                checkpoint_root: None,
+                witness_mode: "full".into(),
+            },
+            VatEntry {
+                cell_id: "5e".repeat(32),
+                name: "nightshift".into(),
+                owner: "acct:renter".into(),
+                endpoint: None,
+                state: "sleeping".into(),
+                funded: true,
+                paid_periods: 12,
+                checkpoint_root: Some("9a".repeat(32)),
+                witness_mode: "symbolic".into(),
+            },
+            VatEntry {
+                cell_id: "7a".repeat(32),
+                name: "scratch".into(),
+                owner: "acct:renter".into(),
+                endpoint: None,
+                state: "created".into(),
+                funded: false,
+                paid_periods: 0,
+                checkpoint_root: None,
+                witness_mode: "full".into(),
             },
         ]
     }

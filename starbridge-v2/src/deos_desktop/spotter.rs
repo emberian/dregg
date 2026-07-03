@@ -80,6 +80,13 @@ pub enum SpotterTarget {
     /// outbox · mail-ledger; a *deliver now* button fires one ferry round). A global
     /// surface: anchored on the room's own sentinel cell by the dispatcher.
     MailRoom,
+    /// Open MY DREGG COMPUTERS — the vats (private verified Worlds on a DreggNet
+    /// ServerFleet, each a content-addressed cell) this account can reach: the
+    /// roster off the designed `GET /v1/vats` seam, CONNECT attaching one over
+    /// the proven HTTP+SSE wire path, its remote cells + receipt stream
+    /// reflected live. A global surface: anchored on its own sentinel cell by
+    /// the dispatcher.
+    DreggComputers,
     /// Open the World Transcript — the receipt log of every committed turn (global).
     WorldTranscript,
     /// Open a DOCUMENT-COLLABORATION session — a document editor over the user's own
@@ -520,6 +527,13 @@ pub fn surface_candidates() -> Vec<SpotterEntry> {
             score: 0,
         },
         SpotterEntry {
+            label: "My Dregg Computers  (vats you can reach · connect)".to_string(),
+            sublabel: "surface · your private verified Worlds — reflect · receipts · cannot lie"
+                .to_string(),
+            target: SpotterTarget::DreggComputers,
+            score: 0,
+        },
+        SpotterEntry {
             label: "Co-author a Document  (branch · stitch · resolve)".to_string(),
             sublabel: "surface · a confined co-author draft, ready to diverge + merge".to_string(),
             target: SpotterTarget::DocCollab,
@@ -628,6 +642,7 @@ pub fn entry_badge(entry: &SpotterEntry) -> (&'static str, u32) {
         T::AgentRoom => (kind_short(WinKindTag::AgentRoom), NT_LABEL),
         T::ProvenanceWalker => (kind_short(WinKindTag::ProvenanceWalker), NT_LABEL),
         T::MailRoom => (kind_short(WinKindTag::MailRoom), NT_LABEL),
+        T::DreggComputers => (kind_short(WinKindTag::DreggComputers), NT_LABEL),
         T::WorldTranscript => (kind_short(WinKindTag::Transcript), NT_LABEL),
         T::DocCollab => (kind_short(WinKindTag::DocEditor), NT_LABEL),
         #[cfg(feature = "card-pane")]

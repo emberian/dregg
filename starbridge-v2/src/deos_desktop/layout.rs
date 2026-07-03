@@ -113,6 +113,15 @@ pub enum WinKindTag {
     /// `AgentRoom`. Anchored on its own sentinel cell; the render is gated on
     /// `dev-surfaces` (the hireling rail), falling back to the inspector otherwise.
     AttachWizard,
+    /// **MY DREGG COMPUTERS** — the desktop face of *have a Dregg Computer*: the
+    /// vats (private verified Worlds, each a content-addressed cell on a DreggNet
+    /// ServerFleet) this account can reach, with CONNECT attaching one over the
+    /// proven HTTP+SSE wire path and reflecting its remote cells + receipt stream
+    /// live (see [`super::dregg_computers`]). Per-window state lives in
+    /// `dregg_computers`; the attachment itself lives on the desktop (`vat_link`)
+    /// so your computer stays attached with the window closed. Anchored on its
+    /// own sentinel cell.
+    DreggComputers,
     /// **THE MAIL ROOM** — the desktop face of the [`crate::letter_office`]: mail
     /// between agents as cells on the live World (inbox · outbox · mail-ledger). A
     /// letter IS a cell carrying its markdown in the heap; sending drops it in an outbox

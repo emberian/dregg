@@ -122,6 +122,7 @@ pub fn kind_short(tag: WinKindTag) -> &'static str {
         WinKindTag::ProvenanceWalker => "PRV",
         WinKindTag::AttachWizard => "ATW",
         WinKindTag::MailRoom => "MBX",
+        WinKindTag::DreggComputers => "VAT",
     }
 }
 

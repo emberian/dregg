@@ -118,6 +118,64 @@ pub struct ReceiptEvent {
     pub timestamp: i64,
 }
 
+/// One **Dregg Computer** (a vat) off the DreggNet gateway's designed
+/// `GET /v1/vats` roster — THE NAMED SEAM to the rental trunk
+/// (DREGG-COMPUTER.md build order #3: the `POST /v1/vats` + `GET /v1/vats/{id}`
+/// handlers over `ServerFleet`, behind the funded-lease gate).
+///
+/// A vat is a persistent server whose identity is a content-addressed CELL
+/// (`ServerRecord.cell_id`, DreggNet control/src/server.rs) — so this mirror
+/// carries the cell id as the primary key, the reachable `endpoint`
+/// (`ServerRecord.endpoint` is build-order #1 and may be absent while the vat
+/// is asleep or the overlay route unbuilt — hence `Option`), the funded-lease
+/// truth (`funded` reads the REAL reserve admission, never a self-asserted
+/// flag), the per-period settle count, the committed `checkpoint_root` a
+/// sleeping vat wakes from, and the witness discipline (`"full"` proof-as-you-go
+/// / `"symbolic"` defer-verify-later — `WitnessMode`, turn/src/collapse.rs).
+///
+/// Every field except `cell_id` is `#[serde(default)]`-tolerant: the gateway
+/// contract is still landing on the DreggNet side, and a missing field must
+/// degrade to an honest empty rather than a parse failure (the same tolerance
+/// discipline `BlockInfo` holds).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct VatEntry {
+    /// The vat's identity — the content-addressed cell id (hex), derived from
+    /// `(owner, app, name)`. This is also the capability scope: the credential
+    /// that reaches this computer carries exactly `vat:<cell_id>`.
+    pub cell_id: String,
+    /// The human name its owner gave it (`"mybox"`).
+    #[serde(default)]
+    pub name: String,
+    /// The owning account subject (the funded-lease principal).
+    #[serde(default)]
+    pub owner: String,
+    /// The reachable endpoint URL (loopback in dev; overlay-routed later).
+    /// `None` = not reachable yet (asleep, or the data plane unbuilt).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Lifecycle as a free string (`"running"` / `"sleeping"` / `"created"` …) —
+    /// tolerant so a new provider state never breaks the parse.
+    #[serde(default)]
+    pub state: String,
+    /// The funded-lease admission truth — read from the owner's REAL on-chain
+    /// reserve at authorize time, never self-asserted.
+    #[serde(default)]
+    pub funded: bool,
+    /// Uptime periods settled so far (the exactly-once per-period settle).
+    #[serde(default)]
+    pub paid_periods: u64,
+    /// The committed state root a sleeping vat checkpointed to (hex), if any —
+    /// the cell-ness of the computer: sleep = commit, wake = restore.
+    #[serde(default)]
+    pub checkpoint_root: Option<String>,
+    /// The witness discipline: `"full"` (every turn's Merkle witness
+    /// materialized, receipt immediately publishable) or `"symbolic"` (state
+    /// fully applies, witness deferred until a collapse re-derives it
+    /// fail-closed). Empty = unknown (an old gateway) — treat as full.
+    #[serde(default)]
+    pub witness_mode: String,
+}
+
 /// `GET /api/federations` entry. Mirrors `api::FederationInfo`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FederationInfo {
@@ -302,4 +360,55 @@ pub struct SubmitSignedTurnResponse {
     pub witness_count: usize,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `/v1/vats` mirror is TOLERANT: a minimal gateway row (just the cell
+    /// id) parses with honest defaults, and a full row round-trips every field.
+    /// This is the wire-contract tooth for the Dregg Computer roster — the
+    /// gateway is still landing on the DreggNet side, so the mirror must never
+    /// turn a missing optional field into a parse failure.
+    #[test]
+    fn vat_entry_parses_tolerantly_and_roundtrips() {
+        // Minimal: only the identity — everything else defaults.
+        let minimal: VatEntry =
+            serde_json::from_str(&format!(r#"{{"cell_id":"{}"}}"#, "dc".repeat(32))).unwrap();
+        assert_eq!(minimal.cell_id, "dc".repeat(32));
+        assert!(minimal.endpoint.is_none());
+        assert!(!minimal.funded);
+        assert_eq!(minimal.paid_periods, 0);
+        assert!(minimal.witness_mode.is_empty()); // unknown → caller treats as full
+
+        // Full: the shape the designed gateway returns for a running vat.
+        let full = VatEntry {
+            cell_id: "dc".repeat(32),
+            name: "mybox".into(),
+            owner: "acct:renter".into(),
+            endpoint: Some("http://127.0.0.1:8730".into()),
+            state: "running".into(),
+            funded: true,
+            paid_periods: 3,
+            checkpoint_root: None,
+            witness_mode: "full".into(),
+        };
+        let json = serde_json::to_string(&full).unwrap();
+        let back: VatEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, full);
+
+        // An unknown extra field from a newer gateway is ignored, not fatal.
+        let ahead: VatEntry = serde_json::from_str(&format!(
+            r#"{{"cell_id":"{}","state":"sleeping","checkpoint_root":"{}","novel_field":7}}"#,
+            "5e".repeat(32),
+            "9a".repeat(32)
+        ))
+        .unwrap();
+        assert_eq!(ahead.state, "sleeping");
+        assert_eq!(
+            ahead.checkpoint_root.as_deref(),
+            Some("9a".repeat(32).as_str())
+        );
+    }
 }
