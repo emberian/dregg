@@ -81,6 +81,14 @@ pub enum WinKindTag {
     /// installed set) lives on the desktop (gated on `app-registry`), so this variant
     /// is a marker like `WorldExplorer`. Anchored on a sentinel cell (the user).
     AppShelf,
+    /// **THE EXCHANGE FLOOR** — the $DREGG agent-economy window: compute OFFERS as
+    /// live cells (each carrying the compute-exchange job program) posted / taken /
+    /// settled by real verified turns, the execution-lease rail metering every take,
+    /// and Σδ = 0 read off the LIVE ledger at settlement. The floor's state
+    /// (`ExchangeFloorState`: the order book) lives on the desktop (gated on
+    /// `app-registry`), so this variant is a marker like `AppShelf`. Anchored on a
+    /// sentinel cell (the user).
+    ExchangeFloor,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT

@@ -1719,6 +1719,53 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         cx.run_until_parked();
     }
 
+    // ── 4h′. THE EXCHANGE FLOOR — the $DREGG agent economy on the glass: opening
+    //     the floor installs its substrate (compute-exchange + execution-lease, real
+    //     launch receipts); POSTING an offer, TAKING it under a metered lease, and
+    //     SETTLING Σδ=0 are each REAL verified turns whose receipts grow the LIVE
+    //     World's log; the over-budget cheat is refused by the executor itself.
+    #[cfg(feature = "app-registry")]
+    {
+        let r0 = desk.update(&mut cx, |d, _cx| d.bake_world_receipt_count());
+        desk.update(&mut cx, |d, _cx| d.bake_open_exchange());
+        cx.run_until_parked();
+        let r_open = desk.update(&mut cx, |d, _cx| d.bake_world_receipt_count());
+        anyhow::ensure!(
+            r_open > r0,
+            "opening the Exchange Floor launches its substrate apps — real receipts \
+             ({r0} → {r_open})"
+        );
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_post_offer()),
+            "posting an offer commits a real verified 'post' turn on a fresh offer cell"
+        );
+        let r_post = desk.update(&mut cx, |d, _cx| d.bake_world_receipt_count());
+        anyhow::ensure!(r_post > r_open, "the post receipt landed on the LIVE World");
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_exchange_cheat_refused()),
+            "the over-budget take is REFUSED by the executor (the BUDGET gate bites)"
+        );
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_world_receipt_count()) == r_post,
+            "the refused cheat committed NOTHING (anti-ghost)"
+        );
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_take_lease()),
+            "taking the lease commits the bid + the metered checkpoint"
+        );
+        let r_take = desk.update(&mut cx, |d, _cx| d.bake_world_receipt_count());
+        anyhow::ensure!(r_take > r_post, "the take's receipts landed");
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_settle_offer()),
+            "settlement commits (the executor-enforced Σδ=0 split)"
+        );
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_exchange_settlement_delta()) == Some(0),
+            "the settled offer shows Σδ = 0 read off the LIVE ledger"
+        );
+        cx.run_until_parked();
+    }
+
     // ── 4i. THE REWIND RAIL — scrub the whole desktop to an early height (the
     //     root-verified past: a smaller census, REPLAYED chrome), then snap LIVE.
     desk.update(&mut cx, |d, cx| {
