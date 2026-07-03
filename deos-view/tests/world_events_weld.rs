@@ -188,6 +188,57 @@ fn catch_up_own_turns_notices_a_directly_fired_turn_once() {
 }
 
 #[test]
+fn cell_wide_events_invalidate_conservatively_and_foreign_cells_stay_still() {
+    // THE `CellMutated`/`CapabilityRevoked` FOLD — those events name a cell but no
+    // slot, so the pump projects them into `on_world_cells` (the registry's
+    // conservative `invalidate_cell` tooth) instead of the `(cell, slot)` broadcast.
+    let shared = Rc::new(RefCell::new(two_slot_applet(0x56)));
+    let view = AppletView::new(shared.clone(), two_bind_tree());
+    let own = shared.borrow().cell();
+
+    // Prime + settle (first-paint fill, then retire the glow).
+    view.on_committed_turn(&[0, 1]);
+    view.fade_glow();
+
+    // A cell-wide event on a FOREIGN cell dirties nothing (the broadcast guarantee
+    // holds for the conservative tooth too).
+    assert!(
+        view.on_world_cells(&[foreign_cell()]).is_empty(),
+        "a foreign CellMutated must not over-invalidate this card"
+    );
+    assert!(view.glowing().is_empty());
+
+    // Move slot 0 behind the cache's back (a real verified turn), then fold a
+    // cell-wide event naming the applet's OWN cell: EVERY binding of the cell
+    // re-reads (never under-invalidating) and the fresh value lands in the cache.
+    shared
+        .borrow_mut()
+        .fire("incA", 7)
+        .expect("incA commits a verified turn");
+    let dirty = view.on_world_cells(&[own]);
+    assert_eq!(
+        dirty,
+        vec![BindingId(0), BindingId(1)],
+        "an own-cell CellMutated invalidates every binding of the cell"
+    );
+    assert_eq!(
+        view.cached(BindingId(0)),
+        Some(17),
+        "slot 0 re-read 10 → 17"
+    );
+    assert_eq!(
+        view.cached(BindingId(1)),
+        Some(20),
+        "slot 1 re-read (unchanged)"
+    );
+    assert_eq!(
+        view.glowing(),
+        vec![BindingId(0), BindingId(1)],
+        "the conservative re-read glows like every other feed"
+    );
+}
+
+#[test]
 fn mark_own_turns_seen_suppresses_the_conservative_catch_up() {
     let shared = Rc::new(RefCell::new(two_slot_applet(0x55)));
     let view = AppletView::new(shared.clone(), two_bind_tree());

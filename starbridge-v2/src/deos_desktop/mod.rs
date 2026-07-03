@@ -58,6 +58,12 @@ pub mod app_shelf;
 /// Discord embed). The core (ops · drive · feed) is gpui-free; the card render is gated
 /// on `card-pane` (where `deos-view` is in scope).
 pub mod bot_surface;
+// THE CARD FEED OF THE PULSE — attached-World `CardPane`s ride the same dynamics
+// beat the AppletView panes do (wave 3's named gap): the quiet/loud pulse pair over
+// the desktop's open-card registry, plus the proven foreign-turn-repaints-a-card
+// bake. Gated on `card-pane` (where `CardPane`/`deos-view` are in scope).
+#[cfg(feature = "card-pane")]
+pub mod card_pulse;
 pub mod chrome;
 pub mod docgraph_view;
 /// THE EXCHANGE FLOOR — the $DREGG agent economy as a desktop window: compute
@@ -632,6 +638,15 @@ pub struct DeosDesktop {
     /// window's anchor cell. Gated on `card-pane` (where `deos-view` is in scope).
     #[cfg(feature = "card-pane")]
     viewnode_panes: HashMap<CellId, Entity<deos_view::AppletView>>,
+    /// **The open live CARDS on the pulse** — every mounted
+    /// [`crate::card_pane::CardPane`] (an attached-World card whose binds read REAL
+    /// cells of the live `World`), keyed by its substance cell. [`Self::pump_dynamics`]
+    /// broadcasts each beat's world events into every card's signal registry
+    /// ([`card_pulse::pulse_cards`] / [`card_pulse::pulse_cards_quiet`]) so a foreign
+    /// turn repaints exactly the dirty binds — the card half of the Pulse→Signals
+    /// weld (the viewnode half is `viewnode_panes`). Gated on `card-pane`.
+    #[cfg(feature = "card-pane")]
+    card_panes: HashMap<CellId, Entity<crate::card_pane::CardPane>>,
     /// **The per-window AGENT-ROOM view state** — which resident is watched and which
     /// face (actions/mandate/reach) is shown. Keyed by the room window's anchor cell
     /// (the room's own sentinel). A pure view concern (no committed state).
@@ -855,6 +870,8 @@ impl DeosDesktop {
             #[cfg(feature = "card-pane")]
             viewnode_panes: HashMap::new(),
             #[cfg(feature = "card-pane")]
+            card_panes: HashMap::new(),
+            #[cfg(feature = "card-pane")]
             bot_activity: Vec::new(),
             #[cfg(feature = "android-systemui")]
             systemui_chromes: HashMap::new(),
@@ -930,14 +947,16 @@ impl DeosDesktop {
         use crate::dynamics::WorldEvent;
         let aged = self.toast_rack.beat();
         // THE PULSE→SIGNALS WELD, quiet half — every beat, even when the World did not
-        // move: retire last beat's dirty-glow tint on every open content-IR pane and
-        // catch up turns a pane's OWN embedded executor committed between beats (a
-        // button fired on the surface itself). See `viewnode_pane::pulse_panes_quiet`.
+        // move: retire last beat's dirty-glow tint on every open content-IR pane AND
+        // every open attached-World card, and catch up turns a surface's OWN backing
+        // committed between beats (a button fired on the surface itself). See
+        // `viewnode_pane::pulse_panes_quiet` + `card_pulse::pulse_cards_quiet`.
         #[cfg(feature = "card-pane")]
-        let weld_quiet = viewnode_pane::pulse_panes_quiet(&self.viewnode_panes, cx);
+        let weld_quiet = viewnode_pane::pulse_panes_quiet(&self.viewnode_panes, cx)
+            | card_pulse::pulse_cards_quiet(&self.card_panes, cx);
         #[cfg(not(feature = "card-pane"))]
         let weld_quiet = false;
-        let (cursor, announce, arrivals, cells, field_sets, receipts) = {
+        let (cursor, announce, arrivals, cells, field_sets, cell_events, receipts) = {
             let w = self.world.borrow();
             let d = w.dynamics();
             let cursor = d.cursor();
@@ -952,8 +971,13 @@ impl DeosDesktop {
             let mut arrivals: Vec<(toasts::ToastKind, String)> = Vec::new();
             // The beat's `(cell, slot)` writes — projected into the exact shape the
             // signal registry invalidates on (`deos_js::signals::SourceEvent`), so the
-            // weld's loud half can broadcast them to every open content-IR pane.
+            // weld's loud half can broadcast them to every open content-IR pane + card.
             let mut field_sets: Vec<(CellId, usize)> = Vec::new();
+            // The beat's CELL-WIDE mutations (a cell named, no slot): `CellMutated`
+            // (nonce bump / sovereign flip / permissions write / cap reshape) and
+            // `CapabilityRevoked` — folded through the registries' conservative
+            // `invalidate_cell` tooth (wave 3 left them unprojected).
+            let mut cell_events: Vec<CellId> = Vec::new();
             for e in d.since(self.pulse_cursor) {
                 match e {
                     WorldEvent::TurnCommitted {
@@ -976,30 +1000,42 @@ impl DeosDesktop {
                         ));
                     }
                     WorldEvent::FieldSet { cell, index } => field_sets.push((*cell, *index)),
+                    WorldEvent::CapabilityRevoked { cell, .. } => cell_events.push(*cell),
+                    WorldEvent::CellMutated { cell } => cell_events.push(*cell),
                     _ => {}
                 }
             }
             let mut cells: Vec<CellId> = w.ledger().iter().map(|(id, _)| *id).collect();
             cells.sort();
             let receipts = w.receipts().len() as u64;
-            (cursor, announce, arrivals, cells, field_sets, receipts)
+            (
+                cursor,
+                announce,
+                arrivals,
+                cells,
+                field_sets,
+                cell_events,
+                receipts,
+            )
         };
         self.pulse_cursor = cursor;
         self.cells = cells;
         // THE PULSE→SIGNALS WELD, loud half — the World moved: broadcast the beat's
-        // FieldSets into every pane's signal registry (exactly the dirty binds re-read)
-        // and mirror the moved census into the World-Status panel as receipted tracking
-        // turns. The shipped pane's binds finally track the live World.
+        // FieldSets + cell-wide mutations into every pane's AND every open card's
+        // signal registry (exactly the dirty binds re-read), and mirror the moved
+        // census into the World-Status panel as receipted tracking turns. The shipped
+        // surfaces' binds finally track the live World.
         #[cfg(feature = "card-pane")]
         {
             let census = viewnode_pane::WorldCensus {
                 cells: self.cells.len() as u64,
                 receipts,
             };
-            viewnode_pane::pulse_panes(&self.viewnode_panes, &field_sets, census, cx);
+            viewnode_pane::pulse_panes(&self.viewnode_panes, &field_sets, &cell_events, census, cx);
+            card_pulse::pulse_cards(&self.card_panes, &field_sets, &cell_events, cx);
         }
         #[cfg(not(feature = "card-pane"))]
-        let _ = (&field_sets, receipts);
+        let _ = (&field_sets, &cell_events, receipts);
         for (kind, line) in arrivals {
             self.toast_rack.push(kind, line);
         }

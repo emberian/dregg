@@ -375,10 +375,15 @@ pub fn agent_rewrite_status_panel(rt: &mut JsRuntime) -> Result<RewriteResult, S
 //     surface itself — no dynamics stream names its slots).
 //   - LOUD half (a beat where the World moved): broadcast the beat's
 //     `WorldEvent::FieldSet`s into every pane's signal registry (an attached-cell card
-//     bound to a touched `(cell, slot)` repaints EXACTLY its dirty binds), and mirror
+//     bound to a touched `(cell, slot)` repaints EXACTLY its dirty binds), broadcast
+//     the beat's CELL-WIDE `CellMutated`/`CapabilityRevoked` events through the
+//     registry's conservative `invalidate_cell` tooth (`on_world_cells`), and mirror
 //     the moved World census into the World-Status panel as RECEIPTED tracking turns
 //     (`set_cells` / `set_receipts`, `ApplyOp::SetSlotFromArg`) — then fold exactly
 //     those slots through the registry so the pane's binds re-read committed state.
+//
+//     (The SAME two broadcasts also feed every open attached-World CARD — see
+//     `super::card_pulse`, the card half of this weld.)
 
 /// The live World's census — the two readings the World-Status panel's first two
 /// `bind` rows surface. The desktop reads it off the LIVE ledger each pulse beat and
@@ -445,6 +450,12 @@ pub fn pulse_panes_quiet(panes: &HashMap<CellId, Entity<AppletView>>, cx: &mut A
 ///      [`AppletView::on_world_events`]. The registry is keyed `(cell, slot)`, so a
 ///      pane whose binds never read a touched source stays perfectly still — and a
 ///      pane over an ATTACHED World cell repaints exactly its dirty binds.
+///   1b. Broadcast the beat's CELL-WIDE events (`cell_events` — each a
+///      `WorldEvent::CellMutated` / `CapabilityRevoked`, naming a cell but no slot;
+///      wave 3 left them unprojected) through the registry's conservative
+///      `invalidate_cell` tooth ([`AppletView::on_world_cells`]): every binding of a
+///      touched cell re-reads (never under-invalidating), a cell no bind reads
+///      dirties nothing.
 ///   2. For panes carrying the census-tracking verbs (the World-Status panel): fire
 ///      the [`census_plan`]'s `set_cells`/`set_receipts` affordances — one REAL
 ///      receipted verified turn per moved reading — then fold exactly those slots
@@ -454,6 +465,7 @@ pub fn pulse_panes_quiet(panes: &HashMap<CellId, Entity<AppletView>>, cx: &mut A
 pub fn pulse_panes(
     panes: &HashMap<CellId, Entity<AppletView>>,
     field_sets: &[(CellId, Slot)],
+    cell_events: &[CellId],
     census: WorldCensus,
     cx: &mut App,
 ) -> bool {
@@ -466,6 +478,13 @@ pub fn pulse_panes(
             //     (cell, slot) source re-read (a foreign write never over-invalidates).
             if !field_sets.is_empty() {
                 dirty += view.on_world_events(field_sets).len();
+            }
+
+            // (1b) The beat's cell-wide events — the conservative invalidate_cell
+            //      tooth: a nonce bump / permissions write / cap revoke on a cell a
+            //      bind reads re-reads that cell's bindings; foreign cells stay still.
+            if !cell_events.is_empty() {
+                dirty += view.on_world_cells(cell_events).len();
             }
 
             // (2) The census weld — only panes whose applet carries the tracking
