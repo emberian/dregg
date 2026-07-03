@@ -22,6 +22,13 @@
 //!   node-for-node mirroring the gpui vocabulary, into a browser-loadable `.html`. This
 //!   is the web-projection of the reflective cockpit: the SAME card paints in a browser,
 //!   not just the native window. See the `web_render_card` example for the bake.
+//!
+//! ONE PARITY EXCEPTION (honest boundary): "renderer-INDEPENDENT" is exact for the
+//! view-tree DATA and holds for every node's *content*; the single INTERACTIVITY gap
+//! is `input` — a real editable `<input>` on web, but display-only on native (a
+//! read-only label; deos-view has no native text-entry widget yet), so a native
+//! `input` reflects only agent-seeded draft state and an unseeded submit fires
+//! `arg = 0`. See the `render` module's NATIVE/WEB PARITY note (audit finding #17).
 
 // The view-tree MODEL is renderer-independent (gpui-free serializable DATA): it is
 // always compiled, under BOTH the `native` and `web` renderers.
