@@ -1100,10 +1100,17 @@ fn resolve_world_image_spec(args: &[String]) -> starbridge_v2::durable_desktop::
             path: std::path::PathBuf::from(p),
             fresh,
         },
-        None => WorldImageSpec::Durable {
+        None if args.iter().any(|a| a == "--durable-world") => WorldImageSpec::Durable {
             path: default_world_image_path(),
             fresh,
         },
+        // OPT-IN, not default: the durable overlay's change-set drops CreateCell
+        // (CORE-AUDIT.md finding 1), and the desktop's App Shelf / Exchange / Letter
+        // actuations all create cells — a durable-by-default desktop would refuse or
+        // silently truncate on reopen. `--desktop` stays EPHEMERAL until the operator
+        // asks (`--durable-world` or an explicit --world-image path), which becomes
+        // safe once the executor exposes its real journal write-set.
+        None => WorldImageSpec::Ephemeral,
     }
 }
 
