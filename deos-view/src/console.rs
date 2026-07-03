@@ -1,40 +1,38 @@
-//! **THE DREGGNET CONSOLE AS A PORTABLE CARD** — "My Dregg Computer" through the
-//! deos-view `ViewNode` IR: one console model, many faces (native gpui · web · the
-//! graphideOS phone).
+//! **THE DREGG COMPUTER DASHBOARD** — "My Dregg Computer" through the deos-view
+//! `ViewNode` IR: one dashboard model, many faces (native gpui · web · the graphideOS
+//! phone). This is NOT a terminal (that is alacritty, in the zed bundle) — it is the
+//! "my stuff" home: your Dregg Computers, your hermeses, spend, and verify.
 //!
-//! DreggNet ships a management console today (`DreggNet/console/src/`), but it renders
-//! server-side HTML STRINGS (`render.rs`) over its view model (`model.rs::ConsoleView`).
-//! That console is web-only by construction: the markup IS the surface, so there is no
-//! native face, no phone face, and no way for the cockpit to mount "my computers" as a
-//! card. THIS module is the portability proto: the SAME console content built as a pure,
-//! serializable [`ViewNode`] tree — the identical IR the native gpui renderer
-//! (`crate::render`, feature `native`), the web renderer (`crate::web`), and the discord
-//! renderer (`crate::discord`) already walk. Prove the card once, and the graphideOS phone
-//! (dregg as the upper half of userspace) gets the console for free: it is just a fourth
-//! walker over the same tree.
+//! ## Why an IR dashboard (not HTML strings, not a terminal)
 //!
-//! ## THE SEAM back to DreggNet (name it, do not import it)
+//! A dashboard rendered as server-side HTML strings is web-only by construction: the
+//! markup IS the surface, so there is no native face, no phone face, and no way for the
+//! cockpit to mount "my computers" as a card. THIS dashboard is a pure, serializable
+//! [`ViewNode`] tree — the identical IR the native gpui renderer (`crate::render`,
+//! feature `native`), the web renderer (`crate::web`), and the discord renderer
+//! (`crate::discord`) already walk. Build the card once, and the graphideOS phone (dregg
+//! as the upper half of userspace) gets the dashboard for free: it is just a fourth
+//! walker over the same tree. One model, four faces.
 //!
-//! deos (breadstuffs) and DreggNet are separate cargo workspaces with NO dep edge, so
-//! this module MIRRORS the console model natively instead of importing it — field for
-//! field from the REAL shapes (read directly from DreggNet, not reconstructed from
-//! memory). The weld, when the repos meet, is a thin adapter in DreggNet's console:
+//! ## The source of truth is OUR cells
 //!
-//! | here                          | DreggNet source of truth                                        |
+//! The view models here ([`VatView`], [`HermesView`], …) are dregg-native — their source
+//! of truth is the live World, not any external service:
+//!
+//! | view model                    | native source of truth                                          |
 //! |-------------------------------|-----------------------------------------------------------------|
-//! | [`ConsoleModel`]              | `console/src/model.rs:303` `ConsoleView` (subject, generated_at)|
-//! | [`VatView`]                   | `model.rs:56` `ServerView` (lessee/id/name/state/region/size/budget_units/per_period_units/periods_metered) + the vat fields: `cell_id` (`control/src/server.rs:56`), `endpoint` (the v0 build-order field, absent at HEAD — DREGG-COMPUTER.md step 1), `witness` (`turn/src/collapse.rs:98` `WitnessMode`, not yet on the lease — named gap) |
-//! | [`VatView::settled_units`]    | `model.rs:79` `ServerView::settled_units` (periods × per-period) |
-//! | [`VatView::headroom_units`]   | `model.rs:83` `ServerView::headroom_units` (budget − settled, floored) |
-//! | [`HermesView`]                | the F4 gap made concrete: `model.rs:99` has `AgentView` (a one-shot deploy report) but NO `HermesView`; this is the living-resident shape (`starbridge-v2/src/hireling.rs` + `agent_memory.rs` checkpoint/resume) |
-//! | [`HermesView::mandate`]       | `starbridge-v2/src/agent.rs:150` mandate edges + `:305` the CAN/CANNOT boundary (read off the live World, never self-report) |
-//! | [`SpendLine`] / [`LedgerView`]| `model.rs:194` `SpendEntry` / `model.rs:215` `DreggLedgerView`   |
-//! | [`ConsoleModel::scoped_to`]   | `console/src/scope.rs` + the `Owned` trait (`model.rs:25`): a resource is shown iff `owner() == subject` |
-//! | the assembled model           | `console/src/source.rs:48` `view_for(source, subject)` — a `ResourceSource::fetch` catalog narrowed to the subject; the adapter maps THAT into a `ConsoleModel` and serves the card instead of `render.rs` HTML |
+//! | [`VatView`]                   | the vat cell — `cell_id` (content-addressed from you+app+name), lifecycle = checkpoint/wake, `endpoint` + `witness` = the vat's own lease terms (DREGG-COMPUTER.md) |
+//! | [`VatView::settled_units`] / [`VatView::headroom_units`] | the vat's `execution-lease` StandingObligation (periods × per-period; budget − settled, floored) |
+//! | [`HermesView`]                | a living resident: `starbridge-v2/src/hireling.rs` (the hire weld) + `agent_memory.rs` (checkpoint/resume) — a persistent/resumable hermes, not a one-shot deploy report |
+//! | [`HermesView::mandate`]       | `starbridge-v2/src/agent.rs` mandate edges + the CAN/CANNOT boundary (read off the live World, never self-report) |
+//! | [`SpendLine`] / [`LedgerView`]| the $DREGG cells (balance + spend, conserving) |
+//! | [`ConsoleModel::scoped_to`]   | a resource is shown iff its owner-cap subject == the viewer (the capability the viewer holds) |
 //!
-//! DreggNet units are `i64`; this view layer clamps to `u64` at the seam (a negative
-//! meter reading is a bug upstream, not a renderable quantity) — same `.max(0)` floor
-//! `ServerView::headroom_units` already applies.
+//! (Historical note: this dashboard's shape was strip-mined from the retired DreggNet
+//! `console/` before that repo was abandoned — the LOGIC was ported, made dregg-native,
+//! and re-anchored on cells. There is no dependency on, and no future weld back to, that
+//! repo; it is gone. Units are clamped to `u64` here — a negative meter reading is a bug,
+//! not a renderable quantity.)
 //!
 //! ## LIVE-BIND DISCIPLINE (how one static model becomes a live card)
 //!
@@ -67,7 +65,7 @@ use crate::fmt::{format_value, BindFmt};
 use crate::tree::{Crumb, MenuItem, PillCase, ViewNode};
 
 // ─────────────────────────────────────────────────────────────────────────────
-// THE MODEL MIRROR — DreggNet console/src/model.rs, reconstructed field-for-field
+// THE DASHBOARD VIEW MODELS — dregg-native, anchored on live-World cells
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A vat's lifecycle state — the `ServerView.state` string (`"running"` / `"stopped"` /

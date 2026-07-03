@@ -1,9 +1,15 @@
 # DREGGNET MIGRATION LEDGER — ./dreggnet slop → dregg-native breadstuffs
 
 *Fable · 2026-07-03 · read-only audit `wf_f97362fa-5a0` (6 theme lanes + synthesis).*
-*`./dreggnet` is a vendored copy of the old proprietary DreggNet, in the workspace `exclude`
-list, being rewritten INTO the main workspace as dregg-native crates. Status per subdir:*
-*MIGRATED (native equiv exists → deletable) · UNIQUE (needs porting) · DEAD (deletable).*
+*`./dreggnet` (and `~/dev/DreggNet`) is the retired proprietary DreggNet. It is being
+**ABANDONED** — not maintained, not rejoined, no future weld. It is a **reference to
+strip-mine**: take the logic, rewrite it dregg-native in the main workspace against OUR
+cells, delete the source. There is no "seam back" and the repos will never meet.*
+
+*Status per subdir: **MIGRATED** (native equivalent already exists → delete the slop) ·
+**UNIQUE** (real logic with no native home yet → strip-mine + port, then delete) ·
+**DEAD** (stale/DreggNet-infra-specific → just delete). "native home" = where it lives
+or should be built HERE; DreggNet paths are only cited to say what to strip-mine from.*
 
 Ground truth confirmed: 31 code subdirs + build-infra files on disk; all cited native exemplars and `starbridge-apps/*` targets exist. The two catalogue passes (the 5 theme passes + the coarser `misc-remainder` census) cover the same physical subdirs, so I've collapsed them to one row each, preferring the deeper theme analysis and flagging where `misc-remainder` diverged.
 
