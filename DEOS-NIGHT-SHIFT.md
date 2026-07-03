@@ -154,3 +154,23 @@ deliver act on non-self cells, needed genesis_grant_cap, not open_permissions).
 Also surfaced: deos-view integration test renders_inspector_card_to_pixels is RED on the
 branch (view_source lacks "Cell State"/"inc"), regressed by an earlier deos-view wave,
 invisible until now because gauntlets only ran -p starbridge-v2 --lib. Wants a deos-view lane.
+
+## ~late morning — HAVE A DREGG COMPUTER (the coherence layer) + wave B
+Ember reframed the whole thing: not "rent a vat" but "HAVE A DREGG COMPUTER" — yours, follows
+you (local + web starbridge), can't be lied to, lives in the cloud. Killer app: persistent/
+resumable/forkable/explorable HERMESES + a beautiful management console (not xterm). Design
+wave wf_eec2e0e5-f31 (5 scouts + synthesis, 1 lane resumable) → DREGG-COMPUTER.md. HEADLINE:
+the vat substrate ALREADY EXISTS as DreggNet ServerFleet/ServerRecord — persistent, durable,
+per-period-metered, and fork()/wake=resume/stop=checkpoint/time-travel are ALREADY REAL. Gap
+is pure wiring: auth→funded-lease→ServerFleet→per-vat cap (vat:<cell-id>)→reachable endpoint.
+The unification is literal: a grain is a cell, a hermes is a cell, the vat is a cell — one cap
+grammar, one witness discipline, one settlement rail. v0 slice: "rent a Dregg Computer, hold a
+key that reaches only yours, see its cells, verify one receipt against your own key, restart
+the provider — it followed you." ~90% assembly of pieces that work.
+
+Wave B (audit slate + atlas) integrated, 940 starbridge + 22 deos-view green: #8 resolve_mounts
+total-work budget (k^depth fan-out DoS) · #11 dynamics ring-buffer eviction + cursor-safe since()
++ conservative pump recovery · aspirational-honesty (#12/#16/#17 comments corrected) · atlas
+refreshed + docs/what-is-deos.html explainer. Also: stopped checking render PNGs into git.
+Demo video: no rendered file on-disk; the demo is DreggNet/demo/{run-demo.sh (Stripe→lease→
+durable exec), crash-resume.sh ("on-camera crash-resume proof")} — the resume story, camera-ready.
