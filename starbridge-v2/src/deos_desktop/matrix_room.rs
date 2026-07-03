@@ -345,6 +345,7 @@ mod stack {
 
     /// The granular outcome of one rehydrate → drive → stitch pass — every claim
     /// a checker can re-verify (no self-reported "done").
+    #[derive(Debug)]
     pub struct DriveOutcome {
         /// Cells the rehydrated fork holds (== the envelope's declared cull).
         pub fork_cells: usize,
