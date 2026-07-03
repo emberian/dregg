@@ -10,6 +10,29 @@
 //! It is intentionally a plain append-only log with a cursor, not a callback
 //! bus: views poll `since(cursor)` on each frame, which is trivially correct
 //! under gpui's pull-render model and needs no shared-mutability plumbing.
+//!
+//! # Bounded retention (long-session memory)
+//!
+//! The stream is append-only from the *caller's* view — cursors are ABSOLUTE,
+//! monotonic indices into the total history — but the backing storage is a
+//! bounded ring: once the retained window exceeds [`Dynamics::cap()`], [`emit`]
+//! evicts the oldest events. Without this a long-running node/desktop session
+//! leaks memory forever (every `commit_turn` emits several events and nothing
+//! ever shrinks the log — CORE-AUDIT #11).
+//!
+//! Eviction is cursor-SAFE. The struct keeps a monotonic [`base`](Dynamics::base())
+//! offset — the number of events dropped off the front — so `cursor()` still
+//! reports `base + retained`, exactly the total ever emitted. [`since`] resolves
+//! a caller's absolute cursor against `max(cursor, base)`: a live cursor inside
+//! the retained window resolves EXACTLY, and a cursor that fell BEHIND the
+//! evicted window is clamped up to `base` and gets the retained tail — never a
+//! panic and never a wrong slice. (A consumer that lags more than the whole
+//! retained window therefore *misses* the evicted span; the one such consumer,
+//! the desktop pulse pump, detects the lag via [`Dynamics::base()`] and recovers
+//! conservatively — see `deos_desktop::DeosDesktop::pump_dynamics`.)
+//!
+//! [`emit`]: Dynamics::emit
+//! [`since`]: Dynamics::since
 
 use dregg_cell::CellId;
 use serde::{Deserialize, Serialize};
@@ -167,9 +190,34 @@ impl WorldEvent {
     }
 }
 
-/// The append-only dynamics log with a monotonic cursor.
+/// Default retained-event ceiling for a live cockpit stream (64Ki events).
+///
+/// At a typical [`WorldEvent`] footprint (a few `CellId`s / a `[u8; 32]` and
+/// small scalars — order 100 bytes) this bounds the live log to a few MB while
+/// retaining far more scrollback than any pull-render view consumes between
+/// frames. The desktop pulse beats at ~250ms; a beat cannot plausibly emit 64Ki
+/// events, so no live consumer ever lags past the retained window under this cap
+/// (and the one that theoretically could recovers conservatively — see the pump).
+pub const DEFAULT_CAP: usize = 1 << 16;
+
+/// The append-only dynamics log with a monotonic cursor and a BOUNDED retained
+/// window.
+///
+/// Callers see an append-only log addressed by absolute, monotonic cursors; the
+/// backing store is a bounded ring that evicts the oldest events once the
+/// retained window exceeds [`Self::cap()`]. See the module docs for the
+/// cursor-safety contract.
 pub struct Dynamics {
+    /// The retained window, most-recent-last. The absolute index of `events[0]`
+    /// is [`Self::base()`]; eviction drains the oldest from the front.
     events: Vec<WorldEvent>,
+    /// Number of events evicted off the front — a monotonic floor that keeps
+    /// outstanding ABSOLUTE cursors valid across eviction. Invariant:
+    /// `cursor() == base + events.len()` == total events ever emitted.
+    base: usize,
+    /// Retained-event ceiling. Once `events.len()` exceeds this, [`Self::emit`]
+    /// batch-evicts the oldest down to a low-water mark (amortized O(1) per emit).
+    cap: usize,
 }
 
 impl Default for Dynamics {
@@ -179,36 +227,95 @@ impl Default for Dynamics {
 }
 
 impl Dynamics {
+    /// A fresh log with the [`DEFAULT_CAP`] retained ceiling.
     pub fn new() -> Self {
-        Dynamics { events: Vec::new() }
+        Self::with_cap(DEFAULT_CAP)
     }
 
-    /// Append an observed transition.
+    /// A fresh log with an explicit retained ceiling (`cap` events). `cap` is
+    /// floored at 1 so the newest event is always retained. Useful for tests and
+    /// for tuning a tighter live window.
+    pub fn with_cap(cap: usize) -> Self {
+        Dynamics {
+            events: Vec::new(),
+            base: 0,
+            cap: cap.max(1),
+        }
+    }
+
+    /// Append an observed transition, evicting the oldest events if the retained
+    /// window now exceeds [`Self::cap()`]. Cursors stay valid: eviction only
+    /// advances [`Self::base()`], never renumbers a surviving event.
     pub fn emit(&mut self, event: WorldEvent) {
         self.events.push(event);
+        if self.events.len() > self.cap {
+            self.evict();
+        }
     }
 
-    /// The current cursor (== total events emitted). A view stores this and
-    /// passes it back to [`Self::since`] next frame to get only what's new.
+    /// Batch-evict the oldest events down to a low-water mark.
+    ///
+    /// The physical buffer never exceeds `cap` (the memory bound), and each
+    /// eviction removes ~`cap/4` events at once — a front `drain` costs
+    /// O(retained), but happens only once per ~`cap/4` emits, so eviction is
+    /// amortized O(1) per [`Self::emit`]. `base` advances by exactly the number
+    /// dropped, so every outstanding absolute cursor keeps resolving.
+    fn evict(&mut self) {
+        let evict_batch = (self.cap / 4).max(1);
+        let low_water = self.cap.saturating_sub(evict_batch).max(1);
+        let drop = self.events.len().saturating_sub(low_water);
+        if drop == 0 {
+            return;
+        }
+        self.events.drain(0..drop);
+        self.base += drop;
+    }
+
+    /// The current cursor (== total events EVER emitted, including evicted ones).
+    /// A view stores this and passes it back to [`Self::since`] next frame to get
+    /// only what is new. Monotonic and stable across eviction.
     pub fn cursor(&self) -> usize {
-        self.events.len()
+        self.base + self.events.len()
     }
 
-    /// All events at or after `cursor`.
+    /// The absolute index of the oldest RETAINED event — i.e. how many events have
+    /// been evicted off the front. A consumer whose saved cursor is `< base()`
+    /// lagged past the retained window and lost the evicted span (see
+    /// [`Self::since`]); the desktop pulse pump reads this to recover
+    /// conservatively rather than silently under-invalidate.
+    pub fn base(&self) -> usize {
+        self.base
+    }
+
+    /// All retained events at or after the absolute `cursor`.
+    ///
+    /// The caller's absolute cursor is clamped into the retained window
+    /// `[base, cursor())`: a cursor at/after the head yields the empty slice; a
+    /// cursor that fell BEHIND the evicted window (`cursor < base`) is clamped up
+    /// to `base` and yields the retained tail. Never panics, never mis-slices —
+    /// but a caller clamped up this way has *missed* the events in
+    /// `[cursor, base)`, which were evicted.
     pub fn since(&self, cursor: usize) -> &[WorldEvent] {
-        let start = cursor.min(self.events.len());
+        let total = self.base + self.events.len();
+        let start = cursor.clamp(self.base, total) - self.base;
         &self.events[start..]
     }
 
-    /// The whole log (most-recent-last).
+    /// The retained window (most-recent-last). After eviction this is the live
+    /// tail, not the whole history — bounded by [`Self::cap()`].
     pub fn all(&self) -> &[WorldEvent] {
         &self.events
     }
 
-    /// The last `n` events, most-recent-last.
+    /// The last `n` events, most-recent-last (drawn from the retained window).
     pub fn tail(&self, n: usize) -> &[WorldEvent] {
         let start = self.events.len().saturating_sub(n);
         &self.events[start..]
+    }
+
+    /// The retained-event ceiling (`cap`) — introspection / test hook.
+    pub fn cap(&self) -> usize {
+        self.cap
     }
 }
 
@@ -245,5 +352,102 @@ mod tests {
         let t = d.tail(2);
         assert_eq!(t.len(), 2);
         assert!(matches!(t[1], WorldEvent::FieldSet { index: 4, .. }));
+    }
+
+    /// Emit `n` FieldSet events tagged `0..n` by their `index` slot so tests can
+    /// identify exactly which events survived eviction.
+    fn emit_tagged(d: &mut Dynamics, range: std::ops::Range<usize>) {
+        for i in range {
+            d.emit(WorldEvent::FieldSet {
+                cell: CellId::ZERO,
+                index: i,
+            });
+        }
+    }
+
+    fn indices(events: &[WorldEvent]) -> Vec<usize> {
+        events
+            .iter()
+            .map(|e| match e {
+                WorldEvent::FieldSet { index, .. } => *index,
+                other => panic!("unexpected event {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn eviction_caps_memory_but_keeps_the_cursor_monotonic() {
+        let mut d = Dynamics::with_cap(8);
+        emit_tagged(&mut d, 0..1000);
+        // The retained window never exceeds the cap, so RAM is bounded regardless
+        // of how many events have flowed through the log.
+        assert!(
+            d.all().len() <= d.cap(),
+            "retained {} exceeds cap {}",
+            d.all().len(),
+            d.cap()
+        );
+        // The cursor still reports the TOTAL ever emitted, and base == the number
+        // evicted, so `cursor() == base + retained` holds.
+        assert_eq!(d.cursor(), 1000);
+        assert_eq!(d.base(), 1000 - d.all().len());
+        // The retained window is genuinely the most-recent tail.
+        let idx = indices(d.all());
+        assert_eq!(*idx.last().unwrap(), 999);
+        assert!(idx.windows(2).all(|w| w[1] == w[0] + 1));
+    }
+
+    #[test]
+    fn a_live_cursor_keeps_working_across_eviction() {
+        let mut d = Dynamics::with_cap(8);
+        emit_tagged(&mut d, 0..6);
+        // A view saves its cursor after 6 events (nothing evicted yet).
+        let c = d.cursor();
+        assert_eq!(c, 6);
+        // More events arrive, tripping eviction (base advances off 0).
+        emit_tagged(&mut d, 6..10);
+        assert!(d.base() > 0, "expected eviction to advance base");
+        // The saved cursor is still INSIDE the retained window, so `since` resolves
+        // it EXACTLY — the view sees precisely the four events it had not yet read,
+        // in order, none dropped, none duplicated.
+        assert!(
+            c >= d.base(),
+            "cursor must remain within the retained window"
+        );
+        assert_eq!(indices(d.since(c)), vec![6, 7, 8, 9]);
+        // And re-reading from the fresh head yields nothing new.
+        assert!(d.since(d.cursor()).is_empty());
+    }
+
+    #[test]
+    fn a_stale_cursor_is_clamped_safely_to_the_retained_tail() {
+        let mut d = Dynamics::with_cap(8);
+        emit_tagged(&mut d, 0..20);
+        assert!(d.base() > 0, "expected eviction");
+        let tail = indices(d.all());
+        // A cursor from before the evicted window (0, or anything `< base`) does
+        // NOT panic and does NOT mis-slice — it clamps up to `base` and hands back
+        // exactly the retained tail.
+        assert_eq!(indices(d.since(0)), tail);
+        assert_eq!(indices(d.since(d.base() - 1)), tail);
+        // A cursor exactly at the floor is the same retained tail.
+        assert_eq!(indices(d.since(d.base())), tail);
+        // A cursor at/after the head yields the empty slice (no over-read panic).
+        assert!(d.since(d.cursor()).is_empty());
+        assert!(d.since(d.cursor() + 100).is_empty());
+        // A cursor strictly inside the window resolves to its exact suffix.
+        let mid = d.base() + 3;
+        assert_eq!(d.since(mid).len(), d.cursor() - mid);
+    }
+
+    #[test]
+    fn a_tiny_cap_still_retains_the_newest_event() {
+        // `cap` is floored at 1, so even a degenerate cap keeps the last event and
+        // never drains the buffer empty on the same emit that pushed it.
+        let mut d = Dynamics::with_cap(1);
+        emit_tagged(&mut d, 0..5);
+        assert_eq!(indices(d.all()), vec![4]);
+        assert_eq!(d.cursor(), 5);
+        assert_eq!(indices(d.since(0)), vec![4]);
     }
 }

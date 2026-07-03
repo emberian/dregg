@@ -1189,6 +1189,13 @@ impl DeosDesktop {
             let w = self.world.borrow();
             let d = w.dynamics();
             let cursor = d.cursor();
+            // The dynamics log is a BOUNDED ring (CORE-AUDIT #11): once it exceeds
+            // its retained cap it evicts the oldest events, advancing `base`. If our
+            // pulse cursor fell BEHIND that floor between beats, `since` can only
+            // hand us the retained tail — the evicted span's FieldSet/CellMutated
+            // teeth are gone. Capture the floor now so the loud half can recover
+            // conservatively rather than silently under-invalidate.
+            let base = d.base();
             if cursor == self.pulse_cursor {
                 drop(w);
                 if aged || weld_quiet {
@@ -1237,6 +1244,21 @@ impl DeosDesktop {
             let mut cells: Vec<CellId> = w.ledger().iter().map(|(id, _)| *id).collect();
             cells.sort();
             let receipts = w.receipts().len() as u64;
+            // CONSERVATIVE RECOVERY across dynamics eviction (CORE-AUDIT #11). If the
+            // pulse lagged MORE than the whole retained cap behind, the beat's `since`
+            // slice is only the retained tail — the evicted FieldSet/CellMutated teeth
+            // for the lost span never reached `field_sets`/`cell_events`, so a
+            // fine-grained invalidation would UNDER-invalidate and leave stale paint
+            // (violating "cache soundness = dynamics completeness"). Rather than miss
+            // dirty rows, name EVERY live cell as cell-wide dirty so every open
+            // pane/card re-reads its binds through the conservative `invalidate_cell`
+            // tooth. Only the cosmetic activity-feed toasts for the evicted span are
+            // lost (they were never a correctness invariant). In practice this branch
+            // never fires — a ~250ms beat cannot emit a full retained cap of events —
+            // it is the fail-safe that makes eviction SOUND, not merely cheap.
+            if self.pulse_cursor < base {
+                cell_events = cells.clone();
+            }
             (
                 cursor,
                 announce,
