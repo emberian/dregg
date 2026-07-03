@@ -1,0 +1,32 @@
+[package]
+name = "starbridge-billing"
+version = "0.1.0"
+edition = "2024"
+description = "A billing plane with NO new primitive: an invoice is an aggregation VIEW over settled turn receipts (each line item carries its settle-receipt hash), sealed as its own turn receipt; a spend cap is a rate-limited-allowance ceiling cell (an over-cap charge refused by the executor — the 402 shape); an estimate is a pure fn over a rate card; the recurring half rides the standing-obligation capacity."
+
+# The customer-facing billing plane for the dregg value layer, built by COMPOSING
+# capacities the substrate already proves — no metering, no mint, no new Effect:
+#   * invoices AGGREGATE settled turn receipts into per-resource line items, each
+#     line carrying the settle-receipt hash it was billed from, and the invoice
+#     seals as its own turn receipt (the executor's TurnReceipt for the seal turn);
+#   * a spend cap is the rate-limited-allowance ceiling (cell/src/allowance.rs) —
+#     the executor's FieldLteField(spent <= cap) refuses an over-cap charge in-band;
+#   * an estimate is a pure fn over a rate card;
+#   * the recurring half rides the StandingObligation capacity
+#     (cell/src/obligation_standing.rs), mirroring starbridge-subscription's shape.
+# See src/lib.rs and README.md. Full four axes: verified core + service + card.
+
+[lib]
+name = "starbridge_billing"
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-types = { path = "../../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

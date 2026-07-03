@@ -1,0 +1,72 @@
+{
+  "id": "billing",
+  "name": "Billing",
+  "description": "A billing plane with no new primitive: an invoice is an aggregation view over settled turn receipts (each line item carries its settle-receipt hash), sealed as its own turn receipt; a spend cap is a rate-limited-allowance ceiling cell (an over-cap charge refused by the executor — the 402 shape); an estimate is a pure fn over a rate card; the recurring half rides the standing-obligation capacity.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d62696c6c696e672d6163636f756e742d6661637421"
+  ],
+  "inspectors": [
+    "dregg-billing"
+  ],
+  "host_inspectors": [
+    { "id": "billing", "label": "Billing Account", "tag": "dregg-billing", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "open_billing", "label": "Open account", "builder": "open_billing", "kind": "turn" },
+    { "id": "charge", "label": "Charge under cap", "builder": "charge", "kind": "turn" },
+    { "id": "seal_invoice", "label": "Seal invoice", "builder": "seal_invoice", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "billing_uri", "label": "Account URI", "type": "uri", "default": "dregg://cell/billing-default" },
+    { "id": "cap", "label": "Per-period spend cap", "type": "number", "default": 1000 },
+    { "id": "period_start", "label": "Period start (block)", "type": "number", "default": 1000 }
+  ],
+  "turn_builders": [
+    "open_billing",
+    "charge",
+    "seal_invoice"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "cell.readHeap"
+  ],
+  "slot_layout": {
+    "SPENT_SLOT": 0,
+    "CAP_SLOT": 1,
+    "PROVIDER_SLOT": 2,
+    "START_SLOT": 3,
+    "INVOICE_DIGEST_SLOT": 4
+  },
+  "heap_collections": {
+    "ALLOWANCE_COLL": "0x000A110E — the rate-limited-allowance ledger (the forge-detecting spend cap): terms digest, current-epoch cursor, spent-this-epoch, cumulative spent"
+  },
+  "state_constraints": [
+    "WriteOnce(CAP_SLOT)",
+    "WriteOnce(PROVIDER_SLOT)",
+    "WriteOnce(START_SLOT)",
+    "Monotonic(SPENT_SLOT)",
+    "FieldLteField(SPENT_SLOT <= CAP_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry",
+    "src_factory": "billing_app(cipherclerk, executor)",
+    "cell": "billing",
+    "discoverable": ["billing", "invoices"],
+    "publish": "Signature",
+    "affordances": {
+      "charge": "cap-only, Signature (a cap-guarded charge — the executor's FieldLteField(SPENT <= CAP) tooth refuses an over-cap charge in-band, the 402; the value moves by a conserving Transfer)",
+      "seal": "cap-only, Signature (seal the period's invoice as its own turn receipt — bind the invoice body_hash into the cell)"
+    },
+    "seam": "PARTIAL — the spend-cap CEILING (FieldLteField(SPENT <= CAP)) and the value MOVE (a conserving Transfer) are REAL verified turns the executor enforces + the kernel conserves; the allowance heap ledger and the invoice body_hash mirror are executor-side / cell-committed steps (the named SpendAllowance / sealed-digest in-circuit seam the allowance + obligation capacities describe). This is a billing VIEW + CEILING over settled turns, not a metering engine."
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/billing/src/lib.rs"
+  }
+}
