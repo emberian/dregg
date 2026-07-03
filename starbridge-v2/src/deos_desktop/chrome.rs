@@ -121,6 +121,7 @@ pub fn kind_short(tag: WinKindTag) -> &'static str {
         WinKindTag::MatrixRoom => "MTX",
         WinKindTag::ProvenanceWalker => "PRV",
         WinKindTag::AttachWizard => "ATW",
+        WinKindTag::MailRoom => "MBX",
     }
 }
 

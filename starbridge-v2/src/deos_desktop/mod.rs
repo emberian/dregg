@@ -104,6 +104,13 @@ pub mod halo;
 #[cfg(feature = "dev-surfaces")]
 pub mod hireling;
 pub mod layout;
+/// THE MAIL ROOM — the desktop face of the [`crate::letter_office`]: mail between
+/// agents as cells on the live World. Inbox (letters delivered to you) · Outbox (letters
+/// you sent, each Outbound one carrying a *deliver now* button that fires one ferry round
+/// as a real receipted turn) · Mail-Ledger (every letter in the town). A letter IS a cell
+/// carrying its markdown in the heap; the room re-scans the live ledger each paint (never
+/// a cache). gpui-free faces + the View's listeners, split clobber-safe like `agent_room`.
+pub mod mail_room;
 /// THE MATRIX ROOM — membrane-over-Matrix in the shipped desktop: rooms as live
 /// cells on the desktop's OWN World, every send a receipted `SetField` turn whose
 /// timeline is decoded back off the recorded receipt chain, and the real
@@ -458,6 +465,13 @@ enum WinKind {
     /// the hireling rail. Its per-window walk state lives in `attach_wizards`, so
     /// this variant is a marker like `AgentRoom`.
     AttachWizard,
+    /// **THE MAIL ROOM** — the desktop face of the [`crate::letter_office`]: mail
+    /// between agents as cells on the live World (inbox · outbox · mail-ledger). A letter
+    /// IS a cell carrying its markdown in the heap; sending drops it in an outbox cell,
+    /// delivery is a receipted turn moving it to an inbox cell. Per-window state (the
+    /// compose recipient + the shown face) lives in `mail_rooms`, so this variant is a
+    /// marker like `AgentRoom`. Anchored on its own sentinel cell.
+    MailRoom,
 }
 
 impl WinKind {
@@ -478,6 +492,7 @@ impl WinKind {
             WinKind::MatrixRoom => "Matrix Room",
             WinKind::ProvenanceWalker => "Provenance Walker",
             WinKind::AttachWizard => "Attach a Resident",
+            WinKind::MailRoom => "Mail Room",
         }
     }
 }
@@ -535,6 +550,9 @@ enum ActionKind {
     /// Open the PROVENANCE WALKER — the receipt chain walked hash-by-hash, every
     /// link recomputed (never trusted). A World-level (desktop-background) surface.
     OpenProvenanceWalker,
+    /// Open the MAIL ROOM — mail between agents as cells on the live World (inbox ·
+    /// outbox · mail-ledger). A World-level (desktop-background) surface.
+    OpenMailRoom,
     /// Open a DOCUMENT-COLLABORATION session — the document editor with a forked
     /// co-author draft already in flight (branch · stitch · resolve), landed mold-ready.
     OpenDocCollab,
@@ -789,6 +807,19 @@ pub struct DeosDesktop {
     /// ([`provenance_walker::walker_window_cell`]). A pure view concern — the
     /// chain itself is re-derived from the live World on every paint.
     provenance_walkers: HashMap<CellId, provenance_walker::WalkerState>,
+    /// **The per-window MAIL-ROOM view state** — the compose recipient + which face
+    /// (inbox/outbox/mail-ledger) is shown. Keyed by the room window's own sentinel cell
+    /// ([`mail_room::mail_room_window_cell`]). A pure view concern — the mail itself is
+    /// re-scanned off the live World ([`crate::letter_office`]) on every paint.
+    mail_rooms: HashMap<CellId, mail_room::MailRoomState>,
+    /// The Mail Room composer's live input widget (single-line; Enter sends the draft as a
+    /// REAL letter turn — the SAME send the bake hook drives), built lazily on first render
+    /// like the Spotter's.
+    mail_input: Option<Entity<InputState>>,
+    /// The Mail Room composer's `Change`/`PressEnter` subscription (kept alive while open).
+    mail_input_sub: Option<Subscription>,
+    /// The Mail Room composer's current draft (mirrored from the widget on each `Change`).
+    mail_draft: String,
     /// **THE HIRELING** — the Agent Room's hired resident: the confined deos-hermes
     /// brain+gate [`crate::resident_agent::AgentHandle`] plus the step planner
     /// (see [`hireling`]). Unstaffed by default; every STEP beat mirrors real
@@ -1041,6 +1072,10 @@ impl DeosDesktop {
             world_explorers: HashMap::new(),
             agent_rooms: HashMap::new(),
             provenance_walkers: HashMap::new(),
+            mail_rooms: HashMap::new(),
+            mail_input: None,
+            mail_input_sub: None,
+            mail_draft: String::new(),
             #[cfg(feature = "dev-surfaces")]
             hireling: hireling::HirelingState::default(),
             #[cfg(feature = "dev-surfaces")]
@@ -1284,6 +1319,7 @@ impl DeosDesktop {
             WinKindTag::DocExplorer => WinKind::DocExplorer,
             WinKindTag::WorldExplorer => WinKind::WorldExplorer,
             WinKindTag::AgentRoom => WinKind::AgentRoom,
+            WinKindTag::MailRoom => WinKind::MailRoom,
             WinKindTag::ViewNodePane => WinKind::ViewNodePane,
             WinKindTag::AndroidCell => WinKind::AndroidCell,
             WinKindTag::AppShelf => WinKind::AppShelf,
@@ -1336,6 +1372,10 @@ impl DeosDesktop {
         // The Provenance Walker's sentinel gets the same courtesy.
         let title = if agent_room::is_agent_room(&cell) {
             format!("the resident — {}", kind.label())
+        } else if mail_room::is_mail_room(&cell) {
+            // The Mail Room's sentinel gets the same courtesy — it is a post office, not
+            // a zero-balance service cell.
+            format!("the letter office — {}", kind.label())
         } else if matrix_room::is_matrix_room(&cell) {
             // The Matrix Room's sentinel gets the same courtesy.
             format!("membranes over the wire — {}", kind.label())
@@ -1398,6 +1438,23 @@ impl DeosDesktop {
         );
     }
 
+    /// Open (or focus) the MAIL ROOM — mail between agents as cells on the live World
+    /// (inbox · outbox · mail-ledger), anchored on the room's own sentinel. Opening it
+    /// ensures the operator's post office exists on the World (a genesis-path install of
+    /// their inbox + outbox cells + the town ferry), so a fresh room opens ready to write.
+    fn open_mail_room(&mut self) {
+        {
+            let mut w = self.world.borrow_mut();
+            crate::letter_office::ensure_office(&mut w, self.user);
+            crate::letter_office::ensure_ferry(&mut w);
+        }
+        self.open_kind(mail_room::mail_room_window_cell(), WinKindTag::MailRoom);
+        self.say(
+            "Mail Room — the letter office: a letter IS a cell carrying its markdown; \
+             sending drops it in your outbox, and the ferry delivers it to an inbox.",
+        );
+    }
+
     /// Open (or focus) the PROVENANCE WALKER — the receipt chain walked
     /// hash-by-hash, every link recomputed on the spot (never trusted),
     /// anchored on its own sentinel like the Agent Room.
@@ -1444,6 +1501,8 @@ impl DeosDesktop {
             WinKindTag::ProvenanceWalker => (560.0, 460.0),
             // The Attach Wizard opens as a calm portrait card for the five-breath walk.
             WinKindTag::AttachWizard => (420.0, 480.0),
+            // The Mail Room opens tall enough for the letter cards + the compose strip.
+            WinKindTag::MailRoom => (520.0, 500.0),
             #[allow(unreachable_patterns)]
             // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => (380.0, 320.0),
@@ -1803,6 +1862,11 @@ impl DeosDesktop {
                 true,
                 A::OpenProvenanceWalker,
             ),
+            MenuAction::new(
+                "Mail Room… (letters as cells · inbox · outbox · deliver)",
+                true,
+                A::OpenMailRoom,
+            ),
             MenuAction::new("Spotter… (jump to anything)", true, A::OpenSpotter),
             MenuAction::sep(),
             // The session's woven surfaces — reachable from the bare desktop too, not only
@@ -2096,6 +2160,7 @@ impl DeosDesktop {
             }
             ActionKind::OpenAgentRoom => self.open_agent_room(),
             ActionKind::OpenProvenanceWalker => self.open_provenance_walker(),
+            ActionKind::OpenMailRoom => self.open_mail_room(),
             ActionKind::OpenSpotter => self.open_spotter(),
             // The session's woven surfaces, reached from a cell menu too (anchored on the
             // acted-on cell): a doc-collab session, the World-Status board, an Android cell.
@@ -3132,6 +3197,15 @@ impl DeosDesktop {
                 provenance_walker::walker_window_cell(),
                 WinKindTag::ProvenanceWalker,
             ),
+            // The Mail Room's opener ensures the operator's office (a genesis-path install
+            // when missing) and lands mold-ready like every other global surface.
+            Tg::MailRoom => {
+                self.open_mail_room();
+                self.selected = Some(HaloTarget::Window((
+                    mail_room::mail_room_window_cell(),
+                    WinKindTag::MailRoom,
+                )));
+            }
             Tg::WorldTranscript => self.land_in(self.user, WinKindTag::Transcript),
             Tg::DocCollab => self.start_doc_collab(self.user),
             #[cfg(feature = "card-pane")]
@@ -3271,6 +3345,7 @@ impl DeosDesktop {
             }
             ActionKind::OpenAgentRoom => self.open_agent_room(),
             ActionKind::OpenProvenanceWalker => self.open_provenance_walker(),
+            ActionKind::OpenMailRoom => self.open_mail_room(),
             ActionKind::OpenSpotter => self.open_spotter(),
             ActionKind::OpenDocCollab => self.start_doc_collab(self.user),
             ActionKind::OpenViewNodePane => {
@@ -3804,6 +3879,47 @@ impl DeosDesktop {
         crate::agent::AgentActivity::build(&self.world.borrow(), resident, 24)
             .actions
             .len()
+    }
+
+    // ── Mail Room bake/test hooks ──
+
+    /// Open the MAIL ROOM window (anchored on its own sentinel; ensures the operator's
+    /// office + the town ferry) — a bake/test hook.
+    pub fn bake_open_mail_room(&mut self) {
+        self.open_mail_room();
+    }
+
+    /// **Post a letter** from the operator to `to` as a real send turn — a bake/test hook
+    /// (the SAME [`crate::letter_office::send_letter`] the compose strip drives). Returns
+    /// the born letter cell id on success.
+    pub fn bake_mail_send(&mut self, to: CellId, subject: &str, body: &str) -> Option<CellId> {
+        let from = self.user;
+        let mut w = self.world.borrow_mut();
+        crate::letter_office::send_letter(&mut w, from, to, subject, body)
+            .ok()
+            .map(|r| r.letter)
+    }
+
+    /// **Deliver a letter now** as a real ferry turn — a bake/test hook (the SAME
+    /// [`crate::letter_office::deliver_now`] the *deliver now* button drives). Returns
+    /// whether the delivery committed.
+    pub fn bake_mail_deliver(&mut self, letter: CellId) -> bool {
+        let mut w = self.world.borrow_mut();
+        crate::letter_office::deliver_now(&mut w, letter).is_ok()
+    }
+
+    /// How many letters have landed in `owner`'s inbox on the live World — a bake/test
+    /// hook (the Inbox face's row count).
+    pub fn bake_mail_inbox_count(&self, owner: CellId) -> usize {
+        crate::letter_office::mailbox_of(&self.world.borrow(), owner)
+            .inbox
+            .len()
+    }
+
+    /// How many letters exist town-wide (every letter is a cell) — a bake/test hook (the
+    /// Mail-Ledger face's row count).
+    pub fn bake_mail_town_count(&self) -> usize {
+        crate::letter_office::town_letters(&self.world.borrow()).len()
     }
 
     // ── Provenance Walker bake/test hooks ──
@@ -4802,6 +4918,7 @@ impl DeosDesktop {
             WinKindTag::DocExplorer => self.render_doc_explorer_body(cell, &sc, cx),
             WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
             WinKindTag::AgentRoom => self.render_agent_room_window(cell, cx),
+            WinKindTag::MailRoom => self.render_mail_room_window(cell, window, cx),
             WinKindTag::ProvenanceWalker => self.render_provenance_walker_window(cell, cx),
             #[cfg(feature = "card-pane")]
             WinKindTag::ViewNodePane => self.render_viewnode_body(cell, &sc, window, cx),
@@ -5591,6 +5708,334 @@ impl DeosDesktop {
             .child(header)
             .child(tabs)
             .child(body)
+            .into_any_element()
+    }
+
+    /// Build the Mail Room composer's live input on first render — single-line, Enter
+    /// posts the draft as a REAL send turn (the SAME send the bake hook drives). Mirrors
+    /// the Matrix composer / Spotter input plumbing exactly.
+    fn ensure_mail_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mail_input.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Write a letter — Enter posts it to your outbox…")
+        });
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            |this, input, ev: &InputEvent, window, cx| match ev {
+                InputEvent::Change => {
+                    this.mail_draft = input.read(cx).value().to_string();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.mail_send_draft(mail_room::mail_room_window_cell());
+                    input.update(cx, |st, cx| st.set_value("", window, cx));
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+        self.mail_input = Some(input);
+        self.mail_input_sub = Some(sub);
+    }
+
+    /// **POST the composer draft as a letter** — one real [`crate::letter_office::send_letter`]
+    /// turn from the operator to the chosen correspondent: the letter is born as a cell
+    /// (its markdown in the heap), then dropped in the operator's outbox with a receipted
+    /// turn. The subject is the first non-empty markdown line; the verdict is narrated.
+    fn mail_send_draft(&mut self, cell: CellId) {
+        let body = std::mem::take(&mut self.mail_draft);
+        let body = body.trim().to_string();
+        if body.is_empty() {
+            return;
+        }
+        let recipient = {
+            let w = self.world.borrow();
+            self.mail_rooms
+                .get(&cell)
+                .and_then(|s| s.recipient)
+                .or_else(|| mail_room::default_recipient(&w, self.user))
+        };
+        let Some(to) = recipient else {
+            self.say("No one to write to yet — a resident must exist to receive a letter.");
+            return;
+        };
+        // The subject is the first non-empty line (heading marks trimmed), capped legibly.
+        let subject: String = body
+            .lines()
+            .map(|l| l.trim_start_matches('#').trim())
+            .find(|l| !l.is_empty())
+            .unwrap_or("(no subject)")
+            .chars()
+            .take(64)
+            .collect();
+        let from = self.user;
+        let outcome = {
+            let mut w = self.world.borrow_mut();
+            crate::letter_office::send_letter(&mut w, from, to, &subject, &body)
+        };
+        match outcome {
+            Ok(r) => self.say(format!(
+                "Letter posted to {} — it sits in your outbox awaiting the ferry (receipt {}).",
+                id_short(&to),
+                r.receipt[..4]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            )),
+            Err(e) => self.say(format!("Letter REFUSED — {e}")),
+        }
+    }
+
+    /// **DELIVER a letter NOW** — the ferry's round, fired by hand from the Outbox face:
+    /// one [`crate::letter_office::deliver_now`] turn moves the Outbound letter to its
+    /// recipient's inbox (the twice-daily mailman a named seam). The verdict is narrated.
+    fn mail_deliver(&mut self, letter: CellId) {
+        let outcome = {
+            let mut w = self.world.borrow_mut();
+            crate::letter_office::deliver_now(&mut w, letter)
+        };
+        match outcome {
+            Ok(r) => self.say(format!(
+                "Delivered — the ferry moved the letter to its inbox (receipt {}).",
+                r.receipt[..4]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            )),
+            Err(e) => self.say(format!("Delivery REFUSED — {e}")),
+        }
+    }
+
+    /// **The Mail Room window body** — the letter office on the live World: the recipient
+    /// picker, the Inbox / Outbox / Mail-Ledger tabs, the office header, the selected face
+    /// (each letter a real cell, re-scanned off the ledger every paint), and the compose
+    /// strip that posts a new letter as a real send turn. The Outbox face welds a *deliver
+    /// now* button onto every Outbound letter — one click IS one ferry round, committing
+    /// the delivery turn locally.
+    fn render_mail_room_window(
+        &mut self,
+        cell: CellId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use mail_room::MailRoomTab as T;
+        self.ensure_mail_input(window, cx);
+        let state = self.mail_rooms.entry(cell).or_default().clone();
+        // Each face keeps its OWN persistent scroll handle (tab ordinal in the key).
+        let sc = self.face_scrolls.ensure(FaceScrollKey::Window(
+            cell,
+            WinKindTag::MailRoom,
+            state.tab as u8,
+        ));
+        let world = self.world.borrow();
+        let mb = crate::letter_office::mailbox_of(&world, self.user);
+        let town = crate::letter_office::town_letters(&world);
+        let cands = mail_room::recipient_candidates(&world, self.user);
+        let recipient = state
+            .recipient
+            .or_else(|| mail_room::default_recipient(&world, self.user));
+        drop(world);
+
+        // The recipient picker — other residents by activity; clicking sets who the
+        // compose strip writes to.
+        let mut picker = div().flex().flex_row().flex_wrap().gap_1().my_1();
+        for (rid, nonce) in cands.iter().take(6) {
+            let rid = *rid;
+            let selected = Some(rid) == recipient;
+            let caption = format!("{} n{}", id_short(&rid), nonce);
+            picker = picker.child(
+                bevel_raised(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "mailroom-to-{}",
+                            id_hex(&rid)
+                        )))
+                        .px_2()
+                        .py_1()
+                        .text_size(px(10.0))
+                        .when(selected, |d| {
+                            d.bg(gpui::rgb(NT_SELECT)).text_color(gpui::rgb(0xffffff))
+                        }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.mail_rooms.entry(cell).or_default().recipient = Some(rid);
+                        cx.notify();
+                    }),
+                )
+                .child(caption),
+            );
+        }
+        if cands.is_empty() {
+            picker = picker.child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(gpui::rgb(NT_DIM))
+                    .child("(no other residents yet — no one to write to)"),
+            );
+        }
+
+        // The face tabs — inbox / outbox / mail-ledger.
+        let mut tabs = div().flex().flex_row().gap_1().my_1();
+        for t in T::ALL {
+            let selected = t == state.tab;
+            tabs = tabs.child(
+                bevel_raised(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "mailroom-tab-{}",
+                            t.label()
+                        )))
+                        .px_2()
+                        .py_1()
+                        .text_size(px(10.0))
+                        .when(selected, |d| {
+                            d.bg(gpui::rgb(NT_SELECT)).text_color(gpui::rgb(0xffffff))
+                        }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.mail_rooms.entry(cell).or_default().tab = t;
+                        cx.notify();
+                    }),
+                )
+                .child(t.label()),
+            );
+        }
+
+        let header = mail_room::render_mailbox_header(&mb);
+
+        // The selected face. Inbox + Ledger are pure; the Outbox welds deliver buttons.
+        let body = match state.tab {
+            T::Inbox => mail_room::render_inbox_face(&mb, &sc),
+            T::Ledger => mail_room::render_ledger_face(&town, &sc),
+            T::Outbox => {
+                let mut col = div()
+                    .id("mailroom-outbox")
+                    .bg(gpui::rgb(NT_PANEL))
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(face_section(&format!(
+                        "Outbox · {} sent · {} awaiting the ferry",
+                        mb.sent, mb.pending
+                    )));
+                if mb.outbox.is_empty() {
+                    col = col.child(face_row("(empty)", "no letters sent yet — write one below"));
+                } else {
+                    for l in &mb.outbox {
+                        let card = mail_room::letter_card(l);
+                        let card = if l.status == crate::letter_office::LetterStatus::Outbound {
+                            let lc = l.cell;
+                            card.child(
+                                div().flex().flex_row().justify_end().child(
+                                    bevel_raised(
+                                        div()
+                                            .id(gpui::SharedString::from(format!(
+                                                "mail-deliver-{}",
+                                                id_hex(&lc)
+                                            )))
+                                            .px_2()
+                                            .py_1()
+                                            .text_size(px(10.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .bg(gpui::rgb(NT_WARN))
+                                            .text_color(gpui::rgb(0xffffff)),
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                                            this.mail_deliver(lc);
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child("deliver now  ⟶"),
+                                ),
+                            )
+                        } else {
+                            card
+                        };
+                        col = col.child(card);
+                    }
+                }
+                nt_scroll_face(&sc, col).into_any_element()
+            }
+        };
+
+        // The compose strip — write a letter to the chosen recipient (Enter or Send posts
+        // it to the outbox as a real send turn). Rides under every face.
+        let to_label = match recipient {
+            Some(r) => format!("To: {}", id_short(&r)),
+            None => "To: (pick a recipient above)".to_string(),
+        };
+        let input = self.mail_input.clone();
+        let composer = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .my_1()
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(gpui::rgb(NT_LABEL))
+                    .child(to_label),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .h(px(26.0))
+                            .bg(gpui::rgb(0xffffff))
+                            .when_some(input, |d, input| d.child(Input::new(&input).h_full())),
+                    )
+                    .child(
+                        bevel_raised(
+                            div()
+                                .id("mail-send")
+                                .px_2()
+                                .py_1()
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::BOLD),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                                this.mail_send_draft(cell);
+                                cx.notify();
+                            }),
+                        )
+                        .child("Send ✉"),
+                    ),
+            );
+
+        div()
+            .id(gpui::SharedString::from(format!(
+                "mailroom-body-{}",
+                id_hex(&cell)
+            )))
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .bg(gpui::rgb(NT_PANEL))
+            .p_2()
+            .child(picker)
+            .child(header)
+            .child(tabs)
+            .child(body)
+            .child(composer)
             .into_any_element()
     }
 
