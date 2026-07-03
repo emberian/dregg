@@ -823,8 +823,10 @@ mod tests {
         let mut w = World::new();
         let a = w.genesis_cell(0x51, 5_000);
         let b = w.genesis_cell(0x52, 5_000);
-        let body = "# A longer letter\n\n".to_string()
-            + &"dregg is a verified substrate; a letter is a cell. ".repeat(8);
+        let body = format!(
+            "# A longer letter\n\n{}",
+            "dregg is a verified substrate; a letter is a cell. ".repeat(8)
+        );
         let sent = send_letter(
             &mut w,
             a,
