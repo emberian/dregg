@@ -102,3 +102,10 @@ STEP/FIRE (a real confined resident on the live World; refusals as amber toasts)
 merged, 864 lib tests + 5 weld tests green, woven tour beats 4j/4k witness the hire and
 the trade. Layout-saver perf fix in (coalescing writer thread for hot paths). The bake's
 World now ends at 11 cells / 9 windows: the demo image grows a population during the tour.
+
+## ~06:1x — receipt console + interleaving fix integrated (865 green)
+say() spine: 80 status sites swept; console flyout (dark, 64-line log, unread chip);
+height tray → Transcript click. agent.rs REFUSED rows now interleave in true stream order
+(regression-pinned). LayoutSaver perf fix landed earlier. WAVE 4 launched
+(wf_9e8fd7e1-e45): NT scrollbars everywhere · CardPane rides the pulse (+ CapRevoked/
+CellMutated projection) · Spotter verbs-with-args + recent-jumps.
