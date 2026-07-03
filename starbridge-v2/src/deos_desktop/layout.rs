@@ -74,6 +74,13 @@ pub enum WinKindTag {
     /// sentinel cell; per-window state lives in `agent_rooms`, so this variant is
     /// a marker like `WorldExplorer`.
     AgentRoom,
+    /// **THE APP SHELF** — the roster of pre-built starbridge-apps (the registry) as a
+    /// desktop window: name · what-it-does · manifest facts per app, LAUNCH (a real
+    /// `launch_on_world` — the app's cell + receipt land on the LIVE World) and the
+    /// wired live fires. The shelf's state (`AppShelfState`: the registry + the
+    /// installed set) lives on the desktop (gated on `app-registry`), so this variant
+    /// is a marker like `WorldExplorer`. Anchored on a sentinel cell (the user).
+    AppShelf,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT
