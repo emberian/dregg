@@ -51,6 +51,10 @@ pub enum SpotterTarget {
     /// Open the World Explorer — the map of everything (ledger · chronicle · Σ=0). A
     /// global surface: anchored on the desktop's user sentinel by the dispatcher.
     WorldExplorer,
+    /// Open the AGENT ROOM — the resident's provable activity (receipted actions ·
+    /// held mandate · authorization boundary). A global surface: anchored on the
+    /// room's own sentinel cell by the dispatcher.
+    AgentRoom,
     /// Open the World Transcript — the receipt log of every committed turn (global).
     WorldTranscript,
     /// Open a DOCUMENT-COLLABORATION session — a document editor over the user's own
@@ -279,6 +283,12 @@ pub fn surface_candidates() -> Vec<SpotterEntry> {
             label: "World Transcript  (receipt log)".to_string(),
             sublabel: "surface · every committed turn".to_string(),
             target: SpotterTarget::WorldTranscript,
+            score: 0,
+        },
+        SpotterEntry {
+            label: "Agent Room  (receipts · mandate · reach)".to_string(),
+            sublabel: "surface · the resident, as the executor accounts for it".to_string(),
+            target: SpotterTarget::AgentRoom,
             score: 0,
         },
         SpotterEntry {

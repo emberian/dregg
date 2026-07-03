@@ -67,6 +67,13 @@ pub enum WinKindTag {
     /// The rendered renderer entity lives in `viewnode_panes` (gated on `card-pane`),
     /// so this variant is a marker like `WorldExplorer`.
     ViewNodePane,
+    /// **The AGENT ROOM** — the desktop face of an agent-as-inhabitant: a tabbed
+    /// inspector over one resident cell's provable activity (the held mandate ·
+    /// the receipted actions · the authorization boundary), built purely from the
+    /// live World by [`crate::agent::AgentActivity`]. Anchored on the room's own
+    /// sentinel cell; per-window state lives in `agent_rooms`, so this variant is
+    /// a marker like `WorldExplorer`.
+    AgentRoom,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT

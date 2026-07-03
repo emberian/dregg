@@ -36,6 +36,11 @@
 //   * `layout`  — the spatial + content persistence (DesktopLayout and friends).
 // The remaining surfaces (windows, menus, document editing, properties, actuation,
 // rendering) live here as `impl DeosDesktop` blocks over the shared chrome/layout.
+/// THE AGENT ROOM — the desktop face of an agent-as-inhabitant: one resident
+/// cell's provable activity (mandate · receipted actions · authorization
+/// boundary) rendered off the live World via [`crate::agent::AgentActivity`] —
+/// the executor's account of the agent, never its self-report.
+pub mod agent_room;
 pub mod android_window;
 /// THE DISCORD-BOT SURFACE — the desktop face of the one dregg-driven bot: a card
 /// that drives the bot's ops as dregg turns (`drive_on_world` on the embedded executor
@@ -243,6 +248,10 @@ enum WinKind {
     /// chronicle · conservation). Per-window face selection lives in `world_explorers`,
     /// so this variant is a marker.
     WorldExplorer,
+    /// **The AGENT ROOM** — the desktop face of an agent-as-inhabitant (mandate ·
+    /// receipted actions · authorization boundary, off the live World). Per-window
+    /// resident + face selection lives in `agent_rooms`, so this variant is a marker.
+    AgentRoom,
     /// **THE CONTENT-IR PANE** — a window whose body is a real `deos_view::ViewNode`
     /// rendered through deos-view's NATIVE renderer (`AppletView`). The rendered
     /// renderer entity lives in `viewnode_panes`, so this variant is a marker.
@@ -264,6 +273,7 @@ impl WinKind {
             WinKind::WorkflowComposer => "Workflow",
             WinKind::DocExplorer => "Doc Explorer",
             WinKind::WorldExplorer => "World Explorer",
+            WinKind::AgentRoom => "Agent Room",
             WinKind::ViewNodePane => "World Status",
             WinKind::AndroidCell => "Android · SystemUI",
         }
@@ -317,6 +327,9 @@ enum ActionKind {
     /// Open the WORLD EXPLORER — the "My Computer" of the verified World (ledger ·
     /// chronicle · conservation). A World-level (desktop-background) surface.
     OpenWorldExplorer,
+    /// Open the AGENT ROOM — the resident's provable activity (mandate · receipted
+    /// actions · authorization boundary). A World-level (desktop-background) surface.
+    OpenAgentRoom,
     /// Open a DOCUMENT-COLLABORATION session — the document editor with a forked
     /// co-author draft already in flight (branch · stitch · resolve), landed mold-ready.
     OpenDocCollab,
@@ -520,6 +533,10 @@ pub struct DeosDesktop {
     /// window's anchor cell. Gated on `card-pane` (where `deos-view` is in scope).
     #[cfg(feature = "card-pane")]
     viewnode_panes: HashMap<CellId, Entity<deos_view::AppletView>>,
+    /// **The per-window AGENT-ROOM view state** — which resident is watched and which
+    /// face (actions/mandate/reach) is shown. Keyed by the room window's anchor cell
+    /// (the room's own sentinel). A pure view concern (no committed state).
+    agent_rooms: HashMap<CellId, agent_room::AgentRoomState>,
     /// **The discord-bot's activity feed** the bot-surface card paints — the desktop
     /// mirror of the bot's `GET /api/apps/activity/recent` (folded into the SAME
     /// `ViewNode` card shape the bot renders as a Discord embed). Empty without a live
@@ -648,6 +665,7 @@ impl DeosDesktop {
             doc_resync: std::collections::HashSet::new(),
             doc_explorers: HashMap::new(),
             world_explorers: HashMap::new(),
+            agent_rooms: HashMap::new(),
             spotter: None,
             selected: None,
             show_welcome,
@@ -700,6 +718,7 @@ impl DeosDesktop {
             WinKindTag::Workflow => WinKind::WorkflowComposer,
             WinKindTag::DocExplorer => WinKind::DocExplorer,
             WinKindTag::WorldExplorer => WinKind::WorldExplorer,
+            WinKindTag::AgentRoom => WinKind::AgentRoom,
             WinKindTag::ViewNodePane => WinKind::ViewNodePane,
             WinKindTag::AndroidCell => WinKind::AndroidCell,
             WinKindTag::DocEditor => {
@@ -742,12 +761,18 @@ impl DeosDesktop {
         let z = self.next_z;
         self.next_z += 1;
         let kind = self.make_kind(cell, tag);
-        let title = format!(
-            "{} {} — {}",
-            self.cell_kind(&cell),
-            id_short(&cell),
-            kind.label()
-        );
+        // The Agent Room anchors on its own non-ledger sentinel, so the usual
+        // "{cell-kind} {id}" prefix would misread it as a zero-balance service.
+        let title = if agent_room::is_agent_room(&cell) {
+            format!("the resident — {}", kind.label())
+        } else {
+            format!(
+                "{} {} — {}",
+                self.cell_kind(&cell),
+                id_short(&cell),
+                kind.label()
+            )
+        };
         self.windows.insert(
             (cell, tag),
             WindowState {
@@ -785,6 +810,17 @@ impl DeosDesktop {
         self.user
     }
 
+    /// Open (or focus) the AGENT ROOM — the resident's provable activity (mandate ·
+    /// receipted actions · authorization boundary), anchored on the room's own
+    /// sentinel. A fresh room watches the DEFAULT resident (the most-active cell
+    /// that is not the operator) — whoever is actually doing things in the World.
+    fn open_agent_room(&mut self) {
+        self.open_kind(agent_room::agent_room_window_cell(), WinKindTag::AgentRoom);
+        self.status = "Agent Room — the executor's account of the resident: receipts, \
+                       mandate, and the boundary of its reach."
+            .into();
+    }
+
     /// Open (or focus) a window of `tag` on `cell`, restoring its persisted geometry
     /// if any, else a cascade default. The same cell can hold several window kinds.
     fn open_kind(&mut self, cell: CellId, tag: WinKindTag) {
@@ -803,6 +839,7 @@ impl DeosDesktop {
             WinKindTag::Workflow => (420.0, 460.0),
             WinKindTag::DocExplorer => (460.0, 420.0),
             WinKindTag::WorldExplorer => (480.0, 440.0),
+            WinKindTag::AgentRoom => (460.0, 440.0),
             WinKindTag::ViewNodePane => (420.0, 320.0),
             // A phone-ish portrait window for the android-cell's SystemUI cap-chrome.
             WinKindTag::AndroidCell => (340.0, 520.0),
@@ -1159,6 +1196,11 @@ impl DeosDesktop {
                 A::OpenWorldExplorer,
             ),
             MenuAction::new("World Transcript (receipt log)…", true, A::OpenTranscript),
+            MenuAction::new(
+                "Agent Room… (the resident's receipts · mandate · reach)",
+                true,
+                A::OpenAgentRoom,
+            ),
             MenuAction::new("Spotter… (jump to anything)", true, A::OpenSpotter),
             MenuAction::sep(),
             // The session's woven surfaces — reachable from the bare desktop too, not only
@@ -1405,6 +1447,7 @@ impl DeosDesktop {
             ActionKind::OpenWorldExplorer => {
                 self.open_kind(self.user, WinKindTag::WorldExplorer);
             }
+            ActionKind::OpenAgentRoom => self.open_agent_room(),
             ActionKind::OpenSpotter => self.open_spotter(),
             // The session's woven surfaces, reached from a cell menu too (anchored on the
             // acted-on cell): a doc-collab session, the World-Status board, an Android cell.
@@ -2059,6 +2102,9 @@ impl DeosDesktop {
                 self.selected = Some(HaloTarget::Window((c, WinKindTag::Workflow)));
             }
             Tg::WorldExplorer => self.land_in(self.user, WinKindTag::WorldExplorer),
+            Tg::AgentRoom => {
+                self.land_in(agent_room::agent_room_window_cell(), WinKindTag::AgentRoom)
+            }
             Tg::WorldTranscript => self.land_in(self.user, WinKindTag::Transcript),
             Tg::DocCollab => self.start_doc_collab(self.user),
             #[cfg(feature = "card-pane")]
@@ -2136,6 +2182,7 @@ impl DeosDesktop {
                 self.status =
                     "World Explorer — the ledger census · the chronicle · Σ balance = 0.".into();
             }
+            ActionKind::OpenAgentRoom => self.open_agent_room(),
             ActionKind::OpenSpotter => self.open_spotter(),
             ActionKind::OpenDocCollab => self.start_doc_collab(self.user),
             ActionKind::OpenViewNodePane => {
@@ -2613,6 +2660,30 @@ impl DeosDesktop {
             _ => T::Ledger,
         };
         self.world_explorers.entry(self.user).or_default().tab = t;
+    }
+
+    /// Open the AGENT ROOM window (anchored on its own sentinel) — a bake/test hook.
+    pub fn bake_open_agent_room(&mut self) {
+        self.open_agent_room();
+    }
+
+    /// The resident the open Agent Room is watching (the pinned one, else the
+    /// default-resident projection) — a bake/test hook.
+    pub fn bake_agent_room_resident(&self) -> CellId {
+        let key = agent_room::agent_room_window_cell();
+        self.agent_rooms
+            .get(&key)
+            .and_then(|s| s.resident)
+            .unwrap_or_else(|| agent_room::default_resident(&self.world.borrow(), self.user))
+    }
+
+    /// How many receipted actions the watched resident's activity carries — a
+    /// bake/test hook (the room's Actions face row count, before capping).
+    pub fn bake_agent_room_action_count(&self) -> usize {
+        let resident = self.bake_agent_room_resident();
+        crate::agent::AgentActivity::build(&self.world.borrow(), resident, 24)
+            .actions
+            .len()
     }
 
     // ── Content-IR pane bake/test hooks (gated on `card-pane`) ──
@@ -3326,6 +3397,7 @@ impl DeosDesktop {
             WinKindTag::Workflow => self.render_workflow_body(cell, cx),
             WinKindTag::DocExplorer => self.render_doc_explorer_body(cell, cx),
             WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
+            WinKindTag::AgentRoom => self.render_agent_room_window(cell, cx),
             #[cfg(feature = "card-pane")]
             WinKindTag::ViewNodePane => self.render_viewnode_body(cell, window, cx),
             #[cfg(feature = "android-systemui")]
@@ -3969,6 +4041,108 @@ impl DeosDesktop {
             .gap_1()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
+            .child(tabs)
+            .child(body)
+            .into_any_element()
+    }
+
+    /// **The Agent Room window body** — the resident picker strip + the face tabs +
+    /// the room header + the selected face, all over a fresh [`agent::AgentActivity`]
+    /// built from the live World each frame (the ledger's truth, never a cache).
+    fn render_agent_room_window(&mut self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
+        use agent_room::AgentRoomTab as T;
+        let state = self.agent_rooms.entry(cell).or_default().clone();
+        let world = self.world.borrow();
+        let resident = state
+            .resident
+            .unwrap_or_else(|| agent_room::default_resident(&world, self.user));
+        let activity = crate::agent::AgentActivity::build(&world, resident, 24);
+        let ranked = agent_room::residents(&world);
+        drop(world);
+
+        // The resident picker — the top-ranked cells by committed-turn count, the
+        // watched one selected. Clicking pins the room to that resident.
+        let mut picker = div().flex().flex_row().flex_wrap().gap_1().my_1();
+        for (rid, nonce) in ranked.iter().take(6) {
+            let rid = *rid;
+            let selected = rid == resident;
+            let is_user = rid == self.user;
+            let caption = format!(
+                "{}{} n{}",
+                id_short(&rid),
+                if is_user { " (you)" } else { "" },
+                nonce
+            );
+            picker = picker.child(
+                bevel_raised(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "agentroom-pick-{}",
+                            id_hex(&rid)
+                        )))
+                        .px_2()
+                        .py_1()
+                        .text_size(px(10.0))
+                        .when(selected, |d| {
+                            d.bg(gpui::rgb(NT_SELECT)).text_color(gpui::rgb(0xffffff))
+                        }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.agent_rooms.entry(cell).or_default().resident = Some(rid);
+                        cx.notify();
+                    }),
+                )
+                .child(caption),
+            );
+        }
+
+        // The face tabs — actions / mandate / reach.
+        let mut tabs = div().flex().flex_row().gap_1().my_1();
+        for t in T::ALL {
+            let selected = t == state.tab;
+            tabs = tabs.child(
+                bevel_raised(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "agentroom-tab-{}",
+                            t.label()
+                        )))
+                        .px_2()
+                        .py_1()
+                        .text_size(px(10.0))
+                        .when(selected, |d| {
+                            d.bg(gpui::rgb(NT_SELECT)).text_color(gpui::rgb(0xffffff))
+                        }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.agent_rooms.entry(cell).or_default().tab = t;
+                        cx.notify();
+                    }),
+                )
+                .child(t.label()),
+            );
+        }
+
+        let header = agent_room::render_room_header(&activity);
+        let body = agent_room::render_agent_room_body(&activity, state.tab);
+        div()
+            .id(gpui::SharedString::from(format!(
+                "agentroom-body-{}",
+                id_hex(&cell)
+            )))
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .bg(gpui::rgb(NT_PANEL))
+            .p_2()
+            .child(picker)
+            .child(header)
             .child(tabs)
             .child(body)
             .into_any_element()
@@ -5534,6 +5708,7 @@ fn kind_short(tag: WinKindTag) -> &'static str {
         WinKindTag::AndroidCell => "AND",
         WinKindTag::DocExplorer => "DGX",
         WinKindTag::WorldExplorer => "WLD",
+        WinKindTag::AgentRoom => "AGT",
         WinKindTag::ViewNodePane => "IR",
     }
 }
