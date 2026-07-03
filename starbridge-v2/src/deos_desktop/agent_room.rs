@@ -32,7 +32,10 @@
 //! View owns the window dispatch, the clickable tab strip, and the resident
 //! picker strip (it holds the `Context` the listeners need).
 
-use gpui::{div, px, AnyElement, FontWeight, IntoElement, ParentElement, Styled};
+use gpui::{
+    div, px, AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled,
+};
 
 use dregg_types::CellId;
 
