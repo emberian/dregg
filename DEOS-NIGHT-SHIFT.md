@@ -80,3 +80,9 @@ HIRELING + honest labels are the answer.
 - `~/src/dregg-posters/the-coin.txt` — honest-tokenomics poster draft, needs your red pen.
 - `~/dev/collected-writings/dreggnet-tweets.{md,jsonl}` — full @DreggNet archive.
 - Memory updated: `~/.claude/projects/-Users-ember/memory/`.
+
+## MILESTONE 2026-07-03 ~07:0x — FIRST LINUX VERIFIED RELEASE BUILD EVER
+hbox: elan + scripts/bootstrap.sh green → libdregg_lean.a linked → cargo build --release
+green → ./target/release/starbridge-v2 --headless: VERDICT ✓ (frames committed, two
+distinct receipts, both refusals fail-closed citing the executor's reason). 415MB binary.
+Bundle risk #1 retired: mac AND linux can build the verified shape. Next: linux packaging.
