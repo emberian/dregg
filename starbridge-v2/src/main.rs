@@ -1696,6 +1696,48 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     );
     cx.run_until_parked();
 
+    // ── 4h. THE APP SHELF — the registry's apps as first-class citizens: launch one
+    //     and its cell + receipt land on the LIVE World (a real verified turn), its
+    //     icon wearing the app's own face. Gated on `app-registry`.
+    #[cfg(feature = "app-registry")]
+    {
+        desk.update(&mut cx, |d, _cx| d.bake_open_app_shelf());
+        cx.run_until_parked();
+        let apps = desk.update(&mut cx, |d, _cx| d.bake_app_count());
+        anyhow::ensure!(
+            apps >= 10,
+            "the shelf lists the registry's roster (got {apps} apps)"
+        );
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_launch_app("bounty-board")),
+            "launching bounty-board lands its cell + receipt on the LIVE World"
+        );
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_installed_app_count()) == 1,
+            "the launch is recorded on the shelf's installed set"
+        );
+        cx.run_until_parked();
+    }
+
+    // ── 4i. THE REWIND RAIL — scrub the whole desktop to an early height (the
+    //     root-verified past: a smaller census, REPLAYED chrome), then snap LIVE.
+    desk.update(&mut cx, |d, cx| {
+        d.bake_rewind_to(1);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let past_census = desk.update(&mut cx, |d, _cx| d.bake_rewind_census_len());
+    let live_census = desk.update(&mut cx, |d, _cx| {
+        d.bake_rewind_live();
+        d.bake_rewind_census_len()
+    });
+    anyhow::ensure!(
+        past_census != live_census,
+        "the scrubbed past differs from live (census {past_census} vs {live_census}) — \
+         the rail replays root-verified history, not a decoration"
+    );
+    cx.run_until_parked();
+
     // Leave the woven room in frame, every surface present at once: TILE the open
     // windows into a grid so the doc-collab editor, the World-Status board, the Android
     // cap-chrome, and the agent-composed board are each fully visible side by side as ONE
