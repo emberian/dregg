@@ -9,7 +9,7 @@
 //!      Render that view-source over the live focused applet → PNG #1 (the inspector, count 1).
 //!   2. Fire the `inc` affordance from the inspector = a REAL cap-gated verified turn; assert
 //!      the bound slot-0 advanced 1 → 2. Re-render → PNG #2 (the bound row tracked the turn).
-//!   3. EDIT FROM WITHIN: relabel the "Cell State" face to "Substance" + append an "inc ×5"
+//!   3. EDIT FROM WITHIN: relabel the "What this holds" face to "Substance" + append an "inc ×5"
 //!      button — receipted patches with blame. Render the RESHAPED view-source → PNG #3, which
 //!      DIFFERS from #1 (the inspector UI was rewritten from inside, accountably).
 
@@ -78,8 +78,14 @@ fn inspector_proof_body() {
         /*edit_authority=*/ AuthRequired::Signature,
     );
     let source_before = card.view_source();
+    // The RawFields face's section title is "What this holds" and the Affordances face carries
+    // the focused cell's `inc` button. NOTE: the section reads "What this holds" (not the older
+    // "Cell State"): `deos_js::InspectorCard`'s generator was warmed to jargon-free titles by
+    // the consumer-delight progressive-disclosure pass, and its own tests
+    // (`deos-js/tests/inspector_card.rs`) codify those friendly titles. Do NOT "restore" the
+    // "Cell State" wording here — this test simply hadn't been swept to the new naming.
     assert!(
-        source_before.contains("Cell State") && source_before.contains("inc"),
+        source_before.contains("What this holds") && source_before.contains("inc"),
         "the generated inspector view carries the RawFields + Affordances faces"
     );
 
@@ -162,7 +168,9 @@ fn inspector_proof_body() {
 
     let edit_a = card2
         .edit_view(ViewPatch::Relabel {
-            from: "Cell State".into(),
+            // The RawFields face's current section title (post consumer-delight pass) is
+            // "What this holds"; relabeling it from within renames the face to "Substance".
+            from: "What this holds".into(),
             to: "Substance".into(),
         })
         .expect("relabel the RawFields face from within");
