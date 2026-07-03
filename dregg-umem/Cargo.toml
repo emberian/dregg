@@ -1,0 +1,23 @@
+[package]
+name = "dregg-umem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The reusable umem-heap convention over a dregg cell: lay/open records into the cell's committed (collection, key) -> value heap, seal them to the kernel's real sorted-Poseidon2 boundary root (dregg_cell::compute_heap_root, pinned by root_binds_get), and checkpoint / restore / fork / time-travel over that root — the durable, passable, witnessed execution image. Factors out the record-laying + checkpoint machinery that starbridge-execution-lease and starbridge-vat currently hand-roll inline. The heap leaf-set is a grow-only set, so the I-confluent dregg-merge runtime applies."
+
+[lib]
+name = "dregg_umem"
+
+[dependencies]
+dregg-cell = { path = "../cell", default-features = false }
+dregg-merge = { path = "../dregg-merge" }
+
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
