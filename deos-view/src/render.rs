@@ -24,19 +24,28 @@
 //!   - Each bind's live value is held in a small per-binding **value cache**. A `bind`
 //!     node renders out of the cache — NOT a fresh `get_u64` every paint.
 //!   - On a committed turn the caller folds the turn's touched `(cell, slot)`s through
-//!     [`AppletView::on_committed_turn`]: the registry's [`BindingRegistry::invalidate`]
-//!     returns EXACTLY the dirty bindings, and only those re-read the live ledger into
-//!     the cache. Clean bindings keep their cached value untouched — a turn on slot A
-//!     re-evaluates binding A and leaves binding B alone (the fine-grained win).
+//!     [`AppletView::on_committed_turn`] (the self-cell sugar) or the general
+//!     [`AppletView::on_world_events`] (events naming ANY cell — THE PULSE→SIGNALS WELD:
+//!     the cockpit's dynamics pump projects each `WorldEvent::FieldSet { cell, index }`
+//!     straight into the registry): [`BindingRegistry::invalidate_all`] returns EXACTLY
+//!     the dirty bindings, and only those re-read the live ledger into the cache. Clean
+//!     bindings keep their cached value untouched — a turn on slot A re-evaluates
+//!     binding A and leaves binding B alone (the fine-grained win). An event naming a
+//!     cell no bind reads dirties nothing (a foreign World write never over-invalidates).
 //!
 //! The first paint is still immediate-mode (the cache fills lazily from the live ledger
 //! the first time each bind renders), so an un-driven view is always correct; the
 //! felt-liveness is the INCREMENTAL update path the committed turn drives. A bind whose
 //! value did not change re-reads nothing; the [`AppletView::last_dirty`] instrumentation
 //! exposes exactly which bindings the last turn re-evaluated (the test bar).
+//!
+//! THE DIRTY GLOW — liveness FELT, not just correct: every binding an invalidation
+//! re-evaluates joins a per-beat glow set ([`AppletView::glowing`]) and its label paints
+//! in the accent tint until the host's next pulse beat [`AppletView::fade_glow`]s it —
+//! a foreign turn visibly *touches* exactly the rows it moved.
 
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use deos_js::applet::Applet;
@@ -151,17 +160,35 @@ pub struct AppletView {
     /// The id-counter render uses to map the Nth painted `bind` node to `BindingId(n)`.
     /// Reset at the top of each `render`. `Cell` for the same `&self`-walk reason.
     render_cursor: Cell<u64>,
-    /// Instrumentation: the bindings the LAST `on_committed_turn` re-evaluated (the
+    /// Instrumentation: the bindings the LAST invalidation call re-evaluated (the
     /// dirty set). Empty until a turn drives the view. The test bar reads this to prove
     /// a turn on slot A dirtied ONLY binding A.
     last_dirty: RefCell<Vec<BindingId>>,
+    /// THE DIRTY GLOW — the bindings invalidated since the host's last pulse beat.
+    /// Unlike `last_dirty` (replaced per call, the per-turn test bar) this is the
+    /// per-BEAT union: every invalidation inserts, and only [`Self::fade_glow`]
+    /// (called at the top of the host's next beat) clears. A glowing bind's label
+    /// paints in the accent tint, so a foreign turn is FELT on exactly the rows it
+    /// moved for one beat.
+    glow: RefCell<BTreeSet<BindingId>>,
+    /// The applet's audit-tape watermark — how many of the applet's OWN committed
+    /// receipts the view has accounted for. A turn fired on this very surface (a
+    /// rendered button's `on_click`) commits on the applet's EMBEDDED executor, whose
+    /// receipts are NOT projected into any dynamics stream — so the host's pulse calls
+    /// [`Self::catch_up_own_turns`] each beat, which compares the live tape length
+    /// against this watermark and (conservatively) invalidates the whole cell's
+    /// bindings when it moved.
+    receipts_seen: Cell<usize>,
 }
 
 impl AppletView {
     /// Build a view from a shared applet + its view-tree, registering every `bind` node
     /// on its `(cell, slot)` source in the signal registry (the fine-grained index).
     pub fn new(applet: SharedApplet, tree: ViewNode) -> Self {
-        let cell = applet.borrow().cell();
+        let (cell, receipts_seen) = {
+            let a = applet.borrow();
+            (a.cell(), a.receipt_count())
+        };
         let mut bind_slots = Vec::new();
         bind_plan(&tree, &mut bind_slots);
 
@@ -179,6 +206,8 @@ impl AppletView {
             cache: RefCell::new(BTreeMap::new()),
             render_cursor: Cell::new(0),
             last_dirty: RefCell::new(Vec::new()),
+            glow: RefCell::new(BTreeSet::new()),
+            receipts_seen: Cell::new(receipts_seen),
         }
     }
 
@@ -217,43 +246,104 @@ impl AppletView {
         self.cache = RefCell::new(BTreeMap::new());
         self.render_cursor = Cell::new(0);
         self.last_dirty = RefCell::new(Vec::new());
+        self.glow = RefCell::new(BTreeSet::new());
+        // The receipts watermark survives a tree swap — the applet (and its audit tape)
+        // is untouched by a rewrite; only the view changed.
     }
 
-    /// THE FINE-GRAINED HOOK — fold a committed turn's touched slots through the registry
-    /// and re-read ONLY the dirty bindings into the cache.
+    /// **THE GENERAL FINE-GRAINED HOOK — the Pulse→Signals weld's entry point.** Fold
+    /// world events (each a `(cell, slot)` write, ANY cell) through the registry and
+    /// re-read ONLY the dirty bindings into the cache.
     ///
-    /// `touched_slots` are the `(cell, slot)`s the turn wrote (the cockpit projects the
-    /// turn's `WorldEvent`s into these; for the single-cell applet they are slots of the
-    /// applet's own cell). Returns the dirty set — exactly the bindings whose painted
-    /// value may have changed. A turn touching a slot no `bind` reads dirties nothing
-    /// (the view stays still). Clean bindings keep their cached value — never re-read.
-    pub fn on_committed_turn(&self, touched_slots: &[Slot]) -> Vec<BindingId> {
-        let events: Vec<SourceEvent> = touched_slots
-            .iter()
-            .map(|s| SourceEvent::new(self.cell, *s))
-            .collect();
-        let dirty = self.registry.invalidate_all(events);
+    /// `touched` is what the cockpit's dynamics pump projects each
+    /// `WorldEvent::FieldSet { cell, index }` into (the [`SourceEvent`] shape, see
+    /// `deos_js::signals`). The registry is keyed `(cell, slot)`, so an event naming a
+    /// FOREIGN cell (one this view's binds never read) dirties nothing — the pump can
+    /// broadcast one beat's events to every open card and only the cards actually bound
+    /// to the touched sources repaint. Returns the dirty set — exactly the bindings
+    /// whose painted value may have changed; those also join the [`Self::glowing`] set
+    /// until the host's next [`Self::fade_glow`] beat.
+    pub fn on_world_events(&self, touched: &[(CellId, Slot)]) -> Vec<BindingId> {
+        let dirty = self
+            .registry
+            .invalidate_all(touched.iter().map(|(c, s)| SourceEvent::new(*c, *s)));
+        self.reread_dirty(&dirty);
+        dirty
+    }
 
-        // Re-read ONLY the dirty bindings off the live ledger into the cache (the
-        // witnessed read the `bind` closure made). Clean bindings are untouched.
+    /// THE FINE-GRAINED HOOK, single-cell sugar — fold a committed turn's touched slots
+    /// (of the applet's OWN sovereign cell) through the registry. Exactly
+    /// [`Self::on_world_events`] with every event on `self.cell`; kept because the
+    /// embedded single-custody applet's turns only ever write its own cell.
+    pub fn on_committed_turn(&self, touched_slots: &[Slot]) -> Vec<BindingId> {
+        let touched: Vec<(CellId, Slot)> = touched_slots.iter().map(|s| (self.cell, *s)).collect();
+        self.on_world_events(&touched)
+    }
+
+    /// **Catch up turns committed on the applet's OWN embedded executor** — the pulse's
+    /// quiet-beat tooth. A button rendered by this very view fires [`Applet::fire`]
+    /// directly (no dynamics stream names the touched slots), so the host's pulse calls
+    /// this each beat: if the applet's audit tape grew past the watermark, every binding
+    /// of the applet's cell is (conservatively) invalidated and re-read — the
+    /// `CellMutated`-shaped tooth from `deos_js::signals`, never under-invalidating.
+    /// Returns the dirty set (empty on a still tape — the common, free case).
+    pub fn catch_up_own_turns(&self) -> Vec<BindingId> {
+        let n = self.applet.borrow().receipt_count();
+        if n == self.receipts_seen.replace(n) {
+            return Vec::new();
+        }
+        let dirty = self.registry.invalidate_cell(self.cell);
+        self.reread_dirty(&dirty);
+        dirty
+    }
+
+    /// Mark the applet's current audit tape as accounted for WITHOUT invalidating —
+    /// for a caller that just fired turns itself and already folded their exact
+    /// touched slots through [`Self::on_world_events`] (the census weld does this),
+    /// so the next [`Self::catch_up_own_turns`] doesn't re-invalidate the whole cell.
+    pub fn mark_own_turns_seen(&self) {
+        self.receipts_seen.set(self.applet.borrow().receipt_count());
+    }
+
+    /// Re-read ONLY the dirty bindings off the live ledger into the cache (the
+    /// witnessed read the `bind` closure made) — clean bindings are untouched — then
+    /// record them as the last dirty set and light their glow.
+    fn reread_dirty(&self, dirty: &[BindingId]) {
         {
             let app = self.applet.borrow();
             let mut cache = self.cache.borrow_mut();
-            for b in &dirty {
+            for b in dirty {
                 if let Some(v) = self.registry.reread(*b, |_cell, slot| app.get_u64(slot)) {
                     cache.insert(*b, v);
                 }
             }
         }
-
-        *self.last_dirty.borrow_mut() = dirty.clone();
-        dirty
+        *self.last_dirty.borrow_mut() = dirty.to_vec();
+        self.glow.borrow_mut().extend(dirty.iter().copied());
     }
 
-    /// The bindings the last [`on_committed_turn`](Self::on_committed_turn) re-evaluated
+    /// The bindings the last invalidation call ([`Self::on_committed_turn`] /
+    /// [`Self::on_world_events`] / [`Self::catch_up_own_turns`]) re-evaluated
     /// (instrumentation / the test bar). Empty before any turn drove the view.
     pub fn last_dirty(&self) -> Vec<BindingId> {
         self.last_dirty.borrow().clone()
+    }
+
+    /// The bindings still wearing the dirty glow — the per-BEAT union of every dirty
+    /// set since the last [`Self::fade_glow`], id-sorted. The bake bar reads this to
+    /// prove ONE foreign turn lit EXACTLY one row.
+    pub fn glowing(&self) -> Vec<BindingId> {
+        self.glow.borrow().iter().copied().collect()
+    }
+
+    /// Retire the dirty glow (the host's pulse calls this at the top of each beat, so a
+    /// glow lasts exactly one beat). Returns whether anything was glowing — the caller's
+    /// cue that a repaint is needed to un-tint the rows.
+    pub fn fade_glow(&self) -> bool {
+        let mut g = self.glow.borrow_mut();
+        let had = !g.is_empty();
+        g.clear();
+        had
     }
 
     /// The cached live value of a binding, if it has been read (lazily on first paint or
@@ -267,17 +357,31 @@ impl AppletView {
         self.bind_slots.len()
     }
 
-    /// The value the next-painted `bind` node should show: its cached value, filling the
-    /// cache lazily off the live ledger on first paint. Advances the render cursor so the
-    /// Nth `bind` node maps to `BindingId(n)`.
-    fn next_bind_value(&self, slot: Slot) -> u64 {
+    /// The bindings whose registered source is `slot` of the applet's own cell — the
+    /// EXPECTED dirty set for a write to that slot (instrumentation / the bake bar:
+    /// "one foreign turn lit exactly this row" is checked against this).
+    pub fn bindings_reading(&self, slot: Slot) -> Vec<BindingId> {
+        self.bind_slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| **s == slot)
+            .map(|(n, _)| BindingId(n as u64))
+            .collect()
+    }
+
+    /// The identity + value the next-painted `bind` node should show: its cached value,
+    /// filling the cache lazily off the live ledger on first paint. Advances the render
+    /// cursor so the Nth `bind` node maps to `BindingId(n)`. The id comes back too so
+    /// the paint can check the dirty-glow set for this exact binding.
+    fn next_bind_value(&self, slot: Slot) -> (BindingId, u64) {
         let n = self.render_cursor.get();
         self.render_cursor.set(n + 1);
         let id = BindingId(n);
         let mut cache = self.cache.borrow_mut();
-        *cache
+        let value = *cache
             .entry(id)
-            .or_insert_with(|| self.applet.borrow().get_u64(slot))
+            .or_insert_with(|| self.applet.borrow().get_u64(slot));
+        (id, value)
     }
 
     /// Render one node into a gpui element. Recursive: containers render their
@@ -309,7 +413,7 @@ impl AppletView {
                 // bindings a committed turn `invalidate`s (see `on_committed_turn`). A
                 // clean binding repaints its cached value without re-reading the ledger —
                 // the SolidJS-shaped fine-grained re-render.
-                let value = self.next_bind_value(*slot);
+                let (id, value) = self.next_bind_value(*slot);
                 // CONSUMER-DELIGHT: an opaque key/hash paints SHORT + friendly (`🦊 swift-fox` /
                 // `0x8bf3…a3d8` / `1,234,567`) instead of a 20-digit decimal; the default keeps
                 // the plain decimal so a counter is unchanged. Identical across all renderers.
@@ -319,9 +423,18 @@ impl AppletView {
                 } else {
                     format!("{label}{shown}")
                 };
+                // THE DIRTY GLOW — a binding freshly invalidated this beat paints in the
+                // accent tint (the same accent `tag_color` falls back to) until the
+                // host's next pulse `fade_glow`s it: a foreign turn is FELT on exactly
+                // the rows it moved, for exactly one beat.
+                let color = if self.glow.borrow().contains(&id) {
+                    tag_color("accent")
+                } else {
+                    theme_fg
+                };
                 Label::new(text)
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme_fg)
+                    .text_color(color)
                     .into_any_element()
             }
             ViewNode::Button { label, turn, arg } => {

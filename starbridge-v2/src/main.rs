@@ -2453,6 +2453,63 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
             "the agent's COMPOSED board must reach the SHIPPED desktop — a new surface the \
              agent authored from scratch must appear on the glass (before == after)"
         );
+
+        // 4e‴. THE PULSE→SIGNALS WELD — the shipped pane's binds finally track the LIVE
+        //      World. A FOREIGN turn (a real verified `SetField` committed on the live
+        //      ledger — not one of the pane's own affordances) moves the receipts census;
+        //      the desktop's pulse mirrors it into the World-Status pane as ONE receipted
+        //      tracking turn (`set_receipts`, `ApplyOp::SetSlotFromArg`); EXACTLY the
+        //      receipts bind re-reads + repaints, wearing the one-beat dirty glow. The
+        //      before/after frames differ — liveness reached pixels.
+        desk_h.update(&mut cx, |desk, cx| {
+            // Raise the World-Status pane above the board window so the repainted bind
+            // reaches unoccluded pixels in both captures.
+            desk.bake_place_viewnode_window(360.0, 110.0, 520.0, 360.0);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        let weld_before = cx.capture_screenshot(window.into())?;
+        weld_before.save(format!("{out}.pulse-weld-before.png"))?;
+
+        let weld = desk_h
+            .update(&mut cx, |desk, cx| {
+                desk.bake_foreign_turn_repaints_viewnode_binds(cx)
+            })
+            .map_err(|e| anyhow::anyhow!("the Pulse→Signals weld loop failed: {e}"))?;
+        anyhow::ensure!(
+            weld.receipts_before != weld.receipts_after
+                && weld.receipts_after == weld.live_receipts,
+            "TRACK THE WORLD: the pane's committed receipts reading must move to the live \
+             census (shown {} -> {}, live {})",
+            weld.receipts_before,
+            weld.receipts_after,
+            weld.live_receipts
+        );
+        anyhow::ensure!(
+            weld.dirty_is_exactly_receipts_bind,
+            "FINE-GRAINED: one foreign turn must dirty + glow EXACTLY the receipts bind — \
+             not the whole card (dirty {:?}, glowing {:?})",
+            weld.dirty,
+            weld.glowing
+        );
+        anyhow::ensure!(
+            weld.weld_receipts_committed == 1,
+            "RECEIPTED: the census mirror must be exactly ONE verified tracking turn on \
+             the pane's audit tape (got {})",
+            weld.weld_receipts_committed
+        );
+
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        let weld_after = cx.capture_screenshot(window.into())?;
+        weld_after.save(format!("{out}.pulse-weld-after.png"))?;
+        anyhow::ensure!(
+            weld_before.as_raw() != weld_after.as_raw(),
+            "THE PULSE→SIGNALS WELD must reach pixels — the repainted receipts bind (and \
+             its dirty glow) must change the shipped desktop frame (before == after)"
+        );
     }
 
     // 4f. THE SPOTTER — the Pharo command palette. Open it with a query, assert it ranks
