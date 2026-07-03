@@ -31,7 +31,7 @@
 
 use gpui::{
     div, px, AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, StatefulInteractiveElement, Styled,
+    ParentElement, Styled,
 };
 
 use dregg_deploy::refine::{
@@ -312,6 +312,7 @@ impl DeosDesktop {
     pub(super) fn render_workflow_body(
         &self,
         subject: CellId,
+        scroll: &gpui::ScrollHandle,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let wf = self.workflow_state(subject);
@@ -324,9 +325,6 @@ impl DeosDesktop {
                 "wfbody-{}",
                 super::chrome::id_hex(&subject)
             )))
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -412,7 +410,9 @@ impl DeosDesktop {
                 ),
         );
 
-        col.into_any_element()
+        // The composed body scrolls behind a REAL NT scrollbar (the persistent
+        // handle keeps the operator's place while intents are added/popped).
+        super::chrome::nt_scroll_face(scroll, col).into_any_element()
     }
 
     /// An intent-palette button: clicking it appends that intent to the workflow.
