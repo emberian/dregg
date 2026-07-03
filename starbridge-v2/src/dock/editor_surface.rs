@@ -45,6 +45,16 @@ struct WorldSpine {
     /// with the editor cell; offset high so it can't collide with cockpit genesis
     /// seeds either).
     next_seed: std::cell::Cell<u32>,
+    /// Per-FILE receipt timeline: the receipts whose save targeted a given
+    /// file cell, in commit order — what deos-zed's RECEIPT RAIL (the editor
+    /// pane's ledger face) renders for the open file. Mirrors `OwnedSpine`'s
+    /// `per_file`; without it this spine silently inherited the empty
+    /// `LedgerSpine::file_history` default and the live-cockpit rail was
+    /// blank. Only genuine commits are recorded (a refused save reaches
+    /// neither arm). Single-threaded `RefCell`, same as the World itself.
+    per_file: std::cell::RefCell<
+        std::collections::BTreeMap<dregg_cell::CellId, Vec<dregg_turn::TurnReceipt>>,
+    >,
 }
 
 #[cfg(all(feature = "firmament", feature = "embedded-executor"))]
@@ -61,6 +71,7 @@ impl WorldSpine {
             // Start high so file-cell seeds don't collide with the cockpit's own
             // small genesis seeds (anchors etc.).
             next_seed: std::cell::Cell::new(0x1000_0000),
+            per_file: std::cell::RefCell::new(std::collections::BTreeMap::new()),
         }
     }
 }
@@ -116,7 +127,17 @@ impl deos_zed::fs::LedgerSpine for WorldSpine {
             w.commit_turn(turn)
         };
         match outcome {
-            crate::world::CommitOutcome::Committed { receipt, .. } => Ok(*receipt),
+            crate::world::CommitOutcome::Committed { receipt, .. } => {
+                // Attribute the receipt to the file it saved — the per-file
+                // rail the editor pane's ledger face reads (only genuine
+                // commits land here; a refused save returned above).
+                self.per_file
+                    .borrow_mut()
+                    .entry(file)
+                    .or_default()
+                    .push((*receipt).clone());
+                Ok(*receipt)
+            }
             crate::world::CommitOutcome::Rejected { reason, .. } => Err(anyhow::anyhow!(
                 "save turn refused by the executor: {reason}"
             )),
@@ -132,6 +153,21 @@ impl deos_zed::fs::LedgerSpine for WorldSpine {
 
     fn last_receipt(&self) -> Option<dregg_turn::TurnReceipt> {
         self.world.borrow().receipts().last().cloned()
+    }
+
+    fn file_history(&self, file: dregg_cell::CellId) -> Vec<dregg_turn::TurnReceipt> {
+        self.per_file
+            .borrow()
+            .get(&file)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn receipts(&self) -> Vec<dregg_turn::TurnReceipt> {
+        // The LIVE World's global receipt log — the rail's `verify chain`
+        // embeds a file's timeline into exactly this (each chip's hash is the
+        // SAME hash the desktop's dynamics feed carries in TurnCommitted).
+        self.world.borrow().receipts().to_vec()
     }
 
     fn total_balance(&self) -> i128 {

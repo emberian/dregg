@@ -52,6 +52,16 @@ name = "editor_structure_pane"
 path = "tests/editor_structure_pane.rs"
 required-features = ["firmament", "cockpit-surface", "screenshot"]
 
+# THE RECEIPT-RAIL test — drives the REAL gpui `EditorSurface` in a headless
+# gpui app and proves the LEDGER face: a save through the editor's own path
+# lands its `TurnReceipt` chip on the rail live (the pane observes the editor),
+# and the rail's `verify chain` verdict is the genuine
+# subsequence-of-the-global-log check over the spine's real receipts.
+[[test]]
+name = "receipt_rail_pane"
+path = "tests/receipt_rail_pane.rs"
+required-features = ["firmament", "cockpit-surface", "screenshot"]
+
 [features]
 # By default the editor builds the full windowed gpui surface with
 # rust/json/toml/markdown tree-sitter grammars so a real source file highlights

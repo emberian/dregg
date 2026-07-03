@@ -365,6 +365,21 @@ mod live {
             Vec::new()
         }
 
+        /// The spine's GLOBAL receipt log, in commit order — every save-turn
+        /// receipt this spine recorded, across all files. The receipt rail's
+        /// `verify chain` embeds a file's timeline into exactly this log (the
+        /// chain threads through ALL files, so per-file adjacency alone can't
+        /// verify linkage).
+        ///
+        /// Default: `Vec::new()` — a spine that does not publish its log
+        /// yields a rail verdict that says so (the rail's intra-file checks
+        /// still run). [`OwnedSpine`] overrides with its real log; a host
+        /// (e.g. starbridge-v2's `World`) opts in without this default
+        /// disturbing its existing impl.
+        fn receipts(&self) -> Vec<TurnReceipt> {
+            Vec::new()
+        }
+
         /// The total balance across all cells on the spine's ledger — the
         /// conservation observable (Σ balance). A content `SetField` save leaves
         /// this INVARIANT (Σδ=0).
@@ -572,6 +587,10 @@ mod live {
                 .unwrap_or_default()
         }
 
+        fn receipts(&self) -> Vec<TurnReceipt> {
+            self.inner.borrow().receipts.clone()
+        }
+
         fn total_balance(&self) -> i128 {
             self.inner
                 .borrow()
@@ -652,6 +671,14 @@ mod live {
         /// save happened under the editor's authority), if any save has run.
         pub fn last_receipt(&self) -> Option<TurnReceipt> {
             self.spine.last_receipt()
+        }
+
+        /// The spine's GLOBAL receipt log, in commit order — every recorded
+        /// save-turn receipt across all files (empty if the spine does not
+        /// publish its log; see [`LedgerSpine::receipts`]). The receipt rail
+        /// verifies a file's timeline as an ordered subsequence of this.
+        pub fn receipts(&self) -> Vec<TurnReceipt> {
+            self.spine.receipts()
         }
 
         /// The file cell backing `path`, if it resolves in the namespace.
@@ -878,6 +905,33 @@ mod live {
             // `N saves · on-ledger` is the real ledger truth, not the gpui-side
             // patch history.
             Some(self.receipt_count())
+        }
+
+        fn last_save_receipt_hash(&self) -> Option<[u8; 32]> {
+            // The just-minted receipt's own hash — what the status line stamps
+            // (`⛓ a1b2c3d4`) so the save visibly LANDS as a chain event.
+            self.last_receipt().map(|r| r.receipt_hash())
+        }
+
+        fn receipt_facts_for(&self, path: &Path) -> Vec<crate::receipt_rail::ReceiptFact> {
+            // The REAL per-file timeline off the live spine, projected to the
+            // rail's always-compiled fact shape. A path with no cell (or a
+            // spine with no per-file attribution) yields an empty rail — the
+            // rail renders that honestly rather than erroring a UI strip.
+            self.history(path)
+                .map(|v| {
+                    v.iter()
+                        .map(crate::receipt_rail::ReceiptFact::from)
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        fn receipt_facts(&self) -> Vec<crate::receipt_rail::ReceiptFact> {
+            self.receipts()
+                .iter()
+                .map(crate::receipt_rail::ReceiptFact::from)
+                .collect()
         }
     }
 

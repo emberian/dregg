@@ -15,6 +15,10 @@
 //!   open/save go through the seam, tracking open path + dirty state.
 //! * [`file_tree`] — the [`FileTree`](file_tree::FileTree) affordance: browse a
 //!   directory (via the seam) and click a file to open it into the editor.
+//! * [`receipt_rail`] — the LEDGER face: the open file's verifiable save
+//!   timeline as a rail of chained receipt chips (hash, height, pre→post
+//!   morph, computrons), read off the REAL cell the file binds to, with a
+//!   `verify chain` action embedding the rail in the spine's global log.
 //!
 //! ## The editor buffer IS a document-language document
 //!
@@ -51,6 +55,12 @@
 // off for the wasm-shaped core build).
 pub mod fs;
 
+// The receipt rail: the module itself is always compiled — its MODEL half
+// ([`ReceiptFact`](receipt_rail::ReceiptFact), [`verify_rail`](receipt_rail::verify_rail))
+// is gpui-free (the `Fs` seam speaks it), while the [`ReceiptRail`](receipt_rail::ReceiptRail)
+// VIEW inside is `gui`-gated like the other panes.
+pub mod receipt_rail;
+
 #[cfg(feature = "gui")]
 pub mod doc_viewer;
 #[cfg(feature = "gui")]
@@ -71,3 +81,6 @@ pub use editor::Editor;
 #[cfg(feature = "gui")]
 pub use file_tree::FileTree;
 pub use fs::{DirEntry, FirmamentFs, Fs, Metadata, RealFs};
+#[cfg(feature = "gui")]
+pub use receipt_rail::ReceiptRail;
+pub use receipt_rail::{RailVerdict, ReceiptFact};

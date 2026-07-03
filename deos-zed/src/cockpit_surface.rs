@@ -31,7 +31,7 @@ use std::sync::Arc;
 use gpui::{
     div, px, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window,
 };
 use gpui_component::{h_flex, v_flex, ActiveTheme as _};
 
@@ -41,9 +41,12 @@ use crate::doc_viewer::DocViewer;
 use crate::editor::Editor;
 use crate::file_tree::FileTree;
 use crate::fs::Fs;
+use crate::receipt_rail::ReceiptRail;
 
-/// Which face of the document the editor pane shows: the editable BUFFER, or the
-/// document's STRUCTURE — the blame timeline + first-class conflict objects.
+/// Which face of the document the editor pane shows: the editable BUFFER, the
+/// document's STRUCTURE — the blame timeline + first-class conflict objects —
+/// or its LEDGER: the per-file receipt rail, each committed save as a chained
+/// `TurnReceipt` chip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewMode {
     /// The rope-backed editable buffer (the authoring face).
@@ -51,6 +54,12 @@ pub enum ViewMode {
     /// The provenance + conflicts inspector (the [`DocViewer`]): who wrote each
     /// live span, and any two-pens-at-one-tail clash as a first-class object.
     Structure,
+    /// The receipt rail (the [`ReceiptRail`]): this file's verifiable save
+    /// timeline — one chip per committed turn (hash, height, pre→post morph,
+    /// computrons, chain link), read off the REAL cell the file binds to.
+    /// Where Structure answers "who wrote each span", Ledger answers "which
+    /// receipted turns landed each save".
+    Ledger,
 }
 
 impl ViewMode {
@@ -58,12 +67,14 @@ impl ViewMode {
         match self {
             ViewMode::Buffer => "editor-mode-buffer",
             ViewMode::Structure => "editor-mode-structure",
+            ViewMode::Ledger => "editor-mode-ledger",
         }
     }
     fn label(self) -> &'static str {
         match self {
             ViewMode::Buffer => "buffer",
             ViewMode::Structure => "structure · blame / conflicts",
+            ViewMode::Ledger => "ledger · receipts",
         }
     }
 }
@@ -78,8 +89,19 @@ pub struct EditorPaneView {
     /// The provenance/conflicts inspector over the editor's live document. Snapshot
     /// is refreshed from `editor.document()` on open + on each switch to Structure.
     docviewer: Entity<DocViewer>,
+    /// The receipt rail over the open file's save timeline — the LEDGER face.
+    /// Snapshot is refreshed from the editor's `Fs` seam
+    /// ([`Fs::receipt_facts_for`] on the open path) on open, on each switch to
+    /// Ledger, and — via the editor observation below — after every save, so a
+    /// Cmd-S lands its chip live.
+    rail: Entity<ReceiptRail>,
     mode: ViewMode,
     focus: FocusHandle,
+    /// Keeps the editor→rail observation alive: whenever the editor notifies
+    /// (open, save, merge — every notify), the rail re-snapshots off the live
+    /// seam. Cheap (a per-file receipt clone), so a save's new chip appears
+    /// without the host re-driving anything.
+    _subscriptions: Vec<Subscription>,
 }
 
 impl EditorPaneView {
@@ -93,15 +115,27 @@ impl EditorPaneView {
         cx: &mut Context<Self>,
     ) -> Self {
         let docviewer = cx.new(|cx| DocViewer::new(cx));
+        let rail = cx.new(|cx| ReceiptRail::new(cx));
         let focus = cx.focus_handle();
+        // THE LIVE WIRE: the editor `cx.notify()`s on open/save/merge; observe
+        // it so the rail re-snapshots — a save flash-lands its chip with zero
+        // extra plumbing (gpui defers observer callbacks past the update, so
+        // this cannot re-enter the editor borrow).
+        let subs = vec![cx.observe(&editor, |this: &mut Self, _editor, cx| {
+            this.refresh_rail(cx);
+            cx.notify();
+        })];
         let mut me = Self {
             editor,
             tree,
             docviewer,
+            rail,
             mode: ViewMode::Buffer,
             focus,
+            _subscriptions: subs,
         };
         me.refresh_structure(cx);
+        me.refresh_rail(cx);
         me
     }
 
@@ -113,6 +147,12 @@ impl EditorPaneView {
     /// The structure inspector entity.
     pub fn doc_viewer(&self) -> &Entity<DocViewer> {
         &self.docviewer
+    }
+
+    /// The receipt-rail entity (the LEDGER face) — host/test reads of the
+    /// per-file save timeline (chip count, latest hash, verify verdict).
+    pub fn receipt_rail(&self) -> &Entity<ReceiptRail> {
+        &self.rail
     }
 
     /// The current face shown.
@@ -130,6 +170,28 @@ impl EditorPaneView {
         };
         self.docviewer.update(cx, |v, _cx| {
             v.set_snapshot(blame, rendered, title, patches);
+        });
+    }
+
+    /// Re-snapshot the receipt rail from the editor's LIVE `Fs` seam: the open
+    /// path's per-file receipt timeline ([`Fs::receipt_facts_for`]) + the
+    /// spine's global log ([`Fs::receipt_facts`]) for the verify embedding.
+    /// Reads are owned (fact clones) so no borrow spans the `rail` update. A
+    /// `RealFs` (or no open file) snapshots an empty rail — the rail renders
+    /// that honestly.
+    pub fn refresh_rail(&mut self, cx: &mut Context<Self>) {
+        let (facts, global, title) = {
+            let ed = self.editor.read(cx);
+            let fs = ed.fs();
+            let facts = ed
+                .path()
+                .map(|p| fs.receipt_facts_for(p))
+                .unwrap_or_default();
+            (facts, fs.receipt_facts(), ed.title())
+        };
+        self.rail.update(cx, |r, cx| {
+            r.set_snapshot(facts, global, title);
+            cx.notify();
         });
     }
 
@@ -154,14 +216,17 @@ impl EditorPaneView {
         cx.notify();
     }
 
-    /// Switch the shown face; refresh the structure snapshot when entering it.
+    /// Switch the shown face; refresh the entered face's snapshot from the
+    /// live editor (structure → blame/conflicts; ledger → the receipt rail).
     pub fn set_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         if self.mode == mode {
             return;
         }
         self.mode = mode;
-        if mode == ViewMode::Structure {
-            self.refresh_structure(cx);
+        match mode {
+            ViewMode::Structure => self.refresh_structure(cx),
+            ViewMode::Ledger => self.refresh_rail(cx),
+            ViewMode::Buffer => {}
         }
         cx.notify();
     }
@@ -256,10 +321,12 @@ impl Render for EditorPaneView {
             .border_color(cx.theme().border)
             .child(self.mode_tab(ViewMode::Buffer, cx))
             .child(self.mode_tab(ViewMode::Structure, cx))
+            .child(self.mode_tab(ViewMode::Ledger, cx))
             .child(div().flex_1())
             .child(self.coauthor_button(cx));
 
-        // The right column is the editor buffer or the structure inspector.
+        // The right column is the editor buffer, the structure inspector, or
+        // the receipt rail — by face.
         let right: AnyElement = match self.mode {
             ViewMode::Buffer => div()
                 .flex_1()
@@ -276,6 +343,15 @@ impl Render for EditorPaneView {
                 .border_l_1()
                 .border_color(cx.theme().border)
                 .child(self.docviewer.clone())
+                .into_any_element(),
+            ViewMode::Ledger => div()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.))
+                .min_w(px(0.))
+                .border_l_1()
+                .border_color(cx.theme().border)
+                .child(self.rail.clone())
                 .into_any_element(),
         };
 
@@ -574,5 +650,11 @@ impl EditorSurface {
     /// The face currently shown.
     pub fn mode(&self, cx: &App) -> ViewMode {
         self.view.read(cx).mode()
+    }
+
+    /// The pane's receipt-rail entity (the LEDGER face) — host/test reads of
+    /// the open file's save timeline (chip count, latest hash, verify verdict).
+    pub fn receipt_rail(&self, cx: &App) -> Entity<ReceiptRail> {
+        self.view.read(cx).receipt_rail().clone()
     }
 }
