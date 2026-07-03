@@ -1966,6 +1966,20 @@ pub fn demo_world() -> (World, [CellId; 3]) {
     (w, anchors)
 }
 
+/// [`demo_world`] with the wall-clock PINNED to `timestamp` — the DETERMINISTIC
+/// demo boot. Two calls with the same `timestamp` produce receipt-identical
+/// images (the timestamp is folded into every `TurnReceipt`, see
+/// [`World::with_costs_and_timestamp`]), so their canonical ledger roots are
+/// equal byte-for-byte. This is the hinge the DESKTOP-IN-A-LINK share URL
+/// ([`crate::share_link`]) replays through: the link carries the instant, the
+/// recipient re-derives the SAME world — never a screenshot taken on trust.
+pub fn demo_world_at(timestamp: i64) -> (World, [CellId; 3]) {
+    let (mut w, anchors, mut seed) = demo_genesis_at(timestamp);
+    // Run every seed turn now (the eager, deterministic-replay path).
+    while seed.next(&mut w).is_some() {}
+    (w, anchors)
+}
+
 /// The INSTANT half of [`demo_world`]: install the three anchor cells (treasury,
 /// service, user) and the issuer well via the GENESIS PATH (which bypasses the
 /// executor — no turns run), and return a [`DemoSeed`] that will commit the five
@@ -1973,7 +1987,14 @@ pub fn demo_world() -> (World, [CellId; 3]) {
 /// the cockpit can open its window on this image immediately and seed the turns
 /// afterward (cells appear live as each commits). Returns `(world, anchors, seed)`.
 pub fn demo_genesis() -> (World, [CellId; 3], DemoSeed) {
-    let mut w = World::new();
+    demo_genesis_at(now_unix())
+}
+
+/// [`demo_genesis`] with the wall-clock PINNED to `timestamp` (the deterministic
+/// half [`demo_world_at`] builds on). [`demo_genesis`] pins `now_unix()` through
+/// here — one construction path, the instant merely explicit.
+pub fn demo_genesis_at(timestamp: i64) -> (World, [CellId; 3], DemoSeed) {
+    let mut w = World::with_costs_and_timestamp(ComputronCosts::zero(), timestamp);
     let treasury = w.genesis_cell(0x11, 1_000_000);
     let user = w.genesis_cell(0x33, 5_000);
     // The service is born already holding a capability reaching the user (so it

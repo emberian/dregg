@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The desktop in a link · deos viewer · dregg</title>
+  <meta name="description" content="A shared deos desktop is not a screenshot — it is a tape: a pinned instant plus a message sequence, small enough to live in a URL fragment. Your viewer re-executes it through the verified executor and re-derives the sharer's desktop, root-checked.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%23%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../assets/style.css">
+  <style>
+    main.wrap { padding-top: var(--s7); padding-bottom: var(--s9); max-width: 980px; }
+    .dv-eyebrow { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--accent); margin-bottom: var(--s3); }
+    .dv-hero h1 { font-size: clamp(2rem, 5vw, 3rem); max-width: 24ch; }
+    .dv-lede { max-width: 68ch; margin: var(--s3) 0 var(--s5); color: var(--fg-dim); line-height: 1.6; }
+    .panel { background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--r3);
+      padding: var(--s5) var(--s6); margin-bottom: var(--s5); }
+    .panel h2 { font-family: var(--font-display); font-size: 1.2rem; margin-bottom: var(--s2); }
+    .panel p.hint { color: var(--fg-muted); font-size: 0.86rem; line-height: 1.55; margin-bottom: var(--s4); }
+    .controls { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: flex-end; margin: var(--s4) 0; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--fg-muted); }
+    .field input { font-family: var(--font-mono); font-size: 0.88rem; background: var(--bg-inset);
+      color: var(--fg); border: 1px solid var(--line-strong); border-radius: var(--r2); padding: 8px 10px; }
+    .field input.wide { min-width: min(34rem, 80vw); }
+    .field input:focus { outline: none; border-color: var(--accent); }
+    button.go { font-family: var(--font-mono); font-size: 0.88rem; padding: 9px 16px; cursor: pointer;
+      background: var(--accent); color: var(--bg); border: none; border-radius: var(--r2); font-weight: 700; }
+    button.go:hover { background: var(--accent-bright); }
+    .readout { font-family: var(--font-mono); font-size: 0.84rem; line-height: 1.7; background: var(--bg-inset);
+      border: 1px solid var(--line); border-radius: var(--r2); padding: var(--s4) var(--s5); margin-top: var(--s4);
+      white-space: pre-wrap; word-break: break-word; min-height: 2.5em; color: var(--fg-dim); }
+    .readout .k { color: var(--accent); }
+    .readout .v { color: var(--chalk); }
+    .readout .no { color: var(--danger); font-weight: 700; }
+    .grammar { font-family: var(--font-mono); font-size: 0.82rem; background: var(--bg-inset);
+      border: 1px solid var(--line); border-radius: var(--r2); padding: var(--s4) var(--s5);
+      overflow-x: auto; color: var(--chalk); }
+    .grammar .opt { color: var(--fg-muted); }
+    .steps { counter-reset: step; margin: var(--s4) 0 0; padding: 0; list-style: none; }
+    .steps li { position: relative; padding-left: 2.4rem; margin-bottom: var(--s3);
+      color: var(--fg-dim); line-height: 1.55; font-size: 0.92rem; }
+    .steps li::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 0.05em;
+      width: 1.6rem; height: 1.6rem; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-mono); font-size: 0.75rem; font-weight: 700;
+      background: var(--accent-soft); color: var(--accent-bright); border: 1px solid var(--line-strong); }
+    .honest { border-left: 3px solid var(--accent); padding: var(--s3) var(--s4);
+      background: var(--accent-soft); border-radius: 0 var(--r2) var(--r2) 0;
+      font-size: 0.88rem; color: var(--fg-dim); line-height: 1.6; }
+    code { font-family: var(--font-mono); }
+  </style>
+</head>
+<body>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name"><a href="../" style="color:var(--chalk)"><code>dregg</code> / deos</a></span>
+  <span class="nav__tag">the desktop in a link &middot; deterministic replay</span>
+  <div class="nav__links">
+    <a class="nav__link" href="../">Home</a>
+    <a class="nav__link" href="../deos/">deos in your tab</a>
+    <a class="nav__link" href="../transclusion/">Transclusion</a>
+    <a class="nav__link" href="https://github.com/emberian/dregg">Source</a>
+  </div>
+</nav>
+
+<main class="wrap">
+  <div class="dv-hero">
+    <p class="dv-eyebrow">share &middot; replay &middot; re-derive</p>
+    <h1>You did not trust my screenshot. You re-derived my desktop.</h1>
+  </div>
+  <p class="dv-lede">
+    A shared deos desktop is not a picture and not a state blob. It is a <b>tape</b>: a pinned genesis
+    instant plus the sequence of messages a session sent, small enough to live in a URL fragment.
+    Your viewer boots a <b>fresh world</b> at that instant and re-executes the tape through the same
+    verified executor the sharer used — then compares its re-derived canonical ledger root against
+    the root the link claims. The headline of a shared desktop is an <b>equality</b>, not an image.
+  </p>
+
+  <div class="panel" id="tape-panel">
+    <h2>This link's tape</h2>
+    <p class="hint">
+      Paste a share fragment below (or arrive here with one after <code>#</code> in the URL — it is
+      read automatically). What you see here is a <b>display-only preview</b> decoded in this page's
+      JS for legibility; the <b>authority</b> is the replay your viewer server performs. This page
+      never replays anything itself and holds no world.
+    </p>
+    <div class="controls">
+      <div class="field">
+        <label for="frag">share fragment</label>
+        <input id="frag" class="wide" spellcheck="false"
+               placeholder="deos1!ts=1751500800!act=1111:peek!root=&hellip;">
+      </div>
+    </div>
+    <div class="readout" id="preview">no tape yet — paste a fragment, or open a share link ending in <span class="v">#deos1!&hellip;</span></div>
+    <div class="controls">
+      <div class="field">
+        <label for="server">your viewer server (a locally running <code>starbridge-v2 --serve-ie6</code>)</label>
+        <input id="server" spellcheck="false" value="http://127.0.0.1:8600">
+      </div>
+      <button class="go" id="open">replay it &rarr; read-only viewer</button>
+    </div>
+    <div class="readout" id="target" style="min-height:1.5em"></div>
+  </div>
+
+  <div class="panel">
+    <h2>The grammar (one line, forever)</h2>
+    <div class="grammar">deos1!ts=&lt;unix&gt;<span class="opt">[!tab=&lt;surface&gt;][!root=&lt;64 hex&gt;]</span>[!act=&lt;cell hex prefix&gt;:&lt;verb&gt;]&hellip;</div>
+    <ul class="steps">
+      <li><code>ts</code> — the pinned instant. Receipt hashes bind the wall-clock, so byte-identical
+          replay <em>requires</em> sharing it: the clock rides the link as a recorded, replayable input.</li>
+      <li><code>act</code> — one message of the tape, in order: a cell (by hex-id prefix) and the
+          affordance verb sent to it. The same <code>(cell, message)</code> vocabulary the
+          <code>--replay</code> bake flag and the dregg-mcp act log already speak.</li>
+      <li><code>root</code> — the sharer's claimed canonical ledger root after the tape. The viewer
+          re-derives its own and shows <b>ROOT MATCH</b> or, honestly, <b>ROOT MISMATCH</b>.</li>
+      <li><code>tab</code> — the cockpit surface the sharer was looking at, so the frame reconstructs
+          the view as well as the world.</li>
+    </ul>
+  </div>
+
+  <div class="panel">
+    <h2>What the viewer server does with it</h2>
+    <ul class="steps">
+      <li>Boots a <b>fresh</b> demo world pinned to <code>ts</code> — never the live one. Two boots at
+          one instant are receipt-identical by construction.</li>
+      <li>Re-executes each act through the real verified executor (the same cap-gate + turn path every
+          cockpit surface fires). A refused or unresolvable act is <b>skipped in-band and listed</b> —
+          the page tells you the reconstruction is not the sharer's desktop.</li>
+      <li>Derives the canonical ledger root and judges it against the link's claim. Then — and only
+          then — renders the frame, as an illustration of a world you already verified.</li>
+    </ul>
+    <p class="hint" style="margin-top: var(--s4); margin-bottom: 0;">
+      The whole route is stateless and <b>read-only</b>: a stranger's link buys a bounded replay
+      (32 acts max) against a throwaway world. It cannot drive the live cockpit, and there are no
+      live turns from strangers — sharing a desktop hands over a <em>derivation</em>, not a capability.
+    </p>
+  </div>
+
+  <div class="honest">
+    <b>Honest scope.</b> Today the replaying server is the local <code>--serve-ie6</code> cockpit
+    server (bound to 127.0.0.1), so &ldquo;shareable&rdquo; means: anyone who runs deos can paste your
+    link into <em>their own</em> viewer and re-derive your desktop — the link format is
+    server-independent and carries no secrets. A hosted read-only viewer and the wasm cockpit adopting
+    the same fragment are the natural next welds; the codec (<code>starbridge_v2::share_link</code>)
+    is pure and round-trip-tested precisely so both glasses can speak it unchanged.
+  </div>
+</main>
+
+<script>
+// ── display-only preview of the deos1 fragment grammar ──────────────────────
+// This mirrors starbridge_v2::share_link::decode_fragment FOR LEGIBILITY ONLY:
+// the preview below the input. The authoritative decode + replay + root check
+// happen on the viewer server (the Rust codec, fail-closed, round-trip-tested).
+// If this preview and the server ever disagree, the server is right.
+'use strict';
+const MAX_ACTS = 32, MAX_FRAGMENT_LEN = 1024;
+
+function unesc(s) {
+  let out = '';
+  for (let i = 0; i < s.length; ) {
+    const c = s[i];
+    if (c === '~') {
+      const hx = s.slice(i + 1, i + 3);
+      if (!/^[0-9A-Fa-f]{2}$/.test(hx)) return null;
+      out += String.fromCharCode(parseInt(hx, 16));
+      i += 3;
+    } else if (/[A-Za-z0-9._-]/.test(c)) { out += c; i += 1; }
+    else return null;
+  }
+  try { return decodeURIComponent(escape(out)); } catch { return out; }
+}
+
+function decodePreview(frag) {
+  frag = frag.replace(/^#/, '').trim();
+  if (!frag) return { err: null, empty: true };
+  if (frag.length > MAX_FRAGMENT_LEN) return { err: 'fragment too long (max ' + MAX_FRAGMENT_LEN + ')' };
+  const parts = frag.split('!');
+  if (parts[0] !== 'deos1') return { err: 'unknown version tag (expected deos1)' };
+  const tape = { ts: null, tab: null, root: null, acts: [] };
+  for (const f of parts.slice(1)) {
+    const eq = f.indexOf('=');
+    if (eq < 0) return { err: 'field `' + f + '` is not key=value' };
+    const k = f.slice(0, eq), v = f.slice(eq + 1);
+    if (k === 'ts') {
+      if (tape.ts !== null) return { err: 'duplicate ts' };
+      if (!/^-?\d+$/.test(v)) return { err: 'ts is not an integer' };
+      tape.ts = v;
+    } else if (k === 'tab') {
+      if (tape.tab !== null) return { err: 'duplicate tab' };
+      const t = unesc(v); if (t === null) return { err: 'bad escape in tab' };
+      tape.tab = t;
+    } else if (k === 'root') {
+      if (tape.root !== null) return { err: 'duplicate root' };
+      if (!/^[0-9a-f]{64}$/.test(v)) return { err: 'root is not 64 lowercase hex chars' };
+      tape.root = v;
+    } else if (k === 'act') {
+      if (tape.acts.length >= MAX_ACTS) return { err: 'too many acts (max ' + MAX_ACTS + ')' };
+      const c = v.indexOf(':');
+      if (c < 0) return { err: 'act is not cell:verb' };
+      const cell = v.slice(0, c), msg = unesc(v.slice(c + 1));
+      if (!/^[0-9a-f]{1,64}$/.test(cell)) return { err: 'act cell `' + cell + '` is not a hex prefix' };
+      if (msg === null) return { err: 'bad escape in act verb' };
+      tape.acts.push({ cell, msg });
+    } else return { err: 'unknown field `' + k + '`' };
+  }
+  if (tape.ts === null) return { err: 'no ts — a tape without its pinned instant cannot replay byte-identically' };
+  return { tape };
+}
+
+const $frag = document.getElementById('frag');
+const $server = document.getElementById('server');
+const $preview = document.getElementById('preview');
+const $target = document.getElementById('target');
+const $open = document.getElementById('open');
+
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function render() {
+  const raw = $frag.value;
+  const r = decodePreview(raw);
+  if (r.empty) {
+    $preview.innerHTML = 'no tape yet — paste a fragment, or open a share link ending in <span class="v">#deos1!&hellip;</span>';
+    $target.textContent = '';
+    return;
+  }
+  if (r.err) {
+    $preview.innerHTML = '<span class="no">REFUSED (preview):</span> ' + esc(r.err) +
+      '\n<span class="k">note</span> the server codec is the authority and refuses fail-closed too';
+    $target.textContent = '';
+    return;
+  }
+  const t = r.tape;
+  let out = '';
+  out += '<span class="k">pinned instant</span>  <span class="v">' + esc(t.ts) + '</span>' +
+         ' (' + esc(new Date(Number(t.ts) * 1000).toISOString()) + ')\n';
+  if (t.tab) out += '<span class="k">surface</span>         <span class="v">' + esc(t.tab) + '</span>\n';
+  out += '<span class="k">root claim</span>      ' +
+    (t.root ? '<span class="v">' + esc(t.root) + '</span> — the server re-derives and compares'
+            : 'none — the server will show the derived root to bake in') + '\n';
+  out += '<span class="k">tape</span>            ' + t.acts.length + ' act(s)';
+  t.acts.forEach((a, i) => {
+    out += '\n  <span class="k">#' + i + '</span> cell <span class="v">' + esc(a.cell) +
+           '</span> &larr; <span class="v">' + esc(a.msg) + '</span>';
+  });
+  $preview.innerHTML = out;
+  const base = $server.value.replace(/\/+$/, '');
+  const url = base + '/shared?d=' + raw.replace(/^#/, '').trim();
+  $target.innerHTML = '<span class="k">replay URL</span> <a href="' + esc(url) + '">' + esc(url) + '</a>';
+}
+
+$open.addEventListener('click', () => {
+  const raw = $frag.value.replace(/^#/, '').trim();
+  const r = decodePreview(raw);
+  if (r.err || r.empty) { render(); return; }
+  const base = $server.value.replace(/\/+$/, '');
+  location.href = base + '/shared?d=' + raw;
+});
+$frag.addEventListener('input', render);
+$server.addEventListener('input', render);
+
+// Arriving WITH a tape: a share URL is `…/deos-viewer/#deos1!…` — the fragment
+// stays client-side (never sent in the HTTP request), so this page is the hop
+// that carries it to YOUR chosen viewer server as `/shared?d=…`.
+if (location.hash.length > 1) {
+  $frag.value = location.hash.slice(1);
+}
+render();
+</script>
+
+</body>
+</html>

@@ -3335,6 +3335,9 @@ fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
     println!(
         "IE6 cockpit server: http://127.0.0.1:{port}/   (the live verified cockpit, for timetravelers)"
     );
+    println!(
+        "shared-desktop replay: http://127.0.0.1:{port}/shared?d=<deos1 fragment>   (read-only deterministic replay; see site/deos-viewer/)"
+    );
 
     fn qget(q: &str, key: &str) -> Option<String> {
         q.split('&').find_map(|kv| {
@@ -3408,6 +3411,49 @@ fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
                     }
                 });
                 redirect(&mut stream, "/");
+            }
+            // THE DESKTOP IN A LINK (read-only). `/shared?d=<deos1 fragment>`
+            // decodes a share tape (`starbridge_v2::share_link`), boots a FRESH
+            // deterministic world at the tape's pinned instant, re-executes the
+            // tape through the real verified executor, and serves the verdict
+            // page (root match / mismatch / unclaimed — the headline is the
+            // EQUALITY, not the picture). Stateless per request and read-only
+            // by construction: a stranger's link re-derives its OWN world; it
+            // never reaches the live window above, and the page carries no
+            // /nav or /tab links — no live turns from strangers.
+            "/shared" => {
+                let html = match qget(query, "d").map(|d| pct_decode(&d)) {
+                    None => shared_help_page(),
+                    Some(frag) => match starbridge_v2::share_link::decode_fragment(&frag) {
+                        Ok(tape) => {
+                            let (_world, _anchors, outcome) =
+                                starbridge_v2::share_link::replay_fresh(&tape);
+                            shared_verdict_page(&frag, &tape, &outcome)
+                        }
+                        Err(e) => shared_refusal_page(&e),
+                    },
+                };
+                respond(&mut stream, "text/html", html.as_bytes());
+            }
+            // The replayed FRAME itself — the same decode→fresh-boot→replay,
+            // then a throwaway headless cockpit window over the replayed world
+            // (opened, captured, REMOVED — per-request lifecycle; the live
+            // window is untouched). Deterministic: the same `d=` re-derives the
+            // same world every time, so this is a pure function of the link.
+            "/shared/frame.png" => {
+                let result = qget(query, "d")
+                    .map(|d| pct_decode(&d))
+                    .ok_or_else(|| anyhow::anyhow!("missing `d=<fragment>`"))
+                    .and_then(|frag| Ok(starbridge_v2::share_link::decode_fragment(&frag)?))
+                    .and_then(|tape| render_shared_tape_frame(&mut cx, &tape));
+                match result {
+                    Ok(png) => respond(&mut stream, "image/png", &png),
+                    Err(e) => respond(
+                        &mut stream,
+                        "text/plain",
+                        format!("shared replay refused: {e:#}").as_bytes(),
+                    ),
+                }
             }
             _ => {
                 // render-reconcile: select_tab_named sets the visible tab, but the
@@ -3497,6 +3543,207 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+// ═══ THE DESKTOP IN A LINK — the serve-ie6 `/shared` replay routes ═══════════
+//
+// The share-URL codec + replay semantics live in `starbridge_v2::share_link`
+// (pure, round-trip-tested); these helpers are the serve-ie6 glue: the query
+// unwrap, the throwaway-window frame render, and the verdict page. Read-only
+// throughout — a shared link re-derives a FRESH world, never drives the live one.
+
+/// Undo percent-encoding in a query value (`%21` → `!`, …) — a hand-pasted
+/// share link sometimes arrives pre-encoded by a chat client or a shell. A
+/// malformed `%`-sequence passes through UNCHANGED: this layer never guesses;
+/// the codec's fail-closed `decode_fragment` refuses the mangled link instead.
+#[cfg(feature = "render-capture")]
+fn pct_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex2 = [bytes[i + 1], bytes[i + 2]];
+            if let Some(b) = std::str::from_utf8(&hex2)
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+            {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Render ONE frame of a REPLAYED share tape: fresh deterministic boot at the
+/// tape's pinned instant, tape re-executed through the real executor
+/// ([`starbridge_v2::share_link::replay_fresh`]), then a THROWAWAY headless
+/// cockpit window over the replayed world — opened, Root-wrapped (the
+/// kit-input weld, see `render_cockpit_headless`), captured, and REMOVED. The
+/// per-request lifecycle keeps the long-lived server app window-clean; the
+/// live serve-ie6 window is never touched. Deterministic: the same tape
+/// renders the same world state every time (that is the whole point).
+#[cfg(feature = "render-capture")]
+fn render_shared_tape_frame(
+    cx: &mut gpui::HeadlessAppContext,
+    tape: &starbridge_v2::share_link::ShareTape,
+) -> anyhow::Result<Vec<u8>> {
+    use gpui::{px, size, AppContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // The live serve-ie6 geometry (the page displays both at width 1000).
+    const W: f32 = 1280.0;
+    const H: f32 = 832.0;
+
+    let (world, anchors, _outcome) = starbridge_v2::share_link::replay_fresh(tape);
+    let shared = Rc::new(RefCell::new(world));
+    let tab = tape.tab.clone();
+    let window = cx.open_window(size(px(W), px(H)), |window, cx| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            let mut c = cockpit::Cockpit::with_node(shared.clone(), anchors, focus, None, None);
+            if let Some(t) = &tab {
+                if !c.select_tab_named(t) {
+                    eprintln!("shared replay: no tab named `{t}` — keeping the default surface");
+                }
+            }
+            c
+        });
+        view.update(cx, |c, cx| c.focus_on_open(window, cx));
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+    let wh = window.into();
+    cx.run_until_parked();
+    cx.update_window(wh, |_, w, _| w.refresh())?;
+    cx.run_until_parked();
+    let capture = cx.capture_screenshot(wh);
+    // Tear the throwaway window down BEFORE surfacing any capture error, so a
+    // failed render never leaks a window into the long-lived server app.
+    let _ = cx.update_window(wh, |_, w, _| w.remove_window());
+    cx.run_until_parked();
+
+    let img = capture?;
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
+    Ok(png)
+}
+
+/// The shared-desktop page chrome (HTML 4.01, the same floor as [`ie6_page`] —
+/// one server, one look). READ-ONLY: no `/nav`, no `/tab` — a shared desktop
+/// is something you LOOK AT and re-derive; the live one at `/` is yours.
+#[cfg(feature = "render-capture")]
+fn shared_wrap(inner: &str) -> String {
+    format!(
+        "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\">\n\
+<html><head><title>dregg - shared desktop (deterministic replay)</title></head>\n\
+<body bgcolor=\"#0a0e14\" text=\"#c9d1d9\" link=\"#58a6ff\" vlink=\"#bc8cff\">\n\
+<font face=\"monospace\" size=\"2\">\n\
+<b><font color=\"#58a6ff\">dregg</font></b> - THE DESKTOP IN A LINK: a shared desktop, reconstructed by REPLAY. \
+The link carries a pinned instant + a message tape; this server booted a FRESH world at that instant and re-executed \
+the tape through the verified executor. Nothing on this page was taken on trust from the sharer.\n\
+{inner}\n\
+<p><a href=\"/\">back to the LIVE cockpit</a> (yours to drive - this page is read-only, and a shared link never touches it)</p>\n\
+</font></body></html>"
+    )
+}
+
+/// `/shared` with no `d=`: the how-to page (the grammar + a try-it link).
+#[cfg(feature = "render-capture")]
+fn shared_help_page() -> String {
+    shared_wrap(
+        "<p>No tape in the URL. Pass one as <tt>/shared?d=&lt;fragment&gt;</tt> - the fragment grammar is \
+<tt>deos1!ts=&lt;unix&gt;[!tab=&lt;surface&gt;][!root=&lt;64hex&gt;][!act=&lt;cellhex&gt;:&lt;verb&gt;]*</tt> \
+(see <tt>starbridge_v2::share_link</tt>).</p>\n\
+<p>Try the seeded demo image at a pinned instant: <a href=\"/shared?d=deos1!ts=1751500800\">\
+/shared?d=deos1!ts=1751500800</a> - visit it twice and the SAME canonical root re-derives (determinism is the point; \
+bake that root back into the link as <tt>!root=...</tt> to make the claim checkable). The static landing page at \
+<tt>site/deos-viewer/</tt> turns a <tt>#deos1!...</tt> URL fragment into this route.</p>",
+    )
+}
+
+/// `/shared` with a link the codec refused: the refusal, first-class.
+#[cfg(feature = "render-capture")]
+fn shared_refusal_page(e: &starbridge_v2::share_link::ShareLinkError) -> String {
+    shared_wrap(&format!(
+        "<p><b><font color=\"#f85149\" size=\"3\">LINK REFUSED</font></b> - {}</p>\n\
+<p>Decoding is fail-closed: a malformed or over-cap link is refused outright, never guessed at.</p>",
+        html_escape(&e.to_string())
+    ))
+}
+
+/// The `/shared` verdict page: the convergence verdict as the HEADLINE (root
+/// match / mismatch / unclaimed), the tape facts, every in-band skip, and the
+/// replayed frame. The claim-vs-derived equality is the content; the picture
+/// is the illustration.
+#[cfg(feature = "render-capture")]
+fn shared_verdict_page(
+    frag: &str,
+    tape: &starbridge_v2::share_link::ShareTape,
+    outcome: &starbridge_v2::share_link::ReplayOutcome,
+) -> String {
+    use starbridge_v2::share_link::RootVerdict;
+
+    let verdict = match &outcome.verdict {
+        RootVerdict::Match(root) => format!(
+            "<p><b><font color=\"#3fb950\" size=\"3\">ROOT MATCH</font></b> - the re-derived canonical ledger root \
+equals the link's claim:<br><tt>{}</tt><br>You did not trust a screenshot - you re-derived this desktop.</p>",
+            hex::encode(root)
+        ),
+        RootVerdict::Mismatch { claimed, derived } => format!(
+            "<p><b><font color=\"#f85149\" size=\"3\">ROOT MISMATCH</font></b> - the replay DIVERGED from the \
+link's claim (surfaced, never smoothed over):<br>claimed: <tt>{}</tt><br>derived: <tt>{}</tt><br>\
+The code moved since the link was minted, the tape was edited, or an act refused (listed below if so).</p>",
+            hex::encode(claimed),
+            hex::encode(derived)
+        ),
+        RootVerdict::Unclaimed(derived) => format!(
+            "<p><b><font color=\"#8b949e\" size=\"3\">NO ROOT CLAIM</font></b> - this link carries no <tt>root=</tt>; \
+the replay derived <tt>{}</tt>. A sharer can bake it in as <tt>!root=...</tt> to make the link checkable.</p>",
+            hex::encode(derived)
+        ),
+    };
+
+    let surface = tape
+        .tab
+        .as_deref()
+        .map(|t| format!(" · surface <b>{}</b>", html_escape(t)))
+        .unwrap_or_default();
+    let facts = format!(
+        "<p>pinned instant <tt>ts={}</tt> · {} act(s) on the tape · {} committed as real verified turns{surface}</p>",
+        tape.timestamp,
+        tape.acts.len(),
+        outcome.committed,
+    );
+
+    let skips = if outcome.skipped.is_empty() {
+        String::new()
+    } else {
+        let rows: String = outcome
+            .skipped
+            .iter()
+            .map(|(i, why)| format!("<br>&nbsp;&nbsp;act #{i}: {}", html_escape(why)))
+            .collect();
+        format!(
+            "<p><font color=\"#f85149\"><b>{} act(s) did NOT commit</b> - the reconstruction is NOT the sharer's \
+desktop (the skips are surfaced, not swallowed):{rows}</font></p>",
+            outcome.skipped.len()
+        )
+    };
+
+    shared_wrap(&format!(
+        "{verdict}\n{facts}\n{skips}\n\
+<p><img src=\"/shared/frame.png?d={d}\" width=\"1000\" border=\"1\" alt=\"the replayed desktop\"></p>\n\
+<p><font color=\"#8b949e\" size=\"1\">The frame above is itself a pure function of the link: its route re-runs the \
+same fresh-boot + replay, renders the cockpit over the replayed world, and tears the window down. Refresh it as \
+often as you like - the same link, the same desktop.</font></p>",
+        d = html_escape(frag)
+    ))
 }
 
 /// THE UI-EXPLORATION CRAWL — BFS-walk the cockpit's navigation state-space by

@@ -78,12 +78,18 @@ cp -R "$ROOT/site/dregg-works" "$DIST/dregg-works"
 # transclude.js that carries a verified dregg:// quote to ANY web page (it ships
 # beside verify-badge.js inside the dregg-works copy above).
 cp -R "$ROOT/site/transclusion" "$DIST/transclusion"
+# deos-viewer — THE DESKTOP IN A LINK landing: reads a #deos1!... share fragment
+# (pinned instant + message tape + root claim), previews it client-side, and hands
+# it to the reader's own --serve-ie6 viewer server as /shared?d=... for the real
+# fail-closed decode + deterministic replay + root verdict. Static HTML+JS only.
+cp -R "$ROOT/site/deos-viewer" "$DIST/deos-viewer"
 test -f "$DIST/explorer/index.html"
 test -f "$DIST/light-client/index.html"
 test -f "$DIST/dregg-works/index.html"
 test -f "$DIST/dregg-works/verify-badge.js"
 test -f "$DIST/dregg-works/transclude.js"
 test -f "$DIST/transclusion/index.html"
+test -f "$DIST/deos-viewer/index.html"
 
 # ── 1. THE deos COCKPIT: the WebImage launcher (gpui-free skin), node-less ───────
 echo "=== 1/6 build the WebImage cockpit wasm (starbridge-v2/web, default) ==="

@@ -418,6 +418,15 @@ pub mod persistence;
 // gpui-free, `cargo test`-able (reuses `reflect` + `affordance` + `world`).
 #[cfg(feature = "embedded-executor")]
 pub mod inspect_act;
+// THE DESKTOP IN A LINK — the share-URL tape codec (`deos1!ts=…!act=…`): a
+// desktop shared as its pinned instant + message tape + root claim, replayed
+// against a FRESH world by the recipient (read-only re-derivation, never a
+// trusted screenshot). The codec half is pure std+hex (gpui-free, compiles
+// everywhere the crate does — the wasm cockpit can adopt the same format);
+// the `replay_onto`/`replay_fresh` half is embedded-executor-gated and fires
+// the REAL `inspect_act` send path. Served by the serve-ie6 `/shared` route;
+// the static viewer page lives at `site/deos-viewer/`.
+pub mod share_link;
 // THE SERVICE EXPLORER — a Postman-like surface for INVOKING cell methods: it
 // discovers a cell's published interface (derive-from-program, or a registered
 // descriptor), lets you pick a method + fill args, and invokes it as a real
