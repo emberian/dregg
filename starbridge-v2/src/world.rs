@@ -1995,6 +1995,27 @@ pub fn demo_genesis() -> (World, [CellId; 3], DemoSeed) {
 /// here — one construction path, the instant merely explicit.
 pub fn demo_genesis_at(timestamp: i64) -> (World, [CellId; 3], DemoSeed) {
     let mut w = World::with_costs_and_timestamp(ComputronCosts::zero(), timestamp);
+    let (anchors, seed) = seed_demo_genesis_onto(&mut w);
+    (w, anchors, seed)
+}
+
+/// The GENESIS INSTALLS of [`demo_genesis_at`], factored to run ONTO an EXISTING
+/// `world` (rather than constructing a fresh ephemeral one) — the seam the DURABLE
+/// desktop weld (`crate::durable_desktop`) seeds through.
+///
+/// [`demo_genesis_at`] builds its own throwaway ephemeral `World`; but the durable
+/// windowed desktop must seed a world it ALREADY OPENED against a redb image (so
+/// the genesis installs — and the [`DemoSeed`] turns driven afterward — DUAL-WRITE
+/// to the attached store and thus PERSIST). Because [`World::genesis_cell`] /
+/// [`World::genesis_install`] mirror each cell via `record_genesis` when a store is
+/// attached, running the identical install sequence here on a durable `world` makes
+/// the warm demo world durable — the newcomer still gets the same image, but now it
+/// survives a close+reopen. The install ORDER (treasury → user → service → well) is
+/// byte-identical to [`demo_genesis_at`], so recovery reinstalls deterministically
+/// and the anchor ids match. On an EPHEMERAL `world` this is exactly the old
+/// behavior (no store ⟹ no mirror). Returns the `[treasury, service, user]` anchors
+/// + the [`DemoSeed`] plan (drive it with [`DemoSeed::next`] to commit the 5 turns).
+pub fn seed_demo_genesis_onto(w: &mut World) -> ([CellId; 3], DemoSeed) {
     let treasury = w.genesis_cell(0x11, 1_000_000);
     let user = w.genesis_cell(0x33, 5_000);
     // The service is born already holding a capability reaching the user (so it
@@ -2011,7 +2032,7 @@ pub fn demo_genesis_at(timestamp: i64) -> (World, [CellId; 3], DemoSeed) {
         user_cap_slot,
         step: 0,
     };
-    (w, [treasury, service, user], seed)
+    ([treasury, service, user], seed)
 }
 
 /// The seed-turn plan for the demo image: the five real executor turns that give

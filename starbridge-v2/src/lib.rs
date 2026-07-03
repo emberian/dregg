@@ -412,6 +412,16 @@ pub mod persistence;
 #[path = "persistence_wasm.rs"]
 pub mod persistence;
 
+// THE DURABLE-IMAGE WELD for the windowed desktop (docs/deos/WORLD-PERSISTENCE-PLAN.md):
+// make "your world is one durable image" LITERALLY true for `--desktop` by booting the
+// desktop's World from the durable redb image (open-recovering + seed-on-first-run) beside
+// the layout sidecar, with a :memory:/ephemeral escape hatch for bakes/tests/CI. Builds NO
+// persistence — it is the boot policy over `persistence` + `World::open_recovering`,
+// mirroring `session::open_session_world`. Native-only (durable open pulls redb),
+// gpui-free + `cargo test`-able.
+#[cfg(all(feature = "embedded-executor", not(target_arch = "wasm32")))]
+pub mod durable_desktop;
+
 // THE LIVE INSPECT→ACT LOOP — the Smalltalk inspect→act→inspect keystone: an
 // inspected object shows the messages it understands (its cap-gated affordances)
 // inline, fires one as a real verified turn, and re-inspects the post-state.

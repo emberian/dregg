@@ -975,20 +975,39 @@ fn run_desktop_window() {
     use gpui::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
     use gpui_platform::application;
     use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout};
+    use starbridge_v2::durable_desktop::{boot_desktop_world, DurableBoot};
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    // The live verified image — the SAME `World` the cockpit + the woven bake run.
-    let (world, anchors) = world::demo_world();
+    // WHERE THE WORLD LIVES — a DURABLE redb image beside the layout sidecar by
+    // DEFAULT, so "your world is one durable image" is LITERALLY true for the windowed
+    // desktop: the World (cells, balances, receipts, every verified turn) survives a
+    // close + reopen, not just the layout sidecar. Overridable via
+    // `--world-image=<path>` / `--fresh-world` / the `DEOS_WORLD_IMAGE` env, with a
+    // `--world-image=:memory:` (aka `ephemeral`) escape hatch that keeps the OLD
+    // `demo_world()` behavior so bakes / tests / CI stay hermetic + deterministic. The
+    // heavy lifting — open-recovering, seed-on-first-run, the never-strand /
+    // never-silently-wipe fallbacks — lives in `durable_desktop`; this only parses the
+    // spec and reports the outcome.
+    let args: Vec<String> = std::env::args().collect();
+    let spec = resolve_world_image_spec(&args);
+    let DurableBoot {
+        world,
+        anchors,
+        origin,
+    } = boot_desktop_world(spec);
     let [_treasury, _service, user] = anchors;
 
     // STARTUP PROOF (the no-blank-screen receipt): the desktop opens onto the live
-    // image; report its real shape so a blank window reads as a render/display issue,
-    // not an empty UI. A never-greeted layout opens onto the calm WELCOME front door.
+    // image; report its real shape AND whether it is durable (and from where) so a
+    // blank window reads as a render/display issue (not an empty UI), and a
+    // non-persisting session reads LOUDLY as such. A never-greeted layout opens onto
+    // the calm WELCOME front door.
     let layout_path = DesktopLayout::default_path();
     {
         let fresh = !DesktopLayout::load(&layout_path).prefs.welcomed;
         println!("== Starbridge v2 · opening the woven DESKTOP — root: DeosDesktop ==");
+        println!("  world: {}", origin.summary());
         println!(
             "  live image: {} cells · height {} · {} receipts",
             world.cell_count(),
@@ -1054,6 +1073,69 @@ fn run_desktop_window() {
         .expect("failed to open window");
         cx.activate(true);
     });
+}
+
+/// Resolve WHERE the windowed desktop's World lives from the CLI + the environment
+/// (the durable-image weld's front knob). Precedence:
+///
+///   1. `--world-image=<v>` / `--world-image <v>` (explicit),
+///   2. else the `DEOS_WORLD_IMAGE` env knob,
+///   3. else the DEFAULT durable image beside the layout sidecar.
+///
+/// A value of `:memory:` (or `ephemeral`) is the ESCAPE HATCH — the old in-RAM
+/// `demo_world()` (bakes / tests / CI stay hermetic + deterministic). `--fresh-world`
+/// (orthogonal) discards the current durable image and starts over (it is
+/// quarantined aside, never deleted); it is meaningless for — and ignored on — the
+/// ephemeral hatch.
+#[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
+fn resolve_world_image_spec(args: &[String]) -> starbridge_v2::durable_desktop::WorldImageSpec {
+    use starbridge_v2::durable_desktop::WorldImageSpec;
+    let fresh = args.iter().any(|a| a == "--fresh-world");
+    let raw = world_image_arg(args)
+        .or_else(|| std::env::var("DEOS_WORLD_IMAGE").ok())
+        .filter(|s| !s.is_empty());
+    match raw.as_deref() {
+        Some(":memory:") | Some("ephemeral") => WorldImageSpec::Ephemeral,
+        Some(p) => WorldImageSpec::Durable {
+            path: std::path::PathBuf::from(p),
+            fresh,
+        },
+        None => WorldImageSpec::Durable {
+            path: default_world_image_path(),
+            fresh,
+        },
+    }
+}
+
+/// Parse the `--world-image <path>` (or `=<path>`) argument. Returns `None` when
+/// absent. Mirrors [`render_woven_arg`]'s parse idiom.
+#[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
+fn world_image_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--world-image" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--world-image=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// The DEFAULT durable World image path — beside the layout sidecar
+/// (`DesktopLayout::default_path()`'s directory), named `deos-world.redb`. So the
+/// World and its window arrangement live in the same place, and "your world is one
+/// durable image" needs no flags.
+#[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
+fn default_world_image_path() -> std::path::PathBuf {
+    use starbridge_v2::deos_desktop::DesktopLayout;
+    let layout = DesktopLayout::default_path();
+    layout
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("deos-world.redb")
 }
 
 /// Install the deos theme on the gpui-component kit, the SINGLE call every init
