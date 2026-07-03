@@ -146,7 +146,7 @@ use dregg_doc::{
     DocHeapCell, Granularity, PatchId, Regime, ResolutionChoice,
 };
 
-use crate::world::{grant_capability, transfer, World};
+use crate::world::{grant_capability, transfer, CommitOutcome, World};
 
 // The chrome kit + persistence types are re-exported so existing call sites
 // (`deos_desktop::id_hex`, `deos_desktop::DesktopLayout`, …) keep working.
@@ -1401,11 +1401,7 @@ impl DeosDesktop {
                 self.status = format!(
                     "Bump nonce on {} → {} (height {}).",
                     id_short(&cell),
-                    if outcome.is_committed() {
-                        "committed"
-                    } else {
-                        "rejected"
-                    },
+                    Self::outcome_verdict(&outcome),
                     self.world.borrow().height()
                 );
             }
@@ -1420,11 +1416,7 @@ impl DeosDesktop {
                     amount,
                     id_short(&cell),
                     id_short(&self.user),
-                    if outcome.is_committed() {
-                        "committed"
-                    } else {
-                        "rejected"
-                    },
+                    Self::outcome_verdict(&outcome),
                     self.world.borrow().height()
                 );
             }
@@ -1440,11 +1432,7 @@ impl DeosDesktop {
                     id_short(&cell),
                     id_short(target),
                     slot,
-                    if outcome.is_committed() {
-                        "committed"
-                    } else {
-                        "rejected"
-                    },
+                    Self::outcome_verdict(&outcome),
                     self.world.borrow().height()
                 );
             }
@@ -1506,11 +1494,7 @@ impl DeosDesktop {
                     "{} {} → {} (height {}).",
                     if sealed { "Unseal" } else { "Seal" },
                     id_short(&cell),
-                    if outcome.is_committed() {
-                        "committed"
-                    } else {
-                        "rejected"
-                    },
+                    Self::outcome_verdict(&outcome),
                     self.world.borrow().height()
                 );
             }
@@ -1532,6 +1516,23 @@ impl DeosDesktop {
             ActionKind::OpenDocCollab => self.start_doc_collab(cell),
             ActionKind::OpenViewNodePane => self.land_in(cell, WinKindTag::ViewNodePane),
             ActionKind::OpenAndroidCell => self.land_in(cell, WinKindTag::AndroidCell),
+        }
+    }
+
+    /// Render a commit outcome as the status bar's verdict fragment. A committed turn
+    /// reads "committed"; a REFUSAL carries its reason (and the offending action index)
+    /// onto the glass — the ocap guarantee firing is a MOMENT, never a mute "rejected".
+    fn outcome_verdict(outcome: &CommitOutcome) -> String {
+        match outcome {
+            CommitOutcome::Committed { .. } => "committed".to_string(),
+            CommitOutcome::Rejected { reason, at_action } => {
+                if at_action.is_empty() {
+                    format!("REFUSED — {reason}")
+                } else {
+                    format!("REFUSED at action {at_action:?} — {reason}")
+                }
+            }
+            CommitOutcome::Queued { .. } => "queued (world suspended)".to_string(),
         }
     }
 
