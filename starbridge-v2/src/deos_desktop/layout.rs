@@ -89,6 +89,13 @@ pub enum WinKindTag {
     /// `app-registry`), so this variant is a marker like `AppShelf`. Anchored on a
     /// sentinel cell (the user).
     ExchangeFloor,
+    /// **THE PROVENANCE WALKER** — walk the World's receipt chain hash-by-hash,
+    /// every link RECOMPUTED as you walk (the state-root handoff between
+    /// consecutive receipts + each agent's blocklace back-edge, both re-derived,
+    /// never trusted — see `super::provenance_walker`). Per-window state (the walk
+    /// cursor + the go-to landing) lives in `provenance_walkers`, so this variant
+    /// is a marker like `WorldExplorer`. Anchored on its own sentinel cell.
+    ProvenanceWalker,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT

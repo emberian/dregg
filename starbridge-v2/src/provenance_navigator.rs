@@ -292,7 +292,9 @@ fn turn_effects(turn: &Turn) -> impl Iterator<Item = &Effect> {
 }
 
 /// The effect-kinds a turn applied (in call-forest order) — a short summary row.
-fn effect_kinds(turn: &Turn) -> Vec<String> {
+/// `pub` because the Provenance Walker's effects column reuses this exact
+/// vocabulary (one summary, wherever a turn is named in a row).
+pub fn effect_kinds(turn: &Turn) -> Vec<String> {
     turn_effects(turn).map(effect_kind).collect()
 }
 
