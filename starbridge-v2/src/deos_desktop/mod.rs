@@ -537,6 +537,14 @@ pub struct DeosDesktop {
     /// face (actions/mandate/reach) is shown. Keyed by the room window's anchor cell
     /// (the room's own sentinel). A pure view concern (no committed state).
     agent_rooms: HashMap<CellId, agent_room::AgentRoomState>,
+    /// **THE PULSE CURSOR** — how far into the World's [`crate::dynamics`] stream the
+    /// desktop has consumed. A background pump polls the stream (the documented pull
+    /// model: `since(cursor)` per beat) and, when the World moved WITHOUT the desktop's
+    /// own hand — a bot reactor, an attached agent, a live node — refreshes the icon
+    /// census and repaints, so every open surface shows the ledger's truth without a
+    /// refresh button. Turns by residents other than the operator are announced on the
+    /// status bar (the room's heartbeat).
+    pulse_cursor: usize,
     /// **The discord-bot's activity feed** the bot-surface card paints — the desktop
     /// mirror of the bot's `GET /api/apps/activity/recent` (folded into the SAME
     /// `ViewNode` card shape the bot renders as a Discord embed). Empty without a live
@@ -624,13 +632,15 @@ impl DeosDesktop {
         user: CellId,
         layout_path: PathBuf,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Self {
-        let cells: Vec<CellId> = {
+        let (cells, pulse_cursor) = {
             let w = world.borrow();
             let mut v: Vec<CellId> = w.ledger().iter().map(|(id, _)| *id).collect();
             v.sort();
-            v
+            // The pulse starts at the CURRENT cursor — genesis is already on the
+            // glass; the pump only chases what moves from here on.
+            (v, w.dynamics().cursor())
         };
         let layout = DesktopLayout::load(&layout_path);
         // A never-greeted image opens onto the warm WELCOME card (the calm default);
@@ -666,6 +676,7 @@ impl DeosDesktop {
             doc_explorers: HashMap::new(),
             world_explorers: HashMap::new(),
             agent_rooms: HashMap::new(),
+            pulse_cursor,
             spotter: None,
             selected: None,
             show_welcome,
@@ -687,7 +698,67 @@ impl DeosDesktop {
                 desk.open_window_at(cell, g.kind, g.x, g.y, g.w, g.h, g.minimized);
             }
         }
+
+        // THE PULSE — a background beat that consumes the World's dynamics stream
+        // (the documented pull model) so the desktop repaints when the World moves
+        // WITHOUT the desktop's own hand: a bot reactor, an attached agent, a live
+        // node. Self-stopping when the view drops (the weak update fails).
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(250))
+                .await;
+            if this
+                .update(cx, |desk: &mut DeosDesktop, cx| desk.pump_dynamics(cx))
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+
         desk
+    }
+
+    /// One beat of THE PULSE — consume the dynamics stream past [`Self::pulse_cursor`].
+    /// If the World moved, refresh the icon census (cells born outside the desktop
+    /// appear without a reopen) and repaint every open surface off the live ledger.
+    /// The newest turn committed by a resident OTHER than the operator is announced
+    /// on the status bar — the desktop's own actions already narrate themselves.
+    fn pump_dynamics(&mut self, cx: &mut Context<Self>) {
+        use crate::dynamics::WorldEvent;
+        let (cursor, announce, cells) = {
+            let w = self.world.borrow();
+            let d = w.dynamics();
+            let cursor = d.cursor();
+            if cursor == self.pulse_cursor {
+                return;
+            }
+            let announce = d
+                .since(self.pulse_cursor)
+                .iter()
+                .rev()
+                .find_map(|e| match e {
+                    WorldEvent::TurnCommitted {
+                        agent,
+                        height,
+                        computrons,
+                        ..
+                    } if *agent != self.user => Some(format!(
+                        "⋯ resident {} committed turn #{height} · {computrons}cu",
+                        id_short(agent)
+                    )),
+                    _ => None,
+                });
+            let mut cells: Vec<CellId> = w.ledger().iter().map(|(id, _)| *id).collect();
+            cells.sort();
+            (cursor, announce, cells)
+        };
+        self.pulse_cursor = cursor;
+        self.cells = cells;
+        if let Some(line) = announce {
+            self.status = line;
+        }
+        cx.notify();
     }
 
     /// The auto-arranged default grid position for a cell with no persisted slot —
