@@ -6,8 +6,28 @@
 skeptic confirmed against the real code — often citing apply.rs/executor line numbers —
 are listed). Ranked soundness → correctness → scaling → footgun → aspirational-gap.*
 
-Run: workflow `wf_68020930-db3` (harvest via `cv workflow`). This is a findings artifact —
-no code was changed by the audit itself; fixes are tracked in the status column.
+Run: workflow `wf_68020930-db3` (harvest via `cv workflow`).
+
+## Fix status (2026-07-03)
+
+- ✅ **#5 Discord toggle OFF** — fixed (emit both affordances; a static custom_id can't pick).
+- ✅ **#7 engine-twin AddToSlot overflow** — fixed (`saturating_add`, matches SubFromSlot + boa).
+- ✅ **#6 dynamics forest-depth truncation** — fixed (`touched_cells` + effect-event derivation
+  now walk the whole forest via `CallTree::iter_dfs`; partial mitigation of #1's DEPTH aspect).
+- ⏸ **#1/#3/#4 durable-overlay soundness cluster** — HELD FOR REVIEW. The correct fix exposes
+  the executor's real journal write-set (`turn/src/journal.rs` `LedgerJournal` already records
+  every mutated cell exactly), which edits the **verified `turn` executor's surface** — a TCB
+  touch that wants an explicit yes. Hand-completing `collect_touched` is the fragile debt-hole
+  that CAUSED this. Until fixed, the durable-image weld must stay opt-in/ephemeral-default so
+  the landmine can't arm.
+- 📋 remaining (safe, non-TCB, untaken): #8 resolve_mounts total-work bound, #11 dynamics Vec
+  eviction (needs cursor-base care), #14 pulse drops BalanceFlowed/Burned/CellBorn, the
+  aspirational-gap honesty edits (#12/#16/#17), and the big scaling refactors (#9 O(cells) root,
+  #10 History per-step snapshots).
+- 🐛 **also surfaced:** `deos-view` integration test `renders_inspector_card_to_pixels` is RED on
+  the branch (`view_source()` lacks "Cell State"/"inc") — a regression from an earlier deos-view
+  wave, invisible until now because gauntlets only ran `-p starbridge-v2 --lib`. Not from the
+  fixes above (their unit tests are green: deos-view 20, deos-js 47). Needs a deos-view lane.
 
 ## 1. [🔴 SOUNDNESS] Durable overlay change-set is derived from an INCOMPLETE effect walk (touched_cells): Mint/Burn-to-well/CreateCell/ExerciseViaCapability/SetVerificationKey/AttenuateCapability mutate cells never recorded, so a crash-recovered durable image diverges (refuses to reopen) or silently drops the committed turn
 
