@@ -1020,10 +1020,14 @@ fn run_desktop_window() {
                 eprintln!("warning: failed to register embedded UI fonts: {e}");
             }
         }
-        // The real widget kit + the deos dark theme (follow OS appearance, default
-        // Dark) — same boot pair as `run_window`.
+        // The real widget kit — but the NT desktop is a LIGHT room by design: its
+        // hand-rolled chrome is panel-grey with dark text, so the kit's theme must
+        // be LIGHT regardless of the OS appearance. (Following the OS here painted
+        // the GitHub-dark kit palette into the doc editor's Input and the Spotter's
+        // query field under OS dark mode — the scout-found theme inversion.) The
+        // cockpit windows keep following the OS via `apply_deos_theme`.
         gpui_component::init(cx);
-        apply_deos_theme(None, false, cx);
+        gpui_component::Theme::change(gpui_component::ThemeMode::Light, None, cx);
 
         let bounds = Bounds::centered(None, size(px(1600.), px(1000.)), cx);
         let layout_path = layout_path.clone();
