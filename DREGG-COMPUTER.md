@@ -176,3 +176,110 @@ FORK — WORKS as substrate, unglued f
 3. RESTART the desktop: `durable_desktop` recovers the World (cells+receipts return), then NEW `HirelingState::rehydrate` re-binds the resident onto its living cell and re-staffs th
 - **Risks:** TWO-EXECUTOR BUDGET DRIFT: gateway rate/budget counters live on the Box::leak'd `AgentRuntime` (resident_agent.rs:194), a DIFFERENT executor than the durable World. Persisting/rehydrating them needs a new deos-hermes surface (GrantRegistry snapshot/rehydrate) that does not exist; a mismatch between persisted counts and reality silently mis-meters. This is the load-bearing new seam. · RESUME ≠ MEMORY-OF-THOUGHT: AgentMemoryCheckpoint captures the cell's LEDGER working-set (fields/balance/nonce/heap/caps), not the hermes' conversation/scratchpad. The brain is stateless per-prompt today (resident_agent.rs:240 mints a fresh brain), so nothing is lost NOW — but a real resumable LLM hermes needs a conversation-context umem plane too; claiming 'resumes its working set' is honest only for the ledger footprint. · LEAKED RUNTIME ON REHYDRATE: every hire/rebind Box::leak's a `'static AgentRuntime`; rehydrating N residents on boot leaks N runtimes (named teardown seam in hireling.rs:37). Fine for a demo, a real cloud host needs a lifecycle-owned runtime pool. · FORK IDENTITY AMBIGUITY: both forks share the resident's cell id (world.fork clones the ledger); provenance must disambiguate by World, not cell. And 'pick the winner' has no UI — branch_stitch settlement gate is proven for state, but the human/agent choice of which fork to stitch is unbuilt. · WEB LIFECYCLE BRIDGE IS REAL BACKEND WORK: agent-host serves SSH-forced-command attach sessions, not web-driven spin/fork/resume; console is a read-mostly server-render aggregator. Wiring console buttons → control/agent-host → a live resumable hermes crosses crates that don't currently talk, and the console's `AgentView` is a one-shot deploy report, not a living session.
 
+
+
+---
+
+# REMOTE ATTACH — the completed design frontier
+
+*(the scout that capped on schema, redone free-text; folded in here.)*
+
+All ground truth gathered. Here is the design, as the lane's final free-text answer.
+
+---
+
+# REMOTE ATTACH — the starbridge points at your Dregg Computer, and your World follows you
+
+*Scout ground-truth + design. All paths relative to `/Users/ember/dev/breadstuffs/.claude/worktrees/deos-night-shift/`.*
+
+## GROUND TRUTH — what the starbridge can already do against a remote node
+
+### The desktop DOES connect to a remote node today, and reflects it live — read-rich, write-capable in the client, write-wired only in one view
+
+**The attach path is real and threaded end-to-end.** `--node <url>` / `--node=<url>` parses at `starbridge-v2/src/main.rs:838` (`node_url_arg`), rides through the login ceremony (`login.rs:53,100` — `LoginSurface::boot(…, node_url, …)`, main.rs:950) into `Cockpit::with_node` (`cockpit/construct.rs:39`), which at construct wraps a real client, opens the SSE stream, and takes one snapshot (`construct.rs:282-293`). All best-effort: an unreachable node leaves the embedded image fully usable.
+
+**Reads — WORKS, and renders remote identically to local.** `NodeClient` (`client.rs:25-162`) speaks the full read contract: `/status`, `/api/cells`, `/api/receipts` (typed + tolerant-raw), `/api/federations`, `/api/blocklace/blocks`. The wire contract is deliberately hand-mirrored in `model/mod.rs:1-13` ("a *protocol* dependency, not a *code* dependency"). `LiveNode::sync` (`client.rs:577`) projects snapshots through `LiveReflection` (`live_node.rs:194-295`) into the SAME uniform `Inspectable` the embedded world uses — "no parallel view path" is a stated invariant (`live_node.rs:19-23`).
+
+**Live events — WORKS.** A background thread pulls `/api/events/stream` (`sse_reader_loop`, `client.rs:680-755`), auto-reconnecting with the `Last-Event-ID` header, feeding the **pure, wasm-safe** `SseParser` (`live_node.rs:60-182`, byte-fixture tested) into `ReceiptFeed` (`live_node.rs:309`, dedup-by-`chain_index` + resume cursor). The cockpit drains it per frame (`cockpit/live.rs:13`) and renders the LIVE NODE strip (`panels_main.rs:67`), a remote data-plane strip in devtools-network (`panels_devtools.rs:262`), and wire-backed live federations (`panels_devtools.rs:688`).
+
+**Writes — the client can submit turns remotely, on two real paths:**
+- **Operator path:** `unlock` (`POST /cipherclerk/unlock` → bearer, `client.rs:175`) then `submit_turn` (`POST /turn/submit`, `client.rs:217`) — the node signs as its own cipherclerk; refusals in-band.
+- **Client-signed path (the important one):** `submit_signed_turn` (`POST /turns/submit`, `client.rs:246`) posts a postcard `dregg_sdk::SignedTurn` under the **user's own ed25519 key** — the node verifies the signature, requires `agent == derive_raw(user_pubkey, blake3("default"))`, runs the same gates, commits under the CLIENT's authority. Plus `faucet_materialize` (`client.rs:270`) to birth a fresh user cell.
+
+**But the interactive write wire lives only in `UnifiedBootView`**, not the main cockpit. `unified_boot.rs:200-251` installs the editor's own Cmd-S save callback to fire `client_signed_save` (`unified_boot.rs:452` — federation-id derivation, chain-head stamping, `valid_until`, the before→after receipt-count proof, agent==user assertion), threading the logged-in user's `signing_seed` (`login.rs:335`). It is exercised by the three bakes (`--render-unified-boot` / `--render-client-signed-turn` / `--render-interactive-node-save`, `main.rs:590-639`). The main cockpit's live-node surfaces are **read-only reflection** — no submit affordance anywhere in the strip/devtools; its TurnComposer targets the embedded world.
+
+**A designed scoping layer already exists and is tested:** `remote_mirror.rs` + `remote_mirror_live.rs` — a **MirrorCap** over a remote cell with a genuine attenuation lattice (depth `Structure ⊑ ReadState ⊑ Live` × the real `AuthRequired` rights axis), read-only by construction (`viewSurface_confers_no_edge`), live tail projected to exactly the receipts naming the mirror's cell, transport-abstract (`RemoteImage` trait; the named production binding is `LiveNode`). This is the cap grammar for "reflect your remote cells" — built, headless-tested, **unwired to any real vat**.
+
+### The web build does NOTHING remotely (against a node)
+
+- The gpui web cockpit boots the real `Cockpit` with **`node_url = None`, explicitly** (`web/src/cockpit_web.rs:112` — "no remote-federation panel on the web boot — the data plane is the in-tab executor"). The JSON/atlas skin (`WebImage`, `web/src/lib.rs:39`) boots a fresh in-tab `demo_world()` — ephemeral, local, no wire.
+- Transport is structurally absent on wasm: `live-node = ["dep:reqwest"]` (`Cargo.toml:299`) and the web crate builds starbridge-v2 **without it** (`web/Cargo.toml`: `default-features = false, features=["embedded-executor"]`), so `NodeClient::Http` hits the honest "feature off" bail stubs (`client.rs:369-392`). The SSE reader is `std::thread` + blocking reqwest — impossible on wasm as written.
+- The only live socket the web build has is the PTY-over-WebSocket terminal backend (`web/src/pty_ws.rs`) — a terminal bridge, not the node contract.
+- Roaming is gated off: "the browser/wasm image is always ephemeral… the resumable surface is gated off wasm" (`session.rs:621-624`; `login_resumable` is `#[cfg(not(target_arch = "wasm32"))]`).
+- **Crucially, key custody compiles on wasm:** `embedded-executor` pulls `dregg-sdk` (`Cargo.toml:320`) and the web crate builds it — so `AgentCipherclerk` **client-side signing works in the browser today**. The web gap is transport + custody UX, not crypto.
+
+### The vat side has no door yet (re-confirmed)
+
+No `endpoint` field on `ServerRecord` (grep of `dreggnet/control/src/server.rs` — absent); gateway `Machine.private_ip = ""` (`gateway/src/gateway.rs:304`); no `vat:` grammar in `webauth/src/grant.rs` — but `decide()` flows any `required_cap` string through `grant::cap_context` with the 401/403 split already correct (`webauth/src/lib.rs:63-79, 188-203`).
+
+---
+
+## THE DESIGN — attach = a ticket, a credential, and the node wire contract you already speak
+
+**The one-sentence thesis: the vat's data plane should BE the node wire contract, so the attach is `NodeClient` pointed through the gateway with a `vat:<cell-id>` credential — the desktop starbridge needs a header, not an architecture; the web starbridge needs a transport, not a model.**
+
+### 1. The VatTicket — "your computer's address, the key that reaches only yours, and the anchor you check it against"
+
+One attach handle, printed by `dregg-cloud vat create`, stored in the keychain, shareable as a URI:
+
+```
+VatTicket {
+  vat_cell_id:  <32-byte cell id>          // the identity — content-addressed from (you, app, name)
+  endpoint:     https://gw.host/v1/vats/<cell-id>/node   // the gateway-routed data plane
+  credential:   dga1_…                      // webauth cred carrying cap `vat:<cell-id>` (+ acct caveat)
+  anchor:       executor_pk (v0) / RecursionVk (stretch) // what receipts verify against — NEVER fetched from the vat
+}
+```
+
+URI form `dregg-vat://<cell-id>@<gateway-host>` — the cell-id in the address IS the integrity check, the same self-certifying-address argument `web_of_cells.rs` already makes for `dregg://` (the address is the identity; a wrong host cannot forge a matching receipt chain). **"Follows you" falls out of content addressing:** the vat's cell_id derives from `(you, app, name)`, so any starbridge that holds your credential can *recompute* the id and ask the gateway's finder (`GET /v1/vats?subject=me` — the unwired `ServerSource` seam, `api.rs:104-107`) for the endpoint. You never bookmark a machine; you derive your computer.
+
+### 2. The wire path and the two-credentials problem, resolved
+
+`starbridge → gateway forward-auth (webauth decide, required_cap = vat:<id> from the route) → reverse-proxy → the vat's node endpoint (ServerRecord.endpoint)`. The vat's data plane speaks the EXACT `/status, /api/cells, /api/receipts, /api/events/stream, /turns/submit` contract, so `model/mod.rs` and every reflection/feed already work unchanged.
+
+Today `NodeClient` has ONE credential slot (the node-operator bearer, writes only). The attach needs the **gateway credential on EVERY request** (reads + SSE + writes). Resolution, stated as design law:
+
+- `NodeClient::Http` grows `credential: Option<String>` — attached as `Authorization: Bearer dga1_…` on all requests, including the SSE reader (which currently builds its own bare client, `client.rs:688`, and `http_get` is a bare `reqwest::blocking::get`, `client.rs:301` — both must thread it).
+- **Through the gateway, the node-operator bearer becomes infra plumbing, not a renter credential.** The provider runs the vat's node; the gateway holds the node bearer in the vat record and injects it after webauth admits. The renter's real write authority is their **ed25519 signature on the turn** — the executor verifies it, and neither gateway nor provider can forge it. So remotely, all writes go via `/turns/submit` client-signed; the operator `/turn/submit` path stays a direct-dev-node convenience. This keeps the `?cap=` downscoping worry (api.rs:30 bind-internal warning) on the gateway's side of the trust line where it already lives.
+
+**Connect ceremony (the capability presented on connect):** attach = `GET <endpoint>/status` with the credential. `200` → attached; `403 authenticated-but-uncapped` → "genuine session, not your vat" surfaced verbatim in the live-node strip (webauth's Verdict split makes this one line of UI). Then the starbridge verifies it is *your* vat, not by trusting the URL: check the ticket's `vat_cell_id` against the vat identity on the wire (add the vat cell-id to the vat-scoped `/status` mirror — `NodeStatus` today carries only `public_key`), and verify the receipt chain head against the ticket's **anchor** (`verify_receipt_chain_with_keys`, refusing `is_deferred` receipts as non-commitments). The World that follows you is one you *re-verify on arrival*, every time.
+
+### 3. Desktop attach v0 (smallest real thing)
+
+1. **`NodeClient.credential`** on every request + the SSE reader — ~2-3h.
+2. **`--vat <ticket-uri>` arg** beside `--node` (VatTicket parse; login threading identical to `node_url` today) — ~2h.
+3. **The 403 story in the strip** — attach to a foreign vat id renders "authenticated, but this is not your vat" (the cross-account test made visible) — ~1h.
+4. **Promote the write wire from `UnifiedBootView` into the cockpit:** generalize `client_signed_save` (`unified_boot.rs:452`) from SetField-save to `client_signed_turn(client, node_pk, clerk, actions)`; the session already holds `signing_seed` (`login.rs:335`). Then the live-node strip's cells get the same affordance surface local cells have, firing REAL verified turns on the VAT's ledger under YOUR key — ~1-2 days.
+5. **Receipt verify against the ticket anchor** in the receipts inspector for remote receipts (green/red, deferred-refused) — ~3h.
+
+Demo sentence: *"I typed `--vat dregg-vat://…@gw` on a machine I'd never used; my cells appeared, receipts streamed, I fired a turn signed with my key, and the receipt verified against my own anchor. My neighbor's ticket got a 403."*
+
+### 4. Web attach (increment 2) — transport, not architecture
+
+The pure split (`live_node.rs:10-38`) was built for exactly this: `SseParser` / `ReceiptFeed` / `LiveReflection` are wasm-safe today. Design:
+
+- **Fetch transport:** a wasm `NodeClient` backend over browser fetch (reqwest's wasm fetch backend, or web-sys). **Not `EventSource`** — it cannot set an `Authorization` header; instead a streaming `fetch` whose `ReadableStream` chunks feed the SAME `SseParser`, with our own `Last-Event-ID` resume logic (which the native reader already implements — port the loop, not the parser).
+- **Same-origin serving kills CORS and is thematically right:** the gateway (or the vat itself) serves the web starbridge bundle — *your computer serves its own screen*. A foreign-origin deploy needs a CORS allowlist on the gateway; name it, don't default it.
+- **Boot mode:** when a VatTicket is present, the web cockpit boots into **attach mode** — no local demo world; Home = the remote census (`/api/cells` through the existing reflections), receipts live via the fetch-stream, turns client-signed in-tab (the clerk already compiles). The wasm world stays honestly ephemeral — **the REMOTE vat is the durability**, which dissolves the `session.rs` wasm-resume gate instead of fighting it: nothing durable lives in the tab, so nothing is lost when it closes except the login.
+- **Custody v0:** mnemonic → seed in tab memory for the session (the existing dev-seed shape); passkey-wrapped durable custody is the named follow-up.
+
+### 5. Honest gaps
+
+- **The gateway vat route + `ServerRecord.endpoint` are prerequisites from the F1 trunk** — this design lands on top of DREGG-COMPUTER.md's build-order items 1-5, it does not replace them.
+- **Chain-head races:** `client_signed_save` reads the receipt head then submits; two concurrent writers to one vat can cross. Single-renter vats mostly dodge it; the fix (node-side head auto-fill for client-signed turns, like the operator path's nonce auto-fill) is a node change — named, not done.
+- **The cockpit's remote surface is a strip, not a Home.** v0 reflects cells + receipts; the unified Files/Apps/Services/Grains Home over the remote census is F3's slice riding this attach.
+- **Anchor distribution is still the ballgame:** the ticket carries the anchor precisely so it never comes from the vat's own wire; ticket delivery (at `vat create`, over the account session) must itself be the trustworthy channel. STARK-grade `verify_history` stays the stretch.
+- **Attach-wakes-the-vat ("open the lid")** — attaching to a Sleeping vat should trigger the gateway's funded-lease wake before the node wire answers — is a lovely v1, control-plane only, not in v0.
+- **`MirrorCap` (remote_mirror) is not yet the enforcement on this path** — v0 scopes by the gateway's `vat:<id>` (whole-vat); folding MirrorDepth per-cell attenuation into what a shared/sub-scoped ticket grants is the follow-up that makes "show a friend one cell of my computer" real.
+
+**Smallest attach v0, named: `VatTicket` + credentialed `NodeClient` + the gateway vat route** — desktop `--vat` attach reflecting your remote cells and live receipts, one client-signed turn landing on the vat ledger, receipt verified against your own anchor, and a 403 on your neighbor's vat. Web follows as a transport port over the already-pure core, served same-origin by your own vat.
