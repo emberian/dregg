@@ -692,6 +692,13 @@ pub struct DeosDesktop {
     /// (green committed / amber REFUSED), fed and aged by [`Self::pump_dynamics`],
     /// mounted bottom-right by the render tail; click-through opens the Transcript.
     toast_rack: toasts::ToastRack,
+    /// **The coalescing background layout writer** — the HOT interaction paths
+    /// (window drag/resize via `persist_window`, icon drag-end, the per-keystroke
+    /// document sidecar mirrors) queue snapshots here instead of serializing every
+    /// document's prose synchronously on the UI thread per gesture. Cold paths
+    /// (prefs, welcome, close, bake hooks) still write synchronously for
+    /// exit-safety. See [`layout::LayoutSaver`].
+    saver: layout::LayoutSaver,
     /// **THE REWIND RAIL's cursor + memoized projection** — LIVE (`None`) by
     /// default; while scrubbed, every `cell_*` reader and the World Explorer
     /// faces read the root-verified REPLAYED ledger at the cursor instead of
@@ -777,6 +784,9 @@ impl DeosDesktop {
         // a returning one opens straight onto its arranged room.
         let show_welcome = !layout.prefs.welcomed;
 
+        // The saver takes its own copy of the path (the struct literal moves the
+        // local `layout_path` into the field above this init line evaluates).
+        let saver_path = layout_path.clone();
         let mut desk = DeosDesktop {
             world,
             cells,
@@ -827,6 +837,7 @@ impl DeosDesktop {
             last_viewport: (1600.0, 1000.0),
             focus: cx.focus_handle(),
             toast_rack: toasts::ToastRack::default(),
+            saver: layout::LayoutSaver::spawn(saver_path),
             rewind: rewind::RewindState::default(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
@@ -1196,7 +1207,7 @@ impl DeosDesktop {
                 minimized: ws.minimized,
                 kind: key.1,
             });
-            self.layout.save(&self.layout_path);
+            self.saver.save(&self.layout);
         }
     }
 
@@ -1838,7 +1849,7 @@ impl DeosDesktop {
             let graph = graph.unwrap_or_else(DocGraph::new);
             let prose_ok = self.commit_doc_to_umem_heap(into, &graph, &text);
             self.layout.set_doc_text(&id_hex(&into), &text);
-            self.layout.save(&self.layout_path);
+            self.saver.save(&self.layout);
             let rev = self.cell_field_u64(&into, DOC_REV_SLOT) + 1;
             let ok = prose_ok && self.commit_set_field(into, DOC_REV_SLOT, rev);
             // The live editor widget must pick up the transcluded line on next render
@@ -1950,7 +1961,7 @@ impl DeosDesktop {
         let graph = graph.unwrap_or_else(DocGraph::new);
         let prose_ok = self.commit_doc_to_umem_heap(cell, &graph, &new_text);
         self.layout.set_doc_text(&id_hex(&cell), &new_text);
-        self.layout.save(&self.layout_path);
+        self.saver.save(&self.layout);
         let rev = self.cell_field_u64(&cell, DOC_REV_SLOT) + 1;
         let ok = prose_ok && self.commit_set_field(cell, DOC_REV_SLOT, rev);
         self.status = format!(
@@ -2782,7 +2793,7 @@ impl DeosDesktop {
         match drag {
             Drag::Icon { cell, .. } => {
                 // Persist the new icon position (the spatial-persistence write).
-                self.layout.save(&self.layout_path);
+                self.saver.save(&self.layout);
                 // COMPOSE: if released over an OPEN DOCUMENT window, transclude the
                 // cell into it. Else if over ANOTHER cell-icon, act across them.
                 if let Some(into) = self.doc_window_under(ev.position) {

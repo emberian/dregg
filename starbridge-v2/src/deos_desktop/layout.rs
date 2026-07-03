@@ -186,10 +186,15 @@ impl DesktopLayout {
             .unwrap_or_default()
     }
 
-    /// **Persist the layout** to `path` (atomic-ish: write then rename). Called on
-    /// every drag-end / window move / resize — this is the act that makes the
-    /// arrangement durable. Errors are swallowed (a read-only FS still gives a live
-    /// desktop; only persistence is lost).
+    /// **Persist the layout** to `path` (atomic-ish: write then rename), on the
+    /// calling thread. The COLD-path write: preferences flips, the welcome
+    /// dismissal, a window close, and the bake hooks (which reopen + assert
+    /// immediately, so they need the write durable before they return). The HOT
+    /// interaction paths — window drag/resize, icon drag-end, per-keystroke doc
+    /// mirrors — go through [`LayoutSaver`] instead: this serialization covers
+    /// EVERY document's full prose, and paying it synchronously on the UI thread
+    /// per gesture is the jank the perf scout flagged. Errors are swallowed (a
+    /// read-only FS still gives a live desktop; only persistence is lost).
     pub fn save(&self, path: &PathBuf) {
         if let Ok(json) = serde_json::to_vec_pretty(self) {
             let tmp = path.with_extension("json.tmp");
@@ -258,6 +263,86 @@ impl DesktopLayout {
                 text: text.to_string(),
             });
         }
+    }
+}
+
+/// **The coalescing background layout writer** — the HOT-path half of
+/// persistence. One writer thread owns the file; the UI thread's `save` is a
+/// clone + channel send (microseconds, no serialization, no IO). The writer
+/// drains the channel to the NEWEST snapshot before each write, so a burst of
+/// drag-move gestures costs ONE serialize+rename instead of one per event, and
+/// last-sent always wins (a single writer means no stale write can land after a
+/// newer one). The honest tradeoff: a snapshot sent microseconds before process
+/// exit may not reach disk — which is why the cold paths (prefs, welcome, close,
+/// bake hooks) still call [`DesktopLayout::save`] synchronously.
+pub struct LayoutSaver {
+    tx: std::sync::mpsc::Sender<DesktopLayout>,
+}
+
+impl LayoutSaver {
+    /// Spawn the writer thread for `path`. The thread parks on an empty channel
+    /// and exits when every sender is dropped (recv errors out).
+    pub fn spawn(path: PathBuf) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<DesktopLayout>();
+        std::thread::Builder::new()
+            .name("deos-layout-saver".into())
+            .spawn(move || {
+                while let Ok(mut latest) = rx.recv() {
+                    // Coalesce the burst: only the newest snapshot hits the disk.
+                    while let Ok(newer) = rx.try_recv() {
+                        latest = newer;
+                    }
+                    latest.save(&path);
+                }
+            })
+            .ok();
+        LayoutSaver { tx }
+    }
+
+    /// Queue `layout` for persistence — a clone + send; never blocks on IO. If
+    /// the writer thread is gone (spawn failed / shutdown) this silently drops,
+    /// mirroring `DesktopLayout::save`'s swallow-errors contract.
+    pub fn save(&self, layout: &DesktopLayout) {
+        let _ = self.tx.send(layout.clone());
+    }
+}
+
+#[cfg(test)]
+mod saver_tests {
+    use super::*;
+
+    /// A burst of queued snapshots coalesces and the LAST one is what the file
+    /// holds (poll-load until the writer catches up — the channel guarantees
+    /// order, the single writer guarantees no stale overwrite).
+    #[test]
+    fn saver_coalesces_and_last_write_wins() {
+        let path = std::env::temp_dir().join(format!(
+            "deos-layout-saver-test-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let saver = LayoutSaver::spawn(path.clone());
+
+        for rows in 1..=9u32 {
+            let mut l = DesktopLayout::default();
+            l.prefs.grid_rows = rows;
+            saver.save(&l);
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let loaded = DesktopLayout::load(&path);
+            if loaded.prefs.grid_rows == 9 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "writer never landed the newest snapshot (got rows={})",
+                loaded.prefs.grid_rows
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_file(&path);
     }
 }
 
