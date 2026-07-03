@@ -6,12 +6,15 @@
 //! invariant the operator can SEE hold at zero.
 //!
 //! This surface is pure presentation: each face is a scrolling `div()` element
-//! tree built directly from the `World`'s read surface
-//! ([`World::ledger`]/[`World::receipts`]/[`World::height`]/[`World::cell_count`]),
-//! so the file carries no view context (`Context<DeosDesktop>`) and no
-//! interactivity inside the faces. The clickable tab strip is owned by the
-//! window-dispatch caller (which holds the view context); this module supplies
-//! the tab vocabulary ([`WorldExplorerTab`]) + the per-tab body renderer
+//! tree built from a [`WorldLens`] — one read-only view of A world state
+//! (ledger + receipts + height), either the LIVE `World` ([`WorldLens::live`])
+//! or the Rewind Rail's root-verified REPLAYED projection at a scrubbed step
+//! (built in [`super::rewind`]; it arrives wearing an amber `banner` so the
+//! face names its own liveness). The file carries no view context
+//! (`Context<DeosDesktop>`) and no interactivity inside the faces. The
+//! clickable tab strip is owned by the window-dispatch caller (which holds the
+//! view context); this module supplies the tab vocabulary
+//! ([`WorldExplorerTab`]) + the per-tab body renderer
 //! ([`render_world_explorer_body`]).
 
 use gpui::{
@@ -19,14 +22,48 @@ use gpui::{
     StatefulInteractiveElement, Styled,
 };
 
-use dregg_cell::{lifecycle::CellLifecycle, Cell};
+use dregg_cell::{lifecycle::CellLifecycle, Cell, Ledger};
+use dregg_turn::turn::TurnReceipt;
 use dregg_types::CellId;
 
 use crate::deos_desktop::chrome::{
     face_gauge, face_row, face_row_color, face_section, fmt_balance, id_short, NT_DIM, NT_OK,
-    NT_PANEL, NT_WARN,
+    NT_PANEL, NT_TITLE_TEXT, NT_WARN,
 };
 use crate::world::World;
+
+/// **One read-only view of a world state** — the faces' single input, so the
+/// SAME pure render draws the live World and the Rewind Rail's replayed past.
+/// Borrowed, never owning: the live lens borrows straight off [`World`]; the
+/// replayed lens borrows the projection's reconstructed ledger + the receipts
+/// that existed AT the scrubbed step.
+pub struct WorldLens<'a> {
+    /// The census to render (live ledger, or the root-verified reconstruction).
+    pub ledger: &'a Ledger,
+    /// The receipt log AT this view (truncated to the cursor while replaying).
+    pub receipts: &'a [TurnReceipt],
+    /// The world height at this view (committed-turn count).
+    pub height: u64,
+    /// The census size (kept explicit so the header agrees with `ledger`).
+    pub cell_count: usize,
+    /// `Some(caption)` when this lens is a REPLAYED past projection — each face
+    /// paints it as an amber banner row so the surface names its own liveness
+    /// (`ui_snapshot`'s honesty discipline). `None` = the live World.
+    pub banner: Option<String>,
+}
+
+impl<'a> WorldLens<'a> {
+    /// The live World's lens — what every face read before the Rewind Rail.
+    pub fn live(world: &'a World) -> Self {
+        WorldLens {
+            ledger: world.ledger(),
+            receipts: world.receipts(),
+            height: world.height(),
+            cell_count: world.cell_count(),
+            banner: None,
+        }
+    }
+}
 
 /// The three faces of the World Explorer — the moldable multiplicity over the
 /// World as a whole. Each is a read-only projection the operator browses.
@@ -69,15 +106,37 @@ pub struct WorldExplorerState {
 
 /// Render the BODY for the selected tab as a pure gpui element tree.
 ///
-/// The faces are read-only lists over the live `world`; the clickable tab strip
-/// above this body is built by the caller (it owns the view context the tab
-/// listeners need). Long lists are capped (~24 rows) to keep the dense view
-/// legible, the way the transcript surface does.
-pub fn render_world_explorer_body(world: &World, tab: WorldExplorerTab) -> AnyElement {
-    match tab {
-        WorldExplorerTab::Ledger => render_ledger_face(world),
-        WorldExplorerTab::Chronicle => render_chronicle_face(world),
-        WorldExplorerTab::Conservation => render_conservation_face(world),
+/// The faces are read-only lists over the `lens` (the live World, or the
+/// Rewind Rail's replayed projection — same render either way); the clickable
+/// tab strip above this body is built by the caller (it owns the view context
+/// the tab listeners need). Long lists are capped (~24 rows) to keep the dense
+/// view legible, the way the transcript surface does. A replayed lens gets its
+/// amber banner stacked above the face so the past never masquerades as live.
+pub fn render_world_explorer_body(lens: &WorldLens, tab: WorldExplorerTab) -> AnyElement {
+    let face = match tab {
+        WorldExplorerTab::Ledger => render_ledger_face(lens),
+        WorldExplorerTab::Chronicle => render_chronicle_face(lens),
+        WorldExplorerTab::Conservation => render_conservation_face(lens),
+    };
+    match &lens.banner {
+        None => face,
+        Some(caption) => div()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .bg(gpui::rgb(NT_WARN))
+                    .text_color(gpui::rgb(NT_TITLE_TEXT))
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::BOLD)
+                    .child(caption.clone()),
+            )
+            .child(face)
+            .into_any_element(),
     }
 }
 
@@ -114,8 +173,10 @@ fn cell_lifecycle(cell: &Cell) -> &'static str {
 
 /// The LEDGER face — a browsable list of every cell, sorted by id, each showing
 /// its short id, kind, balance, lifecycle, and nonce. The My-Computer census.
-fn render_ledger_face(world: &World) -> AnyElement {
-    let ledger = world.ledger();
+/// Over a replayed lens this is the census AS IT WAS — since-destroyed cells
+/// reappear, not-yet-born ones are absent.
+fn render_ledger_face(lens: &WorldLens) -> AnyElement {
+    let ledger = lens.ledger;
     // Sort by id for a stable, browsable census (the same canonical order the
     // image root folds over).
     let mut cells: Vec<(&CellId, &Cell)> = ledger.iter().collect();
@@ -190,8 +251,8 @@ fn render_ledger_face(world: &World) -> AnyElement {
 /// The CHRONICLE face — the last ~24 receipts, each showing the commit index,
 /// turn-hash (first 4 bytes), post-state-hash (first 4 bytes), the agent cell,
 /// and the computrons it spent. The World's navigable history.
-fn render_chronicle_face(world: &World) -> AnyElement {
-    let receipts = world.receipts();
+fn render_chronicle_face(lens: &WorldLens) -> AnyElement {
+    let receipts = lens.receipts;
     let n = receipts.len();
 
     let mut col = div()
@@ -207,7 +268,7 @@ fn render_chronicle_face(world: &World) -> AnyElement {
         .gap_1()
         .child(div().text_color(gpui::rgb(0x6fc0ff)).child(format!(
             "── World chronicle · {n} turns · height {} ",
-            world.height()
+            lens.height
         )));
 
     if n == 0 {
@@ -242,15 +303,15 @@ fn render_chronicle_face(world: &World) -> AnyElement {
 /// (issuer wells negative, accounts positive). Shows the total balance (which
 /// MUST read 0), the cell/height/receipt counts, and the per-cell breakdown so
 /// the operator SEES Σδ = 0 hold across the live ledger.
-fn render_conservation_face(world: &World) -> AnyElement {
-    let ledger = world.ledger();
+fn render_conservation_face(lens: &WorldLens) -> AnyElement {
+    let ledger = lens.ledger;
     let mut cells: Vec<(&CellId, &Cell)> = ledger.iter().collect();
     cells.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
 
     let sum: i64 = cells.iter().map(|(_, c)| c.state.balance()).sum();
-    let cell_count = world.cell_count();
-    let height = world.height();
-    let receipts = world.receipts().len();
+    let cell_count = lens.cell_count;
+    let height = lens.height;
+    let receipts = lens.receipts.len();
     // Σ reads green at the invariant (0), amber if it ever drifts — the operator's
     // at-a-glance conservation verdict.
     let sum_color = if sum == 0 { NT_OK } else { NT_WARN };
