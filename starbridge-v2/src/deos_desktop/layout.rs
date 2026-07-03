@@ -145,6 +145,15 @@ pub struct DesktopPrefs {
     /// docuverse's geometry out of the box); the View-menu toggle flips + persists it.
     #[serde(default = "default_show_threads")]
     pub show_threads: bool,
+    /// **The Spotter's RECENT-JUMPS trail** — the replay strings of the last 8
+    /// dispatches, newest first (a jump's label, or a command's canonical verb line
+    /// — see `super::spotter::replay_string`). The empty-query palette greets you
+    /// with these, RE-RESOLVED against the live desktop on show (a closed window's
+    /// jump quietly drops; a recalled command re-resolves its cell prefixes), so
+    /// persisting plain strings is safe: nothing stale can dispatch. Persisted like
+    /// every other preference; `#[serde(default)]` keeps legacy layouts loading.
+    #[serde(default)]
+    pub recent_jumps: Vec<String>,
 }
 
 /// The serde default for [`DesktopPrefs::show_threads`] — `true`, so a legacy layout
@@ -162,6 +171,7 @@ impl Default for DesktopPrefs {
             grid_rows: 6,
             welcomed: false,
             show_threads: true,
+            recent_jumps: Vec::new(),
         }
     }
 }
