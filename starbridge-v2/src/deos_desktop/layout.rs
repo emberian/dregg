@@ -124,6 +124,18 @@ pub struct DesktopPrefs {
     /// exactly once and the room is thereafter the bare, breathing desktop.
     #[serde(default)]
     pub welcomed: bool,
+    /// Whether the GOSSAMER transclusion threads paint between windows (the cyan
+    /// elbow connectors from a quoting document to each quoted surface — see
+    /// `super::threads`). Defaults to `true` (fresh AND legacy layouts show the
+    /// docuverse's geometry out of the box); the View-menu toggle flips + persists it.
+    #[serde(default = "default_show_threads")]
+    pub show_threads: bool,
+}
+
+/// The serde default for [`DesktopPrefs::show_threads`] — `true`, so a legacy layout
+/// (serialized before the field existed) deserializes with the threads visible.
+fn default_show_threads() -> bool {
+    true
 }
 
 impl Default for DesktopPrefs {
@@ -134,6 +146,7 @@ impl Default for DesktopPrefs {
             word_granularity: false,
             grid_rows: 6,
             welcomed: false,
+            show_threads: true,
         }
     }
 }

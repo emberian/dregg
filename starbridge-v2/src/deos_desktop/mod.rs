@@ -63,6 +63,11 @@ pub mod spotter;
 // + the cap-chrome model are in scope); the window falls back to the inspector body off it.
 #[cfg(feature = "android-systemui")]
 pub mod systemui_chrome_render;
+/// GOSSAMER — the visible transclusion threads: a cyan NT elbow connector drawn
+/// between a document window quoting cell X and whatever surface shows X, walkable
+/// from either endpoint dot (Ted Nelson's parallel visible connections over real
+/// receipted quotes). Gated on the persisted `show_threads` preference (View menu).
+pub mod threads;
 // THE CONTENT-IR BRIDGE — a desktop window whose body is a real `deos_view::ViewNode`
 // rendered through deos-view's NATIVE renderer (the portable-IR content surface beside
 // the native-chrome panes). Gated on `card-pane` (pulls deos-view + deos-js); the
@@ -383,6 +388,11 @@ enum ActionKind {
     TileWindows,
     /// **Close every open window** (the NT "Close All"). Pure layout actuation.
     CloseAllWindows,
+    /// **Show / hide the GOSSAMER transclusion threads** — the cyan elbow connectors
+    /// drawn between a quoting document window and each quoted surface
+    /// ([`threads`]). A persisted preference flip (pure view actuation): it repaints
+    /// the glass and re-saves the layout, firing NO verified turn.
+    ToggleThreads,
 }
 
 // ── A floating context menu (rendered as an NT popup overlay) ─────────────────────
@@ -1340,6 +1350,18 @@ impl DeosDesktop {
                         true,
                         A::OpenDocCollab,
                     ),
+                    MenuAction::sep(),
+                    // The GOSSAMER toggle — the label names the flip it fires, so the
+                    // menu reads as a checkbox without a glyph (font-safe in the bake).
+                    MenuAction::new(
+                        if self.layout.prefs.show_threads {
+                            "Hide transclusion threads"
+                        } else {
+                            "Show transclusion threads"
+                        },
+                        true,
+                        A::ToggleThreads,
+                    ),
                 ];
                 #[cfg(feature = "card-pane")]
                 v.push(MenuAction::new(
@@ -1504,6 +1526,7 @@ impl DeosDesktop {
             ActionKind::CascadeWindows => self.cascade_windows(),
             ActionKind::TileWindows => self.tile_windows(),
             ActionKind::CloseAllWindows => self.close_all_windows(),
+            ActionKind::ToggleThreads => self.toggle_threads(),
             // World-level surfaces (also reachable from the desktop menu) — open them
             // regardless of which cell's menu summoned them.
             ActionKind::OpenWorldExplorer => {
@@ -3287,6 +3310,18 @@ impl Render for DeosDesktop {
         for key in wins {
             let active = Some(key) == focused;
             root = root.child(self.render_window(key, active, window, cx));
+        }
+
+        // ── GOSSAMER — the visible transclusion threads (the docuverse's geometry) ─
+        // A cyan NT elbow runs from every surface showing a quoted cell into the
+        // document window quoting it — drawn with the same absolutely-positioned
+        // overlay idiom as the halo, walkable from either endpoint dot. Painted over
+        // the windows but under the halo/menus, gated on the persisted Show-threads
+        // preference (the View-menu toggle).
+        if self.layout.prefs.show_threads {
+            for el in self.render_threads(cx) {
+                root = root.child(el);
+            }
         }
 
         // ── The Pharo HALO — direct-manipulation handles on the selected surface ──
