@@ -154,6 +154,15 @@ required-features = ["web"]
 name = "portal_bake"
 required-features = ["web"]
 
+# THE CONSOLE BAKE — the DreggNet management console ("My Dregg Computer") as a portable
+# ViewNode card (`console::console_card`), baked to a browser-loadable `.html` in BOTH
+# disclosure projections (simple + adept), gpui-free. The graphideOS portability proof:
+# the SAME tree the native gpui renderer walks, painted by the web renderer.
+#   cd deos-view && cargo run --no-default-features --features web --example console_bake
+[[example]]
+name = "console_bake"
+required-features = ["web"]
+
 # ─── THE FORK SEAMS — replicated from deos-js + starbridge-v2 (the two standalone
 #     workspaces this crate path-deps). Because deos-view is its OWN workspace root,
 #     neither the repo-root `[patch]` nor deos-js's/starbridge-v2's reaches it, so the

@@ -32,8 +32,14 @@
 
 // The view-tree MODEL is renderer-independent (gpui-free serializable DATA): it is
 // always compiled, under BOTH the `native` and `web` renderers.
+pub mod console;
 pub mod fmt;
 pub mod tree;
+pub use console::{
+    console_bind_values, console_card, console_slot_seeds, demo_console, ConsoleModel,
+    HermesStatus, HermesView, LedgerView, MandateEdge, ReceiptRow, SpendLine, VatState, VatView,
+    WitnessStance,
+};
 pub use fmt::BindFmt;
 pub use tree::{
     disclose, parse_view_tree, pill_display, resolve_mounts, Crumb, Disclosure, HaloHandle,
