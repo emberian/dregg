@@ -496,7 +496,7 @@ pub fn correspondents(world: &World) -> Vec<CellId> {
 /// World, carrying its kind marker + owner witness. Returns its id either way. Balance 0
 /// so the town leaves the World's Σ-conservation untouched (a seeded 0-balance service
 /// cell, like the demo's service anchor).
-fn ensure_office_cell(world: &mut World, owner: CellId, magic: u64) -> CellId {
+fn ensure_office_cell(world: &mut World, owner: CellId, ferry: CellId, magic: u64) -> CellId {
     let (pk, token) = office_keys(owner, magic);
     let id = CellId::derive_raw(&pk, &token);
     if !world.ledger().contains(&id) {
@@ -505,6 +505,13 @@ fn ensure_office_cell(world: &mut World, owner: CellId, magic: u64) -> CellId {
         cell.state.fields[SLOT_O_KIND] = pack_u64(magic);
         cell.state.fields[SLOT_O_OWNER] = pack_u64(id_lo(owner));
         world.genesis_install(cell);
+        // AUTHORITY (ocap): acting on a NON-SELF cell needs a held capability —
+        // open_permissions on the target is not the authorizing mechanism. Granted
+        // exactly once, at creation (before any turn touches the cell, so the
+        // durable genesis-mutation guard stays clean): the OWNER drops/drains its
+        // own box; the FERRY moves letters through every box on its round.
+        world.genesis_grant_cap(&owner, id);
+        world.genesis_grant_cap(&ferry, id);
     }
     id
 }
@@ -513,8 +520,11 @@ fn ensure_office_cell(world: &mut World, owner: CellId, magic: u64) -> CellId {
 /// `(inbox, outbox)`. Idempotent — the guard in [`ensure_office_cell`] makes re-opening a
 /// town a no-op.
 pub fn ensure_office(world: &mut World, owner: CellId) -> (CellId, CellId) {
-    let inbox = ensure_office_cell(world, owner, MAIL_INBOX_MAGIC);
-    let outbox = ensure_office_cell(world, owner, MAIL_OUTBOX_MAGIC);
+    // The ferry must exist first — every office cell grants it a cap at creation
+    // so a later delivery round can move letters through the box.
+    let ferry = ensure_ferry(world);
+    let inbox = ensure_office_cell(world, owner, ferry, MAIL_INBOX_MAGIC);
+    let outbox = ensure_office_cell(world, owner, ferry, MAIL_OUTBOX_MAGIC);
     (inbox, outbox)
 }
 
@@ -606,6 +616,9 @@ pub fn send_letter(
     cell.state.heap_map = heap;
     cell.state.reseal_heap_root();
     world.genesis_install(cell);
+    // The ferry flips this letter's status Outbound → Delivered on its round, so it
+    // needs a capability to it — granted at birth (before any turn touches it).
+    world.genesis_grant_cap(&ferry_cell(), letter);
 
     // 2 ── drop it in the outbox (a receipted turn agented by the sender; one action on
     // the sender's outbox cell, bumping its sent + pending tallies + the last-peer/digest).
