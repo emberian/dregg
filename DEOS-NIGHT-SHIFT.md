@@ -94,3 +94,11 @@ dregg-node (--run-node dispatcher) + the self-describing vessel (19.4MB dregg-sr
 in the ROOT workspace target/ on this checkout, not starbridge-v2/target/ — CI recipe
 assumes the standalone workspace; noted for the workflow fix). Smoke: both binaries + the
 vessel extracted and asserted. Planner risk #3 (linux leg): retired.
+
+## WAVE 3 INTEGRATED ~06:0x — the desktop is an ECONOMY now
+Pulse→Signals weld (World-Status binds finally live, dirty-glow) · Exchange Floor (offers/
+leases as cells, Σδ=0 settlement, over-budget cheat refused in-band) · Agent Room HIRE/
+STEP/FIRE (a real confined resident on the live World; refusals as amber toasts) — all
+merged, 864 lib tests + 5 weld tests green, woven tour beats 4j/4k witness the hire and
+the trade. Layout-saver perf fix in (coalescing writer thread for hot paths). The bake's
+World now ends at 11 cells / 9 windows: the demo image grows a population during the tour.
