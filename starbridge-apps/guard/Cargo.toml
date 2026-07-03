@@ -1,0 +1,38 @@
+[package]
+name = "starbridge-guard"
+version = "0.1.0"
+edition = "2024"
+description = "Per-subject abuse-governance for a permissionless (KYC-free) substrate: a subject-account cell whose quota/rate is a verified counter+ceiling (over-ceiling refused in-band — the 402/429 shape) and whose account STANDING (good/flagged/suspended) is a slot moved ONLY by a governance-gated, receipted turn (takedown/suspension), never a self-write. Composed from native cells — the counter+ceiling is the verified pattern of starbridge-tool-access-delegation; the standing gate is the SenderAuthorized governance idiom of starbridge-governed-namespace; the ceiling itself is the cell/src/allowance.rs ceiling-cell shape."
+
+# The per-subject abuse-governance / STANDING layer for an openly-deployable
+# substrate. Only the standing layer is genuinely new: the quota/rate ceiling is
+# the SAME `Monotonic(counter) + FieldLteField(counter <= ceiling)` verified
+# slot-caveat pair `starbridge-tool-access-delegation` proved (its Lean
+# `mandateSpec`), reused here as the per-subject consume budget; the governance
+# gate is the `SenderAuthorized(PublicRoot)` shape `starbridge-governed-namespace`
+# uses for its committee-gated table swap; and the ceiling is the ceiling-cell
+# concept `cell/src/allowance.rs` seals into a cell's commitment. See `src/lib.rs`
+# for the four-axes composition (FactoryDescriptor + Cases program, the invoke()
+# service front door, the deos-view card, the abuse-audit reactor) and the
+# tests/ for the two verified turns (consume-quota refused over ceiling;
+# set-standing governance-gated, not a self-write).
+
+[lib]
+name = "starbridge_guard"
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+# The verified counter+ceiling we REUSE (do not hand-roll): its `deleg_admit` is
+# the byte-for-byte mirror of the Lean `delegAdmit` counter+ceiling half, and the
+# differential test pins our per-subject consume budget to it.
+starbridge-tool-access-delegation = { path = "../tool-access-delegation" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
