@@ -1,0 +1,81 @@
+{
+  "id": "guard",
+  "name": "Guard · Subject Abuse-Governance",
+  "description": "Per-subject abuse-governance for a permissionless (KYC-free) substrate: a subject-account cell whose quota/rate is a verified counter+ceiling (over-ceiling refused in-band — the 402/429 shape) and whose account STANDING (good/flagged/suspended) is a slot moved ONLY by a governance-gated, receipted turn, never a self-write.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d67756172642d7375626a6563742d666163746f7279"
+  ],
+  "inspectors": [
+    "guard-subject"
+  ],
+  "host_inspectors": [
+    { "id": "subject", "label": "Subject", "tag": "dregg-guard-subject", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "constitute", "label": "Constitute account", "builder": "constitute", "kind": "turn" },
+    { "id": "consume_quota", "label": "Consume quota", "builder": "consume_quota", "kind": "turn" },
+    { "id": "set_standing", "label": "Set standing (governance)", "builder": "set_standing", "kind": "turn" }
+  ],
+  "turn_builders": [
+    "constitute",
+    "consume_quota",
+    "set_standing"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "merkleMembershipProof"
+  ],
+  "slot_layout": {
+    "CONSUMED_SLOT": 0,
+    "CEILING_SLOT": 1,
+    "STANDING_SLOT": 2,
+    "GOVERNANCE_ROOT_SLOT": 3,
+    "SUBJECT_SLOT": 4
+  },
+  "standing_codes": {
+    "good": 0,
+    "flagged": 1,
+    "suspended": 2
+  },
+  "state_constraints": [
+    "FieldLteField(CONSUMED_SLOT, CEILING_SLOT)",
+    "WriteOnce(CEILING_SLOT)",
+    "WriteOnce(GOVERNANCE_ROOT_SLOT)",
+    "WriteOnce(SUBJECT_SLOT)",
+    "MethodIs(consume_quota) => Monotonic(CONSUMED_SLOT)",
+    "MethodIs(consume_quota) => Immutable(STANDING_SLOT)",
+    "MethodIs(set_standing) => SenderAuthorized(PublicRoot(GOVERNANCE_ROOT_SLOT))",
+    "MethodIs(set_standing) => Immutable(CONSUMED_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "guard_app(cipherclerk, executor)",
+    "cell": "subject",
+    "discoverable": ["governance", "abuse"],
+    "publish": "Signature (the SUBJECT tier — the role that holds the account and the narrowest cap-only affordance; the account cell is a dregg:// sturdyref the subject reacquires at its own tier)",
+    "affordances": {
+      "view": "cap-only, Signature (a SUBJECT reads its standing / budget)",
+      "consume": "GATED (cap∧state), Signature — budget-remaining precondition (consumed < ceiling); the fire submits the FULL counter-advancing turn (reading live consumed), the executor re-enforcing the installed Cases program (FieldLteField(consumed<=ceiling) + Monotonic(consumed))",
+      "set_standing": "cap-only, None/root (the GOVERNANCE tier) — the executor additionally gates the submitted turn on SenderAuthorized(PublicRoot(GOVERNANCE_ROOT_SLOT)); moved through the witnessed build_set_standing_action"
+    },
+    "seam": "CLOSED — the fire runs against the seeded account cell carrying the FULL Cases program (WriteOnce ceiling/governance-root/subject + FieldLteField(consumed<=ceiling) + the consume_quota-scoped Monotonic(consumed)/Immutable(standing) + the set_standing-scoped SenderAuthorized/Immutable(consumed)), so an OVER-CEILING consume (the 402/429 shape), a COUNTER REWIND (Monotonic), a STANDING SELF-WRITE via consume (Immutable), and a non-governance set_standing (SenderAuthorized STARK) all BITE on the real executor-submission path (tests/factory_birth.rs, tests/governance_executor.rs)"
+  },
+  "composition": {
+    "reuses": {
+      "counter_ceiling": "starbridge-tool-access-delegation (the verified Monotonic(counter) + FieldLteField(counter <= ceiling) pair; deleg_admit pins the differential)",
+      "governance_gate": "starbridge-governed-namespace (the SenderAuthorized(PublicRoot) committee-gated shape)",
+      "ceiling_cell": "cell/src/allowance.rs (the per-subject ceiling sealed into a cell's commitment)"
+    },
+    "genuinely_new": "the abuse-governance / account-standing layer"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/guard/src/lib.rs"
+  }
+}
