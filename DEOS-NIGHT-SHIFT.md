@@ -126,3 +126,31 @@ build-pages-dist.sh) · THE PROVENANCE WALKER (walk the receipt chain hash-by-ha
 link recomputed; Broken/Unanchored/Deferred/Reseeded verdicts). Fixes en route: AppContext
 import, Debug derive, reseeded_flags row-0 semantics (impl contradicted its own doc+test).
 Ten waves of organs on the branch now; 898 lib tests.
+
+## ~morning — THE CORE SESSION (ember redirected me from surfaces to foundation)
+Adversarial core audit (7 lenses → find → refute → keep survivors): 21 raised, 19 confirmed
+by a skeptic whose default was REFUTED. Artifact: CORE-AUDIT.md. Headline soundness cluster
+(#1/#3/#4): the durable overlay's change-set is a hand-maintained syntactic effect walk
+(collect_touched, ~13 of 30+ variants) instead of the executor's real journal write-set →
+Mint/Burn/CreateCell/deploy_factory records the correct root but an incomplete overlay →
+recovery refuses a valid image or silently truncates a committed turn. HELD for review (the
+correct fix touches the verified turn crate's surface; the quick fix is the fragility that
+caused it). Put to ember via AskUserQuestion — my rec: expose the journal write-set (option A).
+
+Fixed + verified this session (933 lib tests green):
+- #5 Discord toggle could never fire OFF → emits both affordances
+- #7 engine-twin AddToSlot overflow (panic/wrap vs saturate) → saturating_add, both agree
+- #6 dynamics forest-depth truncation (nested SetField never invalidated its bind → stale
+  paint) → both loops use CallTree::iter_dfs
+- SAFETY: the durable-image weld defaulted to Durable, which armed audit-#1 (the desktop
+  CreateCells via App Shelf/Exchange/letters) → flipped to EPHEMERAL default, opt-in via
+  --durable-world / --world-image path.
+
+Wave 7 integrated (4 lanes): durable-image weld (opt-in) · uncap-the-world virtualization
+(tail-following Chronicle/Ledger/Transcript/console via v_virtual_list) · Attach Wizard
+(five-minute resident onboarding) · Letter Office (mail as cells; fixed its ocap — send/
+deliver act on non-self cells, needed genesis_grant_cap, not open_permissions).
+
+Also surfaced: deos-view integration test renders_inspector_card_to_pixels is RED on the
+branch (view_source lacks "Cell State"/"inc"), regressed by an earlier deos-view wave,
+invisible until now because gauntlets only ran -p starbridge-v2 --lib. Wants a deos-view lane.
