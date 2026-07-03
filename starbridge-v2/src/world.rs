@@ -1182,12 +1182,28 @@ impl World {
                 // commit path; symbolic is a local/ephemeral fast path.)
                 if self.persist.is_some() && !self.witness_mode.is_symbolic() {
                     let height = self.height;
+                    // THE DURABLE OVERLAY'S CHANGE-SET MUST BE COMPLETE (CORE-AUDIT.md
+                    // finding 1). `touched` is a SYNTACTIC over-approximation of the
+                    // input turn that misses cells an effect resolves at runtime (a
+                    // burn's issuer well, a create's newborn, a factory birth, the
+                    // metered agent) — recording the correct root over an incomplete
+                    // overlay makes recovery refuse a valid image (or silently truncate
+                    // a committed turn). The executor's journal write-set is EXACT and
+                    // complete; union it with `touched` (belt-and-suspenders — a
+                    // false-positive unchanged cell in the overlay reconstructs
+                    // identically; only a MISSING cell is the bug).
+                    let mut write_set = touched.clone();
+                    for id in self.engine.executor().last_write_set() {
+                        if !write_set.contains(&id) {
+                            write_set.push(id);
+                        }
+                    }
                     // Split the borrows: take `persist` out, write through the
                     // disjoint `engine` borrow, then put it back (or drop it on a
                     // durable failure — the loud degrade-to-ephemeral path).
                     let mut p = self.persist.take().expect("checked is_some");
                     let result =
-                        p.dual_write(height, self.engine.ledger(), &touched, &receipt, &turn);
+                        p.dual_write(height, self.engine.ledger(), &write_set, &receipt, &turn);
                     match result {
                         Ok(()) => self.persist = Some(p),
                         Err(e) => {

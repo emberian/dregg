@@ -800,6 +800,16 @@ pub struct TurnExecutor {
     /// merely-touched cell gets a walkable per-cell receipt chain here without its
     /// head locking that cell's next authored turn to a causal edge it never made.
     pub per_cell_receipt_head: Mutex<HashMap<CellId, [u8; 32]>>,
+    /// **The last committed turn's exact write-set** — every cell whose serialized
+    /// state that turn mutated, captured from the execution journal
+    /// ([`crate::journal::LedgerJournal::touched_cells`]) on the success path. A
+    /// durable consumer that reconstructs post-state from a per-turn change-set
+    /// (the redb commit-log overlay) reads this instead of re-deriving the set
+    /// syntactically from the input turn — the syntactic walk misses cells an
+    /// effect resolves at runtime (a burn's well, a create's newborn, a factory
+    /// birth), which silently corrupts a recovered image (CORE-AUDIT.md finding 1).
+    /// Overwritten on every committed turn; empty until the first commit.
+    pub last_write_set: Mutex<Vec<CellId>>,
     /// Optional X25519 keypair used to decrypt `EncryptedTurn` submissions.
     ///
     /// When set, callers may submit privacy-preserving `EncryptedTurn`
@@ -988,6 +998,7 @@ impl TurnExecutor {
             epoch_minter: None,
             last_receipt_hash: Mutex::new(HashMap::new()),
             per_cell_receipt_head: Mutex::new(HashMap::new()),
+            last_write_set: Mutex::new(Vec::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
             require_validity_proof: false,
@@ -1049,6 +1060,7 @@ impl TurnExecutor {
             epoch_minter: None,
             last_receipt_hash: Mutex::new(HashMap::new()),
             per_cell_receipt_head: Mutex::new(HashMap::new()),
+            last_write_set: Mutex::new(Vec::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
             require_validity_proof: false,
@@ -1092,6 +1104,7 @@ impl TurnExecutor {
             epoch_minter: None,
             last_receipt_hash: Mutex::new(HashMap::new()),
             per_cell_receipt_head: Mutex::new(HashMap::new()),
+            last_write_set: Mutex::new(Vec::new()),
             executor_signing_key: None,
             turn_decryption_keypair: None,
             require_validity_proof: false,
@@ -1500,6 +1513,20 @@ impl TurnExecutor {
             .unwrap_or_else(|e| e.into_inner())
             .get(agent)
             .copied()
+    }
+
+    /// **The last committed turn's exact write-set** — the cells whose serialized
+    /// state that turn mutated, captured from the execution journal (see
+    /// [`crate::journal::LedgerJournal::touched_cells`] and the field docs on
+    /// [`Self::last_write_set`]). A durable consumer that rebuilds post-state from
+    /// a per-turn change-set reads this (COMPLETE by construction) instead of a
+    /// syntactic input-turn walk (which misses runtime-resolved cells). Empty
+    /// before the first committed turn.
+    pub fn last_write_set(&self) -> Vec<CellId> {
+        self.last_write_set
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Seed the receipt-chain head for an agent (for state recovery / loading).

@@ -1395,6 +1395,14 @@ impl TurnExecutor {
         // P0-3: record the new chain-head for this agent.
         self.record_receipt_hash(turn.agent, receipt.receipt_hash());
 
+        // THE WRITE-SET (CORE-AUDIT.md finding 1): capture this turn's EXACT
+        // mutated cells from the journal, so a durable consumer reconstructs
+        // post-state from a COMPLETE change-set. The journal names every cell it
+        // touched (incl. the cells an effect resolves at runtime — a burn's well,
+        // a create's newborn, a factory birth — that a syntactic input-turn walk
+        // misses). Overwrites the prior turn's set; read via `last_write_set()`.
+        *self.last_write_set.lock().unwrap() = journal.touched_cells();
+
         if prof {
             super::turn_profile::accum(super::turn_profile::Phase::receipt, _pt_receipt);
         }

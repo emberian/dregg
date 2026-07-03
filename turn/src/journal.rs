@@ -157,6 +157,54 @@ impl LedgerJournal {
         &self.entries
     }
 
+    /// **The exact write-set** — every cell whose serialized state this turn
+    /// mutated, distinct, in first-touch order. Because the journal records one
+    /// entry per mutation and each entry names the cell it changed, this set is
+    /// COMPLETE by construction — unlike a syntactic effect walk over the input
+    /// turn, which must re-derive (and can miss) the cells an effect resolves at
+    /// runtime (a burn's issuer well, a create's newborn id, a factory birth,
+    /// the metered agent). Consumers that must reconstruct post-state from a
+    /// per-turn change-set (the durable commit-log overlay — see CORE-AUDIT.md
+    /// finding 1) MUST use this, not `touched_cells(&turn)`.
+    ///
+    /// A cell that appears without a net state change is a harmless
+    /// over-approximation (its recorded post-state reconstructs identically); a
+    /// MISSING cell is the soundness bug this closes. The nullifier-set markers
+    /// (`NoteSpend`/`NoteCreate`/`*NullifierInserted`) carry no cell — they mutate
+    /// executor-side sets, not cell state — and are excluded.
+    pub fn touched_cells(&self) -> Vec<CellId> {
+        let mut out: Vec<CellId> = Vec::new();
+        for entry in &self.entries {
+            let cell = match entry {
+                JournalEntry::SetField { cell, .. }
+                | JournalEntry::SetBalance { cell, .. }
+                | JournalEntry::SetNonce { cell, .. }
+                | JournalEntry::GrantCapability { cell, .. }
+                | JournalEntry::RevokeCapability { cell, .. }
+                | JournalEntry::CreateCell { cell }
+                | JournalEntry::SetProvedState { cell, .. }
+                | JournalEntry::SetPermissions { cell, .. }
+                | JournalEntry::SetVerificationKey { cell, .. }
+                | JournalEntry::SetProgram { cell, .. }
+                | JournalEntry::SetDelegation { cell, .. }
+                | JournalEntry::SetDelegationEpoch { cell, .. }
+                | JournalEntry::SetCommittedHeight { cell, .. }
+                | JournalEntry::EventEmitted { cell, .. }
+                | JournalEntry::SetLifecycle { cell, .. }
+                | JournalEntry::SetHeap { cell, .. }
+                | JournalEntry::AttenuateCapability { cell, .. } => *cell,
+                JournalEntry::NoteSpend
+                | JournalEntry::NoteCreate
+                | JournalEntry::BridgedNullifierInserted { .. }
+                | JournalEntry::NoteNullifierInserted { .. } => continue,
+            };
+            if !out.contains(&cell) {
+                out.push(cell);
+            }
+        }
+        out
+    }
+
     /// Record a field change. `old_value = None` means the heap key was absent
     /// before this turn; fixed slots are always `Some`.
     pub fn record_set_field(
