@@ -1230,11 +1230,13 @@ impl World {
                         }
                     }
                 }
-                // Surface the effect kinds (caps granted, cells born, fields set).
-                for tree in &turn.call_forest.roots {
-                    collect_effect_events(&tree.action, &mut events);
-                    for child in &tree.children {
-                        collect_effect_events(&child.action, &mut events);
+                // Surface the effect kinds (caps granted, cells born, fields set)
+                // across the WHOLE forest depth-first — a nested (depth >= 2)
+                // SetField/Grant/etc. is a real change, and truncating at depth 1
+                // left a bind reading that slot frozen (CORE-AUDIT.md finding 6).
+                for root in &turn.call_forest.roots {
+                    for node in root.iter_dfs() {
+                        collect_effect_events(&node.action, &mut events);
                     }
                 }
 
@@ -1558,14 +1560,20 @@ fn push_unique(ids: &mut Vec<CellId>, id: CellId) {
 }
 
 /// All cell ids a turn's effects touch (for pre/post balance diffing).
+///
+/// Walks the WHOLE forest depth-first (`CallTree::iter_dfs`), not just roots +
+/// direct children — a nested (depth >= 2) sub-action's target/effects are real
+/// mutations, and truncating at depth 1 dropped them from the dynamics diff (a
+/// bind reading such a slot painted a permanently stale value). Note: this is a
+/// SYNTACTIC over-approximation by effect kind (see `collect_touched`), so it is
+/// still incomplete for the effect VARIANTS it does not enumerate — the sound
+/// source is the executor's journal write-set (see CORE-AUDIT.md finding 1).
 pub(crate) fn touched_cells(turn: &Turn) -> Vec<CellId> {
     let mut ids = Vec::new();
-    for tree in &turn.call_forest.roots {
-        push_unique(&mut ids, tree.action.target);
-        collect_touched(&tree.action, &mut ids);
-        for child in &tree.children {
-            push_unique(&mut ids, child.action.target);
-            collect_touched(&child.action, &mut ids);
+    for root in &turn.call_forest.roots {
+        for node in root.iter_dfs() {
+            push_unique(&mut ids, node.action.target);
+            collect_touched(&node.action, &mut ids);
         }
     }
     ids
