@@ -612,6 +612,63 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// **CORE-AUDIT.md finding 1 — the regression guard.** A committed turn that
+    /// CREATES a cell mutates the newborn, a cell the syntactic `touched_cells`
+    /// walk over the input turn does NOT enumerate. Before the executor-write-set
+    /// fix, `dual_write` recorded the correct canonical post-root over an overlay
+    /// that OMITTED the newborn, so recovery — reconstructing checkpoint ⊕ overlay,
+    /// with NO checkpoint flushed here so the OVERLAY is the only source — rebuilt
+    /// a ledger without the created cell and `World::open` refused a validly
+    /// committed image (`OpenError::Divergent`). This proves the newborn now rides
+    /// the overlay through a close + reopen. (The desktop's App Shelf / Exchange /
+    /// Letter Office all create cells, so this is the durable desktop's real path.)
+    #[test]
+    fn a_committed_create_cell_survives_reopen_via_the_overlay() {
+        let path = scratch_path();
+        let (created, root, cells) = {
+            let mut w = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
+                .expect("fresh open of an empty store");
+            let treasury = w.genesis_cell(0x11, 1_000_000);
+            let before: std::collections::HashSet<CellId> =
+                w.ledger().iter().map(|(id, _)| *id).collect();
+            // A create-cell turn: the newborn is NOT in `touched_cells(&turn)`.
+            let t = w.turn(treasury, vec![crate::world::create_cell(0x77)]);
+            assert!(
+                w.commit_turn(t).is_committed(),
+                "the create-cell turn must commit"
+            );
+            let created = w
+                .ledger()
+                .iter()
+                .map(|(id, _)| *id)
+                .find(|id| !before.contains(id))
+                .expect("a cell was born by the committed turn");
+            // DELIBERATELY NO checkpoint_now(): recovery must reconstruct from the
+            // commit-log OVERLAY (the path the bug corrupted), not a full snapshot.
+            (created, canonical_ledger_root(w.ledger()), w.cell_count())
+            // w dropped → the redb file persists on disk.
+        };
+
+        // The clean open must NOT diverge — the overlay carried the newborn.
+        let reopened = World::open_with_timestamp(&path, ComputronCosts::zero(), TS)
+            .expect("reopen must not diverge — the created cell was recorded in the overlay");
+        assert_eq!(
+            canonical_ledger_root(reopened.ledger()),
+            root,
+            "the recovered root equals the committed root"
+        );
+        assert_eq!(
+            reopened.cell_count(),
+            cells,
+            "cell count (incl. newborn) restored"
+        );
+        assert!(
+            reopened.ledger().contains(&created),
+            "the cell created by a committed turn survived the reopen"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn a_committed_turn_after_reopen_threads_the_chain_head() {
         // The chain-head re-prime: a NEW turn from an agent with durable history
