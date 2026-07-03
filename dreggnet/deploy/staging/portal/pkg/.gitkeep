@@ -1,3 +1,0 @@
-# the wasm light-client bundle is copied here from breadstuffs/wasm/pkg by deploy.sh at
-# stage time (it is ~15MB; kept out of git). Drop dregg_wasm.js + dregg_wasm_bg.wasm here
-# to enable the in-tab trustless verify.

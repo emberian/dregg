@@ -1,6 +1,0 @@
-# Match breadstuffs' rolling `nightly` so this demo tool reuses breadstuffs' warm
-# build artifacts when built with CARGO_TARGET_DIR=$BREADSTUFFS_DIR/target.
-[toolchain]
-channel = "nightly"
-profile = "minimal"
-components = ["cargo", "rustc"]

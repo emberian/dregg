@@ -1,5 +1,0 @@
-# This demo tool builds into breadstuffs' target (CARGO_TARGET_DIR) and re-resolves
-# against breadstuffs' current workspace each build, so its lockfile/target are not
-# tracked (a pinned lock would rot against the fast-moving breadstuffs git deps).
-/target
-/Cargo.lock
