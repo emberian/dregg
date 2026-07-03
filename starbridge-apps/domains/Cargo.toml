@@ -1,0 +1,33 @@
+[package]
+name = "starbridge-domains"
+version = "0.1.0"
+edition = "2024"
+description = "BYO custom domains as a dregg-native cell: a domain binding is a factory-born cell whose committed slots {domain, site, owner, verification_state, challenge_nonce} carry the WriteOnce(challenge_nonce) + Monotonic(verified_seq) invariants the executor re-enforces. A DomainCap-gated bind turn issues a DNS challenge; a verify turn flips verification_state once against a DnsResolver seam (MockDns in tests, a host-injected real resolver in prod); site_for_host / is_verified are the verified reads a gateway consults. Supersedes a prior imperative custom-domains module."
+
+[lib]
+name = "starbridge_domains"
+
+# The BYO-custom-domains gap, rebuilt as a starbridge-app on the four-axis
+# template (`starbridge-apps/nameservice` is the sibling exemplar — DNS-challenge
+# BYO domains are NOT federation names, but they share the FactoryDescriptor +
+# WriteOnce/Monotonic slot-caveat shape). A domain binding is its own sovereign
+# cell: register (own the domain) -> bind (point at a site, issue the challenge
+# nonce, cap-gated) -> verify (prove DNS control, flip verification_state once).
+# The cap-gate is a `dregg-auth` credential verifying under the registry's trusted
+# root (the native successor of a prior imperative `webauth/cred.rs`); the DNS
+# check is driven through the injected `DnsResolver` seam. See `src/lib.rs`.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-types = { path = "../../types" }
+# The bind cap = a credential that VERIFIES under the registry's trusted root as
+# granting the binding authority for a domain (not a self-asserted token). The
+# proven credential core (offline verify, no-amplify attenuation).
+dregg-auth = { path = "../../dregg-auth" }
+
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
