@@ -5259,6 +5259,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-umem"
+version = "0.1.0"
+dependencies = [
+ "dregg-cell",
+ "dregg-merge",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dregg-userspace-verify"
 version = "0.1.0"
 dependencies = [
