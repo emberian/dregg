@@ -190,6 +190,26 @@ fn parse_transclusion_ref(line: &str) -> Option<CellId> {
     Some(CellId::from_bytes(bytes))
 }
 
+/// **The pure reverse-scan core** of [`DeosDesktop::backlinks_of`] — given every
+/// desktop document as a `(cell, prose)` pair, return the cells whose prose carries a
+/// transclusion resolving to `here` (its BACKLINKS, in desktop order). A cell quoting
+/// itself is not a backlink. Kept as a free, gpui-less function so the two-way-link
+/// inversion — the truth the Links window, the halo's "← quoted by N" witness arc,
+/// and [`DeosDesktop::bake_doc_links`] all read — is unit-testable headlessly (see
+/// the `tests` module at the bottom of this file).
+fn backlinks_in(here: CellId, docs: impl IntoIterator<Item = (CellId, String)>) -> Vec<CellId> {
+    docs.into_iter()
+        .filter(|(other, _)| *other != here)
+        .filter(|(_, prose)| {
+            prose
+                .lines()
+                .filter_map(parse_transclusion_ref)
+                .any(|t| t == here)
+        })
+        .map(|(other, _)| other)
+        .collect()
+}
+
 // ── A live, open inspector window over one cell ───────────────────────────────────
 
 /// The faces an inspector window shows of a cell (read fresh off the live ledger
@@ -3137,23 +3157,18 @@ impl DeosDesktop {
     /// **Structured link assertion (a bake/test hook)** — does `doc`'s document carry
     /// a transclusion that resolves to `target` (an OUTBOUND link), and does `target`'s
     /// Links view see `doc` as a BACKLINK (← mentions this)? Returns `(outbound, back)`.
-    /// Reuses the exact `parse_transclusion_ref` the Links window renders with, so the
-    /// assertion tracks the real surface.
+    /// Reuses the exact `parse_transclusion_ref` + `Self::backlinks_of` the Links
+    /// window renders with, so the assertion tracks the real surface. (The back leg
+    /// previously re-parsed the SAME doc's prose — the outbound scan twice under
+    /// another name — so the genuine reverse scan was never exercised; it now asks
+    /// the observer's question: is `doc` among `target`'s backlinks?)
     pub fn bake_doc_links(&self, doc: CellId, target: CellId) -> (bool, bool) {
-        let prose = self.load_doc_buffer(doc);
-        let outbound = prose
+        let outbound = self
+            .load_doc_buffer(doc)
             .lines()
             .filter_map(parse_transclusion_ref)
             .any(|t| t == target);
-        // The backlink is the same parse inverted: target sees doc mentioning it.
-        let back = self
-            .read_doc_from_heap(&doc)
-            .or_else(|| Some(prose.clone()))
-            .unwrap_or_default()
-            .lines()
-            .filter_map(parse_transclusion_ref)
-            .any(|t| t == target)
-            && doc != target;
+        let back = self.backlinks_of(target).contains(&doc);
         (outbound, back)
     }
 
@@ -5024,6 +5039,33 @@ impl DeosDesktop {
         col.into_any_element()
     }
 
+    /// **Backlinks — which cells' documents transclude `cell`.** The reverse scan
+    /// over every committed document on the desktop: each cell's umem-heap prose
+    /// (falling back to an open editor's live buffer) is parsed line-by-line through
+    /// [`parse_transclusion_ref`] and matched against `cell`. This is the ONE source
+    /// of two-way-link truth — the Links window's "Backlinks" section, the halo's
+    /// "← quoted by N" witness arc ([`Self::render_halo`]), and the
+    /// [`Self::bake_doc_links`] back-leg all call it, so the surfaces cannot drift.
+    fn backlinks_of(&self, cell: CellId) -> Vec<CellId> {
+        backlinks_in(
+            cell,
+            self.cells.iter().map(|other| {
+                let prose = self
+                    .read_doc_from_heap(other)
+                    .or_else(|| {
+                        self.windows
+                            .get(&(*other, WinKindTag::DocEditor))
+                            .and_then(|w| match &w.kind {
+                                WinKind::DocEditor { buffer, .. } => Some(buffer.clone()),
+                                _ => None,
+                            })
+                    })
+                    .unwrap_or_default();
+                (*other, prose)
+            }),
+        )
+    }
+
     /// **The links / backlinks body** — which cells this one reaches (its caps),
     /// which transclusions are composed into it, and the World's reach.
     fn render_links_body(&self, cell: CellId) -> AnyElement {
@@ -5073,33 +5115,10 @@ impl DeosDesktop {
             }
         }
 
-        // ── Backlinks: which OTHER cells' documents transclude THIS one. A reverse
-        //    scan over every committed document on the desktop (the open windows +
-        //    the heap-backed prose) — "what points here". ──
-        let here = cell;
-        let backlinks: Vec<CellId> = self
-            .cells
-            .iter()
-            .filter(|other| **other != here)
-            .filter(|other| {
-                let prose = self
-                    .read_doc_from_heap(other)
-                    .or_else(|| {
-                        self.windows
-                            .get(&(**other, WinKindTag::DocEditor))
-                            .and_then(|w| match &w.kind {
-                                WinKind::DocEditor { buffer, .. } => Some(buffer.clone()),
-                                _ => None,
-                            })
-                    })
-                    .unwrap_or_default();
-                prose
-                    .lines()
-                    .filter_map(parse_transclusion_ref)
-                    .any(|t| t == here)
-            })
-            .copied()
-            .collect();
+        // ── Backlinks: which OTHER cells' documents transclude THIS one — the SAME
+        //    `backlinks_of` reverse scan the halo's "← quoted by N" witness arc reads
+        //    (one truth, two surfaces) — "what points here". ──
+        let backlinks = self.backlinks_of(cell);
         col = col.child(face_section("Backlinks (← mentions this)"));
         if backlinks.is_empty() {
             col = col.child(face_row("backlinks", "(none point here yet)"));
@@ -5928,3 +5947,79 @@ enum PrefToggle {
 
 // (Small render helpers — `face_section` / `face_row` / `fmt_balance` / `group` —
 // live in `chrome.rs` and are imported at the top of this module.)
+
+// ── Unit tests for the pure two-way-link core (gpui-free) ──────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cid(b: u8) -> CellId {
+        CellId::from_bytes([b; 32])
+    }
+
+    /// The exact line shape `transclude_into` composes (id · kind · balance · life).
+    fn quote_line(target: &CellId) -> String {
+        format!(
+            "{{transclude dregg://{} · token · balance 500 · Live}}",
+            id_hex(target)
+        )
+    }
+
+    #[test]
+    fn parse_transclusion_ref_roundtrips_the_compose_line() {
+        let target = cid(7);
+        assert_eq!(
+            parse_transclusion_ref(&quote_line(&target)),
+            Some(target),
+            "the compose line parses back to the STRUCTURED reference it quotes"
+        );
+        // Plain prose — and a truncated (non-64-hex) dregg:// id — parse to nothing.
+        assert_eq!(parse_transclusion_ref("plain prose line"), None);
+        assert_eq!(
+            parse_transclusion_ref("{transclude dregg://abcd · token}"),
+            None
+        );
+    }
+
+    #[test]
+    fn backlinks_in_inverts_the_quote() {
+        let here = cid(1);
+        let quoter = cid(2);
+        let silent = cid(3);
+        let docs = vec![
+            (
+                quoter,
+                format!("prose above\n{}\nprose below", quote_line(&here)),
+            ),
+            (silent, "no transclusions at all".to_string()),
+            // A cell quoting ITSELF is not a backlink (the Links window skips it too).
+            (here, quote_line(&here)),
+        ];
+        assert_eq!(
+            backlinks_in(here, docs),
+            vec![quoter],
+            "only the OTHER document that quotes `here` comes back"
+        );
+    }
+
+    #[test]
+    fn backlinks_in_finds_every_quoter_in_desktop_order() {
+        let here = cid(9);
+        let a = cid(10);
+        let b = cid(11);
+        let docs = vec![
+            (a, quote_line(&here)),
+            // A document quoting several cells still backlinks each exactly once.
+            (
+                b,
+                format!("{}\n{}", quote_line(&cid(12)), quote_line(&here)),
+            ),
+        ];
+        assert_eq!(backlinks_in(here, docs), vec![a, b]);
+        assert!(
+            backlinks_in(cid(13), vec![(a, quote_line(&here))]).is_empty(),
+            "a cell nobody quotes has no backlinks"
+        );
+    }
+}

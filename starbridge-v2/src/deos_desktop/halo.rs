@@ -93,6 +93,9 @@ enum HaloCmd {
     Resize,
     /// Close a window (`close_window`).
     Close,
+    /// **Walk a backlink** — open the QUOTING document (the payload cell) and land
+    /// selected on it. Fired by the witness-arc beads, not a ring handle.
+    WalkBacklink(CellId),
 }
 
 /// A single handle descriptor — glyph, accent, where it sits, what it fires.
@@ -143,6 +146,10 @@ const HALO_OUTLINE: u32 = 0x33ccff;
 
 /// The handle diameter (px).
 const HANDLE_D: f32 = 24.0;
+
+/// The backlink-bead diameter (px) — smaller than a handle: a bead is a door to
+/// ANOTHER object (a quoting document), not a verb on this one.
+const BEAD_D: f32 = 14.0;
 
 impl DeosDesktop {
     /// The bounding box `(x, y, w, h)` of the current halo target, or `None` if the
@@ -278,6 +285,19 @@ impl DeosDesktop {
                 }
                 self.selected = None;
             }
+            HaloCmd::WalkBacklink(observer) => {
+                // Walk the two-way link BACKWARDS — open the quoting document's
+                // editor and land selected on it (the same `land_in` arrival a
+                // welcome door / Spotter jump makes), so the backlink stops being
+                // a row you must open a Links window to read and becomes a door
+                // you step through.
+                self.land_in(observer, WinKindTag::DocEditor);
+                self.status = format!(
+                    "WALK backlink → document {} (it quotes {}).",
+                    id_short(&observer),
+                    id_short(&cell)
+                );
+            }
         }
     }
 
@@ -328,6 +348,62 @@ impl DeosDesktop {
                 ))
                 .into_any_element(),
         );
+
+        // ── The backlink WITNESS ARC — the ring knows who quotes you. `backlinks_of`
+        //    is the very reverse scan the Links window renders with (one source of
+        //    two-way-link truth, so the two surfaces cannot drift): every document
+        //    whose prose transcludes this cell. An amber badge names the count; up to
+        //    three beads follow, one per quoting document, each labeled with the
+        //    document's leading hex — and each a DOOR: clicking a bead walks the link
+        //    backwards (`HaloCmd::WalkBacklink` → open that document's editor, land
+        //    selected on it, mold-ready). ──
+        let backlinks = self.backlinks_of(target.cell());
+        if !backlinks.is_empty() {
+            let arc_y = by + bh + 8.0;
+            out.push(
+                div()
+                    .absolute()
+                    .left(px(bx))
+                    .top(px(arc_y))
+                    .px_1()
+                    .text_size(px(9.0))
+                    .bg(gpui::rgb(HALO_AFFORD))
+                    .text_color(gpui::rgb(NT_TITLE_TEXT))
+                    .child(format!("← quoted by {}", backlinks.len()))
+                    .into_any_element(),
+            );
+            for (i, observer) in backlinks.into_iter().take(3).enumerate() {
+                let hex2: String = id_hex(&observer).chars().take(2).collect();
+                out.push(
+                    div()
+                        .id(SharedString::from(format!("halo-back-{key_base}-{i}")))
+                        .absolute()
+                        .left(px(bx + 96.0 + i as f32 * (BEAD_D + 4.0)))
+                        .top(px(arc_y))
+                        .w(px(BEAD_D))
+                        .h(px(BEAD_D))
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(8.0))
+                        .text_color(gpui::rgb(NT_TITLE_TEXT))
+                        .bg(gpui::rgb(HALO_AFFORD))
+                        .border_1()
+                        .border_color(gpui::rgb(0xffffff))
+                        .hover(|s| s.border_color(gpui::rgb(0x101010)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                                this.actuate_halo(target, HaloCmd::WalkBacklink(observer));
+                                cx.notify();
+                            }),
+                        )
+                        .child(hex2)
+                        .into_any_element(),
+                );
+            }
+        }
 
         for (i, h) in self.halo_handles(target).into_iter().enumerate() {
             let c = h.anchor.center(bx, by, bw, bh);
@@ -415,5 +491,33 @@ impl DeosDesktop {
             }
             None => false,
         }
+    }
+
+    /// The backlink count the current halo selection's witness arc shows — how many
+    /// documents transclude the selected cell (the "← quoted by N" badge); 0 when
+    /// nothing is selected or the selection is stale. Reads the SAME
+    /// `DeosDesktop::backlinks_of` reverse scan the badge (and the Links window)
+    /// renders with, so the assertion tracks the real surface.
+    pub fn bake_halo_backlink_count(&self) -> usize {
+        match self.selected.and_then(|t| {
+            self.selected_bounds(t)?;
+            Some(t)
+        }) {
+            Some(t) => self.backlinks_of(t.cell()).len(),
+            None => 0,
+        }
+    }
+
+    /// **Walk the first backlink bead** on the current halo selection (what clicking
+    /// bead `halo-back-…-0` does): open the quoting document's editor and land
+    /// selected on it. Returns the quoting cell walked to (`None` when nothing is
+    /// selected or nothing quotes it). Pair with
+    /// `DeosDesktop::bake_selected_window_label` to assert the walk LANDED
+    /// mold-ready in the RIGHT surface (the selection IS the quoting Document).
+    pub fn bake_halo_walk_backlink(&mut self) -> Option<CellId> {
+        let target = self.selected?;
+        let observer = self.backlinks_of(target.cell()).into_iter().next()?;
+        self.actuate_halo(target, HaloCmd::WalkBacklink(observer));
+        Some(observer)
     }
 }
