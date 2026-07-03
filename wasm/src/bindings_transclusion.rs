@@ -21,7 +21,12 @@
 //!      quote cannot be opened;
 //!   4. **no-amplification** → [`transclusion_project_for`] projects the quote
 //!      per-viewer through the REAL [`starbridge_web_surface::rehydrate::Membrane`]; a
-//!      weaker viewer's projection cannot amplify (`granted ⊆ held`).
+//!      weaker viewer's projection cannot amplify (`granted ⊆ held`);
+//!   5. **the two-way link** → [`transclusion_include_into`] records each quote in the
+//!      real [`starbridge_web_surface::transclusion::Backlinks`] reverse index, and
+//!      [`transclusion_backlinks`] enumerates "who quotes this cell" — each entry
+//!      pinned to the cited receipt + content commitment (a verifiable fact, never
+//!      Xanadu's hand-maintained pointer).
 //!
 //! It does NOT touch the circuit prover or the recursion path — only the
 //! resolve/render path reaches the browser. Same `handle: usize` +
@@ -37,7 +42,7 @@ use wasm_bindgen::prelude::*;
 use dregg_cell::{AuthRequired, CellId};
 use starbridge_web_surface::SurfaceCapability;
 use starbridge_web_surface::rehydrate::Membrane;
-use starbridge_web_surface::transclusion::{TranscludedField, TransclusionError};
+use starbridge_web_surface::transclusion::{Backlinks, TranscludedField, TransclusionError};
 use starbridge_web_surface::web_of_cells::{DreggUri, FetchError, WebOfCells};
 
 // ============================================================================
@@ -58,6 +63,11 @@ struct TransclusionDemo {
     /// A monotone seed so each `publish` seeds a DISTINCT origin cell (the
     /// `WebOfCells::seed_origin` key derivation is seed-addressed).
     next_seed: u8,
+    /// The REAL reverse index of Nelson's two-way link: source cell → the observer
+    /// documents that transclude it, each record pinned to the cited receipt +
+    /// content commitment. Populated by [`transclusion_include_into`], read by
+    /// [`transclusion_backlinks`].
+    backlinks: Backlinks,
 }
 
 impl TransclusionDemo {
@@ -68,6 +78,7 @@ impl TransclusionDemo {
             web: WebOfCells::new(3),
             docs: Vec::new(),
             next_seed: 1,
+            backlinks: Backlinks::new(),
         }
     }
 
@@ -178,6 +189,36 @@ struct ProjectionView {
     reason: String,
 }
 
+/// One backlink row of [`transclusion_backlinks`] — the verifiable claim "observer
+/// O quoted source S's value V at receipt R", every field drawn from the recorded
+/// observation, never from the page's own say-so.
+#[derive(Serialize)]
+struct BacklinkView {
+    /// The observing document's `dregg://<cell>` ref (the document that quotes).
+    observer_uri: String,
+    /// The demo name the observer was registered under (`""` when the observing
+    /// cell is not one of the demo's named documents).
+    observer_name: String,
+    /// The receipt the observation was pinned to, as hex — the cited immutable
+    /// past. A later amend of the source does NOT rewrite this recorded fact.
+    receipt_hash: String,
+    /// The source content commitment that was observed, as hex — WHAT value the
+    /// observer quoted (dateable: an old quote visibly cites an old value).
+    content_hash: String,
+}
+
+/// What [`transclusion_backlinks`] returns — the reverse half of Nelson's two-way
+/// link: WHO transcludes the source, each entry receipt-pinned.
+#[derive(Serialize)]
+struct BacklinksReadout {
+    /// The source `dregg://<cell>` ref the observers quote FROM.
+    source_uri: String,
+    /// The in-degree: how many distinct observers transclude the source.
+    count: usize,
+    /// The observers, insertion-ordered — each a verifiable claim, not a pointer.
+    observers: Vec<BacklinkView>,
+}
+
 /// A handle to a fresh `dregg://` document the demo published (so JS can refer to
 /// it + render its `dregg://<cell>` link).
 #[derive(Serialize)]
@@ -277,6 +318,74 @@ pub fn transclusion_include(handle: usize, name: &str) -> Result<JsValue, JsErro
             TranscludedField::include(&demo.web, &uri).map_err(describe_transclusion_err)?;
         let view = quote_view(&field, demo.web.height())?;
         serde_wasm_bindgen::to_value(&view).map_err(|e| e.to_string())
+    })
+}
+
+/// **INCLUDE INTO** an observing document (the two-way-link write): transclude the
+/// source named `source_name` INTO the published document named `observer_name` —
+/// the same verified finalized read as [`transclusion_include`], PLUS recording the
+/// observation in the demo's [`Backlinks`] reverse index (the real
+/// [`Backlinks::observe`]). The backlink carries the cited receipt + content
+/// commitment from the quote's provenance, so "who quotes this cell" becomes a
+/// verifiable fact, not Xanadu's hand-maintained pointer. Returns a [`QuoteView`].
+///
+/// The observer must itself be a PUBLISHED document (it observes from its own
+/// `dregg://` cell) — an unpublished observer name is a clear error, never a
+/// silent default.
+#[wasm_bindgen]
+pub fn transclusion_include_into(
+    handle: usize,
+    observer_name: &str,
+    source_name: &str,
+) -> Result<JsValue, JsError> {
+    with_demo(handle, |demo| {
+        let observer_uri = demo.uri_of(observer_name)?;
+        let source_uri = demo.uri_of(source_name)?;
+        let field =
+            TranscludedField::include(&demo.web, &source_uri).map_err(describe_transclusion_err)?;
+        // The reverse-index write: the observation is recorded with the quote's
+        // OWN provenance (receipt + content commitment) — idempotent on identical
+        // records, so re-rendering a quote never inflates the in-degree.
+        demo.backlinks.observe(observer_uri.cell, &field);
+        let view = quote_view(&field, demo.web.height())?;
+        serde_wasm_bindgen::to_value(&view).map_err(|e| e.to_string())
+    })
+}
+
+/// **BACKLINKS** (the two-way link, finally honest): enumerate WHO transcludes the
+/// source named `name` — the reverse index [`transclusion_include_into`] populates,
+/// wrapping the real [`Backlinks::observers_of`]. Each entry carries the cited
+/// receipt + content commitment from the observation's provenance, so a backlink is
+/// a verifiable claim ("observer O quoted source S's value V at receipt R") that a
+/// third party can recheck — never a dangling pointer. Returns a
+/// [`BacklinksReadout`]; a source nobody quotes yields an EMPTY readout, not an
+/// error.
+#[wasm_bindgen]
+pub fn transclusion_backlinks(handle: usize, name: &str) -> Result<JsValue, JsError> {
+    with_demo_ref(handle, |demo| {
+        let uri = demo.uri_of(name)?;
+        let observers: Vec<BacklinkView> = demo
+            .backlinks
+            .observers_of(uri.cell)
+            .iter()
+            .map(|o| BacklinkView {
+                observer_uri: DreggUri::new(o.observer).to_uri_string(),
+                observer_name: demo
+                    .docs
+                    .iter()
+                    .find(|(_, u)| u.cell == o.observer)
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_default(),
+                receipt_hash: hex32(&o.receipt_hash),
+                content_hash: hex32(&o.content_hash),
+            })
+            .collect();
+        let readout = BacklinksReadout {
+            source_uri: uri.to_uri_string(),
+            count: observers.len(),
+            observers,
+        };
+        serde_wasm_bindgen::to_value(&readout).map_err(|e| e.to_string())
     })
 }
 
@@ -678,6 +787,74 @@ mod tests {
         assert_eq!(demo.uri_of("constitution").unwrap(), uri);
         // NEGATIVE: an unknown name is a clear error (never a silent default).
         assert!(demo.uri_of("nope").is_err(), "an unknown doc name errors");
+    }
+
+    // (7) THE TWO-WAY LINK — the include-into path records a receipt-pinned backlink
+    //     the readout enumerates (positive), re-quoting at the same receipt is
+    //     idempotent AND an unquoted source has an EMPTY readout / an unpublished
+    //     observer is a clear error (negative). The exact store+registry logic the
+    //     `transclusion_include_into` / `transclusion_backlinks` wrappers ride.
+    #[test]
+    fn include_into_records_backlinks_unquoted_empty_unknown_observer_errors() {
+        let mut demo = TransclusionDemo::new();
+        // Publish a source + TWO observer documents (each a real published cell —
+        // an observer quotes FROM its own dregg:// cell).
+        let src = demo
+            .web
+            .publish(1, b"<h1>the charter</h1>", "dregg://constitution");
+        demo.docs.push(("constitution".to_string(), src.clone()));
+        let essay = demo.web.publish(2, b"<p>my essay</p>", "dregg://essay");
+        demo.docs.push(("essay".to_string(), essay.clone()));
+        let review = demo.web.publish(3, b"<p>a review</p>", "dregg://review");
+        demo.docs.push(("review".to_string(), review.clone()));
+
+        // POSITIVE: both observers transclude the source; the reverse index
+        // enumerates exactly the two, each pinned to the quote's OWN provenance
+        // (receipt + content commitment — the verifiable backlink).
+        let field = TranscludedField::include(&demo.web, &src).expect("include resolves");
+        demo.backlinks.observe(essay.cell, &field);
+        demo.backlinks.observe(review.cell, &field);
+        // …and the essay re-quoting at the same receipt is idempotent (a re-render
+        // never inflates the in-degree):
+        demo.backlinks.observe(essay.cell, &field);
+
+        let observers = demo.backlinks.observers_of(src.cell);
+        assert_eq!(
+            observers.len(),
+            2,
+            "two distinct observers, no double-count"
+        );
+        assert!(
+            observers
+                .iter()
+                .all(|o| o.receipt_hash == field.cite().receipt_hash
+                    && o.content_hash == field.cite().content_hash),
+            "every backlink is pinned to the cited receipt + content commitment"
+        );
+        // The name mapping the readout renders: an observer cell that IS a named
+        // demo document resolves back to its name.
+        let named: Vec<&str> = observers
+            .iter()
+            .filter_map(|o| {
+                demo.docs
+                    .iter()
+                    .find(|(_, u)| u.cell == o.observer)
+                    .map(|(n, _)| n.as_str())
+            })
+            .collect();
+        assert!(named.contains(&"essay") && named.contains(&"review"));
+
+        // NEGATIVE: a source nobody quotes has an EMPTY readout (not an error)…
+        assert!(
+            demo.backlinks.observers_of(essay.cell).is_empty(),
+            "nobody quotes the essay — empty readout"
+        );
+        // …and an unpublished observer name is a clear error via the store (the
+        // wrapper's observer gate), never a silent default.
+        assert!(
+            demo.uri_of("ghost").is_err(),
+            "an unpublished observer errors"
+        );
     }
 
     // (6) The rights vocabulary the projection accepts is the REAL AuthRequired lattice.

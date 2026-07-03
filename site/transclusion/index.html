@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transclusion — Xanadu made honest · dregg</title>
+  <meta name="description" content="Quote the web without copying it: a transcluded span IS a verified dregg:// finalized read. Amend the source and the live quote follows; forge the bytes and the quote refuses to open; every quote leaves a receipt-pinned backlink.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../assets/style.css">
+  <style>
+    main.wrap { padding-top: var(--s7); padding-bottom: var(--s9); max-width: 1080px; }
+    .tx-eyebrow { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--accent); margin-bottom: var(--s3); }
+    .tx-hero h1 { font-size: clamp(2rem, 5vw, 3rem); max-width: 22ch; }
+    .tx-lede { max-width: 68ch; margin: var(--s3) 0 var(--s5); color: var(--fg-dim); line-height: 1.6; }
+    .panel { background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--r3);
+      padding: var(--s5) var(--s6); margin-bottom: var(--s5); }
+    .panel h2 { font-family: var(--font-display); font-size: 1.2rem; margin-bottom: var(--s2); }
+    .panel p.hint { color: var(--fg-muted); font-size: 0.86rem; line-height: 1.55; margin-bottom: var(--s4); }
+    .controls { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: center; margin: var(--s4) 0; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--fg-muted); }
+    .field input, .field select { font-family: var(--font-mono); font-size: 0.88rem; background: var(--bg-inset);
+      color: var(--fg); border: 1px solid var(--line-strong); border-radius: var(--r2); padding: 8px 10px; }
+    .field input.wide { min-width: min(34rem, 80vw); }
+    .field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+    .readout { font-family: var(--font-mono); font-size: 0.84rem; line-height: 1.7; background: var(--bg-inset);
+      border: 1px solid var(--line); border-radius: var(--r2); padding: var(--s4) var(--s5); margin-top: var(--s4);
+      white-space: pre-wrap; word-break: break-word; min-height: 2.5em; color: var(--fg-dim); }
+    .readout .k { color: var(--accent); }
+    .readout .v { color: var(--chalk); }
+    .verdict { font-family: var(--font-mono); font-weight: 700; }
+    .verdict.ok { color: var(--accent-bright); }
+    .verdict.no { color: var(--danger); }
+
+    /* ── the parallel-source (EEL) two-column view ─────────────────────────── */
+    .eel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s5); }
+    @media (max-width: 800px) { .eel { grid-template-columns: minmax(0, 1fr); } }
+    .eel h3 { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase;
+      letter-spacing: 0.1em; color: var(--fg-muted); margin-bottom: var(--s3); }
+    .doc { background: var(--bg-inset); border: 1px solid var(--line); border-radius: var(--r2);
+      padding: var(--s4) var(--s5); line-height: 1.65; font-size: 0.95rem; }
+    .doc p.own { color: var(--fg-dim); margin: var(--s3) 0; }
+    .quote { border-left: 3px solid var(--accent); border-radius: 0 var(--r2) var(--r2) 0;
+      background: color-mix(in srgb, var(--accent) 7%, transparent);
+      padding: var(--s3) var(--s4); margin: var(--s3) 0; transition: filter 0.25s, opacity 0.25s; }
+    .quote .qtext { color: var(--chalk); display: block; }
+    .quote .cite { display: block; margin-top: var(--s2); font-family: var(--font-mono);
+      font-size: 0.68rem; color: var(--fg-muted); word-break: break-all; }
+    .quote .cite a { color: var(--accent); text-decoration: none; }
+    .quote .cite a:hover { color: var(--accent-bright); }
+    .quote .cite .tick { color: var(--accent-bright); font-weight: 700; }
+    /* THE HONEST DEFAULT: a quote is DARK until the verifier has spoken. JS only
+       lightens a span by replacing it with a verified render — so no-JS, a failed
+       wasm load, or a refused verify all leave the placeholder visibly untrusted. */
+    .quote.dark { border-left-color: var(--line-strong); filter: grayscale(1) brightness(0.62); }
+    .quote.dark .qtext { color: var(--fg-muted); font-style: italic; }
+    .quote.refused { border-left-color: var(--danger);
+      background: color-mix(in srgb, var(--danger) 8%, transparent); }
+    .quote.refused .qtext { color: var(--fg-muted); text-decoration: line-through; }
+    .src-card { background: var(--bg-inset); border: 1px solid var(--line); border-radius: var(--r2);
+      padding: var(--s4) var(--s5); margin-bottom: var(--s4); }
+    .src-card mark { background: color-mix(in srgb, var(--accent) 22%, transparent);
+      color: var(--chalk); border-radius: 3px; padding: 0 2px; }
+    .src-card .prov { display: block; margin-top: var(--s2); font-family: var(--font-mono);
+      font-size: 0.68rem; color: var(--fg-muted); word-break: break-all; }
+    .badge { display: inline-block; font-family: var(--font-mono); font-size: 0.66rem;
+      border: 1px solid var(--line-strong); border-radius: 999px; padding: 1px 8px;
+      color: var(--fg-muted); margin-bottom: var(--s2); }
+
+    /* the SNAPSHOT / LIVE dial */
+    .dial { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 999px; overflow: hidden; }
+    .dial button { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase;
+      letter-spacing: 0.06em; background: transparent; color: var(--fg-muted); border: 0;
+      padding: 7px 14px; cursor: pointer; }
+    .dial button.on { background: var(--accent); color: var(--bg); font-weight: 700; }
+
+    /* the wasm-unavailable fallback banner */
+    .fallback { display: none; border: 1px solid var(--danger); border-radius: var(--r3);
+      background: color-mix(in srgb, var(--danger) 8%, transparent); color: var(--fg-dim);
+      padding: var(--s4) var(--s5); margin-bottom: var(--s5); line-height: 1.6; font-size: 0.9rem; }
+    .fallback b { color: var(--danger); }
+    body.unverified .fallback { display: block; }
+    body.unverified .controls button { opacity: 0.45; pointer-events: none; }
+
+    pre.snippet { font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.6;
+      background: var(--bg-inset); border: 1px solid var(--line); border-radius: var(--r2);
+      padding: var(--s4) var(--s5); overflow-x: auto; color: var(--fg-dim); }
+    pre.snippet .a { color: var(--accent); }
+    .tx-back { font-family: var(--font-mono); font-size: 0.8rem; }
+    .bl-row { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); align-items: baseline;
+      font-family: var(--font-mono); font-size: 0.78rem; padding: var(--s2) 0;
+      border-bottom: 1px dashed var(--line); color: var(--fg-dim); }
+    .bl-row .who { color: var(--chalk); font-weight: 700; }
+    .bl-row .pin { color: var(--fg-muted); font-size: 0.7rem; word-break: break-all; }
+  </style>
+</head>
+<body>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name"><a href="../" style="color:var(--chalk)"><code>dregg</code> / deos</a></span>
+  <span class="nav__tag">transclusion &middot; xanadu made honest</span>
+  <div class="nav__links">
+    <a class="nav__link" href="../">Home</a>
+    <a class="nav__link" href="../light-client/">Light client</a>
+    <a class="nav__link" href="../dregg-works/">dregg.works</a>
+    <a class="nav__link" href="https://github.com/emberian/dregg">Source</a>
+  </div>
+</nav>
+
+<main class="wrap">
+  <div class="tx-hero">
+    <p class="tx-eyebrow">transclusion &middot; in your tab</p>
+    <h1>Quote the web without copying it</h1>
+  </div>
+  <p class="tx-lede">
+    Ted Nelson's Xanadu promised <strong>transclusion</strong>: include-by-reference, where a quote keeps
+    its identity and provenance and the link back to its source can never break. It was never honest,
+    because nothing forced the quote to equal the source. Here it is honest: a transcluded span
+    <strong>is</strong> a verified <code>dregg://</code> finalized read, running client-side in WebAssembly
+    in this tab. The displayed bytes are the source's committed bytes — content-addressed, receipt-pinned,
+    quorum-attested. Amend the source and a live quote follows; tamper the bytes and the quote
+    <em>refuses to open</em>; and every quote registers a receipt-pinned backlink, so "who quotes me"
+    is a verifiable fact, not a rotting index.
+  </p>
+
+  <div class="fallback" id="fallback">
+    <b>&#10005; the verifier is unavailable — nothing on this page is verified.</b><br>
+    The WebAssembly transclusion engine failed to load, so no finalized read ran and no provenance was
+    checked. Every quote below stays a <em>darkened placeholder</em> — exactly what an honest client
+    shows when it cannot verify. A failed check is never a pass; a forgery is never painted.
+    <span id="fallback-why" style="display:block;margin-top:6px;font-family:var(--font-mono);font-size:0.75rem"></span>
+  </div>
+  <noscript>
+    <div class="fallback" style="display:block">
+      <b>&#10005; scripts are disabled — nothing on this page is verified.</b>
+      The quotes below stay darkened placeholders: the honest fallback, never a forgery.
+    </div>
+  </noscript>
+
+  <!-- ── 1 · the parallel-source view ─────────────────────────────────────── -->
+  <section class="panel">
+    <h2>1 &middot; The document and its sources — side by side</h2>
+    <p class="hint">
+      The left column is a document that <em>transcludes</em> two published sources. Each quote is a real
+      verified finalized read: the wasm engine publishes the sources into a genuine 3-of-3 quorum web of
+      cells, then includes them. The right column shows each source's <em>full</em> committed text with the
+      quoted range marked — Nelson's "see the quote in its home." Jump links connect the two.
+    </p>
+
+    <div class="controls">
+      <span class="dial" role="group" aria-label="quote dial">
+        <button id="dial-live" class="on" type="button">live</button>
+        <button id="dial-snap" type="button">snapshot</button>
+      </span>
+      <span class="readout" style="margin-top:0;min-height:0;padding:7px 12px" id="height">federation height: —</span>
+    </div>
+
+    <div class="eel">
+      <div>
+        <h3>the quoting document — <code>essay</code></h3>
+        <div class="doc" id="essay">
+          <p class="own">What the charter promises —</p>
+          <div class="quote dark" id="q-constitution">
+            <span class="qtext">&#9711; awaiting the verifier — nothing shown here is a quote yet</span>
+            <span class="cite">unverified placeholder</span>
+          </div>
+          <p class="own">— and what the field notes add:</p>
+          <div class="quote dark" id="q-field-notes">
+            <span class="qtext">&#9711; awaiting the verifier — nothing shown here is a quote yet</span>
+            <span class="cite">unverified placeholder</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <h3>the sources — full committed text, quoted range marked</h3>
+        <div class="src-card" id="src-constitution">
+          <span class="badge">source &middot; constitution</span>
+          <div class="stext"><em style="color:var(--fg-muted)">unpublished — the verifier has not spoken</em></div>
+          <span class="prov">—</span>
+        </div>
+        <div class="src-card" id="src-field-notes">
+          <span class="badge">source &middot; field-notes</span>
+          <div class="stext"><em style="color:var(--fg-muted)">unpublished — the verifier has not spoken</em></div>
+          <span class="prov">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls" style="margin-top:var(--s5)">
+      <div class="field">
+        <label for="amend-text">amend the constitution to…</label>
+        <input id="amend-text" class="wide" type="text" spellcheck="false"
+          value="Article I. The federation threshold is 5 of 5 (amended). A finalized read carries quorum, and a quote of it carries the receipt.">
+      </div>
+      <button class="btn btn--primary" id="amend" disabled>Amend the source</button>
+    </div>
+    <div class="readout" id="amend-out">
+      the dial above chooses what the essay's quote shows: <span class="k">live</span> re-resolves the same
+      <span class="v">dregg://</span> ref on every render (the unbreakable link — it follows every amend);
+      <span class="k">snapshot</span> keeps the pin taken when the page loaded (I-confluence — the pinned
+      receipt stays a valid leaf forever).
+    </div>
+  </section>
+
+  <!-- ── 2 · the forge ────────────────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>2 &middot; Try to forge the quote</h2>
+    <p class="hint">
+      A lying node serves different bytes under the same citation. The client runs the genuine
+      content&rarr;commitment&rarr;receipt&rarr;root&rarr;quorum verification, and the forged quote
+      <em>cannot be opened</em>: it is refused with the named error, and the forged bytes are never
+      rendered as content.
+    </p>
+    <div class="controls">
+      <div class="field">
+        <label for="forge-text">what the lying node serves</label>
+        <input id="forge-text" class="wide" type="text" spellcheck="false"
+          value="Article I. The federation threshold is 1 of 3 (no quorum needed, trust me).">
+      </div>
+      <button class="btn btn--primary" id="forge" disabled>Attempt the forge</button>
+    </div>
+    <div class="readout" id="forge-out">—</div>
+  </section>
+
+  <!-- ── 3 · per-viewer projection ────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>3 &middot; A quote is a read, not a key</h2>
+    <p class="hint">
+      Projecting a transclusion for a viewer goes through the real membrane: the viewer's held authority is
+      met with the source's lineage, and the result can only ever <em>attenuate</em> — a quote confers no
+      authority over the source beyond observing the cited value. A viewer whose authority cannot meet the
+      lineage sees the span <strong>darkened</strong>: the citation survives, the bytes are withheld.
+    </p>
+    <div class="controls">
+      <div class="field">
+        <label for="viewer-rights">viewer holds</label>
+        <select id="viewer-rights">
+          <option value="signature" selected>signature (weaker — read-only)</option>
+          <option value="either">either (writable)</option>
+          <option value="none">none (wide open)</option>
+          <option value="proof">proof</option>
+          <option value="impossible">impossible (sealed)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="lineage-rights">source lineage serves under</label>
+        <select id="lineage-rights">
+          <option value="either" selected>either (writable)</option>
+          <option value="signature">signature (read-only)</option>
+          <option value="proof">proof</option>
+        </select>
+      </div>
+      <button class="btn btn--primary" id="project" disabled>Project for this viewer</button>
+    </div>
+    <div class="eel">
+      <div>
+        <h3>what this viewer sees</h3>
+        <div class="doc">
+          <div class="quote dark" id="q-viewer">
+            <span class="qtext">&#9711; project a viewer to render their view</span>
+            <span class="cite">—</span>
+          </div>
+        </div>
+      </div>
+      <div>
+        <h3>the projection readout</h3>
+        <div class="readout" style="margin-top:0" id="project-out">—</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 4 · backlinks ────────────────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>4 &middot; Backlinks — who quotes the constitution?</h2>
+    <p class="hint">
+      The other half of Nelson's two-way link. Every <em>include</em> registers the observing document in a
+      reverse index, pinned to the receipt and content commitment it quoted — so a backlink is a verifiable
+      claim ("<code>essay</code> quoted value <code>V</code> at receipt <code>R</code>"), never a
+      hand-maintained pointer that dangles. Amend the source above, then re-quote: the new observation pins
+      the <em>new</em> value, and the old one visibly remains a citation of the old value. Quotes are dated,
+      not overwritten.
+    </p>
+    <div class="controls">
+      <button class="btn btn--secondary" id="requote" disabled>Re-quote the constitution now (from the essay)</button>
+    </div>
+    <div class="readout" id="backlinks">—</div>
+  </section>
+
+  <!-- ── 5 · carry it to your page ────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>5 &middot; Carry a verified quote to <em>your</em> page</h2>
+    <p class="hint">
+      One script tag makes any website carry a dregg-verified quote. <code>transclude.js</code> (shipped
+      beside <a href="../dregg-works/">the dregg.works verify badge</a>) fetches the source document's bytes
+      from any untrusted host, hashes them <em>in the visitor's browser</em>, and matches the hash against
+      the on-chain commitment fetched from a node the visitor can point anywhere. Only a match paints the
+      span verified. A mismatch paints a refusal; an unreachable node leaves the darkened placeholder.
+      A failed check is never a pass.
+    </p>
+<pre class="snippet">&lt;script src="https://&lt;your-host&gt;/transclude.js"&gt;&lt;/script&gt;
+
+&lt;blockquote <span class="a">data-dregg</span>="dregg://&lt;64-hex cell id&gt;<span class="a">#b=120-240</span>"
+            <span class="a">cite</span>="https://any-host.example/charter.html"
+            <span class="a">data-node</span>="https://devnet.dregg.fg-goose.online"&gt;
+  Your fallback text — shown darkened until the bytes verify,
+  and NEVER replaced by bytes that failed the check.
+&lt;/blockquote&gt;</pre>
+    <p class="hint" style="margin-top:var(--s4);margin-bottom:0">
+      <code>data-dregg</code> names the source cell (the fragment <code>#b=start-end</code> selects a byte
+      range of the committed document); <code>cite</code> is where the untrusted bytes come from;
+      <code>data-node</code> picks which node answers for the on-chain commitment — the visitor's choice,
+      cross-checkable. The host merely ships bytes; it is never asked to be believed.
+    </p>
+  </section>
+
+  <p class="tx-lede" style="font-size:0.84rem;color:var(--fg-muted)">
+    Named floor: this demo's federation is the in-tab <code>WebOfCells</code> (a genuine ledger + a 3-of-3
+    quorum attestation, structurally verified); the embeddable script's trust root is the node the visitor
+    selects. Everything shown is the executable counterpart of the Lean
+    <code>Dregg2.Deos.Transclusion</code> theorems: <code>transclusion_is_observed_finalized_read</code>,
+    <code>transclusion_forge_refused</code>, <code>transclusion_no_amplify</code>,
+    <code>transclusion_stable_under_source_advance</code>.
+  </p>
+
+  <p class="tx-back"><a href="../">&larr; back to dregg / deos</a></p>
+</main>
+
+<script type="module">
+  import init, {
+    transclusion_create, transclusion_publish, transclusion_include_into,
+    transclusion_read_live, transclusion_amend, transclusion_forge_attempt,
+    transclusion_project_for, transclusion_backlinks,
+  } from '../cards/pkg/dregg_wasm.js';
+
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const short = h => esc(String(h || '').slice(0, 8)) + '…';
+
+  // The demo's source texts (v0 — the committed values the quotes must equal).
+  const DOCS = {
+    'constitution': 'Article I. The federation threshold is 3 of 3. A finalized read carries quorum, and a quote of it carries the receipt.',
+    'field-notes': 'A quote that cannot be forged is a citation you can bank on.',
+  };
+
+  let handle = null;
+  let snapshots = {};       // name -> the QuoteView pinned at first include (the SNAPSHOT dial)
+  let dial = 'live';        // 'live' | 'snapshot'
+
+  function citeLine(q) {
+    const range = 'bytes 0..end';
+    return `<span class="tick">${q.verifies ? '✓ verified' : '✕ UNVERIFIED'}</span> · ` +
+      `<a href="#src-${q.__name}">${short(q.source_uri.replace('dregg://', ''))}</a> · ${range} · ` +
+      `receipt ${short(q.receipt_hash)} · blake3 ${short(q.content_hash)} · ` +
+      `${q.finalized ? 'finalized' : 'UNATTESTED'} · h${q.at_height}`;
+  }
+
+  function renderQuote(el, q) {
+    // Only a verified read lightens a span. An unverified view stays dark.
+    el.classList.toggle('dark', !q.verifies);
+    el.classList.remove('refused');
+    el.querySelector('.qtext').textContent = q.text;
+    el.querySelector('.cite').innerHTML = citeLine(q);
+  }
+
+  function renderSource(name) {
+    const live = view(name, 'live'); // the source card always shows the CURRENT committed text
+    const card = $('#src-' + name);
+    // whole-document quote: the entire committed text is the marked range.
+    card.querySelector('.stext').innerHTML = `<mark>${esc(live.text)}</mark>`;
+    card.querySelector('.prov').textContent =
+      `${live.source_uri} · bytes 0..end · receipt ${live.receipt_hash.slice(0, 8)}… · ` +
+      (live.finalized ? 'finalized' : 'UNATTESTED');
+  }
+
+  function view(name, which) {
+    const q = which === 'live' ? transclusion_read_live(handle, name) : snapshots[name];
+    q.__name = name;
+    return q;
+  }
+
+  function render() {
+    if (handle === null) return; // the verifier has not spoken — placeholders stay dark
+    for (const name of Object.keys(DOCS)) {
+      renderQuote($('#q-' + name), view(name, dial));
+      renderSource(name);
+    }
+    const h = view('constitution', 'live').at_height;
+    $('#height').textContent = `federation height: ${h} · dial: ${dial.toUpperCase()}`;
+    renderBacklinks();
+  }
+
+  function renderBacklinks() {
+    const bl = transclusion_backlinks(handle, 'constitution');
+    const rows = (bl.observers || []).map(o =>
+      `<div class="bl-row"><span class="who">${esc(o.observer_name || o.observer_uri)}</span>` +
+      `<span>quoted value blake3 ${short(o.content_hash)}</span>` +
+      `<span class="pin">pinned at receipt ${short(o.receipt_hash)} · ${esc(o.observer_uri)}</span></div>`
+    ).join('');
+    $('#backlinks').innerHTML =
+      `<span class="k">${bl.count}</span> <span class="v">recorded observation${bl.count === 1 ? '' : 's'} of ${esc(bl.source_uri)}</span>\n` +
+      (rows || '<span class="v">nobody quotes it yet</span>');
+  }
+
+  async function boot() {
+    await init();
+    handle = transclusion_create();
+    // Publish the two SOURCES + the two OBSERVER documents (an observer quotes
+    // from its own dregg:// cell — that is what the backlink names).
+    for (const [name, text] of Object.entries(DOCS)) {
+      transclusion_publish(handle, name, text, 'dregg://' + name);
+    }
+    transclusion_publish(handle, 'essay', 'What the charter promises — [quotes] — and what the field notes add.', 'dregg://essay');
+    transclusion_publish(handle, 'review', 'A review that also cites the charter.', 'dregg://review');
+    // The real verified reads + the two-way-link writes: essay quotes both
+    // sources, review quotes the constitution (so its in-degree is 2).
+    snapshots['constitution'] = transclusion_include_into(handle, 'essay', 'constitution');
+    snapshots['field-notes'] = transclusion_include_into(handle, 'essay', 'field-notes');
+    transclusion_include_into(handle, 'review', 'constitution');
+    render();
+    for (const id of ['#amend', '#forge', '#project', '#requote']) $(id).disabled = false;
+  }
+
+  // ── the SNAPSHOT / LIVE dial ──────────────────────────────────────────────
+  function setDial(which) {
+    dial = which;
+    $('#dial-live').classList.toggle('on', which === 'live');
+    $('#dial-snap').classList.toggle('on', which === 'snapshot');
+    render();
+  }
+  $('#dial-live').addEventListener('click', () => setDial('live'));
+  $('#dial-snap').addEventListener('click', () => setDial('snapshot'));
+
+  // ── amend: the SAME dregg:// ref advances; live follows, the pin does not ──
+  $('#amend').addEventListener('click', () => {
+    try {
+      const text = $('#amend-text').value || '(amended to empty)';
+      const h = transclusion_amend(handle, 'constitution', text);
+      render();
+      const live = view('constitution', 'live');
+      const snap = snapshots['constitution'];
+      $('#amend-out').innerHTML =
+        `<span class="verdict ok">source amended — same dregg:// ref, new finalized value at height ${h}</span>\n` +
+        `<span class="k">live</span> <span class="v">now cites receipt ${short(live.receipt_hash)} (followed the amend${live.verifies ? ', still verifies' : ''})</span>\n` +
+        `<span class="k">snapshot</span> <span class="v">still cites receipt ${short(snap.receipt_hash)} (the pin did not move — flip the dial to see it)</span>`;
+    } catch (e) {
+      $('#amend-out').innerHTML = '<span class="verdict no">error:</span> ' + esc(String(e));
+    }
+  });
+
+  // ── the forge: tampered bytes MUST refuse with the named error ────────────
+  $('#forge').addEventListener('click', () => {
+    try {
+      const v = transclusion_forge_attempt(handle, 'constitution', $('#forge-text').value || '(empty forge)');
+      if (v.refused) {
+        $('#forge-out').innerHTML =
+          `<span class="verdict no">✕ REFUSED — ${esc(v.reason)}</span>\n` +
+          `<span class="k">the citation pins</span> <span class="v">blake3 ${esc(v.committed_content_hash)}</span>\n` +
+          `<span class="k">the lying node served</span> <span class="v" style="text-decoration:line-through;color:var(--fg-muted)">${esc(v.forged_text)}</span>\n` +
+          `the forged bytes were never rendered as content — a quote that does not verify cannot be opened.`;
+      } else {
+        $('#forge-out').innerHTML =
+          `<span class="verdict no">BUG: the forge was NOT refused — ${esc(v.reason)}</span>\n` +
+          `this must never happen; the demo asserts the refusal polarity. Please report it.`;
+      }
+    } catch (e) {
+      $('#forge-out').innerHTML = '<span class="verdict no">error:</span> ' + esc(String(e));
+    }
+  });
+
+  // ── per-viewer projection: attenuate or darken, never amplify ─────────────
+  $('#project').addEventListener('click', () => {
+    try {
+      const v = transclusion_project_for(handle, 'constitution',
+        $('#viewer-rights').value, $('#lineage-rights').value);
+      const q = view('constitution', 'live');
+      const el = $('#q-viewer');
+      if (v.projected) {
+        el.classList.remove('dark', 'refused');
+        el.querySelector('.qtext').textContent = q.text;
+        el.querySelector('.cite').innerHTML =
+          `<span class="tick">✓</span> projected · attenuated to <b>${esc(v.viewer_rights)}</b> ` +
+          `(lineage ${esc(v.lineage_rights)}) · receipt ${short(q.receipt_hash)}`;
+      } else {
+        // THE DARKENED SPAN: the citation survives; the bytes are withheld.
+        el.classList.add('dark');
+        el.classList.remove('refused');
+        el.querySelector('.qtext').textContent = '▨ bytes withheld — this viewer’s authority cannot meet the source lineage';
+        el.querySelector('.cite').innerHTML =
+          `citation preserved: ${short(q.source_uri.replace('dregg://', ''))} · receipt ${short(q.receipt_hash)} · ` +
+          `refused: ${esc(v.reason)}`;
+      }
+      $('#project-out').innerHTML =
+        `<span class="k">projected</span> <span class="verdict ${v.projected ? 'ok' : 'no'}">${v.projected}</span>\n` +
+        `<span class="k">viewer rights</span> <span class="v">${esc(v.viewer_rights)}</span>\n` +
+        `<span class="k">lineage rights</span> <span class="v">${esc(v.lineage_rights)}</span>\n` +
+        `<span class="k">no amplification</span> <span class="verdict ${v.no_amplify ? 'ok' : 'no'}">${v.no_amplify}</span>` +
+        (v.reason ? `\n<span class="k">reason</span> <span class="v">${esc(v.reason)}</span>` : '');
+    } catch (e) {
+      $('#project-out').innerHTML = '<span class="verdict no">error:</span> ' + esc(String(e));
+    }
+  });
+
+  // ── re-quote: a NEW dated observation lands beside the old one ────────────
+  $('#requote').addEventListener('click', () => {
+    try {
+      transclusion_include_into(handle, 'essay', 'constitution');
+      renderBacklinks();
+    } catch (e) {
+      $('#backlinks').innerHTML = '<span class="verdict no">error:</span> ' + esc(String(e));
+    }
+  });
+
+  boot().catch(err => {
+    // THE HONEST FALLBACK: no verifier -> nothing lightens. The placeholders
+    // stay dark, the banner names the failure, and no forgery is painted.
+    document.body.classList.add('unverified');
+    $('#fallback-why').textContent = 'refusal: ' + String(err && err.message || err);
+  });
+</script>
+</body>
+</html>
