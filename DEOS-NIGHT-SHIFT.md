@@ -109,3 +109,10 @@ height tray → Transcript click. agent.rs REFUSED rows now interleave in true s
 (regression-pinned). LayoutSaver perf fix landed earlier. WAVE 4 launched
 (wf_9e8fd7e1-e45): NT scrollbars everywhere · CardPane rides the pulse (+ CapRevoked/
 CellMutated projection) · Spotter verbs-with-args + recent-jumps.
+
+## ~06:5x — WAVE 4 INTEGRATED first-try (882 green + bake)
+NT scrollbars on every dense face (persistent scroll positions, ScrollbarShow::Always NT
+dress) · CardPane rides the pulse (bind cache + glow + own-turn watermark; CapRevoked/
+CellMutated folded) · Spotter is a command line (transfer/grant/bump verbs → verified
+turns; recent jumps on empty query). kind_short moved to chrome.rs. WAVE 5 next:
+matrix-rehydrate · web-transclude · provenance-walker.
