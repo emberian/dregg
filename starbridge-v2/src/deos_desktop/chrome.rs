@@ -12,6 +12,8 @@ use gpui::{
 
 use dregg_types::CellId;
 
+use super::layout::WinKindTag;
+
 // ── The NT palette ──────────────────────────────────────────────────────────────
 // Deliberately sterile / technical: a 3D-beveled gray chrome over a teal void, the
 // way an NT workstation reads. Dense, not calm; detailed, not minimal.
@@ -92,6 +94,28 @@ pub fn id_short(cell: &CellId) -> String {
 /// `Pixels` → `f32` (the field is private; the `From` impl is the supported route).
 pub fn pxf(p: Pixels) -> f32 {
     f32::from(p)
+}
+
+/// A 3-letter window-kind tag — the dense, fixed-width kind glyph the taskbar stub
+/// wears, and the Spotter row-badge's chip (one shared vocabulary for "what kind of
+/// surface is this", wherever a surface is named in two dozen pixels). Lives in the
+/// chrome kit so gpui-free presentation halves (the Spotter's row builder) can badge
+/// without reaching into the desktop View.
+pub fn kind_short(tag: WinKindTag) -> &'static str {
+    match tag {
+        WinKindTag::Inspector => "INS",
+        WinKindTag::DocEditor => "DOC",
+        WinKindTag::Links => "LNK",
+        WinKindTag::Transcript => "LOG",
+        WinKindTag::Workflow => "WFL",
+        WinKindTag::AndroidCell => "AND",
+        WinKindTag::DocExplorer => "DGX",
+        WinKindTag::WorldExplorer => "WLD",
+        WinKindTag::AgentRoom => "AGT",
+        WinKindTag::AppShelf => "APP",
+        WinKindTag::ExchangeFloor => "EXC",
+        WinKindTag::ViewNodePane => "IR",
+    }
 }
 
 // ── The bevel/face primitives (reusable NT widgets) ───────────────────────────────

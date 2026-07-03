@@ -6,15 +6,30 @@
 //! transcript, workflow), or to an open WINDOW. It produces a ranked list of
 //! candidate entries; selecting one dispatches the corresponding desktop gesture.
 //!
+//! ## The COMMAND LINE
+//!
+//! The Spotter is also the desktop's REPL over the formally-verified World: a query
+//! whose head parses as a VERB (`transfer 500 to 87a5` · `grant ccfc9955` ·
+//! `bump 2a69` · `seal 2a69` — see [`parse_command`]) synthesizes ready-to-commit
+//! COMMAND entries above every fuzzy match. Dispatching one fires the SAME
+//! verified-turn actuation the right-click context menu fires — receipted, verdict
+//! narrated (`committed` / `REFUSED — reason`, with the chronicle height) — so
+//! typing a sentence and pressing Enter IS a real turn on the live ledger. Commands
+//! rank above fuzzy matches ONLY when the verb prefix parses; any other query is the
+//! untouched fuzzy jump.
+//!
 //! ## The clobber-safe split
 //!
 //! This module owns the DATA MODEL ([`SpotterTarget`], [`SpotterEntry`]), the pure
-//! [`rank`] scorer (the load-bearing, unit-testable core), the [`candidates_for_cells`]
-//! builder, and a pure [`render_spotter_rows`] presentation fn that returns inert
-//! result rows. The desktop View (`DeosDesktop`) owns the text input, the open-windows
-//! map, the `cx.listener` click/arrow wiring, and the actual dispatch of a selected
-//! [`SpotterTarget`]. The fuzzy match and scoring are gpui-free, so they compile and
-//! test without a renderer.
+//! [`rank`] scorer (the load-bearing, unit-testable core), the pure command GRAMMAR
+//! ([`SpotterCommand`], [`parse_command`], [`replay_string`]), the
+//! [`candidates_for_cells`] / [`window_candidates`] builders, and a pure
+//! [`render_spotter_rows`] presentation fn that returns inert result rows (each
+//! wearing its [`entry_badge`] kind chip). The desktop View (`DeosDesktop`) owns the
+//! text input, the open-windows map, the cell-prefix RESOLUTION against the live
+//! ledger, the recent-jumps trail, the `cx.listener` click/arrow wiring, and the
+//! actual dispatch of a selected [`SpotterTarget`]. The fuzzy match, scoring, and
+//! grammar are gpui-free, so they compile and test without a renderer.
 
 use gpui::prelude::FluentBuilder;
 use gpui::{div, px, AnyElement, FontWeight, IntoElement, ParentElement, Styled};
@@ -22,8 +37,10 @@ use gpui::{div, px, AnyElement, FontWeight, IntoElement, ParentElement, Styled};
 use dregg_types::CellId;
 
 use crate::deos_desktop::chrome::{
-    bevel_raised, id_short, NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT, NT_TITLE_TEXT,
+    bevel_raised, id_short, kind_glow, kind_short, NT_DIM, NT_FACE_DARK, NT_LABEL, NT_OK,
+    NT_SELECT, NT_TEXT, NT_TITLE_TEXT,
 };
+use crate::deos_desktop::layout::WinKindTag;
 
 // ── The candidate model ───────────────────────────────────────────────────────────
 
@@ -101,6 +118,31 @@ pub enum SpotterTarget {
     /// [`crate::deos_desktop::exchange_floor::exchange_spotter_candidates`].
     #[cfg(feature = "app-registry")]
     ExchangeFloor,
+    /// Jump to an ALREADY-OPEN window — raise it, un-minimize it, and land mold-ready
+    /// (the halo-selected arrival every other jump makes). The module doc has promised
+    /// "or to an open WINDOW" since the Spotter was born; these entries (built by
+    /// [`window_candidates`], front-most first) deliver it. Carries the window's
+    /// `(cell, kind)` key — the desktop's `WinKey`.
+    FocusWindow(CellId, WinKindTag),
+    /// **COMMAND: transfer `amount` from `src` to `dst`** — a real verified transfer
+    /// turn between two RESOLVED cells (the View resolved the typed id-prefixes
+    /// against the live ledger before synthesizing this entry). Dispatch routes
+    /// through the same one-transfer-turn body the compose-drop gesture commits.
+    CmdTransfer {
+        src: CellId,
+        dst: CellId,
+        amount: u64,
+    },
+    /// **COMMAND: grant `src` a capability reaching `dst`** — the context menu's
+    /// `Grant` verb (`ActionKind::Grant`) fired from the keyboard; a real
+    /// `GrantCapability` turn at the next free slot.
+    CmdGrant { src: CellId, dst: CellId },
+    /// **COMMAND: bump the cell's nonce** — the context menu's `Bump nonce` verb
+    /// (`ActionKind::BumpNonce`); the simplest always-available receipted turn.
+    CmdBump(CellId),
+    /// **COMMAND: seal / unseal the cell** — the context menu's lifecycle verb
+    /// (`ActionKind::ToggleSeal`); seals a live cell, unseals a sealed one.
+    CmdSeal(CellId),
 }
 
 /// One ranked candidate in the spotter result list. `label` is the reader-legible
@@ -116,6 +158,137 @@ pub struct SpotterEntry {
     pub target: SpotterTarget,
     /// The match quality (higher = better) — the sort key.
     pub score: i64,
+}
+
+// ── The command grammar — the pure, unit-testable verb parser ─────────────────────
+
+/// A parsed Spotter COMMAND — the verb vocabulary of the palette-as-command-line.
+/// Cell arguments are carried as the typed id-PREFIXES (lowercased hex, unresolved):
+/// the pure parser knows no ledger; the desktop View resolves each prefix against
+/// the live cells (`id_hex` starts-with) and synthesizes one ready entry per
+/// resolution, dispatching the SAME verified-turn actuations the context menu fires.
+/// A `None` source means "the operator's own cell" (the desktop's user anchor).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpotterCommand {
+    /// `transfer <amount> [from <src>] [to] <dst>` — a real transfer turn.
+    Transfer {
+        amount: u64,
+        src: Option<String>,
+        dst: String,
+    },
+    /// `grant [<src>] [to] <dst>` — a real `GrantCapability` turn (reach `dst`).
+    Grant { src: Option<String>, dst: String },
+    /// `bump <cell>` — a real `IncrementNonce` turn.
+    Bump { target: String },
+    /// `seal <cell>` — a real seal/unseal lifecycle turn (toggles on dispatch).
+    Seal { target: String },
+}
+
+/// Parse `query` as a Spotter COMMAND, or `None` when it is not one (the query then
+/// stays a plain fuzzy jump — commands never shadow the fuzzy match unless the verb
+/// prefix actually parses, which is the palette's no-regression contract).
+///
+/// The grammar (case-insensitive; the `from` / `to` connectives are optional prose
+/// and can never collide with a cell prefix — their letters are not hex digits):
+///
+/// ```text
+/// transfer <amount> [from <src>] [to] <dst>      "transfer 500 to 87a5"
+/// grant [<src>] [to] <dst>                       "grant ccfc9955"
+/// bump <cell>                                    "bump 2a69"
+/// seal <cell>                                    "seal 2a69"   (toggles seal/unseal)
+/// ```
+///
+/// A cell argument is a hex id-prefix (2–64 hex chars); amounts take `,` / `_`
+/// separators (`1,000`). Anything missing, malformed, or extra parses to `None`,
+/// so a half-typed command degrades to fuzzy ranking keystroke by keystroke and
+/// only a whole, well-formed sentence puts a command on top.
+pub fn parse_command(query: &str) -> Option<SpotterCommand> {
+    let toks: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let (verb, args) = toks.split_first()?;
+    // Drop the prose connectives; what remains must be exactly the verb's arguments.
+    let args: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|t| *t != "from" && *t != "to")
+        .collect();
+    match verb.as_str() {
+        "transfer" => {
+            let (amount_tok, prefixes) = args.split_first()?;
+            let amount = parse_amount(amount_tok)?;
+            match prefixes {
+                [dst] => Some(SpotterCommand::Transfer {
+                    amount,
+                    src: None,
+                    dst: valid_prefix(dst)?,
+                }),
+                [src, dst] => Some(SpotterCommand::Transfer {
+                    amount,
+                    src: Some(valid_prefix(src)?),
+                    dst: valid_prefix(dst)?,
+                }),
+                _ => None,
+            }
+        }
+        "grant" => match args.as_slice() {
+            [dst] => Some(SpotterCommand::Grant {
+                src: None,
+                dst: valid_prefix(dst)?,
+            }),
+            [src, dst] => Some(SpotterCommand::Grant {
+                src: Some(valid_prefix(src)?),
+                dst: valid_prefix(dst)?,
+            }),
+            _ => None,
+        },
+        "bump" => match args.as_slice() {
+            [c] => Some(SpotterCommand::Bump {
+                target: valid_prefix(c)?,
+            }),
+            _ => None,
+        },
+        "seal" => match args.as_slice() {
+            [c] => Some(SpotterCommand::Seal {
+                target: valid_prefix(c)?,
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Validate a (lowercased) cell id-prefix argument: 2–64 hex chars. One char would
+/// fan out to a sixteenth of the ledger; more than 64 can prefix no id at all.
+fn valid_prefix(t: &str) -> Option<String> {
+    ((2..=64).contains(&t.len()) && t.chars().all(|c| c.is_ascii_hexdigit())).then(|| t.to_string())
+}
+
+/// Parse an amount token, tolerating `,` / `_` grouping (`1,000` · `25_000`).
+fn parse_amount(t: &str) -> Option<u64> {
+    let digits: String = t.chars().filter(|c| *c != ',' && *c != '_').collect();
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// The string that RE-RUNS a dispatched entry from the recent-jumps trail. For a
+/// command it is the canonical verb line over the RESOLVED cells' short ids (which
+/// [`parse_command`] re-parses, so a recalled command re-resolves against the LIVE
+/// ledger rather than replaying a stale target); for every other entry it is the
+/// label, which the trail matches back to the current candidate set (so a closed
+/// window or vanished cell quietly drops out instead of dispatching into nothing).
+pub fn replay_string(entry: &SpotterEntry) -> String {
+    match &entry.target {
+        SpotterTarget::CmdTransfer { src, dst, amount } => {
+            format!("transfer {} {} {}", amount, id_short(src), id_short(dst))
+        }
+        SpotterTarget::CmdGrant { src, dst } => {
+            format!("grant {} {}", id_short(src), id_short(dst))
+        }
+        SpotterTarget::CmdBump(c) => format!("bump {}", id_short(c)),
+        SpotterTarget::CmdSeal(c) => format!("seal {}", id_short(c)),
+        _ => entry.label.clone(),
+    }
 }
 
 // ── The ranking — the pure, load-bearing core ─────────────────────────────────────
@@ -350,37 +523,121 @@ pub fn surface_candidates() -> Vec<SpotterEntry> {
     out
 }
 
+/// Build the OPEN-WINDOW candidates — one jump-to-window entry per `(title, cell,
+/// kind)` row, in the caller's order (the desktop passes front-most first, so the
+/// window you touched last is also the first row a bare query greets). These are
+/// prepended AHEAD of every other candidate: [`rank`]'s stable sort keeps input
+/// order on ties, so "open windows rank first" holds exactly at equal match quality
+/// — a strictly stronger fuzzy match elsewhere still wins, and the existing jump
+/// vocabulary is not regressed. Dispatching one focuses (raises + un-minimizes) the
+/// window and lands mold-ready.
+pub fn window_candidates(wins: &[(String, CellId, WinKindTag)]) -> Vec<SpotterEntry> {
+    wins.iter()
+        .map(|(title, cell, tag)| SpotterEntry {
+            label: format!("Window  {title}"),
+            sublabel: "open window · jump + focus (raises · un-minimizes)".to_string(),
+            target: SpotterTarget::FocusWindow(*cell, *tag),
+            score: 0,
+        })
+        .collect()
+}
+
+// ── The row badge — what a row IS, in one fixed-width chip ────────────────────────
+
+/// The `(tag, color)` kind-chip a result row wears, derived purely from the entry:
+/// navy `CMD` for a command (it COMMITS), green window-kind tags for open windows
+/// (they are already alive on the glass), the cell's kind-glow hue for a bare cell
+/// jump, dim gray window-kind tags for per-cell action verbs, and dim tags for the
+/// global surfaces. One glance sorts the list; the tags are [`kind_short`]'s — the
+/// same vocabulary the taskbar stubs wear.
+pub fn entry_badge(entry: &SpotterEntry) -> (&'static str, u32) {
+    use SpotterTarget as T;
+    match &entry.target {
+        T::CmdTransfer { .. } | T::CmdGrant { .. } | T::CmdBump(_) | T::CmdSeal(_) => {
+            ("CMD", NT_SELECT)
+        }
+        T::FocusWindow(_, tag) => (kind_short(*tag), NT_OK),
+        // A bare cell jump: the label is "{kind} {short}", so the kind (possibly
+        // two words — "issuer well") is everything before the trailing id.
+        T::Cell(_) => (
+            "CEL",
+            kind_glow(entry.label.rsplit_once(' ').map(|(k, _)| k).unwrap_or("")),
+        ),
+        T::Inspect(_) => (kind_short(WinKindTag::Inspector), NT_LABEL),
+        T::OpenDoc(_) => (kind_short(WinKindTag::DocEditor), NT_LABEL),
+        T::Explore(_) => (kind_short(WinKindTag::DocExplorer), NT_LABEL),
+        T::Links(_) => (kind_short(WinKindTag::Links), NT_LABEL),
+        T::Transcript(_) => (kind_short(WinKindTag::Transcript), NT_LABEL),
+        T::Workflow(_) => (kind_short(WinKindTag::Workflow), NT_LABEL),
+        T::WorldExplorer => (kind_short(WinKindTag::WorldExplorer), NT_LABEL),
+        T::AgentRoom => (kind_short(WinKindTag::AgentRoom), NT_LABEL),
+        T::WorldTranscript => (kind_short(WinKindTag::Transcript), NT_LABEL),
+        T::DocCollab => (kind_short(WinKindTag::DocEditor), NT_LABEL),
+        #[cfg(feature = "card-pane")]
+        T::PortableCard => (kind_short(WinKindTag::ViewNodePane), NT_LABEL),
+        #[cfg(feature = "card-pane")]
+        T::BotSurface => ("BOT", NT_LABEL),
+        #[cfg(feature = "android-systemui")]
+        T::AndroidCell => (kind_short(WinKindTag::AndroidCell), NT_LABEL),
+        #[cfg(feature = "app-registry")]
+        T::AppShelf | T::LaunchApp(_) => (kind_short(WinKindTag::AppShelf), NT_LABEL),
+        #[cfg(feature = "app-registry")]
+        T::ExchangeFloor => (kind_short(WinKindTag::ExchangeFloor), NT_LABEL),
+    }
+}
+
 // ── The result-row presentation (pure elements, no interactivity) ─────────────────
 
-/// Render the spotter result rows as inert elements — one row per entry, the label in
-/// bold over a dim sublabel, the row at `selected` highlighted (navy fill, white text).
-/// No click/hover wiring: the desktop View wraps each returned `AnyElement` in its own
-/// `cx.listener` for selection + dispatch and threads the arrow-key cursor through
-/// `selected`. The geometry matches the context-menu rows (the same dense NT feel).
+/// Render the spotter result rows as inert elements — one row per entry: the
+/// [`entry_badge`] kind chip, then the label in bold over a dim sublabel; the row at
+/// `selected` highlighted (navy fill, white text — the chip goes white too, so the
+/// selected row is one coherent NT inversion). No click/hover wiring: the desktop
+/// View wraps each returned `AnyElement` in its own `cx.listener` for selection +
+/// dispatch and threads the arrow-key cursor through `selected`. The geometry
+/// matches the context-menu rows (the same dense NT feel).
 pub fn render_spotter_rows(entries: &[SpotterEntry], selected: usize) -> Vec<AnyElement> {
     entries
         .iter()
         .enumerate()
         .map(|(i, e)| {
             let is_sel = i == selected;
+            let (tag, color) = entry_badge(e);
             bevel_raised(div())
                 .px_3()
                 .py_1()
                 .flex()
-                .flex_col()
+                .flex_row()
+                .items_center()
+                .gap_2()
                 .when(is_sel, |d| d.bg(gpui::rgb(NT_SELECT)))
                 .child(
+                    // The kind chip — fixed-width so the label column stays ruled.
                     div()
-                        .text_size(px(12.0))
+                        .w(px(30.0))
+                        .flex_none()
+                        .text_size(px(9.0))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(gpui::rgb(if is_sel { NT_TITLE_TEXT } else { NT_TEXT }))
-                        .child(e.label.clone()),
+                        .text_color(gpui::rgb(if is_sel { NT_TITLE_TEXT } else { color }))
+                        .child(tag),
                 )
                 .child(
                     div()
-                        .text_size(px(10.0))
-                        .text_color(gpui::rgb(if is_sel { NT_FACE_DARK } else { NT_DIM }))
-                        .child(e.sublabel.clone()),
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(gpui::rgb(if is_sel { NT_TITLE_TEXT } else { NT_TEXT }))
+                                .child(e.label.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(gpui::rgb(if is_sel { NT_FACE_DARK } else { NT_DIM }))
+                                .child(e.sublabel.clone()),
+                        ),
                 )
                 .into_any_element()
         })
@@ -477,5 +734,198 @@ mod tests {
         ];
         let ranked = rank("ins", &cands);
         assert_eq!(ranked[0].label, "Inspect", "the shorter label wins the tie");
+    }
+
+    // ── The command grammar ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_command_reads_the_daily_driver_verbs() {
+        // The scout plan's three headline sentences, verbatim.
+        assert_eq!(
+            parse_command("transfer 500 to 87a5"),
+            Some(SpotterCommand::Transfer {
+                amount: 500,
+                src: None,
+                dst: "87a5".into(),
+            })
+        );
+        assert_eq!(
+            parse_command("grant ccfc9955"),
+            Some(SpotterCommand::Grant {
+                src: None,
+                dst: "ccfc9955".into(),
+            })
+        );
+        assert_eq!(
+            parse_command("bump 2a69"),
+            Some(SpotterCommand::Bump {
+                target: "2a69".into(),
+            })
+        );
+        assert_eq!(
+            parse_command("seal 2a69"),
+            Some(SpotterCommand::Seal {
+                target: "2a69".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_command_takes_full_and_connective_forms() {
+        // Two-prefix transfer, bare and dressed in `from … to …` prose — one shape.
+        let full = Some(SpotterCommand::Transfer {
+            amount: 1_000,
+            src: Some("1a2b".into()),
+            dst: "9f3c".into(),
+        });
+        assert_eq!(parse_command("transfer 1,000 1a2b 9f3c"), full);
+        assert_eq!(parse_command("transfer 1000 from 1a2b to 9f3c"), full);
+        assert_eq!(parse_command("transfer 1_000 1a2b to 9f3c"), full);
+        // Grant with an explicit source.
+        assert_eq!(
+            parse_command("grant 1a2b to ccfc"),
+            Some(SpotterCommand::Grant {
+                src: Some("1a2b".into()),
+                dst: "ccfc".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_command_is_case_insensitive_and_lowercases_prefixes() {
+        assert_eq!(
+            parse_command("Transfer 500 TO 87A5"),
+            Some(SpotterCommand::Transfer {
+                amount: 500,
+                src: None,
+                dst: "87a5".into(),
+            }),
+            "verbs, connectives, and hex prefixes all read case-insensitively"
+        );
+    }
+
+    #[test]
+    fn parse_command_rejects_non_commands_and_half_typed_ones() {
+        // Not verbs — ordinary fuzzy queries must NEVER parse (the no-regression
+        // contract: commands rank above fuzzy only when the verb prefix parses).
+        for q in [
+            "",
+            "world explorer",
+            "inspect 87a5",
+            "doc",
+            "agent room",
+            "co-author document",
+        ] {
+            assert_eq!(parse_command(q), None, "{q:?} is not a command");
+        }
+        // Half-typed / malformed commands degrade to fuzzy, keystroke by keystroke.
+        for q in [
+            "transfer",
+            "transfer 500",               // no destination yet
+            "transfer x to 87a5",         // amount is not a number
+            "transfer 500 to zz99",       // 'z' is not a hex digit
+            "transfer 500 to 87a5 extra", // trailing junk
+            "grant",
+            "bump",
+            "bump a",         // a 1-char prefix fans out to a sixteenth of the ledger
+            "bump 2a69 2b70", // one cell only
+            "seal",
+        ] {
+            assert_eq!(parse_command(q), None, "{q:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn replay_string_roundtrips_a_command_through_the_parser() {
+        // A dispatched command's replay line re-parses to the same command shape
+        // over the resolved cells' short ids — the recent-jumps trail re-resolves
+        // against the LIVE ledger instead of replaying a stale target.
+        let (src, dst) = (CellId::from_bytes([1u8; 32]), CellId::from_bytes([2u8; 32]));
+        let e = SpotterEntry {
+            label: "Transfer 500  account 01010101 → account 02020202".into(),
+            sublabel: String::new(),
+            target: SpotterTarget::CmdTransfer {
+                src,
+                dst,
+                amount: 500,
+            },
+            score: 0,
+        };
+        assert_eq!(
+            parse_command(&replay_string(&e)),
+            Some(SpotterCommand::Transfer {
+                amount: 500,
+                src: Some(id_short(&src)),
+                dst: id_short(&dst),
+            })
+        );
+        // A plain jump replays as its label (matched back to the live candidates).
+        assert_eq!(
+            replay_string(&entry("Inspect  account 1a2b")),
+            "Inspect  account 1a2b"
+        );
+    }
+
+    // ── The open-window candidates + the row badges ─────────────────────────────
+
+    #[test]
+    fn window_candidates_carry_focus_targets_in_input_order() {
+        let a = CellId::from_bytes([3u8; 32]);
+        let b = CellId::from_bytes([4u8; 32]);
+        let wins = vec![
+            (
+                "account 0303 — Document".to_string(),
+                a,
+                WinKindTag::DocEditor,
+            ),
+            (
+                "treasury 0404 — Inspector".to_string(),
+                b,
+                WinKindTag::Inspector,
+            ),
+        ];
+        let cands = window_candidates(&wins);
+        assert_eq!(
+            labels(&cands),
+            vec![
+                "Window  account 0303 — Document",
+                "Window  treasury 0404 — Inspector",
+            ]
+        );
+        assert!(
+            matches!(cands[0].target, SpotterTarget::FocusWindow(c, WinKindTag::DocEditor) if c == a),
+            "the entry targets the window's (cell, kind) key"
+        );
+    }
+
+    #[test]
+    fn entry_badge_sorts_the_list_at_a_glance() {
+        // A command wears the navy CMD chip.
+        let cmd = SpotterEntry {
+            label: "Bump nonce  account 2a69".into(),
+            sublabel: String::new(),
+            target: SpotterTarget::CmdBump(CellId::from_bytes([5u8; 32])),
+            score: 0,
+        };
+        assert_eq!(entry_badge(&cmd), ("CMD", NT_SELECT));
+        // An open window wears its kind tag in the live green.
+        let win = SpotterEntry {
+            label: "Window  account 0303 — Document".into(),
+            sublabel: String::new(),
+            target: SpotterTarget::FocusWindow(
+                CellId::from_bytes([3u8; 32]),
+                WinKindTag::DocEditor,
+            ),
+            score: 0,
+        };
+        assert_eq!(entry_badge(&win), ("DOC", NT_OK));
+        // A bare cell jump glows its kind's hue — including a two-word kind.
+        let cell = SpotterEntry {
+            label: "issuer well 1a2b3c4d".into(),
+            sublabel: String::new(),
+            target: SpotterTarget::Cell(CellId::from_bytes([6u8; 32])),
+            score: 0,
+        };
+        assert_eq!(entry_badge(&cell), ("CEL", kind_glow("issuer well")));
     }
 }

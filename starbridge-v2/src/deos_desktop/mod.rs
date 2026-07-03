@@ -193,7 +193,7 @@ use crate::world::{grant_capability, transfer, CommitOutcome, World};
 pub use android_window::{AndroidInputCmd, AndroidWindow, ANDROID_WINDOW_TITLE};
 pub use chrome::{
     bevel_raised, bevel_sunken, bevel_window, face_gauge, face_row, face_row_color, face_section,
-    fmt_balance, id_hex, id_short, pxf, DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT,
+    fmt_balance, id_hex, id_short, kind_short, pxf, DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT,
     DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP, GLYPH_MAX, GLYPH_MIN, GLYPH_RESTORE, ICON_H, ICON_W,
     MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_LABEL,
     NT_MENU_HILIGHT, NT_OK, NT_PANEL, NT_RULE, NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE,
@@ -2482,10 +2482,15 @@ impl DeosDesktop {
     /// verbs), reading live faces off the ledger. Delegates the entry shapes to
     /// [`spotter::candidates_for_cells`].
     fn spotter_candidates(&self) -> Vec<spotter::SpotterEntry> {
-        // The GLOBAL surfaces (World Explorer · Transcript · the Portable-IR card) come
-        // FIRST so the unifying entry opens onto the whole rooms of the desktop, then the
-        // per-cell vocabulary — one entry to every surface, not only every cell.
-        let mut out = spotter::surface_candidates();
+        // The OPEN WINDOWS come first of all (front-most first): a jump to a place
+        // already on the glass is the cheapest move there is, and `rank`'s stable
+        // sort keeps input order on ties, so windows outrank only at EQUAL match
+        // quality — a strictly stronger fuzzy match elsewhere still wins.
+        let mut out = spotter::window_candidates(&self.spotter_window_rows());
+        // Then the GLOBAL surfaces (World Explorer · Transcript · the Portable-IR
+        // card…), so the unifying entry opens onto the whole rooms of the desktop
+        // before the per-cell vocabulary — one entry to every surface + every cell.
+        out.extend(spotter::surface_candidates());
         // THE APP SHELF vocabulary — the shelf surface + one "Launch <name> · app"
         // per registry app, so the one-keystroke entry reaches every pre-built app.
         #[cfg(feature = "app-registry")]
@@ -2507,14 +2512,179 @@ impl DeosDesktop {
         out
     }
 
-    /// The ranked candidates for the live query (empty query = the full list).
+    /// The open windows as `(title, cell, kind)` rows for the Spotter's
+    /// jump-to-window candidates — front-most (highest z) first, so the window you
+    /// touched last is the first row a bare query greets.
+    fn spotter_window_rows(&self) -> Vec<(String, CellId, WinKindTag)> {
+        let mut rows: Vec<(&WinKey, &WindowState)> = self.windows.iter().collect();
+        rows.sort_by_key(|(_, ws)| std::cmp::Reverse(ws.z));
+        rows.into_iter()
+            .map(|(key, ws)| (ws.title.clone(), key.0, key.1))
+            .collect()
+    }
+
+    /// The ranked candidates for the live query — three layers, in rank order:
+    ///
+    ///   1. **COMMANDS** — when the verb prefix parses ([`spotter::parse_command`]),
+    ///      the synthesized ready-to-commit entries sit ABOVE every fuzzy match, and
+    ///      ONLY then (any other query never sees them — the fuzzy jump is intact).
+    ///   2. **RECENTS** — on an empty query only, the last 8 dispatches greet you.
+    ///   3. The fuzzy-ranked candidate set (empty query = the full list, in order).
     fn spotter_ranked(&self) -> Vec<spotter::SpotterEntry> {
         let q = self
             .spotter
             .as_ref()
             .map(|s| s.query.as_str())
             .unwrap_or("");
-        spotter::rank(q, &self.spotter_candidates())
+        let mut out = self.spotter_command_entries(q);
+        if q.trim().is_empty() {
+            out.extend(self.spotter_recent_entries());
+        }
+        out.extend(spotter::rank(q, &self.spotter_candidates()));
+        out
+    }
+
+    /// Every live cell whose full hex id starts with `prefix` (already lowercased by
+    /// the parser) — the command line's argument resolution against the LIVE ledger.
+    /// One hit = a ready command; several = the entries fan out, one per completion
+    /// (pick the one you meant); none = the query falls back to the plain fuzzy jump.
+    fn resolve_prefix(&self, prefix: &str) -> Vec<CellId> {
+        self.cells
+            .iter()
+            .filter(|c| id_hex(c).starts_with(prefix))
+            .copied()
+            .collect()
+    }
+
+    /// Synthesize the COMMAND entries for `query` — the Spotter-as-command-line
+    /// half. The pure grammar ([`spotter::parse_command`]) reads the verb; this
+    /// resolves each cell prefix via [`Self::resolve_prefix`] and emits one entry
+    /// per resolution (capped at 6 so an ambiguous fan-out stays a list, not a
+    /// flood). The targets carry RESOLVED `CellId`s; dispatch routes them through
+    /// the SAME verified-turn actuations the context menu fires. An omitted source
+    /// (`transfer 500 to 87a5` · `grant ccfc9955`) is the operator's own cell.
+    fn spotter_command_entries(&self, query: &str) -> Vec<spotter::SpotterEntry> {
+        use spotter::{SpotterCommand as C, SpotterEntry, SpotterTarget as Tg};
+        let Some(cmd) = spotter::parse_command(query) else {
+            return Vec::new();
+        };
+        let sub = "command · a verified turn on the live World · Enter to commit";
+        let name = |c: &CellId| format!("{} {}", self.cell_kind(c), id_short(c));
+        let mut out = Vec::new();
+        match cmd {
+            C::Transfer { amount, src, dst } => {
+                let srcs = src
+                    .map(|p| self.resolve_prefix(&p))
+                    .unwrap_or_else(|| vec![self.user]);
+                let dsts = self.resolve_prefix(&dst);
+                for s in &srcs {
+                    for d in &dsts {
+                        if s == d {
+                            continue; // a self-transfer is no move at all
+                        }
+                        out.push(SpotterEntry {
+                            label: format!(
+                                "Transfer {}  {} → {}",
+                                chrome::group(amount),
+                                name(s),
+                                name(d)
+                            ),
+                            sublabel: sub.to_string(),
+                            target: Tg::CmdTransfer {
+                                src: *s,
+                                dst: *d,
+                                amount,
+                            },
+                            score: 0,
+                        });
+                    }
+                }
+            }
+            C::Grant { src, dst } => {
+                let srcs = src
+                    .map(|p| self.resolve_prefix(&p))
+                    .unwrap_or_else(|| vec![self.user]);
+                let dsts = self.resolve_prefix(&dst);
+                for s in &srcs {
+                    for d in &dsts {
+                        out.push(SpotterEntry {
+                            label: format!("Grant cap  {} → {}", name(s), name(d)),
+                            sublabel: sub.to_string(),
+                            target: Tg::CmdGrant { src: *s, dst: *d },
+                            score: 0,
+                        });
+                    }
+                }
+            }
+            C::Bump { target } => {
+                for c in self.resolve_prefix(&target) {
+                    out.push(SpotterEntry {
+                        label: format!("Bump nonce  {}", name(&c)),
+                        sublabel: sub.to_string(),
+                        target: Tg::CmdBump(c),
+                        score: 0,
+                    });
+                }
+            }
+            C::Seal { target } => {
+                for c in self.resolve_prefix(&target) {
+                    let verb = if self.cell_sealed(&c) {
+                        "Unseal"
+                    } else {
+                        "Seal"
+                    };
+                    out.push(SpotterEntry {
+                        label: format!("{verb}  {}", name(&c)),
+                        sublabel: sub.to_string(),
+                        target: Tg::CmdSeal(c),
+                        score: 0,
+                    });
+                }
+            }
+        }
+        out.truncate(6);
+        out
+    }
+
+    /// The RECENT-JUMPS rows the empty-query palette greets you with — the last 8
+    /// dispatches, newest first, each RE-RESOLVED against the live desktop rather
+    /// than replayed blind: a recent command re-parses + re-resolves its prefixes
+    /// (it fires on today's ledger), a recent jump matches its label back into the
+    /// current candidate set (a closed window / vanished cell quietly drops out).
+    fn spotter_recent_entries(&self) -> Vec<spotter::SpotterEntry> {
+        if self.layout.prefs.recent_jumps.is_empty() {
+            return Vec::new();
+        }
+        let full = self.spotter_candidates();
+        self.layout
+            .prefs
+            .recent_jumps
+            .iter()
+            .filter_map(|r| {
+                let hit = self
+                    .spotter_command_entries(r)
+                    .into_iter()
+                    .next()
+                    .or_else(|| full.iter().find(|e| e.label == *r).cloned())?;
+                Some(spotter::SpotterEntry {
+                    sublabel: format!("recent · {}", hit.sublabel),
+                    ..hit
+                })
+            })
+            .collect()
+    }
+
+    /// Remember a Spotter dispatch on the RECENT-JUMPS trail (newest first, deduped,
+    /// capped at 8) and persist it with the layout prefs — the same cold-path sync
+    /// save the welcome dismissal uses, so the trail survives reopen. `replay` is
+    /// the entry's replay string ([`spotter::replay_string`]): a jump's label, or a
+    /// command's canonical verb line (re-parsed + re-resolved when shown again).
+    fn note_recent_jump(&mut self, replay: String) {
+        let recents = &mut self.layout.prefs.recent_jumps;
+        recents.retain(|r| *r != replay);
+        recents.insert(0, replay);
+        recents.truncate(8);
+        self.layout.save(&self.layout_path);
     }
 
     /// Dispatch the Spotter's selected (or `idx`-th) candidate: open the corresponding
@@ -2528,6 +2698,11 @@ impl DeosDesktop {
             self.spotter = None;
             return;
         };
+        // THE RECENT-JUMPS TRAIL — every dispatch is remembered (newest first,
+        // deduped, capped at 8, persisted with the prefs) so the next empty-query
+        // palette greets you with your own trail. Recorded BEFORE the match so the
+        // early-returning arms (commands, app launches) land on it too.
+        self.note_recent_jump(spotter::replay_string(entry));
         // Every jump LANDS MOLD-READY: the opened surface is selected so its halo ring
         // is already floating when you arrive (the unifying entry hands you straight to
         // the mold-in-place gesture). Global surfaces anchor on the user sentinel.
@@ -2569,6 +2744,45 @@ impl DeosDesktop {
             Tg::LaunchApp(id) => {
                 self.spotter = None;
                 self.launch_shelf_app(id);
+                return;
+            }
+            // Jump to an ALREADY-OPEN window: raise + un-minimize + land mold-ready
+            // (the same halo-selected arrival every other jump makes).
+            Tg::FocusWindow(c, tag) => {
+                self.focus_window((c, tag));
+                self.selected = Some(HaloTarget::Window((c, tag)));
+            }
+            // ── THE COMMAND LINE's verbs — receipted turns with their own verdict
+            // narration. Each routes through the SAME actuation the context menu
+            // fires and returns early: the receipt line (committed / REFUSED, with
+            // the chronicle height) IS the story; the generic "Spotter → …" jump
+            // line must not clobber it — the LaunchApp precedent, held to.
+            Tg::CmdTransfer { src, dst, amount } => {
+                self.spotter = None;
+                let outcome = self.commit_transfer(src, dst, amount);
+                self.say(format!(
+                    "Spotter command: transfer {} {} → {} → {} (height {}).",
+                    chrome::group(amount),
+                    id_short(&src),
+                    id_short(&dst),
+                    Self::outcome_verdict(&outcome),
+                    self.world.borrow().height()
+                ));
+                return;
+            }
+            Tg::CmdGrant { src, dst } => {
+                self.spotter = None;
+                self.actuate(src, &ActionKind::Grant { target: dst });
+                return;
+            }
+            Tg::CmdBump(c) => {
+                self.spotter = None;
+                self.actuate(c, &ActionKind::BumpNonce);
+                return;
+            }
+            Tg::CmdSeal(c) => {
+                self.spotter = None;
+                self.actuate(c, &ActionKind::ToggleSeal);
                 return;
             }
         }
@@ -2667,6 +2881,20 @@ impl DeosDesktop {
         }
     }
 
+    /// **Commit ONE transfer turn** `src → dst` for `amount` — the single
+    /// verified-turn body behind both the spatial compose-drop gesture and the
+    /// Spotter's `transfer` command, factored so the palette's typed verb and the
+    /// drag gesture are provably the SAME actuation. Returns the executor's
+    /// verdict; the narration is each caller's own (a drop says COMPOSE, the
+    /// command line says its receipt).
+    fn commit_transfer(&mut self, src: CellId, dst: CellId, amount: u64) -> CommitOutcome {
+        let turn = {
+            let w = self.world.borrow();
+            w.turn(src, vec![transfer(src, dst, amount)])
+        };
+        self.world.borrow_mut().commit_turn(turn)
+    }
+
     /// **COMPOSE** — drop cell `src` ONTO cell `dst`: act across them with the
     /// dropped affordance. A transfer when `src` has balance, else a cap grant. This
     /// is the spatial compose gesture (drag one icon onto another).
@@ -2676,11 +2904,7 @@ impl DeosDesktop {
         }
         let bal = self.cell_balance(&src);
         if bal >= 1_000 {
-            let turn = {
-                let w = self.world.borrow();
-                w.turn(src, vec![transfer(src, dst, 1_000)])
-            };
-            let outcome = self.world.borrow_mut().commit_turn(turn);
+            let outcome = self.commit_transfer(src, dst, 1_000);
             self.say(format!(
                 "COMPOSE: dropped {} → {}: transfer 1,000 {} (height {}).",
                 id_short(&src),
@@ -3507,6 +3731,42 @@ impl DeosDesktop {
     /// Dispatch the Spotter's top candidate (what Enter does) — a bake/test hook.
     pub fn bake_spotter_dispatch_top(&mut self) {
         self.spotter_dispatch(Some(0));
+    }
+
+    /// Drive one Spotter COMMAND end-to-end — a bake/test hook: open the palette
+    /// with `query`, and dispatch the top entry (what typing the sentence + Enter
+    /// does). Returns whether the top entry WAS a command (the verb prefix parsed
+    /// and its cells resolved); `false` means the query stayed a plain fuzzy jump
+    /// — so a bake can assert both that `transfer 500 <hex> <hex>` commits a real
+    /// verified turn (the height advances; the status line carries the verdict)
+    /// AND that a non-verb query never grows a command on top.
+    pub fn bake_spotter_run_command(&mut self, query: &str) -> bool {
+        use spotter::SpotterTarget as Tg;
+        self.bake_open_spotter(query);
+        let was_command = matches!(
+            self.spotter_ranked().first().map(|e| e.target.clone()),
+            Some(Tg::CmdTransfer { .. } | Tg::CmdGrant { .. } | Tg::CmdBump(_) | Tg::CmdSeal(_))
+        );
+        self.spotter_dispatch(Some(0));
+        was_command
+    }
+
+    /// The persisted RECENT-JUMPS trail (newest first, capped at 8) — a bake/test
+    /// hook proving dispatches land on it, dedupe, and greet the empty query.
+    pub fn bake_spotter_recent_jumps(&self) -> Vec<String> {
+        self.layout.prefs.recent_jumps.clone()
+    }
+
+    /// The status bar's current line — a bake/test hook (a committed Spotter
+    /// command's receipt narration, verdict + height, lands here via `say()`).
+    pub fn bake_status_line(&self) -> String {
+        self.status.clone()
+    }
+
+    /// The World's chronicle height — a bake/test hook (a committed command
+    /// advances it; a refused one leaves it be).
+    pub fn bake_world_height(&self) -> u64 {
+        self.world.borrow().height()
     }
 
     /// Whether the warm WELCOME card is currently showing (a bake/test hook).
@@ -4912,7 +5172,8 @@ impl DeosDesktop {
             return;
         }
         let input = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Jump to a cell, action, or surface…")
+            InputState::new(window, cx)
+                .placeholder("Jump anywhere — or command: transfer 500 to <id> · grant · bump…")
         });
         let sub = cx.subscribe_in(
             &input,
@@ -6449,23 +6710,8 @@ impl DeosDesktop {
     }
 }
 
-/// A 3-letter window-kind tag for the taskbar stub (dense, fixed-width).
-fn kind_short(tag: WinKindTag) -> &'static str {
-    match tag {
-        WinKindTag::Inspector => "INS",
-        WinKindTag::DocEditor => "DOC",
-        WinKindTag::Links => "LNK",
-        WinKindTag::Transcript => "LOG",
-        WinKindTag::Workflow => "WFL",
-        WinKindTag::AndroidCell => "AND",
-        WinKindTag::DocExplorer => "DGX",
-        WinKindTag::WorldExplorer => "WLD",
-        WinKindTag::AgentRoom => "AGT",
-        WinKindTag::AppShelf => "APP",
-        WinKindTag::ExchangeFloor => "EXC",
-        WinKindTag::ViewNodePane => "IR",
-    }
-}
+// (`kind_short` — the 3-letter window-kind tag the taskbar stubs and the Spotter's
+// row badges share — moved into `chrome.rs` beside `kind_glow`, re-exported above.)
 
 #[derive(Clone, Copy)]
 enum TitleBtn {
