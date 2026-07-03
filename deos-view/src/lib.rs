@@ -31,7 +31,7 @@ pub use fmt::BindFmt;
 pub use tree::{
     disclose, parse_view_tree, pill_display, resolve_mounts, Crumb, Disclosure, HaloHandle,
     MapMountSource, MenuItem, MountSource, PillCase, RawItem, RawNode, RawPillCase, RawProps,
-    ViewNode, MAX_MOUNT_DEPTH,
+    ViewNode, MAX_MOUNT_DEPTH, MAX_MOUNT_NODES,
 };
 
 // ── The NATIVE renderer: `ViewNode` → real gpui-component pixels (the heavy stack

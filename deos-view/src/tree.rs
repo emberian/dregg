@@ -740,7 +740,31 @@ pub fn pill_display<'a>(
 /// The maximum mount DEPTH (`host` nesting) the resolver unfolds before fail-safing. Bounds
 /// a huge-but-acyclic mount tree so it can never blow the stack (cycles are caught separately
 /// by the visited-path check). 16 levels of cells-host-cells is far past any real surface.
+///
+/// DEPTH is only ONE amplification axis. A shallow-but-WIDE fan-out (a cell hosting `k` copies
+/// of a child that itself hosts `k` grandchildren …) stays under this cap on every root-to-leaf
+/// path yet unfolds `k^depth` mounts in total — the WIDTH×DEPTH work axis. That axis is bounded
+/// separately by [`MAX_MOUNT_NODES`]; this constant alone is NOT a total-work fail-safe.
 pub const MAX_MOUNT_DEPTH: usize = 16;
+
+/// The maximum TOTAL number of `host` mounts the resolver unfolds in a single pass — the
+/// WIDTH×DEPTH work budget that [`MAX_MOUNT_DEPTH`] (a per-descent, one-chain cap) cannot give.
+///
+/// [`MAX_MOUNT_DEPTH`] bounds a single root-to-leaf chain, and the visited-path check bounds
+/// cycles — but neither bounds an *acyclic fan-out* graph. Craft distinct cells `c0..c15`
+/// (never repeating on any path, so the cycle guard never fires; only 16 deep, so the depth
+/// guard never fires) where each `ci` hosts a `vstack` of `k` `host(c{i+1})` nodes. Every
+/// path is short and acyclic, yet the resolver unfolds `k + k² + … + k¹⁵ ≈ k¹⁵` mounts total
+/// (`k = 8` → ~3.5e13), each cloning a subtree and — under the ledger source — re-reading and
+/// re-parsing a cell blob: a render-time OOM/hang DoS from a victim card that host-mounts one
+/// attacker-controlled cell.
+///
+/// This is the second, INDEPENDENT fail-safe: a single tally of host mounts unfolded across
+/// the WHOLE pass (not per-chain), threaded through the recursion. Once the pass has spent its
+/// whole budget every further `host` fail-safes to a `‹mount budget exceeded›` body — the
+/// truncated subtree is still SHOWN (labelled, honest), never unfolded, never a hang. 4096 is
+/// thousands of real cells past any authored surface yet forecloses the amplification cold.
+pub const MAX_MOUNT_NODES: usize = 4096;
 
 /// **Resolve every `host` mount against a [`MountSource`]** — the cell-hosted-view-tree
 /// composition keystone. Walks `tree`, and for each [`ViewNode::Host`] fills its `view` from
@@ -748,18 +772,29 @@ pub const MAX_MOUNT_DEPTH: usize = 16;
 /// cells-host-cells — resolve too). Returns a fully-resolved tree every renderer walks
 /// identically.
 ///
-/// FAIL-SAFE BY CONSTRUCTION (the recursion contract):
+/// FAIL-SAFE BY CONSTRUCTION (the recursion contract) — three independent bounds cover the
+/// three amplification axes (self-reference, chain DEPTH, and total WIDTH×DEPTH work):
 /// - **cycle** — a `host{cell}` naming a cell already on the mount path (self-host, or an
 ///   a→b→a cycle) resolves to a `‹mount cycle: …›` body inside the host frame (the cell is
 ///   still shown; only the self-reference is cut). Never an infinite unfold.
 /// - **depth** — at [`MAX_MOUNT_DEPTH`] the resolver stops with a `‹mount depth exceeded›`
-///   body (a huge acyclic tree can't blow the stack).
+///   body (a huge acyclic *chain* can't blow the stack).
+/// - **budget** — across the WHOLE pass at most [`MAX_MOUNT_NODES`] `host` mounts are unfolded;
+///   past that every further mount stops with a `‹mount budget exceeded›` body. This is what
+///   bounds an acyclic *fan-out* graph (short, non-cyclic paths that nonetheless unfold `kᵈ`
+///   mounts) — the axis neither the cycle nor the depth guard can see. A huge fan-out truncates
+///   (visibly, cheaply) rather than OOM/hanging the renderer.
 /// - **source miss** — a cell the source can't supply stays `view: None` (the unresolved
 ///   placeholder). A `host` already carrying a `view` (provided/pre-baked) is recursed for
 ///   nested hosts but otherwise kept.
 pub fn resolve_mounts(tree: &ViewNode, source: &dyn MountSource) -> ViewNode {
     let mut path: Vec<String> = Vec::new();
-    resolve_rec(tree, source, &mut path, 0)
+    // `budget` is the REMAINING total-work allowance for this pass — the shared tally of host
+    // mounts still permitted to unfold, threaded (like `path`) through the whole recursion so a
+    // fan-out reached via many sibling hosts draws down ONE global budget, not a fresh per-chain
+    // one. Depleted → the width×depth amplification fail-safes to `‹mount budget exceeded›`.
+    let mut budget: usize = MAX_MOUNT_NODES;
+    resolve_rec(tree, source, &mut path, 0, &mut budget)
 }
 
 fn resolve_rec(
@@ -767,13 +802,15 @@ fn resolve_rec(
     source: &dyn MountSource,
     path: &mut Vec<String>,
     depth: usize,
+    budget: &mut usize,
 ) -> ViewNode {
-    let recur = |children: &[ViewNode], path: &mut Vec<String>| -> Vec<ViewNode> {
-        children
-            .iter()
-            .map(|c| resolve_rec(c, source, path, depth))
-            .collect()
-    };
+    let recur =
+        |children: &[ViewNode], path: &mut Vec<String>, budget: &mut usize| -> Vec<ViewNode> {
+            children
+                .iter()
+                .map(|c| resolve_rec(c, source, path, depth, budget))
+                .collect()
+        };
     match node {
         ViewNode::Host { cell, view } => {
             // Cycle: this cell is already being mounted on the current path.
@@ -790,6 +827,17 @@ fn resolve_rec(
                     view: Some(Box::new(ViewNode::Text("‹mount depth exceeded›".into()))),
                 };
             }
+            // Budget: the WIDTH×DEPTH fail-safe. Cycle+depth bound one chain; this bounds the
+            // TOTAL mounts unfolded across the whole pass, so an acyclic fan-out (short, cycle-
+            // free paths that still amplify k^depth) truncates here instead of OOM/hanging. Each
+            // mount that gets past cycle+depth spends one unit; at zero, stop (labelled, cheap).
+            if *budget == 0 {
+                return ViewNode::Host {
+                    cell: cell.clone(),
+                    view: Some(Box::new(ViewNode::Text("‹mount budget exceeded›".into()))),
+                };
+            }
+            *budget -= 1;
             // The hosted subtree: the provided/pre-baked `view`, else the source's tree for
             // this cell. A miss leaves it unresolved (the honest placeholder).
             let hosted = match view {
@@ -798,7 +846,7 @@ fn resolve_rec(
             };
             let resolved = hosted.map(|h| {
                 path.push(cell.clone());
-                let r = resolve_rec(&h, source, path, depth + 1);
+                let r = resolve_rec(&h, source, path, depth + 1, budget);
                 path.pop();
                 Box::new(r)
             });
@@ -807,10 +855,10 @@ fn resolve_rec(
                 view: resolved,
             }
         }
-        ViewNode::VStack(cs) => ViewNode::VStack(recur(cs, path)),
-        ViewNode::Row(cs) => ViewNode::Row(recur(cs, path)),
-        ViewNode::List(cs) => ViewNode::List(recur(cs, path)),
-        ViewNode::Table(cs) => ViewNode::Table(recur(cs, path)),
+        ViewNode::VStack(cs) => ViewNode::VStack(recur(cs, path, budget)),
+        ViewNode::Row(cs) => ViewNode::Row(recur(cs, path, budget)),
+        ViewNode::List(cs) => ViewNode::List(recur(cs, path, budget)),
+        ViewNode::Table(cs) => ViewNode::Table(recur(cs, path, budget)),
         ViewNode::Section {
             title,
             tag,
@@ -818,7 +866,7 @@ fn resolve_rec(
         } => ViewNode::Section {
             title: title.clone(),
             tag: tag.clone(),
-            children: recur(children, path),
+            children: recur(children, path, budget),
         },
         ViewNode::Tabs {
             tabs,
@@ -829,18 +877,18 @@ fn resolve_rec(
             tabs: tabs.clone(),
             selected_slot: *selected_slot,
             select_turn: select_turn.clone(),
-            panels: recur(panels, path),
+            panels: recur(panels, path, budget),
         },
         // The `grid` container recurses its children (a child may host a cell), like the other
         // containers.
         ViewNode::Grid { cols, children } => ViewNode::Grid {
             cols: *cols,
-            children: recur(children, path),
+            children: recur(children, path, budget),
         },
         // The adept-only wrapper is transparent to mount resolution — recurse the wrapped node
         // (it may host a cell) and keep the marker (disclosure runs separately).
         ViewNode::Adept(inner) => {
-            ViewNode::Adept(Box::new(resolve_rec(inner, source, path, depth)))
+            ViewNode::Adept(Box::new(resolve_rec(inner, source, path, depth, budget)))
         }
         // Leaves carry no mounts — cloned through unchanged. (The actuation/indicator nodes hold
         // affordance/value DATA, not `ViewNode` children, so no mount can hide inside them.)
@@ -1029,6 +1077,158 @@ mod mount_tests {
         assert!(
             matches!(&**inner, ViewNode::Text(t) if t == "inner resolved"),
             "the nested host inside a provided subtree resolved from the source"
+        );
+    }
+
+    /// Walk a resolved tree and tally, at each `host`, which of the three fail-safe placeholders
+    /// (or a genuine unfold) it landed on. `unfolded` counts hosts whose body is real resolved
+    /// content — i.e. one drawn-down unit of the [`MAX_MOUNT_NODES`] budget.
+    #[derive(Default)]
+    struct MountTally {
+        unfolded: usize,
+        budget_markers: usize,
+        depth_markers: usize,
+        cycle_markers: usize,
+    }
+
+    fn tally_mounts(node: &ViewNode, t: &mut MountTally) {
+        match node {
+            ViewNode::Host { view: Some(v), .. } => {
+                match &**v {
+                    ViewNode::Text(s) if s.contains("mount budget exceeded") => {
+                        t.budget_markers += 1
+                    }
+                    ViewNode::Text(s) if s.contains("mount depth exceeded") => t.depth_markers += 1,
+                    ViewNode::Text(s) if s.contains("mount cycle") => t.cycle_markers += 1,
+                    // A genuine unfold (any real resolved body, incl. a non-marker leaf).
+                    other => {
+                        t.unfolded += 1;
+                        tally_mounts(other, t);
+                    }
+                }
+            }
+            ViewNode::Host { view: None, .. } => {}
+            ViewNode::VStack(cs) | ViewNode::Row(cs) | ViewNode::List(cs) | ViewNode::Table(cs) => {
+                cs.iter().for_each(|c| tally_mounts(c, t))
+            }
+            ViewNode::Section { children, .. } => children.iter().for_each(|c| tally_mounts(c, t)),
+            ViewNode::Tabs { panels, .. } => panels.iter().for_each(|c| tally_mounts(c, t)),
+            ViewNode::Grid { children, .. } => children.iter().for_each(|c| tally_mounts(c, t)),
+            ViewNode::Adept(inner) => tally_mounts(inner, t),
+            _ => {}
+        }
+    }
+
+    /// **The SCALING fail-safe (CORE-AUDIT #8).** An *acyclic fan-out* mount graph — distinct
+    /// cells `c0..c{N}` where each hosts a `vstack` of `k` `host(c{i+1})` — trips NEITHER the
+    /// cycle guard (no cell repeats on any path) NOR the depth guard (every path is well under
+    /// [`MAX_MOUNT_DEPTH`]), yet without a total-work budget it would unfold `k + k² + … ≈ kᴺ`
+    /// mounts (`k = 8`, N = 12 → ~6.9e10) and OOM/hang the renderer. [`MAX_MOUNT_NODES`] bounds
+    /// the TOTAL unfolds: the pass terminates promptly, the work is capped at the budget, and the
+    /// truncated subtrees carry a VISIBLE `‹mount budget exceeded›` marker — while the pre-existing
+    /// depth marker never fires, proving it is the NEW width×depth axis that bounded this.
+    #[test]
+    fn resolve_mounts_bounds_an_acyclic_fan_out_to_the_node_budget() {
+        // `k` well above 1 and `levels` well below MAX_MOUNT_DEPTH: the graph is short and
+        // cycle-free on every path, so only the node budget can bound it.
+        let k = 8usize;
+        let levels = 12usize;
+        assert!(
+            levels < MAX_MOUNT_DEPTH,
+            "stays under the depth cap on every path"
+        );
+
+        // Cell `c{i}` hosts a vstack of `k` `host(c{i+1})`; the leaf cell hosts a plain text so a
+        // fully-unfolded path has an honest terminus. No cell id repeats on any root-to-leaf path.
+        let mut source = MapMountSource::default();
+        for i in 0..levels {
+            let child = format!("c{}", i + 1);
+            let fan = ViewNode::VStack(
+                (0..k)
+                    .map(|_| ViewNode::Host {
+                        cell: child.clone(),
+                        view: None,
+                    })
+                    .collect(),
+            );
+            source = source.with(format!("c{i}"), fan);
+        }
+        source = source.with(format!("c{levels}"), ViewNode::Text("leaf".into()));
+
+        // A victim card that host-mounts ONE attacker-controlled cell. Without the budget this
+        // resolve would attempt ~kᴺ unfolds; with it, it returns promptly.
+        let root = ViewNode::Host {
+            cell: "c0".into(),
+            view: None,
+        };
+        let resolved = resolve_mounts(&root, &source);
+
+        let mut t = MountTally::default();
+        tally_mounts(&resolved, &mut t);
+
+        // Bounded to the budget — the total-WORK cap the depth guard alone cannot give.
+        assert!(
+            t.unfolded <= MAX_MOUNT_NODES,
+            "unfolds ({}) bounded by the node budget ({MAX_MOUNT_NODES})",
+            t.unfolded,
+        );
+        // The cap actually ENGAGED (this graph vastly exceeds it) and the budget was fully spent.
+        assert_eq!(
+            t.unfolded, MAX_MOUNT_NODES,
+            "the fan-out is huge, so exactly the whole budget is spent before truncation",
+        );
+        // The truncation is VISIBLE — the honest labelled placeholder, never a silent hang.
+        assert!(
+            t.budget_markers > 0,
+            "the truncated subtrees carry a visible ‹mount budget exceeded› marker",
+        );
+        // It is the WIDTH×DEPTH axis (the new guard) that bounded this, NOT the pre-existing
+        // depth cap: every path is shallow, so no depth marker is ever emitted.
+        assert_eq!(
+            t.depth_markers, 0,
+            "the depth guard never fires — the node budget is what bounded the fan-out",
+        );
+        assert_eq!(t.cycle_markers, 0, "an acyclic graph trips no cycle guard");
+    }
+
+    /// A single ultra-WIDE level (one cell hosting `MAX_MOUNT_NODES + spill` sibling mounts)
+    /// exercises the budget on the width axis exactly: the first `MAX_MOUNT_NODES` mounts unfold
+    /// (the root host + its children), and every sibling past the budget is truncated — an exact,
+    /// off-by-one-proof witness that the tally is a hard cap, not a soft heuristic.
+    #[test]
+    fn resolve_mounts_budget_caps_a_single_wide_level_exactly() {
+        let spill = 64usize;
+        let width = MAX_MOUNT_NODES + spill;
+        // `wide` hosts `width` copies of `host(leaf)`; `leaf` hosts a plain text.
+        let fan = ViewNode::VStack(
+            (0..width)
+                .map(|_| ViewNode::Host {
+                    cell: "leaf".into(),
+                    view: None,
+                })
+                .collect(),
+        );
+        let source = MapMountSource::default()
+            .with("wide", fan)
+            .with("leaf", ViewNode::Text("leaf".into()));
+        let root = ViewNode::Host {
+            cell: "wide".into(),
+            view: None,
+        };
+        let resolved = resolve_mounts(&root, &source);
+
+        let mut t = MountTally::default();
+        tally_mounts(&resolved, &mut t);
+        // `wide` (1 unfold) + the first (MAX_MOUNT_NODES - 1) leaf mounts = MAX_MOUNT_NODES unfolds.
+        assert_eq!(
+            t.unfolded, MAX_MOUNT_NODES,
+            "exactly the budget's worth unfold"
+        );
+        // The `spill + 1` siblings beyond the budget are all truncated with the visible marker.
+        assert_eq!(
+            t.budget_markers,
+            width - (MAX_MOUNT_NODES - 1),
+            "every sibling past the budget carries the truncation marker",
         );
     }
 }
