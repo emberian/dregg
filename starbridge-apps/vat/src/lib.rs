@@ -41,15 +41,21 @@
 //! ```
 //!
 //! Every transition — `launch` / `sleep` / `wake` / `lapse` / `reap` — is a
-//! verified turn writing [`VAT_STATE_SLOT`]. The executor re-enforces the machine:
-//! the state slot is `Monotonic` in a lattice order ([`VatState::rank`]), so a vat
-//! can never illegally *go backwards* into a state it already left (Reaped is
-//! terminal; Lapsed cannot silently return to Running without a fresh launch),
-//! and the placement/endpoint bindings are sealed the same way the lease seals its
-//! economics. **Sleep = checkpoint** (the World's whole state committed to the
-//! durable image root); **wake = restore** from that root; the backend machine is
-//! a thin operational adapter above this cell — the *state* is the cell, the
-//! *box* is fungible.
+//! verified turn. The machine is encoded on TWO executor-enforced axes (because it
+//! is not linear — sleep/wake move up and down *within* being alive):
+//!
+//!   * the **phase** slot ([`VAT_PHASE_SLOT`], `Monotonic`): the one-way terminality
+//!     axis `Provisioned < Live < Lapsed < Reaped` — Reaped is terminal, Lapsed
+//!     cannot un-lapse, and Running/Sleeping share the `Live` phase;
+//!   * the **up** slot ([`VAT_UP_SLOT`], not monotone): whether a box currently runs
+//!     the World — sleep flips it down, wake flips it back up, without ever moving
+//!     the monotone phase.
+//!
+//! **Sleep = checkpoint** (the World's whole state committed to the durable image
+//! root); **wake = restore** from that root. Splitting liveness out of the
+//! terminality rank is what lets a wake be a legal turn under the phase tooth. The
+//! backend machine is a thin operational adapter above this cell — the *state* is
+//! the cell, the *box* is fungible.
 //!
 //! ## The honest boundary
 //!
@@ -78,12 +84,22 @@ pub use starbridge_execution_lease::{self as lease, field_to_u64};
 // / PERIOD / PROVIDER). The vat adds its lifecycle + identity slots ABOVE that
 // range so the two layers never collide and a vat cell IS a valid lease cell.
 
-/// Slot 8 — `vat_state`. The lifecycle state as its [`VatState::rank`] (a lattice
-/// order). `Monotonic`: the machine only advances — a vat can never illegally slip
-/// back into a state it left. (Wake→Running from Sleeping is modeled as staying at
-/// or above the Running rank, see [`VatState`]; the *box* comes and goes, the
-/// *rank* never rewinds.)
-pub const VAT_STATE_SLOT: u8 = 8;
+/// Slot 8 — `vat_phase`. The **terminality rank** (the phase rank ([`VatPhase::rank`])): how
+/// far along the one-way lifecycle a vat is — `Provisioned(0) < Live(1) <
+/// Lapsed(2) < Reaped(3)`. `Monotonic`: a vat only ever moves FORWARD along this
+/// axis (Reaped is terminal; Lapsed cannot un-lapse). Crucially this rank does NOT
+/// distinguish Running from Sleeping — both are `Live` — so sleep/wake (which
+/// toggle the *liveness* axis below) never rewind it, and the `Monotonic` tooth is
+/// exactly the terminality machine, no more no less.
+pub const VAT_PHASE_SLOT: u8 = 8;
+/// Slot 7 — `up`. The **liveness axis**: `1` = a box currently holds the running
+/// World (Running), `0` = no box (Provisioned/Sleeping/Lapsed/Reaped). This slot is
+/// NOT monotone — sleep flips it 1→0, wake flips it 0→1 — and it is meaningful only
+/// while the phase is `Live` (a Lapsed/Reaped vat is definitionally down). Splitting
+/// liveness OUT of the terminality rank is what lets a wake be a legal turn under
+/// the phase's `Monotonic` tooth (the earlier single-rank encoding made wake
+/// illegally *lower* the rank — the tooth would have refused a legal wake).
+pub const VAT_UP_SLOT: u8 = 7;
 /// Slot 9 — `machine_tag`. A tag of the backend machine currently holding the
 /// running World (0 = none/asleep). NOT `WriteOnce` — a vat re-placed onto a fresh
 /// box on wake gets a new machine; the durable image (the lease's EXEC_COLL) is
@@ -103,25 +119,29 @@ pub const WITNESS_SLOT: u8 = 11;
 // The lifecycle state machine
 // =============================================================================
 
-/// A vat's lifecycle state — the Dregg Computer's power state, as a monotone
-/// lattice the executor re-enforces on [`VAT_STATE_SLOT`].
+/// A vat's lifecycle state — the Dregg Computer's power state. Encoded on TWO
+/// executor-enforced axes rather than one linear rank, because the machine is not
+/// linear: sleep/wake move a vat up and down *within* being alive, while the
+/// terminality axis only ever advances.
 ///
-/// The rank is the tooth: [`VatState::rank`] never rewinds (`Monotonic`), so the
-/// legal transitions fall out of the order. `Reaped` is the top (terminal); a
-/// `Lapsed` vat cannot silently become `Running` again (its rank already passed
-/// `Running`) — it needs an explicit re-launch that the provider gates on a fresh
-/// paid period. `Sleeping` sits ABOVE `Running` in rank (you can only sleep a vat
-/// that ran), and `wake` does not lower the rank — it re-places the box and
-/// advances the durable cursor, leaving the lifecycle rank monotone.
+///   * **phase** ([`VatState::phase`] → [`VatPhase::rank`], slot [`VAT_PHASE_SLOT`],
+///     `Monotonic`): `Provisioned < Live < Lapsed < Reaped` — the one-way axis.
+///   * **up** ([`VatState::is_up`], slot [`VAT_UP_SLOT`], NOT monotone): whether a
+///     box currently runs the World. Meaningful only while `Live`.
+///
+/// So `Running` and `Sleeping` are BOTH `Live` (same phase rank) and differ only in
+/// the `up` bit — a wake (`Sleeping`→`Running`) flips `up` 0→1 and leaves the
+/// monotone phase untouched, which is what makes it a legal turn. `Reaped` is the
+/// top phase (terminal); `Lapsed` cannot un-lapse (its phase already passed `Live`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VatState {
     /// Provisioned but never brought up — the lease exists, the box has never run.
     Created,
     /// Up: a backend machine holds the running World; metered per uptime period.
     Running,
-    /// Checkpointed to its durable image root and torn down — no box, no meter.
-    /// Wakes by restoring from the image. (Rank above Running: a sleep is a thing
-    /// that happens to a vat that ran.)
+    /// Alive but checkpointed to its durable image root and torn down — no box, no
+    /// meter. Wakes by restoring from the image. Same PHASE as Running (`Live`);
+    /// differs only in the `up` bit.
     Sleeping,
     /// Non-payment reclaimed the slot — the box is gone and stays gone until a
     /// fresh launch against a new paid period. Mirrors the lease's LAPSED tooth.
@@ -131,29 +151,72 @@ pub enum VatState {
     Reaped,
 }
 
-impl VatState {
-    /// The monotone rank the executor pins on [`VAT_STATE_SLOT`]. The state machine
-    /// is exactly "rank never decreases": every legal transition raises (or, for a
-    /// wake, holds) the rank; every illegal one would lower it and is refused.
+/// The one-way terminality axis a vat travels — the `Monotonic`-enforced half of
+/// the two-axis state (see [`VatState`]). `Running` and `Sleeping` share the `Live`
+/// phase; only `up` tells them apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VatPhase {
+    /// The lease exists; the box has never run.
+    Provisioned,
+    /// Alive — a box either runs the World (`up`) or is checkpointed asleep.
+    Live,
+    /// Non-payment reclaimed the slot.
+    Lapsed,
+    /// Destroyed — terminal.
+    Reaped,
+}
+
+impl VatPhase {
+    /// The monotone rank the executor pins on [`VAT_PHASE_SLOT`].
     pub fn rank(self) -> u64 {
         match self {
-            VatState::Created => 0,
-            VatState::Running => 1,
-            VatState::Sleeping => 2,
-            VatState::Lapsed => 3,
-            VatState::Reaped => 4,
+            VatPhase::Provisioned => 0,
+            VatPhase::Live => 1,
+            VatPhase::Lapsed => 2,
+            VatPhase::Reaped => 3,
         }
     }
 
-    /// Reconstruct from a slot rank (the inverse of [`rank`](Self::rank)); `None`
-    /// for an out-of-range value (a forged slot).
-    pub fn from_rank(rank: u64) -> Option<VatState> {
+    /// Reconstruct from a slot rank; `None` for a forged out-of-range value.
+    pub fn from_rank(rank: u64) -> Option<VatPhase> {
         Some(match rank {
-            0 => VatState::Created,
-            1 => VatState::Running,
-            2 => VatState::Sleeping,
-            3 => VatState::Lapsed,
-            4 => VatState::Reaped,
+            0 => VatPhase::Provisioned,
+            1 => VatPhase::Live,
+            2 => VatPhase::Lapsed,
+            3 => VatPhase::Reaped,
+            _ => return None,
+        })
+    }
+}
+
+impl VatState {
+    /// This state's terminality phase (the monotone axis).
+    pub fn phase(self) -> VatPhase {
+        match self {
+            VatState::Created => VatPhase::Provisioned,
+            VatState::Running | VatState::Sleeping => VatPhase::Live,
+            VatState::Lapsed => VatPhase::Lapsed,
+            VatState::Reaped => VatPhase::Reaped,
+        }
+    }
+
+    /// Whether a running box currently holds this vat (the `up` bit — metered,
+    /// reachable). Only `Running` is up.
+    pub fn is_up(self) -> bool {
+        matches!(self, VatState::Running)
+    }
+
+    /// Reconstruct the full state from the two slot axes (`phase_rank`, `up`) — the
+    /// inverse of `(phase().rank(), is_up())`. `None` for a forged/contradictory
+    /// pair (e.g. `up` set on a non-Live phase).
+    pub fn from_slots(phase_rank: u64, up: bool) -> Option<VatState> {
+        Some(match (VatPhase::from_rank(phase_rank)?, up) {
+            (VatPhase::Provisioned, false) => VatState::Created,
+            (VatPhase::Live, true) => VatState::Running,
+            (VatPhase::Live, false) => VatState::Sleeping,
+            (VatPhase::Lapsed, false) => VatState::Lapsed,
+            (VatPhase::Reaped, false) => VatState::Reaped,
+            // `up` is only ever set while Live; any other pairing is a forged slot.
             _ => return None,
         })
     }
@@ -169,11 +232,6 @@ impl VatState {
             VatState::Lapsed => "lapsed",
             VatState::Reaped => "reaped",
         }
-    }
-
-    /// Whether a running box currently holds this vat (metered, reachable).
-    pub fn is_up(self) -> bool {
-        matches!(self, VatState::Running)
     }
 
     /// Whether this state is terminal (no future box under this cell).
@@ -254,7 +312,7 @@ impl VatTransition {
 pub fn vat_invariants() -> Vec<StateConstraint> {
     let mut cs = lease::lease_invariants();
     cs.push(StateConstraint::Monotonic {
-        index: VAT_STATE_SLOT,
+        index: VAT_PHASE_SLOT,
     });
     cs.push(StateConstraint::WriteOnce {
         index: WITNESS_SLOT,
@@ -285,23 +343,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_lifecycle_rank_is_a_monotone_lattice() {
-        // Every state's rank is distinct + ordered as the machine expects.
-        let order = [
+    fn the_phase_axis_is_a_monotone_lattice_and_states_round_trip_two_slots() {
+        // The MONOTONE axis is the phase; Running and Sleeping share it (both Live).
+        assert_eq!(VatState::Running.phase(), VatPhase::Live);
+        assert_eq!(VatState::Sleeping.phase(), VatPhase::Live);
+        assert_eq!(
+            VatState::Running.phase().rank(),
+            VatState::Sleeping.phase().rank(),
+            "Running and Sleeping share the Live phase rank — sleep/wake never move it"
+        );
+        // The phase ranks are strictly ordered.
+        let phases = [
+            VatPhase::Provisioned,
+            VatPhase::Live,
+            VatPhase::Lapsed,
+            VatPhase::Reaped,
+        ];
+        for w in phases.windows(2) {
+            assert!(w[0].rank() < w[1].rank(), "{:?} < {:?}", w[0], w[1]);
+        }
+        // Every state round-trips through its two slot axes (phase_rank, up).
+        for s in [
             VatState::Created,
             VatState::Running,
             VatState::Sleeping,
             VatState::Lapsed,
             VatState::Reaped,
-        ];
-        for w in order.windows(2) {
-            assert!(w[0].rank() < w[1].rank(), "{:?} < {:?}", w[0], w[1]);
+        ] {
+            assert_eq!(
+                VatState::from_slots(s.phase().rank(), s.is_up()),
+                Some(s),
+                "{s:?} round-trips through (phase_rank, up)"
+            );
         }
-        // Round-trip through the slot rank.
-        for s in order {
-            assert_eq!(VatState::from_rank(s.rank()), Some(s));
-        }
-        assert_eq!(VatState::from_rank(99), None, "a forged rank is rejected");
+        // A forged slot pair (up set on a non-Live phase) is rejected.
+        assert_eq!(
+            VatState::from_slots(VatPhase::Reaped.rank(), true),
+            None,
+            "up on a terminal phase is a forged, rejected pairing"
+        );
+        assert_eq!(
+            VatState::from_slots(99, false),
+            None,
+            "a forged phase rank is rejected"
+        );
     }
 
     #[test]
@@ -335,9 +420,12 @@ mod tests {
     }
 
     #[test]
-    fn a_legal_transition_never_lowers_the_state_rank() {
-        // The executor tooth is Monotonic(VAT_STATE): prove every legal transition
-        // holds-or-raises the rank, so the tooth admits exactly the legal machine.
+    fn a_legal_transition_never_lowers_the_phase_rank() {
+        // The executor tooth is Monotonic(VAT_PHASE): prove every legal transition
+        // holds-or-raises the PHASE rank, so the tooth admits exactly the legal
+        // machine — AND a wake (Sleeping→Running), which lowers the old single
+        // linear rank, HOLDS the phase (both Live) so the tooth admits it. This is
+        // the regression the two-axis split fixes.
         use VatState::*;
         use VatTransition::*;
         let states = [Created, Running, Sleeping, Lapsed, Reaped];
@@ -345,12 +433,19 @@ mod tests {
             for t in [BringUp, Sleep, Lapse, Reap] {
                 if t.is_legal_from(from) {
                     assert!(
-                        t.target().rank() >= from.rank(),
-                        "legal {t:?} from {from:?} lowered the rank"
+                        t.target().phase().rank() >= from.phase().rank(),
+                        "legal {t:?} from {from:?} lowered the phase rank"
                     );
                 }
             }
         }
+        // Explicitly: the wake that used to be refused now holds the phase.
+        assert!(BringUp.is_legal_from(Sleeping));
+        assert_eq!(
+            BringUp.target().phase().rank(),
+            Sleeping.phase().rank(),
+            "wake holds the monotone phase (Live→Live) — the tooth admits it"
+        );
     }
 
     #[test]
@@ -362,12 +457,12 @@ mod tests {
         assert_eq!(
             vat_cs.len(),
             lease_cs.len() + 2,
-            "vat = lease invariants + Monotonic(VAT_STATE) + WriteOnce(WITNESS)"
+            "vat = lease invariants + Monotonic(VAT_PHASE) + WriteOnce(WITNESS)"
         );
         assert!(
             vat_cs.iter().any(|c| matches!(
                 c,
-                StateConstraint::Monotonic { index } if *index == VAT_STATE_SLOT
+                StateConstraint::Monotonic { index } if *index == VAT_PHASE_SLOT
             )),
             "the lifecycle machine tooth is present"
         );
