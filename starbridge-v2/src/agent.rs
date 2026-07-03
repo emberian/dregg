@@ -199,36 +199,38 @@ impl AgentActivity {
     }
 }
 
-/// Build the agent's recent committed actions from the world's receipt log +
-/// the dynamics stream, most-recent-first, capped at `max`.
+/// Build the agent's recent actions from the dynamics stream + the receipt log,
+/// most-recent-first, capped at `max` — with committed and REFUSED rows
+/// INTERLEAVED in true observation order. One ordered walk of the stream is the
+/// spine (a refusal that happened between two commits reads between them, not
+/// sorted to the top — the loop's real story); receipts the stream never
+/// observed (e.g. re-seeded genesis after a reset) are prepended oldest-first so
+/// the log stays complete.
 fn build_actions(world: &World, agent: &CellId, max: usize) -> Vec<AgentAction> {
     let events = world.dynamics().all();
-    // Walk the receipts (commit order); keep the ones this agent committed.
-    let mut actions: Vec<AgentAction> = world
-        .receipts()
-        .iter()
-        .filter(|r| &r.agent == agent)
-        .map(|r| {
-            // Find the TurnCommitted event for this receipt to recover its
-            // height, then gather the effect-events that immediately followed it
-            // (the transition's human-meaningful effects), for the summary.
-            let (height, summary) = describe_committed(events, r.receipt_hash());
-            AgentAction {
+    let mut seen: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+    let mut actions: Vec<AgentAction> = Vec::new();
+    for (idx, ev) in events.iter().enumerate() {
+        match ev {
+            WorldEvent::TurnCommitted {
+                agent: a,
                 height,
-                committed: true,
-                receipt_hash: Some(r.receipt_hash()),
-                action_count: r.action_count,
-                computrons: r.computrons_used,
-                summary,
+                receipt_hash,
+                action_count,
+                computrons,
+                ..
+            } if a == agent => {
+                seen.insert(*receipt_hash);
+                actions.push(AgentAction {
+                    height: Some(*height),
+                    committed: true,
+                    receipt_hash: Some(*receipt_hash),
+                    action_count: *action_count,
+                    computrons: *computrons,
+                    summary: summarize_effects_after(events, idx),
+                });
             }
-        })
-        .collect();
-
-    // Also surface the agent's REFUSED actions (from the dynamics — a refused
-    // turn never reaches the receipt log, but it IS observed on the stream).
-    for ev in events {
-        if let WorldEvent::TurnRejected { agent: a, reason } = ev {
-            if a == agent {
+            WorldEvent::TurnRejected { agent: a, reason } if a == agent => {
                 actions.push(AgentAction {
                     height: None,
                     committed: false,
@@ -238,31 +240,36 @@ fn build_actions(world: &World, agent: &CellId, max: usize) -> Vec<AgentAction> 
                     summary: format!("REFUSED — {reason}"),
                 });
             }
+            _ => {}
         }
     }
 
+    // Receipts whose commit predates the stream (a reset re-seed) still deserve
+    // rows — oldest, before everything the stream observed.
+    let mut full: Vec<AgentAction> = world
+        .receipts()
+        .iter()
+        .filter(|r| &r.agent == agent && !seen.contains(&r.receipt_hash()))
+        .map(|r| AgentAction {
+            height: None,
+            committed: true,
+            receipt_hash: Some(r.receipt_hash()),
+            action_count: r.action_count,
+            computrons: r.computrons_used,
+            summary: "committed".to_string(),
+        })
+        .collect();
+    full.extend(actions);
+
     // Most-recent-first, capped.
-    actions.reverse();
-    actions.truncate(max);
-    actions
+    full.reverse();
+    full.truncate(max);
+    full
 }
 
-/// Describe a committed turn by scanning the dynamics stream: find its
-/// `TurnCommitted` (to recover the height), then summarize the effect-events
-/// that immediately follow it (the transition's effects).
-fn describe_committed(events: &[WorldEvent], receipt_hash: [u8; 32]) -> (Option<u64>, String) {
-    // Locate the TurnCommitted with this receipt hash.
-    let idx = events.iter().position(
-        |e| matches!(e, WorldEvent::TurnCommitted { receipt_hash: rh, .. } if *rh == receipt_hash),
-    );
-    let Some(idx) = idx else {
-        return (None, "committed".to_string());
-    };
-    let height = match &events[idx] {
-        WorldEvent::TurnCommitted { height, .. } => Some(*height),
-        _ => None,
-    };
-    // Gather the effect-events that follow, up to the next TurnCommitted.
+/// Summarize the effect-events that follow the `TurnCommitted` at `idx`, up to
+/// the next `TurnCommitted` — the transition's human-meaningful effects.
+fn summarize_effects_after(events: &[WorldEvent], idx: usize) -> String {
     let mut parts: Vec<String> = Vec::new();
     for ev in &events[idx + 1..] {
         if matches!(ev, WorldEvent::TurnCommitted { .. }) {
@@ -285,12 +292,11 @@ fn describe_committed(events: &[WorldEvent], receipt_hash: [u8; 32]) -> (Option<
             _ => {}
         }
     }
-    let summary = if parts.is_empty() {
+    if parts.is_empty() {
         "committed".to_string()
     } else {
         parts.join(" · ")
-    };
-    (height, summary)
+    }
 }
 
 /// Project the agent's mandate into a legible authorization boundary — the verbs
@@ -570,6 +576,43 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(act.committed_action_count(), 0, "no action committed");
+    }
+
+    #[test]
+    fn refusals_interleave_with_commits_in_true_order() {
+        // The loop's REAL story: commit → refusal → commit must read in exactly
+        // that order (most-recent-first), never with the refusal sorted to the
+        // top. The regression this pins: build_actions once appended ALL
+        // refusals after the committed batch and reversed, so every REFUSED row
+        // surfaced newest regardless of when the gate actually fired.
+        let mut w = World::new();
+        let agent = w.genesis_cell(0x55, 100);
+        let target = w.genesis_cell(0x66, 0);
+
+        // 1. a committed nonce bump.
+        let t1 = w.turn(
+            agent,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: agent }],
+        );
+        assert!(w.commit_turn(t1).is_committed());
+        // 2. a REFUSED over-grant (no cap held).
+        let bad = w.turn(agent, vec![grant_capability(agent, agent, target, 0)]);
+        assert!(!w.commit_turn(bad).is_committed());
+        // 3. another committed nonce bump.
+        let t3 = w.turn(
+            agent,
+            vec![dregg_turn::action::Effect::IncrementNonce { cell: agent }],
+        );
+        assert!(w.commit_turn(t3).is_committed());
+
+        let act = AgentActivity::build(&w, agent, 16);
+        let shape: Vec<bool> = act.actions.iter().map(|a| a.committed).collect();
+        // Most-recent-first: committed(3), REFUSED(2), committed(1), then any
+        // genesis-era rows (all committed).
+        assert!(
+            shape.len() >= 3 && shape[0] && !shape[1] && shape[2],
+            "commit/refusal/commit must interleave in true order, got {shape:?}"
+        );
     }
 
     #[test]
