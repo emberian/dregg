@@ -63,6 +63,15 @@ pub mod docgraph_view;
 /// The Pharo HALO — direct-manipulation handles floating on a selected icon/window,
 /// each firing the same actuation the right-click menu does ("mold it in place").
 pub mod halo;
+/// THE HIRELING WELD — HIRE / STEP / FIRE a REAL confined resident from the Agent
+/// Room: hire mints its cell + cap-gated gateway on the LIVE World
+/// ([`crate::resident_agent::hire_resident_seeded`]), STEP drives one
+/// perceive→decide→act beat whose admitted calls mirror as real verified turns
+/// (THE PULSE announces them) and whose gate refusals surface as amber toasts +
+/// REFUSED rows, FIRE commits a real `RevokeCapability` turn. Gated on
+/// `dev-surfaces` (where the deos-hermes brain/gate rail lives).
+#[cfg(feature = "dev-surfaces")]
+pub mod hireling;
 pub mod layout;
 /// THE REWIND RAIL — scrub the whole desktop through root-verified history: the
 /// bottom-docked timeline over `crate::replay::History` (gpui-free projection
@@ -598,6 +607,13 @@ pub struct DeosDesktop {
     /// face (actions/mandate/reach) is shown. Keyed by the room window's anchor cell
     /// (the room's own sentinel). A pure view concern (no committed state).
     agent_rooms: HashMap<CellId, agent_room::AgentRoomState>,
+    /// **THE HIRELING** — the Agent Room's hired resident: the confined deos-hermes
+    /// brain+gate [`crate::resident_agent::AgentHandle`] plus the step planner
+    /// (see [`hireling`]). Unstaffed by default; every STEP beat mirrors real
+    /// verified turns onto the live World and surfaces gate refusals in-band.
+    /// Gated on `dev-surfaces` (where the deos-hermes rail is in scope).
+    #[cfg(feature = "dev-surfaces")]
+    hireling: hireling::HirelingState,
     /// **THE PULSE CURSOR** — how far into the World's [`crate::dynamics`] stream the
     /// desktop has consumed. A background pump polls the stream (the documented pull
     /// model: `since(cursor)` per beat) and, when the World moved WITHOUT the desktop's
@@ -761,6 +777,8 @@ impl DeosDesktop {
             doc_explorers: HashMap::new(),
             world_explorers: HashMap::new(),
             agent_rooms: HashMap::new(),
+            #[cfg(feature = "dev-surfaces")]
+            hireling: hireling::HirelingState::default(),
             pulse_cursor,
             spotter: None,
             selected: None,
@@ -4439,6 +4457,17 @@ impl DeosDesktop {
         let ranked = agent_room::residents(&world);
         drop(world);
 
+        // THE HIRELING's session-side gate refusals — REAL gate verdicts merged into
+        // the Actions face as REFUSED rows (surfaced, never fabricated World turns;
+        // see `hireling`'s two-truths line). Only when the room watches the hired
+        // resident itself.
+        #[cfg(feature = "dev-surfaces")]
+        let activity = {
+            let mut activity = activity;
+            self.hireling.merge_refusals_into(resident, &mut activity);
+            activity
+        };
+
         // The resident picker — the top-ranked cells by committed-turn count, the
         // watched one selected. Clicking pins the room to that resident.
         let mut picker = div().flex().flex_row().flex_wrap().gap_1().my_1();
@@ -4506,6 +4535,14 @@ impl DeosDesktop {
             );
         }
 
+        // THE HIRELING STRIP — hire/step/fire the room's real confined resident
+        // (`dev-surfaces`: the deos-hermes brain/gate rail). A build without that
+        // rail simply mounts no strip — the room stays the pure observer it was.
+        #[cfg(feature = "dev-surfaces")]
+        let hire_strip = Some(self.render_hireling_strip(cell, cx));
+        #[cfg(not(feature = "dev-surfaces"))]
+        let hire_strip: Option<AnyElement> = None;
+
         let header = agent_room::render_room_header(&activity);
         let body = agent_room::render_agent_room_body(&activity, state.tab);
         div()
@@ -4521,6 +4558,7 @@ impl DeosDesktop {
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .child(picker)
+            .children(hire_strip)
             .child(header)
             .child(tabs)
             .child(body)
