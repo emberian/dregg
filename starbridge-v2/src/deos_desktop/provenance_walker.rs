@@ -207,7 +207,9 @@ pub fn reseeded_flags(history: &History) -> Vec<bool> {
         match step {
             RecordedStep::Genesis { .. } => pending = true,
             RecordedStep::Committed { .. } => {
-                out.push(pending);
+                // Installs before the FIRST commit are world setup shaping row 0
+                // (an origin anyway), not a mid-session reseed boundary.
+                out.push(pending && !out.is_empty());
                 pending = false;
             }
         }
