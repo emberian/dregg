@@ -71,6 +71,9 @@
 
 #![forbid(unsafe_code)]
 
+/// The lifecycle apply layer — pure open_vat + apply_transition over a vat Cell.
+pub mod lifecycle;
+
 use dregg_app_framework::{CellProgram, StateConstraint, TransitionCase, TransitionGuard};
 
 pub use dregg_app_framework::{FieldElement, field_from_u64};
