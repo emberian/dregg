@@ -86,3 +86,11 @@ hbox: elan + scripts/bootstrap.sh green → libdregg_lean.a linked → cargo bui
 green → ./target/release/starbridge-v2 --headless: VERDICT ✓ (frames committed, two
 distinct receipts, both refusals fail-closed citing the executor's reason). 415MB binary.
 Bundle risk #1 retired: mac AND linux can build the verified shape. Next: linux packaging.
+
+## MILESTONE 2026-07-03 ~05:14 — FIRST LINUX AppImage EVER BUILT
+hbox: starbridge-v2/dist/starbridge-v2-linux-x86_64.AppImage (158MB) — cockpit + bundled
+dregg-node (--run-node dispatcher) + the self-describing vessel (19.4MB dregg-src payload,
+5.2x zstd). Assembled by the never-proven installers recipe, adapted (cockpit binary lives
+in the ROOT workspace target/ on this checkout, not starbridge-v2/target/ — CI recipe
+assumes the standalone workspace; noted for the workflow fix). Smoke: both binaries + the
+vessel extracted and asserted. Planner risk #3 (linux leg): retired.
