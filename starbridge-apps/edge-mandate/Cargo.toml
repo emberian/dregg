@@ -1,0 +1,44 @@
+[package]
+name = "starbridge-edge-mandate"
+version = "0.1.0"
+edition = "2024"
+description = "Edge-identity → budget → caps as a verified mandate cell: an SSH-pubkey (or any access-edge identity) is bound to a dregg account, a spend ceiling, and an attenuated tool-set (granted ⊑ held — no amplification), with enrol / spend / revoke as witnessed turns. A thin deploy-side adapter lowers a mandate cell to an OpenSSH authorized_keys forced-command line — a pure function of the committed cell state."
+
+# The edge-identity mandate: the SAME Mandate attenuation the sibling
+# `starbridge-agent-orchestration` proves (granted ⊑ held, sub-budget, scoped
+# tool-set), re-pointed at an ACCESS EDGE. One enrolled subject (an SSH public
+# key) is one mandate cell whose committed state binds identity → budget → caps;
+# the caps are validated against the REAL `dregg-agent` grant vocabulary at enrol
+# (a hosted `shell` is refused), attenuated no wider than the operator's held
+# grant (a `dregg-auth::Grant`), and lowered to an `authorized_keys` line by a
+# deploy-side adapter. See src/lib.rs and README.md. Supersedes a prior imperative
+# SSH-attach hosting module (a mutable key→record map persisted to JSON); here the
+# committed, witnessed cell IS the durable, tamper-evident record.
+
+[lib]
+name = "starbridge_edge_mandate"
+
+[dependencies]
+# The verified-turn substrate: the cell program / factory descriptor / state
+# constraints, the embedded executor, the invoke() front door, the field codec.
+dregg-app-framework = { path = "../../app-framework" }
+# The mandate CELL (fields + committed heap + state commitment) + the program
+# StateConstraint vocabulary the executor re-enforces.
+dregg-cell = { path = "../../cell", default-features = false }
+# The CellId newtype the mandate + adapter speak in.
+dregg-types = { path = "../../types" }
+# The REAL grant vocabulary: `session::parse_caps_confined` validates an enrolled
+# caps string against the live tool grammar under the HOSTED confinement posture
+# (a raw `shell` is refused), so a bad bundle is rejected at enrol, not at login.
+dregg-agent = { path = "../../dregg-agent" }
+# The ergonomic operator-grant vocabulary: a `dregg_auth::Grant` (subject + tools)
+# lifts to the operator's HELD mandate, so "enrol mints a mandate no wider than the
+# grant" is literal — the enrolled tool-set is a subset of the grant's tools.
+dregg-auth = { path = "../../dregg-auth" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
