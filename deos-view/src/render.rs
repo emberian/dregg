@@ -32,6 +32,11 @@
 //!     bindings keep their cached value untouched — a turn on slot A re-evaluates
 //!     binding A and leaves binding B alone (the fine-grained win). An event naming a
 //!     cell no bind reads dirties nothing (a foreign World write never over-invalidates).
+//!   - Events that name a CELL but no slot (`WorldEvent::CellMutated` — the generic
+//!     "this cell changed" tooth — and `WorldEvent::CapabilityRevoked`) fold through
+//!     [`AppletView::on_world_cells`]: the registry's conservative `invalidate_cell`
+//!     re-reads every binding of the touched cell (never under-invalidating), and a
+//!     cell no bind reads still dirties nothing.
 //!
 //! The first paint is still immediate-mode (the cache fills lazily from the live ledger
 //! the first time each bind renders), so an un-driven view is always correct; the
@@ -278,6 +283,30 @@ impl AppletView {
     pub fn on_committed_turn(&self, touched_slots: &[Slot]) -> Vec<BindingId> {
         let touched: Vec<(CellId, Slot)> = touched_slots.iter().map(|s| (self.cell, *s)).collect();
         self.on_world_events(&touched)
+    }
+
+    /// **THE CELL-WIDE INVALIDATION HOOK — the `CellMutated`/`CapabilityRevoked` feed.**
+    /// Fold world events that name a whole CELL but no slot through the registry.
+    ///
+    /// A `WorldEvent::CellMutated` (nonce bump / sovereign flip / permissions or
+    /// verification-key write / cap reshape — the generic "this cell changed" tooth)
+    /// and a `WorldEvent::CapabilityRevoked` carry no `(cell, slot)` pair to
+    /// invalidate on, so the registry's conservative
+    /// [`BindingRegistry::invalidate_cell`] is the right tooth: EVERY binding reading
+    /// ANY slot of a touched cell re-reads its live value (never under-invalidating —
+    /// cache soundness = dynamics completeness), while a cell no bind of this view
+    /// reads dirties nothing (a foreign mutation never over-invalidates — the pump can
+    /// broadcast the beat's cell events to every open card, same as the FieldSet
+    /// feed). Returns the dirty set; those bindings also join the glow until the
+    /// host's next [`Self::fade_glow`] beat.
+    pub fn on_world_cells(&self, cells: &[CellId]) -> Vec<BindingId> {
+        let mut dirty: BTreeSet<BindingId> = BTreeSet::new();
+        for c in cells {
+            dirty.extend(self.registry.invalidate_cell(*c));
+        }
+        let dirty: Vec<BindingId> = dirty.into_iter().collect();
+        self.reread_dirty(&dirty);
+        dirty
     }
 
     /// **Catch up turns committed on the applet's OWN embedded executor** — the pulse's
