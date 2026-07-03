@@ -1,0 +1,25 @@
+[package]
+name = "grain-turn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The R2 kernel-turn weld (THE-GRAIN.md face #1): the REAL GrainTurnMinter — it drives every admitted dregg-agent action through a genuine dregg_sdk::ToolGateway::invoke on a real dregg_cell::Cell grain turn-cell, so the agent's receipts become VIEWS over committed kernel turns and the executor's own calls_made caveat enforces the meter host-side. The heavyweight kernel-facing half kept OUT of the std-only dregg-agent crate."
+
+[lib]
+name = "grain_turn"
+path = "src/lib.rs"
+
+[dependencies]
+# The std-only agent runtime + the GrainTurnMinter seam we implement.
+dregg-agent = { path = "../dregg-agent" }
+# The verified executor + the proven ToolGateway (delegAdmit mandate: the
+# calls_made FieldLte/Monotonic caveat is the host-side meter).
+dregg-sdk = { path = "../sdk" }
+# The grain turn-cell's field-slot helpers (field_from_u64) + Effect/CellId types.
+dregg-cell = { path = "../cell" }
+
+[dev-dependencies]

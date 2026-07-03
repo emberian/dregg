@@ -366,6 +366,24 @@ impl Session {
         brain: &mut dyn AgentBrain,
         toolkit: &dyn ToolKit,
     ) -> GoalReport {
+        self.run_goal_minted(goal, brain, toolkit, None)
+    }
+
+    /// **[`run_goal`](Session::run_goal) welded to a genuine kernel turn per admitted
+    /// action (R2).** When a [`GrainTurnMinter`](crate::agent::GrainTurnMinter) is
+    /// supplied, each admitted action first becomes a REAL committed executor turn on
+    /// the grain turn-cell, and that turn's `turn_hash` is sealed into the action's
+    /// [`AgentReceipt`](crate::agent::AgentReceipt) as its `turn_receipt_hash` — the
+    /// session's receipts become VIEWS over genuine kernel transitions, and the
+    /// executor's own `calls_made` caveat enforces the meter HOST-SIDE (a refused
+    /// turn admits nothing). Passing `None` is exactly [`run_goal`](Session::run_goal).
+    pub fn run_goal_minted(
+        &mut self,
+        goal: impl Into<String>,
+        brain: &mut dyn AgentBrain,
+        toolkit: &dyn ToolKit,
+        minter: Option<&mut dyn crate::agent::GrainTurnMinter>,
+    ) -> GoalReport {
         let goal = goal.into();
         // Mark the cumulative log/receipt lengths + counts BEFORE the goal, so the
         // delta (just this goal's steps) can be sliced out afterward.
@@ -375,9 +393,9 @@ impl Session {
         let prev_cap = self.state.cap_refused();
         let prev_budget = self.state.budget_refused();
 
-        let report = self
-            .cloud
-            .run_goal(&self.handle, &mut self.state, brain, toolkit);
+        let report =
+            self.cloud
+                .run_goal_minted(&self.handle, &mut self.state, brain, toolkit, minter);
 
         let steps = transcript_of_slices(
             &self.state.log()[prev_log..],
