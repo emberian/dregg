@@ -604,6 +604,15 @@ fn main() {
                         document publishes to the doc-cell's umem-heap as a real verified turn — \
                         the boundary heap_root moves, a receipt is left.",
             },
+            GalleryCard {
+                href: "dregg-computer.html",
+                name: "My Dregg Computer",
+                blurb: "The DreggNet management console as a portable card: your computers \
+                        (status + uptime-budget gauge + wake/sleep/fork/explore/verify), your \
+                        resident hermeses (receipts + mandate + budget), your $DREGG spend, and \
+                        a verify-anything panel. One ViewNode model — native gpui, web, and the \
+                        graphideOS phone are just walkers. Bake it with the console_bake example.",
+            },
         ],
     );
     let pgallery = dist.join("index.html");
@@ -616,16 +625,18 @@ fn main() {
             && gallery.contains("href=\"tally.html\"")
             && gallery.contains("href=\"kvstore.html\"")
             && gallery.contains("href=\"trustless.html\"")
-            && gallery.contains("href=\"doccollab.html\""),
-        "the gallery links to ALL the live card pages incl. the trustless portal (the card-picker)"
+            && gallery.contains("href=\"doccollab.html\"")
+            && gallery.contains("href=\"dregg-computer.html\""),
+        "the gallery links to ALL the card pages incl. the trustless portal + the console (the card-picker)"
     );
     assert!(
         gallery.contains("Counter")
             && gallery.contains("Reflective Inspector")
             && gallery.contains("Tally Board")
             && gallery.contains("KV-Store (service cell)")
-            && gallery.contains("Document Collaboration"),
-        "the gallery names all five cards"
+            && gallery.contains("Document Collaboration")
+            && gallery.contains("My Dregg Computer"),
+        "the gallery names all the cards"
     );
 
     eprintln!("deos-view web projection baked (gpui-free):");

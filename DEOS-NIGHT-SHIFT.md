@@ -174,3 +174,21 @@ total-work budget (k^depth fan-out DoS) · #11 dynamics ring-buffer eviction + c
 refreshed + docs/what-is-deos.html explainer. Also: stopped checking render PNGs into git.
 Demo video: no rendered file on-disk; the demo is DreggNet/demo/{run-demo.sh (Stripe→lease→
 durable exec), crash-resume.sh ("on-camera crash-resume proof")} — the resume story, camera-ready.
+
+## CONSOLE-AS-CARD lane — the DreggNet console through the portable ViewNode IR (graphideOS path)
+`deos-view/src/console.rs` (new, always-compiled like tree/fmt): a PURE ConsoleModel→ViewNode
+builder for "My Dregg Computer" — computers (live status pill + uptime-budget gauge + wake/
+sleep/fork/explore/verify menu with cap teeth shown-dimmed) · hermeses (the missing HermesView:
+live-bound receipts count, mandate CAN/CANNOT edges, budget gauge, receipt trail with refusals
+in-band, deferred-witness amber) · $DREGG balance (live bind, amount-grouped) + spend ledger ·
+verify-anything input→turn. Seam named field-for-field back to DreggNet console/src/{model.rs
+ConsoleView/ServerView/AgentView, scope.rs Owned, source.rs view_for, fixtures.rs demo shapes}
+— mirrored, NOT imported (no cross-workspace dep edge). Conventions minted: fixed slot regions
+(vats base 8 stride 2, hermeses base 64 stride 4) so re-binds survive fleet growth; the
+`0 = as-baked` live-pill rule (case lists never map 0, so a static bake paints SNAPSHOT truth —
+a sleeping vat can never say RUNNING); adept-wrapped raw hex carries no Bind (one bind snapshot
+serves both disclosure projections). 9 unit tests (bind-cursor alignment, scoping cut +
+recomputed spend, saturating meter math, honest pills, cap teeth, seed coverage). Bake:
+`examples/console_bake.rs` (web feature) → dist/dregg-computer{,-adept}.html + a gallery tile
+in web_render_card. UNVERIFIED LOCALLY (no local cargo — wants the hbox gauntlet:
+`cargo test` in deos-view + `cargo run --no-default-features --features web --example console_bake`).
