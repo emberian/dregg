@@ -118,6 +118,13 @@ pub enum SpotterTarget {
     /// [`crate::deos_desktop::exchange_floor::exchange_spotter_candidates`].
     #[cfg(feature = "app-registry")]
     ExchangeFloor,
+    /// Open the MATRIX ROOM — membrane-over-Matrix in the shipped desktop: rooms as
+    /// live cells, sends as receipted turns read back off the receipt chain, the
+    /// REAL executor envelope legs over the recorded sync (the live homeserver a
+    /// named env-gated seam). A global surface, anchored on the room's own sentinel
+    /// cell by the dispatcher. Gated on `dev-surfaces` (the `deos-matrix` wire).
+    #[cfg(feature = "dev-surfaces")]
+    MatrixRoom,
     /// Jump to an ALREADY-OPEN window — raise it, un-minimize it, and land mold-ready
     /// (the halo-selected arrival every other jump makes). The module doc has promised
     /// "or to an open WINDOW" since the Spotter was born; these entries (built by
@@ -520,6 +527,17 @@ pub fn surface_candidates() -> Vec<SpotterEntry> {
         target: SpotterTarget::AndroidCell,
         score: 0,
     });
+    // The Matrix Room — membranes over the wire — only when the deos-matrix wire
+    // types are compiled in (`dev-surfaces`).
+    #[cfg(feature = "dev-surfaces")]
+    out.push(SpotterEntry {
+        label: "Matrix Room  (membranes over the wire · receipted sends)".to_string(),
+        sublabel: "surface · rooms as live cells; envelopes rehydrate + drive on the real \
+                   executor"
+            .to_string(),
+        target: SpotterTarget::MatrixRoom,
+        score: 0,
+    });
     out
 }
 
@@ -583,6 +601,8 @@ pub fn entry_badge(entry: &SpotterEntry) -> (&'static str, u32) {
         T::AppShelf | T::LaunchApp(_) => (kind_short(WinKindTag::AppShelf), NT_LABEL),
         #[cfg(feature = "app-registry")]
         T::ExchangeFloor => (kind_short(WinKindTag::ExchangeFloor), NT_LABEL),
+        #[cfg(feature = "dev-surfaces")]
+        T::MatrixRoom => (kind_short(WinKindTag::MatrixRoom), NT_LABEL),
     }
 }
 

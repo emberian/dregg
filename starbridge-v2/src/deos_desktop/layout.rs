@@ -89,6 +89,15 @@ pub enum WinKindTag {
     /// `app-registry`), so this variant is a marker like `AppShelf`. Anchored on a
     /// sentinel cell (the user).
     ExchangeFloor,
+    /// **THE MATRIX ROOM** — membrane-over-Matrix in the shipped desktop: rooms as
+    /// live cells on the desktop's OWN World, every send a receipted turn decoded
+    /// back off the receipt chain, and the REAL executor envelope legs (mint ·
+    /// fail-closed rehydrate · receipted drive · settlement-gated stitch) riding
+    /// the `deos_matrix` wire shape over the recorded/mock sync (the live
+    /// homeserver a named env-gated seam). Its state lives in the desktop's
+    /// `matrix_rooms` / `matrix_stack` (gated on `dev-surfaces`), so this variant
+    /// is a marker like `AgentRoom`. Anchored on its own sentinel cell.
+    MatrixRoom,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT

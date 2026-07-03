@@ -94,6 +94,17 @@ pub mod halo;
 #[cfg(feature = "dev-surfaces")]
 pub mod hireling;
 pub mod layout;
+/// THE MATRIX ROOM — membrane-over-Matrix in the shipped desktop: rooms as live
+/// cells on the desktop's OWN World, every send a receipted `SetField` turn whose
+/// timeline is decoded back off the recorded receipt chain, and the real
+/// [`crate::shared_fork::MembraneFrustum`] envelope legs (mint · fail-closed
+/// rehydrate · receipted drive · settlement-gated stitch) riding the exact
+/// `deos_matrix` wire shape over the recorded/mock sync backend. The live
+/// homeserver is a NAMED env-gated seam (`DEOS_HOMESERVER_URL`), shown honestly.
+/// The sentinel/tabs/codec/seam compile everywhere; the wire-typed half is gated
+/// on `dev-surfaces` (where `deos-matrix` lives), falling back to the inspector
+/// body like the other gated windows.
+pub mod matrix_room;
 /// THE REWIND RAIL — scrub the whole desktop through root-verified history: the
 /// bottom-docked timeline over `crate::replay::History` (gpui-free projection
 /// model + the rail render + the effective-ledger accessor every reader routes
@@ -344,6 +355,13 @@ enum WinKind {
     /// state (`ExchangeFloorState`) lives in `exchange_floor` (gated on
     /// `app-registry`), so this variant is a marker.
     ExchangeFloor,
+    /// **THE MATRIX ROOM** — membrane-over-Matrix in the shipped desktop: rooms as
+    /// live cells, sends as receipted turns read back off the receipt chain, and
+    /// the REAL executor envelope legs over the recorded/mock sync (the live
+    /// homeserver a named env-gated seam). Per-window state lives in
+    /// `matrix_rooms` / `matrix_stack` (gated on `dev-surfaces`), so this variant
+    /// is a marker like `AgentRoom`. Anchored on its own sentinel cell.
+    MatrixRoom,
 }
 
 impl WinKind {
@@ -361,6 +379,7 @@ impl WinKind {
             WinKind::AndroidCell => "Android · SystemUI",
             WinKind::AppShelf => "App Shelf",
             WinKind::ExchangeFloor => "Exchange Floor",
+            WinKind::MatrixRoom => "Matrix Room",
         }
     }
 }
@@ -435,6 +454,12 @@ enum ActionKind {
     /// execution-lease substrate crates ride that feature).
     #[cfg(feature = "app-registry")]
     OpenExchangeFloor,
+    /// Open the MATRIX ROOM — membrane-over-Matrix in the shipped desktop (rooms
+    /// as live cells; sends as receipted turns; the real envelope legs over the
+    /// recorded sync; the live homeserver a named env-gated seam). A World-level
+    /// surface. Gated on `dev-surfaces` (where the `deos-matrix` wire types live).
+    #[cfg(feature = "dev-surfaces")]
+    OpenMatrixRoom,
     /// Open the SPOTTER command palette — fuzzy-jump to any cell / action / window.
     OpenSpotter,
     /// Open the links / backlinks view over the cell.
@@ -658,6 +683,29 @@ pub struct DeosDesktop {
     /// Gated on `dev-surfaces` (where the deos-hermes rail is in scope).
     #[cfg(feature = "dev-surfaces")]
     hireling: hireling::HirelingState,
+    /// **The per-window MATRIX ROOM view state** — which room is watched and which
+    /// face (timeline/envelopes/wire) is shown. Keyed by the window's own sentinel.
+    /// A pure view concern. Gated on `dev-surfaces` (where the wire types live).
+    #[cfg(feature = "dev-surfaces")]
+    matrix_rooms: HashMap<CellId, matrix_room::MatrixRoomState>,
+    /// **THE MATRIX ROOM's substance** — the live room cells + the Matrix-hand on
+    /// the desktop's OWN World, the recorded-sync wire, and the envelope verdicts
+    /// (see [`matrix_room::MatrixRoomStack`]). Installed lazily on first open (a
+    /// real genesis-path install; the icon census refreshes at once). Gated on
+    /// `dev-surfaces`.
+    #[cfg(feature = "dev-surfaces")]
+    matrix_stack: Option<matrix_room::MatrixRoomStack>,
+    /// The Matrix composer's live input widget (single-line; Enter commits the
+    /// draft as a REAL receipted turn), built lazily on first render like the
+    /// Spotter's. Gated on `dev-surfaces`.
+    #[cfg(feature = "dev-surfaces")]
+    matrix_input: Option<Entity<InputState>>,
+    /// The composer's `Change`/`PressEnter` subscription (kept alive while open).
+    #[cfg(feature = "dev-surfaces")]
+    matrix_input_sub: Option<Subscription>,
+    /// The composer's current draft (mirrored from the widget on each `Change`).
+    #[cfg(feature = "dev-surfaces")]
+    matrix_draft: String,
     /// **THE PULSE CURSOR** — how far into the World's [`crate::dynamics`] stream the
     /// desktop has consumed. A background pump polls the stream (the documented pull
     /// model: `since(cursor)` per beat) and, when the World moved WITHOUT the desktop's
@@ -863,6 +911,16 @@ impl DeosDesktop {
             agent_rooms: HashMap::new(),
             #[cfg(feature = "dev-surfaces")]
             hireling: hireling::HirelingState::default(),
+            #[cfg(feature = "dev-surfaces")]
+            matrix_rooms: HashMap::new(),
+            #[cfg(feature = "dev-surfaces")]
+            matrix_stack: None,
+            #[cfg(feature = "dev-surfaces")]
+            matrix_input: None,
+            #[cfg(feature = "dev-surfaces")]
+            matrix_input_sub: None,
+            #[cfg(feature = "dev-surfaces")]
+            matrix_draft: String::new(),
             pulse_cursor,
             spotter: None,
             selected: None,
@@ -1094,6 +1152,7 @@ impl DeosDesktop {
             WinKindTag::AndroidCell => WinKind::AndroidCell,
             WinKindTag::AppShelf => WinKind::AppShelf,
             WinKindTag::ExchangeFloor => WinKind::ExchangeFloor,
+            WinKindTag::MatrixRoom => WinKind::MatrixRoom,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -1138,6 +1197,9 @@ impl DeosDesktop {
         // "{cell-kind} {id}" prefix would misread it as a zero-balance service.
         let title = if agent_room::is_agent_room(&cell) {
             format!("the resident — {}", kind.label())
+        } else if matrix_room::is_matrix_room(&cell) {
+            // The Matrix Room's sentinel gets the same courtesy.
+            format!("membranes over the wire — {}", kind.label())
         } else {
             format!(
                 "{} {} — {}",
@@ -1221,6 +1283,8 @@ impl DeosDesktop {
             WinKindTag::AppShelf => (540.0, 460.0),
             // The Exchange Floor opens wide enough for the order book's verb rows.
             WinKindTag::ExchangeFloor => (560.0, 480.0),
+            // The Matrix Room opens wide enough for the merged timeline + composer.
+            WinKindTag::MatrixRoom => (560.0, 500.0),
             #[allow(unreachable_patterns)]
             // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => (380.0, 320.0),
@@ -1279,6 +1343,16 @@ impl DeosDesktop {
         if key.1 == WinKindTag::AndroidCell {
             self.systemui_chromes.remove(&key.0);
             self.systemui_shades.remove(&key.0);
+        }
+        // Drop the Matrix composer widget + per-window view state when the Matrix
+        // Room closes (the STACK stays — its room cells live on the World ledger,
+        // which a window close must never un-install).
+        #[cfg(feature = "dev-surfaces")]
+        if key.1 == WinKindTag::MatrixRoom {
+            self.matrix_rooms.remove(&key.0);
+            self.matrix_input = None;
+            self.matrix_input_sub = None;
+            self.matrix_draft.clear();
         }
         self.layout.drop_win(&id_hex(&key.0), key.1);
         self.layout.save(&self.layout_path);
@@ -1588,6 +1662,14 @@ impl DeosDesktop {
             true,
             A::OpenExchangeFloor,
         ));
+        // THE MATRIX ROOM — membrane-over-Matrix: rooms as live cells, sends as
+        // receipted turns, real envelope legs over the recorded sync.
+        #[cfg(feature = "dev-surfaces")]
+        v.push(MenuAction::new(
+            "Matrix Room… (membranes over the wire · sends are receipted turns)",
+            true,
+            A::OpenMatrixRoom,
+        ));
         #[cfg(feature = "card-pane")]
         v.push(MenuAction::new(
             "World-Status Board… (deos.ui ViewNode · agent-composable)",
@@ -1848,6 +1930,8 @@ impl DeosDesktop {
             ActionKind::OpenAppShelf => self.open_app_shelf(),
             #[cfg(feature = "app-registry")]
             ActionKind::OpenExchangeFloor => self.open_exchange_floor(),
+            #[cfg(feature = "dev-surfaces")]
+            ActionKind::OpenMatrixRoom => self.open_matrix_room(),
         }
     }
 
@@ -2811,6 +2895,10 @@ impl DeosDesktop {
             // and lands mold-ready like every other global surface.
             #[cfg(feature = "app-registry")]
             Tg::ExchangeFloor => self.open_exchange_floor(),
+            // The Matrix Room's opener installs the room cells + the Matrix-hand
+            // onto the LIVE World on first open, then lands mold-ready.
+            #[cfg(feature = "dev-surfaces")]
+            Tg::MatrixRoom => self.open_matrix_room(),
             // Launching an app writes its OWN rich status line (the receipt landmark),
             // so this arm returns early rather than letting the generic "Spotter → …"
             // overwrite the committed-turn verdict.
@@ -2944,6 +3032,8 @@ impl DeosDesktop {
             ActionKind::OpenAppShelf => self.open_app_shelf(),
             #[cfg(feature = "app-registry")]
             ActionKind::OpenExchangeFloor => self.open_exchange_floor(),
+            #[cfg(feature = "dev-surfaces")]
+            ActionKind::OpenMatrixRoom => self.open_matrix_room(),
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Desktop);
                 self.say("Desktop Preferences & customization.");
@@ -4404,6 +4494,8 @@ impl DeosDesktop {
             WinKindTag::AppShelf => self.render_app_shelf_body(&sc, cx),
             #[cfg(feature = "app-registry")]
             WinKindTag::ExchangeFloor => self.render_exchange_floor_body(&sc, cx),
+            #[cfg(feature = "dev-surfaces")]
+            WinKindTag::MatrixRoom => self.render_matrix_room_window(cell, window, cx),
             #[allow(unreachable_patterns)]
             // needed when card-pane / android-systemui features are off
             _ => self.render_inspector_body(cell, &sc, cx),
