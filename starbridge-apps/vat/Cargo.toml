@@ -1,0 +1,23 @@
+[package]
+name = "starbridge-vat"
+version = "0.1.0"
+edition = "2024"
+description = "HAVE A DREGG COMPUTER — a vat is a persistent, durable, forkable World you rent and reach from any starbridge, and cannot be lied to. A dregg-native rewrite of the retired DreggNet ServerFleet: the vat cell is an execution-lease (persist=durable image · meter=StandingObligation · pay=Payable Transfer) wrapped in a lifecycle state machine (Created→Running→Sleeping→Lapsed/Reaped) whose every provision/wake/sleep/lapse/reap transition is a verified turn. Money + lifecycle are cells; VM placement is a thin operational adapter above."
+
+# The Dregg Computer, native. Strip-mined from ./dreggnet/control (ServerFleet)
+# — its ECONOMIC + DURABILITY halves were already native (execution-lease,
+# compute-exchange, the umem cell-heap), so this crate is the lifecycle STATE
+# MACHINE + the vat IDENTITY on top of that base, with the operational
+# provisioning glue (VM/mesh) left as a thin adapter the vat drives. See
+# DREGG-COMPUTER.md + DREGGNET-MIGRATION.md §3.2/§4.
+
+[lib]
+name = "starbridge_vat"
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-types = { path = "../../types" }
+starbridge-execution-lease = { path = "../execution-lease" }
+
+[dev-dependencies]
