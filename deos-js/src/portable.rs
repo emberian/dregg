@@ -69,7 +69,12 @@ impl ApplyOp {
         match self {
             ApplyOp::AddToSlot { slot } => Box::new(move |model, arg| {
                 let cur = model.field_u64(slot);
-                vec![(slot, pack_u64(cur + arg.max(0) as u64))]
+                // SATURATING — matches `SubFromSlot`'s saturating_sub AND the boa twin
+                // (`deos-js-runtime`'s AddToSlot saturates). A plain `cur + arg` panicked
+                // in debug / wrapped in release, so the two "twin" engines produced
+                // DIFFERENT receipted state (or a crash) for the same authored applet on
+                // an overflow. One vocabulary, one arithmetic, both engines.
+                vec![(slot, pack_u64(cur.saturating_add(arg.max(0) as u64)))]
             }),
             ApplyOp::SubFromSlot { slot } => Box::new(move |model, arg| {
                 let cur = model.field_u64(slot);

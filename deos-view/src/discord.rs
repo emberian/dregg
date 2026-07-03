@@ -269,12 +269,23 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
                     .push(("seek".to_string(), affordance_custom_id(turn, *min as i64)));
             }
         }
-        ViewNode::Toggle { on_turn, label, .. } => {
-            // Discord flattens the toggle to a single affordance button (the bot picks on/off by
-            // the live slot on press); the label carries the toggle's name.
+        ViewNode::Toggle {
+            on_turn,
+            off_turn,
+            label,
+            ..
+        } => {
+            // A Discord custom_id is STATIC — there is no live-slot press logic to pick
+            // on-vs-off — so a single button could only ever fire ONE transition. Emit BOTH
+            // affordances so a Discord user can reach both states (parity with native/web,
+            // where the toggle drives whichever transition the current slot value selects).
             let name = if label.is_empty() { "toggle" } else { label };
             acc.buttons
-                .push((name.to_string(), affordance_custom_id(on_turn, 0)));
+                .push((format!("{name} on"), affordance_custom_id(on_turn, 0)));
+            if !off_turn.is_empty() {
+                acc.buttons
+                    .push((format!("{name} off"), affordance_custom_id(off_turn, 0)));
+            }
         }
         ViewNode::Tile { handle, w, h } => push_line(
             &mut acc.description,
