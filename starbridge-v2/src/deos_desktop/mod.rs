@@ -51,6 +51,16 @@ pub mod android_window;
 /// clobber-safe. Gated on `app-registry` (which implies `embedded-executor`).
 #[cfg(feature = "app-registry")]
 pub mod app_shelf;
+/// THE ATTACH WIZARD — "send your AI to live here" in five minutes: a warm desktop
+/// onboarding over the hireling rail (name your resident · pick the brain — hermetic
+/// on-box default or BYO key with the brain-pocket invariant explained · set an
+/// attenuated mandate + a small budget by direct manipulation · HIRE) that lands a
+/// real confined resident in the Agent Room already stepping. Its HIRE routes through
+/// the ONE [`hireling::HirelingState::hire_with`] the room's own button delegates to
+/// (no duplicated hire logic). Gated on `dev-surfaces` (the deos-hermes brain/gate
+/// rail), like [`hireling`].
+#[cfg(feature = "dev-surfaces")]
+pub mod attach_wizard;
 /// THE DISCORD-BOT SURFACE — the desktop face of the one dregg-driven bot: a card
 /// that drives the bot's ops as dregg turns (`drive_on_world` on the embedded executor
 /// / the `op_request` POST to the live bot's `/api/op`) and renders the bot's activity
@@ -374,6 +384,10 @@ enum WinKind {
     /// the go-to landing) lives in `provenance_walkers`, so this variant is a
     /// marker like `WorldExplorer`.
     ProvenanceWalker,
+    /// **THE ATTACH WIZARD** — the warm "send your AI to live here" onboarding over
+    /// the hireling rail. Its per-window walk state lives in `attach_wizards`, so
+    /// this variant is a marker like `AgentRoom`.
+    AttachWizard,
 }
 
 impl WinKind {
@@ -393,6 +407,7 @@ impl WinKind {
             WinKind::ExchangeFloor => "Exchange Floor",
             WinKind::MatrixRoom => "Matrix Room",
             WinKind::ProvenanceWalker => "Provenance Walker",
+            WinKind::AttachWizard => "Attach a Resident",
         }
     }
 }
@@ -476,6 +491,12 @@ enum ActionKind {
     /// surface. Gated on `dev-surfaces` (where the `deos-matrix` wire types live).
     #[cfg(feature = "dev-surfaces")]
     OpenMatrixRoom,
+    /// Open the ATTACH WIZARD — the warm "send your AI to live here" onboarding: name
+    /// a resident, pick its brain, set its mandate by hand, and HIRE it into the Agent
+    /// Room already stepping. A World-level surface. Gated on `dev-surfaces` (the
+    /// hireling rail it drives).
+    #[cfg(feature = "dev-surfaces")]
+    OpenAttachWizard,
     /// Open the SPOTTER command palette — fuzzy-jump to any cell / action / window.
     OpenSpotter,
     /// Open the links / backlinks view over the cell.
@@ -705,6 +726,14 @@ pub struct DeosDesktop {
     /// Gated on `dev-surfaces` (where the deos-hermes rail is in scope).
     #[cfg(feature = "dev-surfaces")]
     hireling: hireling::HirelingState,
+    /// **The per-window ATTACH-WIZARD state** — the five-breath onboarding walk (its
+    /// step position + the operator's name/brain/mandate choices) that hires a real
+    /// confined resident into the Agent Room (see [`attach_wizard`]). Keyed by the
+    /// wizard's own sentinel cell ([`attach_wizard::wizard_window_cell`]); a pure
+    /// view concern until HIRE, which routes through the shared hireling path. Gated
+    /// on `dev-surfaces` (where the hireling rail is in scope).
+    #[cfg(feature = "dev-surfaces")]
+    attach_wizards: HashMap<CellId, attach_wizard::WizardState>,
     /// **The per-window MATRIX ROOM view state** — which room is watched and which
     /// face (timeline/envelopes/wire) is shown. Keyed by the window's own sentinel.
     /// A pure view concern. Gated on `dev-surfaces` (where the wire types live).
@@ -934,6 +963,8 @@ impl DeosDesktop {
             provenance_walkers: HashMap::new(),
             #[cfg(feature = "dev-surfaces")]
             hireling: hireling::HirelingState::default(),
+            #[cfg(feature = "dev-surfaces")]
+            attach_wizards: HashMap::new(),
             #[cfg(feature = "dev-surfaces")]
             matrix_rooms: HashMap::new(),
             #[cfg(feature = "dev-surfaces")]
@@ -1177,6 +1208,7 @@ impl DeosDesktop {
             WinKindTag::ExchangeFloor => WinKind::ExchangeFloor,
             WinKindTag::MatrixRoom => WinKind::MatrixRoom,
             WinKindTag::ProvenanceWalker => WinKind::ProvenanceWalker,
+            WinKindTag::AttachWizard => WinKind::AttachWizard,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -1328,6 +1360,8 @@ impl DeosDesktop {
             WinKindTag::MatrixRoom => (560.0, 500.0),
             // The Provenance Walker opens wide for the dense hash rows + detail.
             WinKindTag::ProvenanceWalker => (560.0, 460.0),
+            // The Attach Wizard opens as a calm portrait card for the five-breath walk.
+            WinKindTag::AttachWizard => (420.0, 480.0),
             #[allow(unreachable_patterns)]
             // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => (380.0, 320.0),
@@ -1721,6 +1755,14 @@ impl DeosDesktop {
             true,
             A::OpenMatrixRoom,
         ));
+        // THE ATTACH WIZARD — send your AI to live here: name · brain · mandate ·
+        // hire, landing a real confined resident in the Agent Room already stepping.
+        #[cfg(feature = "dev-surfaces")]
+        v.push(MenuAction::new(
+            "Attach a resident… (send your AI to live here — name · brain · hire)",
+            true,
+            A::OpenAttachWizard,
+        ));
         #[cfg(feature = "card-pane")]
         v.push(MenuAction::new(
             "World-Status Board… (deos.ui ViewNode · agent-composable)",
@@ -1984,6 +2026,8 @@ impl DeosDesktop {
             ActionKind::OpenExchangeFloor => self.open_exchange_floor(),
             #[cfg(feature = "dev-surfaces")]
             ActionKind::OpenMatrixRoom => self.open_matrix_room(),
+            #[cfg(feature = "dev-surfaces")]
+            ActionKind::OpenAttachWizard => self.open_attach_wizard(),
         }
     }
 
@@ -2631,6 +2675,13 @@ impl DeosDesktop {
                 _ => false,
             };
         }
+        // THE ATTACH WIZARD's name field — while it is capturing, printable keys and
+        // Backspace type into the resident's name (Escape/Enter release capture). It
+        // sits below ⌘K + the Spotter (they still win) and above the Escape ladder.
+        #[cfg(feature = "dev-surfaces")]
+        if self.wizard_type_key(key, cmd) {
+            return true;
+        }
         if key == "escape" {
             if self.open_menu.take().is_some() {
                 return true;
@@ -2955,6 +3006,10 @@ impl DeosDesktop {
             // onto the LIVE World on first open, then lands mold-ready.
             #[cfg(feature = "dev-surfaces")]
             Tg::MatrixRoom => self.open_matrix_room(),
+            // The Attach Wizard's opener starts a FRESH five-breath walk and lands
+            // mold-ready like every other global surface.
+            #[cfg(feature = "dev-surfaces")]
+            Tg::AttachWizard => self.open_attach_wizard(),
             // Launching an app writes its OWN rich status line (the receipt landmark),
             // so this arm returns early rather than letting the generic "Spotter → …"
             // overwrite the committed-turn verdict.
@@ -3091,6 +3146,8 @@ impl DeosDesktop {
             ActionKind::OpenExchangeFloor => self.open_exchange_floor(),
             #[cfg(feature = "dev-surfaces")]
             ActionKind::OpenMatrixRoom => self.open_matrix_room(),
+            #[cfg(feature = "dev-surfaces")]
+            ActionKind::OpenAttachWizard => self.open_attach_wizard(),
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Desktop);
                 self.say("Desktop Preferences & customization.");
@@ -4612,6 +4669,8 @@ impl DeosDesktop {
             WinKindTag::ExchangeFloor => self.render_exchange_floor_body(&sc, cx),
             #[cfg(feature = "dev-surfaces")]
             WinKindTag::MatrixRoom => self.render_matrix_room_window(cell, window, cx),
+            #[cfg(feature = "dev-surfaces")]
+            WinKindTag::AttachWizard => self.render_attach_wizard_window(cell, cx),
             #[allow(unreachable_patterns)]
             // needed when card-pane / android-systemui features are off
             _ => self.render_inspector_body(cell, &sc, cx),

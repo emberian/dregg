@@ -105,6 +105,14 @@ pub enum WinKindTag {
     /// cursor + the go-to landing) lives in `provenance_walkers`, so this variant
     /// is a marker like `WorldExplorer`. Anchored on its own sentinel cell.
     ProvenanceWalker,
+    /// **THE ATTACH WIZARD** — the warm "send your AI to live here" onboarding: a
+    /// five-breath walk (name · brain · mandate · review · hire) over the hireling
+    /// rail that lands a real confined resident in the Agent Room, already stepping
+    /// (see `super::attach_wizard`). Per-window state (the walk position + the
+    /// choices) lives in `attach_wizards`, so this variant is a marker like
+    /// `AgentRoom`. Anchored on its own sentinel cell; the render is gated on
+    /// `dev-surfaces` (the hireling rail), falling back to the inspector otherwise.
+    AttachWizard,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT

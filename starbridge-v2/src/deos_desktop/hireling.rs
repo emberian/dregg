@@ -65,7 +65,7 @@ use gpui::{
 
 use dregg_types::CellId;
 
-use deos_hermes::resident::resident_brain_from_env;
+use deos_hermes::resident::{resident_brain_from_env, ResidentBrain};
 
 use crate::agent::{AgentAction, AgentActivity};
 use crate::resident_agent::{hire_resident_seeded, AgentHandle, Refusal, ResidentMandate};
@@ -223,9 +223,34 @@ impl HirelingState {
     }
 
     /// **HIRE** — mint a real confined resident on the live `world` under the
-    /// canonical attenuated mandate. Refuses (a surfaced string, never a panic)
-    /// when the room is already staffed or the seed lane is exhausted.
+    /// canonical attenuated mandate, thinking with the env-resolved brain. Refuses
+    /// (a surfaced string, never a panic) when the room is already staffed or the
+    /// seed lane is exhausted. The room's plain HIRE button drives this; the Attach
+    /// Wizard drives [`HirelingState::hire_with`] with an operator-shaped mandate +
+    /// a hermetic pin.
     pub fn hire(&mut self, world: &Rc<RefCell<World>>) -> Result<HireReport, String> {
+        self.hire_with(world, ResidentMandate::attenuated(ROOM_SESSION_ID), false)
+    }
+
+    /// **HIRE with an operator-shaped confinement** — the SINGLE hire path (the
+    /// plain [`HirelingState::hire`] is this with the canonical attenuated mandate
+    /// and the env-resolved brain). `mandate` carries the resident's name
+    /// (session id), allowance body, `write_file` denial, and `terminal` rate
+    /// ceiling — exactly what the Attach Wizard sets by direct manipulation.
+    /// `force_on_box` pins the HERMETIC on-box brain regardless of a provider key
+    /// in the environment (the wizard's truthful "no credential leaves the box"
+    /// pick); `false` resolves the brain from the env like the plain hire.
+    ///
+    /// There is NO duplicated minting here — the resident cell + cap-gated gateway
+    /// are stood up by the one [`hire_resident_seeded`] the phase-1 acceptance
+    /// proved; this only chooses the confinement + the brain and records the
+    /// employment. Refuses when already staffed or the seed lane is exhausted.
+    pub fn hire_with(
+        &mut self,
+        world: &Rc<RefCell<World>>,
+        mandate: ResidentMandate,
+        force_on_box: bool,
+    ) -> Result<HireReport, String> {
         if self.handle.is_some() {
             return Err(
                 "a resident is already hired — FIRE it first (one hireling per room)".to_string(),
@@ -234,13 +259,18 @@ impl HirelingState {
         let (peer_seed, agent_seed) = free_seed_pair(&world.borrow()).ok_or_else(|| {
             "the hireling genesis-seed lane is exhausted (128 hires on one image)".to_string()
         })?;
-        let mandate = ResidentMandate::attenuated(ROOM_SESSION_ID);
         let (terminal_rate, allowance) = (mandate.terminal_rate, mandate.allowance);
-        // The honest brain label — resolved from the SAME environment the
-        // handle's per-beat brain resolver reads, so the strip names what will
-        // actually think (on-box by default; the BYO-key provider by name).
-        let brain = resident_brain_from_env().describe();
-        let handle = hire_resident_seeded(world, mandate, peer_seed, agent_seed);
+        // The honest brain label — the hermetic pin names the on-box brain even
+        // when a key is present; otherwise it is resolved from the SAME environment
+        // the handle's per-beat resolver reads, so the label names what will
+        // ACTUALLY think (on-box by default; the BYO-key provider by name).
+        let brain = if force_on_box {
+            ResidentBrain::default().describe()
+        } else {
+            resident_brain_from_env().describe()
+        };
+        let mut handle = hire_resident_seeded(world, mandate, peer_seed, agent_seed);
+        handle.force_on_box = force_on_box;
         let cell = handle.cell;
         self.handle = Some(handle);
         self.brain = brain.clone();
@@ -418,8 +448,25 @@ impl DeosDesktop {
     /// would catch the genesis on its next beat; the click deserves the immediate
     /// read). Returns whether the room is staffed after the call.
     pub(super) fn hire_room_resident(&mut self, room: CellId) -> bool {
+        self.hire_room_resident_with(room, ResidentMandate::attenuated(ROOM_SESSION_ID), false)
+    }
+
+    /// **HIRE with an operator-shaped confinement** — the shared body behind both
+    /// the room's plain HIRE button ([`Self::hire_room_resident`], the canonical
+    /// attenuated mandate + env brain) and the Attach Wizard's HIRE (an
+    /// operator-shaped mandate + the hermetic pin). Pins the Agent Room onto the
+    /// new resident, grows the icon census now (the click deserves the immediate
+    /// read; THE PULSE would catch the genesis on its next beat anyway), narrates,
+    /// and returns whether the room is staffed after the call. The hire LOGIC is
+    /// not duplicated — it delegates to [`HirelingState::hire_with`].
+    pub(super) fn hire_room_resident_with(
+        &mut self,
+        room: CellId,
+        mandate: ResidentMandate,
+        force_on_box: bool,
+    ) -> bool {
         let world = Rc::clone(&self.world);
-        match self.hireling.hire(&world) {
+        match self.hireling.hire_with(&world, mandate, force_on_box) {
             Ok(report) => {
                 self.agent_rooms.entry(room).or_default().resident = Some(report.cell);
                 let mut v: Vec<CellId> = {

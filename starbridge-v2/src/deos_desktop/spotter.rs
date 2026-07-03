@@ -129,6 +129,12 @@ pub enum SpotterTarget {
     /// cell by the dispatcher. Gated on `dev-surfaces` (the `deos-matrix` wire).
     #[cfg(feature = "dev-surfaces")]
     MatrixRoom,
+    /// Open the ATTACH WIZARD — the warm "send your AI to live here" onboarding over
+    /// the hireling rail (name · brain · mandate · hire → a real confined resident in
+    /// the Agent Room, already stepping). A global surface, anchored on the wizard's
+    /// own sentinel cell by the dispatcher. Gated on `dev-surfaces` (the hireling rail).
+    #[cfg(feature = "dev-surfaces")]
+    AttachWizard,
     /// Jump to an ALREADY-OPEN window — raise it, un-minimize it, and land mold-ready
     /// (the halo-selected arrival every other jump makes). The module doc has promised
     /// "or to an open WINDOW" since the Spotter was born; these entries (built by
@@ -548,6 +554,16 @@ pub fn surface_candidates() -> Vec<SpotterEntry> {
         target: SpotterTarget::MatrixRoom,
         score: 0,
     });
+    // THE ATTACH WIZARD — the warm front door onto the hireling rail (name · brain ·
+    // mandate · hire), only when that rail is compiled in (`dev-surfaces`).
+    #[cfg(feature = "dev-surfaces")]
+    out.push(SpotterEntry {
+        label: "Attach a resident  (send your AI to live here)".to_string(),
+        sublabel: "surface · name · brain · mandate · hire → a real resident in the Agent Room"
+            .to_string(),
+        target: SpotterTarget::AttachWizard,
+        score: 0,
+    });
     out
 }
 
@@ -614,6 +630,8 @@ pub fn entry_badge(entry: &SpotterEntry) -> (&'static str, u32) {
         T::ExchangeFloor => (kind_short(WinKindTag::ExchangeFloor), NT_LABEL),
         #[cfg(feature = "dev-surfaces")]
         T::MatrixRoom => (kind_short(WinKindTag::MatrixRoom), NT_LABEL),
+        #[cfg(feature = "dev-surfaces")]
+        T::AttachWizard => (kind_short(WinKindTag::AttachWizard), NT_LABEL),
     }
 }
 
