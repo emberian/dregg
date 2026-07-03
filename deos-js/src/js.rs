@@ -588,7 +588,9 @@ const PRELUDE: &str = r#"
             },
             // addAffordance(cardId, spec) — weld a fireable affordance into the card's
             // program. spec: {name, required:"none"/"signature"/"proof"/"either",
-            //   op:"add"/"sub"/"set", slot, value}. Returns 1 on commit, -1 on refusal.
+            //   op:"add"/"sub"/"set"/"track", slot, value}. ("track": slot := max(arg,0)
+            //   — the fire's arg IS the new value, the census-mirroring write verb.)
+            // Returns 1 on commit, -1 on refusal.
             addAffordance: function(cardId, spec) {
                 return __deos_editor_add_affordance(String(cardId), JSON.stringify(spec || {})) | 0;
             }
@@ -1614,6 +1616,9 @@ fn parse_affordance_spec(spec_json: &str) -> Result<AffordanceSpec, String> {
         "add" | "inc" => ApplyOp::AddToSlot { slot },
         "sub" | "dec" => ApplyOp::SubFromSlot { slot },
         "set" => ApplyOp::SetSlot { slot, value },
+        // `slot := max(arg, 0)` — the fire's arg IS the new value (the tracking write
+        // verb the Pulse→Signals weld fires to mirror a live World reading into a card).
+        "track" | "setFromArg" => ApplyOp::SetSlotFromArg { slot },
         other => return Err(format!("unknown affordance op '{other}'")),
     };
     Ok(AffordanceSpec { name, required, op })

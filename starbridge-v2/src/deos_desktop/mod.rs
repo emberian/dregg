@@ -818,19 +818,31 @@ impl DeosDesktop {
     fn pump_dynamics(&mut self, cx: &mut Context<Self>) {
         use crate::dynamics::WorldEvent;
         let aged = self.toast_rack.beat();
-        let (cursor, announce, arrivals, cells) = {
+        // THE PULSE→SIGNALS WELD, quiet half — every beat, even when the World did not
+        // move: retire last beat's dirty-glow tint on every open content-IR pane and
+        // catch up turns a pane's OWN embedded executor committed between beats (a
+        // button fired on the surface itself). See `viewnode_pane::pulse_panes_quiet`.
+        #[cfg(feature = "card-pane")]
+        let weld_quiet = viewnode_pane::pulse_panes_quiet(&self.viewnode_panes, cx);
+        #[cfg(not(feature = "card-pane"))]
+        let weld_quiet = false;
+        let (cursor, announce, arrivals, cells, field_sets, receipts) = {
             let w = self.world.borrow();
             let d = w.dynamics();
             let cursor = d.cursor();
             if cursor == self.pulse_cursor {
                 drop(w);
-                if aged {
+                if aged || weld_quiet {
                     cx.notify();
                 }
                 return;
             }
             let mut announce = None;
             let mut arrivals: Vec<(toasts::ToastKind, String)> = Vec::new();
+            // The beat's `(cell, slot)` writes — projected into the exact shape the
+            // signal registry invalidates on (`deos_js::signals::SourceEvent`), so the
+            // weld's loud half can broadcast them to every open content-IR pane.
+            let mut field_sets: Vec<(CellId, usize)> = Vec::new();
             for e in d.since(self.pulse_cursor) {
                 match e {
                     WorldEvent::TurnCommitted {
@@ -852,15 +864,31 @@ impl DeosDesktop {
                             format!("{} — {reason}", id_short(agent)),
                         ));
                     }
+                    WorldEvent::FieldSet { cell, index } => field_sets.push((*cell, *index)),
                     _ => {}
                 }
             }
             let mut cells: Vec<CellId> = w.ledger().iter().map(|(id, _)| *id).collect();
             cells.sort();
-            (cursor, announce, arrivals, cells)
+            let receipts = w.receipts().len() as u64;
+            (cursor, announce, arrivals, cells, field_sets, receipts)
         };
         self.pulse_cursor = cursor;
         self.cells = cells;
+        // THE PULSE→SIGNALS WELD, loud half — the World moved: broadcast the beat's
+        // FieldSets into every pane's signal registry (exactly the dirty binds re-read)
+        // and mirror the moved census into the World-Status panel as receipted tracking
+        // turns. The shipped pane's binds finally track the live World.
+        #[cfg(feature = "card-pane")]
+        {
+            let census = viewnode_pane::WorldCensus {
+                cells: self.cells.len() as u64,
+                receipts,
+            };
+            viewnode_pane::pulse_panes(&self.viewnode_panes, &field_sets, census, cx);
+        }
+        #[cfg(not(feature = "card-pane"))]
+        let _ = (&field_sets, receipts);
         for (kind, line) in arrivals {
             self.toast_rack.push(kind, line);
         }
@@ -3209,6 +3237,106 @@ impl DeosDesktop {
             receipt_count,
             blamed_agent,
             mounted_window,
+        })
+    }
+
+    /// **THE PULSE→SIGNALS WELD, PROVEN** — a FOREIGN turn (committed on the live
+    /// World: outside the pane, not one of its own affordances) repaints EXACTLY the
+    /// shipped World-Status pane's receipts bind, through a receipted tracking turn,
+    /// with the one-beat dirty glow lit.
+    ///
+    /// The loop: (1) ensure the live pane entity exists; (2) CONVERGE — drive a loud
+    /// pulse beat so the pane's committed readings catch the live census (the frozen
+    /// 3/12 seeds stop lying; in the shipped desktop the first 250ms beat after open
+    /// does this); (3) THE FOREIGN TURN — commit a real verified `SetField` turn on
+    /// the live World: the receipts census moves by exactly one, the cells census does
+    /// not, and the turn's `FieldSet` event rides the next beat's broadcast (proving a
+    /// foreign write never over-invalidates a pane whose binds don't read it);
+    /// (4) THE PROOF BEAT — one more [`Self::pump_dynamics`] beat: the pane fires ONE
+    /// receipted `set_receipts` tracking turn, its dirty set is EXACTLY the receipts
+    /// bind (cells + refreshes rows stay clean), the glow is lit, and the bind's
+    /// committed value equals the live census. A capture before/after this call
+    /// differs — the repainted value + the accent glow reach pixels.
+    #[cfg(feature = "card-pane")]
+    pub fn bake_foreign_turn_repaints_viewnode_binds(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<viewnode_pane::PulseWeldWitness, String> {
+        let cell = self.user;
+
+        // (1) The live renderer entity (created lazily on render; mint it here so the
+        //     weld can drive it even before the window's next paint).
+        let entity = match self.viewnode_panes.get(&cell).cloned() {
+            Some(e) => e,
+            None => {
+                let e = viewnode_pane::build_viewnode_view(cx);
+                self.viewnode_panes.insert(cell, e.clone());
+                e
+            }
+        };
+        let applet = entity.read(cx).applet();
+
+        // (2) CONVERGE — drive one beat; if the dynamics stream was already drained
+        //     (the beat stays quiet and the census weld never ran), nudge the World
+        //     with one real turn so the next beat is loud, and converge on that.
+        self.pump_dynamics(cx);
+        {
+            let live = self.world.borrow().receipts().len() as u64;
+            let shown = applet.borrow().get_u64(viewnode_pane::STATUS_SLOT_RECEIPTS);
+            if shown != live && !self.commit_set_field(cell, 9, 7) {
+                return Err("the convergence nudge turn did not commit".into());
+            }
+        }
+        self.pump_dynamics(cx);
+        let receipts_before = applet.borrow().get_u64(viewnode_pane::STATUS_SLOT_RECEIPTS);
+        {
+            let live = self.world.borrow().receipts().len() as u64;
+            if receipts_before != live {
+                return Err(format!(
+                    "the convergence beat did not land: the pane's committed receipts \
+                     reading is {receipts_before}, the live census {live}"
+                ));
+            }
+        }
+        let pane_tape_before = applet.borrow().receipt_count();
+
+        // (3) THE FOREIGN TURN — a real verified `SetField` on the live World. The
+        //     receipts census moves by one; the cells census does not.
+        if !self.commit_set_field(cell, 9, 42) {
+            return Err("the foreign SetField turn did not commit".into());
+        }
+        let live_receipts = self.world.borrow().receipts().len() as u64;
+
+        // (4) THE PROOF BEAT — the pulse mirrors the moved receipts census into the
+        //     pane as ONE receipted tracking turn and invalidates EXACTLY its bind.
+        self.pump_dynamics(cx);
+
+        let view = entity.read(cx);
+        let receipts_after = applet.borrow().get_u64(viewnode_pane::STATUS_SLOT_RECEIPTS);
+        let dirty = viewnode_pane::raw_ids(&view.last_dirty());
+        let glowing = viewnode_pane::raw_ids(&view.glowing());
+        let expected = viewnode_pane::bindings_reading(view, viewnode_pane::STATUS_SLOT_RECEIPTS);
+        let dirty_is_exactly_receipts_bind =
+            !expected.is_empty() && dirty == expected && glowing == expected;
+        let weld_receipts_committed = applet
+            .borrow()
+            .receipt_count()
+            .saturating_sub(pane_tape_before);
+
+        self.status = format!(
+            "THE PULSE→SIGNALS WELD — a foreign turn moved the World's receipts census \
+             to {live_receipts}; the World-Status pane repainted exactly its receipts \
+             bind (a receipted tracking turn; dirty glow lit)."
+        );
+
+        Ok(viewnode_pane::PulseWeldWitness {
+            receipts_before,
+            receipts_after,
+            live_receipts,
+            dirty,
+            glowing,
+            dirty_is_exactly_receipts_bind,
+            weld_receipts_committed,
         })
     }
 

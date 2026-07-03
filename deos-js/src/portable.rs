@@ -52,6 +52,14 @@ pub enum ApplyOp {
     SubFromSlot { slot: Slot },
     /// `slot := value` — set a slot to a fixed u64 (the counter `reset` to 0).
     SetSlot { slot: Slot, value: u64 },
+    /// `slot := max(arg, 0)` — TRACK an externally-observed value: the fire's arg is
+    /// the new slot value. This is the Pulse→Signals weld's write verb — the cockpit
+    /// mirrors a LIVE World reading (the ledger census) into a status card's model as
+    /// a receipted verified turn, so the card's `bind` rows re-read committed state
+    /// (never a side-channel), and the mirroring itself is on the audit tape. The
+    /// SAME named power-up the boa twin (`deos-js-runtime`'s `ApplyOp::SetSlotFromArg`)
+    /// already carries — one write vocabulary, two engines.
+    SetSlotFromArg { slot: Slot },
 }
 
 impl ApplyOp {
@@ -69,6 +77,9 @@ impl ApplyOp {
             }),
             ApplyOp::SetSlot { slot, value } => {
                 Box::new(move |_model, _arg| vec![(slot, pack_u64(value))])
+            }
+            ApplyOp::SetSlotFromArg { slot } => {
+                Box::new(move |_model, arg| vec![(slot, pack_u64(arg.max(0) as u64))])
             }
         }
     }
