@@ -116,3 +116,13 @@ dress) · CardPane rides the pulse (bind cache + glow + own-turn watermark; CapR
 CellMutated folded) · Spotter is a command line (transfer/grant/bump verbs → verified
 turns; recent jumps on empty query). kind_short moved to chrome.rs. WAVE 5 next:
 matrix-rehydrate · web-transclude · provenance-walker.
+
+## ~07:2x — WAVE 5 INTEGRATED (898 green + bake)
+THE MATRIX ROOM (membranes over the wire: rooms as live cells, sends as receipted turns
+decoded off the receipt chain, mint→rehydrate→drive→stitch legs real, homeserver an
+env-gated named seam) · TRANSCLUSION ON THE OPEN WEB (site/transclusion demo page +
+embeddable transclude.js — hash-verified quotes, refusal chrome, backlinks; build tooth in
+build-pages-dist.sh) · THE PROVENANCE WALKER (walk the receipt chain hash-by-hash, every
+link recomputed; Broken/Unanchored/Deferred/Reseeded verdicts). Fixes en route: AppContext
+import, Debug derive, reseeded_flags row-0 semantics (impl contradicted its own doc+test).
+Ten waves of organs on the branch now; 898 lib tests.
