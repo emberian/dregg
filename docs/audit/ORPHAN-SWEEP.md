@@ -261,6 +261,48 @@ claimed faithful ~124-bit. This is precisely the `docs/FAITHFUL-STATE-COMMITMENT
 green 8-felt keystones stand beside a lane-0 deployed denotation — the "misled us" pattern. Named
 residual: "flipping the apex to quantify over `effAccumWriteV3` is a SEPARATE VK epoch" (`:1642`).
 
+> **⚑ AUDIT RESOLUTION 2026-07-03 — REFUTED (STAGED-VS-DEPLOYED CONFLATION). This verdict above was
+> WRONG.** An adversarial forge (`circuit/tests/accumulator_completion_lane_forge.rs`, both tests GREEN)
+> attacked the accumulator root's completion lanes 1..7 directly against **the descriptor the light
+> client actually runs** and found them BOUND at 8-felt (~124-bit), not lane-0. The error was reading
+> the Lean `scalarRootGroup` *after-spine* denotation (`EffectVmEmitRotationV3.lean:1570`) as if it were
+> the whole binding — it is not. What the deployed descriptor JSON carries, and what the deployed Rust
+> verifier resolves, both independently bind the full 8-felt root:
+>
+> 1. **The deployed verifier resolves the WIDE / WELDED registry, NOT the 1-felt V3.** For a single-cohort
+>    noteSpend/noteCreate lead, `turn/src/executor/proof_verify.rs:684/704/1219` resolves
+>    `WIDE_REGISTRY_STAGED_TSV` and then sets `require_welded = true` (`:1219`), DROPPING the bare form so
+>    the SOLE accepted descriptor is the welded twin
+>    `noteSpend-v1-rot24-v3-insert-heapopen-umem-wide-welded` (2829-wide, 8-felt anchors + umem_op). The
+>    umem VK epoch was FIRED (`da0c47dd6` "umem IS the deployed prover"; `443661298` "umem-welded WIDE as
+>    deployed default") — so §1's "the live one is `rotation-v3-staged-registry.tsv` (1-felt)" is STALE
+>    for the effect-vm verify path. The SDK light-client producer/verifier route NoteCreate through
+>    `generate_rotated_note_create_wide` (the insert-shaped `effAccumInsertV3` member), confirmed by
+>    `vk_epoch_notes_light_client_binding::notecreate_forced_on_wire_through_live_wide_producer`.
+> 2. **Every deployed member's inline map-op binds an 8-felt `new_root` group — including the narrow V3
+>    member the sweep cited.** In `rotation-v3-staged-registry.tsv`, `rotation-wide-registry-staged.tsv`
+>    AND `…-umem-welded-…tsv`, the noteCreate `.insert` map-op's `new_root` is an 8-element column group
+>    (narrow cols `[441,482..488]`; wide/welded `[442,489..495]`), enforced through the arity-16 `node8`
+>    compression on BUS_P2. The producer fills those lanes with the genuine `CanonicalHeapTree8::root8()`
+>    high felts (`trace_rotated.rs:1409-1424`).
+> 3. **The forge is UNSAT on BOTH geometries.** `wide_notecreate_completion_lane_forge_verdict` (the LC
+>    geometry) and `narrow_v3_notecreate_completion_lane_forge_verdict` (the sweep's own cited registry)
+>    each forge `new_root` lanes 1..7 to arbitrary values ≠ the genuine insert, keep lane 0 honest, make
+>    the trace fully self-consistent, and REFUSE through `prove`/`verify` ALONE. The grow-gate binds all
+>    eight felts. (The setField exemplar that seeded the "class" is a genuine completion-lane seam because
+>    its written-slot lanes are freeze-bound, not map-op-bound — that dangerous #2 stands; the accumulator
+>    roots are structurally different: a map-op, not a freeze.)
+>
+> Net: the accumulator roots are **LC-faithful at ~124-bit** on the deployed path. The `effAccumWriteV3`
+> orphan (§2 C4) is a redundant assurance twin of an already-8-felt-deployed binding, not the sole carrier
+> of a property the deployed path lacks. Item #1 in §5 and §6 is retired.
+>
+> **Honest coverage caveat:** the N=3 empirical run exercised a **Transfer** turn, whose wide descriptor
+> carries **no map-op** (`transferVmDescriptor2R24` constraint kinds = gate/transition/pi_binding/lookup
+> only). So the "live on iron under the faithful VK" evidence does NOT yet cover a noteSpend/noteCreate/
+> createCell turn end-to-end on the testnet — the 8-felt accumulator binding is proven by the in-circuit
+> forge here, not yet by an on-chain accumulator turn.
+
 *(By contrast, the cap-write / heap / fields accumulator roots DO deploy the after-spine 8-felt model —
 the `*WriteCapOpen` family is present in `rotation-v3-staged-registry.tsv`, and
 `effect_vm_descriptors.rs:2045` routes `has_after_spine`. Those are OPTION-I deployed and are the safe
@@ -284,12 +326,14 @@ counterexample that makes the three note/create roots stand out.)*
 
 Ranked by how much they mislead a reader of the "axiom-clean" green.
 
-1. **Dedicated accumulator roots — 8-felt keystones vs lane-0 deployment.** `nullifierWrite_forces_write8_sat`
-   & siblings (`…CapFamily.lean:1645+`) prove faithful ~124-bit binding for `effAccumWriteV3`, but
-   `noteSpendV3`/`noteCreateV3`/`createCellV3` deploy a lane-0 `scalarRootGroup` (`…RotationV3.lean:1570`).
-   The light client binds these three roots at ~31 bits. **Full-node-safe** (Rust node8 AIR), **not
-   LC-faithful.** This is the highest-value find: it directly touches the faithful-commitment claim and
-   the code explicitly labels it an assurance twin behind a VK epoch.
+1. ~~**Dedicated accumulator roots — 8-felt keystones vs lane-0 deployment.**~~ **⚑ REFUTED 2026-07-03
+   (see §3b AUDIT RESOLUTION).** The forge (`circuit/tests/accumulator_completion_lane_forge.rs`) shows
+   the deployed descriptor (WIDE/welded that the LC verifier resolves, AND even the narrow V3 member)
+   binds ALL EIGHT `new_root` lanes through the inline `.insert` map-op / `node8` AIR — a completion-lane
+   forge is UNSAT. The "lane-0 `scalarRootGroup`" reading (`…RotationV3.lean:1570`) was the after-spine
+   denotation only, NOT the map-op binding; this was the R1 staged-vs-deployed trap. The accumulator
+   roots are **LC-faithful at ~124-bit**. `effAccumWriteV3` is a redundant assurance twin, not the sole
+   carrier. (Dangerous #2, setField, is a real freeze-bound completion seam and STANDS.)
 
 2. **setField refinement stack — circuit-grounding + completeness about `v3OfFrozenSetField`.** 8
    `#assert_axioms` keystones (`RotatedKernelRefinementSetField.lean`) + `setField_descriptorComplete`
@@ -305,9 +349,11 @@ variant whose deployed sibling carries an equal-or-stronger property). No new so
 
 ## 6. THE UNFINISHED-DEPLOYMENT SET (built + proven + never wired, ranked by value)
 
-1. **Dedicated accumulator 8-felt apex flip** (`effAccumWriteV3` → 3 note/create roots). Closes the
-   last ~31-bit LC binding on the faithful-commitment surface. Producers already fill 8 lanes; the flip
-   is a descriptor swap + VK epoch. **Highest value — retires a named soundness-adjacent floor.**
+1. ~~**Dedicated accumulator 8-felt apex flip**~~ **⚑ ALREADY DEPLOYED / REFUTED 2026-07-03.** The
+   deployed WIDE/welded (and even narrow V3) note/create/create-cell members already bind the root 8-felt
+   via the inline `.insert` map-op — proven UNSAT-to-forge by `accumulator_completion_lane_forge.rs`. The
+   separate `effAccumWriteV3` apex flip is NOT needed for LC faithfulness (it is a redundant twin). No
+   floor here. (Remaining honest gap: an on-chain accumulator turn in the N=3 run — see §3b caveat.)
 2. **VALUE8 setField weld** (`v3OfFrozenSetField` + lane-force). Buys faithful large-value field writes
    (today capped at lane-0 ≤~31-bit values). Completeness, not soundness. VK-affecting.
 3. **G5 discharge / vault (tags 18/19)**. Fully-built Lean+Rust machinery (`EmitDischargeVaultSat.lean`,
