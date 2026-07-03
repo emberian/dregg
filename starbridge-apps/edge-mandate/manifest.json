@@ -1,0 +1,77 @@
+{
+  "id": "edge-mandate",
+  "name": "Edge Identity Mandate",
+  "description": "Edge-identity → budget → caps as a verified mandate cell: an SSH public key (or any access-edge identity) bound to a dregg account, a spend ceiling, and an attenuated tool-set (granted ⊑ held — no amplification), with enrol / spend / revoke as witnessed turns. A thin deploy-side adapter lowers a mandate cell to an OpenSSH authorized_keys forced-command line — a pure function of the committed cell state.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d656467652d6d616e646174652d666163746f727921"
+  ],
+  "inspectors": [
+    "dregg-edge-mandate"
+  ],
+  "host_inspectors": [
+    { "id": "mandate", "label": "Edge Mandate", "tag": "dregg-edge-mandate", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "enrol", "label": "Enrol subject", "builder": "enrol", "kind": "turn" },
+    { "id": "spend", "label": "Spend", "builder": "spend", "kind": "turn" },
+    { "id": "revoke", "label": "Revoke", "builder": "revoke", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "mandate_uri", "label": "Mandate URI", "type": "uri", "default": "dregg://cell/edge-mandate-default" },
+    { "id": "account", "label": "Account", "type": "text", "default": "dga1_" },
+    { "id": "budget", "label": "Budget (cents)", "type": "number", "default": 500 },
+    { "id": "caps", "label": "Caps", "type": "text", "default": "fs,http:api.github.com" }
+  ],
+  "turn_builders": [
+    "enrol",
+    "spend",
+    "revoke"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "cell.readHeap"
+  ],
+  "slot_layout": {
+    "SUBJECT_SLOT": 0,
+    "ACCOUNT_SLOT": 1,
+    "BUDGET_SLOT": 2,
+    "SPENT_SLOT": 3,
+    "CAPS_DIGEST_SLOT": 4,
+    "REVOKED_SLOT": 5,
+    "EPOCH_SLOT": 6
+  },
+  "heap_collections": {
+    "REC_COLL": "0x0000ED6E — the deploy-facing enrolment record (account / ssh-pubkey / canonical caps / brain), chunked strings folded into the state commitment; the authorized_keys adapter reads these back"
+  },
+  "state_constraints": [
+    "AffineLe(SPENT - BUDGET <= 0)",
+    "WriteOnce(SUBJECT_SLOT)",
+    "WriteOnce(ACCOUNT_SLOT)",
+    "WriteOnce(BUDGET_SLOT)",
+    "WriteOnce(CAPS_DIGEST_SLOT)",
+    "Monotonic(SPENT_SLOT)",
+    "Monotonic(REVOKED_SLOT)",
+    "StrictMonotonic(EPOCH_SLOT)"
+  ],
+  "axes": {
+    "core": "the FactoryDescriptor (mandate_factory_descriptor) + the mandate_cell_program (the identity/budget/caps invariants the executor re-enforces on every touching turn)",
+    "service": "the invoke() front door (src/service.rs) — a typed InterfaceDescriptor over enrol / spend / revoke / view; enrol/spend/revoke are Replayable + Signature-gated, view is a Serviced OFE read seam",
+    "card": "the deos-view card (src/card.rs) — the mandate dashboard as a renderer-independent deos.ui.* view-tree (a live spend gauge toward the sealed budget + the three mutating-method buttons)",
+    "adapter": "the deploy-side authorized_keys adapter (authorized_keys_line / authorized_keys) — a PURE FUNCTION from a mandate cell to an OpenSSH forced-command line; a revoked mandate emits no line"
+  },
+  "composes": {
+    "dregg-agent": "session::parse_caps_confined validates an enrolled caps string against the real tool grammar under Confinement::Hosted (a raw shell is refused at enrol)",
+    "dregg-auth": "a dregg_auth::Grant lifts (held_from_grant) into the operator's HELD mandate, so 'enrol mints a mandate no wider than the grant' is literal",
+    "agent-orchestration": "the SAME Mandate attenuation lattice (granted ⊑ held, sub-budget, scoped tool-set) it proves, re-pointed at an access-edge subject and the caps-token vocabulary"
+  },
+  "seam": "PARTIAL — the budget bound (AffineLe(spent ≤ budget)), the WriteOnce identity/economics, the monotone meter/revocation, and the no-replay epoch are REAL verified turns the executor re-enforces on enrol / spend / revoke. The enrolment-record heap strings are an executor-side ledger mirror (there is no heap-write effect), and standing up the live SSH edge (a real sshd whose AuthorizedKeysCommand serves the adapter's output) is the reviewed deploy step, not this crate.",
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/edge-mandate/src/lib.rs"
+  }
+}
