@@ -119,6 +119,7 @@ pub fn kind_short(tag: WinKindTag) -> &'static str {
         WinKindTag::ExchangeFloor => "EXC",
         WinKindTag::ViewNodePane => "IR",
         WinKindTag::MatrixRoom => "MTX",
+        WinKindTag::ProvenanceWalker => "PRV",
     }
 }
 

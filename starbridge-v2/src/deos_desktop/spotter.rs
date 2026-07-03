@@ -72,6 +72,10 @@ pub enum SpotterTarget {
     /// held mandate · authorization boundary). A global surface: anchored on the
     /// room's own sentinel cell by the dispatcher.
     AgentRoom,
+    /// Open the PROVENANCE WALKER — the receipt chain walked hash-by-hash, every
+    /// link (state-root handoff + blocklace back-edge) RECOMPUTED as you walk. A
+    /// global surface: anchored on the walker's own sentinel cell by the dispatcher.
+    ProvenanceWalker,
     /// Open the World Transcript — the receipt log of every committed turn (global).
     WorldTranscript,
     /// Open a DOCUMENT-COLLABORATION session — a document editor over the user's own
@@ -493,6 +497,12 @@ pub fn surface_candidates() -> Vec<SpotterEntry> {
             score: 0,
         },
         SpotterEntry {
+            label: "Provenance Walker  (receipt chain · hash-by-hash)".to_string(),
+            sublabel: "surface · every link recomputed as you walk, never trusted".to_string(),
+            target: SpotterTarget::ProvenanceWalker,
+            score: 0,
+        },
+        SpotterEntry {
             label: "Co-author a Document  (branch · stitch · resolve)".to_string(),
             sublabel: "surface · a confined co-author draft, ready to diverge + merge".to_string(),
             target: SpotterTarget::DocCollab,
@@ -589,6 +599,7 @@ pub fn entry_badge(entry: &SpotterEntry) -> (&'static str, u32) {
         T::Workflow(_) => (kind_short(WinKindTag::Workflow), NT_LABEL),
         T::WorldExplorer => (kind_short(WinKindTag::WorldExplorer), NT_LABEL),
         T::AgentRoom => (kind_short(WinKindTag::AgentRoom), NT_LABEL),
+        T::ProvenanceWalker => (kind_short(WinKindTag::ProvenanceWalker), NT_LABEL),
         T::WorldTranscript => (kind_short(WinKindTag::Transcript), NT_LABEL),
         T::DocCollab => (kind_short(WinKindTag::DocEditor), NT_LABEL),
         #[cfg(feature = "card-pane")]

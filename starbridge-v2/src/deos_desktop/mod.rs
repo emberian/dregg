@@ -105,6 +105,13 @@ pub mod layout;
 /// on `dev-surfaces` (where `deos-matrix` lives), falling back to the inspector
 /// body like the other gated windows.
 pub mod matrix_room;
+/// THE PROVENANCE WALKER — walk the World's receipt chain hash-by-hash in the
+/// dark-console window: every row a committed receipt with BOTH its links
+/// RE-DERIVED on the spot (the state-root handoff between consecutive receipts,
+/// and each agent's blocklace back-edge recomputed with blake3 — never read,
+/// never trusted), the walk cursor stepping back edge-by-edge, and a
+/// root-verified go-to-that-point off [`crate::provenance_navigator::goto`].
+pub mod provenance_walker;
 /// THE REWIND RAIL — scrub the whole desktop through root-verified history: the
 /// bottom-docked timeline over `crate::replay::History` (gpui-free projection
 /// model + the rail render + the effective-ledger accessor every reader routes
@@ -362,6 +369,11 @@ enum WinKind {
     /// `matrix_rooms` / `matrix_stack` (gated on `dev-surfaces`), so this variant
     /// is a marker like `AgentRoom`. Anchored on its own sentinel cell.
     MatrixRoom,
+    /// **THE PROVENANCE WALKER** — the receipt chain walked hash-by-hash, every
+    /// link recomputed (never trusted). Its per-window state (the walk cursor +
+    /// the go-to landing) lives in `provenance_walkers`, so this variant is a
+    /// marker like `WorldExplorer`.
+    ProvenanceWalker,
 }
 
 impl WinKind {
@@ -380,6 +392,7 @@ impl WinKind {
             WinKind::AppShelf => "App Shelf",
             WinKind::ExchangeFloor => "Exchange Floor",
             WinKind::MatrixRoom => "Matrix Room",
+            WinKind::ProvenanceWalker => "Provenance Walker",
         }
     }
 }
@@ -434,6 +447,9 @@ enum ActionKind {
     /// Open the AGENT ROOM — the resident's provable activity (mandate · receipted
     /// actions · authorization boundary). A World-level (desktop-background) surface.
     OpenAgentRoom,
+    /// Open the PROVENANCE WALKER — the receipt chain walked hash-by-hash, every
+    /// link recomputed (never trusted). A World-level (desktop-background) surface.
+    OpenProvenanceWalker,
     /// Open a DOCUMENT-COLLABORATION session — the document editor with a forked
     /// co-author draft already in flight (branch · stitch · resolve), landed mold-ready.
     OpenDocCollab,
@@ -676,6 +692,12 @@ pub struct DeosDesktop {
     /// face (actions/mandate/reach) is shown. Keyed by the room window's anchor cell
     /// (the room's own sentinel). A pure view concern (no committed state).
     agent_rooms: HashMap<CellId, agent_room::AgentRoomState>,
+    /// **The per-window PROVENANCE-WALKER view state** — the walk cursor (which
+    /// receipt is selected, keyed by recomputed hash) plus the last root-verified
+    /// go-to-that-point landing. Keyed by the walker window's own sentinel cell
+    /// ([`provenance_walker::walker_window_cell`]). A pure view concern — the
+    /// chain itself is re-derived from the live World on every paint.
+    provenance_walkers: HashMap<CellId, provenance_walker::WalkerState>,
     /// **THE HIRELING** — the Agent Room's hired resident: the confined deos-hermes
     /// brain+gate [`crate::resident_agent::AgentHandle`] plus the step planner
     /// (see [`hireling`]). Unstaffed by default; every STEP beat mirrors real
@@ -909,6 +931,7 @@ impl DeosDesktop {
             doc_explorers: HashMap::new(),
             world_explorers: HashMap::new(),
             agent_rooms: HashMap::new(),
+            provenance_walkers: HashMap::new(),
             #[cfg(feature = "dev-surfaces")]
             hireling: hireling::HirelingState::default(),
             #[cfg(feature = "dev-surfaces")]
@@ -1153,6 +1176,7 @@ impl DeosDesktop {
             WinKindTag::AppShelf => WinKind::AppShelf,
             WinKindTag::ExchangeFloor => WinKind::ExchangeFloor,
             WinKindTag::MatrixRoom => WinKind::MatrixRoom,
+            WinKindTag::ProvenanceWalker => WinKind::ProvenanceWalker,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -1195,11 +1219,14 @@ impl DeosDesktop {
         let kind = self.make_kind(cell, tag);
         // The Agent Room anchors on its own non-ledger sentinel, so the usual
         // "{cell-kind} {id}" prefix would misread it as a zero-balance service.
+        // The Provenance Walker's sentinel gets the same courtesy.
         let title = if agent_room::is_agent_room(&cell) {
             format!("the resident — {}", kind.label())
         } else if matrix_room::is_matrix_room(&cell) {
             // The Matrix Room's sentinel gets the same courtesy.
             format!("membranes over the wire — {}", kind.label())
+        } else if provenance_walker::is_walker(&cell) {
+            format!("the receipt chain — {}", kind.label())
         } else {
             format!(
                 "{} {} — {}",
@@ -1257,6 +1284,20 @@ impl DeosDesktop {
         );
     }
 
+    /// Open (or focus) the PROVENANCE WALKER — the receipt chain walked
+    /// hash-by-hash, every link recomputed on the spot (never trusted),
+    /// anchored on its own sentinel like the Agent Room.
+    fn open_provenance_walker(&mut self) {
+        self.open_kind(
+            provenance_walker::walker_window_cell(),
+            WinKindTag::ProvenanceWalker,
+        );
+        self.say(
+            "Provenance Walker — the receipt chain, hash-by-hash: state-root \
+             handoffs and blocklace back-edges re-derived as you walk.",
+        );
+    }
+
     /// Open (or focus) a window of `tag` on `cell`, restoring its persisted geometry
     /// if any, else a cascade default. The same cell can hold several window kinds.
     fn open_kind(&mut self, cell: CellId, tag: WinKindTag) {
@@ -1285,6 +1326,8 @@ impl DeosDesktop {
             WinKindTag::ExchangeFloor => (560.0, 480.0),
             // The Matrix Room opens wide enough for the merged timeline + composer.
             WinKindTag::MatrixRoom => (560.0, 500.0),
+            // The Provenance Walker opens wide for the dense hash rows + detail.
+            WinKindTag::ProvenanceWalker => (560.0, 460.0),
             #[allow(unreachable_patterns)]
             // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => (380.0, 320.0),
@@ -1330,6 +1373,9 @@ impl DeosDesktop {
         }
         if key.1 == WinKindTag::WorldExplorer {
             self.world_explorers.remove(&key.0);
+        }
+        if key.1 == WinKindTag::ProvenanceWalker {
+            self.provenance_walkers.remove(&key.0);
         }
         // Drop the content-IR renderer entity when its window closes so a reopen
         // re-mints the applet + re-renders the portable tree fresh.
@@ -1636,6 +1682,11 @@ impl DeosDesktop {
                 true,
                 A::OpenAgentRoom,
             ),
+            MenuAction::new(
+                "Provenance Walker… (the receipt chain, hash-by-hash)",
+                true,
+                A::OpenProvenanceWalker,
+            ),
             MenuAction::new("Spotter… (jump to anything)", true, A::OpenSpotter),
             MenuAction::sep(),
             // The session's woven surfaces — reachable from the bare desktop too, not only
@@ -1920,6 +1971,7 @@ impl DeosDesktop {
                 self.open_kind(self.user, WinKindTag::WorldExplorer);
             }
             ActionKind::OpenAgentRoom => self.open_agent_room(),
+            ActionKind::OpenProvenanceWalker => self.open_provenance_walker(),
             ActionKind::OpenSpotter => self.open_spotter(),
             // The session's woven surfaces, reached from a cell menu too (anchored on the
             // acted-on cell): a doc-collab session, the World-Status board, an Android cell.
@@ -2878,6 +2930,10 @@ impl DeosDesktop {
             Tg::AgentRoom => {
                 self.land_in(agent_room::agent_room_window_cell(), WinKindTag::AgentRoom)
             }
+            Tg::ProvenanceWalker => self.land_in(
+                provenance_walker::walker_window_cell(),
+                WinKindTag::ProvenanceWalker,
+            ),
             Tg::WorldTranscript => self.land_in(self.user, WinKindTag::Transcript),
             Tg::DocCollab => self.start_doc_collab(self.user),
             #[cfg(feature = "card-pane")]
@@ -3012,6 +3068,7 @@ impl DeosDesktop {
                 self.say("World Explorer — the ledger census · the chronicle · Σ balance = 0.");
             }
             ActionKind::OpenAgentRoom => self.open_agent_room(),
+            ActionKind::OpenProvenanceWalker => self.open_provenance_walker(),
             ActionKind::OpenSpotter => self.open_spotter(),
             ActionKind::OpenDocCollab => self.start_doc_collab(self.user),
             ActionKind::OpenViewNodePane => {
@@ -3543,6 +3600,64 @@ impl DeosDesktop {
         crate::agent::AgentActivity::build(&self.world.borrow(), resident, 24)
             .actions
             .len()
+    }
+
+    // ── Provenance Walker bake/test hooks ──
+
+    /// Open the PROVENANCE WALKER window (anchored on its own sentinel) — a
+    /// bake/test hook.
+    pub fn bake_open_provenance_walker(&mut self) {
+        self.open_provenance_walker();
+    }
+
+    /// **Does the receipt chain VERIFY to depth `n`?** Re-derives every link of
+    /// the live World's receipt log ([`provenance_walker::walk_rows`]: the
+    /// state-root handoff between consecutive receipts + each agent's blocklace
+    /// back-edge, blake3-recomputed) and demands the newest `n` receipts' links
+    /// all check out ([`provenance_walker::chain_verifies_to_depth`]) — with
+    /// out-of-band genesis boundaries named off the recorded History
+    /// ([`provenance_walker::reseeded_flags`]), exactly as the window paints
+    /// them. The bake's tooth on "the chain on screen is a chain, not a list".
+    pub fn bake_walk_verify(&self, n: usize) -> bool {
+        let w = self.world.borrow();
+        let flags = provenance_walker::reseeded_flags(w.recorded_turns());
+        provenance_walker::chain_verifies_to_depth(w.receipts(), &flags, n)
+    }
+
+    /// **Walk one back-edge** — step the open walker's cursor from the selected
+    /// receipt (the chain head when none is pinned) to its author's previous
+    /// receipt, exactly as the window's "← walk to prev" verb does. Returns the
+    /// landing receipt's full hex, or `None` at a chain head (nothing before
+    /// it). A bake/test hook: drives the WALK headlessly.
+    pub fn bake_walker_walk_back(&mut self) -> Option<String> {
+        let cell = provenance_walker::walker_window_cell();
+        let prev = {
+            let w = self.world.borrow();
+            let cur = self
+                .provenance_walkers
+                .get(&cell)
+                .and_then(|s| s.selected)
+                .or_else(|| w.receipts().last().map(|r| r.receipt_hash()))?;
+            crate::provenance_navigator::turn_detail(&w, &cur)?.previous_receipt?
+        };
+        let st = self.provenance_walkers.entry(cell).or_default();
+        st.selected = Some(prev);
+        st.landed = None;
+        Some(prev.iter().map(|b| format!("{b:02x}")).collect())
+    }
+
+    /// The open walker's selected receipt (the walk cursor), as full hex — the
+    /// chain head when none is pinned yet. `None` on an empty chronicle. A
+    /// bake/test hook (pairs with [`Self::bake_walker_walk_back`]).
+    pub fn bake_walker_selected(&self) -> Option<String> {
+        let cell = provenance_walker::walker_window_cell();
+        let w = self.world.borrow();
+        let cur = self
+            .provenance_walkers
+            .get(&cell)
+            .and_then(|s| s.selected)
+            .or_else(|| w.receipts().last().map(|r| r.receipt_hash()))?;
+        Some(cur.iter().map(|b| format!("{b:02x}")).collect())
     }
 
     // ── Content-IR pane bake/test hooks (gated on `card-pane`) ──
@@ -4486,6 +4601,7 @@ impl DeosDesktop {
             WinKindTag::DocExplorer => self.render_doc_explorer_body(cell, &sc, cx),
             WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
             WinKindTag::AgentRoom => self.render_agent_room_window(cell, cx),
+            WinKindTag::ProvenanceWalker => self.render_provenance_walker_window(cell, cx),
             #[cfg(feature = "card-pane")]
             WinKindTag::ViewNodePane => self.render_viewnode_body(cell, &sc, window, cx),
             #[cfg(feature = "android-systemui")]
@@ -5277,6 +5393,262 @@ impl DeosDesktop {
             .child(tabs)
             .child(body)
             .into_any_element()
+    }
+
+    /// **The Provenance Walker window body** — the dark-console chain walk: the
+    /// links-verified header, one CLICKABLE row per committed receipt (both links
+    /// re-derived by [`provenance_walker::walk_rows`] on every paint — the live
+    /// World's truth, never a cache), and the selected receipt's detail face with
+    /// the walk verbs: WALK the back-edge, click through to the agent cell's
+    /// inspector, GO TO THAT POINT by root-verified replay. This View owns every
+    /// listener; the `provenance_walker` module renders only inert facts (the
+    /// clobber-safe split, exactly as the Agent Room / World Explorer hold it).
+    fn render_provenance_walker_window(
+        &mut self,
+        cell: CellId,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use provenance_walker as pw;
+        let state = self.provenance_walkers.entry(cell).or_default().clone();
+        // The rows and the detail each keep their OWN persistent scroll handle
+        // (ordinal-keyed, the tabbed-window discipline).
+        let sc_rows =
+            self.face_scrolls
+                .ensure(FaceScrollKey::Window(cell, WinKindTag::ProvenanceWalker, 0));
+        let sc_detail =
+            self.face_scrolls
+                .ensure(FaceScrollKey::Window(cell, WinKindTag::ProvenanceWalker, 1));
+
+        let w = self.world.borrow();
+        // The effects column reads the RECORDED turns (the same call-forest walk
+        // the navigator's lineage does) — one summary line per committed receipt,
+        // in log order. A receipt with no recorded turn (a symbolic-mode commit
+        // the tape skipped) falls back to its action count inside `walk_rows`.
+        let effects: Vec<String> = {
+            use crate::replay::RecordedStep;
+            w.recorded_turns()
+                .steps()
+                .iter()
+                .filter_map(|s| match s {
+                    RecordedStep::Committed { turn, .. } => {
+                        Some(crate::provenance_navigator::effect_kinds(turn).join(" · "))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // Genesis-install boundaries (a hire's mid-session seed) are named off
+        // the recorded History so a lawful out-of-band root move never paints
+        // as a broken chain.
+        let reseeded = pw::reseeded_flags(w.recorded_turns());
+        let rows = pw::walk_rows(w.receipts(), &effects, &reseeded);
+        let height = w.height();
+
+        // The walk cursor: the pinned receipt, else the chain head (the natural
+        // start of a walk toward genesis).
+        let selected_hash = state
+            .selected
+            .or_else(|| rows.last().map(|r| r.receipt_hash));
+        let selected_row = rows
+            .iter()
+            .find(|r| Some(r.receipt_hash) == selected_hash)
+            .cloned();
+        let detail = selected_hash.and_then(|h| crate::provenance_navigator::turn_detail(&w, &h));
+        drop(w);
+
+        // ── the row list (the last ~48, newest last — the console-log idiom);
+        //    each inert row from the pure module is wrapped in this View's own
+        //    listener: click pins the walk cursor there.
+        let shown = 48usize;
+        let start = rows.len().saturating_sub(shown);
+        let mut rows_col = div()
+            .id(gpui::SharedString::from(format!(
+                "provwalk-rows-{}",
+                id_hex(&cell)
+            )))
+            .bg(gpui::rgb(pw::CONSOLE_BG))
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(pw::render_walker_header(&rows, height));
+        if start > 0 {
+            rows_col = rows_col.child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(gpui::rgb(pw::CONSOLE_DIM))
+                    .child(format!("… {start} earlier receipts above")),
+            );
+        }
+        for row in rows.iter().skip(start) {
+            let is_sel = Some(row.receipt_hash) == selected_hash;
+            let hash = row.receipt_hash;
+            rows_col = rows_col.child(
+                div()
+                    .id(gpui::SharedString::from(format!(
+                        "provwalk-row-{}",
+                        row.index
+                    )))
+                    .px_1()
+                    .when(is_sel, |d| d.bg(gpui::rgb(pw::CONSOLE_SEL)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                            let st = this.provenance_walkers.entry(cell).or_default();
+                            st.selected = Some(hash);
+                            st.landed = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child(pw::render_walk_row(row, is_sel)),
+            );
+        }
+
+        // ── the walk verbs over the selected receipt (this View's listeners).
+        let mut verbs = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap_1()
+            .text_color(gpui::rgb(NT_TEXT));
+        if let Some(d) = &detail {
+            // WALK — step the cursor one back-edge toward genesis. The landing
+            // row re-derives BOTH its links on the repaint: the walk verifies.
+            if let Some(prev) = d.previous_receipt {
+                verbs = verbs.child(
+                    bevel_raised(div().id("provwalk-back").px_2().py_1().text_size(px(10.0)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                                let st = this.provenance_walkers.entry(cell).or_default();
+                                st.selected = Some(prev);
+                                st.landed = None;
+                                this.say(format!(
+                                    "Walked the back-edge to receipt {} — its links recompute \
+                                     on this very paint.",
+                                    pw::hash4(&prev)
+                                ));
+                                cx.notify();
+                            }),
+                        )
+                        .child(format!("← walk to prev {}", pw::hash4(&prev))),
+                );
+            }
+            // CLICK-THROUGH — the receipt's authoring cell, in its inspector.
+            let agent = d.author;
+            verbs = verbs.child(
+                bevel_raised(
+                    div()
+                        .id("provwalk-inspect")
+                        .px_2()
+                        .py_1()
+                        .text_size(px(10.0)),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.land_in(agent, WinKindTag::Inspector);
+                        this.say(format!(
+                            "Inspecting {} — the receipt's authoring cell.",
+                            id_short(&agent)
+                        ));
+                        cx.notify();
+                    }),
+                )
+                .child(format!("inspect agent {}", id_short(&agent))),
+            );
+            // GO TO THAT POINT — root-verified replay to the receipt's landing.
+            let hash = d.receipt_hash;
+            verbs = verbs.child(
+                bevel_raised(div().id("provwalk-goto").px_2().py_1().text_size(px(10.0)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                            this.walker_goto(cell, hash);
+                            cx.notify();
+                        }),
+                    )
+                    .child("go to that point (root-verified)"),
+            );
+        }
+
+        // ── the detail face under the rows (its own scroll handle).
+        let detail_col = div()
+            .id(gpui::SharedString::from(format!(
+                "provwalk-detail-{}",
+                id_hex(&cell)
+            )))
+            .bg(gpui::rgb(pw::CONSOLE_BG))
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .when_some(
+                detail.as_ref().zip(selected_row.as_ref()),
+                |d, (det, row)| d.child(pw::render_detail_face(det, row, state.landed.as_ref())),
+            );
+
+        div()
+            .id(gpui::SharedString::from(format!(
+                "provwalk-body-{}",
+                id_hex(&cell)
+            )))
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .bg(gpui::rgb(NT_FACE_DARK))
+            .p_1()
+            .child(nt_scroll_face(&sc_rows, rows_col))
+            .child(verbs)
+            .child(
+                div()
+                    .h(px(150.0))
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .child(nt_scroll_face(&sc_detail, detail_col)),
+            )
+            .into_any_element()
+    }
+
+    /// **GO TO THAT POINT** — run the navigator's root-verified replay to the
+    /// receipt's landing ([`crate::provenance_navigator::goto`]) and pin the
+    /// verdict on the walker's state for the detail face: the recorded root
+    /// tooth, VERIFIED ✓/✗, live-vs-replayed, and the author's then-balance.
+    /// Narrated on the receipt console like every other landmark.
+    fn walker_goto(&mut self, cell: CellId, hash: [u8; 32]) {
+        let note = {
+            let w = self.world.borrow();
+            crate::provenance_navigator::goto(&w, &hash).map(|g| {
+                let author = crate::provenance_navigator::turn_detail(&w, &hash).map(|d| d.author);
+                provenance_walker::GotoNote {
+                    step: g.step,
+                    root: g.root,
+                    verified: g.verified,
+                    live: g.liveness == crate::ui_snapshot::Liveness::Live,
+                    balance_then: author.and_then(|a| g.balance_of(&a)),
+                }
+            })
+        };
+        match note {
+            Some(n) => {
+                self.say(format!(
+                    "Went to receipt {} — step {}, root {}, {}.",
+                    provenance_walker::hash4(&hash),
+                    n.step,
+                    provenance_walker::hash4(&n.root),
+                    if n.verified {
+                        "reconstruction VERIFIED against the recorded tooth"
+                    } else {
+                        "reconstruction FAILED to verify"
+                    }
+                ));
+                self.provenance_walkers.entry(cell).or_default().landed = Some(n);
+            }
+            None => self.say("That receipt is not in the recorded history — nothing to go to."),
+        }
     }
 
     /// **The content-IR pane body** — host a real `deos_view::ViewNode` rendered

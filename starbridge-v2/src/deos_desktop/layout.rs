@@ -98,6 +98,13 @@ pub enum WinKindTag {
     /// `matrix_rooms` / `matrix_stack` (gated on `dev-surfaces`), so this variant
     /// is a marker like `AgentRoom`. Anchored on its own sentinel cell.
     MatrixRoom,
+    /// **THE PROVENANCE WALKER** — walk the World's receipt chain hash-by-hash,
+    /// every link RECOMPUTED as you walk (the state-root handoff between
+    /// consecutive receipts + each agent's blocklace back-edge, both re-derived,
+    /// never trusted — see `super::provenance_walker`). Per-window state (the walk
+    /// cursor + the go-to landing) lives in `provenance_walkers`, so this variant
+    /// is a marker like `WorldExplorer`. Anchored on its own sentinel cell.
+    ProvenanceWalker,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT
