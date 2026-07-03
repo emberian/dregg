@@ -64,6 +64,11 @@ pub mod docgraph_view;
 /// each firing the same actuation the right-click menu does ("mold it in place").
 pub mod halo;
 pub mod layout;
+/// THE REWIND RAIL — scrub the whole desktop through root-verified history: the
+/// bottom-docked timeline over `crate::replay::History` (gpui-free projection
+/// model + the rail render + the effective-ledger accessor every reader routes
+/// through). The past is read-only; the LIVE chip returns you.
+pub mod rewind;
 pub mod spotter;
 // THE GRAPHIDEOS SYSTEMUI CAP-CHROME ON THE GLASS — the gpui body that paints a focused
 // `WinKind::AndroidCell` window as the phone's SystemUI (status bar + quick-settings shade
@@ -489,6 +494,10 @@ enum Drag {
         // The window's top-left at grab; we resize the bottom-right corner.
         origin: Point<Pixels>,
     },
+    /// The Rewind Rail's height scrubber is in hand — each mouse-move maps
+    /// x → a history step and re-plants the rewind cursor (the root-verified
+    /// projection rebuilds memoized on the next render pass; see `rewind`).
+    Rewind,
 }
 
 /// A window-instance key — a cell plus the window TYPE, so one cell can be open as
@@ -638,6 +647,12 @@ pub struct DeosDesktop {
     /// (green committed / amber REFUSED), fed and aged by [`Self::pump_dynamics`],
     /// mounted bottom-right by the render tail; click-through opens the Transcript.
     toast_rack: toasts::ToastRack,
+    /// **THE REWIND RAIL's cursor + memoized projection** — LIVE (`None`) by
+    /// default; while scrubbed, every `cell_*` reader and the World Explorer
+    /// faces read the root-verified REPLAYED ledger at the cursor instead of
+    /// the live World (see [`rewind::RewindState`] — the model is gpui-free and
+    /// unit-tested; a rewind is a session gesture, never persisted layout).
+    rewind: rewind::RewindState,
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -763,6 +778,7 @@ impl DeosDesktop {
             last_viewport: (1600.0, 1000.0),
             focus: cx.focus_handle(),
             toast_rack: toasts::ToastRack::default(),
+            rewind: rewind::RewindState::default(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -1110,35 +1126,30 @@ impl DeosDesktop {
     /// We mark the issuer well (negative balance) as "system" (dim) to show the
     /// lit/dim distinction the metaphor needs.
     fn holds(&self, cell: &CellId) -> bool {
-        self.cell_balance(cell) >= 0
+        // THE READ-ONLY PAST: while the Rewind Rail is scrubbed off LIVE the
+        // desktop is a root-verified REPLAY — no verb may land a turn "in the
+        // past", so every held affordance dims until the LIVE chip returns you.
+        self.rewind.is_live() && self.cell_balance(cell) >= 0
     }
 
+    // The `cell_*` readers below all route through the Rewind Rail's
+    // EFFECTIVE-ledger accessor (`rewind.rs::with_effective_cell`): the live
+    // World's ledger at LIVE, the root-verified replayed projection while the
+    // rail is scrubbed — so the icons, the inspector bodies, and every other
+    // surface built on these readers re-derive at the cursor for free.
+
     fn cell_balance(&self, cell: &CellId) -> i64 {
-        self.world
-            .borrow()
-            .ledger()
-            .get(cell)
-            .map(|c| c.state.balance())
+        self.with_effective_cell(cell, |c| c.state.balance())
             .unwrap_or(0)
     }
 
     fn cell_nonce(&self, cell: &CellId) -> u64 {
-        self.world
-            .borrow()
-            .ledger()
-            .get(cell)
-            .map(|c| c.state.nonce())
+        self.with_effective_cell(cell, |c| c.state.nonce())
             .unwrap_or(0)
     }
 
     fn cell_lifecycle(&self, cell: &CellId) -> String {
-        match self
-            .world
-            .borrow()
-            .ledger()
-            .get(cell)
-            .map(|c| c.lifecycle.clone())
-        {
+        match self.with_effective_cell(cell, |c| c.lifecycle.clone()) {
             Some(CellLifecycle::Live) => "Live".into(),
             Some(CellLifecycle::Sealed { .. }) => "Sealed".into(),
             Some(CellLifecycle::Migrated { .. }) => "Migrated".into(),
@@ -1149,22 +1160,15 @@ impl DeosDesktop {
     }
 
     fn cell_cap_count(&self, cell: &CellId) -> usize {
-        self.world
-            .borrow()
-            .ledger()
-            .get(cell)
-            .map(|c| c.capabilities.iter().count())
+        self.with_effective_cell(cell, |c| c.capabilities.iter().count())
             .unwrap_or(0)
     }
 
     /// Read state slot `index` of a cell as a u64 (the low 8 bytes of the field) —
     /// the property editor's read-back.
     fn cell_field_u64(&self, cell: &CellId, index: usize) -> u64 {
-        self.world
-            .borrow()
-            .ledger()
-            .get(cell)
-            .and_then(|c| c.state.fields.get(index).copied())
+        self.with_effective_cell(cell, |c| c.state.fields.get(index).copied())
+            .flatten()
             .map(|f| u64::from_le_bytes(f[..8].try_into().unwrap_or([0u8; 8])))
             .unwrap_or(0)
     }
@@ -1172,7 +1176,7 @@ impl DeosDesktop {
     /// Whether the cell is currently sealed (drives the seal/unseal menu label).
     fn cell_sealed(&self, cell: &CellId) -> bool {
         matches!(
-            self.world.borrow().ledger().get(cell).map(|c| &c.lifecycle),
+            self.with_effective_cell(cell, |c| c.lifecycle.clone()),
             Some(CellLifecycle::Sealed { .. })
         )
     }
@@ -1225,14 +1229,9 @@ impl DeosDesktop {
 
     /// The count of receipts in the World chronicle whose agent is `cell` — the
     /// cell's own turn history length, surfaced in the inspector. A read-only filter
-    /// over the existing receipt log.
+    /// over the effective receipt log (truncated to the cursor while rewound).
     fn cell_receipt_count(&self, cell: &CellId) -> usize {
-        self.world
-            .borrow()
-            .receipts()
-            .iter()
-            .filter(|r| &r.agent == cell)
-            .count()
+        self.effective_cell_receipt_count(cell)
     }
 
     /// The largest live cell balance (a denominator for the inspector's balance
@@ -2658,6 +2657,17 @@ impl DeosDesktop {
                 }
                 cx.notify();
             }
+            Drag::Rewind => {
+                // Scrub the Rewind Rail: map x → a history step and re-plant the
+                // cursor; the root-verified projection rebuilds (memoized) at the
+                // top of the next render pass (`rewind_refresh`).
+                self.rewind.cursor = Some(rewind::step_at_x(
+                    pxf(ev.position.x),
+                    self.last_viewport.0,
+                    self.world.borrow().recorded_turns().len(),
+                ));
+                cx.notify();
+            }
         }
     }
 
@@ -2680,6 +2690,9 @@ impl DeosDesktop {
             Drag::WinMove { key, .. } | Drag::WinResize { key, .. } => {
                 self.persist_window(key);
             }
+            // Releasing the rail scrubber plants the cursor where it sits —
+            // nothing to persist (a rewind is a session gesture, not layout).
+            Drag::Rewind => {}
         }
         cx.notify();
     }
@@ -3347,6 +3360,11 @@ impl Render for DeosDesktop {
             let vp = window.viewport_size();
             self.last_viewport = (f32::from(vp.width), f32::from(vp.height));
         }
+        // THE REWIND RAIL's projection refresh — keep the memoized root-verified
+        // replay in step with the cursor + the live history BEFORE any surface
+        // reads through `with_effective_ledger` this frame (live turns landing
+        // while the cursor sits in the past re-diff the glow + lengthen the rail).
+        self.rewind_refresh();
         let mut root = div()
             .id("deos-desktop-root")
             .key_context("DeosDesktop")
@@ -3413,6 +3431,11 @@ impl Render for DeosDesktop {
         // ── The desktop icons (cells) ────────────────────────────────────────────
         let cells = self.cells.clone();
         for (idx, cell) in cells.iter().enumerate() {
+            // While the Rewind Rail is scrubbed, a cell that does not exist yet
+            // at the cursor's height has no icon — the past census is the truth.
+            if !self.rewind_cell_present(cell) {
+                continue;
+            }
             root = root.child(self.render_icon(idx, *cell, cx));
         }
 
@@ -3501,6 +3524,12 @@ impl Render for DeosDesktop {
                 stack = stack.child(card);
             }
             root = root.child(stack);
+        }
+
+        // ── THE REWIND RAIL — scrub verified history (docked above the taskbar,
+        //    painted over the windows) + the amber ≠-NOW rings while in the past ──
+        for el in self.render_rewind_layer(cx) {
+            root = root.child(el);
         }
 
         // ── The gentle "type anything" entry pill (the calm Spotter door) ─────────
@@ -4375,7 +4404,10 @@ impl DeosDesktop {
             );
         }
 
-        let body = world_explorer::render_world_explorer_body(&self.world.borrow(), tab);
+        // The faces read through the Rewind Rail's effective lens: the live World
+        // at LIVE, the root-verified replayed projection (with its amber REPLAYED
+        // banner) while the rail is scrubbed.
+        let body = self.render_world_explorer_body_effective(tab);
         div()
             .id(gpui::SharedString::from(format!(
                 "wldbody-{}",
