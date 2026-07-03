@@ -326,6 +326,10 @@ pub use session::{
 
 #[cfg(feature = "embedded-executor")]
 pub mod agent;
+// THE LETTER OFFICE (docs: the Postmark resonance): mail between agents as cells on
+// the live World — a letter IS a cell carrying its markdown in the heap; sending drops
+// it in an outbox cell; delivery is a receipted turn moving it to an inbox cell. gpui-free
+// + `cargo test`-able; the desktop `mail_room` maps it onto an NT window.
 #[cfg(feature = "embedded-executor")]
 pub mod buffer;
 #[cfg(feature = "embedded-executor")]
@@ -346,6 +350,8 @@ pub mod edit;
 pub mod graph;
 #[cfg(feature = "embedded-executor")]
 pub mod landing;
+#[cfg(feature = "embedded-executor")]
+pub mod letter_office;
 #[cfg(feature = "embedded-executor")]
 pub mod narration;
 #[cfg(feature = "embedded-executor")]

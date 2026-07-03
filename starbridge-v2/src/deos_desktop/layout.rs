@@ -105,6 +105,13 @@ pub enum WinKindTag {
     /// cursor + the go-to landing) lives in `provenance_walkers`, so this variant
     /// is a marker like `WorldExplorer`. Anchored on its own sentinel cell.
     ProvenanceWalker,
+    /// **THE MAIL ROOM** — the desktop face of the [`crate::letter_office`]: mail
+    /// between agents as cells on the live World (inbox · outbox · mail-ledger). A
+    /// letter IS a cell carrying its markdown in the heap; sending drops it in an outbox
+    /// cell, delivery is a receipted turn moving it to an inbox cell. Per-window state
+    /// (the compose recipient + the shown face) lives in `mail_rooms`, so this variant
+    /// is a marker like `AgentRoom`. Anchored on its own sentinel cell.
+    MailRoom,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT

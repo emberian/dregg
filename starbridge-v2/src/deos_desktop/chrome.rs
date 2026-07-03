@@ -120,6 +120,7 @@ pub fn kind_short(tag: WinKindTag) -> &'static str {
         WinKindTag::ViewNodePane => "IR",
         WinKindTag::MatrixRoom => "MTX",
         WinKindTag::ProvenanceWalker => "PRV",
+        WinKindTag::MailRoom => "MAIL",
     }
 }
 
