@@ -259,9 +259,9 @@ impl DeosDesktop {
         self.layout.prefs.show_threads = !self.layout.prefs.show_threads;
         self.layout.save(&self.layout_path);
         self.say(if self.layout.prefs.show_threads {
-            "Transclusion threads ON — quotes draw their geometry between windows.".into()
+            "Transclusion threads ON — quotes draw their geometry between windows."
         } else {
-            "Transclusion threads hidden (View menu shows them again).".into()
+            "Transclusion threads hidden (View menu shows them again)."
         });
     }
 
