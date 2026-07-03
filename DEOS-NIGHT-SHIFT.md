@@ -58,7 +58,16 @@ REFUSED rows in amber) → drag a cell onto a document → **a cyan thread snaps
 windows** → select the source → backlink beads on the halo → click a bead → walk the link
 back. Meanwhile the status bar narrates every foreign turn. Zero refresh buttons anywhere.
 
-## Big-ticket ideas parked for ember's daylight judgment (from the harvest)
+## ⚡ 5AM DIRECTIVE (ember, awake): NOTHING IS PARKED. Full trust granted; target =
+## **first deos bundle launch in ~24h**: zed-fork IDE · alacritty terminal · hermes agent
+## (dregg-checked toolcalls) · matrix client · dreggnet cloud · servo browser · gpui
+## cell-driven UI toolkit · mac/linux/windows. App Shelf explicitly craved.
+## In flight: GOSSAMER + BACKLINK (wf_62bfbe78-be0); App Shelf + HIRELING + Rewind Rail
+## + bundle-readiness planner (wf_f1c82037-aff). I merge lanes sequentially, hbox-check
+## each merge (logs /tmp/fable-check-N.log), then next wave: Exchange Floor, Matrix
+## Rehydrate&Drive, web transclude.js, Pulse toasts, Android tile.
+
+## Formerly-parked list (now all live, per directive above)
 
 - **The Rewind Rail** (10w) — scrub the whole desktop through root-verified history.
 - **THE HIRELING / The Resident** (10w×2) — a real hermes brain living in the Agent Room,
