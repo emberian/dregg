@@ -6092,6 +6092,7 @@ fn kind_short(tag: WinKindTag) -> &'static str {
         WinKindTag::DocExplorer => "DGX",
         WinKindTag::WorldExplorer => "WLD",
         WinKindTag::AgentRoom => "AGT",
+        WinKindTag::AppShelf => "APP",
         WinKindTag::ViewNodePane => "IR",
     }
 }
