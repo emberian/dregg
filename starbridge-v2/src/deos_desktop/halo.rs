@@ -292,11 +292,11 @@ impl DeosDesktop {
                 // a row you must open a Links window to read and becomes a door
                 // you step through.
                 self.land_in(observer, WinKindTag::DocEditor);
-                self.status = format!(
+                self.say(format!(
                     "WALK backlink → document {} (it quotes {}).",
                     id_short(&observer),
                     id_short(&cell)
-                );
+                ));
             }
         }
     }

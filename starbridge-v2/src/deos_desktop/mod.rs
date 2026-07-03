@@ -688,6 +688,16 @@ pub struct DeosDesktop {
     /// is open, ↑/↓ move the selection and Escape closes it; otherwise Escape climbs
     /// the dismissal ladder (context menu → property dialog → halo selection).
     focus: FocusHandle,
+    /// **THE RECEIPT CONSOLE's narration log** — every status-bar line the desktop
+    /// ever said (`say()`), newest last, capped at 64. The status bar shows only the
+    /// latest; clicking the bar's left region opens the console flyout over this log,
+    /// so narration history stops evaporating. Session view-state, never persisted.
+    status_log: std::collections::VecDeque<String>,
+    /// Whether the receipt-console flyout is open (anchored above the status bar).
+    status_flyout: bool,
+    /// Narration lines said while the flyout was CLOSED since it was last opened —
+    /// the "⋯ n new" unread chip on the status bar. Opening the flyout clears it.
+    status_unread: usize,
     /// **The PULSE-TOAST rack** — announcement cards for the World's foreign motion
     /// (green committed / amber REFUSED), fed and aged by [`Self::pump_dynamics`],
     /// mounted bottom-right by the render tail; click-through opens the Transcript.
@@ -836,6 +846,9 @@ impl DeosDesktop {
             exchange_floor: exchange_floor::ExchangeFloorState::new(),
             last_viewport: (1600.0, 1000.0),
             focus: cx.focus_handle(),
+            status_log: std::collections::VecDeque::new(),
+            status_flyout: false,
+            status_unread: 0,
             toast_rack: toasts::ToastRack::default(),
             saver: layout::LayoutSaver::spawn(saver_path),
             rewind: rewind::RewindState::default(),
@@ -867,6 +880,23 @@ impl DeosDesktop {
         .detach();
 
         desk
+    }
+
+    /// **Narrate** — set the status bar's line AND append it to the receipt
+    /// console's log (capped at 64, oldest out). Every status write in the desktop
+    /// goes through here, so the console is the complete session narration — the
+    /// story the bar used to overwrite one line at a time. While the flyout is
+    /// closed, said lines tick the unread chip.
+    pub(super) fn say(&mut self, line: impl Into<String>) {
+        let line = line.into();
+        self.status = line.clone();
+        self.status_log.push_back(line);
+        if self.status_log.len() > 64 {
+            self.status_log.pop_front();
+        }
+        if !self.status_flyout {
+            self.status_unread += 1;
+        }
     }
 
     /// One beat of THE PULSE — consume the dynamics stream past [`Self::pulse_cursor`].
@@ -953,7 +983,7 @@ impl DeosDesktop {
             self.toast_rack.push(kind, line);
         }
         if let Some(line) = announce {
-            self.status = line;
+            self.say(line);
         }
         cx.notify();
     }
@@ -1084,10 +1114,10 @@ impl DeosDesktop {
     /// composes intents into a workflow and decides flow-refinement.
     pub(super) fn open_workflow_window(&mut self, cell: CellId) {
         self.open_kind(cell, WinKindTag::Workflow);
-        self.status = format!(
+        self.say(format!(
             "Workflow composer on {} — compose intents, check refinement A ≤ᶠ B.",
             id_short(&cell)
-        );
+        ));
     }
 
     /// The user anchor — the default counterparty for the workflow's intent steps
@@ -1102,9 +1132,10 @@ impl DeosDesktop {
     /// that is not the operator) — whoever is actually doing things in the World.
     fn open_agent_room(&mut self) {
         self.open_kind(agent_room::agent_room_window_cell(), WinKindTag::AgentRoom);
-        self.status = "Agent Room — the executor's account of the resident: receipts, \
-                       mandate, and the boundary of its reach."
-            .into();
+        self.say(
+            "Agent Room — the executor's account of the resident: receipts, \
+                       mandate, and the boundary of its reach.",
+        );
     }
 
     /// Open (or focus) a window of `tag` on `cell`, restoring its persisted geometry
@@ -1618,11 +1649,11 @@ impl DeosDesktop {
         match kind {
             ActionKind::Inspect => {
                 self.open_window(cell);
-                self.status = format!(
+                self.say(format!(
                     "Inspecting {} ({}).",
                     id_short(&cell),
                     self.cell_kind(&cell)
-                );
+                ));
             }
             ActionKind::BumpNonce => {
                 let turn = {
@@ -1633,12 +1664,12 @@ impl DeosDesktop {
                     )
                 };
                 let outcome = self.world.borrow_mut().commit_turn(turn);
-                self.status = format!(
+                self.say(format!(
                     "Bump nonce on {} → {} (height {}).",
                     id_short(&cell),
                     Self::outcome_verdict(&outcome),
                     self.world.borrow().height()
-                );
+                ));
             }
             ActionKind::Transfer { amount } => {
                 let turn = {
@@ -1646,14 +1677,14 @@ impl DeosDesktop {
                     w.turn(cell, vec![transfer(cell, self.user, *amount)])
                 };
                 let outcome = self.world.borrow_mut().commit_turn(turn);
-                self.status = format!(
+                self.say(format!(
                     "Transfer {} {} → {} → {} (height {}).",
                     amount,
                     id_short(&cell),
                     id_short(&self.user),
                     Self::outcome_verdict(&outcome),
                     self.world.borrow().height()
-                );
+                ));
             }
             ActionKind::Grant { target } => {
                 let slot = self.cell_cap_count(&cell) as u32 + 1;
@@ -1662,53 +1693,57 @@ impl DeosDesktop {
                     w.turn(cell, vec![grant_capability(cell, cell, *target, slot)])
                 };
                 let outcome = self.world.borrow_mut().commit_turn(turn);
-                self.status = format!(
+                self.say(format!(
                     "Grant cap {} → {} @{} → {} (height {}).",
                     id_short(&cell),
                     id_short(target),
                     slot,
                     Self::outcome_verdict(&outcome),
                     self.world.borrow().height()
-                );
+                ));
             }
             ActionKind::OpenDoc => {
                 self.open_kind(cell, WinKindTag::DocEditor);
-                self.status = format!("Document editor open on {}.", id_short(&cell));
+                self.say(format!("Document editor open on {}.", id_short(&cell)));
             }
             ActionKind::OpenDocExplorer => {
                 self.open_kind(cell, WinKindTag::DocExplorer);
-                self.status = format!(
+                self.say(format!(
                     "Doc Explorer on {} — time-travel · DocGraph · blame (the patch substance).",
                     id_short(&cell)
-                );
+                ));
             }
             ActionKind::OpenLinks => {
                 self.open_kind(cell, WinKindTag::Links);
-                self.status = format!("Links & backlinks of {}.", id_short(&cell));
+                self.say(format!("Links & backlinks of {}.", id_short(&cell)));
             }
             ActionKind::OpenTranscript => {
                 self.open_kind(cell, WinKindTag::Transcript);
-                self.status = "Transcript — the World receipt log.".into();
+                self.say("Transcript — the World receipt log.");
             }
             ActionKind::OpenWorkflow => {
                 self.open_workflow_window(cell);
             }
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Cell(cell));
-                self.status = format!("Properties of {}.", id_short(&cell));
+                self.say(format!("Properties of {}.", id_short(&cell)));
             }
             ActionKind::WindowProperties { tag } => {
                 self.open_properties(PropSubject::Window(cell, *tag));
-                self.status = format!("Window properties of {} {:?}.", id_short(&cell), tag);
+                self.say(format!(
+                    "Window properties of {} {:?}.",
+                    id_short(&cell),
+                    tag
+                ));
             }
             ActionKind::SetField { index, value } => {
                 let ok = self.commit_set_field(cell, *index, *value);
-                self.status = format!(
+                self.say(format!(
                     "SetField {} field[{index}] = {value} → {} (height {}).",
                     id_short(&cell),
                     if ok { "committed" } else { "rejected" },
                     self.world.borrow().height()
-                );
+                ));
             }
             ActionKind::ToggleSeal => {
                 let sealed = self.cell_sealed(&cell);
@@ -1725,13 +1760,13 @@ impl DeosDesktop {
                     w.turn(cell, vec![eff])
                 };
                 let outcome = self.world.borrow_mut().commit_turn(turn);
-                self.status = format!(
+                self.say(format!(
                     "{} {} → {} (height {}).",
                     if sealed { "Unseal" } else { "Seal" },
                     id_short(&cell),
                     Self::outcome_verdict(&outcome),
                     self.world.borrow().height()
-                );
+                ));
             }
             ActionKind::TranscludeInto { into } => {
                 self.transclude_into(cell, *into);
@@ -1855,18 +1890,18 @@ impl DeosDesktop {
             // The live editor widget must pick up the transcluded line on next render
             // (this path has no `&mut Window` to push into `InputState` directly).
             self.doc_resync.insert(into);
-            self.status = format!(
+            self.say(format!(
                 "COMPOSE: transcluded {} into doc {} → patch + umem heap_root {} (height {}).",
                 id_short(&src),
                 id_short(&into),
                 if ok { "committed" } else { "rejected" },
                 self.world.borrow().height()
-            );
+            ));
         } else {
-            self.status = format!(
+            self.say(format!(
                 "COMPOSE: no open Document on {} — Open as Document first.",
                 id_short(&into)
-            );
+            ));
         }
     }
 
@@ -1964,12 +1999,12 @@ impl DeosDesktop {
         self.saver.save(&self.layout);
         let rev = self.cell_field_u64(&cell, DOC_REV_SLOT) + 1;
         let ok = prose_ok && self.commit_set_field(cell, DOC_REV_SLOT, rev);
-        self.status = format!(
+        self.say(format!(
             "EDIT doc {} → patch #{patches} + umem heap_root {} (rev {rev}, height {}).",
             id_short(&cell),
             if ok { "committed" } else { "rejected" },
             self.world.borrow().height()
-        );
+        ));
     }
 
     /// **The document's umem-heap boundary commitment.** A dreggverse document IS a
@@ -2104,11 +2139,11 @@ impl DeosDesktop {
                 *merged = None;
             }
         }
-        self.status = format!(
+        self.say(format!(
             "BRANCH: forked a confined co-author draft of doc {} — edit it, then Stitch \
              (a divergent region becomes a first-class conflict, not a rejected merge).",
             id_short(&cell)
-        );
+        ));
     }
 
     /// **Land in a live DOCUMENT-COLLABORATION session** — open (mold-ready) the document
@@ -2121,12 +2156,12 @@ impl DeosDesktop {
     fn start_doc_collab(&mut self, cell: CellId) {
         self.land_in(cell, WinKindTag::DocEditor);
         self.fork_doc_branch(cell);
-        self.status = format!(
+        self.say(format!(
             "Document collaboration on {} — a confined co-author draft is open. Type a \
              divergent line, then Stitch: a clashing region becomes a first-class conflict \
              you resolve (never a rejected merge).",
             id_short(&cell)
-        );
+        ));
     }
 
     /// **A divergent edit on the draft branch** — author the branch as a *second*
@@ -2146,7 +2181,7 @@ impl DeosDesktop {
                 new_text = Some(t);
             }
         }
-        self.status = match new_text {
+        self.say(match new_text {
             Some(t) => format!(
                 "BRANCH: co-author @{} diverged the draft of doc {} ({} chars) — confined; \
                  Stitch to merge.",
@@ -2158,7 +2193,7 @@ impl DeosDesktop {
                 "BRANCH: no draft on doc {} — Fork a draft first.",
                 id_short(&cell)
             ),
-        };
+        });
     }
 
     /// **Stitch the draft branch into the document** (BRANCH-AND-STITCH-PROTOCOL §3 —
@@ -2205,11 +2240,11 @@ impl DeosDesktop {
                     .doc_merged_conflict_count(cell)
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| "?".into());
-                self.status = format!(
+                self.say(format!(
                     "STITCH doc {} → {n} first-class CONFLICT(s): both authors edited a \
                      region. Resolve below (a resolution is itself a receipted patch).",
                     id_short(&cell)
-                );
+                ));
             }
             Some((false, text)) => {
                 // A clean merge folds into the committed heap as a real revision turn.
@@ -2220,16 +2255,16 @@ impl DeosDesktop {
                     }
                 }
                 self.retire_branch_input(cell);
-                self.status = format!(
+                self.say(format!(
                     "STITCH doc {} → clean merge (disjoint edits union) committed to heap.",
                     id_short(&cell)
-                );
+                ));
             }
             None => {
-                self.status = format!(
+                self.say(format!(
                     "STITCH: no draft on doc {} — Fork a draft first.",
                     id_short(&cell)
-                );
+                ));
             }
         }
     }
@@ -2279,7 +2314,7 @@ impl DeosDesktop {
             _ => None,
         };
         let Some(choice) = choice else {
-            self.status = "RESOLVE: that conflict/choice is gone (already resolved?).".into();
+            self.say("RESOLVE: that conflict/choice is gone (already resolved?).");
             return;
         };
         // Apply the resolution patch onto the merged history; re-render.
@@ -2328,12 +2363,12 @@ impl DeosDesktop {
             }
             self.retire_branch_input(cell);
             self.edit_doc(cell, text);
-            self.status = format!(
+            self.say(format!(
                 "RESOLVE doc {} → '{}' — conflict collapsed, merge PUBLISHED to heap \
                  (the resolution is itself a receipted patch).",
                 id_short(&cell),
                 choice.label
-            );
+            ));
         } else {
             // Still conflicted (more regions / concurrent resolutions) — hold the merged
             // doc with the resolution folded in; the remaining conflicts stay live.
@@ -2342,12 +2377,12 @@ impl DeosDesktop {
                     *merged = Some(resolved);
                 }
             }
-            self.status = format!(
+            self.say(format!(
                 "RESOLVE doc {} → '{}' applied; further conflict(s) remain (resolution is \
                  closed under its own conflicts).",
                 id_short(&cell),
                 choice.label
-            );
+            ));
         }
     }
 
@@ -2362,7 +2397,7 @@ impl DeosDesktop {
             _sub: None,
         });
         self.open_menu = None;
-        self.status = "Spotter — type to jump to any cell, action, or surface.".into();
+        self.say("Spotter — type to jump to any cell, action, or surface.");
     }
 
     /// **THE KEYBOARD SPINE's dispatcher** — the gpui-free model half (the root's
@@ -2421,6 +2456,26 @@ impl DeosDesktop {
     /// the root listener runs; `cmd` = platform/control held).
     pub fn bake_key(&mut self, key: &str, cmd: bool) -> bool {
         self.on_key_model(key, cmd)
+    }
+
+    /// The receipt console's log length — a bake/test hook (every `say()` lands).
+    pub fn bake_status_log_len(&self) -> usize {
+        self.status_log.len()
+    }
+
+    /// The unread-narration count — a bake/test hook (ticks while the flyout is
+    /// closed; opening clears it).
+    pub fn bake_status_unread(&self) -> usize {
+        self.status_unread
+    }
+
+    /// Toggle the receipt-console flyout — a bake/test hook (the status bar click).
+    pub fn bake_toggle_status_console(&mut self) -> bool {
+        self.status_flyout = !self.status_flyout;
+        if self.status_flyout {
+            self.status_unread = 0;
+        }
+        self.status_flyout
     }
 
     /// Build the Spotter candidate set over the World's cells (each cell + its action
@@ -2517,7 +2572,7 @@ impl DeosDesktop {
                 return;
             }
         }
-        self.status = format!("Spotter → {}", entry.label);
+        self.say(format!("Spotter → {}", entry.label));
         self.spotter = None;
     }
 
@@ -2544,10 +2599,10 @@ impl DeosDesktop {
                 // the newcomer reads a word. (Selecting an icon fires nothing; it only
                 // invites.) A bare-desktop click clears it again whenever they like.
                 self.selected = Some(HaloTarget::Icon(self.user));
-                self.status =
+                self.say(
                     "Look around — that ring of handles molds a cell in place; hover any cell \
-                     for its menu, double-click to open it."
-                        .into();
+                     for its menu, double-click to open it.",
+                );
             }
             A::FindAnything => self.open_spotter(),
             A::WriteSomething => {
@@ -2555,15 +2610,14 @@ impl DeosDesktop {
                 // document, on the cell that is *them* — and land mold-ready (its halo
                 // floats so the next gesture, "mold it", is already in reach).
                 self.land_in(self.user, WinKindTag::DocEditor);
-                self.status =
+                self.say(
                     "Write something — type, and every keystroke is kept. The ring of handles \
-                     molds this surface in place."
-                        .into();
+                     molds this surface in place.",
+                );
             }
             A::SeeTheWorld => {
                 self.land_in(self.user, WinKindTag::WorldExplorer);
-                self.status =
-                    "The whole world — every cell, every receipt, balance summing to zero.".into();
+                self.say("The whole world — every cell, every receipt, balance summing to zero.");
             }
         }
     }
@@ -2574,30 +2628,29 @@ impl DeosDesktop {
             ActionKind::OpenTranscript => {
                 // The transcript over the World — anchor it on the user cell's window.
                 self.open_kind(self.user, WinKindTag::Transcript);
-                self.status = "World Transcript — the receipt log of every turn.".into();
+                self.say("World Transcript — the receipt log of every turn.");
             }
             ActionKind::OpenWorldExplorer => {
                 // The World Explorer anchors on the user cell (a stable sentinel).
                 self.open_kind(self.user, WinKindTag::WorldExplorer);
-                self.status =
-                    "World Explorer — the ledger census · the chronicle · Σ balance = 0.".into();
+                self.say("World Explorer — the ledger census · the chronicle · Σ balance = 0.");
             }
             ActionKind::OpenAgentRoom => self.open_agent_room(),
             ActionKind::OpenSpotter => self.open_spotter(),
             ActionKind::OpenDocCollab => self.start_doc_collab(self.user),
             ActionKind::OpenViewNodePane => {
                 self.land_in(self.user, WinKindTag::ViewNodePane);
-                self.status =
+                self.say(
                     "World-Status Board — the agent-composable ViewNode surface (reflect-on \
-                     + rewrite). Mold it in place with its halo handles."
-                        .into();
+                     + rewrite). Mold it in place with its halo handles.",
+                );
             }
             ActionKind::OpenAndroidCell => {
                 self.land_in(self.user, WinKindTag::AndroidCell);
-                self.status =
+                self.say(
                     "Android Cell — a confined app's caps on the glass; pull the shade to see \
-                     every authority, tap the hand-over sheet to grant a real cap."
-                        .into();
+                     every authority, tap the hand-over sheet to grant a real cap.",
+                );
             }
             #[cfg(feature = "app-registry")]
             ActionKind::OpenAppShelf => self.open_app_shelf(),
@@ -2605,7 +2658,7 @@ impl DeosDesktop {
             ActionKind::OpenExchangeFloor => self.open_exchange_floor(),
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Desktop);
-                self.status = "Desktop Preferences & customization.".into();
+                self.say("Desktop Preferences & customization.");
             }
             ActionKind::CascadeWindows => self.cascade_windows(),
             ActionKind::TileWindows => self.tile_windows(),
@@ -2628,7 +2681,7 @@ impl DeosDesktop {
                 w.turn(src, vec![transfer(src, dst, 1_000)])
             };
             let outcome = self.world.borrow_mut().commit_turn(turn);
-            self.status = format!(
+            self.say(format!(
                 "COMPOSE: dropped {} → {}: transfer 1,000 {} (height {}).",
                 id_short(&src),
                 id_short(&dst),
@@ -2638,7 +2691,7 @@ impl DeosDesktop {
                     "rejected"
                 },
                 self.world.borrow().height()
-            );
+            ));
         } else {
             let slot = self.cell_cap_count(&src) as u32 + 1;
             let turn = {
@@ -2646,7 +2699,7 @@ impl DeosDesktop {
                 w.turn(src, vec![grant_capability(src, src, dst, slot)])
             };
             let outcome = self.world.borrow_mut().commit_turn(turn);
-            self.status = format!(
+            self.say(format!(
                 "COMPOSE: dropped {} → {}: grant cap @{} {} (height {}).",
                 id_short(&src),
                 id_short(&dst),
@@ -2657,7 +2710,7 @@ impl DeosDesktop {
                     "rejected"
                 },
                 self.world.borrow().height()
-            );
+            ));
         }
     }
 
@@ -2682,7 +2735,7 @@ impl DeosDesktop {
             }
             self.persist_window(*key);
         }
-        self.status = format!("Cascaded {} window(s).", keys.len());
+        self.say(format!("Cascaded {} window(s).", keys.len()));
     }
 
     /// **Tile** every open window into a near-square grid filling the desktop below
@@ -2719,7 +2772,7 @@ impl DeosDesktop {
             }
             self.persist_window(*key);
         }
-        self.status = format!("Tiled {n} window(s) in a {cols}×{rows} grid.");
+        self.say(format!("Tiled {n} window(s) in a {cols}×{rows} grid."));
     }
 
     /// **Close all** open windows (and drop their persisted geometry).
@@ -2729,7 +2782,7 @@ impl DeosDesktop {
         for key in keys {
             self.close_window(key);
         }
-        self.status = format!("Closed {n} window(s).");
+        self.say(format!("Closed {n} window(s)."));
     }
 
     /// Focus (raise + un-minimize) a window — what a taskbar-stub click does.
@@ -3312,10 +3365,10 @@ impl DeosDesktop {
             .contains_key(&(board_cell, WinKindTag::ViewNodePane))
             && self.viewnode_panes.contains_key(&board_cell);
 
-        self.status = format!(
+        self.say(format!(
             "The agent COMPOSED a new cockpit surface — a World Board (cells {cells} · \
              receipts {receipts}) — from scratch, mounted as a live window."
-        );
+        ));
 
         Ok(WorldBoardComposition {
             started_empty,
@@ -3412,11 +3465,11 @@ impl DeosDesktop {
             .receipt_count()
             .saturating_sub(pane_tape_before);
 
-        self.status = format!(
+        self.say(format!(
             "THE PULSE→SIGNALS WELD — a foreign turn moved the World's receipts census \
              to {live_receipts}; the World-Status pane repainted exactly its receipts \
              bind (a receipted tracking turn; dirty glow lit)."
-        );
+        ));
 
         Ok(viewnode_pane::PulseWeldWitness {
             receipts_before,
@@ -3714,7 +3767,10 @@ impl Render for DeosDesktop {
 
         // ── The taskbar (open-window stubs) + the status bar ─────────────────────
         root = root.child(self.render_taskbar(cx));
-        root = root.child(self.render_statusbar());
+        root = root.child(self.render_statusbar(cx));
+        if self.status_flyout {
+            root = root.child(self.render_status_console());
+        }
 
         // ── PULSE TOASTS — the World's foreign motion, arriving bottom-right ──────
         // Green committed / amber REFUSED cards fed by the pulse; click-through
@@ -6175,9 +6231,10 @@ impl DeosDesktop {
         .child(format!("{rows} rows"))
     }
 
-    fn render_statusbar(&self) -> impl IntoElement {
+    fn render_statusbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let h = self.world.borrow().height();
-        div()
+        let unread = self.status_unread;
+        let mut bar = div()
             .absolute()
             .left(px(0.0))
             .bottom(px(0.0))
@@ -6192,16 +6249,82 @@ impl DeosDesktop {
             .border_color(gpui::rgb(NT_HILIGHT))
             .text_size(px(11.0))
             .text_color(gpui::rgb(NT_TEXT))
-            .child(div().flex_1().child(self.status.clone()))
-            // A right-aligned height "tray" readout (the NT clock corner).
+            // The narration line — click to open/close the RECEIPT CONSOLE flyout
+            // (the session's full `say()` log; the bar shows only the latest line).
             .child(
                 div()
+                    .id("statusbar-narration")
+                    .flex_1()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                            this.status_flyout = !this.status_flyout;
+                            if this.status_flyout {
+                                this.status_unread = 0;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(self.status.clone()),
+            );
+        // The unread chip — narration said while the console was closed.
+        if unread > 0 && !self.status_flyout {
+            bar = bar.child(
+                div()
                     .px_2()
-                    .border_l_1()
-                    .border_color(gpui::rgb(NT_FACE_DARK))
-                    .text_color(gpui::rgb(0x303030))
-                    .child(format!("World height {h}")),
-            )
+                    .text_color(gpui::rgb(NT_WARN))
+                    .child(format!("⋯ {unread} new")),
+            );
+        }
+        // The height "tray" (the NT clock corner) — click lands in the World
+        // Transcript: the receipts are one click from anywhere, always.
+        bar.child(
+            div()
+                .id("statusbar-height-chip")
+                .px_2()
+                .border_l_1()
+                .border_color(gpui::rgb(NT_FACE_DARK))
+                .text_color(gpui::rgb(0x303030))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                        this.land_in(this.user, WinKindTag::Transcript);
+                        cx.notify();
+                    }),
+                )
+                .child(format!("World height {h}")),
+        )
+    }
+
+    /// **The RECEIPT CONSOLE flyout** — the session's full narration log (every
+    /// `say()` line, newest last), anchored above the status bar in the
+    /// transcript's dense dark-console style. The bar's one line stops being the
+    /// only witness; the story scrolls.
+    fn render_status_console(&self) -> impl IntoElement {
+        let mut col = div()
+            .id("status-console")
+            .absolute()
+            .left(px(8.0))
+            .bottom(px(50.0))
+            .w(px(560.0))
+            .max_h(px(300.0))
+            .overflow_y_scroll()
+            .bg(gpui::rgb(0x101820))
+            .text_color(gpui::rgb(0x9fe0a0))
+            .border_2()
+            .border_color(gpui::rgb(NT_FACE_DARK))
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(div().text_color(gpui::rgb(0x6fc0ff)).child(format!(
+                "── receipt console · {} line(s) · click the bar to close ",
+                self.status_log.len()
+            )));
+        for line in self.status_log.iter().rev().take(24).rev() {
+            col = col.child(div().text_size(px(11.0)).child(line.clone()));
+        }
+        col
     }
 
     /// **The taskbar** — a row of stubs for every open window, just above the status

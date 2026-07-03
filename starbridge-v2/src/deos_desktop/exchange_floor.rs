@@ -477,12 +477,12 @@ impl DeosDesktop {
             return; // the refusal is already on the status bar
         }
         self.land_in(self.user, WinKindTag::ExchangeFloor);
-        self.status = format!(
+        self.say(format!(
             "Exchange Floor — {} · POST puts an offer CELL on the LIVE World, TAKE \
              binds a lease (the executor refuses over-budget draws), SETTLE splits \
              the budget Σδ=0.",
             exchange_summary(&self.exchange_floor.rows())
-        );
+        ));
     }
 
     /// **Ensure the floor's substrate is installed** — the compute-exchange (job
@@ -497,8 +497,9 @@ impl DeosDesktop {
             if self.app_shelf.find(id).is_none() {
                 let world = Rc::clone(&self.world);
                 if let Err(reason) = self.app_shelf.install_on_world(id, world) {
-                    self.status =
-                        format!("Exchange Floor substrate: LAUNCH '{id}' refused: {reason}");
+                    self.say(format!(
+                        "Exchange Floor substrate: LAUNCH '{id}' refused: {reason}"
+                    ));
                     return false;
                 }
             }
@@ -522,18 +523,18 @@ impl DeosDesktop {
         {
             Ok((cell, _receipt)) => {
                 self.refresh_cells_from_ledger();
-                self.status = format!(
+                self.say(format!(
                     "OFFER #{} POSTED — cell {} · budget {} escrow-bound by the job \
                      program (a real verified 'post' turn; height {}).",
                     self.exchange_floor.offers().len(),
                     id_short(&cell),
                     DEFAULT_OFFER_BUDGET,
                     self.world.borrow().height()
-                );
+                ));
                 true
             }
             Err(reason) => {
-                self.status = format!("POST offer refused: {reason}");
+                self.say(format!("POST offer refused: {reason}"));
                 false
             }
         }
@@ -547,10 +548,10 @@ impl DeosDesktop {
     /// status line).
     pub(super) fn exchange_take_lease(&mut self, cell: CellId) -> bool {
         let Some(budget) = self.exchange_floor.find(&cell).map(|o| o.facts().budget) else {
-            self.status = format!(
+            self.say(format!(
                 "TAKE refused: no offer at {} on this floor.",
                 id_short(&cell)
-            );
+            ));
             return false;
         };
         let price = fair_price(budget);
@@ -566,7 +567,7 @@ impl DeosDesktop {
                     Some(Err(e)) => format!("lease checkpoint refused: {e}"),
                     None => "lease rail not installed (substrate seam)".to_string(),
                 };
-                self.status = format!(
+                self.say(format!(
                     "LEASE TAKEN on {} — bid {} of {} committed by {} · {} (height {}).",
                     id_short(&cell),
                     price,
@@ -574,11 +575,11 @@ impl DeosDesktop {
                     id_short(&receipt.agent),
                     meter,
                     self.world.borrow().height()
-                );
+                ));
                 true
             }
             Err(reason) => {
-                self.status = format!("TAKE on {} REFUSED: {reason}", id_short(&cell));
+                self.say(format!("TAKE on {} REFUSED: {reason}", id_short(&cell)));
                 false
             }
         }
@@ -591,26 +592,26 @@ impl DeosDesktop {
     /// the cheat was REFUSED (i.e. `true` means the tooth bit, as it must).
     pub(super) fn exchange_take_overbudget(&mut self, cell: CellId) -> bool {
         let Some(budget) = self.exchange_floor.find(&cell).map(|o| o.facts().budget) else {
-            self.status = format!("no offer at {} on this floor.", id_short(&cell));
+            self.say(format!("no offer at {} on this floor.", id_short(&cell)));
             return false;
         };
         let price = overbudget_price(budget);
         match self.exchange_floor.take(&cell, FLOOR_PROVIDER, price) {
             Err(reason) => {
-                self.status = format!(
+                self.say(format!(
                     "OVER-BUDGET take ({price} > {budget}) REFUSED by the executor — \
                      nothing committed: {reason}"
-                );
+                ));
                 true
             }
             Ok(_) => {
                 // Must be unreachable while the job program stands — surfaced, not
                 // asserted, so a program regression is VISIBLE rather than a panic.
-                self.status = format!(
+                self.say(format!(
                     "over-budget take ({price} > {budget}) COMMITTED — the BUDGET \
                      gate did not bite; the job program on {} needs eyes.",
                     id_short(&cell)
-                );
+                ));
                 false
             }
         }
@@ -627,16 +628,16 @@ impl DeosDesktop {
                 let (paid, refunded, budget, delta) = facts
                     .map(|f| (f.paid, f.refunded, f.budget, f.delta))
                     .unwrap_or((0, 0, 0, 0));
-                self.status = format!(
+                self.say(format!(
                     "SETTLED {} — paid {paid} + refunded {refunded} = budget {budget} · \
                      Σδ = {delta} (AffineEq re-enforced by the executor; height {}).",
                     id_short(&cell),
                     self.world.borrow().height()
-                );
+                ));
                 true
             }
             Err(reason) => {
-                self.status = format!("SETTLE on {} REFUSED: {reason}", id_short(&cell));
+                self.say(format!("SETTLE on {} REFUSED: {reason}", id_short(&cell)));
                 false
             }
         }
@@ -662,7 +663,7 @@ impl DeosDesktop {
         match self.exchange_floor.newest_in(OfferPhase::Posted) {
             Some(cell) => self.exchange_take_lease(cell),
             None => {
-                self.status = "TAKE: no posted offer on the book — post one first.".into();
+                self.say("TAKE: no posted offer on the book — post one first.");
                 false
             }
         }
@@ -673,7 +674,7 @@ impl DeosDesktop {
         match self.exchange_floor.newest_in(OfferPhase::Leased) {
             Some(cell) => self.exchange_settle_offer(cell),
             None => {
-                self.status = "SETTLE: no leased offer on the book — take one first.".into();
+                self.say("SETTLE: no leased offer on the book — take one first.");
                 false
             }
         }

@@ -246,11 +246,11 @@ impl DeosDesktop {
                 self.selected = Some(HaloTarget::Icon(cell));
             }
         }
-        self.status = format!(
+        self.say(format!(
             "Thread → walked to {} ({}).",
             id_short(&cell),
             self.cell_kind(&cell)
-        );
+        ));
     }
 
     /// Flip the persisted Show-threads preference (the View-menu toggle). A pure
@@ -258,11 +258,11 @@ impl DeosDesktop {
     pub(super) fn toggle_threads(&mut self) {
         self.layout.prefs.show_threads = !self.layout.prefs.show_threads;
         self.layout.save(&self.layout_path);
-        self.status = if self.layout.prefs.show_threads {
+        self.say(if self.layout.prefs.show_threads {
             "Transclusion threads ON — quotes draw their geometry between windows.".into()
         } else {
             "Transclusion threads hidden (View menu shows them again).".into()
-        };
+        });
     }
 
     /// **Render the gossamer** — every visible thread as a 3-stroke cyan elbow of

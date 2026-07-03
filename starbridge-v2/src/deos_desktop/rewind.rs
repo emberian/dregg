@@ -355,21 +355,21 @@ impl DeosDesktop {
         self.rewind.cursor = Some(step);
         self.rewind_refresh();
         if let Some(p) = self.rewind.projection() {
-            self.status = format!(
+            self.say(format!(
                 "REWIND · {} · {} — the past is read-only; LIVE returns you.",
                 rail_caption(p),
                 stamp_caption(p)
-            );
+            ));
         }
     }
 
     /// Snap back to LIVE — what the rail's LIVE chip / `bake_rewind_live` does.
     pub(super) fn rewind_go_live(&mut self) {
         self.rewind.go_live();
-        self.status = format!(
+        self.say(format!(
             "LIVE — the desktop reads the live World again (height {}).",
             self.world.borrow().height()
-        );
+        ));
     }
 
     /// The World Explorer body over the EFFECTIVE world — the replayed lens

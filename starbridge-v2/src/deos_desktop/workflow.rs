@@ -226,12 +226,12 @@ impl DeosDesktop {
         let effect = self.workflow_effect(subject, kind);
         let wf = self.workflow_state_mut(subject);
         wf.steps.push(WorkflowStep { kind, effect });
-        self.status = format!(
+        self.say(format!(
             "Workflow {} — added intent “{}” ({} steps).",
             id_short(&subject),
             kind.label(),
             self.workflow_state(subject).steps.len()
-        );
+        ));
     }
 
     /// Drop the last intent step from the subject cell's workflow.
@@ -241,11 +241,11 @@ impl DeosDesktop {
         if wf.baseline_len > wf.steps.len() {
             wf.baseline_len = wf.steps.len();
         }
-        self.status = format!(
+        self.say(format!(
             "Workflow {} — removed last intent ({} steps).",
             id_short(&subject),
             self.workflow_state(subject).steps.len()
-        );
+        ));
     }
 
     /// Mark the current workflow length as the refinement baseline — the running
@@ -253,10 +253,10 @@ impl DeosDesktop {
     pub(super) fn workflow_pin_baseline(&mut self, subject: CellId) {
         let len = self.workflow_state(subject).steps.len();
         self.workflow_state_mut(subject).baseline_len = len;
-        self.status = format!(
+        self.say(format!(
             "Workflow {} — pinned baseline at {len} step(s); new intents must REFINE it.",
             id_short(&subject)
-        );
+        ));
     }
 
     /// Read-only access to a cell's workflow state (default-empty if untouched).

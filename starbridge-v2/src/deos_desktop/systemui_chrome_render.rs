@@ -93,7 +93,7 @@ impl DeosDesktop {
             .get_mut(&cell)
             .expect("android chrome ensured")
             .hand_over(perm);
-        self.status = SystemUiCapChrome::outcome_line(&outcome);
+        self.say(SystemUiCapChrome::outcome_line(&outcome));
         outcome
     }
 

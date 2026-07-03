@@ -374,12 +374,12 @@ impl DeosDesktop {
     /// World Explorer, and landed mold-ready (its halo ring floats on arrival).
     pub(super) fn open_app_shelf(&mut self) {
         self.land_in(self.user, WinKindTag::AppShelf);
-        self.status = format!(
+        self.say(format!(
             "App Shelf — {} pre-built apps; LAUNCH seeds an app's cell + program onto \
              the LIVE World and commits its representative affordance as a real \
              verified turn.",
             self.app_shelf.total()
-        );
+        ));
     }
 
     /// **LAUNCH an app from the shelf** (or focus it if already installed) — the
@@ -390,11 +390,11 @@ impl DeosDesktop {
     pub(super) fn launch_shelf_app(&mut self, id: &str) -> bool {
         if let Some((cell, name)) = self.app_shelf.find(id).map(|a| (a.cell, a.name)) {
             self.land_in(cell, WinKindTag::Inspector);
-            self.status = format!(
+            self.say(format!(
                 "{name} is already installed — opened its live cell {} (re-install is \
                  the receipted install-ceremony seam).",
                 id_short(&cell)
-            );
+            ));
             return true;
         }
         let world = Rc::clone(&self.world);
@@ -405,16 +405,16 @@ impl DeosDesktop {
                 // inspector over its live cell (state slots + affordances + receipts).
                 // The bespoke deos-view card mount is the named richer follow-up.
                 self.land_in(cell, WinKindTag::Inspector);
-                self.status = format!(
+                self.say(format!(
                     "LAUNCHED '{id}' onto the LIVE World — cell {} seeded + its \
                      representative affordance committed (height {}).",
                     id_short(&cell),
                     self.world.borrow().height()
-                );
+                ));
                 true
             }
             Err(reason) => {
-                self.status = format!("LAUNCH '{id}' refused: {reason}");
+                self.say(format!("LAUNCH '{id}' refused: {reason}"));
                 false
             }
         }
@@ -427,21 +427,22 @@ impl DeosDesktop {
     pub(super) fn fire_shelf_app(&mut self, id: &str, method: &str) -> bool {
         match self.app_shelf.fire(id, method, 1) {
             Some(Ok(receipt)) => {
-                self.status = format!(
+                self.say(format!(
                     "App '{id}' · '{method}' COMMITTED — a real verified turn by {} \
                      (height {}).",
                     id_short(&receipt.agent),
                     self.world.borrow().height()
-                );
+                ));
                 true
             }
             Some(Err(e)) => {
-                self.status = format!("App '{id}' · '{method}' REFUSED: {e}");
+                self.say(format!("App '{id}' · '{method}' REFUSED: {e}"));
                 false
             }
             None => {
-                self.status =
-                    format!("App '{id}' is not installed — launch it from the App Shelf first.");
+                self.say(format!(
+                    "App '{id}' is not installed — launch it from the App Shelf first."
+                ));
                 false
             }
         }

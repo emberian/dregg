@@ -428,11 +428,11 @@ impl DeosDesktop {
                 };
                 v.sort();
                 self.cells = v;
-                self.status = format!("{}.", narrate_hire(&report));
+                self.say(format!("{}.", narrate_hire(&report)));
                 true
             }
             Err(reason) => {
-                self.status = format!("HIRE refused: {reason}");
+                self.say(format!("HIRE refused: {reason}"));
                 self.hireling.is_hired()
             }
         }
@@ -454,15 +454,15 @@ impl DeosDesktop {
                         format!("resident gate: {} — {}", r.tool, r.reason),
                     );
                 }
-                self.status = format!(
+                self.say(format!(
                     "{} (height {}).",
                     narrate_step(&report),
                     self.world.borrow().height()
-                );
+                ));
                 report.mirrored > 0 || !report.new_refusals.is_empty()
             }
             Err(reason) => {
-                self.status = format!("Resident step refused: {reason}");
+                self.say(format!("Resident step refused: {reason}"));
                 false
             }
         }
@@ -482,14 +482,14 @@ impl DeosDesktop {
                     Some(o) => Self::outcome_verdict(o),
                     None => "nothing to revoke — the c-list was already empty".to_string(),
                 };
-                self.status = format!(
+                self.say(format!(
                     "FIRED resident {} — revocation turn ({} slot(s)) → {} (height {}). \
                      The gate + its budgets retired with the handle.",
                     id_short(&report.cell),
                     report.revoked_slots,
                     verdict,
                     self.world.borrow().height()
-                );
+                ));
                 report
                     .outcome
                     .as_ref()
@@ -497,7 +497,7 @@ impl DeosDesktop {
                     .unwrap_or(true)
             }
             Err(reason) => {
-                self.status = format!("FIRE refused: {reason}");
+                self.say(format!("FIRE refused: {reason}"));
                 false
             }
         }
