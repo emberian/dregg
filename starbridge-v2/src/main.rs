@@ -1785,6 +1785,43 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     );
     cx.run_until_parked();
 
+    // ── 4j. THE HIRELING LIVES — hire a real confined resident (hermetic on-box
+    //     brain by default), step one perceive-decide-act beat: its cap-gated turns
+    //     land on the LIVE World (the pulse announces them) and at least one
+    //     over-reach is REFUSED in-band. Then the room reads the executor's account.
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_hire_resident()),
+        "hiring the resident attaches a real agent to the live World"
+    );
+    cx.run_until_parked();
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_step_resident()),
+        "one resident beat drives real cap-gated turns"
+    );
+    cx.run_until_parked();
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_resident_action_count()) >= 1,
+        "the resident's receipts landed on the LIVE World (never self-report)"
+    );
+
+    // ── 4k. THE EXCHANGE FLOOR — the agent economy: post an offer (a fresh cell
+    //     carrying compute-exchange's job program), take the lease — every verb a
+    //     real verified turn, settlement conserving Σδ = 0.
+    #[cfg(feature = "app-registry")]
+    {
+        desk.update(&mut cx, |d, _cx| d.bake_open_exchange());
+        cx.run_until_parked();
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_post_offer()),
+            "posting an offer lands a fresh offer cell + receipt on the LIVE World"
+        );
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_take_lease()),
+            "taking the lease is a real verified turn"
+        );
+        cx.run_until_parked();
+    }
+
     // Leave the woven room in frame, every surface present at once: TILE the open
     // windows into a grid so the doc-collab editor, the World-Status board, the Android
     // cap-chrome, and the agent-composed board are each fully visible side by side as ONE
