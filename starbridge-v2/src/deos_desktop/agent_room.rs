@@ -352,11 +352,24 @@ mod tests {
         let (world, anchors) = crate::world::demo_world();
         let [_treasury, _service, user] = anchors;
 
-        // A fresh demo world: nobody has acted, so the default falls back to the
-        // operator — the honest "you are the only actor so far".
-        assert_eq!(default_resident(&world, user), user);
+        // The demo world's genesis commits REAL seed turns, so a fresh desktop
+        // already has non-operator actors — the default resident is the busiest
+        // of them (never the operator while someone else is acting).
+        let def = default_resident(&world, user);
+        assert_ne!(def, user);
+
+        let ranked = residents(&world);
+        let top_non_user_nonce = ranked
+            .iter()
+            .filter(|(id, _)| *id != user)
+            .map(|(_, n)| *n)
+            .max()
+            .expect("demo world has non-user cells");
+        let def_nonce = ranked.iter().find(|(id, _)| *id == def).unwrap().1;
+        assert_eq!(def_nonce, top_non_user_nonce);
+        assert!(def_nonce > 0, "the default resident has actually acted");
 
         // The ranking covers every ledger cell (a picker over the whole census).
-        assert_eq!(residents(&world).len(), world.cell_count());
+        assert_eq!(ranked.len(), world.cell_count());
     }
 }
