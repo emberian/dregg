@@ -18,6 +18,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::receipt_rail::ReceiptFact;
+
 /// Metadata about a path — the editor-relevant subset of Zed's `fs::Metadata`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Metadata {
@@ -91,6 +93,38 @@ pub trait Fs: 'static {
     /// impl unaffected.
     fn save_count(&self) -> Option<usize> {
         None
+    }
+
+    /// The hash of the MOST RECENT save receipt this backend recorded, if it
+    /// records receipts at all. `RealFs` has none (default `None`);
+    /// `FirmamentFs` returns `TurnReceipt::receipt_hash()` of its last
+    /// committed save so the editor's status line can stamp the just-minted
+    /// receipt fingerprint (`⛓ a1b2c3d4`) right where the save landed — the
+    /// `save_count` precedent, one hash deeper. Plain `[u8; 32]` so the trait
+    /// stays free of `dregg_turn` types in the non-firmament build.
+    fn last_save_receipt_hash(&self) -> Option<[u8; 32]> {
+        None
+    }
+
+    /// **The per-file receipt timeline** for `path`, projected to the
+    /// always-compiled [`ReceiptFact`] shape — the ordered facts of every
+    /// committed save that targeted this file's backing cell. The receipt
+    /// rail renders and verifies exactly this. Default: empty — a backend
+    /// with no receipts (`RealFs`) has no timeline, and every existing `Fs`
+    /// impl is untouched. `FirmamentFs` overrides it with the REAL
+    /// `history(path)` receipts off the live spine.
+    fn receipt_facts_for(&self, _path: &Path) -> Vec<ReceiptFact> {
+        Vec::new()
+    }
+
+    /// The backend's GLOBAL receipt log as facts, in commit order — what the
+    /// rail's `verify chain` embeds the per-file timeline into (the receipt
+    /// chain threads through ALL files, so verification needs the whole log).
+    /// Default: empty — the rail's verdict then says "no global log
+    /// published" rather than overclaiming. `FirmamentFs` overrides it when
+    /// its spine publishes the log.
+    fn receipt_facts(&self) -> Vec<ReceiptFact> {
+        Vec::new()
     }
 }
 

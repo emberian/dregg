@@ -253,6 +253,15 @@ impl Editor {
         self.path.as_deref()
     }
 
+    /// The [`Fs`] seam this editor saves through (a clone of the shared
+    /// handle). The editor pane reads the RECEIPT side of the seam off this —
+    /// [`Fs::receipt_facts_for`] / [`Fs::receipt_facts`] — to snapshot the
+    /// receipt rail for the open path, without the pane needing a typed
+    /// backend handle.
+    pub fn fs(&self) -> Arc<dyn Fs> {
+        self.fs.clone()
+    }
+
     /// `true` when there are unsaved edits.
     pub fn is_dirty(&self) -> bool {
         self.dirty
@@ -404,6 +413,14 @@ impl Editor {
                     ),
                     None => format!("saved {name} ({} bytes) — {patches} patches", content.len()),
                 };
+                // Stamp the JUST-MINTED receipt's fingerprint (its own
+                // `receipt_hash()`), when the backend records receipts — the
+                // save visibly LANDS as a chain event, right in the status
+                // line, matching the newest chip on the receipt rail.
+                if let Some(hash) = self.fs.last_save_receipt_hash() {
+                    status.push_str(" · ⛓ ");
+                    status.push_str(&crate::receipt_rail::short_hex(&hash, 4));
+                }
                 // THE NODE WIRE: if the host installed a save hook (the cockpit is
                 // `--node`-attached), route the just-saved content there too — a
                 // client-signed turn on the LIVE NODE. Fail-soft: a node hiccup
