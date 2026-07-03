@@ -1,0 +1,32 @@
+[package]
+name = "starbridge-org"
+version = "0.1.0"
+edition = "2024"
+description = "Teams / organizations (IAM) as a dregg-native cell. An Org is a factory-born cell owning a member→role roster; a role-cap is the org-owner's dregg-auth credential ATTENUATED to the role's permission set — so 'viewer is read-only' / 'admin cannot delete the org' is the SAME no-amplify lattice property dregg-auth already proves (attenuate can only narrow). Receipted membership turns: invite / accept (mints the member's attenuated role-cap) / remove / change-role / transfer-ownership. Supersedes a prior imperative org module."
+
+# The teams/IAM gap: dregg identity is single-subject by default (a `dga1_`
+# cap-account is the whole subject). Real clouds have organizations with members
+# and roles. This crate adds that with NO new authorization primitive: a role IS
+# an attenuation of the org-owner's authority on the `dregg-auth` credential
+# lattice (`dregg-auth/src/credential`, the native successor of a prior
+# `webauth/cred.rs`). Follows the four-axis starbridge-app template
+# (`execution-lease` exemplar): verified core (Org FactoryDescriptor + org
+# cell_program) + service `invoke()` front door + deos-view card + composed
+# DeosApp. See `src/lib.rs` and `the migration plan` §3.5.
+
+[lib]
+name = "starbridge_org"
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-types = { path = "../../types" }
+# The role-cap = an org-owner grant ATTENUATED to the role's permission set. The
+# proven credential core (offline verify, no-amplify `Credential::attenuate`).
+dregg-auth = { path = "../../dregg-auth" }
+
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,85 @@
+{
+ "id": "org",
+ "name": "Organizations (Teams / IAM)",
+ "description": "Teams / organizations (IAM) as a dregg-native cell. An Org is a factory-born cell owning a member→role roster; a role-cap is the org-owner's dregg-auth credential ATTENUATED to the role's permission set — so 'viewer is read-only' / 'admin cannot delete the org' is the SAME no-amplify lattice property dregg-auth already proves. Receipted membership turns: invite / accept (mints the member's attenuated role-cap) / remove / change-role / transfer-ownership. Supersedes a prior imperative org module.",
+ "version": "0.1.0",
+ "factory_vks": [
+ "737461726272696467652d6f72672d6d656d626572736869702d666163742121"
+ ],
+ "inspectors": [
+ "dregg-org"
+ ],
+ "host_inspectors": [
+ { "id": "org", "label": "Organization", "tag": "dregg-org", "uri_attribute": "uri" }
+ ],
+ "host_actions": [
+ { "id": "invite", "label": "Invite member", "builder": "invite", "kind": "turn" },
+ { "id": "accept", "label": "Accept invite", "builder": "accept", "kind": "turn" },
+ { "id": "change_role", "label": "Change role", "builder": "change_role", "kind": "turn" },
+ { "id": "transfer", "label": "Transfer ownership", "builder": "transfer", "kind": "turn" }
+ ],
+ "host_controls": [
+ { "id": "org_uri", "label": "Org URI", "type": "uri", "default": "dregg://cell/org-default" },
+ { "id": "invitee", "label": "Invitee subject", "type": "text", "default": "dregg:" },
+ { "id": "role", "label": "Role", "type": "select", "options": ["admin", "member", "billing", "viewer"], "default": "member" }
+ ],
+ "turn_builders": [
+ "invite",
+ "accept",
+ "remove",
+ "change_role",
+ "transfer"
+ ],
+ "required_apis": [
+ "signTurn",
+ "blake3",
+ "cell.readField",
+ "cell.readHeap"
+ ],
+ "slot_layout": {
+ "ROOT_PUBKEY_SLOT": 0,
+ "OWNER_SLOT": 1,
+ "SEQ_SLOT": 2,
+ "MEMBER_COUNT_SLOT": 3,
+ "NAME_SLOT": 4
+ },
+ "heap_collections": {
+ "MEMBER_COLL": "0x00000A61 — the witnessed member-subject roster (key i -> subject tag of member i, for i in 0..member_count)",
+ "ROLE_COLL": "0x00000A62 — the parallel member-role roster (key i -> role code of member i)"
+ },
+ "state_constraints": [
+ "WriteOnce(ROOT_PUBKEY_SLOT)",
+ "WriteOnce(NAME_SLOT)",
+ "Monotonic(SEQ_SLOT)"
+ ],
+ "roles": {
+ "owner": "every permission (incl. org:delete, org:transfer, billing) — exactly one at a time",
+ "admin": "manage resources AND membership, see billing — NOT delete/transfer/pay",
+ "member": "create + manage resources (the builder)",
+ "billing": "see + pay invoices (no resource access)",
+ "viewer": "read-only across the org's resources"
+ },
+ "deos": {
+ "surface": "DeosApp",
+ "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry",
+ "src_factory": "org_app(cipherclerk, executor)",
+ "cell": "org",
+ "discoverable": ["teams", "iam", "org"],
+ "publish": "Either",
+ "affordances": {
+ "invite": "cap-only, Signature (an admin offers a subject a role — pending)",
+ "accept": "cap-only, Either (the invitee joins; the authority mints their attenuated role-cap)",
+ "remove": "cap-only, Signature (an admin removes a member)",
+ "change_role": "cap-only, Signature (an admin re-roles a member, re-issuing the cap)",
+ "transfer": "GATED (cap∧state), root — precondition MEMBER_COUNT >= 2 (there must be a member to transfer TO); the fire submits the owner-moving turn (reading the LIVE seq + 1), the executor re-enforcing Monotonic(SEQ)"
+ },
+ "seam": "PARTIAL — the ROLE-CAP authorize (a viewer's members:manage attempt refused, unforgeably — the dregg-auth no-amplify lattice) and the cell invariants (WriteOnce(ROOT_PUBKEY/NAME) sealed identity/name + Monotonic(SEQ) append-only audit) are REAL. The roster's source of truth is the pure serializable Org record; the cell mirrors owner/member-count/seq into scalar slots and members into a committed heap image (a light client witnesses the roster). Threading each roster mutation through a per-member SetField allow-list program (so an off-roster write is itself an executor refusal) is the production lane this models."
+ },
+ "supersedes": "a prior imperative org module",
+ "manifest_health": {
+ "status": "ready",
+ "embedded": true,
+ "deos_native_src": true,
+ "source_of_truth": "starbridge-apps/org/src/lib.rs"
+ }
+}

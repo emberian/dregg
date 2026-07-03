@@ -8,22 +8,22 @@
 //!
 //! ## The vat is an execution-lease with a lifecycle
 //!
-//! This crate is a **dregg-native rewrite** of the retired DreggNet `ServerFleet`
-//! (`./dreggnet/control` — abandoned, strip-mined for its logic, never rejoined).
-//! ServerFleet's economic + durability halves were ALREADY native, so this crate
+//! This crate is a **dregg-native rewrite** of a prior imperative fleet-controller
+//! (ported from a prior imperative controller; the substrate is the source of truth).
+//! the prior fleet-controller's economic + durability halves were ALREADY native, so this crate
 //! builds directly on them instead of reinventing:
 //!
-//!   * **persist** — the durable World is the lease cell's committed umem
-//!     execution image ([`starbridge_execution_lease::EXEC_COLL`]): a checkpoint
-//!     cursor + a state digest + the running World's working memory, folded into
-//!     the cell's state commitment. It survives, is passable, is witnessed.
-//!   * **meter** — uptime is a [`dregg_cell::obligation_standing`] StandingObligation
-//!     ([`starbridge_execution_lease::RENT_SLOT`]/[`PERIOD_SLOT`](starbridge_execution_lease::PERIOD_SLOT)):
-//!     the vat owes rent per period; the recurring forge-detectors bite.
-//!   * **pay** — rent is a [`dregg_app_framework::Payable`] conserving `Transfer`
-//!     (Σδ=0): renting the computer moves real value.
-//!   * **fork** — a vat forks by cloning its execution-image cell (the branch/
-//!     stitch pushout) — two divergent computers from one point.
+//! * **persist** — the durable World is the lease cell's committed umem
+//! execution image ([`starbridge_execution_lease::EXEC_COLL`]): a checkpoint
+//! cursor + a state digest + the running World's working memory, folded into
+//! the cell's state commitment. It survives, is passable, is witnessed.
+//! * **meter** — uptime is a [`dregg_cell::obligation_standing`] StandingObligation
+//! ([`starbridge_execution_lease::RENT_SLOT`]/[`PERIOD_SLOT`](starbridge_execution_lease::PERIOD_SLOT)):
+//! the vat owes rent per period; the recurring forge-detectors bite.
+//! * **pay** — rent is a [`dregg_app_framework::Payable`] conserving `Transfer`
+//! (Σδ=0): renting the computer moves real value.
+//! * **fork** — a vat forks by cloning its execution-image cell (the branch/
+//! stitch pushout) — two divergent computers from one point.
 //!
 //! What this crate ADDS over the bare lease is the two things that make a lease a
 //! *computer*: a **lifecycle state machine** ([`VatState`]) and a **placement
@@ -34,22 +34,22 @@
 //! ## The lifecycle — a verified state machine
 //!
 //! ```text
-//!   Created ──launch──▶ Running ──sleep──▶ Sleeping ──wake──▶ Running
-//!      │                   │                   │                  │
-//!      └───────────────────┴──── lapse (non-payment) ────────────▶ Lapsed
-//!                          (reap) ────────────────────────────────▶ Reaped
+//! Created ──launch──▶ Running ──sleep──▶ Sleeping ──wake──▶ Running
+//! │ │ │ │
+//! └───────────────────┴──── lapse (non-payment) ────────────▶ Lapsed
+//! (reap) ────────────────────────────────▶ Reaped
 //! ```
 //!
 //! Every transition — `launch` / `sleep` / `wake` / `lapse` / `reap` — is a
 //! verified turn. The machine is encoded on TWO executor-enforced axes (because it
 //! is not linear — sleep/wake move up and down *within* being alive):
 //!
-//!   * the **phase** slot ([`VAT_PHASE_SLOT`], `Monotonic`): the one-way terminality
-//!     axis `Provisioned < Live < Lapsed < Reaped` — Reaped is terminal, Lapsed
-//!     cannot un-lapse, and Running/Sleeping share the `Live` phase;
-//!   * the **up** slot ([`VAT_UP_SLOT`], not monotone): whether a box currently runs
-//!     the World — sleep flips it down, wake flips it back up, without ever moving
-//!     the monotone phase.
+//! * the **phase** slot ([`VAT_PHASE_SLOT`], `Monotonic`): the one-way terminality
+//! axis `Provisioned < Live < Lapsed < Reaped` — Reaped is terminal, Lapsed
+//! cannot un-lapse, and Running/Sleeping share the `Live` phase;
+//! * the **up** slot ([`VAT_UP_SLOT`], not monotone): whether a box currently runs
+//! the World — sleep flips it down, wake flips it back up, without ever moving
+//! the monotone phase.
 //!
 //! **Sleep = checkpoint** (the World's whole state committed to the durable image
 //! root); **wake = restore** from that root. Splitting liveness out of the
@@ -124,10 +124,10 @@ pub const WITNESS_SLOT: u8 = 11;
 /// linear: sleep/wake move a vat up and down *within* being alive, while the
 /// terminality axis only ever advances.
 ///
-///   * **phase** ([`VatState::phase`] → [`VatPhase::rank`], slot [`VAT_PHASE_SLOT`],
-///     `Monotonic`): `Provisioned < Live < Lapsed < Reaped` — the one-way axis.
-///   * **up** ([`VatState::is_up`], slot [`VAT_UP_SLOT`], NOT monotone): whether a
-///     box currently runs the World. Meaningful only while `Live`.
+/// * **phase** ([`VatState::phase`] → [`VatPhase::rank`], slot [`VAT_PHASE_SLOT`],
+/// `Monotonic`): `Provisioned < Live < Lapsed < Reaped` — the one-way axis.
+/// * **up** ([`VatState::is_up`], slot [`VAT_UP_SLOT`], NOT monotone): whether a
+/// box currently runs the World. Meaningful only while `Live`.
 ///
 /// So `Running` and `Sleeping` are BOTH `Live` (same phase rank) and differ only in
 /// the `up` bit — a wake (`Sleeping`→`Running`) flips `up` 0→1 and leaves the
@@ -221,7 +221,7 @@ impl VatState {
         })
     }
 
-    /// The reader-legible word (matches the retired ServerState words so existing
+    /// The reader-legible word (matches the retired the prior state enum words so existing
     /// dashboards/tools read unchanged): created / running / sleeping / lapsed /
     /// reaped.
     pub fn word(self) -> &'static str {
@@ -302,10 +302,10 @@ impl VatTransition {
 /// ON TOP of [`lease::lease_invariants`] (the economics + durable-cursor teeth the
 /// vat inherits by being a lease cell):
 ///
-///   * `Monotonic` on `VAT_STATE` — the lifecycle rank only advances (the state
-///     machine, enforced as an order — see [`VatState`]);
-///   * `WriteOnce` on `WITNESS` — the renter's chosen witness mode is sealed at
-///     create; a provider cannot silently downgrade a Full vat to skip proofs.
+/// * `Monotonic` on `VAT_STATE` — the lifecycle rank only advances (the state
+/// machine, enforced as an order — see [`VatState`]);
+/// * `WriteOnce` on `WITNESS` — the renter's chosen witness mode is sealed at
+/// create; a provider cannot silently downgrade a Full vat to skip proofs.
 ///
 /// (`MACHINE`/`ENDPOINT` are deliberately NOT sealed — a vat re-placed on wake
 /// gets a fresh box + address; the durable image is what follows.)
@@ -461,8 +461,8 @@ mod tests {
         );
         assert!(
             vat_cs.iter().any(|c| matches!(
-                c,
-                StateConstraint::Monotonic { index } if *index == VAT_PHASE_SLOT
+            c,
+            StateConstraint::Monotonic { index } if *index == VAT_PHASE_SLOT
             )),
             "the lifecycle machine tooth is present"
         );
