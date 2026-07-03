@@ -68,6 +68,9 @@ pub mod systemui_chrome_render;
 /// from either endpoint dot (Ted Nelson's parallel visible connections over real
 /// receipted quotes). Gated on the persisted `show_threads` preference (View menu).
 pub mod threads;
+/// PULSE TOASTS — the World's motion arriving as small NT cards (green committed /
+/// amber REFUSED), fed by the pulse, self-retiring, click-through to the Transcript.
+pub mod toasts;
 // THE CONTENT-IR BRIDGE — a desktop window whose body is a real `deos_view::ViewNode`
 // rendered through deos-view's NATIVE renderer (the portable-IR content surface beside
 // the native-chrome panes). Gated on `card-pane` (pulls deos-view + deos-js); the
@@ -604,6 +607,10 @@ pub struct DeosDesktop {
     /// is open, ↑/↓ move the selection and Escape closes it; otherwise Escape climbs
     /// the dismissal ladder (context menu → property dialog → halo selection).
     focus: FocusHandle,
+    /// **The PULSE-TOAST rack** — announcement cards for the World's foreign motion
+    /// (green committed / amber REFUSED), fed and aged by [`Self::pump_dynamics`],
+    /// mounted bottom-right by the render tail; click-through opens the Transcript.
+    toast_rack: toasts::ToastRack,
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -726,6 +733,7 @@ impl DeosDesktop {
             systemui_shades: std::collections::HashSet::new(),
             last_viewport: (1600.0, 1000.0),
             focus: cx.focus_handle(),
+            toast_rack: toasts::ToastRack::default(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -759,43 +767,78 @@ impl DeosDesktop {
     /// One beat of THE PULSE — consume the dynamics stream past [`Self::pulse_cursor`].
     /// If the World moved, refresh the icon census (cells born outside the desktop
     /// appear without a reopen) and repaint every open surface off the live ledger.
-    /// The newest turn committed by a resident OTHER than the operator is announced
-    /// on the status bar — the desktop's own actions already narrate themselves.
+    /// Foreign residents' committed turns land as green toasts + the status line;
+    /// REFUSALS land as amber toasts (the ocap guarantee firing deserves a card).
+    /// The rack also ages one beat here — toasts retire themselves.
     fn pump_dynamics(&mut self, cx: &mut Context<Self>) {
         use crate::dynamics::WorldEvent;
-        let (cursor, announce, cells) = {
+        let aged = self.toast_rack.beat();
+        let (cursor, announce, arrivals, cells) = {
             let w = self.world.borrow();
             let d = w.dynamics();
             let cursor = d.cursor();
             if cursor == self.pulse_cursor {
+                drop(w);
+                if aged {
+                    cx.notify();
+                }
                 return;
             }
-            let announce = d
-                .since(self.pulse_cursor)
-                .iter()
-                .rev()
-                .find_map(|e| match e {
+            let mut announce = None;
+            let mut arrivals: Vec<(toasts::ToastKind, String)> = Vec::new();
+            for e in d.since(self.pulse_cursor) {
+                match e {
                     WorldEvent::TurnCommitted {
                         agent,
                         height,
                         computrons,
                         ..
-                    } if *agent != self.user => Some(format!(
-                        "⋯ resident {} committed turn #{height} · {computrons}cu",
-                        id_short(agent)
-                    )),
-                    _ => None,
-                });
+                    } if *agent != self.user => {
+                        let line = format!(
+                            "resident {} committed turn #{height} · {computrons}cu",
+                            id_short(agent)
+                        );
+                        announce = Some(format!("⋯ {line}"));
+                        arrivals.push((toasts::ToastKind::Committed, line));
+                    }
+                    WorldEvent::TurnRejected { agent, reason } => {
+                        arrivals.push((
+                            toasts::ToastKind::Refused,
+                            format!("{} — {reason}", id_short(agent)),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
             let mut cells: Vec<CellId> = w.ledger().iter().map(|(id, _)| *id).collect();
             cells.sort();
-            (cursor, announce, cells)
+            (cursor, announce, arrivals, cells)
         };
         self.pulse_cursor = cursor;
         self.cells = cells;
+        for (kind, line) in arrivals {
+            self.toast_rack.push(kind, line);
+        }
         if let Some(line) = announce {
             self.status = line;
         }
         cx.notify();
+    }
+
+    /// How many toasts the rack currently shows — a bake/test hook.
+    pub fn bake_toast_count(&self) -> usize {
+        self.toast_rack.toasts().len()
+    }
+
+    /// Push an announcement card directly — a bake/test hook (the pulse's feed,
+    /// without needing a foreign turn).
+    pub fn bake_push_toast(&mut self, refused: bool, line: &str) {
+        let kind = if refused {
+            toasts::ToastKind::Refused
+        } else {
+            toasts::ToastKind::Committed
+        };
+        self.toast_rack.push(kind, line);
     }
 
     /// The auto-arranged default grid position for a cell with no persisted slot —
@@ -3367,6 +3410,33 @@ impl Render for DeosDesktop {
         // ── The taskbar (open-window stubs) + the status bar ─────────────────────
         root = root.child(self.render_taskbar(cx));
         root = root.child(self.render_statusbar());
+
+        // ── PULSE TOASTS — the World's foreign motion, arriving bottom-right ──────
+        // Green committed / amber REFUSED cards fed by the pulse; click-through
+        // opens the World Transcript (the narration lands you on the receipt log)
+        // and clears the rack.
+        if !self.toast_rack.toasts().is_empty() {
+            let mut stack = div()
+                .id("pulse-toast-rack")
+                .absolute()
+                .right(px(12.0))
+                .bottom(px(52.0))
+                .flex()
+                .flex_col()
+                .gap_1()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                        this.toast_rack.clear();
+                        this.land_in(this.user, WinKindTag::Transcript);
+                        cx.notify();
+                    }),
+                );
+            for card in toasts::render_toast_rack(&self.toast_rack) {
+                stack = stack.child(card);
+            }
+            root = root.child(stack);
+        }
 
         // ── The gentle "type anything" entry pill (the calm Spotter door) ─────────
         // A small, always-present invitation pinned top-center. It is the wonder-first
