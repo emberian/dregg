@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What is deos? — the two-minute one-idea tour</title>
+<style>
+:root{
+  --bg:#0a0f0d; --bg2:#111a15; --bg3:#0c1410; --panel:#101a14;
+  --line:rgba(228,221,208,.11); --line2:rgba(228,221,208,.18);
+  --fg:#e7e0d2; --dim:#a89e8e; --muted:#7d7566;
+  --sage:#9cc08a; --green:#7aab6f; --moss:#5b8a5a;
+  --cyan:#63b7c4; --amber:#c49245; --plum:#a58ac0; --gold:#cdae63;
+  --serif:'Iowan Old Style','Palatino Linotype',Palatino,Georgia,'Times New Roman',serif;
+  --mono:'SF Mono','Cascadia Code','JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:
+    radial-gradient(120% 80% at 50% -8%, #12201a 0%, var(--bg) 58%) fixed;
+  color:var(--fg); font-family:var(--serif); font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:760px; margin:0 auto; padding:0 22px 96px}
+a{color:var(--green); text-decoration:none}
+a:hover{color:var(--sage); text-decoration:underline}
+code,.mono{font-family:var(--mono); font-size:.86em}
+
+/* ── hero ── */
+header{padding:70px 0 30px; text-align:center; border-bottom:1px solid var(--line)}
+.pi{font-family:var(--serif); color:var(--moss); font-size:22px; letter-spacing:1px}
+h1{font-family:var(--serif); font-weight:600; font-size:clamp(38px,9vw,60px);
+   margin:.12em 0 .18em; color:var(--sage); letter-spacing:.5px;
+   text-shadow:0 0 34px rgba(122,171,111,.22)}
+.badge{display:inline-block; font-family:var(--mono); font-size:11px; letter-spacing:.6px;
+  color:var(--muted); border:1px solid var(--line2); border-radius:20px; padding:3px 12px}
+.oneidea{font-size:clamp(19px,3.4vw,23px); color:var(--fg); max-width:600px;
+  margin:26px auto 0; line-height:1.45}
+.oneidea b{color:var(--sage); font-weight:600}
+
+/* ── prose ── */
+section{padding:34px 0; border-bottom:1px solid var(--line)}
+p{margin:0 0 15px}
+.lede{color:var(--dim)}
+.sentence{
+  font-family:var(--serif); font-size:20px; line-height:1.5; color:var(--fg);
+  background:var(--bg3); border:1px solid var(--line2); border-left:3px solid var(--moss);
+  border-radius:10px; padding:18px 22px; margin:6px 0 4px;
+}
+.sentence i{color:var(--sage); font-style:italic}
+.small{font-size:14px; color:var(--muted); font-family:var(--mono); line-height:1.6}
+
+h2{font-family:var(--serif); font-weight:600; font-size:15px; letter-spacing:2.4px;
+  text-transform:uppercase; color:var(--green); margin:0 0 6px}
+.h2note{color:var(--muted); font-size:14px; font-family:var(--mono); margin:0 0 22px}
+
+/* ── the five verbs ── */
+.verb{border:1px solid var(--line); border-radius:12px; background:var(--panel);
+  padding:16px 18px 6px; margin:14px 0; position:relative; overflow:hidden}
+.verb::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--accent,var(--green))}
+.verb.inhabit{--accent:var(--green)} .verb.author{--accent:var(--gold)}
+.verb.verify{--accent:var(--cyan)} .verb.coordinate{--accent:var(--plum)}
+.verb.trade{--accent:var(--amber)}
+.verb .vhead{display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:12px}
+.verb .vword{font-family:var(--serif); font-size:26px; font-weight:600; color:var(--accent,var(--green)); letter-spacing:.5px}
+.verb .vsub{color:var(--dim); font-size:15px}
+.organ{padding:8px 0; border-top:1px solid var(--line); display:grid;
+  grid-template-columns:180px 1fr; gap:6px 16px; align-items:baseline}
+.organ:first-of-type{border-top:none}
+.organ .on{font-family:var(--mono); font-size:13px; color:var(--sage); font-weight:500}
+.organ .od{font-size:15.5px; color:var(--fg); line-height:1.5}
+.organ .od b{color:var(--sage); font-weight:600}
+
+/* ── footer ── */
+footer{padding:36px 0 0; text-align:center}
+.next{display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin:20px 0 26px}
+.next a{border:1px solid var(--line2); border-radius:9px; padding:9px 15px;
+  font-family:var(--mono); font-size:13px; color:var(--dim)}
+.next a:hover{border-color:var(--green); color:var(--sage); background:var(--bg3); text-decoration:none}
+.lineage{color:var(--muted); font-size:13px; font-family:var(--mono)}
+.lineage b{color:var(--moss); font-weight:600}
+
+@media (max-width:560px){
+  .organ{grid-template-columns:1fr; gap:2px}
+  .organ .on{color:var(--green)}
+}
+@media (prefers-color-scheme:light){
+  :root{--bg:#f6f4ec; --bg2:#eef0e6; --bg3:#eceee2; --panel:#f1f2e9;
+    --line:rgba(40,50,38,.14); --line2:rgba(40,50,38,.22);
+    --fg:#232a22; --dim:#4c5346; --muted:#6b7061;
+    --sage:#3f6a3a; --green:#4a7a45; --moss:#3f6a3a;
+    --cyan:#2c6d78; --amber:#8a6320; --plum:#5f4a7a; --gold:#7a5f22}
+  body{background:radial-gradient(120% 80% at 50% -8%, #eef2e6 0%, var(--bg) 58%) fixed}
+  h1{text-shadow:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="pi">π</div>
+    <h1>What is deos?</h1>
+    <div class="badge">· a two-minute read ·</div>
+    <p class="oneidea">deos is a <b>verified object-capability computer</b> you can't be lied to about — an agentic desktop where every action is a proof, not a promise.</p>
+  </header>
+
+  <section>
+    <h2>The one idea</h2>
+    <p class="lede">A normal computer asks you to <em>trust</em> it: trust that the app did what it said, that the log wasn't edited, that the balance is real, that the file on disk is the file you saved. deos removes the trust. Underneath the desktop is <b>dregg</b> — a formally verified, capability-secure substrate where the unit of everything is a <b>cell</b> (a card, a document, an agent, a room, a service, you) and the only way anything changes is a <b>turn</b>: one authorized step, gated before it commits, chained by a receipt that binds the whole new state.</p>
+    <p>Two consequences make deos different from every desktop you've used:</p>
+    <p><b>You can only do what you hold a capability for</b> — and you hold a capability exactly when you can produce its witness. An affordance (a button, a menu item) is just a cap-gated turn template. Sharing is handing over an attenuated capability, never a copy of your authority. Nothing amplifies; re-sharing only ever narrows.</p>
+    <p><b>Nobody has to take the history on faith.</b> Every turn carries a succinct proof that it was a legal transition, and the whole chain folds into one constant-size root. So:</p>
+    <div class="sentence">A light client holding one root knows every transition in the whole history was authorized, conservative, fresh, and correctly committed — re-executing nothing. <i>That sentence is the system.</i></div>
+    <p class="small" style="margin-top:14px">The desktop is a fold over the receipt chain. “The substrate cannot lie” is not a slogan here — it is a column you can read, a rail you can scrub, and a refusal that lands on the glass in amber.</p>
+  </section>
+
+  <section>
+    <h2>The organs, by what you do with them</h2>
+    <p class="h2note">deos has ~47 organs — surfaces you inhabit. Here are the newest, grouped by the five verbs of a day inside it.</p>
+
+    <div class="verb inhabit">
+      <div class="vhead"><span class="vword">Inhabit</span><span class="vsub">be present in a world that is actually running</span></div>
+      <div class="organ"><div class="on">The desktop</div><div class="od">Cells are windows; opening one is reading the live ledger, and mutating it is a <b>verified turn with a receipt</b> — not a syscall you have to trust.</div></div>
+      <div class="organ"><div class="on">The Pulse</div><div class="od">A ~250ms heartbeat: the screen moves when the <b>World</b> moves. A foreign agent's committed turn arrives green on the status line and as a small card; a refusal arrives amber. No refresh buttons.</div></div>
+      <div class="organ"><div class="on">The Agent Room</div><div class="od">An AI <b>living in your World</b>, shown honestly: who it is, what it did (its receipts), and the exact edge of what it may do (its mandate as legible CAN / CANNOT verbs).</div></div>
+      <div class="organ"><div class="on">The Attach Wizard</div><div class="od">Send <b>your own</b> AI to live here in five minutes — name it, pick its brain (the hermetic on-box one keeps every key in your pocket), set its mandate with your hands, and hire it onto the live World already stepping.</div></div>
+      <div class="organ"><div class="on">Console &amp; scrollbars</div><div class="od">The receipt console keeps the <b>whole session's narration</b> (not one line overwritten); real NT scrollbars remember every place you scrolled, across closes and reopens.</div></div>
+    </div>
+
+    <div class="verb author">
+      <div class="vhead"><span class="vword">Author</span><span class="vsub">make things, and make the links between them visible</span></div>
+      <div class="organ"><div class="on">The App Shelf</div><div class="od">Launch any of ~20 real apps — escrow, councils, auctions, identity, agent swarms. Each lands as a <b>live cell wearing its own face</b>, its install a real turn in the Transcript.</div></div>
+      <div class="organ"><div class="on">GOSSAMER threads</div><div class="od">Quote a cell into a document and a literal <b>cyan thread</b> connects them on screen — Ted Nelson's Xanadu drawing, running over real receipted quotes. Walk it either way.</div></div>
+    </div>
+
+    <div class="verb verify">
+      <div class="vhead"><span class="vword">Verify</span><span class="vsub">you cannot be lied to about any of it</span></div>
+      <div class="organ"><div class="on">Provenance Walker</div><div class="od">Walk the receipt chain <b>hash by hash</b>; every link — the state hand-off and the per-agent back-edge — is recomputed right there, never taken on faith. A broken link glows amber.</div></div>
+      <div class="organ"><div class="on">The Rewind Rail</div><div class="od">Scrub the <b>entire desktop</b> back through history by verified replay. The past is strictly read-only — off LIVE, every acting verb dims; the world cannot be asked to lie about where it was.</div></div>
+      <div class="organ"><div class="on">The durable image</div><div class="od">Close it and reopen <b>exactly where you were</b>. Recovery inherits the node's crash-recovery proof; a divergent reconstructed root <b>refuses to open</b> rather than mislead you.</div></div>
+    </div>
+
+    <div class="verb coordinate">
+      <div class="vhead"><span class="vword">Coordinate</span><span class="vsub">reach other people and agents without a trusted middle</span></div>
+      <div class="organ"><div class="on">The Matrix Room</div><div class="od">A chat room <b>is a cell</b>; a message is a receipted turn. A cap-bounded slice of your World can travel as one envelope, be driven by the other side, and <b>stitched back</b> with conflicts surfaced, never silently dropped.</div></div>
+      <div class="organ"><div class="on">The Letter Office</div><div class="od">Slow mail between agents — each letter <b>a cell you can audit</b>, its journey (sender · recipient · digest · status) read straight off the ledger, delivery a real ferry turn.</div></div>
+    </div>
+
+    <div class="verb trade">
+      <div class="vhead"><span class="vword">Trade</span><span class="vsub">value, out in the open</span></div>
+      <div class="organ"><div class="on">The Exchange Floor</div><div class="od">A compute market where <b>offers are cells</b> and every settlement shows <b>Σδ = 0</b> read off the live ledger — conservation the executor enforces, not a caption. An over-budget bid is <b>refused on the glass</b>.</div></div>
+    </div>
+  </section>
+
+  <footer>
+    <p class="lede" style="max-width:560px;margin:0 auto">That is deos: an inhabited, provable computer. Every organ above is the same one idea wearing a different face — a turn you authorized, a receipt you can check, a capability you actually hold.</p>
+    <div class="next">
+      <a href="atlas/atlas.html">The architecture atlas — every organ, grounded to <span class="mono">file:line</span> →</a>
+      <a href="reference/turns.md">What a turn is</a>
+      <a href="reference/cells.md">What a cell is</a>
+    </div>
+    <p class="lineage">deos · the agentic desktop of <b>dregg</b> — the open, verified, object-capability substrate</p>
+  </footer>
+
+</div>
+</body>
+</html>

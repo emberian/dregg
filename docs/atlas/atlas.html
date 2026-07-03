@@ -203,6 +203,7 @@ section.sec.hidden { display: none; }
       <h1>Architecture atlas</h1>
       <div class="lede">A navigable, grounded, honest map of everything built (and being built) across <b>dregg</b> (the open AGPL verified substrate). Status badges distinguish proven truth from staged-not-flipped from designed. Every component cites <code>file:line</code> — click to open the source (serve from the repo root).</div>
       <div class="one-line">A light client holding one root knows every transition in the whole history was authorized, conservative, fresh, and correctly committed — re-executing nothing. <i>That sentence is the system; everything here is how it is true.</i></div>
+      <div style="margin-top:14px;font-size:13.5px;"><a href="../what-is-deos.html">New here? Read <b>“What is deos?”</b> — the two-minute one-idea tour, organs grouped by what you do with them →</a></div>
       <div class="legend" id="legend"></div>
       <div class="viewtabs">
         <button id="tab-map" class="active" onclick="setView('map')">Map &amp; sections</button>
@@ -275,7 +276,7 @@ const ATLAS = {
       name: "deos pillars",
       kind: "OPEN · the desktop",
       tagline: "A reflective workspace where every action is a verifiable turn and adds zero new trust: affordances are cap-gated turn templates, history is the receipt chain, sharing is a cap-confined membrane.",
-      sections: ["cockpit", "bridges", "apps"],
+      sections: ["cockpit", "organs", "bridges", "apps"],
     },
     {
       id: "welds",
@@ -464,6 +465,43 @@ const ATLAS = {
           files: [f("wasm/src/lib.rs"), f("deos-web-cells/src/document.rs"), f("docs/reference/wasm-web.md")] },
         { name: "deos-matrix · deos-terminal · deos-reflect", status: "REAL", what: "Matrix client with a fog-of-war membrane (per-viewer vision projection, proved) · real PTY over alacritty with a platform-free transport (native + WebSocket) · a gpui-free cap-bounded attested reflective view of cells/ocap-graph/affordances.",
           files: [f("deos-matrix/src/membrane.rs"), f("deos-terminal/src/model.rs", 204), f("deos-reflect/src/graph.rs")] },
+      ],
+    },
+    {
+      id: "organs", layer: "deos", title: "The desktop organs (night shift)",
+      what: "The reflective DESKTOP's rooms — the surfaces you actually live in (starbridge-v2 --desktop, the deos_desktop tree). Each is a window onto the ONE live local World: cells become icons, every mutation is a verified turn with a receipt, history carries provenance, and the room re-reads the executor's truth on each paint rather than caching a list. Grouped by what you DO with them — INHABIT · AUTHOR · VERIFY · COORDINATE · TRADE — these are the newest organs, the newcomer-facing skin over the very substrate the pillars around them prove. The one-line WHAT-IS-DEOS reader lives at ../what-is-deos.html.",
+      components: [
+        // ── INHABIT · be present in a living world ──
+        { name: "The Pulse", status: "REAL", what: "INHABIT. The ~250ms dynamics heartbeat: the desktop repaints when the World moves without its own hand — a foreign resident's committed turn lands green on the status line and as a self-retiring toast, a refusal amber (the ocap guarantee firing deserves a card, not a whisper). No refresh buttons; the OS feels alive because the ledger is.",
+          files: [f("starbridge-v2/src/deos_desktop/mod.rs", 1175, "pump_dynamics"), f("starbridge-v2/src/deos_desktop/toasts.rs", 45, "the toast rack")] },
+        { name: "The Agent Room", status: "REAL", what: "INHABIT. The desktop face of an agent-as-inhabitant, answering the operator's three standing questions: WHO lives here (identity + the executor-counted nonce), WHAT it did (recent cap-gated turns as the executor recorded them, a REFUSED row when the guarantee fired), WHAT it may do (its attenuated mandate projected to legible CAN / CANNOT verbs). You read the executor's receipts, never the agent's diary.",
+          files: [f("starbridge-v2/src/deos_desktop/agent_room.rs", 96, "AgentRoomState"), f("starbridge-v2/src/deos_desktop/agent_room.rs", 136, "render body")] },
+        { name: "The Attach Wizard", status: "REAL", what: "INHABIT. “Send your AI to live here in five minutes”: a warm five-breath onboarding — name it · pick the brain · set the mandate by direct manipulation · review · HIRE — that mints a real confined resident on the LIVE World and lands it already stepping. The hermetic on-box brain keeps every credential in your pocket (the brain-pocket invariant); it invents no second hire path.",
+          files: [f("starbridge-v2/src/deos_desktop/attach_wizard.rs", 174, "WizardStep"), f("starbridge-v2/src/resident_agent.rs", 172, "hire_resident_seeded")] },
+        { name: "The receipt console", status: "REAL", what: "INHABIT. Narration stops evaporating: every status line the desktop ever said (say()) lands in a 64-line ring, and clicking the status bar opens a dark, tail-following flyout of the whole session's story — with a “⋯ n new” unread chip. The bar shows the latest; the console keeps the history.",
+          files: [f("starbridge-v2/src/deos_desktop/mod.rs", 1157, "say()"), f("starbridge-v2/src/deos_desktop/mod.rs", 914, "status_log ring")] },
+        { name: "NT scrollbars", status: "REAL", what: "INHABIT. Every dense face gets one owned ScrollHandle behind a real System-7-dress NT scrollbar (thumb, track, ScrollbarShow::Always) — and the scroll POSITION becomes desktop view-state: it survives repaints, tab flips away and back, even a window close/reopen, exactly like the spatially-persisted window geometry. A position you chose is a position the desktop keeps.",
+          files: [f("starbridge-v2/src/deos_desktop/face_scroll.rs", 1, "the face-scroll registry"), f("starbridge-v2/src/deos_desktop/chrome.rs", 258, "nt_scroll_face")] },
+        // ── AUTHOR · make things and connect them ──
+        { name: "GOSSAMER threads", status: "REAL", what: "AUTHOR. Ted Nelson's parallel-visible connection, running over real receipted quotes: when a document quoting cell X and any surface showing X are both on screen, a literal cyan elbow thread runs between them, snapping into being on a drag-and-drop transclude. Each end is a walkable dot — click to travel INTO the quote or back OUT to the source. The docuverse becomes geometry you can see.",
+          files: [f("starbridge-v2/src/deos_desktop/threads.rs", 100, "elbow_path (pure geometry)")] },
+        { name: "The App Shelf", status: "REAL", what: "AUTHOR. The ~20 pre-built starbridge-apps as first-class desktop citizens: a shelf window listing every registry app, and a per-app LAUNCH that seeds the app's cell + program onto the LIVE World and commits its representative affordance as a REAL verified turn — the cell then stands as an icon wearing the app's own face, its receipt in the Transcript. Four apps expose a live-fire button; the rest launch and name their whole-lifecycle seam honestly.",
+          files: [f("starbridge-v2/src/deos_desktop/app_shelf.rs", 109, "AppShelfState"), f("starbridge-v2/src/deos_desktop/app_shelf.rs", 173, "install_on_world")] },
+        // ── VERIFY · see the truth; you cannot be lied to ──
+        { name: "The Provenance Walker", status: "REAL", what: "VERIFY. Walk the World's receipt chain hash-by-hash, every link RE-DERIVED as you walk (never trusted): the state chain (this receipt's pre-root must equal its predecessor's post-root) and the blocklace back-edge (previous_receipt_hash must equal the recomputed blake3 of the same agent's prior receipt). A lawful mid-session genesis install is named Reseeded, not cried broken. “The substrate cannot lie” becomes a column you can read.",
+          files: [f("starbridge-v2/src/deos_desktop/provenance_walker.rs", 95, "LinkVerdict"), f("starbridge-v2/src/deos_desktop/provenance_walker.rs", 229, "walk_rows (unit-tested)")] },
+        { name: "The Rewind Rail", status: "REAL", what: "VERIFY. The event-sourced OS made felt: a thin rail carries one tick per recorded history step; drag the scrubber and the WHOLE desktop — icons, inspectors, the World Explorer's faces — re-derives at that point by VERIFIED replay (History::reify_to, fail-closed against the recorded root). It NEVER mutates the live World: off LIVE every verified-turn verb dims (holds() gates on is_live). The past is read-only; the substrate cannot be asked to lie about it.",
+          files: [f("starbridge-v2/src/deos_desktop/rewind.rs", 104, "RewindProjection"), f("starbridge-v2/src/replay.rs", 316, "reify_to")] },
+        { name: "The durable image", status: "STAGED", what: "VERIFY. Close the desktop, reopen it, land exactly where you were: the World becomes a durable, rewindable image by wiring the node's already-built durability spine (redb commit log + checkpoint⊕overlay recovery) onto the one commit_turn seam — INHERITING CrashRecovery.lean's recover_eq_replay rather than re-proving it. Fail-closed: a divergent reconstructed root REFUSES to open. STAGED because --desktop stays EPHEMERAL by default (opt-in --durable-world) until the last write-set audit item (CORE-AUDIT #4) closes.",
+          files: [f("starbridge-v2/src/persistence.rs", 1, "the durable-image weld"), f("starbridge-v2/src/persistence.rs", 187, "World::open (fail-closed)")] },
+        // ── COORDINATE · reach other people and agents ──
+        { name: "The Matrix Room", status: "REAL", what: "COORDINATE. Membrane-over-Matrix, in the shipped desktop: a room IS a cell on your World, a send IS a receipted SetField turn (the timeline decoded back OFF the receipt chain, never a side table), and “⬡ mint membrane” wraps a cap-bounded World-fork in the exact MembraneEnvelope a Matrix event carries — “▶ rehydrate & drive” opens it fail-closed (anti-substitution root tooth), commits a real turn on the fork, and folds the diff back through the branch-and-stitch settlement gate. The live homeserver is a named, env-gated seam; today it rides the recorded sync.",
+          files: [f("starbridge-v2/src/deos_desktop/matrix_room.rs", 114, "MatrixRoomState"), f("deos-matrix/src/membrane.rs", 59, "MembraneEnvelope wire shape")] },
+        { name: "The Letter Office", status: "REAL", what: "COORDINATE. Mail between agents, as cells on the live World: every letter IS a cell (its markdown in the cell's heap; sender · recipient · digest · status in its slots), so the Mail Room never shows a cached list — it re-scans the executor's truth each paint. Inbox, Outbox (each outbound letter carries a “deliver now” button firing one ferry round as a real receipted turn), and the town's mail-ledger. dregg's own post office, in the spirit of Postmark.",
+          files: [f("starbridge-v2/src/letter_office.rs", 458, "mailbox_of"), f("starbridge-v2/src/deos_desktop/mail_room.rs", 86, "MailRoomState")] },
+        // ── TRADE · value, watchable ──
+        { name: "The Exchange Floor", status: "REAL", what: "TRADE. The $DREGG agent economy as a watchable room: compute OFFERS are real cells on the live World, and posting / taking under a lease / settling are each a real verified turn with a receipt. A settled offer shows Σδ = 0 read straight off the live ledger — the installed AffineEq(PAID + REFUNDED − BUDGET = 0) re-enforced by the executor, not a caption. An over-budget take is a REAL in-band refusal, wired to a button so the conservation tooth is demonstrable on the glass.",
+          files: [f("starbridge-v2/src/deos_desktop/exchange_floor.rs", 291, "ExchangeFloorState"), f("starbridge-v2/src/deos_desktop/exchange_floor.rs", 350, "post_offer")] },
       ],
     },
     {
