@@ -93,6 +93,14 @@ pub enum SpotterTarget {
     /// because every [`crate::app_registry::AppEntry::id`] is). Gated on `app-registry`.
     #[cfg(feature = "app-registry")]
     LaunchApp(&'static str),
+    /// Open the EXCHANGE FLOOR — the $DREGG agent-economy window (offers as live
+    /// cells; post → lease → settle each a real verified turn; Σδ=0 settlement; the
+    /// over-budget cheat refused by the executor). A global surface, anchored on the
+    /// user sentinel. Gated on `app-registry` (the compute-exchange /
+    /// execution-lease substrate crates in scope); the candidate comes from
+    /// [`crate::deos_desktop::exchange_floor::exchange_spotter_candidates`].
+    #[cfg(feature = "app-registry")]
+    ExchangeFloor,
 }
 
 /// One ranked candidate in the spotter result list. `label` is the reader-legible

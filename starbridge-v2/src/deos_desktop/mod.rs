@@ -60,6 +60,15 @@ pub mod app_shelf;
 pub mod bot_surface;
 pub mod chrome;
 pub mod docgraph_view;
+/// THE EXCHANGE FLOOR — the $DREGG agent economy as a desktop window: compute
+/// OFFERS as live cells (each carrying the compute-exchange job program), posted /
+/// taken-under-lease / settled by REAL verified turns (the executor refuses an
+/// over-budget take in-band; settlement conserves the budget Σδ=0, re-read off the
+/// LIVE ledger), with the App Shelf's compute-exchange + execution-lease apps as
+/// the substrate (launched if not installed). gpui-free order-book model + the
+/// View's listeners, split clobber-safe. Gated on `app-registry`.
+#[cfg(feature = "app-registry")]
+pub mod exchange_floor;
 /// The Pharo HALO — direct-manipulation handles floating on a selected icon/window,
 /// each firing the same actuation the right-click menu does ("mold it in place").
 pub mod halo;
@@ -307,6 +316,11 @@ enum WinKind {
     /// onto the LIVE World as a real verified turn. Its state (`AppShelfState`) lives
     /// in `app_shelf` (gated on `app-registry`), so this variant is a marker.
     AppShelf,
+    /// **THE EXCHANGE FLOOR** — the $DREGG agent-economy window: offers as live
+    /// cells, post → lease → settle as real verified turns, Σδ=0 settlement. Its
+    /// state (`ExchangeFloorState`) lives in `exchange_floor` (gated on
+    /// `app-registry`), so this variant is a marker.
+    ExchangeFloor,
 }
 
 impl WinKind {
@@ -323,6 +337,7 @@ impl WinKind {
             WinKind::ViewNodePane => "World Status",
             WinKind::AndroidCell => "Android · SystemUI",
             WinKind::AppShelf => "App Shelf",
+            WinKind::ExchangeFloor => "Exchange Floor",
         }
     }
 }
@@ -391,6 +406,12 @@ enum ActionKind {
     /// `app-registry` (the feature that wires the registry + app crates in).
     #[cfg(feature = "app-registry")]
     OpenAppShelf,
+    /// Open the EXCHANGE FLOOR — the $DREGG agent-economy window (offers as live
+    /// cells; post → lease → settle as real verified turns; Σδ=0 settlement). A
+    /// World-level surface. Gated on `app-registry` (the compute-exchange /
+    /// execution-lease substrate crates ride that feature).
+    #[cfg(feature = "app-registry")]
+    OpenExchangeFloor,
     /// Open the SPOTTER command palette — fuzzy-jump to any cell / action / window.
     OpenSpotter,
     /// Open the links / backlinks view over the cell.
@@ -633,6 +654,14 @@ pub struct DeosDesktop {
     /// Gated on `app-registry` (which implies `embedded-executor`).
     #[cfg(feature = "app-registry")]
     app_shelf: app_shelf::AppShelfState,
+    /// **THE EXCHANGE FLOOR state** — the $DREGG agent-economy order book: every
+    /// floor-posted compute OFFER is a REAL cell on the desktop's own `World`
+    /// carrying the compute-exchange job program; post / take / settle are real
+    /// verified turns committed through its spines. Read by the Exchange window
+    /// body and the offer icon faces; the App Shelf's compute-exchange +
+    /// execution-lease installs are its substrate. Gated on `app-registry`.
+    #[cfg(feature = "app-registry")]
+    exchange_floor: exchange_floor::ExchangeFloorState,
     /// The last rendered viewport size (logical px), captured each `render`. Tile /
     /// cascade read it so they fill the ACTUAL desktop instead of a hardcoded
     /// 1600×1000 — at higher bake resolutions the windows spread the whole room.
@@ -775,6 +804,8 @@ impl DeosDesktop {
             systemui_shades: std::collections::HashSet::new(),
             #[cfg(feature = "app-registry")]
             app_shelf: app_shelf::AppShelfState::new(),
+            #[cfg(feature = "app-registry")]
+            exchange_floor: exchange_floor::ExchangeFloorState::new(),
             last_viewport: (1600.0, 1000.0),
             focus: cx.focus_handle(),
             toast_rack: toasts::ToastRack::default(),
@@ -946,6 +977,7 @@ impl DeosDesktop {
             WinKindTag::ViewNodePane => WinKind::ViewNodePane,
             WinKindTag::AndroidCell => WinKind::AndroidCell,
             WinKindTag::AppShelf => WinKind::AppShelf,
+            WinKindTag::ExchangeFloor => WinKind::ExchangeFloor,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -1070,6 +1102,8 @@ impl DeosDesktop {
             WinKindTag::AndroidCell => (340.0, 520.0),
             // The App Shelf opens tall enough for the dense app roster.
             WinKindTag::AppShelf => (540.0, 460.0),
+            // The Exchange Floor opens wide enough for the order book's verb rows.
+            WinKindTag::ExchangeFloor => (560.0, 480.0),
             #[allow(unreachable_patterns)]
             // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => (380.0, 320.0),
@@ -1429,6 +1463,14 @@ impl DeosDesktop {
             true,
             A::OpenAppShelf,
         ));
+        // THE EXCHANGE FLOOR — the $DREGG agent economy: offers as live cells, every
+        // verb a real verified turn, settlement Σδ=0.
+        #[cfg(feature = "app-registry")]
+        v.push(MenuAction::new(
+            "Exchange Floor… ($DREGG economy · post → lease → settle)",
+            true,
+            A::OpenExchangeFloor,
+        ));
         #[cfg(feature = "card-pane")]
         v.push(MenuAction::new(
             "World-Status Board… (deos.ui ViewNode · agent-composable)",
@@ -1498,6 +1540,12 @@ impl DeosDesktop {
                     "App Shelf… (pre-built apps)",
                     true,
                     A::OpenAppShelf,
+                ));
+                #[cfg(feature = "app-registry")]
+                v.push(MenuAction::new(
+                    "Exchange Floor… (agent economy)",
+                    true,
+                    A::OpenExchangeFloor,
                 ));
                 #[cfg(feature = "card-pane")]
                 v.push(MenuAction::new(
@@ -1677,6 +1725,8 @@ impl DeosDesktop {
             ActionKind::OpenAndroidCell => self.land_in(cell, WinKindTag::AndroidCell),
             #[cfg(feature = "app-registry")]
             ActionKind::OpenAppShelf => self.open_app_shelf(),
+            #[cfg(feature = "app-registry")]
+            ActionKind::OpenExchangeFloor => self.open_exchange_floor(),
         }
     }
 
@@ -2356,6 +2406,10 @@ impl DeosDesktop {
         // per registry app, so the one-keystroke entry reaches every pre-built app.
         #[cfg(feature = "app-registry")]
         out.extend(app_shelf::app_spotter_candidates());
+        // THE EXCHANGE FLOOR — the one entry to the agent-economy room (offers ride
+        // the per-cell candidates below; an offer IS a cell).
+        #[cfg(feature = "app-registry")]
+        out.extend(exchange_floor::exchange_spotter_candidates());
         out.extend(spotter::candidates_for_cells(&self.cells, |c| {
             (
                 self.cell_kind(c).to_string(),
@@ -2420,6 +2474,10 @@ impl DeosDesktop {
             Tg::AndroidCell => self.land_in(self.user, WinKindTag::AndroidCell),
             #[cfg(feature = "app-registry")]
             Tg::AppShelf => self.land_in(self.user, WinKindTag::AppShelf),
+            // The floor's opener ensures the substrate (a real launch when missing)
+            // and lands mold-ready like every other global surface.
+            #[cfg(feature = "app-registry")]
+            Tg::ExchangeFloor => self.open_exchange_floor(),
             // Launching an app writes its OWN rich status line (the receipt landmark),
             // so this arm returns early rather than letting the generic "Spotter → …"
             // overwrite the committed-turn verdict.
@@ -2514,6 +2572,8 @@ impl DeosDesktop {
             }
             #[cfg(feature = "app-registry")]
             ActionKind::OpenAppShelf => self.open_app_shelf(),
+            #[cfg(feature = "app-registry")]
+            ActionKind::OpenExchangeFloor => self.open_exchange_floor(),
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Desktop);
                 self.status = "Desktop Preferences & customization.".into();
@@ -3773,6 +3833,13 @@ impl DeosDesktop {
         // keeps its kind face.)
         #[cfg(feature = "app-registry")]
         let (kind, glyph) = self.app_shelf.icon_face(&cell).unwrap_or((kind, glyph));
+        // A floor-posted OFFER's cell wears the economy face ("compute offer" · $) —
+        // the order book's substance reads as itself on the desktop.
+        #[cfg(feature = "app-registry")]
+        let (kind, glyph) = self
+            .exchange_floor
+            .icon_face(&cell)
+            .unwrap_or((kind, glyph));
         let label = if self.layout.prefs.show_balances {
             format!("{}\n{}\n{}", kind, id_short(&cell), fmt_balance(bal))
         } else {
@@ -3906,6 +3973,8 @@ impl DeosDesktop {
             WinKindTag::AndroidCell => self.render_android_systemui_body(cell, cx),
             #[cfg(feature = "app-registry")]
             WinKindTag::AppShelf => self.render_app_shelf_body(cx),
+            #[cfg(feature = "app-registry")]
+            WinKindTag::ExchangeFloor => self.render_exchange_floor_body(cx),
             #[allow(unreachable_patterns)]
             // needed when card-pane / android-systemui features are off
             _ => self.render_inspector_body(cell, cx),
