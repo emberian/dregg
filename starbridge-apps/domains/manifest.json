@@ -1,0 +1,72 @@
+{
+  "id": "domains",
+  "name": "Custom Domains",
+  "description": "BYO custom domains as a dregg-native cell: a domain binding is a factory-born sovereign cell whose committed slots {domain, site, owner, verification_state, challenge_nonce, verified_seq} carry the WriteOnce(domain/owner/challenge_nonce) + Monotonic(verification_state/verified_seq) invariants the executor re-enforces. A DomainCap-gated bind turn issues a DNS challenge; a verify turn flips verification_state once against an injected DnsResolver seam; site_for_host / is_verified are the verified reads a gateway consults. Register, bind, verify.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d646f6d61696e732d62696e64696e672d6661632121"
+  ],
+  "page": null,
+  "inspectors": [
+    "dregg-domain"
+  ],
+  "host_inspectors": [
+    { "id": "domain", "label": "Domain Binding", "tag": "dregg-domain", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "register_domain", "label": "Register domain", "builder": "register_domain", "kind": "turn" },
+    { "id": "bind_domain", "label": "Bind to site", "builder": "bind_domain", "kind": "turn" },
+    { "id": "verify_domain", "label": "Verify control", "builder": "verify_domain", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "domain", "label": "Custom domain", "type": "text", "default": "blog.acme.io" },
+    { "id": "method", "label": "Challenge method", "type": "select", "options": ["Txt", "Cname"], "default": "Txt" }
+  ],
+  "turn_builders": [
+    "register_domain",
+    "bind_domain",
+    "verify_domain"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.domains"
+  ],
+  "slot_layout": {
+    "DOMAIN_SLOT": 0,
+    "SITE_SLOT": 1,
+    "OWNER_SLOT": 2,
+    "CHALLENGE_NONCE_SLOT": 3,
+    "VERIFICATION_STATE_SLOT": 4,
+    "VERIFIED_SEQ_SLOT": 5
+  },
+  "state_constraints": [
+    "WriteOnce(DOMAIN_SLOT)",
+    "WriteOnce(OWNER_SLOT)",
+    "WriteOnce(CHALLENGE_NONCE_SLOT)",
+    "Monotonic(VERIFICATION_STATE_SLOT)",
+    "Monotonic(VERIFIED_SEQ_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router; DeosApp::publish_all mints the binding cell's dregg:// sturdyref",
+    "src_factory": "domain_app(cipherclerk, executor)",
+    "cell": "domain",
+    "discoverable": ["domains", "custom-domains"],
+    "publish": "Signature (a gateway/resolver reacquires the binding cell across a federation membrane and reads the verified SITE the domain points at)",
+    "affordances": {
+      "register": "cap-only, None/root (the OWNER seals DOMAIN + OWNER — WriteOnce, no takeover)",
+      "bind": "cap-only, None/root (the OWNER points at a site + seals the DNS challenge nonce — WriteOnce(CHALLENGE_NONCE); the fine bind-cap gate is the dregg-auth credential verify)",
+      "verify": "GATED (cap∧state), None/root — not-yet-verified precondition (VERIFICATION_STATE==0); the fire flips VERIFICATION_STATE->1 and advances VERIFIED_SEQ off live state, the executor re-enforcing Monotonic on both",
+      "resolve": "cap-only, Signature (a RESOLVER reads the verified SITE the domain points at)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded domain cell carrying the binding program (WriteOnce(DOMAIN/OWNER/CHALLENGE_NONCE) + Monotonic(VERIFICATION_STATE/VERIFIED_SEQ)), so an UN-VERIFY (VERIFICATION_STATE 1->0), a rewound VERIFIED_SEQ, a re-issued challenge nonce, and an owner TAKEOVER all BITE in the deos fire path. The htmx tooth: after verify, the verify button goes DARK (VERIFICATION_STATE!=0 fails its precondition) — the domain flips to verified exactly once."
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/domains/src/lib.rs"
+  }
+}
