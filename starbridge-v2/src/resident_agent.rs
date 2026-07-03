@@ -33,20 +33,20 @@
 //! on the resident's own open cell — the same [`deos_hermes::tool_effects`] shape
 //! the gate already commits successfully on its own executor.
 //!
-//! ## Where the Agent Room welds (TODO, tonight's newer commits)
+//! ## Where the Agent Room welds (SHIPPED — `deos_desktop::hireling`)
 //!
-//! The Agent Room window (`deos_desktop/agent_room.rs`, mounted at `mod.rs`) opens
-//! onto a `default_resident` that today falls back to the operator. It should:
-//!   * on "Hire" → call [`hire_resident`] on the live desktop World and set the
-//!     room's `resident = Some(handle.cell)`;
-//!   * on a prompt strip submit → call [`AgentHandle::prompt`], then `cx.notify()`
-//!     so `AgentActivity::build` re-reads the mirrored receipts;
-//!   * render [`AgentHandle::refusals`] as a compact refusal banner (a REAL gate
-//!     verdict, not a fabricated `TurnRejected`);
-//!   * on "Fire" → drop the handle (its leaked runtime is app-lived; a full
-//!     teardown is future work).
-//! These welds are intentionally NOT applied to `mod.rs` in this lane — the
-//! surface is a clean library seam the room drives.
+//! The Agent Room window (`deos_desktop/agent_room.rs`, mounted at `mod.rs`) now
+//! carries THE HIRELING STRIP (`deos_desktop/hireling.rs`, `dev-surfaces`):
+//!   * "HIRE" → [`hire_resident_seeded`] on the live desktop World (a free seed
+//!     pair scanned off the LIVE ledger) and the room pinned to `handle.cell`;
+//!   * "STEP" → one [`AgentHandle::prompt`] beat (a rotated confined objective),
+//!     then `cx.notify()` so `AgentActivity::build` re-reads the mirrored
+//!     receipts; new gate refusals arrive as amber toasts;
+//!   * [`AgentHandle::refusals`] merge into the Actions face as REFUSED rows (a
+//!     REAL gate verdict, never a fabricated `TurnRejected`);
+//!   * "FIRE" → a real `RevokeCapability` turn strips the resident's live-World
+//!     mandate, then the handle drops (its leaked runtime is app-lived; that
+//!     teardown seam stays named, not hidden).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -152,13 +152,28 @@ pub struct PromptSummary {
 /// is driven with [`AgentHandle::prompt`]; the room later welds Hire/Fire buttons
 /// to this call (see the module doc).
 pub fn hire_resident(world: &Rc<RefCell<World>>, mandate: ResidentMandate) -> AgentHandle {
+    hire_resident_seeded(world, mandate, 0x5A, 0x5B)
+}
+
+/// [`hire_resident`] with CALLER-CHOSEN genesis seeds for the peer + resident
+/// cells. The fixed `0x5A`/`0x5B` pair derives FIXED cell ids, and the World's
+/// genesis path refuses a second insert at an occupied id — so a hire→fire→hire
+/// cycle (the Agent Room's) must scan the LIVE ledger for a free pair and hand
+/// it here (see `deos_desktop::hireling::free_seed_pair`). Same confinement,
+/// same mirror weld — only the birth address moves.
+pub fn hire_resident_seeded(
+    world: &Rc<RefCell<World>>,
+    mandate: ResidentMandate,
+    peer_seed: u8,
+    agent_seed: u8,
+) -> AgentHandle {
     // Mint the resident's DESKTOP cell (genesis path — no executor turn): a peer
     // it can reach (non-trivial authority) + the resident cell holding that cap,
     // funded with its allowance.
     let cell = {
         let mut w = world.borrow_mut();
-        let peer = w.genesis_cell(0x5A, 0);
-        let (agent, _slot) = w.genesis_cell_with_cap(0x5B, mandate.allowance, peer);
+        let peer = w.genesis_cell(peer_seed, 0);
+        let (agent, _slot) = w.genesis_cell_with_cap(agent_seed, mandate.allowance, peer);
         agent
     };
 
