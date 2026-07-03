@@ -69,21 +69,44 @@ pub enum RecordedStep {
     Committed {
         turn: Box<Turn>,
         receipt: Box<TurnReceipt>,
-        /// The canonical [`Ledger::root`] of the post-state — the same
-        /// commitment `snapshot.rs` binds against. Replay verifies the
-        /// reconstructed ledger against this.
+        /// The canonical [`Ledger::root`] of the post-state, recorded per step —
+        /// the same commitment `snapshot.rs` binds against.
+        ///
+        /// HONEST BOUNDARY (what actually verifies replay): this is a per-step
+        /// *copy* of the canonical tooth, equal by construction to the parallel
+        /// [`History`]`.roots[k+1]` — both are set from the identical
+        /// `ledger.root()` in [`History::record_commit`]. The value the replay path
+        /// verifies the reconstructed ledger against is that parallel `roots` vector
+        /// ([`History::root_at`]), checked once per landing at the end of
+        /// [`History::replay_to`]; `apply_step` drops this per-step field via `..`
+        /// and no verification path currently consults it. Editing only this field
+        /// (leaving `roots[k]` honest) changes no replay outcome. It is surfaced via
+        /// [`RecordedStep::root_after`] for external inspection, not verification.
         post_root: [u8; 32],
     },
 }
 
 impl RecordedStep {
-    /// The canonical root tooth recorded *after* this step landed (the
-    /// commitment replay must reproduce). For a genesis step it is the root of
-    /// the ledger immediately after the install.
-    pub fn root_after(&self) -> [u8; 32] {
+    /// The per-step canonical root tooth this step carries *in isolation*, if any.
+    ///
+    /// `Some(post_root)` for a [`RecordedStep::Committed`] turn — the
+    /// [`Ledger::root`] recorded immediately after that commit. `None` for a
+    /// [`RecordedStep::Genesis`] install: a genesis step carries only its cell, not
+    /// a root — the post-genesis root needs ledger context and lives ONLY in the
+    /// parallel [`History`]`.roots` vector, so this step cannot hand one back
+    /// without inventing it. (It formerly returned a `[0u8; 32]` placeholder here —
+    /// a value that can never equal a real blake3 ledger root, so any verifier that
+    /// keyed off it would spuriously reject every genesis step; `None` states the
+    /// honest thing instead of a bogus tooth.)
+    ///
+    /// This is the recorded per-step *copy* (see [`RecordedStep::Committed`]'s
+    /// `post_root`); the authoritative tooth the replay path verifies against is
+    /// [`History::root_at`]. Use that for verification — this accessor is for
+    /// inspection (timeline UIs, diagnostics), and today has no in-tree consumer.
+    pub fn root_after(&self) -> Option<[u8; 32]> {
         match self {
-            RecordedStep::Genesis { .. } => [0u8; 32], // filled by History (needs ledger context)
-            RecordedStep::Committed { post_root, .. } => *post_root,
+            RecordedStep::Genesis { .. } => None,
+            RecordedStep::Committed { post_root, .. } => Some(*post_root),
         }
     }
 
@@ -136,7 +159,9 @@ pub struct History {
     /// projection). This is the umem time-travel revolution made live: the
     /// boundary IS the state, so [`Self::reify_to`] restores any past point by
     /// [`reify_ledger`] (a single inverse fold) instead of O(history)
-    /// re-execution from genesis — root-verified against `roots[i]` all the same.
+    /// re-execution from genesis — consistency-checked against `roots[i]` all the
+    /// same (a co-recorded round-trip check, strictly weaker than
+    /// [`Self::replay_to`]'s re-execution ground truth — see [`Self::reify_to`]).
     boundaries: Vec<UProjection>,
     /// The fixed executor timestamp used for every recorded turn, so replay is
     /// bit-deterministic (a recorded receipt re-derives identically).
@@ -303,9 +328,29 @@ impl History {
     /// boundary, exactly the `turn/tests/umem_time_travel.rs` keystone
     /// (`reify_ledger(project_ledger(L)) == L`) run on real recorded history.
     ///
-    /// The restore is held to the SAME anti-substitution discipline as
-    /// [`Self::replay_to`]: the reified ledger MUST commit to the recorded root
-    /// tooth `roots[k]`, or the restore is REFUSED ([`ReplayError::RootMismatch`]).
+    /// HONEST BOUNDARY (weaker than [`Self::replay_to`], despite the fast path):
+    /// this restore is NOT held to `replay_to`'s anti-substitution discipline. It
+    /// checks that the reified ledger commits to the recorded root tooth `roots[k]`
+    /// ([`ReplayError::RootMismatch`] on failure) — but `boundaries[k]` and
+    /// `roots[k]` are CO-RECORDED post-state artifacts, captured together from the
+    /// SAME ledger in [`Self::record_commit`] / [`Self::record_genesis`]. So this
+    /// check is the round-trip identity `reify_ledger(project_ledger(L)).root() ==
+    /// L.root()` between two values recorded in lockstep — it confirms the boundary
+    /// is INTERNALLY CONSISTENT with its co-recorded root, NOT that either agrees
+    /// with re-executing the input turns. [`Self::replay_to`], by contrast, discards
+    /// the recorded post-state and RE-DERIVES it from genesis — that re-execution is
+    /// the actual anti-substitution ground truth. A JOINT substitution of the pair
+    /// (`boundaries[k]` ← a forged-but-faithful `project_ledger(L')`, `roots[k]` ←
+    /// `L'.root()`) passes this check while [`Self::replay_to`] catches it — pinned
+    /// by the `reify_to_trusts_the_co_recorded_pair…` test.
+    ///
+    /// This is safe TODAY only because `History`'s `steps` / `roots` / `boundaries`
+    /// are private, have no from-parts constructor and no `Serialize`/`Deserialize`,
+    /// and are mutated ONLY in lockstep by the `record_*` methods — so the pair is
+    /// always consistent with the turns that produced it. The gap would become a
+    /// real substitution vector the moment a `History` is reconstructed from
+    /// persisted or untrusted data; reach for [`Self::replay_to`] where independence
+    /// from the recorded boundary actually matters.
     ///
     /// A cell whose state lies OUTSIDE the projection's faithful class (typed
     /// interfaces, capability tombstones, a post-revoke `next_slot` gap — the named
@@ -1288,6 +1333,72 @@ mod tests {
             h.reify_to(h.len() + 1),
             Err(ReplayError::OutOfRange { .. })
         ));
+    }
+
+    #[test]
+    fn root_after_carries_committed_teeth_and_none_for_genesis() {
+        // The per-step tooth accessor (finding #12): a genesis step carries NO
+        // self-contained root (it lives only in History.roots), so `root_after` is
+        // `None` — not the old `[0u8; 32]` placeholder that could never equal a real
+        // ledger root. A committed step's per-step copy equals the parallel
+        // authoritative tooth `History::root_at(k+1)`.
+        let (h, _l, _a, _b) = fixture();
+        let steps = h.steps();
+        assert_eq!(steps.len(), 5);
+        // The two genesis installs.
+        assert_eq!(steps[0].root_after(), None);
+        assert_eq!(steps[1].root_after(), None);
+        // The three committed turns: step k's post_root == roots[k + 1].
+        for k in 2..steps.len() {
+            assert_eq!(
+                steps[k].root_after(),
+                Some(h.root_at(k + 1)),
+                "committed step {k} per-step tooth == History.roots[{}]",
+                k + 1
+            );
+        }
+    }
+
+    #[test]
+    fn reify_to_trusts_the_co_recorded_pair_a_joint_substitution_replay_to_catches() {
+        // HONEST BOUNDARY (finding #16): reify_to root-checks the reified boundary
+        // against roots[k], but boundaries[k] and roots[k] are CO-RECORDED post-state
+        // artifacts (captured together in record_commit/record_genesis). The check is
+        // therefore a round-trip consistency test between two values recorded in
+        // lockstep — NOT the re-execution-from-genesis ground truth replay_to
+        // enforces. A JOINT substitution of (boundary, root) passes reify_to while
+        // replay_to catches it. This test PINS that weaker guarantee.
+        let (mut h, _l, _a, _b) = fixture();
+
+        // Substitute step 3's (boundary, root) with step 4's post-state — an
+        // internally consistent, faithful-class pair that does NOT match what the
+        // first three turns actually compute.
+        let mut l4 = h.replay_to(4).expect("honest step-4 replay");
+        h.boundaries[3] = project_ledger(&l4);
+        h.roots[3] = l4.root();
+
+        // reify_to TRUSTS the co-recorded pair: the reified boundary commits to the
+        // (substituted) recorded root, so the restore is ACCEPTED — the honest
+        // weakness. It hands back the step-4 ledger for a scrub aimed at step 3.
+        let (mut reified, source) = h
+            .reify_to(3)
+            .expect("reify_to trusts the co-recorded (boundary, root) pair");
+        assert_eq!(source, ScrubSource::UmemBoundary);
+        assert_eq!(
+            reified.root(),
+            h.roots[4],
+            "reify_to returned the step-4 ledger for a step-3 scrub"
+        );
+
+        // replay_to RE-EXECUTES the recorded input turns from genesis and CATCHES the
+        // substitution: the honest step-3 root != the substituted tooth (fail-closed).
+        assert!(
+            matches!(
+                h.replay_to(3),
+                Err(ReplayError::RootMismatch { step: 3, .. })
+            ),
+            "replay_to re-derives from inputs and rejects the substitution reify_to accepted"
+        );
     }
 
     #[test]

@@ -7,11 +7,22 @@
 //!   - `bind`   → a [`Label`] re-read off the live applet ledger (the signal binding)
 //!   - `button` → [`gpui_component::button::Button`] whose `on_click` fires the
 //!     applet's affordance = a REAL cap-gated verified turn (a `TurnReceipt`)
-//!   - `input`  → a bordered field showing the ephemeral view-state value
+//!   - `input`  → a bordered field showing the ephemeral view-state value (see the
+//!     NATIVE/WEB PARITY note below — display-only on native, editable `<input>` on web)
 //!   - `list` / `table` → a `v_flex` of the child nodes
 //!
 //! The same vocabulary renders the moldable `present()` faces ([`crate::faces`]) — the
 //! §7 unification (the inspector and the custom view share widgets).
+//!
+//! NATIVE/WEB PARITY — one honest exception. The view-tree is renderer-independent
+//! DATA and every node paints on both faces, but `input` is not yet INTERACTIVE on
+//! native: there is NO text-entry widget in this crate, so a native `input` renders a
+//! READ-ONLY [`Label`] (a user cannot type), while the `web` renderer emits a real
+//! editable `<input>` read live on submit. A native `input` therefore reflects only
+//! draft text a JS/agent path seeded via `set_view`, and an unseeded submit fires
+//! `arg = 0`. Wiring gpui's `InputState`/`TextInput` (persistent per-field state +
+//! focus) closes it; until then treat native `input` as display/agent-driven, not
+//! user-editable. (Audit finding #17 — the honest boundary, stated at the node.)
 //!
 //! INVALIDATION — the **fine-grained signal hook** (the SolidJS-shaped re-render).
 //!
@@ -494,6 +505,16 @@ impl AppletView {
                 // The ephemeral view-state value (draft text) — NOT cell state. When `fire_turn`
                 // is set, a paired submit button parses the draft into the turn's `arg` and fires
                 // a REAL cap-gated verified turn (input → verified turn).
+                //
+                // NATIVE/WEB PARITY GAP (honest boundary): on NATIVE this renders a READ-ONLY
+                // `Label` — there is no text-entry widget anywhere in deos-view, so a user cannot
+                // type into it. `get_view(bind_view)` returns only whatever a JS/agent path wrote
+                // via `set_view` (empty if nothing did), and on submit the arg is parsed from that
+                // draft at RENDER time (`draft.trim().parse().unwrap_or(0)` below), so an unseeded
+                // field fires `arg = 0`. On WEB the same node renders a real editable `<input>`
+                // whose value is read LIVE on submit. So an authored transfer/URL/amount form is
+                // user-interactive on web but display/agent-driven on native until a native
+                // editable field (gpui `InputState`/`TextInput`) is wired. See the module doc.
                 let draft = self
                     .applet
                     .borrow()

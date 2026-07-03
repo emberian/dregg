@@ -57,6 +57,12 @@ pub enum ViewNode {
     /// `fire_turn` keeps the legacy ephemeral-draft-only behaviour. Unlocks the
     /// `ServiceExplorer` arg rows, the `WebShell` URL bar, the predicate composer (input →
     /// verified turn).
+    ///
+    /// NATIVE/WEB PARITY: the editable field is live on the WEB renderer (a real
+    /// `<input>` read on submit); the NATIVE renderer currently paints this
+    /// display-only (a read-only label — no text-entry widget), so those unlocked
+    /// surfaces are user-interactive on web but display/agent-driven on native until a
+    /// native editable field lands. See `deos-view`'s `render` module doc (finding #17).
     Input {
         bind_view: String,
         /// The affordance the submitted draft fires (its `arg` is the parsed draft). Empty →
