@@ -70,7 +70,7 @@ use std::rc::Rc;
 
 use gpui::{
     div, px, AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, StatefulInteractiveElement, Styled,
+    ParentElement, Styled,
 };
 
 use dregg_app_framework::{symbol, Effect, Event, TurnReceipt};
@@ -718,15 +718,16 @@ impl DeosDesktop {
     /// live amounts · the per-phase verbs, every button a real verified turn or a
     /// demonstrable executor refusal). Rows come from the pure LIVE projection
     /// ([`ExchangeFloorState::rows`]); this method owns only the listeners.
-    pub(super) fn render_exchange_floor_body(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_exchange_floor_body(
+        &self,
+        scroll: &gpui::ScrollHandle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let rows = self.exchange_floor.rows();
         let summary = exchange_summary(&rows);
 
         let mut col = div()
             .id("exchange-floor-body")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -784,7 +785,9 @@ impl DeosDesktop {
         for row in rows {
             col = col.child(self.render_exchange_offer_row(row, cx));
         }
-        col.into_any_element()
+        // The order book scrolls behind a REAL NT scrollbar — a deep book reads
+        // as depth, not truncation, and the persistent handle keeps the place.
+        super::chrome::nt_scroll_face(scroll, col).into_any_element()
     }
 
     /// One substrate row: the shelf app's install verdict + its LIVE detail line

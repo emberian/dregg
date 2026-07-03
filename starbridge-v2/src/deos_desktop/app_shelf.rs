@@ -49,7 +49,7 @@ use std::rc::Rc;
 
 use gpui::{
     div, px, AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, StatefulInteractiveElement, Styled,
+    ParentElement, Styled,
 };
 
 use dregg_app_framework::{DeosApp, TurnReceipt};
@@ -501,7 +501,11 @@ impl DeosDesktop {
     /// button (its cell's inspector), and the wired fire buttons (each a real
     /// verified turn). The rows come from the pure [`shelf_rows`] projection; this
     /// method owns only the listeners (the clobber-safe split).
-    pub(super) fn render_app_shelf_body(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_app_shelf_body(
+        &self,
+        scroll: &gpui::ScrollHandle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let rows = shelf_rows(&self.app_shelf, |cell| {
             format!(
                 "balance {} · nonce {} · {} receipt(s) · {}",
@@ -515,9 +519,6 @@ impl DeosDesktop {
 
         let mut col = div()
             .id("app-shelf-body")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -539,7 +540,9 @@ impl DeosDesktop {
         for row in rows {
             col = col.child(self.render_shelf_row(row, cx));
         }
-        col.into_any_element()
+        // The roster scrolls behind a REAL NT scrollbar — a long shelf reads as
+        // depth, not truncation, and the persistent handle keeps the place.
+        super::chrome::nt_scroll_face(scroll, col).into_any_element()
     }
 
     /// One shelf row: the app's heading + description + facts, then its action

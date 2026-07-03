@@ -33,15 +33,16 @@
 //! picker strip (it holds the `Context` the listeners need).
 
 use gpui::{
-    div, px, AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled,
+    div, px, AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
+    Styled,
 };
 
 use dregg_types::CellId;
 
 use crate::agent::AgentActivity;
 use crate::deos_desktop::chrome::{
-    face_row, face_row_color, face_section, fmt_balance, id_short, NT_DIM, NT_OK, NT_PANEL, NT_WARN,
+    face_row, face_row_color, face_section, fmt_balance, id_short, nt_scroll_face, NT_DIM, NT_OK,
+    NT_PANEL, NT_WARN,
 };
 use crate::world::World;
 
@@ -126,11 +127,21 @@ pub fn default_resident(world: &World, user: CellId) -> CellId {
 /// prebuilt [`AgentActivity`] (the caller builds it from the live `World` each
 /// frame — the room is always the ledger's truth, never a cached self-report).
 /// The clickable tab/picker strips above this body are built by the caller.
-pub fn render_agent_room_body(activity: &AgentActivity, tab: AgentRoomTab) -> AnyElement {
+///
+/// `scroll` is the face's PERSISTENT scroll handle (the View owns it, keyed per
+/// tab — see `face_scroll`); each face wraps itself in the chrome kit's
+/// [`nt_scroll_face`] so it scrolls behind a real, always-visible NT scrollbar
+/// and keeps its position across repaints. The handle is a plain value — the
+/// module stays free of view context (the clobber-safe split holds).
+pub fn render_agent_room_body(
+    activity: &AgentActivity,
+    tab: AgentRoomTab,
+    scroll: &ScrollHandle,
+) -> AnyElement {
     match tab {
-        AgentRoomTab::Actions => render_actions_face(activity),
-        AgentRoomTab::Mandate => render_mandate_face(activity),
-        AgentRoomTab::Reach => render_reach_face(activity),
+        AgentRoomTab::Actions => render_actions_face(activity, scroll),
+        AgentRoomTab::Mandate => render_mandate_face(activity, scroll),
+        AgentRoomTab::Reach => render_reach_face(activity, scroll),
     }
 }
 
@@ -166,14 +177,11 @@ pub fn render_room_header(activity: &AgentActivity) -> AnyElement {
 /// as the executor recorded them. A committed turn shows its height, receipt
 /// hash prefix, action count, and metered computrons; a refused one shows the
 /// refusal reason in amber — the ocap guarantee firing, never faked away.
-fn render_actions_face(activity: &AgentActivity) -> AnyElement {
+fn render_actions_face(activity: &AgentActivity, scroll: &ScrollHandle) -> AnyElement {
     let n = activity.actions.len();
 
     let mut col = div()
         .id("agent-room-actions")
-        .flex_1()
-        .min_h(px(0.0))
-        .overflow_y_scroll()
         .bg(gpui::rgb(0x101820))
         .text_color(gpui::rgb(0x9fe0a0))
         .p_2()
@@ -186,9 +194,11 @@ fn render_actions_face(activity: &AgentActivity) -> AnyElement {
         )));
 
     if n == 0 {
-        return col
-            .child(div().child("(no turns yet — the room is quiet)"))
-            .into_any_element();
+        return nt_scroll_face(
+            scroll,
+            col.child(div().child("(no turns yet — the room is quiet)")),
+        )
+        .into_any_element();
     }
 
     for a in &activity.actions {
@@ -214,7 +224,7 @@ fn render_actions_face(activity: &AgentActivity) -> AnyElement {
             );
         }
     }
-    col.into_any_element()
+    nt_scroll_face(scroll, col).into_any_element()
 }
 
 // ── MANDATE: the held capability edges ────────────────────────────────────────────
@@ -222,14 +232,11 @@ fn render_actions_face(activity: &AgentActivity) -> AnyElement {
 /// The MANDATE face — each capability edge the resident holds: the target cell
 /// it may reach, at what rights, whether the cap is faceted (effect-restricted),
 /// and its expiry height if bounded. Adoption IS attenuation, made legible.
-fn render_mandate_face(activity: &AgentActivity) -> AnyElement {
+fn render_mandate_face(activity: &AgentActivity, scroll: &ScrollHandle) -> AnyElement {
     let n = activity.mandate.len();
 
     let mut col = div()
         .id("agent-room-mandate")
-        .flex_1()
-        .min_h(px(0.0))
-        .overflow_y_scroll()
         .bg(gpui::rgb(NT_PANEL))
         .p_2()
         .flex()
@@ -240,9 +247,11 @@ fn render_mandate_face(activity: &AgentActivity) -> AnyElement {
         )));
 
     if n == 0 {
-        return col
-            .child(face_row("(none)", "no held caps — the room has no reach"))
-            .into_any_element();
+        return nt_scroll_face(
+            scroll,
+            col.child(face_row("(none)", "no held caps — the room has no reach")),
+        )
+        .into_any_element();
     }
 
     for edge in &activity.mandate {
@@ -273,7 +282,7 @@ fn render_mandate_face(activity: &AgentActivity) -> AnyElement {
                 ),
         );
     }
-    col.into_any_element()
+    nt_scroll_face(scroll, col).into_any_element()
 }
 
 // ── REACH: the authorization boundary — CAN and CANNOT ───────────────────────────
@@ -282,7 +291,7 @@ fn render_mandate_face(activity: &AgentActivity) -> AnyElement {
 /// amber CANNOT rows, each with its basis. The CANNOT rows are the edge of the
 /// loop's reach — the answer to "what is this resident unable to touch?", read
 /// off the real cap-graph rather than asserted.
-fn render_reach_face(activity: &AgentActivity) -> AnyElement {
+fn render_reach_face(activity: &AgentActivity, scroll: &ScrollHandle) -> AnyElement {
     let permitted = activity
         .authorizations
         .iter()
@@ -292,9 +301,6 @@ fn render_reach_face(activity: &AgentActivity) -> AnyElement {
 
     let mut col = div()
         .id("agent-room-reach")
-        .flex_1()
-        .min_h(px(0.0))
-        .overflow_y_scroll()
         .bg(gpui::rgb(NT_PANEL))
         .p_2()
         .flex()
@@ -305,9 +311,11 @@ fn render_reach_face(activity: &AgentActivity) -> AnyElement {
         )));
 
     if activity.authorizations.is_empty() {
-        return col
-            .child(face_row("(none)", "no verbs projected — empty mandate"))
-            .into_any_element();
+        return nt_scroll_face(
+            scroll,
+            col.child(face_row("(none)", "no verbs projected — empty mandate")),
+        )
+        .into_any_element();
     }
 
     for auth in &activity.authorizations {
@@ -338,7 +346,7 @@ fn render_reach_face(activity: &AgentActivity) -> AnyElement {
                 ),
         );
     }
-    col.into_any_element()
+    nt_scroll_face(scroll, col).into_any_element()
 }
 
 #[cfg(test)]

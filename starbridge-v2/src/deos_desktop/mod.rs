@@ -69,6 +69,12 @@ pub mod docgraph_view;
 /// View's listeners, split clobber-safe. Gated on `app-registry`.
 #[cfg(feature = "app-registry")]
 pub mod exchange_floor;
+/// THE FACE-SCROLL REGISTRY — one persistent [`gpui::ScrollHandle`] per dense
+/// scrolling face (window bodies keyed by cell × kind × tab; chrome overlays by
+/// name), so every surface scrolls behind a REAL NT scrollbar
+/// ([`chrome::nt_scroll_face`]) and keeps its scroll position across repaints,
+/// tab flips, and window reopens — position as view-state, like window geometry.
+pub mod face_scroll;
 /// The Pharo HALO — direct-manipulation handles floating on a selected icon/window,
 /// each firing the same actuation the right-click menu does ("mold it in place").
 pub mod halo;
@@ -172,8 +178,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, AnyElement, AppContext, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight,
     InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Point, Render, Stateful, StatefulInteractiveElement,
-    Styled, Subscription, Window,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollHandle, Stateful,
+    StatefulInteractiveElement, Styled, Subscription, Window,
 };
 
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -193,12 +199,14 @@ use crate::world::{grant_capability, transfer, CommitOutcome, World};
 pub use android_window::{AndroidInputCmd, AndroidWindow, ANDROID_WINDOW_TITLE};
 pub use chrome::{
     bevel_raised, bevel_sunken, bevel_window, face_gauge, face_row, face_row_color, face_section,
-    fmt_balance, id_hex, id_short, pxf, DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT,
-    DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP, GLYPH_MAX, GLYPH_MIN, GLYPH_RESTORE, ICON_H, ICON_W,
-    MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_LABEL,
-    NT_MENU_HILIGHT, NT_OK, NT_PANEL, NT_RULE, NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE,
-    NT_TITLE_INACTIVE, NT_TITLE_INACTIVE_TEXT, NT_TITLE_TEXT, NT_WARN, WIN_MIN_H, WIN_MIN_W,
+    fmt_balance, id_hex, id_short, nt_scroll_face, nt_scrollbar, pxf, DOC_CHUNK_BYTES,
+    DOC_MAX_CHUNKS, DOC_REV_SLOT, DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP, GLYPH_MAX, GLYPH_MIN,
+    GLYPH_RESTORE, ICON_H, ICON_W, MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK,
+    NT_HILIGHT, NT_ICON_LABEL, NT_LABEL, NT_MENU_HILIGHT, NT_OK, NT_PANEL, NT_RULE, NT_SELECT,
+    NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_INACTIVE, NT_TITLE_INACTIVE_TEXT, NT_TITLE_TEXT,
+    NT_WARN, WIN_MIN_H, WIN_MIN_W,
 };
+pub use face_scroll::{FaceScrollKey, FaceScrollRegistry};
 pub use layout::{DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag};
 
 use halo::HaloTarget;
@@ -715,6 +723,14 @@ pub struct DeosDesktop {
     /// the live World (see [`rewind::RewindState`] — the model is gpui-free and
     /// unit-tested; a rewind is a session gesture, never persisted layout).
     rewind: rewind::RewindState,
+    /// **THE FACE-SCROLL REGISTRY** — one persistent [`ScrollHandle`] per dense
+    /// scrolling face ([`face_scroll::FaceScrollKey`]: window bodies by cell ×
+    /// kind × tab ordinal; the Spotter/console/property overlays by name). Every
+    /// face renders through [`chrome::nt_scroll_face`] with its registry handle,
+    /// so it wears a REAL always-visible NT scrollbar and its scroll POSITION is
+    /// desktop view-state — surviving repaints, tab flips, and window reopens
+    /// (session-only, like the halo; never persisted layout).
+    face_scrolls: face_scroll::FaceScrollRegistry,
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -781,6 +797,10 @@ impl DeosDesktop {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // The kit's scrollbars wear NT from the first paint: always-visible bars,
+        // button-face thumb on a darker track (every mount — live window and
+        // headless bakes — passes through here, so one call dresses them all).
+        chrome::apply_nt_scrollbar_dress(cx);
         let (cells, pulse_cursor) = {
             let w = world.borrow();
             let mut v: Vec<CellId> = w.ledger().iter().map(|(id, _)| *id).collect();
@@ -852,6 +872,7 @@ impl DeosDesktop {
             toast_rack: toasts::ToastRack::default(),
             saver: layout::LayoutSaver::spawn(saver_path),
             rewind: rewind::RewindState::default(),
+            face_scrolls: face_scroll::FaceScrollRegistry::default(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -2478,6 +2499,23 @@ impl DeosDesktop {
         self.status_flyout
     }
 
+    /// BAKE: read a dense face's scroll offset (y px — `0.0` at the top, growing
+    /// NEGATIVE as the face scrolls down) straight off its persistent handle in
+    /// the face-scroll registry. The witness that scroll POSITION is desktop
+    /// view-state (it survives repaints and window reopens), not per-frame
+    /// element state. Ensures the handle, so a bake can probe a face pre-render.
+    pub fn bake_scroll_offset_y(&mut self, key: FaceScrollKey) -> f32 {
+        f32::from(self.face_scrolls.ensure(key).offset().y)
+    }
+
+    /// BAKE: drive a face's scroll position (the headless stand-in for a wheel /
+    /// thumb drag) through the SAME persistent handle the rendered face tracks.
+    pub fn bake_scroll_to(&mut self, key: FaceScrollKey, y: f32) {
+        self.face_scrolls
+            .ensure(key)
+            .set_offset(gpui::point(px(0.0), px(y)));
+    }
+
     /// Build the Spotter candidate set over the World's cells (each cell + its action
     /// verbs), reading live faces off the ledger. Delegates the entry shapes to
     /// [`spotter::candidates_for_cells`].
@@ -3769,7 +3807,10 @@ impl Render for DeosDesktop {
         root = root.child(self.render_taskbar(cx));
         root = root.child(self.render_statusbar(cx));
         if self.status_flyout {
-            root = root.child(self.render_status_console());
+            let sc = self
+                .face_scrolls
+                .ensure(FaceScrollKey::Chrome("status-console"));
+            root = root.child(self.render_status_console(&sc));
         }
 
         // ── PULSE TOASTS — the World's foreign motion, arriving bottom-right ──────
@@ -4042,27 +4083,34 @@ impl DeosDesktop {
                 .into_any_element();
         }
 
-        // The body varies by window TYPE — the NT/Pharo density.
+        // The body varies by window TYPE — the NT/Pharo density. Every body
+        // scrolls behind a REAL NT scrollbar off one persistent handle per
+        // window face (`face_scrolls`); the tabbed bodies (World Explorer /
+        // Agent Room) ensure their OWN per-tab handles inside their renderers,
+        // so each tab keeps its own place.
+        let sc = self
+            .face_scrolls
+            .ensure(FaceScrollKey::Window(cell, tag, 0));
         let body = match tag {
-            WinKindTag::Inspector => self.render_inspector_body(cell, cx),
-            WinKindTag::DocEditor => self.render_doc_body(cell, window, cx),
-            WinKindTag::Links => self.render_links_body(cell),
-            WinKindTag::Transcript => self.render_transcript_body(),
-            WinKindTag::Workflow => self.render_workflow_body(cell, cx),
-            WinKindTag::DocExplorer => self.render_doc_explorer_body(cell, cx),
+            WinKindTag::Inspector => self.render_inspector_body(cell, &sc, cx),
+            WinKindTag::DocEditor => self.render_doc_body(cell, &sc, window, cx),
+            WinKindTag::Links => self.render_links_body(cell, &sc),
+            WinKindTag::Transcript => self.render_transcript_body(&sc),
+            WinKindTag::Workflow => self.render_workflow_body(cell, &sc, cx),
+            WinKindTag::DocExplorer => self.render_doc_explorer_body(cell, &sc, cx),
             WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
             WinKindTag::AgentRoom => self.render_agent_room_window(cell, cx),
             #[cfg(feature = "card-pane")]
-            WinKindTag::ViewNodePane => self.render_viewnode_body(cell, window, cx),
+            WinKindTag::ViewNodePane => self.render_viewnode_body(cell, &sc, window, cx),
             #[cfg(feature = "android-systemui")]
-            WinKindTag::AndroidCell => self.render_android_systemui_body(cell, cx),
+            WinKindTag::AndroidCell => self.render_android_systemui_body(cell, &sc, cx),
             #[cfg(feature = "app-registry")]
-            WinKindTag::AppShelf => self.render_app_shelf_body(cx),
+            WinKindTag::AppShelf => self.render_app_shelf_body(&sc, cx),
             #[cfg(feature = "app-registry")]
-            WinKindTag::ExchangeFloor => self.render_exchange_floor_body(cx),
+            WinKindTag::ExchangeFloor => self.render_exchange_floor_body(&sc, cx),
             #[allow(unreachable_patterns)]
             // needed when card-pane / android-systemui features are off
-            _ => self.render_inspector_body(cell, cx),
+            _ => self.render_inspector_body(cell, &sc, cx),
         };
 
         let resize_grip = div()
@@ -4144,7 +4192,12 @@ impl DeosDesktop {
 
     /// The classic reflective inspector body (identity + live state + affordances +
     /// a Properties button).
-    fn render_inspector_body(&self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
+    fn render_inspector_body(
+        &self,
+        cell: CellId,
+        scroll: &ScrollHandle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let bal = self.cell_balance(&cell);
         let nonce = self.cell_nonce(&cell);
         let lifecycle = self.cell_lifecycle(&cell);
@@ -4163,9 +4216,6 @@ impl DeosDesktop {
                 "winbody-{}",
                 id_hex(&cell)
             )))
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -4261,7 +4311,8 @@ impl DeosDesktop {
             }
         }
 
-        col.child(face_section("Affordances (do it)"))
+        let col = col
+            .child(face_section("Affordances (do it)"))
             .child(self.affordance_button(cell, "Bump nonce", ActionKind::BumpNonce, cx))
             .child(self.affordance_button(
                 cell,
@@ -4276,8 +4327,8 @@ impl DeosDesktop {
                 cx,
             ))
             .child(self.affordance_button(cell, "Open as Document…", ActionKind::OpenDoc, cx))
-            .child(self.affordance_button(cell, "Properties…", ActionKind::Properties, cx))
-            .into_any_element()
+            .child(self.affordance_button(cell, "Properties…", ActionKind::Properties, cx));
+        nt_scroll_face(scroll, col).into_any_element()
     }
 
     /// **The document-editor body** — the cell's prose, the live chronicle (patch
@@ -4286,6 +4337,7 @@ impl DeosDesktop {
     fn render_doc_body(
         &mut self,
         cell: CellId,
+        scroll: &ScrollHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -4311,14 +4363,11 @@ impl DeosDesktop {
         };
         let rev = self.cell_field_u64(&cell, DOC_REV_SLOT);
         let input = self.doc_inputs.get(&cell).cloned();
-        div()
+        let face = div()
             .id(gpui::SharedString::from(format!(
                 "docbody-{}",
                 id_hex(&cell)
             )))
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -4348,8 +4397,8 @@ impl DeosDesktop {
             .child(face_row("patches", &patches.to_string()))
             .child(face_row("cell revision", &rev.to_string()))
             .child(face_row("author", &format!("{}", self.author.0 & 0xffff)))
-            .child(self.render_doc_collab(cell, window, cx))
-            .into_any_element()
+            .child(self.render_doc_collab(cell, window, cx));
+        nt_scroll_face(scroll, face).into_any_element()
     }
 
     /// **The branch / stitch / CONFLICT surface** — the live realization of
@@ -4649,13 +4698,20 @@ impl DeosDesktop {
 
     /// **The World Explorer window** — the NT tab strip + the [`world_explorer`] body
     /// (ledger · chronicle · conservation). The "My Computer" of the verified World.
-    fn render_world_explorer_window(&self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
+    /// (`&mut self` for the face-scroll registry: each tab's face keeps its OWN
+    /// persistent scroll handle, keyed by the tab ordinal.)
+    fn render_world_explorer_window(&mut self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
         use world_explorer::WorldExplorerTab as T;
         let tab = self
             .world_explorers
             .get(&cell)
             .map(|s| s.tab)
             .unwrap_or_default();
+        let sc = self.face_scrolls.ensure(FaceScrollKey::Window(
+            cell,
+            WinKindTag::WorldExplorer,
+            tab as u8,
+        ));
 
         let mut tabs = div().flex().flex_row().gap_1().my_1();
         for t in T::ALL {
@@ -4689,7 +4745,7 @@ impl DeosDesktop {
         // The faces read through the Rewind Rail's effective lens: the live World
         // at LIVE, the root-verified replayed projection (with its amber REPLAYED
         // banner) while the rail is scrubbed.
-        let body = self.render_world_explorer_body_effective(tab);
+        let body = self.render_world_explorer_body_effective(tab, &sc);
         div()
             .id(gpui::SharedString::from(format!(
                 "wldbody-{}",
@@ -4713,6 +4769,12 @@ impl DeosDesktop {
     fn render_agent_room_window(&mut self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
         use agent_room::AgentRoomTab as T;
         let state = self.agent_rooms.entry(cell).or_default().clone();
+        // Each face keeps its OWN persistent scroll handle (tab ordinal in the key).
+        let sc = self.face_scrolls.ensure(FaceScrollKey::Window(
+            cell,
+            WinKindTag::AgentRoom,
+            state.tab as u8,
+        ));
         let world = self.world.borrow();
         let resident = state
             .resident
@@ -4808,7 +4870,7 @@ impl DeosDesktop {
         let hire_strip: Option<AnyElement> = None;
 
         let header = agent_room::render_room_header(&activity);
-        let body = agent_room::render_agent_room_body(&activity, state.tab);
+        let body = agent_room::render_agent_room_body(&activity, state.tab, &sc);
         div()
             .id(gpui::SharedString::from(format!(
                 "agentroom-body-{}",
@@ -4840,6 +4902,7 @@ impl DeosDesktop {
     fn render_viewnode_body(
         &mut self,
         cell: CellId,
+        scroll: &ScrollHandle,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -4862,11 +4925,8 @@ impl DeosDesktop {
                 e
             }
         };
-        div()
+        let face = div()
             .id(gpui::SharedString::from(format!("irbody-{}", id_hex(&cell))))
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -4895,8 +4955,8 @@ impl DeosDesktop {
                     .border_1()
                     .border_color(gpui::rgb(NT_FACE_DARK))
                     .child(entity),
-            )
-            .into_any_element()
+            );
+        nt_scroll_face(scroll, face).into_any_element()
     }
 
     /// Build the Spotter's live query input on first render (a real `gpui-component`
@@ -4949,6 +5009,9 @@ impl DeosDesktop {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.ensure_spotter_input(window, cx);
+        // The result list scrolls behind a real NT scrollbar; the persistent
+        // handle keeps the place while the operator arrows through candidates.
+        let sc = self.face_scrolls.ensure(FaceScrollKey::Chrome("spotter"));
         let (input, selected) = match self.spotter.as_ref() {
             Some(ui) => (ui.input.clone(), ui.selected),
             None => (None, 0),
@@ -4974,6 +5037,10 @@ impl DeosDesktop {
         }
 
         // The palette panel, centered near the top (the NT/Spotlight position).
+        // The panel clamps at 440px; the INNER face (min_h 0 + tracked scroll)
+        // scrolls behind the kit scrollbar when the candidate list outgrows it —
+        // the same sibling arrangement as `nt_scroll_face`, on the overlay's own
+        // max-height geometry.
         div()
             .id("spotter-overlay")
             .absolute()
@@ -4989,25 +5056,37 @@ impl DeosDesktop {
                         .id("spotter-panel")
                         .w(px(520.0))
                         .max_h(px(440.0))
-                        .overflow_y_scroll()
-                        .p_2(),
+                        .relative()
+                        .flex()
+                        .flex_col(),
                 )
-                .child(face_section(&format!(
-                    "Spotter — {} match(es)",
-                    ranked.len()
-                )))
-                .when_some(input, |this, input| {
-                    this.child(
-                        div()
-                            .my_1()
-                            .h(px(26.0))
-                            .bg(gpui::rgb(0xffffff))
-                            .border_1()
-                            .border_color(gpui::rgb(NT_FACE_DARK))
-                            .child(Input::new(&input).h_full()),
-                    )
-                })
-                .child(list),
+                .child(
+                    div()
+                        .id("spotter-scroll")
+                        .min_h(px(0.0))
+                        .overflow_y_scroll()
+                        .track_scroll(&sc)
+                        .p_2()
+                        .flex()
+                        .flex_col()
+                        .child(face_section(&format!(
+                            "Spotter — {} match(es)",
+                            ranked.len()
+                        )))
+                        .when_some(input, |this, input| {
+                            this.child(
+                                div()
+                                    .my_1()
+                                    .h(px(26.0))
+                                    .bg(gpui::rgb(0xffffff))
+                                    .border_1()
+                                    .border_color(gpui::rgb(NT_FACE_DARK))
+                                    .child(Input::new(&input).h_full()),
+                            )
+                        })
+                        .child(list),
+                )
+                .child(nt_scrollbar(&sc)),
             )
             .into_any_element()
     }
@@ -5252,7 +5331,12 @@ impl DeosDesktop {
     /// **The Document Explorer body** — a tabbed Pharo-moldable inspector over a
     /// document's `dregg_doc` faces: the History time-travel scrubber, the DocGraph
     /// atoms+edges, and Blame. Read-only reflection over the live patch substance.
-    fn render_doc_explorer_body(&self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
+    fn render_doc_explorer_body(
+        &self,
+        cell: CellId,
+        scroll: &ScrollHandle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let state = self.doc_explorers.get(&cell).cloned().unwrap_or_default();
         let doc = self.doc_for_explorer(cell);
 
@@ -5261,9 +5345,6 @@ impl DeosDesktop {
                 "docxbody-{}",
                 id_hex(&cell)
             )))
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -5302,12 +5383,14 @@ impl DeosDesktop {
         col = col.child(tabs);
 
         let Some(doc) = doc else {
-            return col
-                .child(face_row(
+            return nt_scroll_face(
+                scroll,
+                col.child(face_row(
                     "(no document)",
                     "Open as Document and type to explore it",
-                ))
-                .into_any_element();
+                )),
+            )
+            .into_any_element();
         };
 
         let body = match state.tab {
@@ -5318,7 +5401,7 @@ impl DeosDesktop {
             DocExplorerTab::Graph => docgraph_view::render_docgraph_nodes(&doc),
             DocExplorerTab::Blame => self.render_docx_blame(&doc),
         };
-        col.child(body).into_any_element()
+        nt_scroll_face(scroll, col.child(body)).into_any_element()
     }
 
     /// The History FACE — the patch-history time-travel scrubber. Each revision is a
@@ -5546,16 +5629,13 @@ impl DeosDesktop {
 
     /// **The links / backlinks body** — which cells this one reaches (its caps),
     /// which transclusions are composed into it, and the World's reach.
-    fn render_links_body(&self, cell: CellId) -> AnyElement {
+    fn render_links_body(&self, cell: CellId, scroll: &ScrollHandle) -> AnyElement {
         let caps = self.cell_cap_count(&cell);
         let mut col = div()
             .id(gpui::SharedString::from(format!(
                 "linksbody-{}",
                 id_hex(&cell)
             )))
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -5616,20 +5696,17 @@ impl DeosDesktop {
                 "height",
                 &self.world.borrow().height().to_string(),
             ));
-        col.into_any_element()
+        nt_scroll_face(scroll, col).into_any_element()
     }
 
     /// **The transcript / receipt-log body** — the World's receipt chain, the
     /// chronicle the user's "do it"s have written.
-    fn render_transcript_body(&self) -> AnyElement {
+    fn render_transcript_body(&self, scroll: &ScrollHandle) -> AnyElement {
         let w = self.world.borrow();
         let receipts = w.receipts();
         let n = receipts.len();
         let mut col = div()
             .id("transcript-body")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(0x101820))
             .text_color(gpui::rgb(0x9fe0a0))
             .p_2()
@@ -5657,7 +5734,7 @@ impl DeosDesktop {
         if n == 0 {
             col = col.child(div().child("(no turns yet — actuate a cell)"));
         }
-        col.into_any_element()
+        nt_scroll_face(scroll, col).into_any_element()
     }
 
     fn render_titlebar(
@@ -5928,22 +6005,36 @@ impl DeosDesktop {
     /// **The property inspector/editor dialog** — an NT property sheet over a cell, a
     /// window, or the desktop. Cell properties are EDITABLE via receipted `SetField`
     /// turns; window/desktop properties are persisted layout changes.
-    fn render_property_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
-        let dlg = self.open_prop.as_ref().unwrap();
-        let (x, y, w, h) = (dlg.at.x, dlg.at.y, dlg.w, dlg.h);
-        let (heading, body) = match dlg.subject.clone() {
-            PropSubject::Cell(cell) => (
-                format!("Properties — {} {}", self.cell_kind(&cell), id_short(&cell)),
-                self.prop_body_cell(cell, cx),
-            ),
+    fn render_property_dialog(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        // (`&mut self` for the face-scroll registry: the scrolling dialog bodies
+        // keep persistent handles keyed per subject.)
+        let (x, y, w, h, subject) = {
+            let dlg = self.open_prop.as_ref().unwrap();
+            (dlg.at.x, dlg.at.y, dlg.w, dlg.h, dlg.subject.clone())
+        };
+        let (heading, body) = match subject {
+            PropSubject::Cell(cell) => {
+                let sc = self
+                    .face_scrolls
+                    .ensure(FaceScrollKey::CellChrome("props-cell", cell));
+                (
+                    format!("Properties — {} {}", self.cell_kind(&cell), id_short(&cell)),
+                    self.prop_body_cell(cell, &sc, cx),
+                )
+            }
             PropSubject::Window(cell, tag) => (
                 format!("Window Properties — {}", id_short(&cell)),
                 self.prop_body_window(cell, tag, cx),
             ),
-            PropSubject::Desktop => (
-                "Desktop Preferences & Customize".to_string(),
-                self.prop_body_desktop(cx),
-            ),
+            PropSubject::Desktop => {
+                let sc = self
+                    .face_scrolls
+                    .ensure(FaceScrollKey::Chrome("props-desktop"));
+                (
+                    "Desktop Preferences & Customize".to_string(),
+                    self.prop_body_desktop(&sc, cx),
+                )
+            }
         };
         bevel_window(
             div()
@@ -6011,18 +6102,20 @@ impl DeosDesktop {
         .into_any_element()
     }
 
-    fn prop_body_cell(&self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
+    fn prop_body_cell(
+        &self,
+        cell: CellId,
+        scroll: &ScrollHandle,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let bal = self.cell_balance(&cell);
         let nonce = self.cell_nonce(&cell);
         let rev = self.cell_field_u64(&cell, DOC_REV_SLOT);
-        div()
+        let face = div()
             .id(gpui::SharedString::from(format!(
                 "propcell-{}",
                 id_hex(&cell)
             )))
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -6039,8 +6132,8 @@ impl DeosDesktop {
             // The property-edit controls: each is a verified turn.
             .child(self.prop_setfield_button(cell, "revision +1", DOC_REV_SLOT, rev + 1, cx))
             .child(self.prop_setfield_button(cell, "revision =0", DOC_REV_SLOT, 0, cx))
-            .child(self.prop_setfield_button(cell, "field[13] =42", 13, 42, cx))
-            .into_any_element()
+            .child(self.prop_setfield_button(cell, "field[13] =42", 13, 42, cx));
+        nt_scroll_face(scroll, face).into_any_element()
     }
 
     fn prop_setfield_button(
@@ -6106,13 +6199,10 @@ impl DeosDesktop {
 
     /// **The desktop Preferences body — customization.** Toggling these persists to
     /// the layout sidecar (a pure layout change: appearance/behaviour, no authority).
-    fn prop_body_desktop(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn prop_body_desktop(&self, scroll: &ScrollHandle, cx: &mut Context<Self>) -> AnyElement {
         let p = &self.layout.prefs;
-        div()
+        let face = div()
             .id("propdesktop")
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
             .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
@@ -6155,8 +6245,8 @@ impl DeosDesktop {
                     .child(self.pref_rows_button(4, cx))
                     .child(self.pref_rows_button(6, cx))
                     .child(self.pref_rows_button(8, cx)),
-            )
-            .into_any_element()
+            );
+        nt_scroll_face(scroll, face).into_any_element()
     }
 
     fn pref_swatch(&self, color: u32, cx: &mut Context<Self>) -> impl IntoElement {
@@ -6299,20 +6389,16 @@ impl DeosDesktop {
     /// **The RECEIPT CONSOLE flyout** — the session's full narration log (every
     /// `say()` line, newest last), anchored above the status bar in the
     /// transcript's dense dark-console style. The bar's one line stops being the
-    /// only witness; the story scrolls.
-    fn render_status_console(&self) -> impl IntoElement {
-        let mut col = div()
+    /// only witness; the story scrolls — behind a REAL NT scrollbar on the
+    /// caller-ensured persistent `scroll` handle (the flyout clamps at 300px;
+    /// the inner tracked face scrolls when the log outgrows it, and reopening
+    /// the flyout lands back where the operator left it).
+    fn render_status_console(&self, scroll: &ScrollHandle) -> impl IntoElement {
+        let mut face = div()
             .id("status-console")
-            .absolute()
-            .left(px(8.0))
-            .bottom(px(50.0))
-            .w(px(560.0))
-            .max_h(px(300.0))
+            .min_h(px(0.0))
             .overflow_y_scroll()
-            .bg(gpui::rgb(0x101820))
-            .text_color(gpui::rgb(0x9fe0a0))
-            .border_2()
-            .border_color(gpui::rgb(NT_FACE_DARK))
+            .track_scroll(scroll)
             .p_2()
             .flex()
             .flex_col()
@@ -6322,9 +6408,22 @@ impl DeosDesktop {
                 self.status_log.len()
             )));
         for line in self.status_log.iter().rev().take(24).rev() {
-            col = col.child(div().text_size(px(11.0)).child(line.clone()));
+            face = face.child(div().text_size(px(11.0)).child(line.clone()));
         }
-        col
+        div()
+            .absolute()
+            .left(px(8.0))
+            .bottom(px(50.0))
+            .w(px(560.0))
+            .max_h(px(300.0))
+            .bg(gpui::rgb(0x101820))
+            .text_color(gpui::rgb(0x9fe0a0))
+            .border_2()
+            .border_color(gpui::rgb(NT_FACE_DARK))
+            .flex()
+            .flex_col()
+            .child(face)
+            .child(nt_scrollbar(scroll))
     }
 
     /// **The taskbar** — a row of stubs for every open window, just above the status

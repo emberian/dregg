@@ -374,8 +374,15 @@ impl DeosDesktop {
 
     /// The World Explorer body over the EFFECTIVE world — the replayed lens
     /// (with its amber REPLAYED banner) while scrubbing, the live lens else.
-    /// The faces themselves are unchanged pure functions over a [`WorldLens`].
-    pub(super) fn render_world_explorer_body_effective(&self, tab: WorldExplorerTab) -> AnyElement {
+    /// The faces themselves are unchanged pure functions over a [`WorldLens`];
+    /// `scroll` is the face's persistent scroll handle (the caller ensures it
+    /// per tab off the desktop's `face_scrolls` registry), so the SAME place
+    /// is kept whether the lens is live or replayed.
+    pub(super) fn render_world_explorer_body_effective(
+        &self,
+        tab: WorldExplorerTab,
+        scroll: &gpui::ScrollHandle,
+    ) -> AnyElement {
         match self.rewind.projection() {
             Some(p) => render_world_explorer_body(
                 &WorldLens {
@@ -386,10 +393,11 @@ impl DeosDesktop {
                     banner: Some(rail_caption(p)),
                 },
                 tab,
+                scroll,
             ),
             None => {
                 let w = self.world.borrow();
-                render_world_explorer_body(&WorldLens::live(&w), tab)
+                render_world_explorer_body(&WorldLens::live(&w), tab, scroll)
             }
         }
     }

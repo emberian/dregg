@@ -18,8 +18,8 @@
 //! ([`render_world_explorer_body`]).
 
 use gpui::{
-    div, px, AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled,
+    div, px, AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement, ScrollHandle,
+    Styled,
 };
 
 use dregg_cell::{lifecycle::CellLifecycle, Cell, Ledger};
@@ -27,8 +27,8 @@ use dregg_turn::turn::TurnReceipt;
 use dregg_types::CellId;
 
 use crate::deos_desktop::chrome::{
-    face_gauge, face_row, face_row_color, face_section, fmt_balance, id_short, NT_DIM, NT_OK,
-    NT_PANEL, NT_TITLE_TEXT, NT_WARN,
+    face_gauge, face_row, face_row_color, face_section, fmt_balance, id_short, nt_scroll_face,
+    NT_DIM, NT_OK, NT_PANEL, NT_TITLE_TEXT, NT_WARN,
 };
 use crate::world::World;
 
@@ -112,11 +112,21 @@ pub struct WorldExplorerState {
 /// the tab listeners need). Long lists are capped (~24 rows) to keep the dense
 /// view legible, the way the transcript surface does. A replayed lens gets its
 /// amber banner stacked above the face so the past never masquerades as live.
-pub fn render_world_explorer_body(lens: &WorldLens, tab: WorldExplorerTab) -> AnyElement {
+///
+/// `scroll` is the face's PERSISTENT scroll handle (the View owns it, keyed per
+/// tab — see `face_scroll`); each face wraps itself in the chrome kit's
+/// [`nt_scroll_face`] so it scrolls behind a real, always-visible NT scrollbar
+/// and keeps its position across repaints. The handle is a plain value — the
+/// module stays free of view context (the clobber-safe split holds).
+pub fn render_world_explorer_body(
+    lens: &WorldLens,
+    tab: WorldExplorerTab,
+    scroll: &ScrollHandle,
+) -> AnyElement {
     let face = match tab {
-        WorldExplorerTab::Ledger => render_ledger_face(lens),
-        WorldExplorerTab::Chronicle => render_chronicle_face(lens),
-        WorldExplorerTab::Conservation => render_conservation_face(lens),
+        WorldExplorerTab::Ledger => render_ledger_face(lens, scroll),
+        WorldExplorerTab::Chronicle => render_chronicle_face(lens, scroll),
+        WorldExplorerTab::Conservation => render_conservation_face(lens, scroll),
     };
     match &lens.banner {
         None => face,
@@ -175,7 +185,7 @@ fn cell_lifecycle(cell: &Cell) -> &'static str {
 /// its short id, kind, balance, lifecycle, and nonce. The My-Computer census.
 /// Over a replayed lens this is the census AS IT WAS — since-destroyed cells
 /// reappear, not-yet-born ones are absent.
-fn render_ledger_face(lens: &WorldLens) -> AnyElement {
+fn render_ledger_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement {
     let ledger = lens.ledger;
     // Sort by id for a stable, browsable census (the same canonical order the
     // image root folds over).
@@ -185,9 +195,6 @@ fn render_ledger_face(lens: &WorldLens) -> AnyElement {
 
     let mut col = div()
         .id("world-explorer-ledger")
-        .flex_1()
-        .min_h(px(0.0))
-        .overflow_y_scroll()
         .bg(gpui::rgb(NT_PANEL))
         .p_2()
         .flex()
@@ -196,9 +203,11 @@ fn render_ledger_face(lens: &WorldLens) -> AnyElement {
         .child(face_section(&format!("World cells · {n} cells")));
 
     if n == 0 {
-        return col
-            .child(face_row("(empty)", "no cells — seed genesis"))
-            .into_any_element();
+        return nt_scroll_face(
+            scroll,
+            col.child(face_row("(empty)", "no cells — seed genesis")),
+        )
+        .into_any_element();
     }
 
     // Cap the dense census so a large World stays legible (newest ids are no more
@@ -243,7 +252,7 @@ fn render_ledger_face(lens: &WorldLens) -> AnyElement {
     if n > cap {
         col = col.child(face_row("…", &format!("{} more cells", n - cap)));
     }
-    col.into_any_element()
+    nt_scroll_face(scroll, col).into_any_element()
 }
 
 // ── CHRONICLE: the World's witnessed receipt history ────────────────────────────
@@ -251,15 +260,12 @@ fn render_ledger_face(lens: &WorldLens) -> AnyElement {
 /// The CHRONICLE face — the last ~24 receipts, each showing the commit index,
 /// turn-hash (first 4 bytes), post-state-hash (first 4 bytes), the agent cell,
 /// and the computrons it spent. The World's navigable history.
-fn render_chronicle_face(lens: &WorldLens) -> AnyElement {
+fn render_chronicle_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement {
     let receipts = lens.receipts;
     let n = receipts.len();
 
     let mut col = div()
         .id("world-explorer-chronicle")
-        .flex_1()
-        .min_h(px(0.0))
-        .overflow_y_scroll()
         .bg(gpui::rgb(0x101820))
         .text_color(gpui::rgb(0x9fe0a0))
         .p_2()
@@ -272,9 +278,11 @@ fn render_chronicle_face(lens: &WorldLens) -> AnyElement {
         )));
 
     if n == 0 {
-        return col
-            .child(div().child("(no turns yet — actuate a cell)"))
-            .into_any_element();
+        return nt_scroll_face(
+            scroll,
+            col.child(div().child("(no turns yet — actuate a cell)")),
+        )
+        .into_any_element();
     }
 
     // The last ~24 receipts, newest last (the dense scrolling log).
@@ -294,7 +302,7 @@ fn render_chronicle_face(lens: &WorldLens) -> AnyElement {
             r.computrons_used
         )));
     }
-    col.into_any_element()
+    nt_scroll_face(scroll, col).into_any_element()
 }
 
 // ── CONSERVATION: the Σδ = 0 invariant, made visible ────────────────────────────
@@ -303,7 +311,7 @@ fn render_chronicle_face(lens: &WorldLens) -> AnyElement {
 /// (issuer wells negative, accounts positive). Shows the total balance (which
 /// MUST read 0), the cell/height/receipt counts, and the per-cell breakdown so
 /// the operator SEES Σδ = 0 hold across the live ledger.
-fn render_conservation_face(lens: &WorldLens) -> AnyElement {
+fn render_conservation_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement {
     let ledger = lens.ledger;
     let mut cells: Vec<(&CellId, &Cell)> = ledger.iter().collect();
     cells.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
@@ -318,9 +326,6 @@ fn render_conservation_face(lens: &WorldLens) -> AnyElement {
 
     let mut col = div()
         .id("world-explorer-conservation")
-        .flex_1()
-        .min_h(px(0.0))
-        .overflow_y_scroll()
         .bg(gpui::rgb(NT_PANEL))
         .p_2()
         .flex()
@@ -344,9 +349,11 @@ fn render_conservation_face(lens: &WorldLens) -> AnyElement {
         .child(face_section("Per-cell balance breakdown"));
 
     if cells.is_empty() {
-        return col
-            .child(face_row("(empty)", "no cells — seed genesis"))
-            .into_any_element();
+        return nt_scroll_face(
+            scroll,
+            col.child(face_row("(empty)", "no cells — seed genesis")),
+        )
+        .into_any_element();
     }
 
     // The largest magnitude balance — the gauge denominator so each cell's bar is
@@ -379,5 +386,5 @@ fn render_conservation_face(lens: &WorldLens) -> AnyElement {
     if cells.len() > cap {
         col = col.child(face_row("…", &format!("{} more cells", cells.len() - cap)));
     }
-    col.into_any_element()
+    nt_scroll_face(scroll, col).into_any_element()
 }
