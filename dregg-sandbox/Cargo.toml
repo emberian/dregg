@@ -1,0 +1,42 @@
+[package]
+name = "dregg-sandbox"
+description = "The dregg-native execution sandbox: an OWNED, zero-unsafe wasmi interpreter for the Sandboxed cap-tier (instantiated against an EMPTY Linker — the guest is offered NO host imports, so it reaches nothing on the host and egress is denied by construction), plus the CapTier tier-gate whose stronger tiers (JIT / Caged / MicroVm / Gpu) are honest fail-closed seams. Driveable from the confined-agent gate (dregg-agent::toolkit) so every run is cap-gated + metered + receipted."
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+
+[lib]
+name = "dregg_sandbox"
+path = "src/lib.rs"
+
+[dependencies]
+# THE INJECTED-INTO gate. dregg-agent owns the confined agent loop: the cap-gated
+# / metered / receipted tool dispatch, the witness binding, the re-witness oracle.
+# Its compute tools take an INJECTED runner (`toolkit::RunFn`), and this crate is
+# the engine behind that seam — the `SandboxToolkit` adapter (src/toolkit.rs)
+# wires `run_workload` in as the runner so a `run_tests` / `run_workload` invoke
+# runs on the owned wasmi sandbox at a chosen `CapTier`. One agent runtime; this
+# crate is the engine, never the witness. (This is the exact edge the retired
+# `a prior exec module` had to `dregg-agent`.)
+dregg-agent = { path = "../dregg-agent" }
+
+# The OWNED wasm execution engine. `wasmi` is a pure-Rust, `#![forbid(unsafe_code)]`
+# wasm interpreter: no JIT, no codegen, no host syscall surface of its own. It
+# backs the `CapTier::Sandboxed` tier as a real in-process sandbox instantiated
+# against an EMPTY `Linker` (deny-all host imports). This is THE load-bearing
+# piece strip-mined from `a prior exec module/src/lib.rs` — the genuinely-executed
+# floor (the `add(40,2)=42` dogfood runs here for real). It is the one place this
+# crate takes an external dep beyond the substrate: the engine IS the ported
+# artifact, and a sandbox with no wasm engine would be a mirror, not a port.
+wasmi = "0.41"
+# Assembles WAT workload text into a core-wasm module for the wasmi tier (and is
+# how the tests express modules readably). Same provenance/justification as wasmi.
+wat = "1"
+# Typed run errors (same idiom as dregg-agent's credential wire errors).
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
