@@ -14,12 +14,19 @@ Run: workflow `wf_68020930-db3` (harvest via `cv workflow`).
 - ✅ **#7 engine-twin AddToSlot overflow** — fixed (`saturating_add`, matches SubFromSlot + boa).
 - ✅ **#6 dynamics forest-depth truncation** — fixed (`touched_cells` + effect-event derivation
   now walk the whole forest via `CallTree::iter_dfs`; partial mitigation of #1's DEPTH aspect).
-- ⏸ **#1/#3/#4 durable-overlay soundness cluster** — HELD FOR REVIEW. The correct fix exposes
-  the executor's real journal write-set (`turn/src/journal.rs` `LedgerJournal` already records
-  every mutated cell exactly), which edits the **verified `turn` executor's surface** — a TCB
-  touch that wants an explicit yes. Hand-completing `collect_touched` is the fragile debt-hole
-  that CAUSED this. Until fixed, the durable-image weld must stay opt-in/ephemeral-default so
-  the landmine can't arm.
+- ✅ **#1/#3 durable-overlay incomplete change-set** — FIXED (TCB, ember-approved). The executor
+  now exposes its exact journal write-set (`LedgerJournal::touched_cells` →
+  `TurnExecutor::last_write_set`, captured on the Full success path); `world.rs` `dual_write`
+  records `touched ∪ executor.last_write_set()`. Additive/read-only exposure of what the journal
+  already tracks — no transition logic changed. Regression guard:
+  `persistence::a_committed_create_cell_survives_reopen_via_the_overlay` (a create-cell turn's
+  newborn now rides the overlay through reopen; would have been `Divergent` before). `dregg-turn`
+  576 tests green, starbridge-v2 933 green.
+- ⏸ **#4 deploy_factory executor-bypass** — STILL OPEN. Distinct mechanism from #1/#3: it bypasses
+  the executor entirely (like the genesis path), so it emits no CommitRecord AND no journal — the
+  write-set fix doesn't cover it. Same class as the known genesis-mutation limitation; wants the
+  factory-birth path to emit a CommitRecord or be genesis-mirrored + guarded. Durable weld stays
+  OPT-IN until this is closed (the desktop's App Shelf may create cells via a factory path).
 - 📋 remaining (safe, non-TCB, untaken): #8 resolve_mounts total-work bound, #11 dynamics Vec
   eviction (needs cursor-base care), #14 pulse drops BalanceFlowed/Burned/CellBorn, the
   aspirational-gap honesty edits (#12/#16/#17), and the big scaling refactors (#9 O(cells) root,
