@@ -260,6 +260,16 @@ pub mod branch_stitch_session;
 #[cfg(feature = "agent-js")]
 pub mod agent_attach;
 
+// THE HIRELING — a real confined agent (deos-hermes brain + gate) that LIVES in the
+// desktop World: `hire_resident` mints it a real cell under an attenuated mandate,
+// each ADMITTED tool-call mirrors a real verified turn onto the resident's cell
+// (`World::turn` + `commit_turn`, the `agent_attach` shape), and each gate REFUSAL is
+// surfaced (not fabricated). The named seam the Agent Room drives (Hire/Fire buttons
+// weld later — see the module doc). gpui-free + mozjs-free; needs deos-hermes (from
+// `dev-surfaces`) + the World (`embedded-executor`).
+#[cfg(all(feature = "dev-surfaces", feature = "embedded-executor"))]
+pub mod resident_agent;
+
 // DISTRIBUTED MULTIPLAYER CARDS — two principals on DIFFERENT instances co-drive ONE
 // shared card across a membrane boundary. Welds deos-js's `coauthored_card` (the LOCAL
 // fork/drive/stitch) to the `shared_fork` membrane's serialize→carry→rehydrate pattern
