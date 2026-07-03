@@ -76,6 +76,15 @@ pub mod bot_surface;
 pub mod card_pulse;
 pub mod chrome;
 pub mod docgraph_view;
+/// MY DREGG COMPUTERS — the desktop face of *have a Dregg Computer*: the vats
+/// (private verified Worlds, each a content-addressed cell on a DreggNet
+/// ServerFleet, admitted behind a funded lease, scoped by a `vat:<cell-id>`
+/// capability) this account can reach. The roster reads the designed gateway
+/// `GET /v1/vats` seam (fixture until it lands — named honestly on the glass);
+/// CONNECT attaches one over the proven `--node <url>` HTTP+SSE wire path and
+/// reflects its remote cells + receipt stream LIVE. gpui-free roster/attach
+/// model + the View's listeners, split clobber-safe like `agent_room`.
+pub mod dregg_computers;
 /// THE EXCHANGE FLOOR — the $DREGG agent economy as a desktop window: compute
 /// OFFERS as live cells (each carrying the compute-exchange job program), posted /
 /// taken-under-lease / settled by REAL verified turns (the executor refuses an
@@ -472,6 +481,15 @@ enum WinKind {
     /// compose recipient + the shown face) lives in `mail_rooms`, so this variant is a
     /// marker like `AgentRoom`. Anchored on its own sentinel cell.
     MailRoom,
+    /// **MY DREGG COMPUTERS** — the vats this account can reach (each a private
+    /// verified World whose identity is a content-addressed cell on a DreggNet
+    /// ServerFleet), the roster off the designed `GET /v1/vats` gateway seam,
+    /// CONNECT attaching one over the proven HTTP+SSE wire path and reflecting
+    /// its remote cells + receipt stream live. Per-window state lives in
+    /// `dregg_computers` (the attachment itself in `vat_link` — it belongs to
+    /// the desktop, not the window), so this variant is a marker like
+    /// `AgentRoom`. Anchored on its own sentinel cell.
+    DreggComputers,
 }
 
 impl WinKind {
@@ -493,6 +511,7 @@ impl WinKind {
             WinKind::ProvenanceWalker => "Provenance Walker",
             WinKind::AttachWizard => "Attach a Resident",
             WinKind::MailRoom => "Mail Room",
+            WinKind::DreggComputers => "My Dregg Computers",
         }
     }
 }
@@ -553,6 +572,9 @@ enum ActionKind {
     /// Open the MAIL ROOM — mail between agents as cells on the live World (inbox ·
     /// outbox · mail-ledger). A World-level (desktop-background) surface.
     OpenMailRoom,
+    /// Open MY DREGG COMPUTERS — the vats you can reach (roster · connect ·
+    /// reflect · receipts). A World-level (desktop-background) surface.
+    OpenDreggComputers,
     /// Open a DOCUMENT-COLLABORATION session — the document editor with a forked
     /// co-author draft already in flight (branch · stitch · resolve), landed mold-ready.
     OpenDocCollab,
@@ -812,6 +834,21 @@ pub struct DeosDesktop {
     /// ([`mail_room::mail_room_window_cell`]). A pure view concern — the mail itself is
     /// re-scanned off the live World ([`crate::letter_office`]) on every paint.
     mail_rooms: HashMap<CellId, mail_room::MailRoomState>,
+    /// **The per-window MY-DREGG-COMPUTERS view state** — which face (computers/
+    /// connection/receipts) is shown. Keyed by the surface's own sentinel cell
+    /// ([`dregg_computers::dregg_computers_window_cell`]). A pure view concern.
+    dregg_computers: HashMap<CellId, dregg_computers::DreggComputersState>,
+    /// **The vat ROSTER** — the Dregg Computers this account can reach, honestly
+    /// sourced (the `GET /v1/vats` fixture, or the live gateway when
+    /// `DREGG_GATEWAY_URL` names one). Built once at construction; the surface
+    /// reads it every paint.
+    vat_directory: dregg_computers::VatDirectory,
+    /// **The vat ATTACHMENT** — the one Dregg Computer this desktop is connected
+    /// to (`None` until CONNECT): the wire client + the reflected snapshot + the
+    /// receipt feed the pulse drains. Deliberately NOT per-window: the link is to
+    /// a remote computer, not a window, so closing the window keeps you attached
+    /// (your computer stays yours with the lid shut).
+    vat_link: Option<dregg_computers::VatLink>,
     /// The Mail Room composer's live input widget (single-line; Enter sends the draft as a
     /// REAL letter turn — the SAME send the bake hook drives), built lazily on first render
     /// like the Spotter's.
@@ -1073,6 +1110,9 @@ impl DeosDesktop {
             agent_rooms: HashMap::new(),
             provenance_walkers: HashMap::new(),
             mail_rooms: HashMap::new(),
+            dregg_computers: HashMap::new(),
+            vat_directory: dregg_computers::VatDirectory::discover(),
+            vat_link: None,
             mail_input: None,
             mail_input_sub: None,
             mail_draft: String::new(),
@@ -1175,6 +1215,11 @@ impl DeosDesktop {
     fn pump_dynamics(&mut self, cx: &mut Context<Self>) {
         use crate::dynamics::WorldEvent;
         let aged = self.toast_rack.beat();
+        // THE VAT TAP — drain the attached Dregg Computer's SSE receipt stream
+        // (if any) into its feed each beat, so the Receipts face advances LIVE
+        // while you watch (the remote half of the pulse; zero when unattached
+        // or snapshot-only).
+        let vat_new = self.pump_vat_stream();
         // THE PULSE→SIGNALS WELD, quiet half — every beat, even when the World did not
         // move: retire last beat's dirty-glow tint on every open content-IR pane AND
         // every open attached-World card, and catch up turns a surface's OWN backing
@@ -1198,7 +1243,7 @@ impl DeosDesktop {
             let base = d.base();
             if cursor == self.pulse_cursor {
                 drop(w);
-                if aged || weld_quiet {
+                if aged || weld_quiet || vat_new > 0 {
                     cx.notify();
                 }
                 return;
@@ -1342,6 +1387,7 @@ impl DeosDesktop {
             WinKindTag::WorldExplorer => WinKind::WorldExplorer,
             WinKindTag::AgentRoom => WinKind::AgentRoom,
             WinKindTag::MailRoom => WinKind::MailRoom,
+            WinKindTag::DreggComputers => WinKind::DreggComputers,
             WinKindTag::ViewNodePane => WinKind::ViewNodePane,
             WinKindTag::AndroidCell => WinKind::AndroidCell,
             WinKindTag::AppShelf => WinKind::AppShelf,
@@ -1401,6 +1447,10 @@ impl DeosDesktop {
         } else if matrix_room::is_matrix_room(&cell) {
             // The Matrix Room's sentinel gets the same courtesy.
             format!("membranes over the wire — {}", kind.label())
+        } else if dregg_computers::is_dregg_computers(&cell) {
+            // The Dregg Computers sentinel gets the same courtesy — it is your
+            // fleet of vats, not a zero-balance service cell.
+            format!("your vats — {}", kind.label())
         } else if provenance_walker::is_walker(&cell) {
             format!("the receipt chain — {}", kind.label())
         } else {
@@ -1477,6 +1527,113 @@ impl DeosDesktop {
         );
     }
 
+    /// Open (or focus) MY DREGG COMPUTERS — the vats you can reach (the roster
+    /// off the `GET /v1/vats` seam, honestly sourced), CONNECT, and the attached
+    /// computer's live reflection, anchored on its own sentinel like the Agent
+    /// Room.
+    fn open_dregg_computers(&mut self) {
+        self.open_kind(
+            dregg_computers::dregg_computers_window_cell(),
+            WinKindTag::DreggComputers,
+        );
+        self.say(format!(
+            "My Dregg Computers — {}. Connect one and watch its receipts: it cannot lie to you.",
+            self.vat_directory.describe()
+        ));
+    }
+
+    /// **CONNECT to a Dregg Computer** — attach the vat with `cell_id` off the
+    /// roster: the backend the roster's source picks (mock for the fixture; HTTP
+    /// at the vat's REAL endpoint for a gateway roster — the same wire path
+    /// `--node <url>` proves), then the snapshot reflection (status · remote
+    /// cells · receipt tail) and, against a live endpoint, the SSE stream the
+    /// pulse drains. The verdict — including an unreachable endpoint — is
+    /// narrated, never swallowed.
+    fn connect_vat(&mut self, cell_id: &str) {
+        let Some(vat) = self.vat_directory.vat(cell_id).cloned() else {
+            self.say("That computer is no longer on the roster.");
+            return;
+        };
+        match self.vat_directory.client_for(&vat) {
+            Err(refusal) => self.say(format!("Cannot connect — {refusal}")),
+            Ok(client) => {
+                let link = dregg_computers::VatLink::connect_with(vat, client);
+                let verdict = match &link.error {
+                    Some(e) => format!("Attach FAILED — {e}"),
+                    None => format!(
+                        "Attached to your Dregg Computer {} — {} remote cell(s), {} receipt(s){}.",
+                        link.describe(),
+                        link.cells.len(),
+                        link.feed.receipts().len(),
+                        if link.streaming() {
+                            ", stream live"
+                        } else {
+                            ""
+                        }
+                    ),
+                };
+                self.vat_link = Some(link);
+                self.say(verdict);
+            }
+        }
+    }
+
+    /// **DISCONNECT** from the attached Dregg Computer (drops the wire client +
+    /// the SSE reader; the vat itself keeps running — detaching a screen does
+    /// not power off the machine).
+    fn disconnect_vat(&mut self) {
+        if let Some(link) = self.vat_link.take() {
+            self.say(format!(
+                "Detached from {} — it keeps running without you watching.",
+                link.describe()
+            ));
+        }
+    }
+
+    /// One pulse beat of the vat attachment: drain every receipt the SSE reader
+    /// delivered since the last beat into the feed. Returns how many were NEW
+    /// (each is a repaint-worthy arrival). Zero when unattached / snapshot-only.
+    fn pump_vat_stream(&mut self) -> usize {
+        self.vat_link.as_mut().map(|l| l.pump()).unwrap_or(0)
+    }
+
+    // ── My Dregg Computers bake/test hooks (headless drivers) ────────────────
+
+    /// Open the My Dregg Computers window — a bake hook.
+    pub fn bake_open_dregg_computers(&mut self) {
+        self.open_dregg_computers();
+    }
+
+    /// The roster's card lines (the text twin of every painted vat card) plus
+    /// the honest source caption — what a headless bake asserts against.
+    pub fn bake_vat_roster(&self) -> Vec<String> {
+        let mut v = vec![self.vat_directory.describe()];
+        v.extend(
+            self.vat_directory
+                .vats
+                .iter()
+                .map(dregg_computers::vat_card_text),
+        );
+        v
+    }
+
+    /// CONNECT to the roster vat at `idx` (the same actuation the card button
+    /// fires) and return the attachment caption — a bake hook. `None` when the
+    /// index is off the roster.
+    pub fn bake_connect_vat(&mut self, idx: usize) -> Option<String> {
+        let cell_id = self.vat_directory.vats.get(idx)?.cell_id.clone();
+        self.connect_vat(&cell_id);
+        self.vat_link.as_ref().map(|l| l.describe())
+    }
+
+    /// The attached computer's reflected truths — `(remote cells, receipts,
+    /// streaming)` — a bake hook. `None` when unattached.
+    pub fn bake_vat_connection(&self) -> Option<(usize, usize, bool)> {
+        self.vat_link
+            .as_ref()
+            .map(|l| (l.cells.len(), l.feed.receipts().len(), l.streaming()))
+    }
+
     /// Open (or focus) the PROVENANCE WALKER — the receipt chain walked
     /// hash-by-hash, every link recomputed on the spot (never trusted),
     /// anchored on its own sentinel like the Agent Room.
@@ -1525,6 +1682,8 @@ impl DeosDesktop {
             WinKindTag::AttachWizard => (420.0, 480.0),
             // The Mail Room opens tall enough for the letter cards + the compose strip.
             WinKindTag::MailRoom => (520.0, 500.0),
+            // My Dregg Computers opens wide enough for the vat cards' rental truths.
+            WinKindTag::DreggComputers => (560.0, 480.0),
             #[allow(unreachable_patterns)]
             // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => (380.0, 320.0),
@@ -1573,6 +1732,12 @@ impl DeosDesktop {
         }
         if key.1 == WinKindTag::ProvenanceWalker {
             self.provenance_walkers.remove(&key.0);
+        }
+        // Drop the per-window view state when My Dregg Computers closes. The
+        // ATTACHMENT (`vat_link`) deliberately stays: the link is to a remote
+        // computer, not to a window — closing the lid does not detach the vat.
+        if key.1 == WinKindTag::DreggComputers {
+            self.dregg_computers.remove(&key.0);
         }
         // Drop the content-IR renderer entity when its window closes so a reopen
         // re-mints the applet + re-renders the portable tree fresh.
@@ -1889,6 +2054,11 @@ impl DeosDesktop {
                 true,
                 A::OpenMailRoom,
             ),
+            MenuAction::new(
+                "My Dregg Computers… (vats you can reach · connect · receipts)",
+                true,
+                A::OpenDreggComputers,
+            ),
             MenuAction::new("Spotter… (jump to anything)", true, A::OpenSpotter),
             MenuAction::sep(),
             // The session's woven surfaces — reachable from the bare desktop too, not only
@@ -2183,6 +2353,7 @@ impl DeosDesktop {
             ActionKind::OpenAgentRoom => self.open_agent_room(),
             ActionKind::OpenProvenanceWalker => self.open_provenance_walker(),
             ActionKind::OpenMailRoom => self.open_mail_room(),
+            ActionKind::OpenDreggComputers => self.open_dregg_computers(),
             ActionKind::OpenSpotter => self.open_spotter(),
             // The session's woven surfaces, reached from a cell menu too (anchored on the
             // acted-on cell): a doc-collab session, the World-Status board, an Android cell.
@@ -3228,6 +3399,15 @@ impl DeosDesktop {
                     WinKindTag::MailRoom,
                 )));
             }
+            // My Dregg Computers' opener narrates the roster source (fixture vs
+            // live gateway) and lands mold-ready like every other global surface.
+            Tg::DreggComputers => {
+                self.open_dregg_computers();
+                self.selected = Some(HaloTarget::Window((
+                    dregg_computers::dregg_computers_window_cell(),
+                    WinKindTag::DreggComputers,
+                )));
+            }
             Tg::WorldTranscript => self.land_in(self.user, WinKindTag::Transcript),
             Tg::DocCollab => self.start_doc_collab(self.user),
             #[cfg(feature = "card-pane")]
@@ -3368,6 +3548,7 @@ impl DeosDesktop {
             ActionKind::OpenAgentRoom => self.open_agent_room(),
             ActionKind::OpenProvenanceWalker => self.open_provenance_walker(),
             ActionKind::OpenMailRoom => self.open_mail_room(),
+            ActionKind::OpenDreggComputers => self.open_dregg_computers(),
             ActionKind::OpenSpotter => self.open_spotter(),
             ActionKind::OpenDocCollab => self.start_doc_collab(self.user),
             ActionKind::OpenViewNodePane => {
@@ -4941,6 +5122,7 @@ impl DeosDesktop {
             WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
             WinKindTag::AgentRoom => self.render_agent_room_window(cell, cx),
             WinKindTag::MailRoom => self.render_mail_room_window(cell, window, cx),
+            WinKindTag::DreggComputers => self.render_dregg_computers_window(cell, cx),
             WinKindTag::ProvenanceWalker => self.render_provenance_walker_window(cell, cx),
             #[cfg(feature = "card-pane")]
             WinKindTag::ViewNodePane => self.render_viewnode_body(cell, &sc, window, cx),
@@ -6058,6 +6240,145 @@ impl DeosDesktop {
             .child(tabs)
             .child(body)
             .child(composer)
+            .into_any_element()
+    }
+
+    /// **The My Dregg Computers window body** — your vats on the glass: the
+    /// roster header (its source named — fixture vs live gateway), the
+    /// Computers / Connection / Receipts tabs, and the selected face. The
+    /// Computers face welds a CONNECT (or disconnect) button onto every vat
+    /// card — one click attaches the computer over the proven wire path; the
+    /// Connection and Receipts faces are the pure `dregg_computers` renders
+    /// over the live [`dregg_computers::VatLink`] (the clobber-safe split, as
+    /// the Agent Room / Mail Room hold it).
+    fn render_dregg_computers_window(
+        &mut self,
+        cell: CellId,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use dregg_computers::DreggComputersTab as T;
+        let state = self.dregg_computers.entry(cell).or_default().clone();
+        // Each face keeps its OWN persistent scroll handle (tab ordinal in the key).
+        let sc = self.face_scrolls.ensure(FaceScrollKey::Window(
+            cell,
+            WinKindTag::DreggComputers,
+            state.tab as u8,
+        ));
+
+        // The face tabs — computers / connection / receipts.
+        let mut tabs = div().flex().flex_row().gap_1().my_1();
+        for t in T::ALL {
+            let selected = t == state.tab;
+            tabs = tabs.child(
+                bevel_raised(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "dregg-computers-tab-{}",
+                            t.label()
+                        )))
+                        .px_2()
+                        .py_1()
+                        .text_size(px(10.0))
+                        .when(selected, |d| {
+                            d.bg(gpui::rgb(NT_SELECT)).text_color(gpui::rgb(0xffffff))
+                        }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.dregg_computers.entry(cell).or_default().tab = t;
+                        cx.notify();
+                    }),
+                )
+                .child(t.label()),
+            );
+        }
+
+        let header =
+            dregg_computers::render_directory_header(&self.vat_directory, self.vat_link.as_ref());
+
+        let body = match state.tab {
+            T::Connection => dregg_computers::render_connection_face(self.vat_link.as_ref(), &sc),
+            T::Receipts => dregg_computers::render_receipts_face(self.vat_link.as_ref(), &sc),
+            T::Computers => {
+                // The roster face — every vat card, CONNECT welded on by this View
+                // (the pure module renders the card; the listener needs `Context`).
+                let mut col = div()
+                    .id("dregg-computers-roster")
+                    .bg(gpui::rgb(NT_PANEL))
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(face_section(&format!(
+                        "Computers you can reach · {}",
+                        self.vat_directory.vats.len()
+                    )));
+                if let Some(err) = &self.vat_directory.error {
+                    col = col.child(face_row_color("gateway", err, NT_WARN));
+                }
+                if self.vat_directory.vats.is_empty() && self.vat_directory.error.is_none() {
+                    col = col.child(face_row(
+                        "(none)",
+                        "no vats yet — `dregg-cloud vat create --name mybox` mints one",
+                    ));
+                }
+                for v in self.vat_directory.vats.clone() {
+                    let attached = self
+                        .vat_link
+                        .as_ref()
+                        .is_some_and(|l| l.vat.cell_id == v.cell_id);
+                    let vid = v.cell_id.clone();
+                    let button = bevel_raised(
+                        div()
+                            .id(gpui::SharedString::from(format!("vat-connect-{vid}")))
+                            .px_2()
+                            .py_1()
+                            .text_size(px(10.0))
+                            .font_weight(FontWeight::BOLD)
+                            .bg(gpui::rgb(if attached { NT_DIM } else { NT_SELECT }))
+                            .text_color(gpui::rgb(0xffffff)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                            if attached {
+                                this.disconnect_vat();
+                            } else {
+                                this.connect_vat(&vid);
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(if attached {
+                        "disconnect"
+                    } else {
+                        "connect  ⟶"
+                    });
+                    col = col.child(
+                        dregg_computers::vat_card(&v, attached)
+                            .child(div().flex().flex_row().justify_end().child(button)),
+                    );
+                }
+                nt_scroll_face(&sc, col).into_any_element()
+            }
+        };
+
+        div()
+            .id(gpui::SharedString::from(format!(
+                "dregg-computers-body-{}",
+                id_hex(&cell)
+            )))
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .bg(gpui::rgb(NT_PANEL))
+            .p_2()
+            .child(header)
+            .child(tabs)
+            .child(body)
             .into_any_element()
     }
 
