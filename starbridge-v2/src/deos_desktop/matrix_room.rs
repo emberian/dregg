@@ -833,8 +833,8 @@ mod view {
 
     use gpui::prelude::FluentBuilder as _;
     use gpui::{
-        div, px, AnyElement, Context, FontWeight, InteractiveElement, IntoElement, MouseButton,
-        MouseDownEvent, ParentElement, ScrollHandle, Styled, Window,
+        div, px, AnyElement, AppContext as _, Context, FontWeight, InteractiveElement, IntoElement,
+        MouseButton, MouseDownEvent, ParentElement, ScrollHandle, Styled, Window,
     };
     use gpui_component::input::{Input, InputEvent, InputState};
 
