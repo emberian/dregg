@@ -139,6 +139,7 @@ pub mod toasts;
 // window-type registration below falls back to the inspector body when it is off.
 #[cfg(feature = "card-pane")]
 pub mod viewnode_pane;
+pub mod virtual_face;
 pub mod welcome;
 pub mod workflow;
 pub mod world_explorer;
@@ -207,6 +208,7 @@ use gpui::{
 };
 
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::{v_virtual_list, VirtualListScrollHandle};
 
 use dregg_cell::lifecycle::CellLifecycle;
 use dregg_types::CellId;
@@ -232,8 +234,76 @@ pub use chrome::{
 };
 pub use face_scroll::{FaceScrollKey, FaceScrollRegistry};
 pub use layout::{DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag};
+pub use virtual_face::{visible_row_range, VirtualFaceRegistry};
 
 use halo::HaloTarget;
+
+// ── UNCAPPED-FACE ROW RENDERERS (pure; the View owns the virtual list state) ──────
+//
+// The virtualized log faces (`render_transcript_body`, the receipt console) build
+// each visible row through these free functions. Keeping them pure — one datum in,
+// one inert row element out, no view context — is the clobber-safe split the dense
+// window bodies already hold: the kit's `v_virtual_list` closure re-enters the View
+// for the LIVE slice, then maps each item through a renderer that could not care
+// less where the row came from. The `*_text` twins carry the exact glyphs the row
+// paints so the bakes can witness "offset N shows the right receipts" as plain
+// strings, with no window (see `bake_transcript_rows_at`).
+
+/// Fixed row pitch (px) for the single-line receipt-log faces — the transcript and
+/// the receipt console. One line of 11px text plus the old `.gap_1()` breathing,
+/// declared uniformly so `virtual_face::visible_row_range` (and the kit) can map an
+/// offset to a row window by division. Kept a touch taller than the glyph so a row
+/// never clips.
+const TRANSCRIPT_ROW_H: f32 = 18.0;
+
+/// Row pitch (px) for the receipt-console flyout — same single-line log geometry.
+const STATUS_ROW_H: f32 = 18.0;
+
+/// The receipt console's ring bound — the newest `say()` lines kept, oldest out.
+/// Was an implicit 64 (of which the flyout showed only the newest 24); now that
+/// the console is virtualized and tail-following, it can hold a real session
+/// history cheaply, so the bound is raised to a full log the operator can scroll
+/// back through. Bounded still (a couple hundred KB of short strings at worst) —
+/// the console is narration, not the receipt chain.
+const STATUS_LOG_CAP: usize = 4096;
+
+/// The transcript body's per-receipt line, exactly as painted: the commit index,
+/// turn-hash + post-state-hash prefixes, and the acting cell. Pure over one receipt.
+fn transcript_row_text(i: usize, r: &dregg_turn::turn::TurnReceipt) -> String {
+    let hh: String = r.turn_hash[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let post: String = r.post_state_hash[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!(
+        "#{i:<4} turn {hh} → post {post}  agent {}",
+        id_short(&r.agent)
+    )
+}
+
+/// One transcript row element — the pure renderer the virtual list maps over its
+/// visible range. Fixed-height so it tiles cleanly under virtualization.
+fn transcript_row(i: usize, r: &dregg_turn::turn::TurnReceipt) -> AnyElement {
+    div()
+        .h(px(TRANSCRIPT_ROW_H))
+        .text_size(px(11.0))
+        .child(transcript_row_text(i, r))
+        .into_any_element()
+}
+
+/// One receipt-console row element — a single `say()` line, fixed-height for
+/// virtualization. The text IS the line (the console is a raw narration log), so
+/// the row is its own witness; no `*_text` twin is needed.
+fn console_row(line: &str) -> AnyElement {
+    div()
+        .h(px(STATUS_ROW_H))
+        .text_size(px(11.0))
+        .child(line.to_string())
+        .into_any_element()
+}
 
 /// Parse a document line back to the `CellId` it transcludes, if any. The compose
 /// gesture writes `{transclude dregg://<64-hex> · <kind> · balance <b> · <life>}`
@@ -816,6 +886,16 @@ pub struct DeosDesktop {
     /// desktop view-state — surviving repaints, tab flips, and window reopens
     /// (session-only, like the halo; never persisted layout).
     face_scrolls: face_scroll::FaceScrollRegistry,
+    /// **THE VIRTUAL-FACE REGISTRY** — one persistent [`VirtualListScrollHandle`]
+    /// (plus a tail cursor) per UNCAPPED log face ([`virtual_face`]): the World
+    /// Explorer's Chronicle + Ledger, the Transcript body, and the receipt
+    /// console. These faces render through `gpui_component::v_virtual_list`, so
+    /// only the visible rows are ever built and the row count is unbounded — the
+    /// chronicle stops being a 24-row peephole. Append-order faces (chronicle,
+    /// transcript, console) `follow_tail` so a landing receipt snaps into view
+    /// (`tail -f` for the World); the id-sorted Ledger keeps its place. The base
+    /// handle feeds the same NT scrollbar the flat faces wear.
+    virtual_faces: virtual_face::VirtualFaceRegistry,
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -971,6 +1051,7 @@ impl DeosDesktop {
             saver: layout::LayoutSaver::spawn(saver_path),
             rewind: rewind::RewindState::default(),
             face_scrolls: face_scroll::FaceScrollRegistry::default(),
+            virtual_faces: virtual_face::VirtualFaceRegistry::default(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -1002,15 +1083,16 @@ impl DeosDesktop {
     }
 
     /// **Narrate** — set the status bar's line AND append it to the receipt
-    /// console's log (capped at 64, oldest out). Every status write in the desktop
-    /// goes through here, so the console is the complete session narration — the
-    /// story the bar used to overwrite one line at a time. While the flyout is
-    /// closed, said lines tick the unread chip.
+    /// console's log (a [`STATUS_LOG_CAP`] ring, oldest out). Every status write in
+    /// the desktop goes through here, so the console is the complete session
+    /// narration — the story the bar used to overwrite one line at a time. The
+    /// virtualized, tail-following flyout renders the whole ring, not a peephole.
+    /// While the flyout is closed, said lines tick the unread chip.
     pub(super) fn say(&mut self, line: impl Into<String>) {
         let line = line.into();
         self.status = line.clone();
         self.status_log.push_back(line);
-        if self.status_log.len() > 64 {
+        if self.status_log.len() > STATUS_LOG_CAP {
             self.status_log.pop_front();
         }
         if !self.status_flyout {
@@ -2688,6 +2770,71 @@ impl DeosDesktop {
             .set_offset(gpui::point(px(0.0), px(y)));
     }
 
+    // ── UNCAP WITNESSES: what a virtualized face paints at an offset ──────────────
+    //
+    // The uncapped faces render only their *visible* rows through `v_virtual_list`,
+    // so "the chronicle is no longer a 24-row peephole" cannot be witnessed by
+    // counting eager children (there are none off-screen). These bakes stand in for
+    // the kit's window-bound prepaint headlessly: the SAME uniform-height range math
+    // (`virtual_face::visible_row_range`) the kit runs, over the SAME pure row
+    // renderers the live face maps, over the live World — so a 10k-row bake proves
+    // "offset N shows exactly these receipts" and "parked on the tail, the newest
+    // receipt is in view" without standing up a window.
+
+    /// BAKE: the row TEXTS the virtualized **Chronicle** paints at scroll
+    /// `offset_y` in a `viewport_h`-tall viewport, over the live receipt log.
+    pub fn bake_chronicle_rows_at(&self, offset_y: f32, viewport_h: f32) -> Vec<String> {
+        let w = self.world.borrow();
+        let receipts = w.receipts();
+        virtual_face::visible_row_range(
+            receipts.len(),
+            world_explorer::CHRONICLE_ROW_H,
+            viewport_h,
+            offset_y,
+        )
+        .filter_map(|i| {
+            receipts
+                .get(i)
+                .map(|r| world_explorer::chronicle_row_text(i, r))
+        })
+        .collect()
+    }
+
+    /// BAKE: the row TEXTS the virtualized **Transcript** paints at scroll
+    /// `offset_y` in a `viewport_h`-tall viewport, over the live receipt log.
+    pub fn bake_transcript_rows_at(&self, offset_y: f32, viewport_h: f32) -> Vec<String> {
+        let w = self.world.borrow();
+        let receipts = w.receipts();
+        virtual_face::visible_row_range(receipts.len(), TRANSCRIPT_ROW_H, viewport_h, offset_y)
+            .filter_map(|i| receipts.get(i).map(|r| transcript_row_text(i, r)))
+            .collect()
+    }
+
+    /// BAKE: parked on the tail, the Transcript's NEWEST receipt is in the painted
+    /// window — the visible end of `tail -f`. Returns that newest row's text, or
+    /// `None` if the newest row is somehow not in view (a failed tail) or the log
+    /// is empty.
+    pub fn bake_transcript_tail_row(&self, viewport_h: f32) -> Option<String> {
+        let w = self.world.borrow();
+        let receipts = w.receipts();
+        let n = receipts.len();
+        if n == 0 {
+            return None;
+        }
+        let off = virtual_face::tail_offset(n, TRANSCRIPT_ROW_H, viewport_h);
+        virtual_face::visible_row_range(n, TRANSCRIPT_ROW_H, viewport_h, off)
+            .contains(&(n - 1))
+            .then(|| transcript_row_text(n - 1, &receipts[n - 1]))
+    }
+
+    /// BAKE: the row TEXTS the virtualized **receipt console** paints at scroll
+    /// `offset_y` — over the WHOLE `say()` ring, not the old newest-24 peephole.
+    pub fn bake_status_console_rows_at(&self, offset_y: f32, viewport_h: f32) -> Vec<String> {
+        virtual_face::visible_row_range(self.status_log.len(), STATUS_ROW_H, viewport_h, offset_y)
+            .filter_map(|i| self.status_log.get(i).cloned())
+            .collect()
+    }
+
     /// Build the Spotter candidate set over the World's cells (each cell + its action
     /// verbs), reading live faces off the ledger. Delegates the entry shapes to
     /// [`spotter::candidates_for_cells`].
@@ -4308,10 +4455,7 @@ impl Render for DeosDesktop {
         root = root.child(self.render_taskbar(cx));
         root = root.child(self.render_statusbar(cx));
         if self.status_flyout {
-            let sc = self
-                .face_scrolls
-                .ensure(FaceScrollKey::Chrome("status-console"));
-            root = root.child(self.render_status_console(&sc));
+            root = root.child(self.render_status_console(cx));
         }
 
         // ── PULSE TOASTS — the World's foreign motion, arriving bottom-right ──────
@@ -4596,7 +4740,7 @@ impl DeosDesktop {
             WinKindTag::Inspector => self.render_inspector_body(cell, &sc, cx),
             WinKindTag::DocEditor => self.render_doc_body(cell, &sc, window, cx),
             WinKindTag::Links => self.render_links_body(cell, &sc),
-            WinKindTag::Transcript => self.render_transcript_body(&sc),
+            WinKindTag::Transcript => self.render_transcript_body(cell, cx),
             WinKindTag::Workflow => self.render_workflow_body(cell, &sc, cx),
             WinKindTag::DocExplorer => self.render_doc_explorer_body(cell, &sc, cx),
             WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
@@ -5211,11 +5355,6 @@ impl DeosDesktop {
             .get(&cell)
             .map(|s| s.tab)
             .unwrap_or_default();
-        let sc = self.face_scrolls.ensure(FaceScrollKey::Window(
-            cell,
-            WinKindTag::WorldExplorer,
-            tab as u8,
-        ));
 
         let mut tabs = div().flex().flex_row().gap_1().my_1();
         for t in T::ALL {
@@ -5248,8 +5387,9 @@ impl DeosDesktop {
 
         // The faces read through the Rewind Rail's effective lens: the live World
         // at LIVE, the root-verified replayed projection (with its amber REPLAYED
-        // banner) while the rail is scrubbed.
-        let body = self.render_world_explorer_body_effective(tab, &sc);
+        // banner) while the rail is scrubbed. Chronicle + Ledger are UNCAPPED here
+        // (View-owned `v_virtual_list`); Conservation stays the flat pure body.
+        let body = self.render_world_explorer_body_effective(tab, cell, cx);
         div()
             .id(gpui::SharedString::from(format!(
                 "wldbody-{}",
@@ -6461,41 +6601,127 @@ impl DeosDesktop {
     }
 
     /// **The transcript / receipt-log body** — the World's receipt chain, the
-    /// chronicle the user's "do it"s have written.
-    fn render_transcript_body(&self, scroll: &ScrollHandle) -> AnyElement {
-        let w = self.world.borrow();
-        let receipts = w.receipts();
-        let n = receipts.len();
-        let mut col = div()
+    /// chronicle the user's "do it"s have written, UNCAPPED and tail-following.
+    ///
+    /// Was a hard-capped tail (the last ~24 receipts eagerly built into the tree);
+    /// now the WHOLE log rides `gpui_component::v_virtual_list` so only the visible
+    /// rows are ever built and the log is unbounded. The View owns the list state
+    /// (the persistent [`VirtualListScrollHandle`] in `virtual_faces`, keyed like
+    /// the flat transcript face was); the row renderer stays a pure free function
+    /// ([`transcript_row`]) the closure calls over the LIVE receipt slice at paint
+    /// time — the live World's truth, never a snapshot. `follow_tail` keeps the
+    /// freshest receipt in view as the pulse lands turns (`tail -f`).
+    ///
+    /// (`&mut self` for the virtual-face registry; `cx` for `cx.entity()`, the
+    /// view handle `v_virtual_list` re-enters to build the visible range. `cell`
+    /// keys the window's own list state + element id, so two transcript windows
+    /// scroll and tail-follow independently.)
+    fn render_transcript_body(&mut self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
+        let (n, height) = {
+            let w = self.world.borrow();
+            (w.receipts().len(), w.height())
+        };
+        let key = FaceScrollKey::Window(cell, WinKindTag::Transcript, 0);
+        let list_id = gpui::SharedString::from(format!("transcript-list-{}", id_hex(&cell)));
+        let header = div().text_color(gpui::rgb(0x6fc0ff)).child(format!(
+            "── World receipt log · {n} turns · height {height} "
+        ));
+        let body = if n == 0 {
+            div()
+                .child("(no turns yet — actuate a cell)")
+                .into_any_element()
+        } else {
+            self.nt_virtual_face(
+                key,
+                list_id,
+                n,
+                TRANSCRIPT_ROW_H,
+                true,
+                cx,
+                |this, range, _w, _cx| {
+                    let w = this.world.borrow();
+                    let receipts = w.receipts();
+                    range
+                        .filter_map(|i| receipts.get(i).map(|r| transcript_row(i, r)))
+                        .collect()
+                },
+            )
+        };
+        div()
             .id("transcript-body")
-            .bg(gpui::rgb(0x101820))
-            .text_color(gpui::rgb(0x9fe0a0))
-            .p_2()
+            .flex_1()
+            .min_h(px(0.0))
             .flex()
             .flex_col()
             .gap_1()
-            .child(div().text_color(gpui::rgb(0x6fc0ff)).child(format!(
-                "── World receipt log · {n} turns · height {} ",
-                w.height()
-            )));
-        // The last ~24 receipts, newest last (the dense scrolling log).
-        let start = n.saturating_sub(24);
-        for (i, r) in receipts.iter().enumerate().skip(start) {
-            let hash = r.turn_hash;
-            let hh: String = hash[..4].iter().map(|b| format!("{b:02x}")).collect();
-            let post: String = r.post_state_hash[..4]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            col = col.child(div().text_size(px(11.0)).child(format!(
-                "#{i:<4} turn {hh} → post {post}  agent {}",
-                id_short(&r.agent)
-            )));
+            .bg(gpui::rgb(0x101820))
+            .text_color(gpui::rgb(0x9fe0a0))
+            .p_2()
+            .child(header)
+            .child(body)
+            .into_any_element()
+    }
+
+    /// **The UNCAP primitive** — assemble one virtualized, NT-chromed log face.
+    ///
+    /// This is the shared spine every uncapped face rides: it mounts a
+    /// `gpui_component::v_virtual_list` over `count` uniform `row_h`-tall rows —
+    /// so only the visible window is ever built, and `count` is unbounded — and
+    /// pairs it with the desktop's always-visible NT scrollbar
+    /// ([`chrome::nt_scrollbar`]) tracking the SAME handle's `base_handle()`, so a
+    /// virtualized face wears exactly the chrome the flat faces did (the kit sizes
+    /// the thumb off the whole virtual content, not the rendered slice).
+    ///
+    /// The list STATE is the View's: the persistent [`VirtualListScrollHandle`]
+    /// lives in `virtual_faces` keyed by `key`, so scroll position (and, for
+    /// `follow`-ing faces, the tail cursor) survives repaints and reopens exactly
+    /// like the flat faces' positions did. The ROW renderer stays pure: `build`
+    /// is a `'static` closure the kit re-enters with `&mut self` and the visible
+    /// `range`, pulling live rows for just those indices (live-World truth, never
+    /// a snapshot). When `follow` is set, a grown `count` defers a scroll to the
+    /// new tail (`tail -f`); an id-sorted census passes `follow = false` and keeps
+    /// its place.
+    ///
+    /// The returned wrapper is the flexing body slot (`flex_1` / `min_h(0)`) — mount
+    /// it under a face's pinned header, the way [`render_transcript_body`] does.
+    fn nt_virtual_face<F>(
+        &mut self,
+        key: FaceScrollKey,
+        list_id: impl Into<gpui::ElementId>,
+        count: usize,
+        row_h: f32,
+        follow: bool,
+        cx: &mut Context<Self>,
+        build: F,
+    ) -> AnyElement
+    where
+        F: 'static
+            + Fn(
+                &mut Self,
+                std::ops::Range<usize>,
+                &mut Window,
+                &mut Context<Self>,
+            ) -> Vec<AnyElement>,
+    {
+        let handle: VirtualListScrollHandle = self.virtual_faces.ensure(key);
+        if follow {
+            // tail -f: a landing receipt (a grown count) snaps the viewport to the
+            // fresh tail; an unchanged count leaves the operator's scroll alone.
+            self.virtual_faces.follow_tail(key, count);
         }
-        if n == 0 {
-            col = col.child(div().child("(no turns yet — actuate a cell)"));
-        }
-        nt_scroll_face(scroll, col).into_any_element()
+        // One uniform-height entry per row — the kit's per-item size table. Cheap
+        // O(count) scalars vs. the O(count) ELEMENTS the flat face used to build.
+        let sizes = Rc::new(vec![gpui::size(px(0.0), px(row_h)); count]);
+        let list = v_virtual_list(cx.entity(), list_id, sizes, build)
+            .track_scroll(&handle)
+            .size_full();
+        div()
+            .relative()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(list)
+            .child(nt_scrollbar(handle.base_handle()))
+            .into_any_element()
     }
 
     fn render_titlebar(
@@ -7147,44 +7373,69 @@ impl DeosDesktop {
         )
     }
 
-    /// **The RECEIPT CONSOLE flyout** — the session's full narration log (every
+    /// **The RECEIPT CONSOLE flyout** — the session's FULL narration log (every
     /// `say()` line, newest last), anchored above the status bar in the
     /// transcript's dense dark-console style. The bar's one line stops being the
-    /// only witness; the story scrolls — behind a REAL NT scrollbar on the
-    /// caller-ensured persistent `scroll` handle (the flyout clamps at 300px;
-    /// the inner tracked face scrolls when the log outgrows it, and reopening
-    /// the flyout lands back where the operator left it).
-    fn render_status_console(&self, scroll: &ScrollHandle) -> impl IntoElement {
-        let mut face = div()
-            .id("status-console")
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .track_scroll(scroll)
-            .p_2()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().text_color(gpui::rgb(0x6fc0ff)).child(format!(
-                "── receipt console · {} line(s) · click the bar to close ",
-                self.status_log.len()
-            )));
-        for line in self.status_log.iter().rev().take(24).rev() {
-            face = face.child(div().text_size(px(11.0)).child(line.clone()));
-        }
+    /// only witness; the story scrolls.
+    ///
+    /// Was the newest-24-of-64 peephole (only the last 24 lines built, the ring
+    /// itself bounded at 64). Now the WHOLE [`STATUS_LOG_CAP`] ring rides
+    /// `v_virtual_list` through [`nt_virtual_face`], so every retained line is
+    /// reachable behind the same NT scrollbar, and the console `follow_tail`s —
+    /// a fresh `say()` snaps the newest line into view. The flyout height tracks
+    /// the log (one row each) up to a cap so a short session shrinks to fit and a
+    /// long one scrolls; `follow = true` keeps the tail live either way.
+    ///
+    /// (`&mut self`/`cx`: the virtual list is View-owned, like every uncapped
+    /// face — see [`nt_virtual_face`].)
+    fn render_status_console(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let n = self.status_log.len();
+        let key = FaceScrollKey::Chrome("status-console");
+        let header = div()
+            .px_2()
+            .pt_2()
+            .pb_1()
+            .text_color(gpui::rgb(0x6fc0ff))
+            .child(format!(
+                "── receipt console · {n} line(s) · click the bar to close "
+            ));
+        // The list area grows one row per line up to a ceiling, so a short session
+        // shrinks to fit and a long one scrolls; the flyout is header + that area.
+        let list_h = (n as f32 * STATUS_ROW_H).clamp(STATUS_ROW_H, 260.0);
+        let body = if n == 0 {
+            div()
+                .p_2()
+                .child("(nothing said yet — the console is quiet)")
+                .into_any_element()
+        } else {
+            self.nt_virtual_face(
+                key,
+                "status-console-list",
+                n,
+                STATUS_ROW_H,
+                true,
+                cx,
+                |this, range, _w, _cx| {
+                    range
+                        .filter_map(|i| this.status_log.get(i).map(|line| console_row(line)))
+                        .collect()
+                },
+            )
+        };
         div()
             .absolute()
             .left(px(8.0))
             .bottom(px(50.0))
             .w(px(560.0))
-            .max_h(px(300.0))
+            .h(px(list_h + 34.0))
             .bg(gpui::rgb(0x101820))
             .text_color(gpui::rgb(0x9fe0a0))
             .border_2()
             .border_color(gpui::rgb(NT_FACE_DARK))
             .flex()
             .flex_col()
-            .child(face)
-            .child(nt_scrollbar(scroll))
+            .child(header)
+            .child(body)
     }
 
     /// **The taskbar** — a row of stubs for every open window, just above the status
@@ -7412,6 +7663,89 @@ mod tests {
         assert!(
             backlinks_in(cid(13), vec![(a, quote_line(&here))]).is_empty(),
             "a cell nobody quotes has no backlinks"
+        );
+    }
+
+    /// A synthetic receipt whose glyphs encode its index — so a row's text
+    /// witnesses WHICH receipt it drew.
+    fn receipt(i: u32) -> dregg_turn::turn::TurnReceipt {
+        dregg_turn::turn::TurnReceipt {
+            turn_hash: [i as u8; 32],
+            post_state_hash: [(i >> 8) as u8; 32],
+            agent: cid((i % 200) as u8),
+            computrons_used: i as u64,
+            ..Default::default()
+        }
+    }
+
+    /// **THE UNCAP, witnessed at 10k.** The flat Chronicle hard-stopped at 24
+    /// rows; the virtualized face pairs `virtual_face::visible_row_range` (the kit's
+    /// uniform-height scan) with the pure `world_explorer::chronicle_row_text`, so
+    /// over a 10k-receipt log it (a) builds only the visible window — never the
+    /// whole log — and (b) draws the CORRECT receipts at any offset, including the
+    /// tail. This is the bake hook: correct rows at offset N with 10k receipts.
+    #[test]
+    fn virtualized_chronicle_shows_correct_rows_at_offset_over_10k() {
+        let receipts: Vec<dregg_turn::turn::TurnReceipt> = (0u32..10_000).map(receipt).collect();
+        let row_h = world_explorer::CHRONICLE_ROW_H;
+        let viewport = 360.0;
+        let n = receipts.len();
+
+        // Parked at the TOP: only the head window is built (virtual, not eager),
+        // and it starts at row 0.
+        let top = virtual_face::visible_row_range(n, row_h, viewport, 0.0);
+        assert_eq!(top.start, 0);
+        assert!(
+            top.len() < 30,
+            "top window is virtualized: {} rows",
+            top.len()
+        );
+        assert!(world_explorer::chronicle_row_text(0, &receipts[0]).contains("#0"));
+
+        // Scroll so row 5000 tops the viewport — the window is the rows AT that
+        // offset (local, not the head, not the whole log), and each reads its OWN
+        // receipt.
+        let off = -(5000.0 * row_h);
+        let mid = virtual_face::visible_row_range(n, row_h, viewport, off);
+        assert_eq!(mid.start, 5000, "first visible is the row at the offset");
+        let row = world_explorer::chronicle_row_text(mid.start, &receipts[mid.start]);
+        assert!(
+            row.contains("#5000") && row.contains("5000cu"),
+            "row 5000 drew receipt 5000: {row:?}"
+        );
+        assert!(
+            !mid.contains(&0) && !mid.contains(&9999),
+            "the window is local to the offset: {mid:?}"
+        );
+
+        // Parked on the TAIL: the newest receipt (row 9999) is in view — the visible
+        // end of tail -f — while the head is still NOT built.
+        let tail_off = virtual_face::tail_offset(n, row_h, viewport);
+        let tail = virtual_face::visible_row_range(n, row_h, viewport, tail_off);
+        assert!(tail.contains(&9999), "tail row present: {tail:?}");
+        assert!(
+            !tail.contains(&0),
+            "still virtualized at the tail: {tail:?}"
+        );
+        assert!(world_explorer::chronicle_row_text(9999, &receipts[9999]).contains("9999cu"));
+    }
+
+    /// The Transcript's pure row renderer draws its receipt's index + hashes +
+    /// agent — the datum the virtualized Transcript body maps over its visible
+    /// range (and the bakes read as text).
+    #[test]
+    fn transcript_row_text_draws_its_receipt() {
+        let r = receipt(42);
+        let text = transcript_row_text(42, &r);
+        assert!(text.contains("#42"), "carries the index: {text:?}");
+        assert!(
+            text.contains(&id_short(&r.agent)),
+            "carries the agent: {text:?}"
+        );
+        // 0x2a = 42 → the turn-hash prefix is the repeated index byte.
+        assert!(
+            text.contains("2a2a2a2a"),
+            "carries the turn-hash prefix: {text:?}"
         );
     }
 }

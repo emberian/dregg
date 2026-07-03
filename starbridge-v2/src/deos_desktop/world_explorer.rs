@@ -128,23 +128,37 @@ pub fn render_world_explorer_body(
         WorldExplorerTab::Chronicle => render_chronicle_face(lens, scroll),
         WorldExplorerTab::Conservation => render_conservation_face(lens, scroll),
     };
-    match &lens.banner {
+    with_replay_banner(lens.banner.clone(), face)
+}
+
+/// The amber "this is REPLAYED, not live" banner row — a rewind projection's
+/// honesty stamp. Pure; the View's virtualized Chronicle/Ledger stack it over
+/// their face exactly as the flat path does, so a scrubbed census never
+/// masquerades as the live World.
+pub fn replay_banner(caption: &str) -> impl IntoElement {
+    div()
+        .px_2()
+        .py_1()
+        .bg(gpui::rgb(NT_WARN))
+        .text_color(gpui::rgb(NT_TITLE_TEXT))
+        .text_size(px(10.0))
+        .font_weight(FontWeight::BOLD)
+        .child(caption.to_string())
+}
+
+/// Stack `face` under the amber [`replay_banner`] when `banner` is `Some` (a
+/// replayed lens), or pass the live face straight through. The single banner
+/// discipline shared by the flat `render_world_explorer_body` and the View's
+/// virtualized Chronicle/Ledger.
+pub fn with_replay_banner(banner: Option<String>, face: AnyElement) -> AnyElement {
+    match banner {
         None => face,
         Some(caption) => div()
             .flex_1()
             .min_h(px(0.0))
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .bg(gpui::rgb(NT_WARN))
-                    .text_color(gpui::rgb(NT_TITLE_TEXT))
-                    .text_size(px(10.0))
-                    .font_weight(FontWeight::BOLD)
-                    .child(caption.clone()),
-            )
+            .child(replay_banner(&caption))
             .child(face)
             .into_any_element(),
     }
@@ -181,8 +195,60 @@ fn cell_lifecycle(cell: &Cell) -> &'static str {
 
 // ── LEDGER: the dense NT census of every cell ───────────────────────────────────
 
-/// The LEDGER face — a browsable list of every cell, sorted by id, each showing
-/// its short id, kind, balance, lifecycle, and nonce. The My-Computer census.
+/// Fixed row pitch (px) for the LEDGER census — one flex row of 11px cells. Uniform
+/// so the View's virtualized Ledger can map a scroll offset to a row window.
+pub const LEDGER_ROW_H: f32 = 18.0;
+
+/// The Ledger face's PINNED header — the census size. Pure; the caller mounts it
+/// above the (flat or virtualized) census.
+pub fn ledger_header(n: usize) -> impl IntoElement {
+    face_section(&format!("World cells · {n} cells"))
+}
+
+/// One census row — a cell's short id, kind, balance, lifecycle, and nonce, in the
+/// fixed-width NT columns. Pure over one `(id, cell)`; the same renderer the eager
+/// face and the View's virtualized census both map, so an id-sorted window at any
+/// scroll offset draws exactly the flat face's rows. Fixed-height for virtualization.
+pub fn ledger_row(id: &CellId, cell: &Cell) -> AnyElement {
+    let bal = cell.state.balance();
+    let kind = cell_kind(cell);
+    let life = cell_lifecycle(cell);
+    let nonce = cell.state.nonce();
+    // An issuer well (negative) reads amber, a Live account reads neutral.
+    let bal_color = if bal < 0 { NT_WARN } else { 0x101010 };
+    div()
+        .h(px(LEDGER_ROW_H))
+        .flex()
+        .flex_row()
+        .gap_1()
+        .text_size(px(11.0))
+        .child(
+            div()
+                .w(px(72.0))
+                .text_color(gpui::rgb(0x000080))
+                .font_weight(FontWeight::BOLD)
+                .child(id_short(id)),
+        )
+        .child(div().w(px(76.0)).text_color(gpui::rgb(NT_DIM)).child(kind))
+        .child(
+            div()
+                .flex_1()
+                .text_color(gpui::rgb(bal_color))
+                .child(fmt_balance(bal)),
+        )
+        .child(div().w(px(64.0)).child(life))
+        .child(
+            div()
+                .w(px(56.0))
+                .text_color(gpui::rgb(NT_DIM))
+                .child(format!("n{nonce}")),
+        )
+        .into_any_element()
+}
+
+/// The LEDGER face (flat/eager fallback — the live surface routes through the
+/// View's virtualized census in [`super::rewind`]) — every cell, sorted by id.
+/// Shares [`ledger_header`] / [`ledger_row`] with the virtualized path.
 /// Over a replayed lens this is the census AS IT WAS — since-destroyed cells
 /// reappear, not-yet-born ones are absent.
 fn render_ledger_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement {
@@ -200,7 +266,7 @@ fn render_ledger_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement {
         .flex()
         .flex_col()
         .gap_1()
-        .child(face_section(&format!("World cells · {n} cells")));
+        .child(ledger_header(n));
 
     if n == 0 {
         return nt_scroll_face(
@@ -214,40 +280,7 @@ fn render_ledger_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement {
     // salient than oldest here, so we show the first ~24 in id order).
     let cap = 24usize;
     for (id, cell) in cells.iter().take(cap) {
-        let bal = cell.state.balance();
-        let kind = cell_kind(cell);
-        let life = cell_lifecycle(cell);
-        let nonce = cell.state.nonce();
-        // An issuer well (negative) reads amber, a Live account reads neutral.
-        let bal_color = if bal < 0 { NT_WARN } else { 0x101010 };
-        col = col.child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_1()
-                .text_size(px(11.0))
-                .child(
-                    div()
-                        .w(px(72.0))
-                        .text_color(gpui::rgb(0x000080))
-                        .font_weight(FontWeight::BOLD)
-                        .child(id_short(id)),
-                )
-                .child(div().w(px(76.0)).text_color(gpui::rgb(NT_DIM)).child(kind))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_color(gpui::rgb(bal_color))
-                        .child(fmt_balance(bal)),
-                )
-                .child(div().w(px(64.0)).child(life))
-                .child(
-                    div()
-                        .w(px(56.0))
-                        .text_color(gpui::rgb(NT_DIM))
-                        .child(format!("n{nonce}")),
-                ),
-        );
+        col = col.child(ledger_row(id, cell));
     }
     if n > cap {
         col = col.child(face_row("…", &format!("{} more cells", n - cap)));
@@ -257,9 +290,54 @@ fn render_ledger_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement {
 
 // ── CHRONICLE: the World's witnessed receipt history ────────────────────────────
 
-/// The CHRONICLE face — the last ~24 receipts, each showing the commit index,
-/// turn-hash (first 4 bytes), post-state-hash (first 4 bytes), the agent cell,
-/// and the computrons it spent. The World's navigable history.
+/// Fixed row pitch (px) for the Chronicle — one line of 11px text plus the old
+/// `.gap_1()` breathing, declared uniformly so `virtual_face::visible_row_range`
+/// (and the widget kit) can map a scroll offset to a row window by division. The
+/// View's virtualized Chronicle mounts rows of exactly this height.
+pub const CHRONICLE_ROW_H: f32 = 18.0;
+
+/// The Chronicle face's PINNED header line — turn count + world height. Pure; the
+/// caller mounts it above the (flat or virtualized) row list.
+pub fn chronicle_header(n: usize, height: u64) -> impl IntoElement {
+    div()
+        .text_color(gpui::rgb(0x6fc0ff))
+        .child(format!("── World chronicle · {n} turns · height {height} "))
+}
+
+/// One Chronicle row, exactly as painted: commit index, turn-hash + post-state
+/// prefixes, the agent cell, and the computrons it spent. Pure over one receipt —
+/// the same renderer the eager face and the View's `v_virtual_list` closure both
+/// map over their rows, so the flat and virtualized Chronicles read identically.
+/// The `_text` twin is the bake witness ("offset N shows THIS receipt").
+pub fn chronicle_row_text(i: usize, r: &TurnReceipt) -> String {
+    let hh: String = r.turn_hash[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let post: String = r.post_state_hash[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!(
+        "#{i:<4} turn {hh} → post {post}  agent {}  · {}cu",
+        id_short(&r.agent),
+        r.computrons_used
+    )
+}
+
+/// One Chronicle row element — fixed-height so it tiles cleanly under virtualization.
+pub fn chronicle_row(i: usize, r: &TurnReceipt) -> AnyElement {
+    div()
+        .h(px(CHRONICLE_ROW_H))
+        .text_size(px(11.0))
+        .child(chronicle_row_text(i, r))
+        .into_any_element()
+}
+
+/// The CHRONICLE face (flat/eager fallback — the live surface routes through the
+/// View's virtualized Chronicle in [`super::rewind`]) — the last ~24 receipts,
+/// newest last. Shares [`chronicle_header`] / [`chronicle_row`] with the
+/// virtualized path so the two never drift.
 fn render_chronicle_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement {
     let receipts = lens.receipts;
     let n = receipts.len();
@@ -272,10 +350,7 @@ fn render_chronicle_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement 
         .flex()
         .flex_col()
         .gap_1()
-        .child(div().text_color(gpui::rgb(0x6fc0ff)).child(format!(
-            "── World chronicle · {n} turns · height {} ",
-            lens.height
-        )));
+        .child(chronicle_header(n, lens.height));
 
     if n == 0 {
         return nt_scroll_face(
@@ -288,19 +363,7 @@ fn render_chronicle_face(lens: &WorldLens, scroll: &ScrollHandle) -> AnyElement 
     // The last ~24 receipts, newest last (the dense scrolling log).
     let start = n.saturating_sub(24);
     for (i, r) in receipts.iter().enumerate().skip(start) {
-        let hh: String = r.turn_hash[..4]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        let post: String = r.post_state_hash[..4]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        col = col.child(div().text_size(px(11.0)).child(format!(
-            "#{i:<4} turn {hh} → post {post}  agent {}  · {}cu",
-            id_short(&r.agent),
-            r.computrons_used
-        )));
+        col = col.child(chronicle_row(i, r));
     }
     nt_scroll_face(scroll, col).into_any_element()
 }
