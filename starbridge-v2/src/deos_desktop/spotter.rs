@@ -76,6 +76,19 @@ pub enum SpotterTarget {
     /// on the user sentinel. Gated on `android-systemui` (where the cap-chrome is in scope).
     #[cfg(feature = "android-systemui")]
     AndroidCell,
+    /// Open the APP SHELF — the roster of pre-built starbridge-apps as first-class
+    /// desktop citizens (launch one and its cell + receipt land on the LIVE World). A
+    /// global surface, anchored on the user sentinel. Gated on `app-registry` (where
+    /// the registry + the app crates are in scope); the candidates come from
+    /// [`crate::deos_desktop::app_shelf::app_spotter_candidates`].
+    #[cfg(feature = "app-registry")]
+    AppShelf,
+    /// LAUNCH the named registry app straight from the palette — the dispatcher runs
+    /// the SAME `launch_on_world` flow the shelf's button does (a real verified turn;
+    /// the app's cell becomes a desktop icon). Carries the registry id (`&'static`
+    /// because every [`crate::app_registry::AppEntry::id`] is). Gated on `app-registry`.
+    #[cfg(feature = "app-registry")]
+    LaunchApp(&'static str),
 }
 
 /// One ranked candidate in the spotter result list. `label` is the reader-legible

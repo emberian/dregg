@@ -37,6 +37,15 @@
 // The remaining surfaces (windows, menus, document editing, properties, actuation,
 // rendering) live here as `impl DeosDesktop` blocks over the shared chrome/layout.
 pub mod android_window;
+/// THE APP SHELF — the pre-built starbridge-apps as first-class desktop citizens: a
+/// shelf window listing every `crate::app_registry` app (name · what-it-does ·
+/// manifest facts), per-app LAUNCH (`AppEntry::launch_on_world` — the app's cell +
+/// program seed onto the LIVE World and its representative affordance COMMITS as a
+/// real verified turn), desktop icons wearing the app's own face, and the wired
+/// card fires as further live turns. gpui-free model + the View's listeners, split
+/// clobber-safe. Gated on `app-registry` (which implies `embedded-executor`).
+#[cfg(feature = "app-registry")]
+pub mod app_shelf;
 /// THE DISCORD-BOT SURFACE — the desktop face of the one dregg-driven bot: a card
 /// that drives the bot's ops as dregg turns (`drive_on_world` on the embedded executor
 /// / the `op_request` POST to the live bot's `/api/op`) and renders the bot's activity
@@ -252,6 +261,10 @@ enum WinKind {
     /// live [`crate::systemui_caps::SystemUiCapChrome`]. The chrome (its real `PermWorld` +
     /// executor) lives in `systemui_chromes`, so this variant is a marker.
     AndroidCell,
+    /// **THE APP SHELF** — the roster of pre-built starbridge-apps, each launchable
+    /// onto the LIVE World as a real verified turn. Its state (`AppShelfState`) lives
+    /// in `app_shelf` (gated on `app-registry`), so this variant is a marker.
+    AppShelf,
 }
 
 impl WinKind {
@@ -266,6 +279,7 @@ impl WinKind {
             WinKind::WorldExplorer => "World Explorer",
             WinKind::ViewNodePane => "World Status",
             WinKind::AndroidCell => "Android · SystemUI",
+            WinKind::AppShelf => "App Shelf",
         }
     }
 }
@@ -326,6 +340,11 @@ enum ActionKind {
     /// Open a confined ANDROID CELL dressed as the phone's SystemUI cap-chrome (status
     /// bar · quick-settings shade · hand-over sheet). A World-level surface.
     OpenAndroidCell,
+    /// Open the APP SHELF — the pre-built starbridge-apps roster (launch one onto the
+    /// LIVE World as a real verified turn). A World-level surface. Gated on
+    /// `app-registry` (the feature that wires the registry + app crates in).
+    #[cfg(feature = "app-registry")]
+    OpenAppShelf,
     /// Open the SPOTTER command palette — fuzzy-jump to any cell / action / window.
     OpenSpotter,
     /// Open the links / backlinks view over the cell.
@@ -539,6 +558,14 @@ pub struct DeosDesktop {
     /// view concern). Keyed by the window's anchor cell.
     #[cfg(feature = "android-systemui")]
     systemui_shades: std::collections::HashSet<CellId>,
+    /// **THE APP SHELF state** — the registry of pre-built starbridge-apps plus the
+    /// installed set (each a launched-on-World app whose cell + receipts live on the
+    /// desktop's OWN `World` ledger). Read by the shelf window body, the app-faced
+    /// desktop icons, and the Spotter's launch dispatch; mutated only by the launch
+    /// flow ([`app_shelf::AppShelfState::install_on_world`] — a real verified turn).
+    /// Gated on `app-registry` (which implies `embedded-executor`).
+    #[cfg(feature = "app-registry")]
+    app_shelf: app_shelf::AppShelfState,
     /// The last rendered viewport size (logical px), captured each `render`. Tile /
     /// cascade read it so they fill the ACTUAL desktop instead of a hardcoded
     /// 1600×1000 — at higher bake resolutions the windows spread the whole room.
@@ -659,6 +686,8 @@ impl DeosDesktop {
             systemui_chromes: HashMap::new(),
             #[cfg(feature = "android-systemui")]
             systemui_shades: std::collections::HashSet::new(),
+            #[cfg(feature = "app-registry")]
+            app_shelf: app_shelf::AppShelfState::new(),
             last_viewport: (1600.0, 1000.0),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
@@ -702,6 +731,7 @@ impl DeosDesktop {
             WinKindTag::WorldExplorer => WinKind::WorldExplorer,
             WinKindTag::ViewNodePane => WinKind::ViewNodePane,
             WinKindTag::AndroidCell => WinKind::AndroidCell,
+            WinKindTag::AppShelf => WinKind::AppShelf,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -806,6 +836,8 @@ impl DeosDesktop {
             WinKindTag::ViewNodePane => (420.0, 320.0),
             // A phone-ish portrait window for the android-cell's SystemUI cap-chrome.
             WinKindTag::AndroidCell => (340.0, 520.0),
+            // The App Shelf opens tall enough for the dense app roster.
+            WinKindTag::AppShelf => (540.0, 460.0),
             #[allow(unreachable_patterns)]
             // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => (380.0, 320.0),
@@ -1169,6 +1201,14 @@ impl DeosDesktop {
                 A::OpenDocCollab,
             ),
         ];
+        // THE APP SHELF — every pre-built starbridge-app, launchable onto the LIVE
+        // World (each launch commits a real verified turn).
+        #[cfg(feature = "app-registry")]
+        v.push(MenuAction::new(
+            "App Shelf… (pre-built apps · launch onto the World)",
+            true,
+            A::OpenAppShelf,
+        ));
         #[cfg(feature = "card-pane")]
         v.push(MenuAction::new(
             "World-Status Board… (deos.ui ViewNode · agent-composable)",
@@ -1221,6 +1261,12 @@ impl DeosDesktop {
                         A::OpenDocCollab,
                     ),
                 ];
+                #[cfg(feature = "app-registry")]
+                v.push(MenuAction::new(
+                    "App Shelf… (pre-built apps)",
+                    true,
+                    A::OpenAppShelf,
+                ));
                 #[cfg(feature = "card-pane")]
                 v.push(MenuAction::new(
                     "World-Status Board… (agent-composable)",
@@ -1411,6 +1457,8 @@ impl DeosDesktop {
             ActionKind::OpenDocCollab => self.start_doc_collab(cell),
             ActionKind::OpenViewNodePane => self.land_in(cell, WinKindTag::ViewNodePane),
             ActionKind::OpenAndroidCell => self.land_in(cell, WinKindTag::AndroidCell),
+            #[cfg(feature = "app-registry")]
+            ActionKind::OpenAppShelf => self.open_app_shelf(),
         }
     }
 
@@ -2011,6 +2059,10 @@ impl DeosDesktop {
         // FIRST so the unifying entry opens onto the whole rooms of the desktop, then the
         // per-cell vocabulary — one entry to every surface, not only every cell.
         let mut out = spotter::surface_candidates();
+        // THE APP SHELF vocabulary — the shelf surface + one "Launch <name> · app"
+        // per registry app, so the one-keystroke entry reaches every pre-built app.
+        #[cfg(feature = "app-registry")]
+        out.extend(app_shelf::app_spotter_candidates());
         out.extend(spotter::candidates_for_cells(&self.cells, |c| {
             (
                 self.cell_kind(c).to_string(),
@@ -2070,6 +2122,17 @@ impl DeosDesktop {
             ),
             #[cfg(feature = "android-systemui")]
             Tg::AndroidCell => self.land_in(self.user, WinKindTag::AndroidCell),
+            #[cfg(feature = "app-registry")]
+            Tg::AppShelf => self.land_in(self.user, WinKindTag::AppShelf),
+            // Launching an app writes its OWN rich status line (the receipt landmark),
+            // so this arm returns early rather than letting the generic "Spotter → …"
+            // overwrite the committed-turn verdict.
+            #[cfg(feature = "app-registry")]
+            Tg::LaunchApp(id) => {
+                self.spotter = None;
+                self.launch_shelf_app(id);
+                return;
+            }
         }
         self.status = format!("Spotter → {}", entry.label);
         self.spotter = None;
@@ -2152,6 +2215,8 @@ impl DeosDesktop {
                      every authority, tap the hand-over sheet to grant a real cap."
                         .into();
             }
+            #[cfg(feature = "app-registry")]
+            ActionKind::OpenAppShelf => self.open_app_shelf(),
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Desktop);
                 self.status = "Desktop Preferences & customization.".into();
@@ -3200,6 +3265,13 @@ impl DeosDesktop {
             "service" => "S",
             _ => "A",
         };
+        // An INSTALLED APP's cell wears the app's OWN face — its display name as the
+        // caption kind and its initial as the tile glyph — so a launched shelf app
+        // reads as an APP on the desktop, not a balance-classified account. (The
+        // registry exposes this for free off the installed set; every other cell
+        // keeps its kind face.)
+        #[cfg(feature = "app-registry")]
+        let (kind, glyph) = self.app_shelf.icon_face(&cell).unwrap_or((kind, glyph));
         let label = if self.layout.prefs.show_balances {
             format!("{}\n{}\n{}", kind, id_short(&cell), fmt_balance(bal))
         } else {
@@ -3330,6 +3402,8 @@ impl DeosDesktop {
             WinKindTag::ViewNodePane => self.render_viewnode_body(cell, window, cx),
             #[cfg(feature = "android-systemui")]
             WinKindTag::AndroidCell => self.render_android_systemui_body(cell, cx),
+            #[cfg(feature = "app-registry")]
+            WinKindTag::AppShelf => self.render_app_shelf_body(cx),
             #[allow(unreachable_patterns)]
             // needed when card-pane / android-systemui features are off
             _ => self.render_inspector_body(cell, cx),
