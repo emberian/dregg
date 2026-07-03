@@ -54,7 +54,7 @@ use std::sync::{Arc, RwLock};
 
 use dregg_cell::CellId;
 
-use deos_hermes::resident::resident_brain_from_env;
+use deos_hermes::resident::{resident_brain_from_env, ResidentBrain};
 use deos_hermes::tool_effects::effects_for_call;
 use deos_hermes::{
     AcpClient, AgentCipherclerk, AgentRuntime, GrantRegistry, HeldToken, HermesAgentPeer,
@@ -128,6 +128,14 @@ pub struct AgentHandle {
     pub receipts: Vec<[u8; 32]>,
     /// Every gate refusal the resident hit (surfaced, not fabricated).
     pub refusals: Vec<Refusal>,
+    /// **The HERMETIC pin.** When `true`, every beat thinks with the on-box
+    /// [`ResidentBrain::OnBox`] REGARDLESS of the environment — a provider key in
+    /// the operator's env is deliberately NOT consulted. This is what makes the
+    /// Attach Wizard's "hermetic (on-box)" pick a truthful one: choosing it means
+    /// no credential leaves the box, even if one is present. `false` (the default,
+    /// and what the Agent Room's plain HIRE sets) resolves the brain from the env
+    /// per the [`resident_brain_from_env`] precedence (BYO key when present).
+    pub force_on_box: bool,
 }
 
 /// The outcome of one resident prompt: how many admitted calls mirrored real
@@ -208,6 +216,9 @@ pub fn hire_resident_seeded(
         clock: 10,
         receipts: Vec::new(),
         refusals: Vec::new(),
+        // Env-resolved by default; the wizard's hermetic pin (set on the returned
+        // handle) is what forces on-box regardless of a present key.
+        force_on_box: false,
     }
 }
 
@@ -223,8 +234,14 @@ impl AgentHandle {
     /// fabricated World turn. Returns a [`PromptSummary`].
     pub fn prompt(&mut self, world: &Rc<RefCell<World>>, prompt: &str) -> PromptSummary {
         // A fresh brain per prompt (on-box by default, BYO-key when present), over
-        // the SAME persisted gateway so budgets carry across prompts.
-        let brain = resident_brain_from_env();
+        // the SAME persisted gateway so budgets carry across prompts. The hermetic
+        // pin forces on-box even when a provider key sits in the env — the wizard's
+        // "no credential leaves the box" pick, honored on every beat.
+        let brain = if self.force_on_box {
+            ResidentBrain::default()
+        } else {
+            resident_brain_from_env()
+        };
         let peer = HermesAgentPeer::new(&self.session_id, brain);
         let gw = self
             .gateway
