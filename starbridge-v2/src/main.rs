@@ -1627,6 +1627,71 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         );
     }
 
+    // ── 4e. THE AGENT ROOM — the resident as first-class inhabitant. The Spotter
+    //     reaches it like every surface; it lands mold-ready; its default resident is
+    //     the busiest NON-OPERATOR cell (the demo genesis really acts), read off the
+    //     executor's receipts — never self-report.
+    desk.update(&mut cx, |d, _cx| d.bake_open_spotter("agent room"));
+    let room_top = desk
+        .update(&mut cx, |d, _cx| d.bake_spotter_top_label())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        room_top.to_lowercase().contains("agent room"),
+        "the Spotter must reach the AGENT ROOM (top: {room_top:?})"
+    );
+    desk.update(&mut cx, |d, _cx| d.bake_spotter_dispatch_top());
+    cx.run_until_parked();
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_selected_window_label()) == Some("Agent Room"),
+        "the Agent Room jump lands its window mold-ready (one gesture everywhere)"
+    );
+    let resident = desk.update(&mut cx, |d, _cx| d.bake_agent_room_resident());
+    anyhow::ensure!(
+        resident != user,
+        "the room's default resident is the busiest NON-operator cell (genesis acts)"
+    );
+
+    // ── 4f. GOSSAMER — drag-transclude quotes a cell into the document, and a cyan
+    //     thread SNAPS between the quoting document window and the quoted surface:
+    //     Xanadu's parallel visible connection, over a real receipted quote.
+    desk.update(&mut cx, |d, cx| {
+        d.bake_open_doc(user);
+        d.bake_transclude(resident, user);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let threads_now = desk.update(&mut cx, |d, _cx| d.bake_thread_count());
+    anyhow::ensure!(
+        threads_now >= 1 && desk.update(&mut cx, |d, _cx| d.bake_thread_between(resident, user)),
+        "a transclusion must snap a GOSSAMER thread between quoted cell and quoting \
+         document (got {threads_now} thread(s))"
+    );
+
+    // ── 4g. THE PULSE SPEAKS — a REFUSED moment arrives as an amber toast card
+    //     (here pushed via the bake feed; live, pump_dynamics feeds it from the
+    //     dynamics stream), and the keyboard spine's Escape ladder is real.
+    desk.update(&mut cx, |d, cx| {
+        d.bake_push_toast(
+            true,
+            "3cc02624 — unauthorized effect: Transfer beyond mandate",
+        );
+        d.bake_push_toast(false, "resident 87a55eb5 committed turn #6 · 41cu");
+        cx.notify();
+    });
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_toast_count()) == 2,
+        "the toast rack carries the pulse's announcements"
+    );
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_key("k", true)),
+        "⌘K summons the Spotter from anywhere (the keyboard spine)"
+    );
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_key("escape", false)),
+        "Escape dismisses the Spotter (the trap the scouts found is fixed)"
+    );
+    cx.run_until_parked();
+
     // Leave the woven room in frame, every surface present at once: TILE the open
     // windows into a grid so the doc-collab editor, the World-Status board, the Android
     // cap-chrome, and the agent-composed board are each fully visible side by side as ONE
