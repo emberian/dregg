@@ -47,6 +47,19 @@ pub use tree::{
     ViewNode, MAX_MOUNT_DEPTH, MAX_MOUNT_NODES,
 };
 
+// ── THE CAP-SCOPE (feature `cap`): the REAL, cap-scoped console read surface — a `Catalog`
+//    source trait bound to our cells + the dregg-auth caveat-chain subject gate (a resource
+//    is shown iff its owner-cap subject == the viewer). PURE (gpui-free + deos-js-free): only
+//    serde + the sibling `dregg-auth` credential core, so it rides the DEFAULT build AND
+//    compiles standalone (`cargo test --no-default-features --features cap --lib` — no gpui,
+//    no SpiderMonkey), and never bloats the tiny `web` bake. ──
+#[cfg(feature = "cap")]
+pub mod catalog;
+#[cfg(feature = "cap")]
+pub use catalog::{
+    demo_catalog, subject_credential, CapScope, CapTurn, Catalog, SnapshotCatalog, SUBJECT_ATTR,
+};
+
 // ── The NATIVE renderer: `ViewNode` → real gpui-component pixels (the heavy stack
 //    + deos-js live verified turns). Gated on `native` so the `web` build stays tiny. ──
 #[cfg(feature = "native")]

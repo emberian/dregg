@@ -103,6 +103,15 @@ gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "49
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# THE CAPABILITY SCOPE — the sibling credential core (`dregg_auth::credential`: the proven
+# ed25519 caveat chain + the Context/Pred algebra). The cap-scope narrows the live catalog
+# to exactly the viewer's caveat-chain SUBJECT (a resource is shown iff its owner-cap subject
+# == the viewer) and gates each row action's turn by the owning subject. PURE (gpui-free +
+# deos-js-free); `dregg-token`/`biscuit-auth` already resolve in this workspace's lock (pulled
+# transitively), so this adds only the one sibling node. Gated on `cap` so the tiny `web` bake
+# never pulls it.
+dregg-auth = { path = "../dregg-auth", optional = true }
+
 # THE DISCORD RENDERER's builder/model types — `CreateEmbed`, `CreateButton`,
 # `CreateActionRow`, `ButtonStyle`. Gated on `discord` (like `web` on its renderer) so
 # the core / native / web builds NEVER pull serenity. `default-features = false` with only
@@ -122,7 +131,9 @@ anyhow = "1"
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [features]
-default = ["native"]
+# The DEFAULT build is the native renderer PLUS the cap-scope: `cargo test --release` (the
+# crate's documented command) then exercises both the pixel path and the cap-scoping teeth.
+default = ["native", "cap"]
 # native — `ViewNode` → gpui-component pixels (the heavy stack + deos-js live turns).
 native = [
     "dep:deos-js",
@@ -136,6 +147,12 @@ native = [
 ]
 # web — `ViewNode` → an HTML/DOM string (gpui-free, deos-js-free): only serde.
 web = []
+# cap — the dregg-auth-backed capability scope (`catalog` module): a `Catalog` source trait
+# over our cells + the caveat-chain subject gate. gpui-free + deos-js-free (pure: serde + the
+# sibling `dregg-auth` credential core), so it rides the DEFAULT build AND compiles standalone
+# (`cargo test --no-default-features --features cap --lib` — no gpui, no SpiderMonkey). NOT
+# pulled into the tiny `web` bake.
+cap = ["dep:dregg-auth"]
 # discord — `ViewNode` → a serenity `CreateEmbed` + button components (gpui-free,
 # deos-js-free): serde + serenity's builder/model. The FOURTH backend over the one IR.
 discord = ["dep:serenity"]
