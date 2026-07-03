@@ -130,10 +130,10 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, AnyElement, AppContext, ClickEvent, Context, Div, Entity, FontWeight,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, Render, Stateful, StatefulInteractiveElement, Styled,
-    Subscription, Window,
+    div, px, AnyElement, AppContext, ClickEvent, Context, Div, Entity, FocusHandle, FontWeight,
+    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Point, Render, Stateful, StatefulInteractiveElement,
+    Styled, Subscription, Window,
 };
 
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -568,6 +568,12 @@ pub struct DeosDesktop {
     /// cascade read it so they fill the ACTUAL desktop instead of a hardcoded
     /// 1600×1000 — at higher bake resolutions the windows spread the whole room.
     last_viewport: (f32, f32),
+    /// **THE KEYBOARD SPINE's focus root** — the desktop root tracks this handle so
+    /// one `on_key` dispatcher hears every keystroke that no focused child consumed:
+    /// ⌘K/Ctrl-K summons (or dismisses) the Spotter from anywhere; while the Spotter
+    /// is open, ↑/↓ move the selection and Escape closes it; otherwise Escape climbs
+    /// the dismissal ladder (context menu → property dialog → halo selection).
+    focus: FocusHandle,
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -689,6 +695,7 @@ impl DeosDesktop {
             #[cfg(feature = "android-systemui")]
             systemui_shades: std::collections::HashSet::new(),
             last_viewport: (1600.0, 1000.0),
+            focus: cx.focus_handle(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -2117,6 +2124,64 @@ impl DeosDesktop {
         self.status = "Spotter — type to jump to any cell, action, or surface.".into();
     }
 
+    /// **THE KEYBOARD SPINE's dispatcher** — the gpui-free model half (the root's
+    /// `on_key_down` listener wraps it; the bake drives it directly). Returns whether
+    /// the keystroke changed anything (the caller notifies).
+    ///
+    ///   * `⌘K` / `Ctrl-K` — summon the Spotter from anywhere; press again to dismiss.
+    ///   * Spotter open: `↑`/`↓` move the selection (clamped to the ranked list),
+    ///     `Escape` closes. (`Enter` dispatches via the query field's `PressEnter`.)
+    ///   * Otherwise `Escape` climbs the dismissal ladder one rung per press:
+    ///     context menu → property dialog → halo selection.
+    fn on_key_model(&mut self, key: &str, cmd: bool) -> bool {
+        if cmd && key == "k" {
+            if self.spotter.is_some() {
+                self.spotter = None;
+            } else {
+                self.open_spotter();
+            }
+            return true;
+        }
+        if self.spotter.is_some() {
+            return match key {
+                "escape" => {
+                    self.spotter = None;
+                    true
+                }
+                "down" | "up" => {
+                    let max = self.spotter_ranked().len().saturating_sub(1);
+                    if let Some(ui) = self.spotter.as_mut() {
+                        ui.selected = if key == "down" {
+                            (ui.selected + 1).min(max)
+                        } else {
+                            ui.selected.saturating_sub(1)
+                        };
+                    }
+                    true
+                }
+                _ => false,
+            };
+        }
+        if key == "escape" {
+            if self.open_menu.take().is_some() {
+                return true;
+            }
+            if self.open_prop.take().is_some() {
+                return true;
+            }
+            if self.selected.take().is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Drive one keystroke through the spine — a bake/test hook (the same model fn
+    /// the root listener runs; `cmd` = platform/control held).
+    pub fn bake_key(&mut self, key: &str, cmd: bool) -> bool {
+        self.on_key_model(key, cmd)
+    }
+
     /// Build the Spotter candidate set over the World's cells (each cell + its action
     /// verbs), reading live faces off the ledger. Delegates the entry shapes to
     /// [`spotter::candidates_for_cells`].
@@ -3137,6 +3202,18 @@ impl Render for DeosDesktop {
         }
         let mut root = div()
             .id("deos-desktop-root")
+            .key_context("DeosDesktop")
+            .track_focus(&self.focus)
+            // THE KEYBOARD SPINE — one dispatcher for every keystroke no focused
+            // child consumed (⌘K Spotter · ↑/↓ selection · the Escape ladder).
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| {
+                if this.on_key_model(&ev.keystroke.key, {
+                    let m = &ev.keystroke.modifiers;
+                    m.platform || m.control
+                }) {
+                    cx.notify();
+                }
+            }))
             .size_full()
             .bg(gpui::rgb(self.layout.prefs.bg))
             .text_color(gpui::rgb(NT_TEXT))
@@ -3159,6 +3236,10 @@ impl Render for DeosDesktop {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                    // NOT the spotter: this ancestor handler fires before a spotter
+                    // row's own mouse-down, so closing it here would clear the query
+                    // state the row's dispatch is about to read. Escape (the keyboard
+                    // spine) is the spotter's dismissal.
                     let dirty = this.open_menu.take().is_some() | this.selected.take().is_some();
                     if dirty {
                         cx.notify();
