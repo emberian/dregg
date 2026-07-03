@@ -65,11 +65,13 @@ use gpui_component::{h_flex, v_flex};
 
 use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken};
 
-use crate::acp_client::StreamEvent;
+use crate::acp_client::{AcpPeer, StreamEvent};
+use crate::agent_peer::HermesAgentPeer;
 use crate::bridge::HermesGateway;
 use crate::grant_registry::GrantRegistry;
 use crate::mandate::Mandate;
 use crate::mock_peer::{MockHermesPeer, ScriptedCall};
+use crate::resident::resident_brain_from_env;
 use crate::surface::{
     AgentDockModel, ChatEntry, MandateBudget, PermissionMoment, RefusalLeg, ToolLine,
 };
@@ -139,16 +141,38 @@ impl HermesSession {
         }
     }
 
-    /// Drive one prompt to completion over the in-process mock Hermes peer,
-    /// returning the ordered stream of deltas (each paired with the live mandate
-    /// at that moment). The reply text + the scripted tool-calls are derived from
-    /// the prompt so different questions produce different, plausible turns.
+    /// Drive one prompt to completion, returning the ordered stream of deltas
+    /// (each paired with the live mandate at that moment).
+    ///
+    /// THE WELD (the cheapest-wow swap): this now drives a REAL brain, not the
+    /// keyword-script stand-in. By default the confined loop runs the on-box
+    /// [`crate::LocalBrain`] — a genuine decide→gate→observe loop that needs no
+    /// key and no network, so the dock is a real agent while staying hermetic;
+    /// [`resident_brain_from_env`] upgrades it to a live BYO-key
+    /// [`crate::HttpLlm`] when `ANTHROPIC_API_KEY` / `HERMES_API_KEY` is set. The
+    /// scripted [`MockHermesPeer`] is retained as an escape hatch — set
+    /// `DEOS_HERMES_MOCK=1` to force the old, fixed-list brain (e.g. for a
+    /// deterministic screenshot). Either way the ACP wire, the gate, and the
+    /// receipts are the SAME real surface; only the decision-maker changed.
     pub fn run(&mut self, prompt: &str) -> Vec<StreamStep> {
-        let (reply, script) = scripted_turn(prompt);
-        let peer = MockHermesPeer::with_reply(&self.session_id, script, &reply);
+        if std::env::var("DEOS_HERMES_MOCK").is_ok() {
+            let (reply, script) = scripted_turn(prompt);
+            let peer = MockHermesPeer::with_reply(&self.session_id, script, &reply);
+            self.drive(peer, prompt)
+        } else {
+            let brain = resident_brain_from_env();
+            let peer = HermesAgentPeer::new(&self.session_id, brain);
+            self.drive(peer, prompt)
+        }
+    }
 
-        // Take the gateway into a client for the run (restored after, so budgets
-        // persist across turns), collecting the raw event stream + the verdicts.
+    /// Drive one prompt over an arbitrary [`AcpPeer`] (a real brain-driven peer,
+    /// or the scripted mock), taking the gateway into the client for the run and
+    /// restoring it after so budgets persist across turns. Collects the raw event
+    /// stream + verdicts, then pairs each event with the live mandate snapshot AS
+    /// OF that point so the dock's budget bars deplete exactly as the gate spent
+    /// them.
+    fn drive<P: AcpPeer>(&mut self, peer: P, prompt: &str) -> Vec<StreamStep> {
         let start_clock = self.clock;
         let mut verdicts = Vec::new();
         let mut raw: Vec<StreamEvent> = Vec::new();
@@ -166,11 +190,10 @@ impl HermesSession {
         let gateway = client.into_gateway();
         self.clock = start_clock + verdicts.len() as i64 + 1;
 
-        // Pair each event with the live mandate AS OF that point so the dock's
-        // budget bars deplete exactly as the gate spent them. The gateway's
-        // per-key counters are final after the run; we reconstruct the RUNNING
-        // mandate by deriving the inspector view from the verdicts seen so far
-        // (`Mandate::from_session` overlays the verdict tally onto the grants).
+        // The gateway's per-key counters are final after the run; we reconstruct
+        // the RUNNING mandate by deriving the inspector view from the verdicts
+        // seen so far (`Mandate::from_session` overlays the verdict tally onto the
+        // grants).
         let mut steps: Vec<StreamStep> = Vec::new();
         let mut seen: Vec<(crate::acp::ToolCallRequest, crate::acp::PermissionOutcome)> =
             Vec::new();
