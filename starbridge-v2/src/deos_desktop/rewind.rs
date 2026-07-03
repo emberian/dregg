@@ -59,10 +59,11 @@ use crate::world::World;
 
 use super::chrome::{
     bevel_raised, bevel_sunken, id_short, pxf, ICON_H, ICON_W, NT_DIM, NT_FACE, NT_FACE_DARK,
-    NT_OK, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_TEXT, NT_WARN,
+    NT_OK, NT_PANEL, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_TEXT, NT_WARN,
 };
+use super::world_explorer as we;
 use super::world_explorer::{render_world_explorer_body, WorldExplorerTab, WorldLens};
-use super::{DeosDesktop, Drag};
+use super::{DeosDesktop, Drag, FaceScrollKey, WinKindTag};
 
 // ── Rail geometry (fixed, so x → step mapping is one pure function) ───────────────
 
@@ -374,30 +375,174 @@ impl DeosDesktop {
 
     /// The World Explorer body over the EFFECTIVE world — the replayed lens
     /// (with its amber REPLAYED banner) while scrubbing, the live lens else.
-    /// The faces themselves are unchanged pure functions over a [`WorldLens`];
-    /// `scroll` is the face's persistent scroll handle (the caller ensures it
-    /// per tab off the desktop's `face_scrolls` registry), so the SAME place
-    /// is kept whether the lens is live or replayed.
+    ///
+    /// The two dense log/census faces — **Chronicle** and **Ledger** — are
+    /// UNCAPPED here: they ride the View's `v_virtual_list` (see
+    /// [`DeosDesktop::nt_virtual_face`]) over the effective receipts/ledger, so
+    /// only the visible rows are ever built and the whole history is reachable —
+    /// no more 24-row peephole at 100k turns. The row renderers stay the pure
+    /// `world_explorer::{chronicle_row, ledger_row}` functions the flat faces
+    /// share; the closure re-resolves the effective lens (replayed while
+    /// scrubbing, live else) each paint, so the census is always the World's
+    /// truth at the cursor. The Chronicle `follow_tail`s (a landing receipt snaps
+    /// the tail into view); the id-sorted Ledger keeps its scroll place.
+    ///
+    /// **Conservation** stays the flat pure path — its per-cell gauge rows are
+    /// two-element and not uniform-height, so it does not fit uniform
+    /// virtualization; it keeps the caller-style persistent `face_scrolls` handle
+    /// (ensured here now that this owns `&mut self`).
+    ///
+    /// (`&mut self` for the virtual/flat scroll registries; `cx` for the
+    /// `v_virtual_list` view handle. `cell` keys the per-window/per-tab face.)
     pub(super) fn render_world_explorer_body_effective(
-        &self,
+        &mut self,
         tab: WorldExplorerTab,
-        scroll: &gpui::ScrollHandle,
+        cell: CellId,
+        cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        match self.rewind.projection() {
-            Some(p) => render_world_explorer_body(
-                &WorldLens {
-                    ledger: &p.ledger,
-                    receipts: &p.receipts,
-                    height: p.receipts.len() as u64,
-                    cell_count: p.ledger.len(),
-                    banner: Some(rail_caption(p)),
-                },
-                tab,
-                scroll,
-            ),
-            None => {
-                let w = self.world.borrow();
-                render_world_explorer_body(&WorldLens::live(&w), tab, scroll)
+        let key = FaceScrollKey::Window(cell, WinKindTag::WorldExplorer, tab as u8);
+        match tab {
+            // The uniform-height gauge rows do not virtualize cleanly; keep the
+            // flat pure body over its persistent face-scroll handle.
+            WorldExplorerTab::Conservation => {
+                let scroll = self.face_scrolls.ensure(key);
+                match self.rewind.projection() {
+                    Some(p) => render_world_explorer_body(
+                        &WorldLens {
+                            ledger: &p.ledger,
+                            receipts: &p.receipts,
+                            height: p.receipts.len() as u64,
+                            cell_count: p.ledger.len(),
+                            banner: Some(rail_caption(p)),
+                        },
+                        tab,
+                        &scroll,
+                    ),
+                    None => {
+                        let w = self.world.borrow();
+                        render_world_explorer_body(&WorldLens::live(&w), tab, &scroll)
+                    }
+                }
+            }
+
+            WorldExplorerTab::Chronicle => {
+                let (count, height, banner) = match self.rewind.projection() {
+                    Some(p) => (
+                        p.receipts.len(),
+                        p.receipts.len() as u64,
+                        Some(rail_caption(p)),
+                    ),
+                    None => {
+                        let w = self.world.borrow();
+                        (w.receipts().len(), w.height(), None)
+                    }
+                };
+                let list_id =
+                    gpui::SharedString::from(format!("wld-chron-{}", super::id_hex(&cell)));
+                let list = if count == 0 {
+                    div()
+                        .child("(no turns yet — actuate a cell)")
+                        .into_any_element()
+                } else {
+                    self.nt_virtual_face(
+                        key,
+                        list_id,
+                        count,
+                        we::CHRONICLE_ROW_H,
+                        true,
+                        cx,
+                        |this, range, _w, _cx| {
+                            if let Some(p) = this.rewind.projection() {
+                                range
+                                    .filter_map(|i| {
+                                        p.receipts.get(i).map(|r| we::chronicle_row(i, r))
+                                    })
+                                    .collect()
+                            } else {
+                                let w = this.world.borrow();
+                                let receipts = w.receipts();
+                                range
+                                    .filter_map(|i| {
+                                        receipts.get(i).map(|r| we::chronicle_row(i, r))
+                                    })
+                                    .collect()
+                            }
+                        },
+                    )
+                };
+                let face = div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .bg(gpui::rgb(0x101820))
+                    .text_color(gpui::rgb(0x9fe0a0))
+                    .p_2()
+                    .gap_1()
+                    .child(we::chronicle_header(count, height))
+                    .child(list)
+                    .into_any_element();
+                we::with_replay_banner(banner, face)
+            }
+
+            WorldExplorerTab::Ledger => {
+                let (count, banner) = match self.rewind.projection() {
+                    Some(p) => (p.ledger.len(), Some(rail_caption(p))),
+                    None => (self.world.borrow().ledger().len(), None),
+                };
+                let list_id =
+                    gpui::SharedString::from(format!("wld-ledger-{}", super::id_hex(&cell)));
+                let list = if count == 0 {
+                    div()
+                        .child("(empty) · no cells — seed genesis")
+                        .into_any_element()
+                } else {
+                    // follow = false: an id-sorted census keeps the operator's
+                    // place, it does not chase a tail. The closure materializes the
+                    // canonical id order and indexes the visible window; the sort
+                    // is the residual O(N log N)/frame (the *render*, not the sort,
+                    // was the cap — that is what virtualization lifts).
+                    self.nt_virtual_face(
+                        key,
+                        list_id,
+                        count,
+                        we::LEDGER_ROW_H,
+                        false,
+                        cx,
+                        |this, range, _w, _cx| {
+                            if let Some(p) = this.rewind.projection() {
+                                let mut cells: Vec<(&CellId, &Cell)> = p.ledger.iter().collect();
+                                cells.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+                                range
+                                    .filter_map(|i| {
+                                        cells.get(i).map(|pair| we::ledger_row(pair.0, pair.1))
+                                    })
+                                    .collect()
+                            } else {
+                                let w = this.world.borrow();
+                                let mut cells: Vec<(&CellId, &Cell)> = w.ledger().iter().collect();
+                                cells.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+                                range
+                                    .filter_map(|i| {
+                                        cells.get(i).map(|pair| we::ledger_row(pair.0, pair.1))
+                                    })
+                                    .collect()
+                            }
+                        },
+                    )
+                };
+                let face = div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .bg(gpui::rgb(NT_PANEL))
+                    .p_2()
+                    .gap_1()
+                    .child(we::ledger_header(count))
+                    .child(list)
+                    .into_any_element();
+                we::with_replay_banner(banner, face)
             }
         }
     }
