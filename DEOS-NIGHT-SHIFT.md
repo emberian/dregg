@@ -1,88 +1,82 @@
-# DEOS NIGHT SHIFT — Fable, 2026-07-03 (~3am–morning)
+# DEOS NIGHT SHIFT — Fable · 2026-07-03, ~3am→dawn
 
-Branch: `fable/deos-night-shift` (this worktree). Nothing pushed anywhere public.
-Forge ritual: commit here → `git push hbox fable/deos-night-shift:refs/heads/fable/hbox-sync -f`
-→ `ssh hbox 'git -C ~/dev/fable-night-shift merge --ff-only fable/hbox-sync'`
-→ check/test on hbox (24 cores), logs in hbox:/tmp/fable-*.log. **No local builds** (fan discipline).
+Branch: `fable/deos-night-shift` (this worktree). **Full lib gauntlet: 850 passed / 0 failed.**
+Forge ritual: commit → `git push hbox fable/deos-night-shift:refs/heads/fable/hbox-sync -f`
+→ `ssh hbox 'git -C ~/dev/fable-night-shift merge --ff-only fable/hbox-sync'` → check/test
+there (logs hbox:/tmp/fable-*.log). No local builds. Morning frame: `night-shift-woven.png`
+(re-baking with the shelf + rail as `fable-woven-3.png` on hbox).
 
-## Shipped tonight (committed, compiles green, tested on hbox)
+## SHIPPED & INTEGRATED (all hbox-verified, all in the woven bake's witness tour)
 
-1. **THE AGENT ROOM** (`starbridge-v2/src/deos_desktop/agent_room.rs` + wiring) — the desktop's
-   first agent-as-inhabitant surface: tabs Actions (receipted turns, REFUSED in amber) ·
-   Mandate (held cap edges) · Reach (CAN/CANNOT verbs), resident picker ranked by
-   executor-counted nonce, default = busiest non-operator cell. Spotter + desktop menu
-   reachable, own sentinel window cell (0xA6…), bake hooks, unit test green.
-2. **THE PULSE** (`mod.rs::pump_dynamics` + spawn in `new()`) — 250ms dynamics-cursor pump:
-   when the World moves without the desktop's hand (bot/agent/node), the icon census
-   refreshes, every surface repaints off the live ledger, and foreign residents' turns are
-   announced on the status bar. No refresh buttons.
-3. Worktree path-dep fix: `.claude/worktrees/plonky3-recursion` symlink → `~/dev/plonky3-recursion`.
+1. **THE AGENT ROOM** — agent-as-inhabitant window: Actions (receipts, REFUSED amber) ·
+   Mandate · Reach; resident picker by executor-counted nonce. `agent_room.rs`
+2. **THE PULSE** — 250ms dynamics pump; the desktop repaints when the World moves without
+   its hand; foreign turns narrated on the status bar. No refresh buttons.
+3. **KEYBOARD SPINE** — ⌘K/Ctrl-K Spotter, ↑/↓ clamped selection, the Escape ladder
+   (spotter → menu → dialog → halo). Fixed scout-found trap: Spotter was undismissable.
+4. **REFUSED IS A MOMENT** — `outcome_verdict` carries the executor's refusal reason (and
+   action index) onto the glass at all four actuation sites.
+5. **PULSE TOASTS** — foreign motion as NT cards (green committed / amber REFUSED),
+   self-retiring, capped, click-through to the Transcript. `toasts.rs`
+6. **GOSSAMER** — cyan transclusion threads between windows (Xanadu's visible connection),
+   walkable endpoints, parallel-thread fanning, persisted View-menu toggle. `threads.rs`
+7. **BACKLINK HALO** — "← quoted by N" witness arc + walkable beads on the halo;
+   `backlinks_of` extraction (one truth, two surfaces); fixed `bake_doc_links` bug.
+8. **THE APP SHELF** — the starbridge-apps registry as first-class citizens: shelf window,
+   Spotter launch (`LaunchApp`), real `launch_on_world` (cell + receipt on the LIVE World),
+   installed icons wear app faces. 6 real-executor tests. `app_shelf.rs` (874 lines)
+9. **THE HIRELING phase 1** — `deos-hermes/src/resident.rs`: `ResidentBrain` = hermetic
+   `LocalBrain` default | BYO-key `HttpLlm` (Anthropic or OpenAI-compatible, via curl;
+   key never crosses the tool-call/receipt wire — the brain-pocket invariant).
+   `examples/resident.rs` acceptance harness (real receipted turns + an in-band REFUSAL).
+   Desktop seam: `starbridge-v2/src/resident_agent.rs::hire_resident` (mirror-weld commits
+   real turns per Allow). Agent Room hire/fire buttons = next weld.
+10. **THE REWIND RAIL** — scrub the whole desktop through root-verified history
+    (`History::reify_to`, fail-closed, memoized). `holds()` correctly gates verbs to LIVE.
+    World Explorer reads a `WorldLens` (amber REPLAYED banner). `rewind.rs` (752 lines)
+11. **NT room stays LIGHT** — kit theme no longer follows OS dark mode into the desktop.
+12. **Extended woven bake** — the tour now machine-witnesses ALL of the above (steps 4e–4i:
+    Agent Room, GOSSAMER thread, toasts, spine, App Shelf launch, Rewind scrub).
 
-## The 13-scout fleet harvest (ultracode, ~1.7M tokens, all 13 returned)
+## THE BUNDLE (ember's manifest → planner's honest table, full detail in wf_f1c82037-aff journal)
 
-Full structured returns (proposals with file:line anchors + step plans) live in:
-- Wave 1 (desktop): `~/.claude/projects/-Users-ember-dev-breadstuffs--claude-worktrees-deos-night-shift/bc17f60d-c3bd-4fc5-8f19-b53c15b497d6/subagents/workflows/wf_32fe966d-c4b/journal.jsonl`
-- Wave 2 (all other organs): same path, `wf_5a5bf69d-db3/journal.jsonl`
-(one `{"type":"result",...}` line per scout; also `cv workflow <session> <run-id>` for the tree.)
+| component | state | est |
+|---|---|---|
+| zed IDE fork | lite pane WORKS in default build; full Zed = standalone workspace only | 2h |
+| alacritty terminal | WORKS in default build (zed's alacritty_terminal grid + PTY) | 2h |
+| hermes agent | gateway/confinement REAL + red-teamed; shipped pane brain was scripted — HIRELING fixes substrate; label honestly | 8h |
+| matrix client | headless lib live-proven; GUI pane boots on mock sync | 6h |
+| dreggnet cloud | REAL and deployed (34.224.208.52, *.dregg.works) but zero in-bundle integration | 4h |
+| servo browser | WORKS on mac (libservo green e2e); SWGL fallback proven | 4h |
+| gpui cell desktop | the real thing, hot (tonight); durable-image weld coded but not wired to `--desktop` (headline-claim drift risk) | 8h |
 
-Frontiers: xanadu-docuverse · daily-driver · truth-surfaces · widget-kit · inhabitation ·
-performance (wave 1) — portable-IR · zed-fork · comms/matrix · agent-runtime/hermes · web ·
-mobile/graphideOS · app-ecosystem (wave 2). ~70 proposals, wow 5–10.
+**Critical path:** freeze + per-OS feature matrix (mac full · linux full · win-x86_64 reduced
+· win-arm64 sel4-thin) → the three long-pole builds start at hour 0 → honest labeling in
+their shadow. **Top risks:** (1) Linux verified build has NEVER existed — hbox lacked
+`libdregg_lean.a`; bootstrap now running (elan installed tonight; mathlib cache next).
+(2) default features silently became an elephant (servo+mozjs). (3) installers workflow
+never proven green. (4) Windows rebuild is artisanal. (8) mock-brain confusion at launch —
+HIRELING + honest labels are the answer.
 
-## Real bugs the scouts found (fix regardless of any feature)
+## Findings for daylight
 
-- **Spotter cannot be dismissed** — no Escape, no click-away (mod.rs spotter_dispatch region).
-- **`actuate()` drops `CommitOutcome::Rejected`'s reason** — refusals vanish silently (mod.rs ~1393–1508).
-- **`holds()` is `balance >= 0`** — a placeholder misreporting ocap authority in every menu (mod.rs ~1000).
-- **`bake_doc_links` back-leg re-scans the same doc** — the backlink assertion never tests the real reverse scan (mod.rs ~3053).
-- **`DesktopLayout::save` pretty-serializes ALL doc prose synchronously on every drag-end** (layout.rs 165–172).
-- **agent.rs `build_actions` sorts every REFUSED row to the top** — interleaving with committed turns lost (agent.rs 204–248).
-- **Theme inversion**: `apply_deos_theme(None,false,cx)` under OS dark mode installs cockpit GitHub-dark on the NT desktop inputs (main.rs 1025–1047).
-- deos-view `BindingRegistry`/`on_committed_turn` have **zero production call sites** — shipped World-Status binds paint frozen seed values forever.
-- SystemUiCapChrome runs a **private ledger** — hand-over receipts never reach the desktop World (android-cell permgate.rs ~739).
-- deos-hermes `HermesSession::run` still uses **MockHermesPeer keyword scripts** in the cockpit surface (cockpit_surface.rs 146–149).
+- **Pre-existing cockpit stack overflow** (first-ever full-suite run found it):
+  `cockpit::frame::layout_cell_drives_the_rail_and_a_reshape_moves_a_surface` overflows the
+  default 2MB test stack; passes in 3.3s under `RUST_MIN_STACK=33554432`. Deep-but-finite
+  recursion in the layout/reshape fold — wants an iterative rewrite, cockpit lane, not mine.
+- The 13-scout harvest (~70 anchored proposals) + heavy-wave lane reports live in the
+  workflow journals (`wf_32fe966d-c4b`, `wf_5a5bf69d-db3`, `wf_f1c82037-aff` under
+  `~/.claude/projects/.../subagents/workflows/`). Unimplemented headliners queued:
+  Exchange Floor, Matrix Rehydrate&Drive, web transclude.js, Android live tile,
+  Pulse→Signals weld (deos-view staleness), receipt-console flyout, uniform_list
+  virtualization, layout-save debounce.
+- App Shelf honest seams: install ceremony/persistence future; 4 apps have wired live
+  fires, the other ~16 launch + surface an honest refusal naming the seam.
 
-## The overnight slate (chosen for wow-per-effort · low collision · one coherent story: "the desktop woke up")
+## Also on your desk
 
-| # | item | lane | status |
-|---|------|------|--------|
-| 1 | Keyboard spine (⌘K Spotter, Escape ladder, arrows) + Spotter-dismiss fix | me, mod.rs core | in progress |
-| 2 | REFUSED is a moment (surface refusal reasons; pairs with Agent Room) | me, mod.rs actuate | queued |
-| 3 | GOSSAMER — visible transclusion threads between windows | agent, threads.rs + render tail | launching |
-| 4 | BACKLINK HALO — "← quoted by N" beads, walkable | agent, halo.rs + backlinks_of extraction | launching |
-| 5 | Pulse toasts (foreign turns as clickable NT cards) | me, after 3 merges (render-tail contention) | queued |
-| 6 | Status bar → receipt console flyout | stretch | queued |
-
-Morning demo script: open desktop → ⌘K, type "agent" → Agent Room (watch the treasury act;
-REFUSED rows in amber) → drag a cell onto a document → **a cyan thread snaps between the
-windows** → select the source → backlink beads on the halo → click a bead → walk the link
-back. Meanwhile the status bar narrates every foreign turn. Zero refresh buttons anywhere.
-
-## ⚡ 5AM DIRECTIVE (ember, awake): NOTHING IS PARKED. Full trust granted; target =
-## **first deos bundle launch in ~24h**: zed-fork IDE · alacritty terminal · hermes agent
-## (dregg-checked toolcalls) · matrix client · dreggnet cloud · servo browser · gpui
-## cell-driven UI toolkit · mac/linux/windows. App Shelf explicitly craved.
-## In flight: GOSSAMER + BACKLINK (wf_62bfbe78-be0); App Shelf + HIRELING + Rewind Rail
-## + bundle-readiness planner (wf_f1c82037-aff). I merge lanes sequentially, hbox-check
-## each merge (logs /tmp/fable-check-N.log), then next wave: Exchange Floor, Matrix
-## Rehydrate&Drive, web transclude.js, Pulse toasts, Android tile.
-
-## Formerly-parked list (now all live, per directive above)
-
-- **The Rewind Rail** (10w) — scrub the whole desktop through root-verified history.
-- **THE HIRELING / The Resident** (10w×2) — a real hermes brain living in the Agent Room,
-  hire/fire from the desktop (needs the MockHermesPeer→real-peer weld).
-- **The live Android tile** (10w) — confined app frames painted in AndroidCell windows.
-- **Rehydrate & Drive over Matrix** (10w) — membrane-over-Matrix in the shipped desktop.
-- **Exchange Floor** (9w) — compute-exchange × execution-lease as the $DREGG agent-economy demo.
-- **App Shelf** (9w) — the 24 starbridge-apps as first-class desktop citizens.
-- **Web transclusion embeds** (9w) — transclude.js + the missing /transclusion/ page.
-- Zed fork: Receipt Rail (8w) then hash-linked blame (9w) — heavy build coupling, week-scale.
-
-## Session-continuity notes (if this session ends)
-
-- 5:15am alarm armed (Monitor). X-spaces crib sheet still TODO (task 5) — source material:
-  `~/dev/collected-writings/dreggnet-tweets.md` (the full @DreggNet archive captured tonight).
-- The `the-coin.txt` honest-tokenomics poster draft sits in `~/src/dregg-posters/` awaiting
-  ember's red pen (lock % discrepancy 6.7 vs 6.2 must be resolved by ember before posting).
-- Memory index updated at `~/.claude/projects/-Users-ember/memory/`.
+- `~/dev/collected-writings/xspaces-crib-2026-07-04.md` — spaces crib (⚠ verify lock % 6.2
+  vs 6.7 and the loaded numbers before speaking).
+- `~/src/dregg-posters/the-coin.txt` — honest-tokenomics poster draft, needs your red pen.
+- `~/dev/collected-writings/dreggnet-tweets.{md,jsonl}` — full @DreggNet archive.
+- Memory updated: `~/.claude/projects/-Users-ember/memory/`.
