@@ -189,6 +189,16 @@ pub enum CarrierWitness {
     /// turn never folds a vacuous claim), and binds the re-proven DSL transition leaf to the
     /// published route-commitment.
     Dsl(DslWitnessBundle),
+    /// FOLD-WIRED (the 8th carrier): the DECO/zkTLS + Stripe money-in carrier's re-provable
+    /// payment-commitment witness — the felt-domain `PaymentFacts` the DECO leaf recomputes
+    /// the identity from (per `docs/deos/DECO-CARRIER-PLAN.md` Option B: the in-AIR leaf
+    /// verifies only the Poseidon2 commitment binding `PaymentFacts → payment_hash`;
+    /// ed25519/HMAC/SHA-256 stay OFF-AIR, executor-checked, as named §8 carriers — exactly
+    /// what `Deco.lean::deco_binds_payment` proves and exactly bridge's ed25519 posture). The
+    /// fold arm admits a leg only when its deployed `stripeMint` descriptor pins the felt
+    /// payment-identity claim slot (`DECO_PAYMENT_HASH_PI`, FIRST-row `param0` — the big-bang
+    /// regen tie); otherwise it refuses (fail-closed).
+    Deco(DecoWitnessBundle),
 }
 
 impl CarrierWitness {
@@ -202,6 +212,7 @@ impl CarrierWitness {
             CarrierWitness::Hatchery(_) => "hatchery",
             CarrierWitness::Membership(_) => "membership",
             CarrierWitness::Dsl(_) => "dsl",
+            CarrierWitness::Deco(_) => "deco",
         }
     }
 
@@ -284,6 +295,48 @@ impl BridgeWitnessBundle {
         retained: Option<&dregg_circuit::note_spending_air::NoteSpendingWitness>,
     ) -> Option<Self> {
         retained.map(Self::from_note_spend_witness)
+    }
+}
+
+/// FOLD-WIRED (the 8th carrier) DECO-carrier bundle — the prover-side inputs
+/// [`crate::deco_leaf_adapter::prove_deco_leaf_with_claim`] consumes: the felt-domain
+/// `PaymentFacts` (`amountCents, currency, recipient, paymentIntentId`) + the transcript-
+/// commitment opening `salt`. The DECO commitment leaf recomputes the felt payment identity
+/// (`deco_payment_hash_felt`) IN-AIR from these and exposes it at claim lane
+/// [`crate::deco_leaf_adapter::DECO_LEAF_PAYMENT_HASH_PI`]; the deployed `stripeMint` leg's
+/// `payment_hash` PI (`DECO_PAYMENT_HASH_PI`) connects to it. The heavy TLS crypto
+/// (ed25519/HMAC/SHA-256/parse) stays OFF-AIR, executor-checked — the named §8 carriers
+/// (`DECO-CARRIER-PLAN.md` §5). The executor projects a `StripePaymentAttestation` onto the
+/// felt witness via `dregg_circuit::dsl::deco_payment::stripe_payment_hash_felt`'s encoders.
+#[derive(Clone)]
+pub struct DecoWitnessBundle {
+    /// The felt-domain payment witness the DECO commitment leaf proves over.
+    pub witness: crate::deco_leaf_adapter::DecoLeafWitness,
+    /// The `DECO_CLAIM_LEN`-slot claim tuple (for an honest bundle,
+    /// [`crate::deco_leaf_adapter::deco_leaf_public_inputs`]).
+    pub public_inputs: Vec<BabyBear>,
+}
+
+impl DecoWitnessBundle {
+    /// Project the honest bundle from the typed felt payment witness (PIs derived from the
+    /// witness itself — including the in-AIR-recomputable felt payment identity — so
+    /// claim == execution by construction).
+    pub fn from_leaf_witness(witness: &crate::deco_leaf_adapter::DecoLeafWitness) -> Self {
+        Self {
+            public_inputs: crate::deco_leaf_adapter::deco_leaf_public_inputs(witness),
+            witness: *witness,
+        }
+    }
+
+    /// **THE PRODUCTION PROJECTION (fail-closed off-wire)** — the DECO twin of
+    /// [`BridgeWitnessBundle::from_retained_bridge`]. The turn-build path RETAINS the felt
+    /// payment witness (projected from the `VerifiedPayment` the Stripe webhook verify
+    /// produced, `stripe_mirror.rs`); a wire-rehydrated turn retains nothing (`None`) — the
+    /// re-exec rung, FAIL-CLOSED rather than fabricated.
+    pub fn from_retained_deco(
+        retained: Option<&crate::deco_leaf_adapter::DecoLeafWitness>,
+    ) -> Option<Self> {
+        retained.map(Self::from_leaf_witness)
     }
 }
 

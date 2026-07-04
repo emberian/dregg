@@ -2866,6 +2866,22 @@ pub const BRIDGE_MINT_HASH_PI: usize = 46;
 /// The bridge claim length (the single felt mint identity lane).
 pub const BRIDGE_MINT_HASH_CLAIM_LEN: usize = 1;
 
+/// The DECO/Stripe leg's felt payment-identity claim PI — the deployed `stripeMint`/`decoMint`
+/// row (the 8th carrier) pins the mint row's `param0` (`prmCol 0` — the FELT-domain
+/// `deco_payment_hash_felt` over the PaymentFacts, `dsl::deco_payment`) at a TAIL PI on the
+/// FIRST row, the twin of the bridge `withMintHashPin` (both mint-family rows share the rotated
+/// base, so the identity rides the SAME `param0`/PI-46 slot convention as bridge). ONE lane
+/// binds the whole payment tuple: the identity is the DECO leaf's in-AIR `hash_fact` chain over
+/// its own PI-pinned `(amountCents, currency, recipient, paymentIntentId)`. Same fail-closed
+/// admission discipline. ⚑ The deployed `stripeMint` descriptor EMIT (`withPaymentHashPin` +
+/// the `generate_rotated_stripe_mint_wide` producer + the TSV regen) rides the coordinated
+/// big-bang descriptor regen (`DECO-CARRIER-PLAN.md` §2 finale) — until it lands, `stripeMint`
+/// legs are `Effect::Mint` rows that carry NO payment-hash pin, so this arm's admission
+/// REFUSES them (fail-closed), never silently degrading to a fabricated fold.
+pub const DECO_PAYMENT_HASH_PI: usize = 46;
+/// The DECO claim length (the single felt payment-identity lane).
+pub const DECO_PAYMENT_HASH_CLAIM_LEN: usize = 1;
+
 /// **The DSL/Dfa rc claim PI base — DERIVED PER MEMBER from the committed registry row.**
 ///
 /// The dsl rc-EMIT (`withDfaRcPins`, cohort-wide) pins the 4-felt DFA route-commitment
@@ -3147,6 +3163,56 @@ fn prove_chain_core_rotated(
                 .map_err(|e| TurnChainError::TurnProofInvalid {
                     index: i,
                     reason: format!("segmented bridge mint-hash binding node failed: {e:?}"),
+                })?
+            }
+            // THE DECO/Stripe money-in FOLD ARM (the 8th carrier) — the fiat twin of the
+            // bridge arm (`DECO-CARRIER-PLAN.md` Option B, the bridge-style commitment fold):
+            // (1) ADMIT the leg's payment-hash claim slot (fail-closed on a pin-less or
+            // wrong-column descriptor — the expected pin is the FIRST-row `prmCol 0`, the
+            // deployed `stripeMint` twin of `withMintHashPin`; until the descriptor regen
+            // lands a Stripe `Effect::Mint` leg has no such pin and is REFUSED), (2) mint the
+            // DUAL-EXPOSE leaf (segment ++ the published payment identity), (3) re-prove the
+            // DECO commitment leaf (`prove_deco_leaf_with_claim` — a Poseidon2-only AIR
+            // recomputing the felt identity IN-AIR from PI-pinned PaymentFacts; ed25519/HMAC/
+            // SHA-256 stay OFF-AIR as named §8 carriers, mirroring bridge's ed25519), (4) fold
+            // under the payment-hash binding node — the in-circuit `connect` makes a published
+            // payment identity no verifying DECO commitment backs UNSAT.
+            Some(CarrierWitness::Deco(bundle)) => {
+                use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
+                use dregg_circuit::lean_descriptor_air::VmRow;
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    DECO_PAYMENT_HASH_PI,
+                    DECO_PAYMENT_HASH_CLAIM_LEN,
+                    "deco",
+                    Some((PARAM_BASE + param::MINT_HASH, VmRow::First)),
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    DECO_PAYMENT_HASH_PI,
+                    DECO_PAYMENT_HASH_CLAIM_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let backing = crate::deco_leaf_adapter::prove_deco_leaf_with_claim(
+                    &bundle.witness,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("deco payment backing leaf mint failed: {reason}"),
+                })?;
+                crate::deco_leaf_adapter::prove_deco_payment_binding_node_segmented(
+                    &dual, &backing, &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented deco payment-binding node failed: {e:?}"),
                 })?
             }
             // THE DSL/Dfa FOLD ARM (the 6th carrier) — mirrors the Custom arm term-for-term
