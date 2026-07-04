@@ -1116,6 +1116,60 @@ mod tests {
         ));
     }
 
+    /// **THE FOLD, end to end.** A rented grain's lifecycle IS a vat: it launches to
+    /// `Running`, sleeps to `Sleeping`, wakes back to `Running` (the wake-from-lease),
+    /// refuses every illegal move by the machine's own tooth, and a delinquent grain
+    /// moves to `Lapsed` — from which it can never wake again.
+    #[test]
+    fn the_grain_lifecycle_is_a_vat_machine() {
+        let wd = workdir();
+        let platform = AgentPlatform::new();
+        let host = platform
+            .rent(
+                "vat.agents.dregg",
+                "dga1_vic",
+                "fs",
+                10_000,
+                wd.to_str().unwrap(),
+                terms(),
+                None,
+            )
+            .expect("provision the grain");
+
+        // rent = open_vat + BringUp → the grain launches Running.
+        assert_eq!(platform.grain_state(&host).unwrap(), VatState::Running);
+
+        // sleep = Running → Sleeping (checkpoint-and-tear-down).
+        assert_eq!(platform.sleep(&host).unwrap(), VatState::Sleeping);
+        assert_eq!(platform.grain_state(&host).unwrap(), VatState::Sleeping);
+
+        // Illegal by the machine's tooth: you cannot sleep an already-sleeping grain.
+        assert!(matches!(
+            platform.sleep(&host),
+            Err(AgentPlatformError::Lifecycle(_))
+        ));
+
+        // wake = Sleeping → Running (the named wake-from-lease, delivered by the fold).
+        assert_eq!(platform.wake(&host).unwrap(), VatState::Running);
+        assert_eq!(platform.grain_state(&host).unwrap(), VatState::Running);
+
+        // Illegal: you cannot wake a grain that is already up.
+        assert!(matches!(
+            platform.wake(&host),
+            Err(AgentPlatformError::Lifecycle(_))
+        ));
+
+        // Miss the rent → the lease lapses AND the vat lifecycle mirrors it to Lapsed.
+        assert!(platform.reap_if_behind(&host, 1100).expect("audit"));
+        assert_eq!(platform.grain_state(&host).unwrap(), VatState::Lapsed);
+
+        // A lapsed grain can never wake again (BringUp is illegal from Lapsed).
+        assert!(matches!(
+            platform.wake(&host),
+            Err(AgentPlatformError::Lifecycle(_))
+        ));
+    }
+
     #[test]
     fn drive_audits_the_schedule_and_lapses_a_delinquent_grain() {
         let wd = workdir();
