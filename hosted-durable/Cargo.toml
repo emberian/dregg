@@ -1,0 +1,27 @@
+# hosted-durable — the conserving settlement + metering rail for the hosting
+# substrate's durable-execution leases (the metering surface the agent-platform's
+# billing binds to). Exports LeaseCharge / SettleReceipt / Settlement /
+# TestConservingLedger. The upstream durable-execution WORKFLOW (a duroxide
+# orchestration over the operated compute tier + a Postgres/duroxide store) is a
+# named follow-up, not imported here (see src/lib.rs); the settlement rail stands
+# complete on its own.
+
+[package]
+name = "hosted-durable"
+description = "The conserving settlement + metering rail for hosted durable-execution leases: LeaseCharge/SettleReceipt/Settlement over the proven signed-balance discipline"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lib]
+name = "hosted_durable"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+# The proven substrate conservation move: `apply_conserving_transfer` runs each
+# settlement through `dregg_cell::CellState`'s signed-balance discipline
+# (`recTransfer_balanceSum_conserve`) on every build.
+dregg-cell = { path = "../cell" }

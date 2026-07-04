@@ -1,0 +1,48 @@
+# grain-commons — the agent commons / grain app-store (docs/THE-GRAIN.md, face #3
+# §Commons). Package, publish, discover, and fork hosted-agent grains: "an app
+# store for hostable/shareable/forkable/pedigreed agents."
+#
+# It COMPOSES the existing crypto; it reimplements none of it:
+#   - the signed `.spk` (App ID = the Ed25519 signing key) + manifest->grain-spec +
+#     GrainBackup/restore from `sandstorm-bridge` (spk.rs / manifest.rs / grain.rs);
+#   - the real `dga1_` powerbox cap rail (mint / attenuate-only / derive-perms) from
+#     `sandstorm-bridge::webauth_rail`;
+#   - the Hatchery abstraction-mint (`MintedKind` — a FactoryDescriptor whose
+#     state_constraints ARE a forever-invariant the executor enforces for the child's
+#     whole life) from breadstuffs `dregg-sdk::hatchery_mint`.
+#
+# A member of the breadstuffs root workspace: it shares the root's one target dir,
+# one resolve, and inherits the root `[patch]` tables. Verify NARROW:
+# `cargo test -p grain-commons`.
+
+[package]
+name = "grain-commons"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The agent commons: package/publish/discover/fork/hatch hosted-agent grains — the app store for shareable, pedigreed agents"
+
+[lib]
+name = "grain_commons"
+path = "src/lib.rs"
+
+[dependencies]
+# The signed `.spk` + manifest + grain lifecycle/backup + the real dga1_ powerbox
+# cap rail. We CONSUME SpkBuilder/Spk/SpkManifest, GrainBackup/restore_grain,
+# HostAuthority/attenuate_grain_cap/derive_permissions — no reimplementation.
+sandstorm-bridge = { path = "../sandstorm-bridge" }
+# The Hatchery: MintedKind bakes a declared Invariant into a FactoryDescriptor the
+# executor enforces forever; evaluate_transition IS the kernel gate, attest_membership
+# is the forge-detector. The genesis-agent mints sub-agent grains with it.
+dregg-sdk = { path = "../sdk" }
+# The kernel cell types MintedKind is built over — CellProgram / CellState /
+# ProgramError / StateConstraint, for exercising a hatched kind's invariant gate.
+dregg-cell = { path = "../cell" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+# Must match sandstorm-bridge's ed25519-dalek so `SpkBuilder::pack(&SigningKey)`
+# type-unifies (the App ID = this key).
+ed25519-dalek = { version = "2.1", features = ["std"] }
+sha2 = "0.10"

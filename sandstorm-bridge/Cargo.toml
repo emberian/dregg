@@ -1,0 +1,42 @@
+# sandstorm-bridge — the dregg-native Sandstorm integration.
+#
+# A signed `.spk` grain is a dregg cell + a cap-bounded workload: read the real
+# `.spk` (xz + Ed25519, App ID = the signing key), decode its manifest into a
+# grain spec, run the grain lifecycle (create / wake / sleep / delete) over a
+# dregg cell's umem heap, and gate every grain capability on the real dregg-auth
+# `dga1_` powerbox rail (mint / attenuate-only / derive-perms). The maintainer
+# wants `.spk` hosting; this is its confinement + capability model, native.
+#
+# The two operated-layer welds present upstream (the compute-tier `exec_workload`
+# weld onto the sandbox executor, and the `serving` weld onto the hosting
+# substrate's site-serving surface) are NOT imported here: they bind to
+# operated-execution / site-serving crates that are not breadstuffs siblings. The
+# signed-`.spk` + grain confinement model (spk / manifest / cell / grain / bridge
+# / net / tenant / limits / capnp wire / the powerbox rail) is complete and green
+# on its own; the two welds are a named follow-up.
+
+[package]
+name = "sandstorm-bridge"
+version = { workspace = true }
+edition = "2021"
+publish = false
+description = "Sandstorm grain=cell + signed .spk runner + powerbox=dregg-cap bridge over the dregg-auth credential rail"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# `.spk` container crypto + compression: App ID = the Ed25519 signing key,
+# payload integrity = the signature over the archive, container = xz.
+lzma-rs = "0.3"          # pure-Rust xz (de)compression
+ed25519-dalek = { workspace = true }   # Ed25519 sign/verify (App ID = pubkey)
+sha2 = { workspace = true }            # content-addressed umem `data_root`
+data-encoding = "2"      # Sandstorm's base32 alphabet for App IDs / dga1_ tokens
+
+# The cap rail: a powerbox grant is a `dga1_` ed25519 caveat-chain credential,
+# host-rooted, attenuating-only, verified offline on present — the proven
+# breadstuffs credential core (`dregg_auth::credential`), the same `dga1_` wire
+# the source rail used.
+dregg-auth = { path = "../dregg-auth" }
+
+[lints.rust]
+unsafe_code = "forbid"
