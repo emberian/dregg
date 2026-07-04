@@ -1,0 +1,44 @@
+[package]
+name = "agent-platform"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+# The AgentPlatform: rent, host, meter, and reap confined dregg-agent sessions.
+# A tenant is a dregg_agent::Session (a hosted, cap+budget-bounded, receipted
+# agent) opened under Confinement::Hosted over a HostedLease; driving it runs a
+# goal, billing meters the rent and settles it on-chain, checkpointing stamps a
+# verified binding of the session's receipt chain into the lease's durable image,
+# and re-witnessing climbs the R-ladder (tamper-evidence → R1 renter anchor → R2
+# kernel-turn views; R3, proving the turns RAN, is the named whole-history STARK
+# gap). This is the first stone of THE GRAIN (docs/THE-GRAIN.md): a hosted agent
+# = a rentable, verifiable grain.
+
+[features]
+# `live-brain` (OFF by default) makes a rented grain THINK LIVE: drive_live wires
+# dregg-agent's real OpenAI-compatible HTTP transport (a BYO key from env) as the
+# session's brain, so the model's tool-calls cross the same cap-gate before they
+# become receipts. Off by default keeps the platform hermetic (PlannedBrain).
+live-brain = ["dregg-agent/live-brain"]
+
+[dependencies]
+# The hosting durable-execution lease (rent obligor + own-obligor conservation +
+# committed durable image) — the lifecycle spine each tenant routes through.
+hosted-lease = { path = "../hosted-lease" }
+# The conserving settlement + metering rail (LeaseCharge / SettleReceipt /
+# Settlement) the billing period settles through.
+hosted-durable = { path = "../hosted-durable" }
+# The substrate HTTP-serve surface the served routes bind to (request/response +
+# the std-net serve loop).
+http-serve = { path = "../http-serve" }
+# The proven credential core the share algebra is grounded on (`dga1_` caveat
+# chain, verified offline) — see src/share.rs.
+dregg-auth = { path = "../dregg-auth" }
+grain-verify = { path = "../grain-verify" }
+dregg-agent = { path = "../dregg-agent" }
+dregg-cell = { path = "../cell" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"

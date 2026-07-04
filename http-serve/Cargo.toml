@@ -1,0 +1,25 @@
+# http-serve — a tiny, server-independent HTTP/1.1 request/response vocabulary + a
+# portable `std`-net serve loop (one thread per connection). No async runtime, no
+# web framework, no external HTTP crate — the minimal surface a cap-gated app
+# handler drives: parse a request into a `ServeRequest`, run `handler(&req)
+# -> WebResponse`, write the response.
+#
+# It exists because the hosting substrate has no reusable generic HTTP
+# request/response + serve surface: the node's HTTP is tokio/framework-integrated,
+# and the other web crates carry domain-specific DTOs, not a generic server. This
+# is the honest thin shim the ported `agent-platform::serve` binds to (the surface
+# its handler was written against): `HttpMethod` / `ServeRequest` / `WebResponse`
+# / `serve_http`.
+
+[package]
+name = "http-serve"
+version = { workspace = true }
+edition = "2021"
+publish = false
+description = "A tiny server-independent HTTP/1.1 request/response vocabulary + a portable std-net serve loop for cap-gated app handlers"
+
+[dependencies]
+serde_json = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
