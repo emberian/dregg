@@ -175,6 +175,33 @@ impl LlmKeys {
         Some(LlmKeys::new(provider, secret))
     }
 
+    /// Resolve the operator's BYO key from the standard env chain, in order:
+    /// `DREGG_LLM_API_KEY` (provider-neutral) → `ANTHROPIC_API_KEY` (Anthropic
+    /// Messages) → `OPENAI_API_KEY` (OpenAI) → `NVIDIA_API_KEY` (NIM) → the
+    /// `~/.nvidiakey` file. The FIRST that is set+non-empty wins; its provider
+    /// label records which one (so the transport can pick the OpenAI-compatible
+    /// vs Anthropic-native adapter). `None` if none are present — the caller
+    /// stays on the on-box [`LocalBrain`]. The secret never leaves this struct's
+    /// redacted [`Debug`]; deos never persists it.
+    pub fn from_env_chain() -> Option<LlmKeys> {
+        const ENV_ORDER: &[(&str, &str)] = &[
+            ("dregg-llm", "DREGG_LLM_API_KEY"),
+            ("anthropic", "ANTHROPIC_API_KEY"),
+            ("openai", "OPENAI_API_KEY"),
+            ("nvidia", "NVIDIA_API_KEY"),
+        ];
+        for (provider, var) in ENV_ORDER {
+            if let Some(keys) = LlmKeys::from_env(provider, var) {
+                return Some(keys);
+            }
+        }
+        // Last resort: the conventional `~/.nvidiakey` file (the NIM deployment
+        // shape, mirroring `dregg-agent`'s CLI key resolution).
+        let home = std::env::var_os("HOME")?;
+        let path = std::path::Path::new(&home).join(".nvidiakey");
+        LlmKeys::from_file("nvidia", path)
+    }
+
     /// The provider label (NOT secret).
     pub fn provider(&self) -> &str {
         &self.provider
@@ -709,6 +736,318 @@ fn openai_to_messages(resp: &Value) -> Value {
     json!({ "content": [{ "type": "text", "text": text }] })
 }
 
+// ──────────────────────────── the LIVE HTTP transport ────────────────────────
+//
+// The `post`/`complete` closure the crate otherwise never supplies live. Behind
+// the `live-brain` feature so the default std-only build needs no HTTP/TLS stack.
+// TWO adapters ship, chosen by which BYO key is present:
+//   * OpenAI-compatible — `live_openai_caller()` wraps the existing
+//     [`OpenAICompatCaller`] with a real `/v1/chat/completions` POST (OpenAI,
+//     NVIDIA NIM, ollama/vLLM, OpenRouter, any OpenAI-shaped proxy).
+//   * Anthropic Messages — [`AnthropicMessagesCaller`] POSTs the brain's
+//     already-Messages-shaped request to `/v1/messages`. [`HttpLlm`] natively
+//     emits `system`+`messages`+`content`-block tool_use and parses `content`
+//     blocks back, which IS the Anthropic Messages shape — so this adapter only
+//     fixes up the wire details (auth headers, `max_tokens`, `input_schema` on
+//     tools, `tool_result` reshaping).
+// The BYO key reaches ONLY the auth header, never the request body or any log.
+
+/// Build a chat/completions endpoint URL from a provider **base URL**:
+/// `http://localhost:11434/v1` → `http://localhost:11434/v1/chat/completions`. A
+/// base already ending in `/chat/completions` is returned unchanged; a trailing
+/// slash is tolerated. The one place the OpenAI chat route is appended.
+pub fn chat_completions_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if base.ends_with("/chat/completions") {
+        base.to_string()
+    } else {
+        format!("{base}/chat/completions")
+    }
+}
+
+/// The default Anthropic Messages endpoint (the `ANTHROPIC_API_KEY` path).
+pub const ANTHROPIC_MESSAGES_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
+/// The Anthropic API version pin the Messages request advertises.
+pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+#[cfg(feature = "live-brain")]
+mod live_transport {
+    use super::*;
+
+    /// A real `reqwest::blocking` POST of `body` to `endpoint` with the given
+    /// `headers` (each a `(name, value)`), returning the response JSON. Runs on a
+    /// dedicated OS thread so it is agnostic to any ambient async runtime (a
+    /// `reqwest::blocking` client panics if dropped inside a tokio context). A
+    /// 60s timeout fails CLOSED (a hung endpoint ends the turn soundly). Error
+    /// strings never include an auth header value.
+    pub(super) fn http_post_json(
+        endpoint: &str,
+        headers: Vec<(&'static str, String)>,
+        body: &Value,
+    ) -> Result<Value, String> {
+        let endpoint = endpoint.to_string();
+        let body = body.clone();
+        let handle = std::thread::spawn(move || -> Result<Value, String> {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(60))
+                .build()
+                .map_err(|e| format!("llm client build error: {e}"))?;
+            let mut req = client.post(&endpoint).json(&body);
+            for (name, value) in &headers {
+                req = req.header(*name, value);
+            }
+            let resp = req
+                .send()
+                // reqwest's Display does not echo header values; do not add them.
+                .map_err(|e| format!("llm http error: {e}"))?;
+            let status = resp.status();
+            let json: Value = resp.json().map_err(|e| format!("llm decode error: {e}"))?;
+            if !status.is_success() {
+                let msg = json
+                    .get("error")
+                    .and_then(|e| e.get("message").or(Some(e)))
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| "(no message)".to_string());
+                return Err(format!("llm http {status}: {msg}"));
+            }
+            Ok(json)
+        });
+        handle
+            .join()
+            .map_err(|_| "llm transport thread panicked".to_string())?
+    }
+
+    /// The live OpenAI-compatible `post` closure the [`OpenAICompatCaller`] takes:
+    /// a real `/v1/chat/completions` POST with the BYO key in the
+    /// `Authorization: Bearer` header (omitted when empty — a local unauthed
+    /// endpoint). The key is the auth arg; it never enters `body`.
+    pub(super) fn openai_post(
+        endpoint: &str,
+        api_key: &str,
+        body: &Value,
+    ) -> Result<Value, String> {
+        let mut headers: Vec<(&'static str, String)> = Vec::new();
+        if !api_key.is_empty() {
+            headers.push(("authorization", format!("Bearer {api_key}")));
+        }
+        http_post_json(endpoint, headers, body)
+    }
+}
+
+/// The concrete `post` fn-pointer type the live [`OpenAICompatCaller`] wraps.
+#[cfg(feature = "live-brain")]
+pub type LivePost = fn(&str, &str, &Value) -> Result<Value, String>;
+
+/// A live OpenAI-compatible caller: [`OpenAICompatCaller`] over the real
+/// `/v1/chat/completions` transport. Drop it into [`HttpLlm::new`] with an
+/// OpenAI-shaped endpoint + model.
+#[cfg(feature = "live-brain")]
+pub type LiveOpenAICompatCaller = OpenAICompatCaller<LivePost>;
+
+/// Construct the live OpenAI-compatible caller (the real network `post`).
+#[cfg(feature = "live-brain")]
+pub fn live_openai_caller() -> LiveOpenAICompatCaller {
+    OpenAICompatCaller::new(live_transport::openai_post as LivePost)
+}
+
+/// Translate the [`HttpLlm`] Messages-shaped request into a wire-valid Anthropic
+/// Messages request: adds the required `max_tokens`, gives each tool an
+/// `input_schema`, and reshapes each `{role:tool}` result into an Anthropic
+/// `{role:user, content:[{type:tool_result,...}]}` (with matching `tool_use`
+/// ids). The BYO key is NOT here — it rides the `x-api-key` header.
+#[cfg(feature = "live-brain")]
+fn messages_to_anthropic(request: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(model) = request.get("model") {
+        out.insert("model".into(), model.clone());
+    }
+    out.insert("max_tokens".into(), json!(1024));
+    if let Some(system) = request.get("system") {
+        out.insert("system".into(), system.clone());
+    }
+    // Reshape messages: assistant tool_use blocks get an `id`; each following
+    // `{role:tool}` becomes a user `tool_result` referencing that id.
+    let mut messages = Vec::new();
+    let mut tu_seq = 0u64;
+    if let Some(src) = request.get("messages").and_then(|m| m.as_array()) {
+        for msg in src {
+            match msg.get("role").and_then(|r| r.as_str()).unwrap_or("") {
+                "assistant" => {
+                    let blocks: Vec<Value> = msg
+                        .get("content")
+                        .and_then(|c| c.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|b| {
+                                    if b.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                                        tu_seq += 1;
+                                        let mut nb = b.clone();
+                                        if let Some(o) = nb.as_object_mut() {
+                                            o.insert("id".into(), json!(format!("toolu_{tu_seq}")));
+                                        }
+                                        nb
+                                    } else {
+                                        b.clone()
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    messages.push(json!({ "role": "assistant", "content": blocks }));
+                }
+                "tool" => {
+                    let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                    messages.push(json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": format!("toolu_{tu_seq}"),
+                            "content": content,
+                        }],
+                    }));
+                }
+                _ => messages.push(msg.clone()),
+            }
+        }
+    }
+    out.insert("messages".into(), json!(messages));
+    // Tools: give each a minimal `input_schema` (Anthropic requires it).
+    if let Some(specs) = request.get("tools").and_then(|t| t.as_array()) {
+        let tools: Vec<Value> = specs
+            .iter()
+            .map(|s| {
+                json!({
+                    "name": s.get("name").and_then(|n| n.as_str()).unwrap_or(""),
+                    "description": s.get("description").and_then(|d| d.as_str()).unwrap_or(""),
+                    "input_schema": { "type": "object", "properties": {} },
+                })
+            })
+            .collect();
+        out.insert("tools".into(), json!(tools));
+    }
+    Value::Object(out)
+}
+
+/// A live [`LlmHttpCaller`] for the **Anthropic Messages API** (`/v1/messages`).
+/// [`HttpLlm`] already emits the Messages request shape and parses `content`
+/// blocks back, so this adapter maps that shape onto the wire form
+/// ([`messages_to_anthropic`]) and posts it with the BYO key in the `x-api-key`
+/// header (never the body). The Anthropic response's top-level `content` array is
+/// exactly what [`parse_provider_step`] consumes — no response translation.
+#[cfg(feature = "live-brain")]
+#[derive(Default)]
+pub struct AnthropicMessagesCaller;
+
+#[cfg(feature = "live-brain")]
+impl AnthropicMessagesCaller {
+    /// A live Anthropic Messages caller.
+    pub fn new() -> AnthropicMessagesCaller {
+        AnthropicMessagesCaller
+    }
+}
+
+#[cfg(feature = "live-brain")]
+impl LlmHttpCaller for AnthropicMessagesCaller {
+    fn complete(
+        &mut self,
+        endpoint: &str,
+        api_key: &str,
+        request: &Value,
+    ) -> Result<Value, String> {
+        let body = messages_to_anthropic(request);
+        let headers = vec![
+            ("x-api-key", api_key.to_string()),
+            ("anthropic-version", ANTHROPIC_VERSION.to_string()),
+        ];
+        live_transport::http_post_json(endpoint, headers, &body)
+    }
+}
+
+/// A single live caller type spanning both live adapters, so a fully-configured
+/// live brain is one concrete [`HttpLlm<LiveCaller>`] regardless of provider.
+#[cfg(feature = "live-brain")]
+pub enum LiveCaller {
+    /// An OpenAI-compatible `/v1/chat/completions` endpoint.
+    OpenAI(LiveOpenAICompatCaller),
+    /// The Anthropic Messages API.
+    Anthropic(AnthropicMessagesCaller),
+}
+
+#[cfg(feature = "live-brain")]
+impl LlmHttpCaller for LiveCaller {
+    fn complete(
+        &mut self,
+        endpoint: &str,
+        api_key: &str,
+        request: &Value,
+    ) -> Result<Value, String> {
+        match self {
+            LiveCaller::OpenAI(c) => c.complete(endpoint, api_key, request),
+            LiveCaller::Anthropic(c) => c.complete(endpoint, api_key, request),
+        }
+    }
+}
+
+/// Build a fully-wired LIVE brain from the environment — the one call a hosted
+/// Session's `run_goal` makes to get a brain that actually calls a model.
+///
+/// Resolves the BYO key via [`LlmKeys::from_env_chain`] (DREGG_LLM_API_KEY →
+/// ANTHROPIC_API_KEY → OPENAI_API_KEY → NVIDIA_API_KEY → `~/.nvidiakey`), picks
+/// the matching transport + a sensible default endpoint/model for that provider,
+/// and returns the confined [`HttpLlm`]. `DREGG_LLM_BASE` overrides the
+/// OpenAI-compatible base URL and `DREGG_LLM_MODEL` overrides the model for any
+/// provider. Returns `None` when no key is present — the caller stays on the
+/// on-box [`LocalBrain`] (no live provider needed).
+#[cfg(feature = "live-brain")]
+pub fn live_brain_from_env() -> Option<HttpLlm<LiveCaller>> {
+    let keys = LlmKeys::from_env_chain()?;
+    let model_override = std::env::var("DREGG_LLM_MODEL")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let base_override = std::env::var("DREGG_LLM_BASE")
+        .ok()
+        .filter(|s| !s.is_empty());
+
+    let (endpoint, default_model, caller) = match keys.provider() {
+        "anthropic" => (
+            ANTHROPIC_MESSAGES_ENDPOINT.to_string(),
+            "claude-opus-4-8",
+            LiveCaller::Anthropic(AnthropicMessagesCaller::new()),
+        ),
+        "openai" => (
+            chat_completions_url(
+                base_override
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1"),
+            ),
+            "gpt-4o-mini",
+            LiveCaller::OpenAI(live_openai_caller()),
+        ),
+        "nvidia" => (
+            chat_completions_url(
+                base_override
+                    .as_deref()
+                    .unwrap_or("https://integrate.api.nvidia.com/v1"),
+            ),
+            "nvidia/llama-3.3-nemotron-super-49b-v1",
+            LiveCaller::OpenAI(live_openai_caller()),
+        ),
+        // "dregg-llm" / anything else: provider-neutral OpenAI-compatible; the
+        // base URL MUST come from DREGG_LLM_BASE (default to OpenAI's).
+        _ => (
+            chat_completions_url(
+                base_override
+                    .as_deref()
+                    .unwrap_or("https://api.openai.com/v1"),
+            ),
+            "gpt-4o-mini",
+            LiveCaller::OpenAI(live_openai_caller()),
+        ),
+    };
+    let model = model_override.as_deref().unwrap_or(default_model);
+    Some(HttpLlm::new(keys, &endpoint, model, caller))
+}
+
 #[cfg(test)]
 mod kimi_adapter_tests {
     use super::*;
@@ -872,5 +1211,91 @@ mod kimi_adapter_tests {
             "redacted under Debug"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+// ─────────────────────── the LIVE transport tests ────────────────────────────
+//
+// Behind `live-brain`. One hermetic test proves the Anthropic Messages request
+// translation is wire-valid (no network); one `#[ignore]`d test does a REAL
+// 1-turn completion when a key env is set, so it's runnable-on-demand, never
+// CI-blocking.
+#[cfg(all(test, feature = "live-brain"))]
+mod live_brain_tests {
+    use super::*;
+
+    /// The Anthropic transform yields a wire-valid Messages request: `max_tokens`
+    /// present, tools carry `input_schema`, and a tool result is reshaped into a
+    /// `user`/`tool_result`. Hermetic — no network, no key.
+    #[test]
+    fn anthropic_request_shape_is_wire_valid() {
+        let mut convo = AgentConvo::new("/work", "read the file then finish");
+        convo.observe("read_file", json!({ "path": "x" }), true, "receipt r1");
+        // Reuse the brain's own request builder over a placeholder caller.
+        let brain = HttpLlm::new(
+            LlmKeys::new("anthropic", "sk-DONOTLEAK"),
+            ANTHROPIC_MESSAGES_ENDPOINT,
+            "claude-opus-4-8",
+            AnthropicMessagesCaller::new(),
+        );
+        let body = super::messages_to_anthropic(&brain.request_body(&convo));
+        assert!(body.get("max_tokens").is_some(), "max_tokens is required");
+        assert_eq!(
+            body["tools"][0]["input_schema"]["type"], "object",
+            "tools carry an input_schema"
+        );
+        // The observed tool-call rides in as an assistant tool_use with an id...
+        let msgs = body["messages"].as_array().expect("messages array");
+        assert!(
+            msgs.iter().any(|m| m["role"] == "assistant"
+                && m["content"][0]["type"] == "tool_use"
+                && m["content"][0]["id"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("toolu_"))),
+            "assistant tool_use gets an id"
+        );
+        // ...and its result as a user tool_result referencing that id.
+        assert!(
+            msgs.iter().any(|m| m["role"] == "user"
+                && m["content"][0]["type"] == "tool_result"
+                && m["content"][0]["tool_use_id"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("toolu_"))),
+            "tool result reshaped to a user tool_result"
+        );
+    }
+
+    /// A REAL 1-turn completion against a live provider. Ignored: it needs a key
+    /// env (any of the chain) + network. Run on demand:
+    ///   `ANTHROPIC_API_KEY=... cargo test -p deos-hermes --features live-brain \
+    ///        -- --ignored live_completion`
+    /// Asserts a non-empty [`BrainStep`] — the brain actually thought live.
+    #[test]
+    #[ignore = "hits a live LLM provider; needs a key env (DREGG_LLM_API_KEY / \
+                ANTHROPIC_API_KEY / OPENAI_API_KEY / NVIDIA_API_KEY or ~/.nvidiakey) + network"]
+    fn live_completion_yields_a_nonempty_brainstep() {
+        let mut brain = live_brain_from_env()
+            .expect("a BYO key is present in the env chain (set one to run this test)");
+        let convo = AgentConvo::new(
+            "/work",
+            "Say hello, then finish. You may call read_file if you wish.",
+        );
+        let step = brain.next_step(&convo);
+        // The key reached the provider (and only the provider) — the confined
+        // channel witness.
+        assert!(
+            brain.key_reached_provider(),
+            "the BYO key reached the live provider"
+        );
+        match step {
+            BrainStep::CallTool { name, .. } => {
+                assert!(!name.is_empty(), "a live tool-call names a tool");
+                println!("live brain called tool: {name}");
+            }
+            BrainStep::Finish { text } => {
+                assert!(!text.is_empty(), "a live finish carries a message");
+                println!("live brain finished: {text}");
+            }
+        }
     }
 }

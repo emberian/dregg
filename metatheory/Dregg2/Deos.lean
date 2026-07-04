@@ -70,6 +70,11 @@ import Dregg2.Deos.SealedEscrow
 -- replay_rejected (one-shot per period) + early/over/behind-schedule teeth + cursor_bound_in_root.
 -- The Rust obligation_standing.rs is wired via invariant_matches_lean_rung. #assert_all_clean.
 import Dregg2.Deos.StandingObligation
+-- The FUSED budget-escrow ⊗ obligation prepaid lease (P1): one atomic write advances the
+-- StrictMonotonic meter cursor AND draws exactly rent from the escrowed prepaid budget, so
+-- meter/pay drift is UNREPRESENTABLE (metered_equals_drawn + budget_never_overdrawn, both
+-- polarities, bound in the heap root). Rust cell/src/prepaid_lease.rs. #assert_all_clean.
+import Dregg2.Deos.PrepaidLease
 -- The SHARE-VAULT house-capacity, GROUNDED: an ERC-4626-style vault whose minted shares equal the
 -- share-price relation d·S/T, where existing holders are NEVER diluted (deposit_price_non_decreasing)
 -- and the classic first-depositor INFLATION ATTACK is REJECTED (zero_mint_rejected + donation_immunity

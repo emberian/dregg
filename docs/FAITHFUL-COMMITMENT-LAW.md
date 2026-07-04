@@ -80,11 +80,20 @@ commitment now binds ALL 32 bytes of every flat field at ~124 bits. The ast-grep
 allowlist directives are gone; the gate PASSES with zero fields entries.
 
 The **one remaining in-circuit seam** (a CIRCUIT weld, NOT a degraded producer
-felt): the setField[0..7] WRITTEN slot's 7 completion lanes are frozen for every
-OTHER field on a value turn (`rotateV3FrozenAuthority` + the setField
-`fieldsCompletionFreezesExcept` variant) but the written slot's own completions
-ride the deliberately-gated setField **VALUE8 weld** follow-on (forcing them to the
-declared value8 params). This is a named circuit residual, not a lossy commitment.
+felt): the setField[0..7] WRITTEN slot's 7 completion lanes ride the
+deliberately-gated setField **VALUE8 weld** follow-on (forcing them to the declared
+value8 params). This is a named circuit residual, not a lossy commitment.
+
+**Deployed reality (2026-07-03 R1 audit, `circuit/tests/setfield_completion_lane_forge.rs`):**
+the DEPLOYED registry member (`EffectVmEmitRotationV3.lean:5363`) is
+`v3OfFrozen (setFieldTickFace slot)` — freeze-**ALL**, so the written slot's own
+completion lanes are FROZEN before==after too (bound to the pre-state). The
+`fieldsCompletionFreezesExcept` / `setFieldV3` "except" variant is defined + carries
+the value keystones but is NOT deployed. Consequence: a forge of the written field's
+high 224 bits is UNSAT (the freeze bites — no ledgerless silent-forge), but an
+honest LARGE-value setField (high bytes ≠ pre-state) currently cannot prove. So the
+seam is a **completeness** residual (the value8 weld unlocks faithful large-value
+writes AND declared-value binding), NOT a soundness hole. VK-affecting; gated.
 
 ## The capstone: the `Faithful8` TYPE WALL (built)
 

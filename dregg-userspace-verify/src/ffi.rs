@@ -25,7 +25,9 @@
 //!                     "prior_state": null },
 //!     "provenance": { "cell": "<hex32>", "entry_base": 4,
 //!                     "claims": ["<hex32>", ...],
-//!                     "prior_committed": ["<hex32>", ...] }
+//!                     "prior_committed": ["<hex32>", ...] },
+//!     "exposure":   { "cell": "<hex32>", "reserve_slot": 6,
+//!                     "prior_reserve": null }
 //!   }
 //! }
 //! ```
@@ -38,11 +40,17 @@
 //!   "ok": true,
 //!   "pass": true,
 //!   "assurance": { "conservation": "Pass", "no_amplification": "Pass",
-//!                  "wellformed": "Pass", "ring_balance": "Pass" },
+//!                  "wellformed": "Pass", "ring_balance": "Pass",
+//!                  "exposure": "Pass" },
 //!   "app_findings": [ { "guarantee": "...", "locus": {...}, "message": "..." } ],
 //!   "error": null
 //! }
 //! ```
+//!
+//! The `exposure` sub-request populates `assurance.exposure` (the `≤` ceiling
+//! `Σ provisional-exposure ≤ reserve`); when it is omitted that field is `Pass`
+//! (vacuously — no reserve to exceed), exactly as `ring_balance` is without
+//! `treat_as_ring`.
 //!
 //! On a malformed request (bad UTF-8, bad JSON, an `app.*.cell` that is not
 //! 32-byte hex) the response is `{ "ok": false, "pass": false, "error":
@@ -86,6 +94,8 @@ struct AppRequest {
     bounty: Option<BountyReq>,
     #[serde(default)]
     provenance: Option<ProvenanceReq>,
+    #[serde(default)]
+    exposure: Option<ExposureReq>,
 }
 
 #[derive(serde::Deserialize)]
@@ -115,6 +125,14 @@ struct ProvenanceReq {
     claims: Vec<String>,
     #[serde(default)]
     prior_committed: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ExposureReq {
+    cell: String,
+    reserve_slot: usize,
+    #[serde(default)]
+    prior_reserve: Option<u64>,
 }
 
 /// The response envelope the binding receives.
@@ -168,7 +186,7 @@ pub(crate) fn analyze_json(input: &str) -> String {
         }
     };
 
-    let assurance = crate::analyze(&req.forest, req.treat_as_ring);
+    let mut assurance = crate::analyze(&req.forest, req.treat_as_ring);
     let mut app_findings = Vec::new();
 
     if let Some(appreq) = req.app {
@@ -244,6 +262,21 @@ pub(crate) fn analyze_json(input: &str) -> String {
                     .iter()
                     .cloned(),
             );
+        }
+        if let Some(ex) = appreq.exposure {
+            let cell = match parse_cell(&ex.cell) {
+                Ok(c) => c,
+                Err(e) => return to_json(&Response::err(format!("app.exposure.cell: {e}"))),
+            };
+            let schema = app::ExposureSchema {
+                cell,
+                reserve_slot: ex.reserve_slot,
+            };
+            // The exposure ceiling is surfaced as a first-class Assurance verdict
+            // (the `≤` twin of conservation), not folded into `app_findings` — so
+            // the light-client Response carries it under `assurance.exposure` and
+            // `assurance.pass()` accounts for it below.
+            assurance.exposure = app::check_exposure_bound(&req.forest, &schema, ex.prior_reserve);
         }
     }
 

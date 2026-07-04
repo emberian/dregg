@@ -514,3 +514,171 @@ fn boundary_report_lists_both_halves() {
     assert!(r.contains("DYNAMIC"));
     assert!(r.contains("HOLDING"));
 }
+
+// ─── app: exposure bound (Σ provisional-exposure ≤ reserve) ──────────────────
+
+/// Encode a small `u64` as the `field_from_u64` field element `decode_u64_field`
+/// reads back (big-endian in the trailing 8 bytes, leading 24 bytes zero).
+fn field_u64(v: u64) -> [u8; 32] {
+    let mut f = [0u8; 32];
+    f[24..32].copy_from_slice(&v.to_be_bytes());
+    f
+}
+
+#[test]
+fn exposure_within_reserve_passes() {
+    // Mint 100 to cell(2), Burn 40 back: net provisional exposure 60.
+    // Reserve slot 6 on cell(1) written = 70 → 60 ≤ 70 passes (exercises the
+    // Mint RISE + Burn FALL fold and an in-forest reserve write).
+    let f = forest_of(vec![CallTree::new(action(
+        cell(1),
+        vec![
+            Effect::SetField {
+                cell: cell(1),
+                index: 6,
+                value: field_u64(70),
+            },
+            Effect::Mint {
+                target: cell(2),
+                slot: 0,
+                amount: 100,
+            },
+            Effect::Burn {
+                target: cell(2),
+                slot: 0,
+                amount: 40,
+            },
+        ],
+    ))]);
+    let schema = app::ExposureSchema::new(cell(1), 6);
+    assert!(app::check_exposure_bound(&f, &schema, None).is_pass());
+}
+
+#[test]
+fn exposure_over_reserve_fails_with_locus() {
+    // Mint 150 against a reserve of 100 → exposure 150 > 100: a Finding.
+    let f = forest_of(vec![CallTree::new(action(
+        cell(1),
+        vec![
+            Effect::SetField {
+                cell: cell(1),
+                index: 6,
+                value: field_u64(100),
+            },
+            Effect::Mint {
+                target: cell(2),
+                slot: 0,
+                amount: 150,
+            },
+        ],
+    ))]);
+    let schema = app::ExposureSchema::new(cell(1), 6);
+    let v = app::check_exposure_bound(&f, &schema, None);
+    assert!(!v.is_pass());
+    let finding = &v.findings()[0];
+    assert_eq!(finding.guarantee, "exposure (reserve bound)");
+    assert!(finding.message.contains("exceeds the reserve"));
+    assert!(
+        finding
+            .locus
+            .asset
+            .as_deref()
+            .is_some_and(|a| a.starts_with("reserve:"))
+    );
+}
+
+#[test]
+fn exposure_uses_prior_reserve_when_forest_omits_it() {
+    // The forest mints 50 but does NOT write the reserve slot: the ceiling comes
+    // from `prior_reserve` (the earlier funding turn). 50 ≤ 100 passes; 50 > 40
+    // fails — the ≤ boundary honored from the prior-committed reserve.
+    let f = forest_of(vec![CallTree::new(action(
+        cell(1),
+        vec![Effect::Mint {
+            target: cell(2),
+            slot: 0,
+            amount: 50,
+        }],
+    ))]);
+    let schema = app::ExposureSchema::new(cell(1), 6);
+    assert!(app::check_exposure_bound(&f, &schema, Some(100)).is_pass());
+    assert!(!app::check_exposure_bound(&f, &schema, Some(40)).is_pass());
+}
+
+#[test]
+fn exposure_unresolved_reserve_is_reported() {
+    // Mint present, reserve neither written in-forest nor supplied: report the
+    // unresolved reserve rather than passing (or failing) vacuously.
+    let f = forest_of(vec![CallTree::new(action(
+        cell(1),
+        vec![Effect::Mint {
+            target: cell(2),
+            slot: 0,
+            amount: 50,
+        }],
+    ))]);
+    let schema = app::ExposureSchema::new(cell(1), 6);
+    let v = app::check_exposure_bound(&f, &schema, None);
+    assert!(!v.is_pass());
+    assert!(
+        v.findings()[0]
+            .message
+            .contains("cannot check the exposure bound")
+    );
+}
+
+#[test]
+fn analyze_defaults_exposure_to_pass_and_roundtrips() {
+    // `analyze` cannot infer a reserve schema, so it leaves exposure Pass
+    // (vacuous, like ring_balance) — and the field round-trips through serde.
+    let f = forest_of(vec![CallTree::new(action(
+        cell(1),
+        vec![Effect::Transfer {
+            from: cell(1),
+            to: cell(2),
+            amount: 7,
+        }],
+    ))]);
+    let a = analyze(&f, false);
+    assert!(a.exposure.is_pass());
+    assert!(a.pass());
+    let j = serde_json::to_string(&a).unwrap();
+    assert!(j.contains("exposure"));
+    let back: Assurance = serde_json::from_str(&j).unwrap();
+    assert_eq!(a, back);
+}
+
+#[test]
+fn ffi_exposure_subrequest_surfaces_verdict() {
+    // The FFI `exposure` sub-request runs check_exposure_bound and folds the
+    // verdict into `assurance.exposure`, flipping the roll-up `pass`.
+    let f = forest_of(vec![CallTree::new(action(
+        cell(1),
+        vec![
+            Effect::SetField {
+                cell: cell(1),
+                index: 6,
+                value: field_u64(100),
+            },
+            Effect::Mint {
+                target: cell(2),
+                slot: 0,
+                amount: 150,
+            },
+        ],
+    ))]);
+    let forest_json = serde_json::to_string(&f).unwrap();
+    let mut cell_hex = String::new();
+    for b in cell(1).0 {
+        cell_hex.push_str(&format!("{b:02x}"));
+    }
+    let req = format!(
+        r#"{{"forest":{forest_json},"app":{{"exposure":{{"cell":"{cell_hex}","reserve_slot":6}}}}}}"#
+    );
+    let resp = crate::ffi::analyze_json(&req);
+    let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["pass"], false);
+    // exposure is a Fail object (over-reserve), not the "Pass" string.
+    assert!(v["assurance"]["exposure"].get("Fail").is_some());
+}

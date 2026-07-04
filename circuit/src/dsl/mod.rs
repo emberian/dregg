@@ -19,6 +19,7 @@ pub mod accumulator;
 pub mod cap_membership;
 pub mod circuit;
 pub mod committed_threshold;
+pub mod deco_payment;
 pub mod derivation;
 pub mod dfa_routing;
 // `dsl_p3_air` routes DSL circuits through the audited Plonky3 batch-STARK

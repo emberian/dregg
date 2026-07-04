@@ -652,6 +652,127 @@ pub trait ToolKit {
 }
 
 // ---------------------------------------------------------------------------
+// The R2 kernel-turn seam — actions become kernel turns, receipts become views.
+// ---------------------------------------------------------------------------
+
+/// **The R2 kernel-turn seam** (THE-GRAIN.md face #1, rung R2: *"actions become
+/// kernel turns, receipts become views"*).
+///
+/// By default a [`drive_state`](AgentCloud) run is a PARALLEL universe: a local
+/// meter, a `BTreeMap` heap, an ed25519 receipt chain — **no executor, no
+/// `dregg_cell::Cell`, no kernel turn**. A `GrainTurnMinter`, when supplied, welds
+/// that universe onto the real one: every ADMITTED action is turned into a GENUINE
+/// committed executor turn on a "grain turn-cell", and the minter hands back that
+/// turn's `turn_hash`, which the run loop SEALS into the action's [`AgentReceipt`]
+/// as its [`turn_receipt_hash`](crate::receipt::ReceiptAttestation::turn_receipt_hash)
+/// — so the receipt becomes a typed VIEW over a real kernel transition, not a
+/// free-standing log line.
+///
+/// The minter is ALSO an admission surface. [`mint_turn`](GrainTurnMinter::mint_turn)
+/// returns `Err` when the EXECUTOR refuses the turn — e.g. its own `calls_made`
+/// `FieldLte`/`Monotonic` caveat bites, so the meter is enforced HOST-SIDE even
+/// against a buggy or bypassing session loop. A refused mint admits NOTHING: no
+/// budget draw, no effect, no receipt (fail-closed, exactly parallel to the
+/// cap-gate). That is the R2 strength — the executor's OWN caveat, not merely the
+/// session-local meter, bounds the run. Its honest residual (the run still trusts
+/// the executor host that committed the turn) is what R3's whole-history STARK
+/// removes; R2 makes the meter a kernel caveat, R3 makes it a FRI-floor theorem.
+///
+/// The heavyweight REAL implementation — driving `dregg_sdk::ToolGateway::invoke`
+/// on a real `dregg_cell::Cell` — lives OUT of this std-only crate (in the
+/// `grain-turn` crate, which depends on the kernel), so this crate stays
+/// substrate-only. [`SyntheticMinter`] is a dep-free deterministic minter for
+/// tests, demos, and the grain-verify R2 tooth.
+pub trait GrainTurnMinter {
+    /// Mint a genuine kernel turn for ONE admitted action and return the committed
+    /// turn receipt hash (`turn_hash`) the [`AgentReceipt`] becomes a view of — or
+    /// `Err(reason)` if the executor REFUSED the turn (its host-side caveat bit; the
+    /// action is then not admitted). `label` names the action; `cost` is the budget
+    /// it draws; `consumed_after` is the session meter's projected post-draw total;
+    /// `cell_root` is the grain heap root at the point of the call.
+    fn mint_turn(
+        &mut self,
+        label: &str,
+        cost: i64,
+        consumed_after: i64,
+        cell_root: [u8; 32],
+    ) -> Result<[u8; 32], String>;
+}
+
+/// A dep-free, DETERMINISTIC [`GrainTurnMinter`] for tests, demos, and the
+/// grain-verify R2 tooth.
+///
+/// It mints a synthetic turn hash `BLAKE3(domain ‖ seq ‖ label ‖ cost ‖ consumed ‖
+/// cell_root)` per call and RECORDS it, so a caller can supply the recorded hashes
+/// as the "committed-turn manifest" the R2 tooth checks a report's receipts
+/// against. It does **not** run a real executor — that is `grain-turn`'s
+/// `ToolGatewayMinter` — so it only exercises the SEAM (that every admitted receipt
+/// carries a bound `turn_receipt_hash`), never the genuine kernel transition.
+///
+/// [`refusing_after`](SyntheticMinter::refusing_after) models the executor's
+/// host-side refusal (its `calls_made` rate caveat biting after `n` admitted calls)
+/// so a both-polarity test can drive the R2 refusal path without the kernel.
+#[derive(Clone, Debug, Default)]
+pub struct SyntheticMinter {
+    seq: u64,
+    minted: Vec<[u8; 32]>,
+    refuse_after: Option<u64>,
+}
+
+impl SyntheticMinter {
+    /// A minter that admits (mints) every action.
+    pub fn new() -> SyntheticMinter {
+        SyntheticMinter::default()
+    }
+
+    /// A minter that REFUSES (executor-style) once `n` turns have been minted —
+    /// models the `calls_made` rate caveat biting host-side after `n` admitted
+    /// calls, for the both-polarity R2 refusal test.
+    pub fn refusing_after(n: u64) -> SyntheticMinter {
+        SyntheticMinter {
+            seq: 0,
+            minted: Vec::new(),
+            refuse_after: Some(n),
+        }
+    }
+
+    /// The turn hashes this minter has committed, in order — the "committed-turn
+    /// manifest" the grain-verify R2 tooth checks a report's receipts against.
+    pub fn committed_turns(&self) -> &[[u8; 32]] {
+        &self.minted
+    }
+}
+
+impl GrainTurnMinter for SyntheticMinter {
+    fn mint_turn(
+        &mut self,
+        label: &str,
+        cost: i64,
+        consumed_after: i64,
+        cell_root: [u8; 32],
+    ) -> Result<[u8; 32], String> {
+        if let Some(n) = self.refuse_after {
+            if self.minted.len() as u64 >= n {
+                return Err(format!(
+                    "executor refused the turn (synthetic calls_made caveat: {} of {n} used)",
+                    self.minted.len()
+                ));
+            }
+        }
+        let mut h = BodyHasher::new(b"dregg-agent-synthetic-grain-turn-v1");
+        h.u64(self.seq)
+            .field(label.as_bytes())
+            .u64(cost as u64)
+            .u64(consumed_after as u64)
+            .field(&cell_root);
+        let hash = h.finalize();
+        self.seq += 1;
+        self.minted.push(hash);
+        Ok(hash)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The per-action outcome + the receipt body.
 // ---------------------------------------------------------------------------
 
@@ -671,6 +792,15 @@ pub enum ActionOutcome {
     BudgetRefused {
         /// The headroom available when the draw was refused.
         headroom: i64,
+    },
+    /// **R2** — refused by the EXECUTOR when a [`GrainTurnMinter`] is present: the
+    /// kernel turn for this action did not commit (the executor's own host-side
+    /// caveat bit — e.g. the `calls_made` `FieldLte`/`Monotonic` rate ceiling). No
+    /// draw, no effect, no receipt (fail-closed, exactly like the cap-gate). This
+    /// is the meter enforced HOST-SIDE, not merely session-local.
+    TurnRefused {
+        /// Why the executor refused the turn (the leg of its caveat that bit).
+        reason: String,
     },
 }
 
@@ -799,6 +929,11 @@ pub struct AgentRunReport {
     pub cap_refused: u64,
     /// Actions refused by the meter (over the ceiling — runaway contained).
     pub budget_refused: u64,
+    /// **R2** — actions refused by the EXECUTOR host-side (the grain turn-cell's
+    /// own `calls_made` caveat bit; only nonzero when a [`GrainTurnMinter`] drives
+    /// the run). `0` for the default parallel-universe path.
+    #[serde(default)]
+    pub turn_refused: u64,
     /// The receipt chain of every admitted action (re-witnessable via [`verify_chain`]).
     pub receipts: Vec<AgentReceipt>,
     /// The full ordered run log (every decided action + its outcome).
@@ -1208,6 +1343,18 @@ impl AgentCloud {
         self.root.public()
     }
 
+    /// A receipt-chain secret derived from this cloud's (secret) root key, domain
+    /// separated. Because the root secret is never published (only its public half
+    /// rides the credential), the derived receipt seed is unpredictable to a
+    /// report-holder — yet reproducible for a seeded cloud (`from_seed`). Used for a
+    /// one-shot [`run`](AgentCloud::run); a persistent session persists its own
+    /// random secret instead (see [`crate::session::Session`]).
+    fn derived_receipt_secret(&self) -> [u8; 32] {
+        let mut h = BodyHasher::new(b"dregg-agent-receipt-chain-seed-v2");
+        h.field(&self.root.secret_bytes());
+        h.finalize()
+    }
+
     /// **Deploy** an agent: open its replenishing-budget cell and mint its cap
     /// bundle (a `dga1_` credential granting exactly the spec's services + cells).
     pub fn deploy(&self, spec: &AgentSpec) -> Result<AgentHandle, AgentError> {
@@ -1318,9 +1465,12 @@ impl AgentCloud {
         toolkit: Option<&dyn ToolKit>,
     ) -> AgentRunReport {
         // A one-shot run is a session of exactly one goal: a fresh persistent
-        // state, driven once, snapshotted into a report.
-        let mut state = SessionState::new(&handle.id);
-        self.drive_state(handle, brain, toolkit, &mut state);
+        // state, driven once, snapshotted into a report. Its receipt-chain secret is
+        // derived from THIS cloud's (secret) root key — reproducible under
+        // `AgentCloud::from_seed`, unpredictable under `AgentCloud::new`, and never a
+        // public function of the agent id.
+        let mut state = SessionState::from_secret(self.derived_receipt_secret());
+        self.drive_state(handle, brain, toolkit, None, &mut state);
         self.report_snapshot(handle, &state)
     }
 
@@ -1340,7 +1490,28 @@ impl AgentCloud {
         brain: &mut dyn AgentBrain,
         toolkit: &dyn ToolKit,
     ) -> AgentRunReport {
-        self.drive_state(handle, brain, Some(toolkit), state);
+        self.run_goal_minted(handle, state, brain, toolkit, None)
+    }
+
+    /// **[`run_goal`](AgentCloud::run_goal) welded to a genuine kernel turn per
+    /// admitted action (R2).** Identical on every authority · bound · receipt rail,
+    /// but when a [`GrainTurnMinter`] is supplied each admitted action first becomes
+    /// a REAL committed executor turn on the grain turn-cell, and that turn's
+    /// `turn_hash` is sealed into the action's [`AgentReceipt`] as its
+    /// [`turn_receipt_hash`](crate::receipt::ReceiptAttestation::turn_receipt_hash)
+    /// — the receipt becomes a VIEW over the kernel transition. A turn the executor
+    /// REFUSES (its host-side `calls_made` caveat) admits nothing: the action is
+    /// [`TurnRefused`](ActionOutcome::TurnRefused), drawing no budget and sealing no
+    /// receipt. Passing `None` is exactly [`run_goal`](AgentCloud::run_goal).
+    pub fn run_goal_minted(
+        &self,
+        handle: &AgentHandle,
+        state: &mut SessionState,
+        brain: &mut dyn AgentBrain,
+        toolkit: &dyn ToolKit,
+        minter: Option<&mut dyn GrainTurnMinter>,
+    ) -> AgentRunReport {
+        self.drive_state(handle, brain, Some(toolkit), minter, state);
         self.report_snapshot(handle, state)
     }
 
@@ -1423,6 +1594,7 @@ impl AgentCloud {
             admitted: state.admitted,
             cap_refused: state.cap_refused,
             budget_refused: state.budget_refused,
+            turn_refused: state.turn_refused,
             receipts: state.receipts.clone(),
             log: state.log.clone(),
             signer: state.chain.signer_public(),
@@ -1438,6 +1610,7 @@ impl AgentCloud {
         handle: &AgentHandle,
         brain: &mut dyn AgentBrain,
         toolkit: Option<&dyn ToolKit>,
+        mut minter: Option<&mut dyn GrainTurnMinter>,
         state: &mut SessionState,
     ) {
         let cred = Credential::decode(&handle.credential)
@@ -1478,13 +1651,57 @@ impl AgentCloud {
                 continue;
             }
 
-            // (2) BOUND — draw the action's cost from the budget cell. A flat
+            let draw_amount = action.draw_cost(handle.cost_per_action);
+
+            // (2) R2 — the KERNEL TURN admission. When a `GrainTurnMinter` is
+            // present, this admitted action becomes a GENUINE committed executor
+            // turn on the grain turn-cell; its `turn_hash` is sealed into the
+            // receipt below, so the receipt is a VIEW over a real kernel transition.
+            // The minter is ALSO an admission surface: an `Err` is the EXECUTOR
+            // refusing the turn host-side (its own `calls_made` caveat) — the action
+            // admits NOTHING (no draw, no effect, no receipt), exactly like the
+            // cap-gate. `projected_consumed` is the meter's post-draw total (the
+            // value the receipt's `consumed_after` will carry), bound into the turn.
+            // Placed BEFORE the draw so a refused turn leaves the meter untouched and
+            // the chain/meter stay consistent (`verify_agent_run` holds).
+            let turn_hash: Option<[u8; 32]> = match minter.as_deref_mut() {
+                None => None,
+                Some(m) => {
+                    let projected_consumed = self.meter.drawn_total(&handle.id) + draw_amount;
+                    match m.mint_turn(
+                        &label,
+                        draw_amount,
+                        projected_consumed,
+                        cell_root(&state.cells),
+                    ) {
+                        Ok(h) => Some(h),
+                        Err(reason) => {
+                            state.turn_refused += 1;
+                            brain.observe(&ActionObservation {
+                                action: label.clone(),
+                                admitted: false,
+                                refusal: Some(format!(
+                                    "executor refused the kernel turn: {reason}"
+                                )),
+                                tool_ok: None,
+                                tool_summary: None,
+                            });
+                            state.log.push(ActionRecord {
+                                action: label,
+                                outcome: ActionOutcome::TurnRefused { reason },
+                            });
+                            continue;
+                        }
+                    }
+                }
+            };
+
+            // (3) BOUND — draw the action's cost from the budget cell. A flat
             // action draws `cost_per_action`; a `Spend` draws its variable
             // `amount_cents` (the priced spend) so the budget cell IS the dollar
             // ceiling. An over-ceiling draw refuses the action in-band — BEFORE the
             // priced tool runs, so no money moves; the draw is exactly-once per
             // (agent, seq).
-            let draw_amount = action.draw_cost(handle.cost_per_action);
             let key = MeterKey::new(&handle.id, state.seq as i64);
             match self.meter.draw(&key, draw_amount, handle.block) {
                 Ok(_) => {}
@@ -1522,7 +1739,7 @@ impl AgentCloud {
                 }
             }
 
-            // (3) RUN the admitted effect against the agent's own cell heap. An
+            // (4) RUN the admitted effect against the agent's own cell heap. An
             // `invoke` is dispatched to the live toolkit when one is present (run
             // the tests / verify the deploy / check health); its verdict is
             // captured and bound into the receipt below. Without a toolkit (the
@@ -1569,7 +1786,7 @@ impl AgentCloud {
                 }
             }
 
-            // (4) RECEIPT — seal the admitted action (and any tool verdict) into
+            // (5) RECEIPT — seal the admitted action (and any tool verdict) into
             // the PERSISTENT chain (it keeps linking across goals in a session).
             let consumed = self.meter.drawn_total(&handle.id);
             let headroom = self.meter.headroom(&handle.id, handle.block);
@@ -1588,7 +1805,11 @@ impl AgentCloud {
                 witnessed: tool_witnessed,
                 attestation: None,
             };
-            receipt.attestation = Some(state.chain.seal(receipt.body_hash(), state.seq, None));
+            // Seal with the R2 kernel-turn link: `Some(turn_hash)` when a minter
+            // committed the action's genuine executor turn (the receipt is a VIEW of
+            // it — a tampered link breaks the signature, see `receipt.rs`), `None`
+            // on the default parallel-universe path.
+            receipt.attestation = Some(state.chain.seal(receipt.body_hash(), state.seq, turn_hash));
             state.receipts.push(receipt);
             brain.observe(&ActionObservation {
                 action: label.clone(),
@@ -1630,23 +1851,45 @@ pub struct SessionState {
     admitted: u64,
     cap_refused: u64,
     budget_refused: u64,
+    turn_refused: u64,
     seq: u64,
 }
 
 impl SessionState {
-    /// Fresh persistent state for `agent_id` (the receipt chain seeded from the id,
-    /// so the chain identity is bound to the agent and a run is reproducible).
-    pub fn new(agent_id: &str) -> SessionState {
+    /// Fresh persistent state seeded from an explicit 32-byte **receipt-chain
+    /// secret**. That secret IS the ed25519 signing seed for the whole chain
+    /// ([`ReceiptSigner::from_seed`](crate::receipt::ReceiptSigner::from_seed)), so
+    /// whoever holds it can sign the chain. It MUST therefore be a per-session
+    /// RANDOM secret — and, for a session that must survive detach/re-attach, one
+    /// that is PERSISTED so a resumed session recovers the SAME key (see
+    /// [`crate::session::Session`] / [`crate::session_store::ConsumedStore`]).
+    ///
+    /// It must NEVER be a public function of the agent id: the agent id is printed
+    /// in cleartext in every report (`report.agent`, `receipt.agent`), so a hashed
+    /// id would let ANY holder of a report re-derive the signing key and forge a
+    /// fully self-consistent chain — exactly the third-party-forgery hole this
+    /// closes. The report still exposes only the ed25519 PUBLIC key
+    /// ([`report.signer`](AgentRunReport::signer)); the secret stays host-side.
+    pub fn from_secret(receipt_secret: [u8; 32]) -> SessionState {
         SessionState {
-            chain: ReceiptChain::from_seed(receipt_seed(agent_id)),
+            chain: ReceiptChain::from_seed(receipt_secret),
             cells: BTreeMap::new(),
             receipts: Vec::new(),
             log: Vec::new(),
             admitted: 0,
             cap_refused: 0,
             budget_refused: 0,
+            turn_refused: 0,
             seq: 0,
         }
+    }
+
+    /// Fresh persistent state with a freshly-generated RANDOM receipt-chain secret
+    /// (OS CSPRNG). For an EPHEMERAL run whose chain need not survive re-attach; a
+    /// persistent [`Session`](crate::session::Session) threads a persisted secret
+    /// through [`from_secret`](SessionState::from_secret) instead.
+    pub fn new_random() -> SessionState {
+        SessionState::from_secret(fresh_receipt_secret())
     }
 
     /// The cumulative receipt chain so far (every admitted action across every
@@ -1672,6 +1915,11 @@ impl SessionState {
     pub fn budget_refused(&self) -> u64 {
         self.budget_refused
     }
+    /// **R2** — executor-refused count across the session (the grain turn-cell's
+    /// host-side `calls_made` caveat bit; `0` unless a [`GrainTurnMinter`] drove it).
+    pub fn turn_refused(&self) -> u64 {
+        self.turn_refused
+    }
 }
 
 /// The reserved meter period for the carried-over prior consumption restored at
@@ -1679,12 +1927,15 @@ impl SessionState {
 /// collide with an in-session per-action draw key (`MeterKey` period `= seq >= 0`).
 const CARRYOVER_PERIOD: i64 = -1;
 
-/// Derive a deterministic 32-byte receipt-chain seed from an agent id, so a run is
-/// reproducible and the chain identity is bound to the agent.
-fn receipt_seed(agent_id: &str) -> [u8; 32] {
-    let mut h = BodyHasher::new(b"dregg-agent-receipt-chain-seed-v1");
-    h.field(agent_id.as_bytes());
-    h.finalize()
+/// Generate a fresh, unpredictable 32-byte receipt-chain secret from OS randomness.
+/// This is the ed25519 signing seed for a chain, so it must be a real CSPRNG draw —
+/// never a function of any public value (the retired `receipt_seed(agent_id)` hashed
+/// the cleartext agent id, which let any report-holder re-derive the key and forge
+/// the chain; see [`SessionState::from_secret`]).
+fn fresh_receipt_secret() -> [u8; 32] {
+    let mut secret = [0u8; 32];
+    getrandom::fill(&mut secret).expect("operating-system randomness is available");
+    secret
 }
 
 /// The committed cell root: a domain-separated hash over the heap's `(key, value)`
@@ -1994,6 +2245,121 @@ mod tests {
             "un-drawn headroom is the could-have bound"
         );
         assert_eq!(report.consumed + report.headroom, report.budget);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // R2 — the kernel-turn seam: admitted actions become VIEWS over kernel turns.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// A trivial toolkit (every invoke passes) — the minted-run tests only exercise
+    /// the R2 seam, not a live tool.
+    struct NoKit;
+    impl ToolKit for NoKit {
+        fn invoke(
+            &self,
+            _service: &str,
+            _amount_cents: Option<i64>,
+            _cells: &BTreeMap<String, String>,
+        ) -> ToolOutcome {
+            ToolOutcome::pass("ok")
+        }
+    }
+
+    // ── every admitted receipt carries the committed turn's hash, bound ───────
+    #[test]
+    fn r2_admitted_receipts_are_views_over_minted_kernel_turns() {
+        let cloud = AgentCloud::from_seed([40u8; 32]);
+        let handle = cloud.deploy(&demo_spec("agent:r2", 10)).unwrap();
+        let mut state = SessionState::from_secret([0x9au8; 32]);
+        let mut minter = SyntheticMinter::new();
+        let plan = vec![
+            AgentAction::Invoke {
+                service: "search".into(),
+            },
+            AgentAction::CellWrite {
+                path: "/scratch".into(),
+                value: "note".into(),
+            },
+            AgentAction::Invoke {
+                service: "fetch".into(),
+            },
+        ];
+        let report = cloud.run_goal_minted(
+            &handle,
+            &mut state,
+            &mut PlannedBrain::new(plan),
+            &NoKit,
+            Some(&mut minter),
+        );
+
+        assert_eq!(report.admitted, 3);
+        assert_eq!(report.turn_refused, 0);
+        // Every admitted receipt is a VIEW: its turn_receipt_hash is Some AND equals
+        // the turn the minter committed for that action, in order.
+        let minted = minter.committed_turns();
+        assert_eq!(minted.len(), 3, "one committed turn per admitted action");
+        for (r, &h) in report.receipts.iter().zip(minted) {
+            assert_eq!(
+                r.attestation.as_ref().unwrap().turn_receipt_hash,
+                Some(h),
+                "the receipt links to the genuine committed turn"
+            );
+        }
+        // The whole run still re-witnesses (the turn link rode the signed body).
+        verify_agent_run(&report).expect("a minted run re-witnesses");
+
+        // A TAMPERED turn link breaks the signature (the receipt IS a view — the
+        // link is bound into receipt_hash; see receipt.rs `turn_receipt_view_is_bound`).
+        let mut forged = report.clone();
+        forged.receipts[0]
+            .attestation
+            .as_mut()
+            .unwrap()
+            .turn_receipt_hash = Some([0u8; 32]);
+        assert!(matches!(
+            verify_agent_run(&forged),
+            Err(AgentVerifyError::Chain(ChainError::BadSignature { .. }))
+        ));
+    }
+
+    // ── the executor's host-side caveat REFUSES over-rate; refused admits nothing ─
+    #[test]
+    fn r2_an_executor_refusal_admits_nothing_and_the_run_stays_consistent() {
+        let cloud = AgentCloud::from_seed([41u8; 32]);
+        let handle = cloud.deploy(&demo_spec("agent:r2-refuse", 100)).unwrap();
+        let mut state = SessionState::from_secret([0x9bu8; 32]);
+        // The executor (synthetic calls_made caveat) admits only 2 turns, even
+        // though the session budget (100) would allow all 5 — the meter is enforced
+        // HOST-SIDE, not merely session-local.
+        let mut minter = SyntheticMinter::refusing_after(2);
+        let plan: Vec<AgentAction> = (0..5)
+            .map(|_| AgentAction::Invoke {
+                service: "search".into(),
+            })
+            .collect();
+        let report = cloud.run_goal_minted(
+            &handle,
+            &mut state,
+            &mut PlannedBrain::new(plan),
+            &NoKit,
+            Some(&mut minter),
+        );
+
+        assert_eq!(report.admitted, 2, "only the 2 executor-admitted turns ran");
+        assert_eq!(report.turn_refused, 3, "the executor refused the other 3");
+        assert_eq!(report.receipts.len(), 2, "a refused turn seals no receipt");
+        assert_eq!(report.consumed, 2, "a refused turn draws no budget");
+        // Refused-by-executor actions left the meter and chain consistent.
+        verify_agent_run(&report).expect("the run re-witnesses after host-side refusals");
+        // Both admitted receipts are genuine views.
+        assert!(
+            report.receipts.iter().all(|r| r
+                .attestation
+                .as_ref()
+                .unwrap()
+                .turn_receipt_hash
+                .is_some())
+        );
     }
 
     /// A forged report claiming more consumed than the chain attests is caught.

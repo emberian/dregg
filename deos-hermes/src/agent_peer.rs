@@ -104,6 +104,16 @@ impl<B: LlmBrain> HermesAgentPeer<B> {
         &self.registered_mcp_servers
     }
 
+    /// Whether the brain finished the turn AND its final `PromptResponse` has been
+    /// handed out over [`AcpPeer::recv`] — i.e. there is nothing more this peer will
+    /// ever emit for this prompt. A socket-serve loop
+    /// ([`crate::confined::serve_acp_peer_over_endpoint`]) uses this to return the
+    /// instant a confined brain's turn completes, instead of blocking for an EOF
+    /// that the driving client (still holding its end) will not send.
+    pub fn turn_complete(&self) -> bool {
+        matches!(self.phase, Phase::Done) && self.prompt_response_id.is_none()
+    }
+
     fn alloc_id(&mut self) -> i64 {
         let id = self.next_id;
         self.next_id += 1;

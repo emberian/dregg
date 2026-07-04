@@ -36,7 +36,7 @@ use dregg_circuit::descriptor_ir2::{
     MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
-    CAP_OPEN_BASE, CAP_OPEN_WIDTH, CapOpenWitness, FACET_MASK_HI, RotatedBlockWitness,
+    CAP_OPEN_BASE, CAP_OPEN_WIDTH, CapOpenWitness, DFA_RC_LEN, FACET_MASK_HI, RotatedBlockWitness,
     SIGNATURE_AUTH_TAG, WRITE_MASK_LO, generate_rotated_effect_vm_trace, transfer_caveat_manifest,
     widen_to_cap_open,
 };
@@ -133,7 +133,7 @@ fn build_exercise_base() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     );
 
     let caveat = transfer_caveat_manifest();
-    let (trace, pis) = generate_rotated_effect_vm_trace(
+    let (trace, mut pis) = generate_rotated_effect_vm_trace(
         &st,
         &effects,
         &bridge(&before_w),
@@ -141,6 +141,11 @@ fn build_exercise_base() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
         &caveat,
     )
     .expect("rotated ExerciseViaCapability base trace must generate");
+    // The cap-open faces were never rc-wrapped in the Lean emit (the committed
+    // `exerciseCapOpenVmDescriptor2R24` carries the UNWRAPPED 46-PI base); the v13 generic base now
+    // appends the 4 dsl rc pins, so lift the rc tail off — exactly as the SDK cap-open leg builder /
+    // the sibling `cap_open_self_verify` base does.
+    pis.truncate(pis.len() - DFA_RC_LEN);
     (trace, pis)
 }
 

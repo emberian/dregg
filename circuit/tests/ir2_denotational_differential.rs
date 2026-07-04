@@ -887,9 +887,11 @@ fn real_range_desc(bits: usize) -> EffectVmDescriptor2 {
 /// declared tuple is `[2, a, b, 0×(CHIP_RATE-2), out0, lane1..lane7]`. The membership rides the
 /// poseidon2 chip bus; a forged digest/leaf has no chip row, so the LogUp is unsatisfiable.
 fn real_chip_desc() -> EffectVmDescriptor2 {
-    // CHIP_RATE = 11, CHIP_OUT_LANES = 8. tuple = arity tag, a, b, 9 zeros, out0, 7 lanes.
-    let chip_rate = 11usize;
-    let out_lanes = 8usize;
+    // The deployed chip tuple = [arity tag, in0..in(CHIP_RATE-1), out0, lane1..lane(CHIP_OUT_LANES-1)].
+    // Reference the SRC constants so the hand-built bus descriptor tracks `fill_chip_lanes`'s indexing
+    // (CHIP_RATE grew 11→16 with the node8 primitive; the lane columns ride `tuple[CHIP_RATE + 2 + j]`).
+    let chip_rate = descriptor_ir2::CHIP_RATE;
+    let out_lanes = descriptor_ir2::CHIP_OUT_LANES;
     let mut tuple = vec![LeanExpr::Const(2), LeanExpr::Var(0), LeanExpr::Var(1)];
     for _ in 0..(chip_rate - 2) {
         tuple.push(LeanExpr::Const(0));
@@ -959,10 +961,13 @@ fn real_mem_desc() -> EffectVmDescriptor2 {
 /// to the canonical `const 0` (the deployed checker `check_descriptor2` REQUIRES it — the
 /// non-membership read has no value), exactly as the Lean `ma_cs`/`absent_desc` shape.
 fn real_map_desc(op: RealMapKind) -> EffectVmDescriptor2 {
+    // The value rides col 9 (`map_bus_row` writes `r[9] = value`) — BETWEEN key@8 and new_root@10..17,
+    // clear of the root lanes 0..7. (Was `Var(2)`, which aliases root lane 2, so the genuine value the
+    // row carries at col 9 never fed the membership arm — the ACCEPT cases spuriously rejected.)
     let value = if op == RealMapKind::Absent {
         LeanExpr::Const(0)
     } else {
-        LeanExpr::Var(2)
+        LeanExpr::Var(9)
     };
     EffectVmDescriptor2 {
         name: "ir2-bus-map".to_string(),

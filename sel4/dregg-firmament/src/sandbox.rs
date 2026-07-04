@@ -70,6 +70,20 @@ pub struct Confinement {
     /// macOS: each becomes an SBPL `(allow file-read* (subpath "<p>"))`.
     /// Linux: each becomes a Landlock read rule. Empty for Endpoint-only Phase 0.
     pub read_paths: Vec<String>,
+    /// Outbound network endpoints (`"host:port"`) a NET-cap granted the child — the
+    /// STRUCTURED EGRESS SOCKET door (e.g. a jailed brain's LLM-provider call).
+    /// Deny-default: empty means NO outbound network at all (the Endpoint-only
+    /// floor). Each entry opens EXACTLY one host:port and nothing else.
+    ///
+    /// macOS: each becomes an SBPL `(allow network-outbound (remote ip
+    /// "<host>:<port>"))` — a precise, enforced allow (host must be a literal IP or
+    /// `localhost`; a hostname is emitted verbatim and only matches if the OS
+    /// resolves it, so a real hostname provider needs a pre-resolved IP or the
+    /// in-jail-DNS caveat, see `deos-hermes`). Linux: NOT yet honored — the empty
+    /// net namespace + seccomp `socket` deny make outbound impossible without a
+    /// filtering proxy, so the door stays CLOSED there (fail-closed) until that
+    /// slice; the grant is recorded but not opened.
+    pub net_out: Vec<String>,
 }
 
 impl Confinement {
@@ -79,6 +93,7 @@ impl Confinement {
         Confinement {
             endpoint_fds: vec![control_fd],
             read_paths: Vec::new(),
+            net_out: Vec::new(),
         }
     }
 
@@ -92,6 +107,15 @@ impl Confinement {
     /// past Endpoint-only.
     pub fn with_read_path(mut self, path: impl Into<String>) -> Self {
         self.read_paths.push(path.into());
+        self
+    }
+
+    /// Grant ONE outbound network endpoint (`"host:port"`) — the structured egress
+    /// SOCKET door (a net-cap → an OS network-allow rule). Deny-default: without a
+    /// grant the child has no outbound network at all; with it, EXACTLY this
+    /// host:port opens and every other remote stays denied.
+    pub fn with_net_out(mut self, endpoint: impl Into<String>) -> Self {
+        self.net_out.push(endpoint.into());
         self
     }
 }
@@ -251,7 +275,48 @@ mod macos {
             }
             p.push_str("\"))\n");
         }
+        for endpoint in &c.net_out {
+            // (allow network-outbound (remote ip "<host>:<port>")) — ONE granted
+            // outbound endpoint (the structured egress socket door). Nothing else
+            // network* is allowed, so every other remote stays denied by the
+            // (deny default). The `socket(2)` creation itself is not a `network*`
+            // op on macOS (only the connect is gated), so this rule is the whole
+            // door: the granted endpoint connects, all others EPERM.
+            //
+            // SBPL LIMITATION (honest): the `remote ip` HOST field accepts only
+            // `*` or `localhost` — a literal remote IP is REJECTED by
+            // `sandbox_init`. So:
+            //   * a LOOPBACK grant (127.0.0.1 / ::1 / localhost) → `localhost:PORT`,
+            //     precise host+port (the hermetic mock + the recommended local
+            //     egress-proxy pattern, where a trusted host-side proxy pins the
+            //     real upstream provider and the jail reaches only localhost).
+            //   * a REMOTE-HOST grant → `*:PORT`, which SBPL can only pin by PORT,
+            //     NOT host. This is a genuine degradation (any host on that port),
+            //     so the host-pinned provider door for a REMOTE endpoint needs the
+            //     local-proxy pattern above; direct-remote is port-scoped only.
+            let (host, port) = endpoint
+                .rsplit_once(':')
+                .map(|(h, p)| (h, p))
+                .unwrap_or((endpoint.as_str(), ""));
+            let sbpl_host = if is_loopback(host) { "localhost" } else { "*" };
+            p.push_str("(allow network-outbound (remote ip \"");
+            p.push_str(sbpl_host);
+            p.push(':');
+            // The port is a bare integer; escape defensively anyway.
+            for ch in port.chars() {
+                if ch == '"' || ch == '\\' {
+                    p.push('\\');
+                }
+                p.push(ch);
+            }
+            p.push_str("\"))\n");
+        }
         p
+    }
+
+    /// Whether `host` is a loopback the SBPL `localhost` token covers.
+    fn is_loopback(host: &str) -> bool {
+        matches!(host, "127.0.0.1" | "::1" | "localhost")
     }
 
     /// SELF-apply the Seatbelt profile to this (child) process.
@@ -481,6 +546,33 @@ mod tests {
         assert!(
             p.contains("(subpath \"/tmp/grant\")"),
             "granted read path must appear"
+        );
+    }
+
+    // A granted net_out endpoint becomes EXACTLY one network-outbound allow — the
+    // structured egress socket door — while the profile stays default-deny/no-exec.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_profile_opens_exactly_the_granted_net_endpoint() {
+        // No net grant → NO network allow at all (the Endpoint-only floor).
+        let sealed = macos::build_profile(&Confinement::endpoint_only(3));
+        assert!(!sealed.contains("network-outbound"), "sealed = no net door");
+        // A LOOPBACK grant → precise host+port via the SBPL `localhost` token
+        // (a literal remote IP is rejected by sandbox_init).
+        let c = Confinement::endpoint_only(3).with_net_out("127.0.0.1:8080");
+        let p = macos::build_profile(&c);
+        assert!(p.contains("(deny default)"), "still default-deny");
+        assert!(!p.contains("process-exec"), "still no exec");
+        assert!(
+            p.contains("(allow network-outbound (remote ip \"localhost:8080\"))"),
+            "loopback grant → localhost:port network-outbound allow:\n{p}"
+        );
+        // A REMOTE-host grant → port-scoped (SBPL cannot pin a remote host).
+        let c2 = Confinement::endpoint_only(3).with_net_out("api.example.com:443");
+        let p2 = macos::build_profile(&c2);
+        assert!(
+            p2.contains("(allow network-outbound (remote ip \"*:443\"))"),
+            "remote grant → port-scoped allow (SBPL host limitation):\n{p2}"
         );
     }
 }

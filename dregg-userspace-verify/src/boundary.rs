@@ -53,6 +53,15 @@ pub const STATIC_CHECKABLE: &[(&str, &str)] = &[
          No re-entry (double-claim), no rewind (re-open). Decidable over the \
          ordered writes (+ optional prior committed state).",
     ),
+    (
+        "exposure bound (app: stripe-reserve)",
+        "Σ provisional-exposure ≤ reserve — the `≤` twin of escrow's `==`. The \
+         forest's Mint / BridgeMint RAISE and Burn RETIRE an exposure counter \
+         (the `drawn` spent-provisional column check_conservation drops at its \
+         `_ => {}`), and the sum must not exceed the disclosed reserve ceiling R \
+         (the Trustline draw_within_line bound). Exact when the forest writes the \
+         reserve slot, else supply the prior-committed reserve.",
+    ),
 ];
 
 /// What is **dynamic** — needs the live executor / state / proof, and is
@@ -99,6 +108,16 @@ pub const DYNAMIC_ONLY: &[(&str, &str)] = &[
         "A bridged note's value conservation is a portable-proof property \
          across federations, not a within-forest sum — not netted by \
          check_conservation.",
+    ),
+    (
+        "exposure bound — whether the reserve is FUNDED",
+        "The `≤` check (check_exposure_bound) compares Σ provisional-exposure \
+         against the reserve CEILING it resolves from a slot (or prior_reserve). \
+         Whether that reserve is actually FUNDED — hard collateral really posted \
+         on the live cell backing the ceiling — is a live-state question, exactly \
+         as a BridgeMint's claimed value is trusted from its portable proof and \
+         not re-derived here. A within-ceiling turn can still be rejected if the \
+         reserve fund is not really there.",
     ),
     (
         "app checks — the LIVE prior-cell state",

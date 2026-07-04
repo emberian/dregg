@@ -1096,7 +1096,26 @@ mod repl {
         let mut spec = bundle.spec.clone();
         spec.asset = "USD-CENTS".into();
 
-        let mut sess = match Session::open(&account, spec) {
+        // The durable per-account store (keyed by account id under a stable state dir,
+        // $DREGG_AGENT_STATE_DIR or ~/.dregg-agent/state) holds two things that must
+        // span SSH detach/re-attach: the cumulative spend (so the ceiling is not reset
+        // by reconnecting) AND the receipt-chain secret (so a resumed session re-signs
+        // with the SAME key — the renter's pinned `(signer, tip)` keeps verifying).
+        let store = ConsumedStore::open_default();
+
+        // Recover (or first-mint + persist) the account's RANDOM receipt-chain secret
+        // and open the session under it. This replaces the old public
+        // `BLAKE3(agent_id)` seed: the agent id is printed in cleartext in every
+        // report, so a hashed-id seed let any report-holder re-derive the signing key
+        // and forge the chain. A persisted random secret closes that third-party hole.
+        let receipt_secret = match store.ensure_receipt_secret(&account, spec.budget) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("could not load/create the receipt-chain secret for {account}: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut sess = match Session::open_with_secret(&account, spec, receipt_secret) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("session open failed: {e}");
@@ -1107,9 +1126,7 @@ mod repl {
         // Restore the account's PERSISTED cumulative spend so the budget ceiling
         // spans SSH detach/re-attach. Each attach process opens a fresh in-memory
         // meter; without this the ceiling would silently reset to full on every
-        // reconnect (an unbounded-spend hole). The durable store is keyed by account
-        // id under a stable state dir ($DREGG_AGENT_STATE_DIR or ~/.dregg-agent/state).
-        let store = ConsumedStore::open_default();
+        // reconnect (an unbounded-spend hole).
         let prior_consumed = store.load_consumed(&account);
         sess.restore_consumed(prior_consumed);
 

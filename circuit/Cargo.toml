@@ -80,6 +80,11 @@ dregg-turn = { path = "../turn" }
 # (dev-deps are not used when building dregg-circuit as a library dependency).
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
 getrandom = { workspace = true }
+# DeployedRefines differential (tests/deployed_refines_verifier_teeth.rs): mutate an
+# honest p3 BatchProof's opened `Challenge` (EF) values to witness that each verifyAlgo
+# tooth bites in the deployed `verify_batch`. Needs the extension-field element type.
+p3-field = { workspace = true }
+p3-baby-bear = { workspace = true }
 blake3 = "1"
 rmp-serde = { workspace = true }
 # proof-economics measurements (tests/proof_economics.rs): structural walk of

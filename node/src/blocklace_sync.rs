@@ -4545,9 +4545,47 @@ async fn execute_finalized_turn(
             let signing_key = dregg_types::SigningKey::from_bytes(&signing_key_bytes);
             let sig = dregg_types::sign(&signing_key, &signing_msg);
             // In solo / single-validator mode our signature alone meets the
-            // threshold (threshold defaults to 1 if the genesis-declared
-            // value is zero). In full mode this is one signature; peer
-            // aggregation occurs in a follow-up commit.
+            // threshold (threshold defaults to 1 if the genesis-declared value
+            // is zero), so the persisted root is a genuine quorum and the node
+            // restarts cleanly.
+            //
+            // ⚠ FULL-MODE COMMITTEE RESTART HOLE (caught by the N3 live run).
+            // In full mode this pushes ONLY the local signature (1 < threshold),
+            // so the persisted `quorum_signatures` do NOT carry a committee
+            // quorum. On restart `verify_signed_anchor_and_rollback` (state.rs)
+            // calls `StoredAttestedRoot::verify_signatures`, which requires
+            // `quorum_signatures.len() >= threshold` valid committee signatures
+            // over THIS root's `signing_message()`. A full-mode committee node
+            // therefore fail-closes after finalizing >=1 height. The recovery
+            // anchor is CORRECT hardening; the persistence under-feeds it.
+            //
+            // This is NOT a plumbing gap (the earlier "peer aggregation occurs
+            // in a follow-up commit" note was wrong). The only cross-node
+            // committee quorum that forms is the `FinalizationVote` set
+            // (finalization_votes.rs), which:
+            //   (a) signs `VOTE_DOMAIN || block_id || level` — NOT this root's
+            //       merkle_root-binding `signing_message()`;
+            //   (b) is collected ASYNC, AFTER this synchronous persist (peer
+            //       votes arrive later over gossip; the local node has not even
+            //       emitted its own vote yet at this point — see the
+            //       `emit_finalization_vote` call after `execute_finalized_turn`);
+            //   (c) is retained by `VoteCollector` as distinct-signer KEY sets
+            //       only — the signature bytes are discarded after counting.
+            // And `signing_message()` binds a wall-clock `timestamp`
+            // (executor_setup sets it via `wall_clock_secs()`), so committee
+            // peers cannot even produce matching signatures over this root.
+            //
+            // Closing this SOUNDLY (without weakening the anchor) requires a
+            // protocol addition: a DETERMINISTIC attested root (drop the
+            // wall-clock timestamp from the signed preimage / derive it from
+            // the finalized block) plus a signed-gossip exchange of committee
+            // signatures over the root, aggregated to >=threshold and threaded
+            // here — OR extending `FinalizationVote` to bind the finalized
+            // merkle_root, retaining those sigs, and persisting the root once
+            // its quorum assembles. Both are consensus-visible and carry an
+            // async-window liveness decision (this synchronous commit cannot
+            // block on network gossip). Diagnosis pinned by
+            // `dregg_persist::tests::full_mode_single_sig_root_is_refused_genuine_quorum_accepted`.
             if federation_keys.is_empty() || federation_keys.contains(&local_pk) {
                 attested.quorum_signatures.push((local_pk, sig));
             }

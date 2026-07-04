@@ -223,8 +223,17 @@ over the commitment producers with an inline `// ast-grep-ignore` allowlist;
    entries. The shared value wrap freezes all 56 completion lanes on a value turn
    (`rotateV3FrozenAuthority_rejects_fields_forge`, `#assert_axioms`-clean); the
    ONE remaining in-circuit seam is the setField[0..7] WRITTEN slot's 7 completion
-   lanes (the deliberately-gated **value8 weld** follow-on — the other 49 are
-   frozen via `fieldsCompletionFreezesExcept`).
+   lanes (the deliberately-gated **value8 weld** follow-on).
+   **Deployed-vs-defined (2026-07-03 R1 audit — `circuit/tests/setfield_completion_lane_forge.rs`):**
+   the DEPLOYED registry member (`EffectVmEmitRotationV3.lean:5363`) is
+   `v3OfFrozen (setFieldTickFace slot)` — the freeze-**ALL** variant, which freezes
+   the written slot's completion lanes too (before==after). The
+   `fieldsCompletionFreezesExcept` / `setFieldV3` "except" variant is DEFINED and
+   carries the value keystones but is NOT wired into the deployed cohort. So the
+   deployed setField's high 224 bits are FROZEN to the pre-state (a forge of them is
+   UNSAT — no ledgerless silent-forge), at the cost of an honest LARGE-value write
+   being unprovable. The seam is therefore a **completeness** residual (the value8
+   weld makes large writes provable AND declared-value-bound), not a soundness hole.
 2. **The flat pre-limb twins zero-fill lanes 67..87** — the genuine accumulator
    node8 fill exists on the circuit trace-producer path (above), but the two
    flat-record producers (`cell/src/commitment.rs` `compute_rotated_pre_limbs`,

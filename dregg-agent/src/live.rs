@@ -119,6 +119,11 @@ pub fn transcript_of_slices(
                 None,
                 0,
             ),
+            ActionOutcome::TurnRefused { reason } => (
+                format!("REFUSED by the executor (R2 host-side caveat: {reason}); no effect"),
+                None,
+                0,
+            ),
         };
         steps.push(LiveStep {
             n: (i + 1) as u64,

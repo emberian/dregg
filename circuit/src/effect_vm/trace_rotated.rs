@@ -3780,8 +3780,10 @@ pub fn append_sovereign_key_commit_rider(
     // The executor-compress interleave quads (Lean `CarrierOctetGates.quadIdx` — the byte twin of
     // `canonical_32_to_felts_4`'s four `hash_4_to_1` folds).
     const QUAD_IDX: [[usize; 4]; 4] = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 4, 2, 6], [1, 5, 3, 7]];
-    // The committed BEFORE-block pubkey octet (`B_PUBKEY8 = B_CARRIER_OCTETS + 16 = B_IROOT − 8`).
-    let b_pubkey8 = B_IROOT - 8;
+    // The committed BEFORE-block pubkey octet at the FIXED limb `B_PUBKEY_OCTET` (104). (v13: this is
+    // NO LONGER `B_IROOT − 8` — B_IROOT moved 112→169 with the fields-octet grow, so `B_IROOT − 8`=161
+    // now reads past the pubkey; the octet limb is geometry-invariant at 104.)
+    let b_pubkey8 = B_PUBKEY_OCTET;
     let octet: [BabyBear; 8] = std::array::from_fn(|i| trace[0][BEFORE_BASE + b_pubkey8 + i]);
     let kc: [BabyBear; 4] = std::array::from_fn(|q| {
         let inputs: [BabyBear; 4] = std::array::from_fn(|j| octet[QUAD_IDX[q][j]]);

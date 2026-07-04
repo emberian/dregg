@@ -48,6 +48,24 @@ use crate::agent::{
 };
 use crate::grant::CapGrant;
 use crate::live::{LiveStep, transcript_of_slices};
+use crate::receipt::BodyHasher;
+
+/// A fresh, unpredictable 32-byte receipt-chain secret from OS randomness — the
+/// default for an in-memory [`Session::open`] (no re-attach persistence).
+fn fresh_receipt_secret() -> [u8; 32] {
+    let mut secret = [0u8; 32];
+    getrandom::fill(&mut secret).expect("operating-system randomness is available");
+    secret
+}
+
+/// A receipt-chain secret derived deterministically from a session's root SEED
+/// (domain separated) — reproducible for [`Session::open_seeded`] tests/demos while
+/// staying a secret function of the seed (never of the public agent id).
+fn receipt_secret_from_seed(seed: [u8; 32]) -> [u8; 32] {
+    let mut h = BodyHasher::new(b"dregg-agent-session-receipt-secret-v1");
+    h.field(&seed);
+    h.finalize()
+}
 
 /// A parsed cap bundle: the [`AgentSpec`] (budget + the signed grants) plus the
 /// advertised tool/service/cell vocabulary the brain is told it may call. The
@@ -255,32 +273,64 @@ impl Session {
     /// bundle the host granted). Mints a fresh root + meter for THIS session (the
     /// isolation boundary) and deploys the agent under it. The `spec.id` is
     /// overridden to bind the agent to the account.
+    ///
+    /// The receipt-chain secret is a **fresh random draw** — so the chain cannot be
+    /// forged by a third party who holds a report. A session that must survive SSH
+    /// detach/re-attach must instead recover its PERSISTED secret and open via
+    /// [`open_with_secret`](Session::open_with_secret), so the resumed chain keeps
+    /// the same signer (the `dregg-agent attach` bin does this through the durable
+    /// [`crate::session_store::ConsumedStore`]).
     pub fn open(account: impl Into<String>, spec: AgentSpec) -> Result<Session, AgentError> {
-        Session::open_in(AgentCloud::new(), account, spec)
+        Session::open_in(AgentCloud::new(), account, spec, fresh_receipt_secret())
+    }
+
+    /// [`open`](Session::open) with an explicit, caller-supplied 32-byte
+    /// **receipt-chain secret** — the persisted-key path a hosted session uses so a
+    /// resumed attach re-signs with the SAME key. The host loads (or first-creates +
+    /// persists) the account's random secret from the durable
+    /// [`ConsumedStore`](crate::session_store::ConsumedStore::ensure_receipt_secret)
+    /// and passes it here. The secret is the ed25519 signing seed; it must be a
+    /// per-account random value kept host-side (never the agent id — see
+    /// [`SessionState::from_secret`](crate::agent::SessionState::from_secret)).
+    pub fn open_with_secret(
+        account: impl Into<String>,
+        spec: AgentSpec,
+        receipt_secret: [u8; 32],
+    ) -> Result<Session, AgentError> {
+        Session::open_in(AgentCloud::new(), account, spec, receipt_secret)
     }
 
     /// [`open`](Session::open) with a deterministic root seed — reproducible
-    /// sessions for tests / recorded demos (the credential + signer are stable).
+    /// sessions for tests / recorded demos (the credential + signer are stable). The
+    /// receipt-chain secret is derived from the SEED (a secret test input), NOT from
+    /// the agent id, so it is both reproducible AND unforgeable from a report.
     pub fn open_seeded(
         seed: [u8; 32],
         account: impl Into<String>,
         spec: AgentSpec,
     ) -> Result<Session, AgentError> {
-        Session::open_in(AgentCloud::from_seed(seed), account, spec)
+        Session::open_in(
+            AgentCloud::from_seed(seed),
+            account,
+            spec,
+            receipt_secret_from_seed(seed),
+        )
     }
 
     fn open_in(
         cloud: AgentCloud,
         account: impl Into<String>,
         mut spec: AgentSpec,
+        receipt_secret: [u8; 32],
     ) -> Result<Session, AgentError> {
         let account = account.into();
         // Bind the agent id to the account, so the meter subject + the receipt
-        // identity name WHOSE session it is — and two accounts' sessions get
-        // distinct receipt-chain signers (the chain seed is derived from the id).
+        // identity name WHOSE session it is. The receipt-chain signer is a per-session
+        // RANDOM secret (persisted for a re-attachable session), NOT derived from the
+        // id — the id is public, a hashed-id seed would be forgeable by any holder.
         spec.id = format!("agent:session:{account}");
         let handle = cloud.deploy(&spec)?;
-        let state = SessionState::new(&handle.id);
+        let state = SessionState::from_secret(receipt_secret);
         Ok(Session {
             account,
             cloud,
@@ -316,6 +366,24 @@ impl Session {
         brain: &mut dyn AgentBrain,
         toolkit: &dyn ToolKit,
     ) -> GoalReport {
+        self.run_goal_minted(goal, brain, toolkit, None)
+    }
+
+    /// **[`run_goal`](Session::run_goal) welded to a genuine kernel turn per admitted
+    /// action (R2).** When a [`GrainTurnMinter`](crate::agent::GrainTurnMinter) is
+    /// supplied, each admitted action first becomes a REAL committed executor turn on
+    /// the grain turn-cell, and that turn's `turn_hash` is sealed into the action's
+    /// [`AgentReceipt`](crate::agent::AgentReceipt) as its `turn_receipt_hash` — the
+    /// session's receipts become VIEWS over genuine kernel transitions, and the
+    /// executor's own `calls_made` caveat enforces the meter HOST-SIDE (a refused
+    /// turn admits nothing). Passing `None` is exactly [`run_goal`](Session::run_goal).
+    pub fn run_goal_minted(
+        &mut self,
+        goal: impl Into<String>,
+        brain: &mut dyn AgentBrain,
+        toolkit: &dyn ToolKit,
+        minter: Option<&mut dyn crate::agent::GrainTurnMinter>,
+    ) -> GoalReport {
         let goal = goal.into();
         // Mark the cumulative log/receipt lengths + counts BEFORE the goal, so the
         // delta (just this goal's steps) can be sliced out afterward.
@@ -325,9 +393,9 @@ impl Session {
         let prev_cap = self.state.cap_refused();
         let prev_budget = self.state.budget_refused();
 
-        let report = self
-            .cloud
-            .run_goal(&self.handle, &mut self.state, brain, toolkit);
+        let report =
+            self.cloud
+                .run_goal_minted(&self.handle, &mut self.state, brain, toolkit, minter);
 
         let steps = transcript_of_slices(
             &self.state.log()[prev_log..],
@@ -807,6 +875,42 @@ mod tests {
         sess.verify().expect("session still verifies");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── R0: the receipt-chain signer is a PERSISTED SECRET, not a public id-hash ─
+    // The hole was `receipt_seed(agent_id) = BLAKE3("…seed-v1" ‖ agent_id)`: the id
+    // is printed in cleartext in every report, so any report-holder could re-derive
+    // the ed25519 seed and forge a self-consistent chain. Now the seed is a random
+    // per-session secret. Two fresh opens for the SAME account get DIFFERENT signers
+    // (so the signer is provably NOT a function of the public id); recovering a
+    // PERSISTED secret reproduces the SAME signer (so a resumed attach stays consistent).
+    #[test]
+    fn the_receipt_signer_is_a_random_persisted_secret_not_an_id_hash() {
+        let spec = || AgentSpec::new("ignored", 10).with_shell();
+
+        // Two fresh opens for the same account → DIFFERENT signers (random each time).
+        // Under the old id-derived seed these would have been IDENTICAL (the hole).
+        let s1 = Session::open("dga1_same", spec()).unwrap();
+        let s2 = Session::open("dga1_same", spec()).unwrap();
+        assert_ne!(
+            s1.report().signer,
+            s2.report().signer,
+            "the signer is a fresh random draw, not a deterministic hash of the agent id"
+        );
+
+        // A resumed attach that recovers the SAME persisted secret reproduces the SAME
+        // signer → the renter's pinned `(signer, tip)` keeps verifying across re-attach.
+        let secret = [0x5Au8; 32];
+        let r1 = Session::open_with_secret("dga1_resume", spec(), secret).unwrap();
+        let r2 = Session::open_with_secret("dga1_resume", spec(), secret).unwrap();
+        assert_eq!(
+            r1.report().signer,
+            r2.report().signer,
+            "a recovered persisted secret yields the same signer across re-attach"
+        );
+        // And a DIFFERENT secret is a DIFFERENT signer (the seed genuinely drives it).
+        let r3 = Session::open_with_secret("dga1_resume", spec(), [0x11u8; 32]).unwrap();
+        assert_ne!(r1.report().signer, r3.report().signer);
     }
 
     // ── multi-user ISOLATION: two sessions cannot touch each other ────────────

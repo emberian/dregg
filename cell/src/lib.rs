@@ -53,6 +53,7 @@ pub mod obligation_standing;
 pub mod permissions;
 pub mod preconditions;
 pub mod predicate;
+pub mod prepaid_lease;
 pub mod program;
 pub mod revocation_channel;
 pub mod ring_closure;

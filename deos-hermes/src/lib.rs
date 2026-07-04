@@ -117,10 +117,10 @@ pub use brain::{
 };
 pub use bridge::{HermesGateway, ToolMarket};
 #[cfg(unix)]
-pub use egress::{EgressGrant, EgressPolicy};
+pub use egress::{EgressGrant, EgressNetGrant, EgressPolicy, provider_host_port};
 pub use grant_registry::{GrantRegistry, MandateKey};
 #[cfg(unix)]
-pub use host::{DreggHost, HostedAgentReport};
+pub use host::{DreggHost, HostedAgentReport, HostedToolVerdict};
 pub use mcp_server::{ConfinedToolResult, DREGG_TOOL_NAMES, McpServer, McpToolHost};
 
 // Re-export the grounding SDK types a HOST needs to construct a confined gateway

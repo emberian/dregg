@@ -40,6 +40,17 @@ pub struct ConsumedRecord {
     pub consumed_cents: i64,
     /// The budget ceiling the account was last opened under (for inspection).
     pub budget_cents: i64,
+    /// The account's persisted **receipt-chain secret** (hex-encoded 32 bytes), the
+    /// ed25519 signing seed for its receipt chain. Generated once (a fresh CSPRNG
+    /// draw, [`ConsumedStore::ensure_receipt_secret`]) so a resumed attach re-signs
+    /// with the SAME key and the renter's pinned `(signer, tip)` keeps verifying.
+    ///
+    /// This is a SECRET — it stays in the host-side store and is NEVER placed in a
+    /// report or receipt (a report exposes only the ed25519 PUBLIC key,
+    /// `report.signer`). `None` on a legacy record written before this field existed
+    /// (back-compatible; a fresh secret is minted + persisted on the next attach).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_secret_hex: Option<String>,
 }
 
 /// A file-backed store mapping an account id → its cumulative [`ConsumedRecord`].
@@ -116,17 +127,76 @@ impl ConsumedStore {
         consumed_cents: i64,
         budget_cents: i64,
     ) -> std::io::Result<()> {
-        std::fs::create_dir_all(&self.dir)?;
-        let prior = self.load_consumed(account);
+        let existing = self.load_record(account);
+        let prior = existing
+            .as_ref()
+            .map(|r| r.consumed_cents.max(0))
+            .unwrap_or(0);
         let record = ConsumedRecord {
             account: account.to_string(),
             consumed_cents: consumed_cents.max(prior),
             budget_cents,
+            // Preserve the account's persisted receipt-chain secret across the
+            // drawdown write — a budget save must never rotate the signing key.
+            receipt_secret_hex: existing.and_then(|r| r.receipt_secret_hex),
         };
-        let json = serde_json::to_string_pretty(&record)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        atomic_write(&self.path_for(account), json.as_bytes())
+        self.write_record(&record)
     }
+
+    /// Load `account`'s persisted **receipt-chain secret**, minting + persisting a
+    /// fresh CSPRNG one on first use (or when a legacy record has none). The stable
+    /// per-account ed25519 signing seed a hosted [`Session`] opens under so a resumed
+    /// attach re-signs with the SAME key — the persisted-key path that closes the
+    /// third-party receipt-chain forgery hole (the old public `BLAKE3(agent_id)`
+    /// seed). Pass the result to
+    /// [`Session::open_with_secret`](crate::session::Session::open_with_secret).
+    ///
+    /// [`Session`]: crate::session::Session
+    pub fn ensure_receipt_secret(
+        &self,
+        account: &str,
+        budget_cents: i64,
+    ) -> std::io::Result<[u8; 32]> {
+        let existing = self.load_record(account);
+        if let Some(secret) = existing
+            .as_ref()
+            .and_then(|r| r.receipt_secret_hex.as_deref())
+            .and_then(decode_secret)
+        {
+            return Ok(secret);
+        }
+        // First attach for this account (or a legacy record with no secret): mint a
+        // fresh, unpredictable secret and persist it so every later attach recovers it.
+        let mut secret = [0u8; 32];
+        getrandom::fill(&mut secret).expect("operating-system randomness is available");
+        let record = ConsumedRecord {
+            account: account.to_string(),
+            consumed_cents: existing
+                .as_ref()
+                .map(|r| r.consumed_cents.max(0))
+                .unwrap_or(0),
+            budget_cents: existing.map(|r| r.budget_cents).unwrap_or(budget_cents),
+            receipt_secret_hex: Some(hex::encode(secret)),
+        };
+        self.write_record(&record)?;
+        Ok(secret)
+    }
+
+    /// Serialize + atomically persist a full [`ConsumedRecord`] (creating the state
+    /// dir if needed).
+    fn write_record(&self, record: &ConsumedRecord) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        let json = serde_json::to_string_pretty(record)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        atomic_write(&self.path_for(&record.account), json.as_bytes())
+    }
+}
+
+/// Decode a hex-encoded 32-byte secret, ignoring a malformed/short value (treated as
+/// absent so a fresh secret is minted rather than trusting a corrupt one).
+fn decode_secret(hexed: &str) -> Option<[u8; 32]> {
+    let bytes = hex::decode(hexed).ok()?;
+    <[u8; 32]>::try_from(bytes.as_slice()).ok()
 }
 
 /// Write `bytes` to `path` atomically (write a temp sibling then rename), so a
@@ -199,6 +269,52 @@ mod tests {
         // Two ids that would sanitize to the same string keep separate records.
         assert_eq!(store.load_consumed("a/b:c d"), 4);
         assert_eq!(store.load_consumed("a_b_c_d"), 7);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn receipt_secret_is_minted_once_then_recovered_across_processes() {
+        let dir = tmpdir();
+        // First "process": mint the secret.
+        let first = {
+            let store = ConsumedStore::new(&dir);
+            store.ensure_receipt_secret("dga1_sec", 500).unwrap()
+        };
+        // Second "process": the SAME secret is recovered (a resumed attach re-signs
+        // with the same key — the persisted-key property R0 needs).
+        {
+            let store = ConsumedStore::new(&dir);
+            let again = store.ensure_receipt_secret("dga1_sec", 500).unwrap();
+            assert_eq!(
+                first, again,
+                "the persisted secret is recovered, not re-minted"
+            );
+        }
+        // It is a real random draw, not a constant / a hash of the id.
+        assert_ne!(first, [0u8; 32]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn distinct_accounts_get_distinct_receipt_secrets() {
+        let dir = tmpdir();
+        let store = ConsumedStore::new(&dir);
+        let a = store.ensure_receipt_secret("dga1_a", 500).unwrap();
+        let b = store.ensure_receipt_secret("dga1_b", 500).unwrap();
+        assert_ne!(a, b, "each account's signing seed is its own random draw");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_budget_save_preserves_the_receipt_secret() {
+        let dir = tmpdir();
+        let store = ConsumedStore::new(&dir);
+        let secret = store.ensure_receipt_secret("dga1_keep", 500).unwrap();
+        // A drawdown write after the secret exists must NEVER rotate the signing key.
+        store.save_consumed("dga1_keep", 42, 500).unwrap();
+        let after = store.ensure_receipt_secret("dga1_keep", 500).unwrap();
+        assert_eq!(secret, after, "save_consumed preserved the secret");
+        assert_eq!(store.load_consumed("dga1_keep"), 42);
         std::fs::remove_dir_all(&dir).ok();
     }
 

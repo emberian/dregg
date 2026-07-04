@@ -63,6 +63,23 @@ dregg-firmament = { path = "../sel4/dregg-firmament", features = [
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# THE LIVE LLM TRANSPORT (gated by `live-brain`, OFF by default). A real
+# `reqwest::blocking` POST to an OpenAI-compatible `/v1/chat/completions` endpoint
+# OR the Anthropic Messages API (`/v1/messages`), with the operator's BYO key in
+# the auth header. OFF by default so the std-only green build (the recorded/mock
+# provider tests, `brain::kimi_adapter_tests`) needs no HTTP/TLS stack; the live
+# `post` closure the brain's `OpenAICompatCaller`/`LlmHttpCaller` seam takes is
+# only supplied under this feature, its live call an `#[ignore]`d test. reqwest
+# 0.12 is already resolved in the workspace lockfile, so this adds no new external
+# crate — it just enables it for this crate. `blocking` keeps the brain a sync
+# call; `json` does the body (de)serialization; `rustls-tls` is the self-contained
+# TLS provider.
+reqwest = { version = "0.12", optional = true, default-features = false, features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+] }
+
 # ── THE HANDS (deos-js), gated behind `js-agent` ──
 # The confined agent's `run_js` tool runs deos-js (real SpiderMonkey via mozjs)
 # bound to the agent's `held` authority. deos-js pulls the multi-GB mozjs
@@ -98,6 +115,15 @@ anyhow = { version = "1", optional = true }
 
 [features]
 default = []
+# THE LIVE BYO-KEY BRAIN TRANSPORT. Supplies the real HTTP `post`/`complete`
+# closure the brain's provider seam takes but the crate otherwise never fills
+# live: `brain::live_openai_caller()` (an OpenAI-compatible `/v1/chat/completions`
+# POST) and `brain::AnthropicMessagesCaller` (the Anthropic Messages API), plus
+# `brain::live_brain_from_env()` which resolves a BYO key from the env chain
+# (DREGG_LLM_API_KEY → ANTHROPIC_API_KEY → OPENAI_API_KEY → NVIDIA_API_KEY →
+# ~/.nvidiakey) and wires the matching transport. OFF by default so the SDK-only
+# build stays HTTP/TLS-free; the live call is an `#[ignore]`d test.
+live-brain = ["dep:reqwest"]
 # THE HANDS — the confined agent's `run_js` tool. Pulls deos-js (real
 # SpiderMonkey) so a Hermes agent can crawl + drive the cockpit as the
 # operator's co-pilot, every fire a cap-gated verified turn under the agent's

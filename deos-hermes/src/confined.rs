@@ -92,6 +92,17 @@ pub mod probe {
     /// STILL DENIED inside the PD. Proves the door is to a specific resource, not a
     /// hole: granting one path does not open its neighbours.
     pub const EGRESS_SIBLING_DENIED: i32 = 0x20;
+
+    /// EGRESS SOCKET tooth — the GRANTED provider endpoint (host:port) WAS
+    /// reachable via `connect(2)` from inside the PD (the structured socket door is
+    /// open). Only meaningful for a PD launched with a provider net grant
+    /// ([`super::EgressPolicy::grant_provider`]); the base jail teeth still assert
+    /// the rest of the network stayed denied around it.
+    pub const EGRESS_NET_GRANTED_OPEN: i32 = 0x40;
+    /// EGRESS SOCKET tooth — an outbound connect to a host:port OUTSIDE the grant
+    /// was STILL DENIED inside the PD. Proves the socket door is to a SPECIFIC
+    /// endpoint, not "the network": granting one provider does not open any other.
+    pub const EGRESS_NET_SIBLING_DENIED: i32 = 0x80;
 }
 
 /// A handle on a confined agent PD: the forked, OS-sandboxed child + the
@@ -215,6 +226,56 @@ where
 /// [`probe::EGRESS_SIBLING_DENIED`]).
 pub fn can_read_path(path: &str) -> bool {
     can_open(path)
+}
+
+/// Probe whether an outbound TCP `connect` to `host:port` SUCCEEDS from inside the
+/// confined PD — the socket-egress check. `host` must be an IPv4 literal (the
+/// provider door's precise form; a hostname would need in-jail DNS, denied). Run
+/// INSIDE a confined body: a GRANTED endpoint returns true (the door is open, the
+/// connect completes); an UNGRANTED one returns false (the jail EPERM'd the
+/// `connect`). Public so a confined body can fold the socket-egress verdict bits
+/// ([`probe::EGRESS_NET_GRANTED_OPEN`] / [`probe::EGRESS_NET_SIBLING_DENIED`]).
+///
+/// A refused connection (`ECONNREFUSED` — reached the host, nothing listening) is
+/// treated as reachable (the door let the packet out); a sandbox denial
+/// (`EPERM`/`EACCES`) or no route is NOT. So this bit means "the door let us reach
+/// the endpoint", distinct from whether a server happened to be listening.
+pub fn can_connect_tcp(host: &str, port: u16) -> bool {
+    // Parse the dotted-quad IPv4 literal. A non-literal host is out of scope for
+    // the in-jail probe (DNS is denied), so treat it as unreachable.
+    let octets: Vec<u8> = host
+        .split('.')
+        .filter_map(|o| o.parse::<u8>().ok())
+        .collect();
+    if octets.len() != 4 {
+        return false;
+    }
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return false;
+    }
+    let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    addr.sin_family = libc::AF_INET as libc::sa_family_t;
+    addr.sin_port = port.to_be();
+    addr.sin_addr.s_addr = u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]).to_be();
+    let rc = unsafe {
+        libc::connect(
+            fd,
+            &addr as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    };
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    unsafe { libc::close(fd) };
+    if rc == 0 {
+        return true; // connected — the door is open.
+    }
+    // The door let the packet out but nothing was listening ⇒ still "reachable".
+    // A sandbox denial (EPERM/EACCES) or no route ⇒ the door is closed.
+    matches!(
+        errno,
+        libc::ECONNREFUSED | libc::EINPROGRESS | libc::ETIMEDOUT
+    )
 }
 
 /// LAUNCH HERMES (the stand-in ACP agent) into a confined host-PD — the
@@ -485,6 +546,61 @@ fn recv_line<R: BufRead>(reader: &mut R) -> Result<RpcMessage, AcpError> {
             continue;
         }
         return serde_json::from_str(t).map_err(|e| AcpError::Parse(e.to_string()));
+    }
+}
+
+// ─────────────── serving an in-process AcpPeer over the Endpoint ─────────────
+
+/// SERVE an in-process [`AcpPeer`] (the SERVER half — e.g. a brain-driven
+/// [`crate::HermesAgentPeer`]) over the confined child's firmament Endpoint.
+///
+/// This is the inverse of [`PdAcpTransport`]: that adapter lets the PARENT drive a
+/// peer that lives over the socket; this loop lets the CHILD run a peer that lives
+/// IN-PROCESS (compiled into the jail) while its wire is the socket. It reads each
+/// client frame off the Endpoint, feeds it to `peer.send` (the peer queues its
+/// replies), then drains `peer.recv` back onto the wire — the exact call pattern
+/// [`crate::AcpClient`] expects, just with the peer on the far side of a real fd.
+///
+/// It is how a REAL brain runs inside the exec-denied jail: the on-box
+/// [`crate::LocalBrain`] is `execve`-free and does no ambient I/O, so it decides
+/// entirely in-process; every tool-call it reaches for crosses this Endpoint as a
+/// `session/request_permission` the PARENT answers through the
+/// [`crate::HermesGateway`] (which stays OUTSIDE the jail, on the verified
+/// executor). The credential/model side of a *live* brain cannot run here — the
+/// jail denies the socket it would need — so the compiled-in brain is the on-box
+/// one; a live provider would ride a granted egress socket (the next slice).
+///
+/// Returns when the brain's turn completes ([`crate::HermesAgentPeer::turn_complete`])
+/// — so the confined body exits promptly without waiting on an EOF the still-open
+/// client would never send — or `Ok(())` if the client hangs up first.
+pub fn serve_acp_peer_over_endpoint<P: AcpPeer>(
+    sock: &mut UnixStream,
+    peer: &mut P,
+    turn_complete: impl Fn(&P) -> bool,
+) -> Result<(), AcpError> {
+    let reader_sock = sock.try_clone()?;
+    let mut reader = BufReader::new(reader_sock);
+    loop {
+        // Block for the next client frame (initialize / session/new /
+        // session/prompt / a permission response). EOF ⇒ the client hung up.
+        let msg = match recv_line(&mut reader) {
+            Ok(m) => m,
+            Err(AcpError::Closed) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        peer.send(&msg)?;
+        // Drain everything the peer queued in response and put it on the wire.
+        loop {
+            match peer.recv() {
+                Ok(out) => send_line(sock, &out)?,
+                Err(AcpError::Closed) => break, // nothing more queued right now.
+                Err(e) => return Err(e),
+            }
+        }
+        // The brain finished the turn and its final response is out — done.
+        if turn_complete(peer) {
+            return Ok(());
+        }
     }
 }
 

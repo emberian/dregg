@@ -110,6 +110,94 @@ fn revocation_time() {
 // Federation (Attested Root) Tests
 // =============================================================================
 
+/// DIAGNOSIS — the N3 committee-restart hole (`node/src/blocklace_sync.rs`
+/// full-mode commit path).
+///
+/// The commit path persists a full-mode attested root with only the LOCAL
+/// node's single signature and `threshold = committee size`. On restart,
+/// `verify_signed_anchor_and_rollback` (`node/src/state.rs`) calls
+/// [`StoredAttestedRoot::verify_signatures`], which requires
+/// `quorum_signatures.len() >= threshold` valid committee signatures over the
+/// root's canonical `signing_message()`. A single-signature root therefore
+/// fails and a full-mode committee node fail-closes after finalizing >=1
+/// height (solo/threshold-1 is unaffected).
+///
+/// This test PINS both halves of the CORRECT recovery-anchor behavior so the
+/// eventual fix is measured against the right bar (and so the anchor is never
+/// silently weakened):
+///   * a genuinely sub-quorum root (1 sig, threshold 3) is REFUSED — the
+///     recovery anchor is correct security hardening and must stay strict;
+///   * a genuine committee quorum (>=threshold valid sigs over the SAME
+///     message) is ACCEPTED — exactly the record the persistence layer must
+///     produce to close the hole WITHOUT relaxing the check;
+///   * a quorum-COUNT of signatures that do not verify over this root's
+///     message (they signed a different merkle_root) is still REFUSED — the
+///     anchor binds the committed state root, not just a signature count.
+#[test]
+fn full_mode_single_sig_root_is_refused_genuine_quorum_accepted() {
+    use dregg_types::{SigningKey, sign};
+
+    // A 3-member committee (the N3 full-mode shape); threshold = 3.
+    let sks: Vec<SigningKey> = (1u8..=3)
+        .map(|s| SigningKey::from_bytes(&[s; 32]))
+        .collect();
+    let committee: Vec<PublicKey> = sks.iter().map(|k| k.public_key()).collect();
+
+    // Build the attested root the way the full-mode commit path does.
+    let mut root = StoredAttestedRoot {
+        merkle_root: [0xAB; 32],
+        note_tree_root: None,
+        nullifier_set_root: None,
+        height: 1,
+        timestamp: 1_700_000_000,
+        blocklace_block_id: Some([0xCD; 32]),
+        finality_round: Some(1),
+        quorum_signatures: Vec::new(),
+        threshold_qc: None,
+        threshold: 3,
+        federation_id: dregg_types::FederationId::PLACEHOLDER,
+        receipt_stream_root: Some([0xEF; 32]),
+    };
+    let msg = root.signing_message();
+
+    // ── THE BUG: full mode persists ONLY the local signature. 1 < 3. ──
+    root.quorum_signatures = vec![(committee[0], sign(&sks[0], &msg))];
+    assert!(
+        !root.verify_signatures(&committee),
+        "a single-signature full-mode root MUST be refused on restart — the \
+         recovery anchor is correct; the persistence under-feeds it (N3 hole)"
+    );
+
+    // ── THE FIX TARGET: a genuine committee quorum over the SAME message. ──
+    root.quorum_signatures = sks
+        .iter()
+        .map(|k| (k.public_key(), sign(k, &msg)))
+        .collect();
+    assert!(
+        root.verify_signatures(&committee),
+        "a genuine >=threshold committee quorum over the root's signing message \
+         MUST be accepted — this is the record the commit path must persist"
+    );
+
+    // ── The anchor stays strict against forgery: >=threshold signatures that
+    //    do NOT verify over THIS root's message (they signed a different
+    //    merkle_root) are still refused. ──
+    let other = StoredAttestedRoot {
+        merkle_root: [0x00; 32],
+        ..root.clone()
+    };
+    let other_msg = other.signing_message();
+    root.quorum_signatures = sks
+        .iter()
+        .map(|k| (k.public_key(), sign(k, &other_msg)))
+        .collect();
+    assert!(
+        !root.verify_signatures(&committee),
+        "three signatures over a DIFFERENT merkle_root must NOT satisfy the \
+         anchor — the check binds the committed state root, not just a count"
+    );
+}
+
 #[test]
 fn attested_root_store_and_load() {
     let store = new_store();

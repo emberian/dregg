@@ -103,7 +103,11 @@ impl StoredAttestedRoot {
     /// `federation_id`, `note_tree_root`, `nullifier_set_root`,
     /// `blocklace_block_id`, and `finality_round` with `0x00 | 0x01 || value`
     /// framing for unambiguous `Option` encoding.
-    fn signing_message(&self) -> Vec<u8> {
+    ///
+    /// `pub(crate)` so the recovery-anchor diagnosis test can reconstruct the
+    /// exact bytes a genuine committee quorum must sign (see
+    /// `tests::full_mode_single_sig_root_is_refused_genuine_quorum_accepted`).
+    pub(crate) fn signing_message(&self) -> Vec<u8> {
         let mut msg = Vec::new();
         msg.extend_from_slice(b"dregg-attested-root-v4");
         msg.extend_from_slice(&self.federation_id.0);

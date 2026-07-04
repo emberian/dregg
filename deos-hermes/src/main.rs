@@ -51,6 +51,12 @@ fn main() {
         // cap-gated, receipted dregg turn (or an in-band refusal it works around).
         // This is the replacement for the scripted stand-in.
         "agent" => run_agent(),
+        // THE LIVE BYO-KEY BRAIN over the standard confinement (feature
+        // `live-brain`). Resolves a provider key from the env chain
+        // (DREGG_LLM_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY /
+        // NVIDIA_API_KEY / ~/.nvidiakey), calls a REAL model for each decision,
+        // and gates every tool-call it reaches for as a receipted dregg turn.
+        "brain-live" => run_brain_live(),
         // The live brain → gateway seam over the standard confinement: the
         // `terminal` tool-call the model emits is ADMITTED (a cap-gated,
         // receipted dregg turn on the verified executor).
@@ -170,6 +176,63 @@ fn run_agent() {
         "\n(the brain decided {} tool-call(s); a denied write_file was met with a \
          read-only fallback — the agent adapted within its caps.)",
         run.verdicts.len()
+    );
+}
+
+/// THE LIVE BYO-KEY BRAIN — a real model drives the confined ACP loop. Resolves
+/// a provider key from the env chain and, if one is present, runs
+/// [`deos_hermes::brain::live_brain_from_env`] over the standard confinement so
+/// every tool-call the model reaches for is a cap-gated, receipted dregg turn.
+/// Without the `live-brain` feature (or without a key), it reports how to enable
+/// the path and falls back to nothing (no scripted stand-in).
+#[cfg(feature = "live-brain")]
+fn run_brain_live() {
+    use deos_hermes::HermesAgentPeer;
+    use deos_hermes::brain::live_brain_from_env;
+
+    println!("deos-hermes — the LIVE BYO-key brain (real model drives the ACP loop)\n");
+    let brain = match live_brain_from_env() {
+        Some(b) => b,
+        None => {
+            println!(
+                "no BYO model key found — set one of DREGG_LLM_API_KEY, ANTHROPIC_API_KEY, \
+                 OPENAI_API_KEY, NVIDIA_API_KEY, or put it in ~/.nvidiakey (optionally \
+                 DREGG_LLM_BASE / DREGG_LLM_MODEL), then re-run `cargo run --features \
+                 live-brain -- brain-live`."
+            );
+            return;
+        }
+    };
+    let (runtime, root_token, registry) = confinement();
+    let gateway = HermesGateway::new(&runtime, root_token, registry);
+    let prompt = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| "search the docs, then run the build".to_string());
+
+    let peer = HermesAgentPeer::new("sess-brain-live", brain);
+    let mut client = AcpClient::new(peer, gateway, 16);
+    let run = client
+        .run_prompt("/Users/ember/dev/breadstuffs", &prompt)
+        .expect("the live brain-driven ACP loop runs end-to-end");
+
+    let model = AgentDockModel::from_run("sess-brain-live", &run, client.gateway());
+    print!("{}", model.render_text());
+    println!(
+        "\n(the live model decided {} tool-call(s); each admitted one is a receipted \
+         dregg turn on the verified executor.)",
+        run.verdicts.len()
+    );
+}
+
+/// Without the `live-brain` feature, the live brain path is unavailable: report
+/// how to build it in rather than silently running a scripted stand-in.
+#[cfg(not(feature = "live-brain"))]
+fn run_brain_live() {
+    println!(
+        "deos-hermes — the LIVE BYO-key brain is behind the `live-brain` feature.\n\
+         Rebuild with it and provide a key, e.g.:\n\
+         \n\
+         \x20\x20ANTHROPIC_API_KEY=... cargo run --features live-brain -- brain-live\n"
     );
 }
 
