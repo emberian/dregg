@@ -1,0 +1,36 @@
+# grain-verify — the crown weld, CONSUMER side (docs/THE-GRAIN.md face #1).
+#
+# Make a hosted agent's session INDEPENDENTLY RE-WITNESSABLE: fold its cumulative
+# signed receipt chain into a `GrainAttestation` a RENTER verifies re-running
+# nothing — the landed ladder R0 (tamper-evidence under a pinned signer) + R1
+# (renter-countersigned anti-rewrite/anti-truncation) + R2 (every receipt a view
+# over a genuine committed kernel turn). It COMPOSES the existing verifiers (it
+# does not reimplement verification): `dregg_agent::verify_agent_run` over the
+# session's `AgentRunReport`. HONEST BOUNDARY: not yet unfoolable — execution
+# integrity + completeness ("nothing else") are R3, the whole-history STARK fold
+# (lightclient::verify_history), which needs grain turns minted as rotated
+# EffectVM legs — a breadstuffs-side build, flagged in src/lib.rs as
+# WHOLE_HISTORY_GAP.
+
+[package]
+name = "grain-verify"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lib]
+name = "grain_verify"
+path = "src/lib.rs"
+
+[[bin]]
+name = "grain-demo"
+path = "src/bin/grain_demo.rs"
+
+[dependencies]
+# The hosted-session core + its re-witness verifier. We CONSUME its Session /
+# AgentRunReport / verify_agent_run; we do not re-implement any of it.
+dregg-agent = { path = "../dregg-agent" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

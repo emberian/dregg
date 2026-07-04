@@ -1,0 +1,68 @@
+# grain-verify-wasm — the crown weld in the RENTER'S BROWSER (docs/THE-GRAIN.md
+# face #1, build item #3: "surface the renter verify in the renter's browser").
+#
+# A thin `#[wasm_bindgen]` shell over `grain-verify`: it deserializes a
+# `GrainAttestation` (the artifact a host hands back) and calls the REAL
+# grain-verify verifier for whichever LANDED rungs the renter's pins select —
+# `verify` (R0), `verify_for_renter` (+R1, renter pubkey + genesis nonce),
+# `verify_r2` / `verify_r2_for_renter` (+R2, the executor's committed-turn
+# manifest). It reimplements NOTHING: every tooth (the composed
+# `verify_agent_run` chain check, the headroom + per-step budget teeth, the R1
+# anti-rewrite / anti-truncation anchor teeth, the R2 kernel-turn link teeth)
+# runs inside the same code the native verifier runs.
+#
+# The renter re-witnesses their hosted agent's session offline, in a browser
+# tab, re-running nothing. HONEST BOUNDARY: the whole-history STARK leg (R3 —
+# execution integrity + completeness, the rung that would make this unfoolable
+# rather than tamper-evident) is NOT here — see grain-verify's
+# WHOLE_HISTORY_GAP, which the page renders verbatim.
+#
+# ## Building for the browser
+#
+# dregg-agent (pulled transitively) uses getrandom 0.3, which needs a backend on
+# wasm32-unknown-unknown. The `wasm_js` backend is enabled two ways, both wired:
+#   * the target dep below turns on getrandom's `wasm_js` feature, and
+#   * `.cargo/config.toml` sets `--cfg getrandom_backend="wasm_js"` for the wasm
+#     target (cargo prefers target rustflags over the workspace `build.rustflags`,
+#     which the wasm build does not need).
+# Then: `wasm-pack build --target web` (see build-web.sh, which also inlines the
+# wasm + glue into a single self-contained CSP-safe HTML page).
+
+[package]
+name = "grain-verify-wasm"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lib]
+# cdylib for the wasm artifact; rlib so the native agreement tests + the fixture
+# bin link the same core logic.
+crate-type = ["cdylib", "rlib"]
+
+# Native-only helper: emit sample attestation JSON (genuine / tampered / renter-
+# anchored) for the browser page + the headless agreement test.
+[[bin]]
+name = "gen-fixture"
+path = "src/bin/gen_fixture.rs"
+
+[dependencies]
+# The REAL verifier. We deserialize its GrainAttestation and call its verify /
+# verify_for_renter — we do not reimplement any check.
+grain-verify = { path = "../grain-verify" }
+# Drives a sample session for the fixture bin (native only in practice; a
+# transitive dep of grain-verify already, so no new crate in the graph).
+dregg-agent = { path = "../dregg-agent" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+wasm-bindgen = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser randomness backend getrandom 0.3 needs on wasm32-unknown-unknown.
+# Only the verify path is exercised in the browser (no randomness is drawn), but
+# dregg-agent links getrandom, so the backend must be selectable to COMPILE.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# serde -> JS object conversion for the returned {ok, summary, error, ...}.
+serde-wasm-bindgen = "0.6"

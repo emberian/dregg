@@ -1,0 +1,57 @@
+# grain-fork — fork + branch-and-stitch a hosted agent grain's mind.
+#
+# THE-GRAIN.md face #2, "Forkable — the mind is a umem cell you own", made real on
+# the hosting substrate. A grain's mind is a committed dregg cell (its heap is the
+# durable, projectable working-memory image; its c-list is its authority), wrapped
+# by a `hosted_lease::HostedLease` (rent + own-obligor economics). This crate
+# composes the ALREADY-PROVEN machinery — it does not reimplement a theorem:
+#
+#   * fork  — clone the mind's committed image at its checkpoint root into a child
+#             under its OWN cap-confined lease (child genesis == parent checkpoint
+#             root ⇒ provable common ancestry). State copies; value/authority do NOT.
+#   * rewind — restore the mind to an earlier committed root, fail-closed on a
+#             boundary mismatch (the `root_binds_get` discipline over the kernel's
+#             real sorted-Poseidon2 `dregg_cell::compute_heap_root`).
+#   * stitch — merge a child's divergent state back through the PROVEN field-granular
+#             pushout + settlement-sound authority gate:
+#             `starbridge_v2::umem_membrane::{stitch_projections, settle_umem_stitch}`
+#             (the guts of `ForkMembraneHost::stitch_pair`, the operable shadow of
+#             `Metatheory.SettlementSoundness`). Disjoint learnings fold clean; a
+#             same-address collision is a first-class `UmemConflict`; a cap revoked
+#             between branch and settlement is linear-dropped at the tip.
+#
+# A member of the breadstuffs root workspace: it shares the root's one target dir,
+# one resolve, and inherits the root `[patch]` tables (plonky3-recursion +
+# ark-serialize). Verify NARROW: `cargo test -p grain-fork`.
+
+[package]
+name = "grain-fork"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Fork + branch-and-stitch a hosted agent grain's mind: umem-fork + the proven settlement-sound stitch gate composed onto the hosting lease."
+
+[lib]
+name = "grain_fork"
+path = "src/lib.rs"
+
+[dependencies]
+# The hosting lease (rent obligor + own-obligor conservation + committed durable
+# image). Path dep on the PATH-based dregg-cell side (NOT a git-pinned umem, which
+# would pin a different dregg-cell rev — mixing the two would fork the `Cell`/`CellId`
+# types). See docs/GRAIN-FORK.md.
+hosted-lease = { path = "../hosted-lease" }
+
+# The kernel cell + its real sorted-Poseidon2 heap root (`compute_heap_root`) — the
+# mind's committed image and boundary.
+dregg-cell = { path = "../cell" }
+
+# The universal-memory bridge: `project_cell` (a cell → a `UProjection`) is the
+# executable shadow of the Lean `UniversalBridge` — the substrate the stitch folds.
+dregg-turn = { path = "../turn" }
+
+# THE PROVEN STITCH. `umem_membrane` (embedded-executor, gpui-free) carries the
+# field-granular pushout `stitch_projections`, the settlement-sound gate
+# `settle_umem_stitch`, and the first-class `UmemConflict` / `ConferredCap` /
+# `SettledUmemStitch`. We CONSUME these; we do not re-derive them.
+starbridge-v2 = { path = "../starbridge-v2", default-features = false, features = ["embedded-executor"] }

@@ -1,0 +1,18 @@
+[package]
+name = "hosted-lease"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+# The hosting lease: a dregg-native durable-execution lease built on the proven
+# `starbridge-execution-lease` capacity (StandingObligation meter + conserving
+# Transfer pay + committed umem checkpoint image). This is the spine a hosted
+# Hermes/webcell runtime binds to — the lease cell holds the durable execution
+# image, and the runtime advances its checkpoint each period. A ~90-line wrapper
+# over `starbridge-execution-lease` that pins the hosting-shaped surface.
+
+[dependencies]
+starbridge-execution-lease = { path = "../starbridge-apps/execution-lease" }
+dregg-cell = { path = "../cell" }

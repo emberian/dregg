@@ -1,0 +1,7 @@
+# Select getrandom 0.3's browser backend for the wasm build. Cargo prefers a
+# target-specific rustflags block over the workspace `[build] rustflags`
+# (reqwest_unstable), and the wasm verifier build needs the getrandom cfg, not
+# reqwest_unstable — so this override is exactly right for wasm32 and leaves the
+# native workspace build untouched.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
