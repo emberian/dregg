@@ -6,6 +6,12 @@
 //! the seam), these drive a real `dregg_sdk::ToolGateway` over the verified
 //! executor — so `turn_receipt_hash` is a hash the kernel actually committed, not a
 //! fabricated stub. This is the non-vacuity witness for the whole R2 weld.
+//!
+//! CROSS-REPO: this test consumes `grain-verify` (the DreggNet-side R2 verifier),
+//! so it is gated behind the `grain-integration` feature (off by default). Run it
+//! with `cargo test -p grain-turn --features grain-integration` and `~/dev/DreggNet`
+//! checked out beside this repo. Without the feature, breadstuffs builds standalone.
+#![cfg(feature = "grain-integration")]
 
 use std::collections::BTreeMap;
 

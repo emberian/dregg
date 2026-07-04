@@ -23,10 +23,17 @@ dregg-sdk = { path = "../sdk" }
 dregg-cell = { path = "../cell" }
 # The action commit witnessed at ACTION_SLOT (same crypto tier dregg-agent uses).
 blake3 = "1"
+# The CONSUMER half of the R2 weld lives in the DreggNet repo (cross-repo sibling).
+# OPTIONAL + feature-gated so breadstuffs builds STANDALONE — CI-green without a
+# ~/dev/DreggNet checkout beside it. Enable the end-to-end R2 integration test with
+# `--features grain-integration` (requires the DreggNet sibling present).
+# NOTE (architecture): this is an INVERTED dep — the core (breadstuffs) reaching up
+# into the operated layer (DreggNet). The proper fix is to move grain-verify's core
+# types into breadstuffs; tracked in docs/GRAIN-VERIFY-HOME.md (coordinate w/ the
+# DreggNet lane before moving).
+grain-verify = { path = "../../DreggNet/grain-verify", optional = true }
 
-[dev-dependencies]
-# The CONSUMER half of the R2 weld (DreggNet side): verify_r2 over the REAL
-# committed-turn manifest this crate mints — the end-to-end non-vacuity witness
-# that the producer (ToolGatewayMinter) satisfies the verifier (grain-verify)
-# with no synthetic stand-in anywhere on the path.
-grain-verify = { path = "../../DreggNet/grain-verify" }
+[features]
+# Off by default: keeps grain-turn + the whole breadstuffs workspace self-contained.
+# On: pulls the DreggNet-side grain-verify for the cross-repo R2 end-to-end test.
+grain-integration = ["dep:grain-verify"]
