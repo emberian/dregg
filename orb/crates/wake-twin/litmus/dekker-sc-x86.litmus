@@ -1,0 +1,14 @@
+X86 dekker-sc-x86
+(* Two-flag Dekker wakeup handshake, all accesses sequentially consistent.
+   pending = "there is unconsumed work" (producer stores, consumer loads);
+   might_block = "consumer is about to block" (consumer stores, producer loads).
+   A C11 seq_cst store lowers to a locked/mfenced store on x86; modeled here
+   as store; MFENCE. The full barrier forbids the store-buffering outcome.
+   Bad final state 0:EAX=0 /\ 1:EAX=0 = producer saw consumer awake (skips
+   the doorbell) AND consumer saw no pending work (blocks) = lost wakeup. *)
+{ pending=0; might_block=0; }
+ P0                    | P1                    ;
+ MOV [pending],$1      | MOV [might_block],$1  ;
+ MFENCE                | MFENCE                ;
+ MOV EAX,[might_block] | MOV EAX,[pending]     ;
+exists (0:EAX=0 /\ 1:EAX=0)

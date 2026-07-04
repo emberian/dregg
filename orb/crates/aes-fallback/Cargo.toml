@@ -1,0 +1,18 @@
+[package]
+name = "aes-fallback"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Portable AES-128/256-GCM AEAD backend for the crypto FFI seam, used where the verified EverCrypt/Vale AES-GCM path is unavailable (non-x86, no AES-NI). Hardware-accelerated on ARMv8 via aws-lc-rs (AWS-LC). Not part of the verified TCB."
+publish = false
+
+[lib]
+name = "aes_fallback"
+crate-type = ["staticlib"]
+
+[dependencies]
+# AWS-LC / BoringSSL-derived crypto (the backend rustls uses). Well-audited,
+# constant-time AES-GCM with ARMv8 crypto-extension acceleration. This is a
+# functional-usability backend, NOT part of the machine-checked TCB — see
+# CRYPTO-FFI-README.md for the trust ledger.
+aws-lc-rs = "1"

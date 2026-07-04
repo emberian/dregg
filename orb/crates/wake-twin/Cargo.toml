@@ -1,0 +1,13 @@
+[package]
+name = "wake-twin"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Executable model of a two-flag (pending/might-block) Dekker-style wakeup protocol with syscall coalescing, built for exhaustive schedule exploration under loom."
+publish = false
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

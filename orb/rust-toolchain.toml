@@ -1,0 +1,5 @@
+# nightly: edition 2024 + cfg_sanitize/linkage feature work.
+[toolchain]
+channel = "nightly-2026-03-24"
+profile = "default"
+components = ["cargo", "clippy", "rustc", "rustfmt"]

@@ -1,0 +1,14 @@
+AArch64 dekker-sc-aarch64
+(* Same Dekker handshake, C11 seq_cst lowered to the baseline AArch64 mapping:
+   seq_cst store = STLR, seq_cst load = LDAR (RCsc). STLR/LDAR do not reorder,
+   so the store-buffering outcome is forbidden.
+   Bad final state 0:X2=0 /\ 1:X2=0 = lost wakeup. *)
+{
+0:X1=pending;     0:X3=might_block;
+1:X1=might_block; 1:X3=pending;
+}
+ P0            | P1            ;
+ MOV W0,#1     | MOV W0,#1     ;
+ STLR W0,[X1]  | STLR W0,[X1]  ;
+ LDAR W2,[X3]  | LDAR W2,[X3]  ;
+exists (0:X2=0 /\ 1:X2=0)

@@ -1,0 +1,15 @@
+AArch64 SB-fenced-aarch64
+(* The fix on AArch64: a full barrier (DMB ISH = fence(SeqCst)) between the
+   store and the load on each side forbids the store-buffering outcome,
+   independent of whether the load is LDAR or LDAPR (plain LDR used here to
+   show the fence alone is sufficient). *)
+{
+0:X1=flag; 0:X3=data;
+1:X1=data; 1:X3=flag;
+}
+ P0           | P1           ;
+ MOV W0,#1    | MOV W0,#1    ;
+ STR W0,[X1]  | STR W0,[X1]  ;
+ DMB ISH      | DMB ISH      ;
+ LDR W2,[X3]  | LDR W2,[X3]  ;
+exists (0:X2=0 /\ 1:X2=0)

@@ -1,0 +1,16 @@
+AArch64 dekker-fenced-ldapr-aarch64
+(* The explicit fence the twin carries between store and load (fence(SeqCst) =
+   DMB ISH) restores the forbidden outcome even against the weakest admissible
+   lowering (STLR store, LDAPR RCpc load) — the redundant fence makes the
+   handshake sound independent of the compiler's SC-access mapping.
+   Bad final state 0:X2=0 /\ 1:X2=0 = lost wakeup. *)
+{
+0:X1=pending;     0:X3=might_block;
+1:X1=might_block; 1:X3=pending;
+}
+ P0            | P1            ;
+ MOV W0,#1     | MOV W0,#1     ;
+ STLR W0,[X1]  | STLR W0,[X1]  ;
+ DMB ISH       | DMB ISH       ;
+ LDAPR W2,[X3] | LDAPR W2,[X3] ;
+exists (0:X2=0 /\ 1:X2=0)
