@@ -28,7 +28,7 @@ serde_json = { workspace = true }
 # `.spk` container crypto + compression: App ID = the Ed25519 signing key,
 # payload integrity = the signature over the archive, container = xz.
 lzma-rs = "0.3"          # pure-Rust xz (de)compression
-ed25519-dalek = { workspace = true }   # Ed25519 sign/verify (App ID = pubkey)
+ed25519-dalek = { version = "2.1", features = ["std"] }   # Ed25519 sign/verify (App ID = pubkey)
 sha2 = { workspace = true }            # content-addressed umem `data_root`
 data-encoding = "2"      # Sandstorm's base32 alphabet for App IDs / dga1_ tokens
 
