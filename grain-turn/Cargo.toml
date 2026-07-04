@@ -21,5 +21,12 @@ dregg-agent = { path = "../dregg-agent" }
 dregg-sdk = { path = "../sdk" }
 # The grain turn-cell's field-slot helpers (field_from_u64) + Effect/CellId types.
 dregg-cell = { path = "../cell" }
+# The action commit witnessed at ACTION_SLOT (same crypto tier dregg-agent uses).
+blake3 = "1"
 
 [dev-dependencies]
+# The CONSUMER half of the R2 weld (DreggNet side): verify_r2 over the REAL
+# committed-turn manifest this crate mints — the end-to-end non-vacuity witness
+# that the producer (ToolGatewayMinter) satisfies the verifier (grain-verify)
+# with no synthetic stand-in anywhere on the path.
+grain-verify = { path = "../../DreggNet/grain-verify" }

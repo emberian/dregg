@@ -28,6 +28,10 @@
 //!   consumed total, written as witness state on the same metered turn.
 //! * **`heap_root`** (slot [`HEAP_ROOT_SLOT`], = 6) — the agent's committed cell
 //!   root at the point of the call, likewise witnessed on the turn.
+//! * **`action`** (slot [`ACTION_SLOT`], = 7) — [`action_commit`]`(label, cost)`,
+//!   the BLAKE3 commit to WHICH action this turn was minted for and what it drew;
+//!   the kernel transition itself commits to the action, so a receipt and its
+//!   linked turn cannot silently disagree about what was done.
 //! * the cell **nonce** — advanced by the executor on every committed turn (the
 //!   anti-replay/anti-reorder link binding each turn to its predecessor's receipt).
 //!
@@ -62,6 +66,30 @@ pub const CONSUMED_SLOT: usize = 5;
 /// `heap_root` at the point of the call (written on the metered turn).
 pub const HEAP_ROOT_SLOT: usize = 6;
 
+/// Slot on the grain turn-cell that witnesses WHICH action this turn was minted
+/// for: [`action_commit`]`(label, cost)` — the BLAKE3 commit binding the action
+/// label and its budget draw into the committed kernel state. Without this slot
+/// the turn would witness only meter state (a turn happened, the meter moved);
+/// with it, the kernel transition itself commits to *what* the action was, so a
+/// receipt and its linked turn cannot silently disagree about the action.
+pub const ACTION_SLOT: usize = 7;
+
+/// Domain separator for [`action_commit`].
+pub const ACTION_COMMIT_DOMAIN: &[u8] = b"dregg-grain-action-commit-v1";
+
+/// The canonical action commit witnessed at [`ACTION_SLOT`] on every grain turn:
+/// `BLAKE3(domain ‖ len(label) ‖ label ‖ cost)`. Length-prefixed so `(label,
+/// cost)` pairs cannot collide by concatenation. Pure — a verifier holding a
+/// receipt's `(action, cost)` recomputes it to check what the turn witnessed.
+pub fn action_commit(label: &str, cost: i64) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(ACTION_COMMIT_DOMAIN);
+    h.update(&(label.len() as u64).to_le_bytes());
+    h.update(label.as_bytes());
+    h.update(&cost.to_le_bytes());
+    *h.finalize().as_bytes()
+}
+
 /// A large-but-finite deadline for the grain mandate — the DEADLINE conjunct of
 /// `delegAdmit` is not the meter here (the rate ceiling is), so it is set far out;
 /// a real deployment binds it to the lease expiry.
@@ -86,8 +114,9 @@ const GRAIN_TOOL_METHOD: &str = "grain.turn";
 /// REFUSES (over-rate / insolvent) is surfaced as an `Err`, and the agent run loop
 /// admits nothing for it (no draw, no receipt).
 pub struct ToolGatewayMinter {
-    /// Kept alive for the shared ledger the worker turns commit against.
-    _runtime: AgentRuntime,
+    /// The shared ledger the worker turns commit against (also the read path for
+    /// [`read_slot`](Self::read_slot) — what the grain turn-cell REALLY committed).
+    runtime: AgentRuntime,
     /// The cap-gated worker + its metered `calls_made` counter + the mandate cell.
     gateway: ToolGateway,
     /// The presentation clock/height every grain turn is stamped at. The DEADLINE
@@ -116,11 +145,21 @@ impl ToolGatewayMinter {
         };
         let gateway = ToolGateway::admit(&runtime, &root, grant)?;
         Ok(ToolGatewayMinter {
-            _runtime: runtime,
+            runtime,
             gateway,
             now: 0,
             minted: Vec::new(),
         })
+    }
+
+    /// Read a witnessed slot straight off the COMMITTED grain turn-cell state in
+    /// the real ledger (not a tracked mirror). `None` if the cell is absent or the
+    /// index is out of range. This is the ground-truth read the slot-witness tests
+    /// use: what the kernel actually committed, not what this struct remembers.
+    pub fn read_slot(&self, index: usize) -> Option<[u8; 32]> {
+        let ledger = self.runtime.ledger().lock().ok()?;
+        let cell = ledger.get(&self.gateway.worker_cell())?;
+        cell.state.fields.get(index).copied()
     }
 
     /// The grain turn-cell id (the mandate cell carrying `calls_made`).
@@ -144,16 +183,18 @@ impl ToolGatewayMinter {
 impl GrainTurnMinter for ToolGatewayMinter {
     fn mint_turn(
         &mut self,
-        _label: &str,
-        _cost: i64,
+        label: &str,
+        cost: i64,
         consumed_after: i64,
         cell_root: [u8; 32],
     ) -> Result<[u8; 32], String> {
         let cell = self.gateway.worker_cell();
         // The tool's witness work rides the SAME metered turn as the gateway's
-        // `calls_made : c → c+1` advance: the session's consumed total and the
-        // agent's heap root are written as grain-turn-cell state, so the committed
-        // turn witnesses WHAT the action was, not merely that a turn happened.
+        // `calls_made : c → c+1` advance: the session's consumed total, the
+        // agent's heap root, AND the action commit (`action_commit(label, cost)`)
+        // are written as grain-turn-cell state, so the committed turn witnesses
+        // WHAT the action was — which action, at what cost, over which heap —
+        // not merely that a turn happened.
         let work = vec![
             Effect::SetField {
                 cell,
@@ -164,6 +205,11 @@ impl GrainTurnMinter for ToolGatewayMinter {
                 cell,
                 index: HEAP_ROOT_SLOT,
                 value: cell_root,
+            },
+            Effect::SetField {
+                cell,
+                index: ACTION_SLOT,
+                value: action_commit(label, cost),
             },
         ];
         // The genuine executor turn. `Err` = the executor refused host-side (its

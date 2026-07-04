@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 
 use dregg_agent::agent::{AgentAction, AgentSpec, PlannedBrain, ToolKit, ToolOutcome};
 use dregg_agent::session::Session;
-use grain_turn::ToolGatewayMinter;
+use grain_turn::{ACTION_SLOT, CONSUMED_SLOT, ToolGatewayMinter, action_commit};
+use grain_verify::{GrainAttestation, GrainVerifyError};
 
 /// A trivial toolkit — the R2 tests exercise the kernel-turn weld, not a live tool.
 struct NoKit;
@@ -74,6 +75,79 @@ fn an_admitted_action_seals_a_receipt_linked_to_a_genuine_committed_turn() {
 
     // The whole session still re-witnesses (the turn link rode the signed body).
     sess.verify().expect("the minted session re-witnesses");
+
+    // ── SLOT WITNESS: the COMMITTED kernel state (read from the real ledger, not
+    //    a tracked mirror) carries the last action's commit + consumed total ────
+    let last = report.receipts.last().unwrap();
+    assert_eq!(
+        minter.read_slot(ACTION_SLOT),
+        Some(action_commit(&last.action, last.cost)),
+        "the committed turn witnesses WHICH action it was minted for"
+    );
+    // Negative polarity: a DIFFERENT action/cost commits differently — the slot
+    // is a binding witness, not a constant.
+    assert_ne!(
+        minter.read_slot(ACTION_SLOT),
+        Some(action_commit("invoke:something-else", last.cost)),
+        "a different action label yields a different witnessed commit"
+    );
+    assert_ne!(
+        minter.read_slot(ACTION_SLOT),
+        Some(action_commit(&last.action, last.cost + 1)),
+        "a different cost yields a different witnessed commit"
+    );
+    // The consumed slot carries the session meter's post-draw total (the
+    // `field_from_u64` encoding: big-endian in the last 8 bytes).
+    let consumed = minter.read_slot(CONSUMED_SLOT).expect("consumed witnessed");
+    assert_eq!(
+        u64::from_be_bytes(consumed[24..32].try_into().unwrap()),
+        last.consumed_after as u64,
+        "the committed turn witnesses the meter's post-draw consumed total"
+    );
+}
+
+// ── THE WHOLE R2 WELD, END TO END: the REAL minter's manifest satisfies the
+//    REAL verifier (grain-verify::verify_r2) — no synthetic stand-in anywhere ──
+#[test]
+fn the_real_minted_manifest_satisfies_verify_r2_end_to_end() {
+    let budget = 10;
+    let mut minter = ToolGatewayMinter::open("grain-weld", budget).expect("admit grain turn-cell");
+    let spec = AgentSpec::new("ignored", budget).with_service("work");
+    let mut sess = Session::open_seeded([73u8; 32], "dga1_renter", spec).unwrap();
+    sess.run_goal_minted("do three", &mut work_plan(3), &NoKit, Some(&mut minter));
+
+    let att = GrainAttestation::attest(&sess);
+    let manifest = minter.committed_turns().to_vec();
+
+    // POSITIVE: the renter's R2 check passes over the executor's real manifest.
+    let v = att
+        .verify_r2(&manifest)
+        .expect("every receipt is a view over a REAL committed kernel turn");
+    assert_eq!(
+        v.linked, 3,
+        "all three actions link to genuine committed turns"
+    );
+    assert_eq!(v.base.consumed, 3);
+
+    // NEGATIVE: a manifest that does NOT vouch for one committed turn is refused
+    // exactly at that receipt — the tooth bites on the real artifact too.
+    let mut partial = manifest.clone();
+    partial.remove(1);
+    match att.verify_r2(&partial) {
+        Err(GrainVerifyError::R2FabricatedLink { seq, .. }) => assert_eq!(seq, 1),
+        other => panic!("expected R2FabricatedLink at seq 1, got {other:?}"),
+    }
+
+    // NEGATIVE: an UNMINTED session (no kernel turns at all) fails R2 against
+    // even the real manifest — a receipt with no link cannot ride along.
+    let spec2 = AgentSpec::new("ignored", budget).with_service("work");
+    let mut bare = Session::open_seeded([74u8; 32], "dga1_renter", spec2).unwrap();
+    bare.run_goal("no mint", &mut work_plan(2), &NoKit);
+    let bare_att = GrainAttestation::attest(&bare);
+    assert!(matches!(
+        bare_att.verify_r2(&manifest),
+        Err(GrainVerifyError::R2Unlinked { seq: 0 })
+    ));
 }
 
 // ── REFUSAL: the executor's calls_made caveat bounds the run host-side ────────
