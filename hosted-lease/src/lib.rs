@@ -99,6 +99,24 @@ impl HostedLease {
     pub fn cell(&self) -> &Cell {
         &self.cell
     }
+
+    /// Mutably borrow the underlying lease cell — for a lifecycle layer that seals or
+    /// advances its OWN state slots on the same cell (e.g. the vat lifecycle machine,
+    /// slots disjoint from the lease's own `KEY_STEP`/`KEY_DIGEST`/working range). The
+    /// caller is responsible for keeping the lease's economic slots intact; this does
+    /// not re-open or re-meter the lease.
+    pub fn cell_mut(&mut self) -> &mut Cell {
+        &mut self.cell
+    }
+
+    /// Wrap an ALREADY-OPENED lease cell under `terms` — the constructor for a caller
+    /// that opened the lease itself (e.g. via `starbridge_vat::lifecycle::open_vat`,
+    /// which opens the lease AND seals the vat lifecycle in one pass), rather than
+    /// through [`HostedLease::open`]. Does NOT call `open_lease`, so it never
+    /// double-opens the (WriteOnce-sealed) economic slots.
+    pub fn from_cell(cell: Cell, terms: LeaseTerms) -> HostedLease {
+        HostedLease { cell, terms }
+    }
 }
 
 #[cfg(test)]

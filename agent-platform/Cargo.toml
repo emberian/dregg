@@ -37,6 +37,12 @@ http-serve = { path = "../http-serve" }
 # chain, verified offline) — see src/share.rs.
 dregg-auth = { path = "../dregg-auth" }
 grain-verify = { path = "../grain-verify" }
+# THE FOLD: the vat's verified lifecycle machine (VatState / VatTransition +
+# open_vat / apply_transition / read_state). Each tenant's grain lifecycle routes
+# through this — rent = open_vat + BringUp, sleep/wake = Sleep/BringUp, reap/lapse
+# = Reap/Lapse — reusing VatTransition's legality (the executor's Monotonic(VAT_PHASE)
+# tooth) instead of an ad-hoc per-tenant state.
+starbridge-vat = { path = "../starbridge-apps/vat" }
 dregg-agent = { path = "../dregg-agent" }
 dregg-cell = { path = "../cell" }
 serde = { version = "1", features = ["derive"] }

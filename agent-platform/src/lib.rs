@@ -56,6 +56,11 @@ use dregg_agent::tools::OperatorTools;
 use dregg_cell::{Cell, CellId};
 use hosted_durable::{LeaseCharge, SettleReceipt, Settlement};
 use hosted_lease::{FieldElement, HostedLease, LeaseTerms, WORKING_BASE, field_from_u64};
+// THE FOLD: the vat's verified lifecycle machine. A tenant's grain lifecycle is a
+// `VatState` sealed on the SAME lease cell (slots disjoint from the lease economics),
+// advanced only through the legality-checked `apply_transition` — no ad-hoc state.
+use starbridge_vat::lifecycle::{WitnessStance, apply_transition, open_vat, read_state};
+pub use starbridge_vat::{VatState, VatTransition};
 
 /// **The R1 renter finality anchor**, supplied whole at rent: the renter-chosen
 /// `nonce` (the genesis pin, re-exposed bound to the session signer in every
@@ -103,6 +108,14 @@ pub const WK_CONSUMED: u32 = WORKING_BASE + 2;
 struct Tenant {
     session: Session,
     lease: HostedLease,
+    /// **THE FOLD — the grain's verified lifecycle state.** A vat lifecycle
+    /// (`Created`/`Running`/`Sleeping`/`Lapsed`/`Reaped`) sealed on the lease cell
+    /// (slots disjoint from the lease economics) at rent. This field is the cached
+    /// read of [`starbridge_vat::lifecycle::read_state`] over `lease.cell()`; every
+    /// mutation goes through [`Tenant::transition`], which advances it ONLY via the
+    /// legality-checked [`apply_transition`] (the executor's `Monotonic(VAT_PHASE)`
+    /// tooth), so an illegal move (e.g. waking a reaped grain) is refused up front.
+    vat: VatState,
     terms: LeaseTerms,
     workdir: std::path::PathBuf,
     /// The account that owns this grain — the only subject authorized to drive it.
@@ -125,6 +138,38 @@ struct Tenant {
     /// [`AgentPlatform::role_of`]); a subject absent from both the owner slot and
     /// this map is a non-member (fail-closed → the routes 404, no existence oracle).
     acl: HashMap<String, Role>,
+}
+
+impl Tenant {
+    /// Advance the grain's lifecycle by ONE vat transition on the lease cell — the
+    /// single seam every lifecycle move flows through. It calls the legality-checked
+    /// [`apply_transition`] (so an illegal move — waking a reaped grain, sleeping a
+    /// non-running one — is refused by the machine's own tooth, agreeing with the
+    /// executor's `Monotonic(VAT_PHASE)` re-enforcement), then caches the new state.
+    /// On `BringUp` it binds the box + endpoint to a stable per-host token (the box
+    /// is re-placed on every wake); the other transitions clear them (no box while
+    /// not Running).
+    fn transition(&mut self, host: &str, t: VatTransition) -> Result<VatState, AgentPlatformError> {
+        let (machine, endpoint) = match t {
+            VatTransition::BringUp => (box_token(host), box_token(host) ^ 0x01),
+            VatTransition::Sleep | VatTransition::Lapse | VatTransition::Reap => (0, 0),
+        };
+        let to = apply_transition(self.lease.cell_mut(), t, machine, endpoint)
+            .map_err(|e| AgentPlatformError::Lifecycle(format!("{e:?}")))?;
+        self.vat = to;
+        Ok(to)
+    }
+}
+
+/// A stable, nonzero box/endpoint token for a host — the vat's `MACHINE`/`ENDPOINT`
+/// slots want a placement identity, and a hosted agent grain's "box" is the
+/// in-process session, so we bind a deterministic per-host token (the first 8 bytes
+/// of `blake3(host)`, forced nonzero) re-bound on each `BringUp`.
+fn box_token(host: &str) -> u64 {
+    let h = blake3::hash(host.as_bytes());
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&h.as_bytes()[..8]);
+    u64::from_le_bytes(b) | 1
 }
 
 /// The platform every rented agent grain is hosted on, keyed by host.
@@ -164,6 +209,9 @@ pub enum AgentPlatformError {
     BadTerms(String),
     /// The grain's hosting lease has lapsed (non-payment): the slot is reclaimed.
     Lapsed,
+    /// A vat lifecycle transition was refused by the machine (an illegal move —
+    /// e.g. waking a reaped grain, or a malformed lifecycle slot).
+    Lifecycle(String),
     /// Advancing the lease's durable checkpoint was refused.
     Lease(String),
     /// Settling a rent period was refused.
@@ -189,6 +237,7 @@ impl std::fmt::Display for AgentPlatformError {
             AgentPlatformError::Lapsed => {
                 write!(f, "the hosting lease has lapsed: grain reclaimed")
             }
+            AgentPlatformError::Lifecycle(e) => write!(f, "vat lifecycle transition refused: {e}"),
             AgentPlatformError::Lease(e) => write!(f, "durable checkpoint refused: {e}"),
             AgentPlatformError::Settle(e) => write!(f, "rent settlement refused: {e}"),
             AgentPlatformError::Verify(e) => write!(f, "session re-witness failed: {e}"),
@@ -292,9 +341,32 @@ impl AgentPlatform {
         let session = Session::open(account, bundle.spec)
             .map_err(|e| AgentPlatformError::Session(e.to_string()))?;
 
-        let lease_cell = Cell::with_balance(bytes32(terms.lease), bytes32(terms.asset), funding);
-        let lease = HostedLease::open(lease_cell, terms.clone(), field_from_u64(0))
-            .map_err(|e| AgentPlatformError::Lease(e.to_string()))?;
+        // THE FOLD: rent = open_vat (opens the durable-execution lease AND seals the
+        // vat lifecycle at `Created` on the same cell) + a `BringUp` transition to
+        // `Running` (the launch). The lease is then wrapped read/meter-side by a
+        // `HostedLease` over the SAME already-opened cell (`from_cell`, never a second
+        // open of the WriteOnce economic slots). A hosted agent grain rents Symbolic
+        // (verify-later) — proofs are re-derived on collapse, not proof-as-you-go.
+        let mut lease_cell =
+            Cell::with_balance(bytes32(terms.lease), bytes32(terms.asset), funding);
+        open_vat(
+            &mut lease_cell,
+            &terms,
+            field_from_u64(0),
+            WitnessStance::Symbolic,
+        )
+        .map_err(|e| AgentPlatformError::Lease(format!("{e:?}")))?;
+        // Launch: Created → Running, binding the box + endpoint for this host.
+        apply_transition(
+            &mut lease_cell,
+            VatTransition::BringUp,
+            box_token(&host),
+            box_token(&host) ^ 0x01,
+        )
+        .map_err(|e| AgentPlatformError::Lifecycle(format!("{e:?}")))?;
+        let vat =
+            read_state(&lease_cell).map_err(|e| AgentPlatformError::Lifecycle(format!("{e:?}")))?;
+        let lease = HostedLease::from_cell(lease_cell, terms.clone());
 
         let mut tenants = self.tenants.lock().expect("platform poisoned");
         // Re-check under the write lock (TOCTOU with the read check above).
@@ -306,6 +378,7 @@ impl AgentPlatform {
             Arc::new(Mutex::new(Tenant {
                 session,
                 lease,
+                vat,
                 terms,
                 workdir: std::path::PathBuf::from(workdir),
                 owner: account.to_string(),
@@ -667,10 +740,46 @@ impl AgentPlatform {
     pub fn reap_if_behind(&self, host: &str, clock: i64) -> Result<bool, AgentPlatformError> {
         let arc = self.tenant_arc(host)?;
         let mut guard = arc.lock().expect("tenant poisoned");
-        guard
+        let lapsed = guard
             .lease
             .lapse_if_behind(clock)
-            .map_err(|e| AgentPlatformError::Lease(e.to_string()))
+            .map_err(|e| AgentPlatformError::Lease(e.to_string()))?;
+        // THE FOLD: mirror the lease's LAPSED tooth in the vat lifecycle — any live
+        // grain moves to `Lapsed` (routed through the legality-checked transition, so
+        // an already-lapsed/terminal grain is a no-op, never a double-lapse).
+        if lapsed && guard.vat != VatState::Lapsed && !guard.vat.is_terminal() {
+            guard.transition(host, VatTransition::Lapse)?;
+        }
+        Ok(lapsed)
+    }
+
+    /// **Sleep the grain at `host`** — checkpoint-and-tear-down. Routes the vat
+    /// `Running → Sleeping` transition: the box goes dark and metering stops; the
+    /// durable image is what follows. Refused if the grain is not Running (the
+    /// machine's own tooth). The session + committed history are retained for the wake.
+    pub fn sleep(&self, host: &str) -> Result<VatState, AgentPlatformError> {
+        let arc = self.tenant_arc(host)?;
+        let mut guard = arc.lock().expect("tenant poisoned");
+        guard.transition(host, VatTransition::Sleep)
+    }
+
+    /// **Wake the grain at `host` from its lease** — the named *wake-from-lease* move,
+    /// delivered for free by the fold: the vat's `BringUp` from `Sleeping → Running`
+    /// re-places the box, restores from the durable image, and resumes metering.
+    /// Refused if the grain is not Sleeping (the machine's own tooth).
+    pub fn wake(&self, host: &str) -> Result<VatState, AgentPlatformError> {
+        let arc = self.tenant_arc(host)?;
+        let mut guard = arc.lock().expect("tenant poisoned");
+        guard.transition(host, VatTransition::BringUp)
+    }
+
+    /// The grain's current verified lifecycle state at `host` — the vat [`VatState`]
+    /// read off the lease cell (created / running / sleeping / lapsed / reaped), or
+    /// [`NoSuchGrain`](AgentPlatformError::NoSuchGrain).
+    pub fn grain_state(&self, host: &str) -> Result<VatState, AgentPlatformError> {
+        let arc = self.tenant_arc(host)?;
+        let guard = arc.lock().expect("tenant poisoned");
+        read_state(guard.lease.cell()).map_err(|e| AgentPlatformError::Lifecycle(format!("{e:?}")))
     }
 
     /// The renter's artifact for the grain at `host`: a
