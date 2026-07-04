@@ -1,0 +1,12 @@
+X86 SB-relacq-x86
+(* Waker fast path modeled as store-buffering with release/acquire atomics.
+   flag = "a waker is parked" (waiter stores, notifier loads);
+   data = the published counter (notifier stores, waiter loads).
+   On x86 a release store and an acquire load are both plain MOV.
+   Bad final state 0:EAX=0 /\ 1:EAX=0 = waiter saw no data (parks) AND
+   notifier saw no waker (skips wake) = lost wakeup. *)
+{ flag=0; data=0; }
+ P0             | P1             ;
+ MOV [flag],$1  | MOV [data],$1  ;
+ MOV EAX,[data] | MOV EAX,[flag] ;
+exists (0:EAX=0 /\ 1:EAX=0)

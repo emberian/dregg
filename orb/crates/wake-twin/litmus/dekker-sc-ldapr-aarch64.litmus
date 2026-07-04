@@ -1,0 +1,15 @@
+AArch64 dekker-sc-ldapr-aarch64
+(* Counter-demonstration: if the seq_cst LOAD were (mis)lowered to the RCpc
+   LDAPR instead of LDAR, the two SC stores no longer order before the loads
+   and the store-buffering outcome reopens. This is why a bare-SC handshake is
+   not mapping-independent and why an explicit fence is defensive.
+   Bad final state 0:X2=0 /\ 1:X2=0 = lost wakeup. *)
+{
+0:X1=pending;     0:X3=might_block;
+1:X1=might_block; 1:X3=pending;
+}
+ P0            | P1            ;
+ MOV W0,#1     | MOV W0,#1     ;
+ STLR W0,[X1]  | STLR W0,[X1]  ;
+ LDAPR W2,[X3] | LDAPR W2,[X3] ;
+exists (0:X2=0 /\ 1:X2=0)

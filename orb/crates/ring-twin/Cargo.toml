@@ -1,0 +1,13 @@
+[package]
+name = "ring-twin"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Executable model of a bounded SPSC ring with free-running counters and check-register-recheck waker handoff, built for exhaustive schedule exploration under loom."
+publish = false
+
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7", features = ["futures"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }

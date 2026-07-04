@@ -1,0 +1,15 @@
+AArch64 SB-relacq-ldapr-aarch64
+(* Same store-buffering shape, release store (STLR) + RCpc acquire load
+   (LDAPR), the ARMv8.3 (+rcpc) lowering an optimizing compiler may pick for
+   an acquire load. LDAPR does not order after a prior STLR, so the
+   store-buffering outcome reopens.
+   Bad final state 0:X2=0 /\ 1:X2=0 = lost wakeup. *)
+{
+0:X1=flag; 0:X3=data;
+1:X1=data; 1:X3=flag;
+}
+ P0            | P1            ;
+ MOV W0,#1     | MOV W0,#1     ;
+ STLR W0,[X1]  | STLR W0,[X1]  ;
+ LDAPR W2,[X3] | LDAPR W2,[X3] ;
+exists (0:X2=0 /\ 1:X2=0)

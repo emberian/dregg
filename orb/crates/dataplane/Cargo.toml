@@ -1,0 +1,17 @@
+[package]
+name = "dataplane"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+description = "Native host that drives the leanc-compiled proven serve over a real TCP socket: it owns the socket and accept loop and calls the exported drorb_serve for every request."
+publish = false
+
+[[bin]]
+name = "dataplane"
+path = "src/main.rs"
+
+# The io_uring IO path is Linux-only. On other platforms the host uses the
+# portable blocking thread-per-connection path and pulls in neither dependency.
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
+libc = "0.2"

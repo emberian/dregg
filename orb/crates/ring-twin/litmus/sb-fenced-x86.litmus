@@ -1,0 +1,10 @@
+X86 SB-fenced-x86
+(* The fix: a full fence (MFENCE = fence(SeqCst)) between the flag store and
+   the counter load on each side drains the store buffer, forbidding the
+   store-buffering outcome. *)
+{ flag=0; data=0; }
+ P0             | P1             ;
+ MOV [flag],$1  | MOV [data],$1  ;
+ MFENCE         | MFENCE         ;
+ MOV EAX,[data] | MOV EAX,[flag] ;
+exists (0:EAX=0 /\ 1:EAX=0)

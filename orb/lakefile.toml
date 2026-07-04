@@ -1,0 +1,501 @@
+name = "drorb"
+version = "0.1.0"
+defaultTargets = ["Arena", "Uring", "Proto", "Slab", "Pool", "Flow", "Quic", "H3", "Tls", "Proxy", "Policy", "Route", "H2", "Ws", "Dns", "Rate", "Captp", "Safety", "Drain", "Body", "Header", "Sticky", "Resume", "Trace", "Fallback", "Mux", "Sse", "StickTable", "Socks", "Udp", "Mtls", "Acme", "Ct", "EarlyHints", "HtmlRewrite", "Metrics", "Tap", "Har", "DownloadMgr", "Isolation", "Dsl", "Reactor", "StaticFile", "Redirect", "Cgi", "Cache", "Middleware", "Cors", "SecurityHeaders", "IpFilter", "Jwt", "BasicAuth", "Stun", "Ice", "Dcep", "Wireguard", "Derp", "Disco", "ForwardProxy", "AccessControlProxy", "RouteAdvanced", "WebrtcTransport", "H2Sound", "QpackSound", "QuicTransport", "QuicHeaderProt", "RouteCorrect", "HpackDynCorrect", "ChunkedCorrect", "ReactorStepCorrect", "TlsFsmCorrect", "H2FlowCorrect", "CacheFreshCorrect", "StaticRangeCorrect", "CorsCorrect", "JwtValidCorrect", "DnsNameCorrect"]
+
+[[lean_lib]]
+name = "Arena"
+
+# `arena-check`: the runnable arena model — reads {"input": [bytes...]} JSON on
+# stdin, parses the HTTP/1.1 request head into the arena view, prints it (or a
+# typed error) as JSON on stdout. See Arena/Check.lean.
+[[lean_exe]]
+name = "arena-check"
+root = "Arena.Check"
+# ld64 on current macOS hard-errors on the toolchain's __DATA_CONST segment
+# (missing SG_READ_ONLY); keep the data segment writable instead.
+moreLinkArgs = ["-Wl,-no_data_const"]
+
+[[lean_lib]]
+name = "Uring"
+
+[[lean_lib]]
+name = "Proto"
+
+[[lean_lib]]
+name = "Slab"
+
+[[lean_lib]]
+name = "Pool"
+
+[[lean_lib]]
+name = "Flow"
+
+[[lean_lib]]
+name = "Quic"
+
+[[lean_lib]]
+name = "H3"
+
+[[lean_lib]]
+name = "Tls"
+
+[[lean_lib]]
+name = "Proxy"
+
+[[lean_lib]]
+name = "Policy"
+
+[[lean_lib]]
+name = "Route"
+
+[[lean_lib]]
+name = "H2"
+
+[[lean_lib]]
+name = "Ws"
+
+[[lean_lib]]
+name = "Dns"
+
+[[lean_lib]]
+name = "Rate"
+
+[[lean_lib]]
+name = "Captp"
+
+[[lean_lib]]
+name = "Safety"
+
+[[lean_lib]]
+name = "Drain"
+
+[[lean_lib]]
+name = "Body"
+
+[[lean_lib]]
+name = "Header"
+
+[[lean_lib]]
+name = "Sticky"
+
+[[lean_lib]]
+name = "Resume"
+
+[[lean_lib]]
+name = "Trace"
+
+[[lean_lib]]
+name = "Fallback"
+
+[[lean_lib]]
+name = "Mux"
+
+[[lean_lib]]
+name = "Sse"
+
+[[lean_lib]]
+name = "StickTable"
+
+[[lean_lib]]
+name = "Socks"
+
+[[lean_lib]]
+name = "Udp"
+
+[[lean_lib]]
+name = "Mtls"
+
+[[lean_lib]]
+name = "Acme"
+
+[[lean_lib]]
+name = "Ct"
+
+[[lean_lib]]
+name = "EarlyHints"
+
+[[lean_lib]]
+name = "HtmlRewrite"
+
+[[lean_lib]]
+name = "Metrics"
+
+[[lean_lib]]
+name = "Tap"
+
+[[lean_lib]]
+name = "Har"
+
+[[lean_lib]]
+name = "DownloadMgr"
+
+[[lean_lib]]
+name = "Isolation"
+
+[[lean_lib]]
+name = "Dsl"
+
+[[lean_exe]]
+name = "orb"
+root = "Arena.Orb"
+# The deployed serve now composes the REAL Jwt gate (Reactor.Stage.Jwt), which
+# imports Crypto — the HACL*/EverCrypt @[extern] primitives (ed25519Verify et al.).
+# Even though the deployed JWT config routes around them (its verify boundaries are
+# pure stubs), the Jwt object references the extern symbols, so the orb binary links
+# the crypto shim + libevercrypt.a — the SAME recipe crypto-selftest uses. No
+# unverified C crosses this seam. -no_data_const is the ld64/__DATA_CONST macOS
+# workaround the other exes use.
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+[[lean_lib]]
+name = "Reactor"
+
+# `Dataplane`: the proven serve exposed with a C ABI (`@[export drorb_serve]`)
+# for a native host to drive. Unlike the `orb-*` exes (Lean owns `main`, the C
+# shell is the `@[extern]` callee), here Lean is the CALLEE of an FFI call the
+# host makes: `lake build Dataplane` compiles the module + its transitive deps
+# to Mach-O objects under .lake/build/ir/**/*.c.o.export, which a host archives
+# (libdrorb.a) and links against the Lean runtime (lib/lean/libleanshared*).
+# The Rust dataplane in crates/dataplane is that host. A library, not an exe:
+# it exports `drorb_serve`, it has no `main`.
+[[lean_lib]]
+name = "Dataplane"
+
+[[lean_lib]]
+name = "StaticFile"
+
+[[lean_lib]]
+name = "Redirect"
+
+[[lean_lib]]
+name = "Cgi"
+
+[[lean_lib]]
+name = "Cache"
+
+[[lean_lib]]
+name = "Middleware"
+
+[[lean_lib]]
+name = "Cors"
+
+[[lean_lib]]
+name = "SecurityHeaders"
+
+[[lean_lib]]
+name = "IpFilter"
+
+[[lean_lib]]
+name = "Jwt"
+
+[[lean_lib]]
+name = "BasicAuth"
+
+[[lean_lib]]
+name = "Stun"
+
+[[lean_lib]]
+name = "Ice"
+
+[[lean_lib]]
+name = "Dcep"
+
+[[lean_lib]]
+name = "Wireguard"
+
+[[lean_lib]]
+name = "Derp"
+
+[[lean_lib]]
+name = "Disco"
+
+[[lean_lib]]
+name = "ForwardProxy"
+
+[[lean_lib]]
+name = "AccessControlProxy"
+
+[[lean_lib]]
+name = "RouteAdvanced"
+
+[[lean_lib]]
+name = "WebrtcTransport"
+
+# `orb-mac`: the proven reactor as a real macOS TCP server. `main` binds a port
+# (argv[1] or 8080) and hands the accept loop to the untrusted C shell
+# (ffi/mac_io.c), which answers each connection with `deployStepIngress` — the
+# SAME proven pipeline the `orb` exe runs, unchanged. The C shell is precompiled
+# to ffi/mac_io.o (run ffi/build-mac-io.sh; TOML lakefiles cannot compile a C
+# source directly) and linked in via moreLinkArgs. The -no_data_const flag is
+# the same ld64/__DATA_CONST workaround the other exes use on current macOS.
+# The deployed reactor closure now reaches the REAL Jwt gate (Reactor.Stage.Jwt →
+# Crypto), so this exe references the @[extern] crypto symbols and must link the
+# SAME backend the `orb` exe does: the crypto FFI shim, the AES-GCM Rust fallback,
+# and the F*-verified HACL*/EverCrypt. No unverified C crosses the seam. See the
+# HACL* path convention note at the top of this file's crypto targets
+# (-L/opt/hacl-star/dist/gcc-compatible; symlink it or see CRYPTO-FFI-README.md).
+[[lean_exe]]
+name = "orb-mac"
+root = "IoMac"
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/mac_io.o", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+# `IoSel4`: the seL4 Microkit / sDDF IO boundary for the net protection domain.
+# A library (NOT a lean_exe): a Microkit PD has no `main` — it exports
+# init/notified/protected, which the seL4 image links into a CapDL ELF. It
+# elaborates and compiles to .o here (the @[extern] sDDF/Microkit symbols resolve
+# only at the final seL4 link, which is not available in this environment). See
+# SEL4-IO-README.md. No moreLinkArgs: this target links nothing here.
+[[lean_lib]]
+name = "IoSel4"
+
+# `Crypto`: the crypto FFI seam — opaque @[extern] primitives + assumed-property
+# axioms (Crypto.lean). The library elaborates on its own (the @[extern] symbols
+# are unresolved until something links the shim); the *executable* below is what
+# links ffi/crypto_shim.o and runs.
+[[lean_lib]]
+name = "Crypto"
+
+# `crypto-selftest`: runs the FFI primitives against published test vectors
+# (RFC 7748 / 8032 / 5869, FIPS-180). The C shim is precompiled to
+# ffi/crypto_shim.o (run ffi/build-crypto-shim.sh — TOML lakefiles cannot compile
+# a C source directly) and linked here against libevercrypt.a — the F*-verified
+# HACL*/EverCrypt crypto (Project Everest), built from /opt/hacl-star/dist. No
+# unverified C (no libsodium/OpenSSL) crosses this seam. -no_data_const is the
+# same ld64/__DATA_CONST workaround the other exes use on current macOS.
+[[lean_exe]]
+name = "crypto-selftest"
+root = "Crypto.SelfTest"
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+# `orb-linux`: the native Linux IO driver (TASK LINUX-IO). A real TCP accept loop
+# (ffi/linux_io.c — io_uring preferred, epoll fallback) that answers each
+# connection with `deployStepIngress` — the SAME proven pipeline the `orb` exe
+# runs, unchanged. The C shell is precompiled to ffi/linux_io.o (run
+# ffi/build-linux-io.sh; TOML lakefiles cannot compile a C source directly) and
+# linked via moreLinkArgs. On macOS the shell compiles to a Linux-only stub that
+# fails at runtime, so this exe still links here for a build-check; the real
+# server runs on Linux. -no_data_const is the same ld64/__DATA_CONST macOS
+# workaround the other exes use; on Linux drop it (lld-ELF rejects the Mach-O-only
+# flag) — see LINUX-IO-README.md. For io_uring add "-luring" and rebuild the
+# object with ORB_IO_URING=1. Like `orb`/`orb-mac`, the reactor closure reaches the
+# real Jwt gate → Crypto, so this exe links the crypto shim + AES fallback +
+# HACL*/EverCrypt (same recipe, same HACL* path convention as the crypto targets).
+[[lean_exe]]
+name = "orb-linux"
+root = "IoLinux"
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/linux_io.o", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+# `orb-win`: the native Windows IO driver (TASK WINDOWS-IO). A real TCP accept
+# loop over I/O Completion Ports (ffi/win_io.c — AcceptEx/WSARecv/WSASend on an
+# IOCP completion loop) that answers each connection with `deployStepIngress` —
+# the SAME proven pipeline the `orb` exe runs, unchanged. The C shell is
+# precompiled to ffi/win_io.o (run ffi/build-win-io.sh; TOML lakefiles cannot
+# compile a C source directly) and linked via moreLinkArgs. The IOCP path is
+# `#ifdef _WIN32`-guarded; on macOS the shell compiles to a Windows-only stub that
+# fails at runtime, so this exe still links here for a build-check. The real
+# server compiles under MSVC/clang-cl and links ws2_32 + mswsock — see
+# WINDOWS-IO-README.md. -no_data_const is the same ld64/__DATA_CONST macOS
+# workaround the other exes use; drop it on the Windows build. Like `orb`/`orb-mac`,
+# the reactor closure reaches the real Jwt gate → Crypto, so this exe links the
+# crypto shim + AES fallback + HACL*/EverCrypt (same recipe, same HACL* path
+# convention as the crypto targets; on Windows the EverCrypt archive comes from the
+# -mingw dist).
+[[lean_exe]]
+name = "orb-win"
+root = "IoWin"
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/win_io.o", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+# `TlsCrypto`: the TLS 1.3 key schedule and record layer over the verified
+# `Crypto` primitives (TlsCrypto.lean). A library — the @[extern] EverCrypt
+# symbols resolve only when something links the shim; the *executable* below is
+# what links it and runs the RFC 8448 key-schedule vectors.
+[[lean_lib]]
+name = "TlsCrypto"
+
+# `tls-keyschedule-selftest`: runs the TLS 1.3 key schedule against the RFC 8448
+# §3 "Simple 1-RTT Handshake" trace (early secret, empty transcript hash,
+# Derive-Secret) plus a real ChaCha20-Poly1305 record roundtrip, on the linked
+# HACL*/EverCrypt (ffi/crypto_shim.o + libevercrypt.a). Same link recipe and
+# ld64/__DATA_CONST workaround as crypto-selftest.
+[[lean_exe]]
+name = "tls-keyschedule-selftest"
+root = "TlsCrypto.SelfTest"
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+# `TlsHandshake`: the TLS 1.3 server-side handshake MESSAGE layer over the
+# `TlsCrypto` key schedule + record layer and the verified `Crypto` primitives
+# (TlsHandshake.lean). A library — the @[extern] EverCrypt symbols resolve only
+# when something links the shim; the *executable* below runs the handshake.
+[[lean_lib]]
+name = "TlsHandshake"
+
+# `tls-handshake-selftest`: drives the server handshake message layer against the
+# RFC 8448 §3 ClientHello (parses it, agrees the DHE, derives the RFC's handshake
+# traffic secrets), then runs a full self-consistent handshake to `established`,
+# on the linked HACL*/EverCrypt. Same link recipe as tls-keyschedule-selftest.
+[[lean_exe]]
+name = "tls-handshake-selftest"
+root = "TlsHandshake.SelfTest"
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+# `Deflate` / `Gzip`: a total, output-bounded model of DEFLATE inflate
+# (RFC 1951) and the gzip container (RFC 1952). Single-file libs; Gzip imports
+# Deflate. The headline theorem is the decompression-bomb bound
+# (`inflate_output_bounded`): output size ≤ the caller's ceiling, for all input.
+[[lean_lib]]
+name = "Deflate"
+
+[[lean_lib]]
+name = "Gzip"
+
+# `WireMore`: six more island libraries attached to the DEPLOYED serve path
+# (Har, StickTable, DownloadMgr, Sse, Isolation, Metrics), each stated over the
+# values `Arena.Orb.main` runs (`Reactor.Deploy.deploySubs`/`deployResp`) and
+# anchored to the shared reactor via `Reactor.Bridge`. Root: Reactor.WireMore.
+[[lean_lib]]
+name = "WireMore"
+roots = ["Reactor.WireMore"]
+
+# `WsDeployLane`: the WebSocket lane made runtime-reachable. An HTTP/1.1
+# `Upgrade: websocket` request drives the FSM into `.plainWs`, then a masked WS
+# text frame runs through the REAL `Ws.wsFeedFn` (decode + unmask + reassembly)
+# at runtime. Root: Reactor.WsDeploy (theorem `ws_upgrade_runtime` + a
+# kernel-evaluated `#guard` over `deployConfig`).
+[[lean_lib]]
+name = "WsDeployLane"
+roots = ["Reactor.WsDeploy"]
+
+# `ReactorH2Response`: the real HTTP/2 RESPONSE path (H2-RESPONSE task) — encodes a
+# `Reactor.Response` as real HEADERS(HPACK :status)+DATA frames and round-trips it
+# back through the real H2 frame + HPACK decoders (Reactor/H2Response.lean).
+[[lean_lib]]
+name = "ReactorH2Response"
+srcDir = "."
+roots = ["Reactor.H2Response"]
+
+# `ArenaSound`: the request-line *soundness* theory — the meaning-preservation
+# successor to `parse_wf`. Proves each resolved request-line field EQUALS its
+# exact input substring (method/target/version), the two SP separators sit at the
+# reported offsets with no earlier SP, and serialize-of-parse = input prefix. See
+# ArenaSound.lean / ARENA-SOUND-README.md.
+[[lean_lib]]
+name = "ArenaSound"
+srcDir = "."
+roots = ["ArenaSound"]
+
+# `HeaderSound`: the header-block *soundness* theory — the meaning-preservation
+# successor to `parse_wf` for header fields. Proves each resolved header VALUE
+# equals its exact OWS-trimmed input substring and each canonical header NAME
+# equals the lowercased pre-colon input name bytes (including the sidecar case).
+# See HeaderSound.lean / HEADER-SOUND-README.md.
+[[lean_lib]]
+name = "HeaderSound"
+srcDir = "."
+roots = ["HeaderSound"]
+
+# `WireRest`: eight more island libraries attached to the DEPLOYED serve path
+# (Fallback, Cgi, Redirect, ForwardProxy, Udp, Mtls, Drain, Resume), each stated
+# over the values `Arena.Orb.main` runs (`Reactor.Deploy.deployResp` / the
+# dispatched request) or a concrete deployed lifecycle scenario, anchored to the
+# shared reactor via `Reactor.Bridge`. Root: Reactor.WireRest.
+[[lean_lib]]
+name = "WireRest"
+srcDir = "."
+roots = ["Reactor.WireRest"]
+
+# `orb-mac-multi`: the proven reactor serving REAL traffic ACROSS PROTOCOLS
+# (TASK MAC-MULTI) — WebSocket over TCP and QUIC/HTTP-3 over UDP, in addition to
+# the H1/h2c the plain orb-mac serves. `main` (IoMacMulti) runs two untrusted C
+# shells at once: ffi/mac_io.c's orb_mac_serve_ws keeps a TCP connection OPEN
+# after an RFC 6455 Upgrade and runs each frame through the proven wsFeedFn/
+# wsEncodeFn; ffi/mac_udp.c's orb_mac_serve_udp recv's a UDP datagram and drives
+# the proven QUIC/H3 datagramServe. Both C shells are precompiled to
+# ffi/mac_io.o + ffi/mac_udp.o (run ffi/build-mac-multi.sh) and linked via
+# moreLinkArgs. -no_data_const is the same ld64/__DATA_CONST macOS workaround the
+# other exes use.
+[[lean_exe]]
+name = "orb-mac-multi"
+root = "IoMacMulti"
+# This exe's reactor closure (Reactor.Ingress → the Jwt gate) references the
+# `Crypto` @[extern] shim symbols, and mac_udp.o now also carries `drorb_chacha20`
+# (the QUIC header-protection block → EverCrypt_Cipher_chacha20) for the orb-quic
+# lane; so it links crypto_shim.o + libevercrypt.a — the same recipe the `orb` exe
+# uses. Inert for the H1/h2c/WS/UDP paths orb-mac-multi actually runs.
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/mac_io.o", "ffi/mac_udp.o", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+[[lean_lib]]
+name = "H2Sound"
+
+[[lean_lib]]
+name = "QpackSound"
+
+[[lean_lib]]
+name = "QuicTransport"
+
+# `quic-transport-selftest`: derives the RFC 9001 Appendix A.1 Initial keys on live
+# HACL*/EverCrypt and checks every hex value, then runs a real ChaCha20-Poly1305
+# AND a real AES-128-GCM QUIC packet roundtrip (seal→open, plus tamper/wrong-pn
+# rejection) through the linked crypto. AES-128-GCM is the cipher RFC 9001 §5.2
+# mandates for Initials; off-x86 its AEAD is the portable aws-lc-rs fallback. Same
+# link recipe and ld64/__DATA_CONST workaround as the other crypto self-tests.
+[[lean_exe]]
+name = "quic-transport-selftest"
+root = "QuicTransport"
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+# `QuicHeaderProt`: QUIC header protection (RFC 9001 §5.4) over the verified
+# EverCrypt ChaCha20 block. Adds the one @[extern] the AEAD-only `Crypto` seam
+# lacked (`drorb_chacha20` in ffi/mac_udp.c → EverCrypt_Cipher_chacha20), plus the
+# mask derivation, truncated-PN decode, and apply/remove-header-protection logic
+# IoQuic now runs on real off-the-shelf-client-shaped Initial packets. The
+# @[extern] symbol resolves only when something links libevercrypt (orb-quic does).
+[[lean_lib]]
+name = "QuicHeaderProt"
+
+# `orb-quic`: QUIC SOCKET-LIVE (TASK QUIC-SOCKET) — a real/crafted QUIC Initial
+# packet is DECRYPTED over a real UDP socket by the verified EverCrypt QUIC packet
+# protection (QuicTransport.initialSecrets/deriveChachaKeys/openPacket) and reaches
+# the proven H3 dispatch (Reactor.QuicIngress.datagramServe). `main` (IoQuic) runs
+# an in-process EverCrypt decrypt→dispatch self-test, then binds the UDP socket via
+# the untrusted C shell (ffi/mac_udp.c, precompiled to ffi/mac_udp.o by
+# ffi/build-mac-multi.sh) and serves live. Links the crypto shim + libevercrypt.a
+# (the F*-verified HACL*/EverCrypt) — the SAME recipe crypto-selftest uses — because
+# the callback runs the real AEAD/HKDF primitives. -no_data_const is the ld64/
+# __DATA_CONST macOS workaround the other exes use. See QUIC-SOCKET-README.md.
+[[lean_exe]]
+name = "orb-quic"
+root = "IoQuic"
+moreLinkArgs = ["-Wl,-no_data_const", "ffi/mac_udp.o", "ffi/crypto_shim.o", "target/release/libaes_fallback.a", "-L/opt/hacl-star/dist/gcc-compatible", "-levercrypt"]
+
+[[lean_lib]]
+name = "RouteCorrect"
+
+[[lean_lib]]
+name = "HpackDynCorrect"
+
+[[lean_lib]]
+name = "ChunkedCorrect"
+
+[[lean_lib]]
+name = "ReactorStepCorrect"
+
+[[lean_lib]]
+name = "TlsFsmCorrect"
+
+[[lean_lib]]
+name = "H2FlowCorrect"
+
+[[lean_lib]]
+name = "CacheFreshCorrect"
+
+[[lean_lib]]
+name = "StaticRangeCorrect"
+
+[[lean_lib]]
+name = "CorsCorrect"
+
+[[lean_lib]]
+name = "JwtValidCorrect"
+
+[[lean_lib]]
+name = "DnsNameCorrect"
