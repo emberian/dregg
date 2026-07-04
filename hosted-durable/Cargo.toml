@@ -19,7 +19,7 @@ license = { workspace = true }
 name = "hosted_durable"
 
 [dependencies]
-anyhow = { workspace = true }
+anyhow = "1"
 serde = { workspace = true }
 # The proven substrate conservation move: `apply_conserving_transfer` runs each
 # settlement through `dregg_cell::CellState`'s signed-balance discipline
