@@ -7,18 +7,16 @@
 //! executor — so `turn_receipt_hash` is a hash the kernel actually committed, not a
 //! fabricated stub. This is the non-vacuity witness for the whole R2 weld.
 //!
-//! CROSS-REPO: this test consumes `grain-verify` (the DreggNet-side R2 verifier),
-//! so it is gated behind the `grain-integration` feature (off by default). Run it
-//! with `cargo test -p grain-turn --features grain-integration` and `~/dev/DreggNet`
-//! checked out beside this repo. Without the feature, breadstuffs builds standalone.
-#![cfg(feature = "grain-integration")]
+//! These tests are PRODUCER-side: grain-turn mints genuine committed kernel turns.
+//! The cross-repo R2 end-to-end (grain-turn's manifest satisfying the DreggNet-side
+//! `grain-verify::verify_r2`) lives in DreggNet, where the consumer and this producer
+//! meet — breadstuffs references DreggNet zero times.
 
 use std::collections::BTreeMap;
 
 use dregg_agent::agent::{AgentAction, AgentSpec, PlannedBrain, ToolKit, ToolOutcome};
 use dregg_agent::session::Session;
 use grain_turn::{ACTION_SLOT, CONSUMED_SLOT, ToolGatewayMinter, action_commit};
-use grain_verify::{GrainAttestation, GrainVerifyError};
 
 /// A trivial toolkit — the R2 tests exercise the kernel-turn weld, not a live tool.
 struct NoKit;
@@ -112,49 +110,9 @@ fn an_admitted_action_seals_a_receipt_linked_to_a_genuine_committed_turn() {
     );
 }
 
-// ── THE WHOLE R2 WELD, END TO END: the REAL minter's manifest satisfies the
-//    REAL verifier (grain-verify::verify_r2) — no synthetic stand-in anywhere ──
-#[test]
-fn the_real_minted_manifest_satisfies_verify_r2_end_to_end() {
-    let budget = 10;
-    let mut minter = ToolGatewayMinter::open("grain-weld", budget).expect("admit grain turn-cell");
-    let spec = AgentSpec::new("ignored", budget).with_service("work");
-    let mut sess = Session::open_seeded([73u8; 32], "dga1_renter", spec).unwrap();
-    sess.run_goal_minted("do three", &mut work_plan(3), &NoKit, Some(&mut minter));
-
-    let att = GrainAttestation::attest(&sess);
-    let manifest = minter.committed_turns().to_vec();
-
-    // POSITIVE: the renter's R2 check passes over the executor's real manifest.
-    let v = att
-        .verify_r2(&manifest)
-        .expect("every receipt is a view over a REAL committed kernel turn");
-    assert_eq!(
-        v.linked, 3,
-        "all three actions link to genuine committed turns"
-    );
-    assert_eq!(v.base.consumed, 3);
-
-    // NEGATIVE: a manifest that does NOT vouch for one committed turn is refused
-    // exactly at that receipt — the tooth bites on the real artifact too.
-    let mut partial = manifest.clone();
-    partial.remove(1);
-    match att.verify_r2(&partial) {
-        Err(GrainVerifyError::R2FabricatedLink { seq, .. }) => assert_eq!(seq, 1),
-        other => panic!("expected R2FabricatedLink at seq 1, got {other:?}"),
-    }
-
-    // NEGATIVE: an UNMINTED session (no kernel turns at all) fails R2 against
-    // even the real manifest — a receipt with no link cannot ride along.
-    let spec2 = AgentSpec::new("ignored", budget).with_service("work");
-    let mut bare = Session::open_seeded([74u8; 32], "dga1_renter", spec2).unwrap();
-    bare.run_goal("no mint", &mut work_plan(2), &NoKit);
-    let bare_att = GrainAttestation::attest(&bare);
-    assert!(matches!(
-        bare_att.verify_r2(&manifest),
-        Err(GrainVerifyError::R2Unlinked { seq: 0 })
-    ));
-}
+// (The R2 end-to-end weld — grain-turn's real manifest satisfying grain-verify::verify_r2
+//  — is a cross-repo integration test that lives in DreggNet, beside the consumer. The
+//  PRODUCER non-vacuity it needs is exactly what `committed_turns()` above exposes.)
 
 // ── REFUSAL: the executor's calls_made caveat bounds the run host-side ────────
 #[test]

@@ -1,6 +1,6 @@
 # grain-verify's home — an architectural coordination note
 
-**Status:** short-term fix landed (`b156b140f`); proper fix needs coordination with the DreggNet lane.
+**Status:** the cross-repo dep is REMOVED (breadstuffs references DreggNet zero times). The R2 end-to-end test's proper home is DreggNet — a coordination note for that lane.
 
 ## What happened
 
