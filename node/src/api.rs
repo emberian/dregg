@@ -2848,6 +2848,55 @@ fn submit_turn_bad_request(err: String) -> Result<Json<SubmitTurnResponse>, Stat
     }))
 }
 
+/// Re-apply the executor signature after the node has stamped the receipt's
+/// committed finality.
+///
+/// The turn executor constructs receipts with [`Finality::Final`] and signs them
+/// inside `execute()` (`maybe_sign_receipt` over
+/// [`TurnReceipt::canonical_executor_signed_message`], the v3 message that binds
+/// the *full* `receipt_hash`). Solo mode then downgrades `finality` to
+/// [`Finality::Tentative`] — a field bound into `receipt_hash` — which strands
+/// that original signature: any verifier recomputing `receipt_hash` from the
+/// committed (Tentative) receipt derives a different v3 message, so the signature
+/// fails to verify against the executor's verifying key. Re-signing with the SAME
+/// key the executor used (the node's gossip signing key, per
+/// `configure_turn_executor`) restores `executor_signature == sign(v3(receipt_hash))`
+/// for the receipt as committed and served.
+fn resign_receipt_committed(receipt: &mut dregg_turn::TurnReceipt, node_signing_key: &[u8; 32]) {
+    use ed25519_dalek::Signer;
+    let sk = ed25519_dalek::SigningKey::from_bytes(node_signing_key);
+    let msg = receipt.canonical_executor_signed_message();
+    receipt.executor_signature = Some(sk.sign(&msg).to_bytes().to_vec());
+}
+
+/// Debug-only "sign LAST" invariant: a committed receipt's own executor
+/// signature MUST verify against the node's executor verifying key over the FINAL
+/// receipt about to be persisted.
+///
+/// Because the v3 executor signature commits to the whole `receipt_hash`, any
+/// mutation of a `receipt_hash`-folded field (finality, `previous_receipt_hash`,
+/// ...) applied AFTER the signature silently strands it and surfaces far
+/// downstream as a verifier's `ExecutorSignatureInvalid`. Asserting here trips
+/// that class at the source. Scoped to the solo commit sites where the node IS
+/// the signer (its gossip key), so it never false-fires on relayed/foreign
+/// receipts. Zero release cost (compiled out unless `debug_assertions`).
+#[cfg(debug_assertions)]
+fn debug_assert_signed_last(receipt: &dregg_turn::TurnReceipt, node_signing_key: &[u8; 32]) {
+    use ed25519_dalek::Verifier;
+    let Some(sig_bytes) = receipt.executor_signature.as_ref() else {
+        return;
+    };
+    let vk = ed25519_dalek::SigningKey::from_bytes(node_signing_key).verifying_key();
+    let sig = ed25519_dalek::Signature::from_slice(sig_bytes)
+        .expect("executor_signature must be a 64-byte ed25519 signature");
+    debug_assert!(
+        vk.verify(&receipt.canonical_executor_signed_message(), &sig)
+            .is_ok(),
+        "sign-LAST invariant violated: the node executor_signature does not verify against \
+         the committed receipt_hash — a receipt_hash-folded field was mutated after signing"
+    );
+}
+
 #[tracing::instrument(skip_all, fields(agent = %req.agent))]
 async fn post_submit_turn(
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
@@ -2997,10 +3046,15 @@ async fn post_submit_turn(
 
             // Solo mode: record in nullifier log, mark receipt as Tentative,
             // and advance the solo consensus height.
+            let node_signing_key = s.cclerk.gossip_signing_key().to_bytes();
             if let Some(ref mut solo) = s.solo_consensus
                 && solo.is_solo
             {
                 receipt.finality = dregg_turn::Finality::Tentative;
+                // Finality is bound into receipt_hash and the executor already
+                // signed the optimistic Final; re-sign with the node key so the
+                // executor_signature matches the committed (Tentative) receipt.
+                resign_receipt_committed(&mut receipt, &node_signing_key);
                 // Record any nullifiers from this turn in the solo nullifier log.
                 // The turn_hash itself serves as the sequencing entry for ordering.
                 let height = solo.height;
@@ -3008,6 +3062,8 @@ async fn post_submit_turn(
                     .nullifier_log
                     .insert(turn_hash_bytes, turn_hash_bytes, height);
                 solo.advance_height();
+                #[cfg(debug_assertions)]
+                debug_assert_signed_last(&receipt, &node_signing_key);
             }
 
             // F-DOS-1 / PATH-PRESERVE Phase 5b: the authoritative executor ALREADY
@@ -3287,15 +3343,21 @@ async fn post_submit_signed_turn(
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
 
+            let node_signing_key = s.cclerk.gossip_signing_key().to_bytes();
             if let Some(ref mut solo) = s.solo_consensus
                 && solo.is_solo
             {
                 receipt.finality = dregg_turn::Finality::Tentative;
+                // Re-sign after the committed finality downgrade: finality is bound
+                // into receipt_hash, and the executor signed the optimistic Final.
+                resign_receipt_committed(&mut receipt, &node_signing_key);
                 let height = solo.height;
                 let _ = solo
                     .nullifier_log
                     .insert(turn_hash_bytes, turn_hash_bytes, height);
                 solo.advance_height();
+                #[cfg(debug_assertions)]
+                debug_assert_signed_last(&receipt, &node_signing_key);
             }
 
             // F-DOS-1 / PATH-PRESERVE Phase 5b: the executor already validated +
@@ -3744,15 +3806,21 @@ async fn post_submit_encrypted_turn(
             // the cleartext path (post_submit_turn). The encrypted path
             // doesn't change consensus semantics — only privacy.
             let turn_hash_bytes = receipt.turn_hash;
+            let node_signing_key = s.cclerk.gossip_signing_key().to_bytes();
             if let Some(ref mut solo) = s.solo_consensus
                 && solo.is_solo
             {
                 receipt.finality = dregg_turn::Finality::Tentative;
+                // Re-sign after the committed finality downgrade: finality is bound
+                // into receipt_hash, and the executor signed the optimistic Final.
+                resign_receipt_committed(&mut receipt, &node_signing_key);
                 let height = solo.height;
                 let _ = solo
                     .nullifier_log
                     .insert(turn_hash_bytes, turn_hash_bytes, height);
                 solo.advance_height();
+                #[cfg(debug_assertions)]
+                debug_assert_signed_last(&receipt, &node_signing_key);
             }
 
             let turn_hash = hex_encode(&turn_hash_bytes);
@@ -5362,15 +5430,20 @@ async fn post_resolve_conditional(
             match exec_result {
                 dregg_turn::TurnResult::Committed { mut receipt, .. } => {
                     // Solo mode: mark receipt as Tentative and log in nullifier log.
+                    let node_signing_key = s.cclerk.gossip_signing_key().to_bytes();
                     if let Some(ref mut solo) = s.solo_consensus
                         && solo.is_solo
                     {
                         receipt.finality = dregg_turn::Finality::Tentative;
+                        // Re-sign after the committed finality downgrade.
+                        resign_receipt_committed(&mut receipt, &node_signing_key);
                         let height = solo.height;
                         let _ =
                             solo.nullifier_log
                                 .insert(receipt.turn_hash, receipt.turn_hash, height);
                         solo.advance_height();
+                        #[cfg(debug_assertions)]
+                        debug_assert_signed_last(&receipt, &node_signing_key);
                     }
                     let turn_hash = hex_encode(&receipt.turn_hash);
                     s.cclerk.append_receipt(receipt).expect(
@@ -6714,15 +6787,21 @@ async fn post_faucet(
 
             // Solo mode: tentative finality + height advance, exactly like the
             // /turn/submit commit path.
+            let node_signing_key = s.cclerk.gossip_signing_key().to_bytes();
             if let Some(ref mut solo) = s.solo_consensus
                 && solo.is_solo
             {
                 receipt.finality = dregg_turn::Finality::Tentative;
+                // Re-sign after the committed finality downgrade: finality is bound
+                // into receipt_hash, and the executor signed the optimistic Final.
+                resign_receipt_committed(&mut receipt, &node_signing_key);
                 let height = solo.height;
                 let _ = solo
                     .nullifier_log
                     .insert(turn_hash_bytes, turn_hash_bytes, height);
                 solo.advance_height();
+                #[cfg(debug_assertions)]
+                debug_assert_signed_last(&receipt, &node_signing_key);
             }
 
             // The faucet turn is a REAL committed turn: append its receipt to
@@ -7998,6 +8077,100 @@ mod tests {
     /// Helper: create a deterministic key pair for testing.
     fn test_key(name: &str) -> [u8; 32] {
         *blake3::hash(format!("dregg-node-atomic-test:{name}").as_bytes()).as_bytes()
+    }
+
+    /// Helper: a minimal receipt with the given finality, unsigned.
+    fn minimal_receipt(finality: dregg_turn::Finality) -> dregg_turn::TurnReceipt {
+        dregg_turn::TurnReceipt {
+            turn_hash: [1u8; 32],
+            forest_hash: [2u8; 32],
+            pre_state_hash: [3u8; 32],
+            post_state_hash: [4u8; 32],
+            timestamp: 100,
+            effects_hash: [5u8; 32],
+            computrons_used: 7,
+            action_count: 1,
+            previous_receipt_hash: None,
+            agent: CellId([6u8; 32]),
+            federation_id: [7u8; 32],
+            routing_directives: Vec::new(),
+            introduction_exports: Vec::new(),
+            derivation_records: Vec::new(),
+            emitted_events: Vec::new(),
+            executor_signature: None,
+            finality,
+            was_encrypted: false,
+            was_burn: false,
+            consumed_capabilities: vec![],
+        }
+    }
+
+    /// The node downgrades `finality` to `Tentative` AFTER the executor signs the
+    /// receipt (v3 signs the full `receipt_hash`, which binds `finality`). Without
+    /// a re-sign, the executor signature no longer verifies against the committed
+    /// receipt — it looks like a verifying-key mismatch.
+    /// `resign_receipt_committed` must restore a signature that verifies in the
+    /// committed (Tentative) state.
+    #[test]
+    fn resign_after_finality_downgrade_restores_verifiable_signature() {
+        use ed25519_dalek::{Signature, Signer, Verifier};
+
+        let seed = test_key("finality-resign");
+        let sk = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let vk = sk.verifying_key();
+
+        // Executor signs while finality is the optimistic Final.
+        let mut receipt = minimal_receipt(dregg_turn::Finality::Final);
+        receipt.executor_signature = Some(
+            sk.sign(&receipt.canonical_executor_signed_message())
+                .to_bytes()
+                .to_vec(),
+        );
+
+        // Node downgrades finality after signing -> the original signature is
+        // stranded (it committed to the Final receipt_hash).
+        receipt.finality = dregg_turn::Finality::Tentative;
+        let stale =
+            Signature::from_slice(receipt.executor_signature.as_ref().expect("signed")).unwrap();
+        assert!(
+            vk.verify(&receipt.canonical_executor_signed_message(), &stale)
+                .is_err(),
+            "pre-downgrade signature must NOT verify against the committed receipt"
+        );
+
+        // The fix re-signs in the committed state.
+        resign_receipt_committed(&mut receipt, &seed);
+        let fixed =
+            Signature::from_slice(receipt.executor_signature.as_ref().expect("resigned")).unwrap();
+        assert!(
+            vk.verify(&receipt.canonical_executor_signed_message(), &fixed)
+                .is_ok(),
+            "re-signed signature MUST verify against the committed receipt"
+        );
+    }
+
+    /// `debug_assert_signed_last` must TRIP when a `receipt_hash`-folded field is
+    /// mutated after signing without a re-sign — proving the guard has teeth.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "sign-LAST invariant violated")]
+    fn sign_last_invariant_trips_on_post_sign_folded_field_mutation() {
+        use ed25519_dalek::Signer;
+
+        let seed = test_key("sign-last-trip");
+        let sk = ed25519_dalek::SigningKey::from_bytes(&seed);
+
+        let mut receipt = minimal_receipt(dregg_turn::Finality::Final);
+        receipt.executor_signature = Some(
+            sk.sign(&receipt.canonical_executor_signed_message())
+                .to_bytes()
+                .to_vec(),
+        );
+        // Mutate a receipt_hash-folded field WITHOUT re-signing (the bug).
+        receipt.finality = dregg_turn::Finality::Tentative;
+
+        // Must panic: the stranded signature does not verify against the receipt.
+        debug_assert_signed_last(&receipt, &seed);
     }
 
     /// Helper: build a minimal AtomicForest with a single noop-like action.
