@@ -680,4 +680,68 @@ mod tests {
             Ok(Ok(_)) => panic!("a FORGED amount minted a foldable leaf — soundness OPEN"),
         }
     }
+
+    /// A "leg" that publishes ONE claimed payment identity at claim position 0 — the DECO leaf
+    /// of `witness` sliced to expose ONLY its `payment_hash` lane. Stands in for the deployed
+    /// `stripeMint` leg's published `payment_hash` PI (which rides the big-bang descriptor
+    /// regen) so the fold's `connect` tooth is exercised through the REAL recursion now.
+    fn prove_deco_leg_identity(
+        witness: &DecoLeafWitness,
+        config: &DreggRecursionConfig,
+    ) -> RecursionOutput<DreggRecursionConfig> {
+        let pis = deco_leaf_public_inputs(witness);
+        let (desc2, inner) = prove_deco_inner(witness, &pis, config).expect("leg inner proves");
+        prove_descriptor_leaf_with_pi_slice_expose(
+            &desc2,
+            &inner,
+            &pis,
+            config,
+            DECO_LEAF_PAYMENT_HASH_PI,
+            1,
+        )
+        .expect("leg exposes its published payment identity")
+    }
+
+    /// THE FOLD-CONNECT TOOTH (POSITIVE): a leg publishing identity `A` folded WITH the DECO
+    /// commitment leaf of the SAME payment `A` — the in-circuit `connect` (leg identity ==
+    /// leaf's in-AIR-recomputed identity) is satisfied, so the binding node PROVES.
+    #[test]
+    #[ignore = "SLOW: real recursion fold (~seconds+); run with --ignored"]
+    fn fold_honest_identity_connects() {
+        let w = make_witness(0x40);
+        let config = ir2_leaf_wrap_config();
+        let leg = prove_deco_leg_identity(&w, &config);
+        let backing =
+            prove_deco_leaf_with_claim(&w, &deco_leaf_public_inputs(&w), &config).expect("leaf");
+        prove_deco_binding_node(&leg, &backing, &config)
+            .expect("honest identity: the fold connect must PROVE (leg == leaf identity)");
+    }
+
+    /// THE FOLD-CONNECT TOOTH (NEGATIVE — the anti-ghost bite): a leg publishing identity `A`
+    /// folded with the DECO commitment leaf of a DIFFERENT payment `B` (A != B) — the
+    /// in-circuit `connect` conflicts ⇒ UNSAT ⇒ no root. A published payment identity no
+    /// verifying DECO commitment backs cannot fold (the fold twin of the Lean
+    /// `forged_payment_hash_unsat_demo`).
+    #[test]
+    #[ignore = "SLOW: real recursion fold (~seconds+); run with --ignored"]
+    fn fold_mismatched_identity_unsat() {
+        let config = ir2_leaf_wrap_config();
+        let leg_w = make_witness(0x41); // leg claims identity A
+        let backing_w = make_witness(0x99); // backing leaf proves identity B != A
+        assert_ne!(leg_w.payment_hash(), backing_w.payment_hash());
+        let leg = prove_deco_leg_identity(&leg_w, &config);
+        let backing =
+            prove_deco_leaf_with_claim(&backing_w, &deco_leaf_public_inputs(&backing_w), &config)
+                .expect("backing leaf B proves");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_deco_binding_node(&leg, &backing, &config)
+        }));
+        match result {
+            Err(_) => {}
+            Ok(Err(_)) => {}
+            Ok(Ok(_)) => panic!(
+                "a leg identity backed by NO matching DECO commitment folded — the connect is OPEN"
+            ),
+        }
+    }
 }
