@@ -302,6 +302,89 @@ fn roundtrip_v3_live_descriptor() {
 
 const FORGED_LANES: [u32; 7] = [0xDEAD, 0xBEEF, 0x1234, 0x5678, 0x9ABC, 0xCAFE, 0xF00D];
 
+/// **(b-ADV) THE ADVERSARIAL R1-TRAP CHECK — the after-root forge run against the DEPLOYED registry.**
+///
+/// The finder's forge `after_root_completion_lane_forge_is_unsat` runs against `WIDE_REGISTRY_STAGED_TSV`,
+/// which its own doc (`effect_vm_descriptors.rs:1204`) calls "the parallel wide path BESIDE" the live
+/// registry, "the live 1-felt `V3_STAGED_REGISTRY_TSV` / FP / VK are UNTOUCHED." The light client the
+/// wire runs verifies against the DEPLOYED registry — `V3_STAGED_REGISTRY_TSV` (`:821`, "the live
+/// 1-felt" registry). If the deployed member bound only after-root lane 0 while WIDE bound all 8, the
+/// finder's UNSAT would be an R1-trap (proving 8-felt binding on an undeployed descriptor). This test
+/// re-runs the identical forge against the DEPLOYED v3-live descriptor (1567/4). UNSAT here ⟹ the
+/// DEPLOYED heapWrite `.write` map-op binds all 8 after-root felts — the finder's refutation holds on
+/// the real light-client path, not just the staged wide twin.
+#[test]
+#[allow(non_snake_case)]
+fn after_root_forge_is_unsat_against_DEPLOYED_v3_registry() {
+    let v3 = parse_vm_descriptor2(registry_json(V3_STAGED_REGISTRY_TSV, KEY))
+        .expect("committed DEPLOYED v3-live heapWriteVmDescriptor2R24 parses");
+    assert_eq!(v3.trace_width, 1567, "deployed v3-live width");
+    assert_eq!(v3.public_input_count, 4, "deployed v3-live PIs");
+    let new_root_cols = write_new_root_cols(&v3);
+    assert_eq!(
+        new_root_cols,
+        vec![443, 473, 474, 475, 476, 477, 478, 479],
+        "deployed v3-live .write new_root columns — all 8 lanes are within the 1567 width"
+    );
+
+    let (trace, dpis, map_heaps) = honest_heap_write();
+    let mb = MemBoundaryWitness::default();
+
+    // NO DOWNGRADE: the honest truncated producer proves + verifies against the deployed descriptor.
+    let htrace: Vec<Vec<BabyBear>> = trace.iter().map(|r| r[..1567].to_vec()).collect();
+    let hdpis: Vec<BabyBear> = dpis[..4].to_vec();
+    assert!(
+        !refused(&v3, &htrace, &hdpis, &mb, &map_heaps),
+        "NO DOWNGRADE: honest heap-write must prove+verify against the deployed v3 descriptor"
+    );
+
+    let honest_root: Vec<BabyBear> = new_root_cols.iter().map(|&c| trace[0][c]).collect();
+
+    // THE FORGE (identical to the finder's, but bound for the DEPLOYED descriptor): garble after-root
+    // completion lanes 1..7 on every row, keep lane 0 honest, recompute the after block-commit so only
+    // the deployed .write map-op grow-gate can bite, then truncate to the deployed 1567 width + build
+    // the deployed 4-PI vector (pi0 = before state-commit, pi1 = recomputed after state-commit).
+    let mut ftrace = trace.clone();
+    for row in ftrace.iter_mut() {
+        for lane in 1..8 {
+            row[new_root_cols[lane]] = BabyBear::new(FORGED_LANES[lane - 1]);
+        }
+    }
+    assert!(
+        (1..8).any(|l| ftrace[0][new_root_cols[l]] != honest_root[l]),
+        "the forged high lanes differ from the genuine splice root"
+    );
+    dregg_circuit::effect_vm::trace_rotated::recompute_after_blocks_for_test(&mut ftrace);
+    let last = ftrace.len() - 1;
+    let before_sc = ftrace[0][BEFORE_BASE + B_STATE_COMMIT];
+    let after_sc = ftrace[last][AFTER_BASE + B_STATE_COMMIT];
+    let ftrace_v3: Vec<Vec<BabyBear>> = ftrace.iter().map(|r| r[..1567].to_vec()).collect();
+    let mut fdpis = dpis[..4].to_vec();
+    fdpis[0] = before_sc;
+    fdpis[1] = after_sc;
+
+    let unsat = refused(&v3, &ftrace_v3, &fdpis, &mb, &map_heaps);
+    if unsat {
+        eprintln!(
+            "HEAP-WRITE DEPLOYED-REGISTRY VERDICT: the after-root completion-lane forge is UNSAT against \
+             the DEPLOYED v3-live (1567/4) descriptor — the light client the wire runs binds ALL EIGHT \
+             after-root felts. NOT an R1-trap; the finder's refutation holds on the deployed path."
+        );
+    } else {
+        eprintln!(
+            "HEAP-WRITE DEPLOYED-REGISTRY VERDICT: the forge PROVES+VERIFIES against the DEPLOYED v3-live \
+             descriptor — the light client binds only after-root lane 0 (~31-bit). The finder's UNSAT \
+             was an R1-TRAP (staged-wide only). LIVE 8-felt gap on the deployed heapWrite path."
+        );
+    }
+    assert!(
+        unsat,
+        "R1-TRAP: the after-root forge proves+verifies against the DEPLOYED v3 registry member — the \
+         deployed light-client heapWrite binds only lane-0, not the 8-felt splice. The finder tested \
+         the undeployed WIDE twin."
+    );
+}
+
 /// **(b) AFTER-ROOT 8-FELT BINDING FORGE.** Forge the `.write` `new_root` completion lanes 1..7 to
 /// garbage on every row while keeping lane 0 honest, recompute the after block-commit chain + wide
 /// carriers so the ONLY thing that can bite is the map-op grow-gate on the completion lanes, then run
