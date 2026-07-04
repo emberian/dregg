@@ -1,6 +1,37 @@
 # The DECO Carrier — making the Stripe/zkTLS money-in crown light-client-live
 
-**Status:** design-scope (READ + DESIGN). No code beyond this doc.
+**Status: BUILT** (Option B, the recommended path) — the carrier's own layer is live and its
+tooth bites; the ONE deployed-descriptor emit rides the coordinated big-bang regen (by design,
+§2 finale — "it does not fire independently"). What landed:
+
+- **Step 1a — the felt anchor:** `dregg_circuit::dsl::deco_payment::deco_payment_hash_felt` =
+  `hash_fact(hash_fact(amountCents, [currency, recipient]), [paymentIntentId])` + the byte-domain
+  `stripe_payment_hash_felt` projector (the bridge `note_spend_mint_hash_felt`/`bridge_mint_hash_felt`
+  twins). ⚑ FELT-domain, NOT the executor byte-domain BLAKE3 `payment_nullifier` (the anti-vacuity law).
+- **Steps 3/4 — the DECO commitment leaf:** `circuit-prove::deco_leaf_adapter` — a Poseidon2-only
+  IR-v2 leaf recomputing the identity IN-AIR from PI-pinned PaymentFacts (gates 3/4/5 of
+  `Deco.lean::DecoRelation`), exposing `payment_hash` at claim lane 4. **Teeth bite (real recursion,
+  green):** honest → foldable leaf + exposed claim; forged `payment_hash` → constraint #4 UNSAT;
+  forged amount → constraint #0 UNSAT. Plus `prove_deco_payment_binding_node_segmented` (deployed
+  connect) + `prove_deco_binding_node`; **fold-connect tooth bites:** honest identity connects+proves,
+  mismatched identity → UNSAT.
+- **Step 2 — the socket:** `CarrierWitness::Deco(DecoWitnessBundle)` + `from_retained_deco`
+  (fail-closed off-wire).
+- **Step 5 — the fold arm:** the `Deco` arm in `prove_chain_core_rotated` (`DECO_PAYMENT_HASH_PI`,
+  fail-closed admission — a Stripe `Effect::Mint` leg with no payment-hash pin is REFUSED until the
+  descriptor regen lands).
+- **Step 5 — the Lean floor:** `Dregg2.Circuit.DecoBackingAttack` + `Dregg2.Circuit.DecoBindingFromFold`
+  (`deco_binding_from_fold`, `backedAt_from_fold`, `deco_authenticates_from_fold` grounding onto
+  `Deco.lean::deco_binds_payment`; non-vacuous both poles; `forged_payment_hash_unsat_demo`). Both
+  `#assert_axioms`-clean ⊆ {propext, Classical.choice, Quot.sound}. `DecoBackingAttack` STANDS.
+- **The named big-bang remainder (Step 1 deployed emit):** the deployed `stripeMint` descriptor
+  `withPaymentHashPin` + the `generate_rotated_stripe_mint_wide` producer + the TSV regen ride the
+  ONE coordinated descriptor big-bang (§2 finale, shared with every other carrier's regen), NOT a
+  solo VK flip. Until it lands the fold arm is fail-closed. Drift PASS (no descriptor moved yet).
+- **Terminal §8 carriers (off-AIR, executor-checked):** ed25519 EUF-CMA (Stripe's Web-PKI TLS key),
+  HMAC-SHA256 (webhook + transcript MAC), SHA-256, the DECO 3-party handshake, Web-PKI, Stripe's
+  `encode` schema, and the standard STARK/FRI + Poseidon2-CR floor — all named, identical to bridge.
+
 **Ground:** repo `/Users/ember/dev/breadstuffs` @ `d459bd7c7` (HEAD at authoring).
 **Provenance:** PR23-A metabolized the DECO/Stripe *verification* onto HEAD (commit
 `f35b930fe`). It is **PROVEN but NOT DEPLOYED as a carrier** — no `CarrierWitness` arm
