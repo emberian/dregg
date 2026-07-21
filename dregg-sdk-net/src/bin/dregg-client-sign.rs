@@ -408,6 +408,15 @@ async fn cmd_send(f: Flags) -> Result<()> {
 
 #[tokio::main]
 async fn main() {
+    // Route this process's ML-DSA through the Lean-verified cores exported by
+    // the linked archive (once-per-process, the same install the node and the
+    // SDK agent-runtime perform). Without it dregg-pq's audit gate ABORTS the
+    // first hybrid sign rather than silently running the unaudited `fips204`
+    // crate — the gate is right, the host must install.
+    let sign_core = dregg_sdk::install_verified_mldsa_sign_core_real();
+    let verify_core = dregg_sdk::install_verified_mldsa_verify_core();
+    eprintln!("[client-sign] verified ML-DSA cores: sign {sign_core:?}, verify {verify_core:?}");
+
     let mut argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.is_empty() {
         eprintln!("{USAGE}");
