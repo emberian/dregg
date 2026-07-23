@@ -30,10 +30,10 @@ use std::collections::HashMap;
 
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::{Cell, CellId, Ledger, Permissions};
-use dregg_exec_lean::lean_apply::execute_via_lean;
+use dregg_exec_lean::lean_apply::{ProducerOutcome, execute_via_lean, produce_via_lean};
 use dregg_exec_lean::lean_shadow::ShadowHostCtx;
 use dregg_turn::{
-    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
+    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Event, TurnExecutor,
     turn::Turn,
 };
 
@@ -95,10 +95,76 @@ fn transfer_turn(agent: CellId, from: CellId, to: CellId, amount: u64, fee: u64)
     }
 }
 
+fn chat_turn(agent: CellId, payload: &[u8], fee: u64) -> Turn {
+    let data = payload
+        .chunks(8)
+        .map(|chunk| {
+            let mut word = [0u8; 32];
+            word[24..24 + chunk.len()].copy_from_slice(chunk);
+            word
+        })
+        .collect();
+    let mut forest = CallForest::new();
+    forest.add_root(Action {
+        target: agent,
+        method: *blake3::hash(b"helm.chat").as_bytes(),
+        args: vec![],
+        authorization: Authorization::Unchecked,
+        preconditions: Default::default(),
+        effects: vec![Effect::EmitEvent {
+            cell: agent,
+            event: Event::new(*blake3::hash(b"helm.chat").as_bytes(), data),
+        }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: Default::default(),
+        balance_change: None,
+        witness_blobs: vec![],
+    });
+    Turn {
+        agent,
+        nonce: 0,
+        call_forest: forest,
+        fee,
+        memo: Some(String::from_utf8(payload.to_vec()).expect("test payload is UTF-8")),
+        valid_until: Some(1_000_000),
+        previous_receipt_hash: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+    }
+}
+
+fn assert_producer_agreed(outcome: ProducerOutcome, label: &str) {
+    match outcome {
+        ProducerOutcome::LeanAuthoritative {
+            committed,
+            rust_agreed,
+            lean_root,
+            rust_root,
+            rust_committed,
+        } => {
+            assert!(committed, "Lean must commit the {label}");
+            assert!(rust_committed, "Rust must commit the {label}");
+            assert!(
+                rust_agreed,
+                "Lean/Rust authority divergence on {label}: lean_root={lean_root:?} rust_root={rust_root:?}"
+            );
+            assert_eq!(lean_root, rust_root, "root agreement on {label}");
+        }
+        ProducerOutcome::Fallback { reason } => {
+            panic!("{label} escaped the verified producer through fallback: {reason}")
+        }
+    }
+}
+
 fn skip_no_lean() -> bool {
-    // Routed through the DREGG_TEST_REQUIRE_LEAN hard mode (dregg-lean-ffi::demand_lean):
-    // unarmed, an archive-less build prints the honest SKIP and returns; ARMED, it PANICS —
-    // so this suite can never report `ok` having asserted nothing on the hard-mode lane.
     !dregg_lean_ffi::demand_lean(
         dregg_lean_ffi::lean_available(),
         "Lean archive (lean_available)",
@@ -357,4 +423,72 @@ fn committed_height_family_agrees() {
                 .unwrap_or_else(|e| panic!("height={height} fee={fee} must agree: {e}"));
         }
     }
+}
+
+/// Regression for the shared-chat starvation incident. The signer already existed with only 90
+/// computrons, so treating `found:true` as "funded" left every later chat turn permanently rejected.
+/// Prove the owner faucet can commit a top-up INTO that existing cell, the authoritative balance
+/// rises to 5,000, and the exact next metered chat-sized `EmitEvent` then commits. Both commits stay
+/// on the verified producer and require full Lean/Rust verdict + root agreement.
+#[test]
+fn low_balance_recipient_top_up_commits_then_chat_send_commits() {
+    if skip_no_lean() {
+        return;
+    }
+
+    let faucet = make_open_cell(1, 1_000_000);
+    let recipient = make_open_cell(2, 90);
+    let fee_well = make_open_cell(9, 0);
+    let faucet_id = faucet.id();
+    let recipient_id = recipient.id();
+    let fee_well_id = fee_well.id();
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(faucet).unwrap();
+    ledger.insert_cell(recipient).unwrap();
+    ledger.insert_cell(fee_well).unwrap();
+
+    let payload = b"This next chat-sized send must commit after the faucet top-up has actually raised the existing cell balance.";
+    let costs = ComputronCosts::default();
+    let mut chat = chat_turn(recipient_id, payload, 0);
+    chat.fee = TurnExecutor::new(costs.clone()).estimate_cost(&chat);
+    assert!(
+        chat.fee > 90 && chat.fee < 5_000,
+        "test must be load-bearing: chat fee {} must exceed the depleted balance but fit after top-up",
+        chat.fee
+    );
+    let mut depleted = ledger.clone();
+    let rejected = TurnExecutor::new(costs.clone()).execute(&chat, &mut depleted);
+    assert!(
+        !rejected.is_committed(),
+        "depleted precondition must genuinely reject the chat turn: {rejected:?}"
+    );
+
+    let top_up = transfer_turn(faucet_id, faucet_id, recipient_id, 4_910, 0);
+    let top_up_executor = TurnExecutor::new(ComputronCosts::zero());
+    let (top_up_result, top_up_outcome) = produce_via_lean(&top_up_executor, &top_up, &mut ledger);
+    assert!(top_up_result.is_committed(), "faucet top-up must commit");
+    assert_producer_agreed(top_up_outcome, "existing-recipient faucet top-up");
+    assert_eq!(
+        ledger.get(&recipient_id).unwrap().state.balance(),
+        5_000,
+        "committed top-up must raise the existing recipient balance"
+    );
+
+    let mut chat_executor = TurnExecutor::new(costs);
+    chat_executor.set_fee_well_cell(fee_well_id);
+    let (chat_result, chat_outcome) = produce_via_lean(&chat_executor, &chat, &mut ledger);
+    assert!(
+        chat_result.is_committed(),
+        "post-top-up chat send must commit"
+    );
+    assert_producer_agreed(chat_outcome, "post-top-up chat send");
+    assert!(
+        ledger.get(&recipient_id).unwrap().state.balance() < 5_000,
+        "chat turn must really execute and spend its fee"
+    );
+    assert_eq!(
+        ledger.get(&fee_well_id).unwrap().state.balance(),
+        chat.fee as i64,
+        "the committed chat fee must reach the configured fee well"
+    );
 }
