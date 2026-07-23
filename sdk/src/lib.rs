@@ -326,7 +326,7 @@ pub use cipherclerk::{
     DisclosureSpec, FactDisclosure, FactIndex, HeldToken, LocalDelegation, OwnedStealthNote,
     VerificationMode,
 };
-pub use dregg_token::{Attenuation, AuthRequest, AuthToken};
+pub use dregg_token::{Attenuation, AuthRequest, AuthToken, BudgetSpec};
 
 // The factory/polis plan builders (authorized by construction: they emit
 // effect lists that ride `runtime.turn().effects(..)` / the execute paths).
