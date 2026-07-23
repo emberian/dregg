@@ -23,6 +23,19 @@ pub struct ComputronCosts {
     pub signature_verify: u64,
     /// Cost per byte of data processed.
     pub per_byte: u64,
+    /// Waive the CHARGE for COORDINATION turns
+    /// ([`Turn::is_coordination`](crate::turn::Turn::is_coordination):
+    /// EmitEvent-only, no `balance_change`) — "leash, not ledger": the
+    /// computron is an oversight budget, and coordination turns are the
+    /// oversight traffic itself. Opt-in, default `false` = exact legacy
+    /// behavior; `#[serde(default)]` keeps persisted/wire cost configs
+    /// compatible. When enabled, a `fee = 0` coordination turn admits and
+    /// commits; metering stays honest (receipts still report the true
+    /// `computrons_used` — only the admission charge is waived) and economic
+    /// turns (Transfer/Burn/NoteSpend/CreateCell/SetField/…) charge exactly
+    /// as before.
+    #[serde(default)]
+    pub coordination_exempt: bool,
 }
 
 impl ComputronCosts {
@@ -36,6 +49,7 @@ impl ComputronCosts {
             proof_verify: 1000,
             signature_verify: 200,
             per_byte: 1,
+            coordination_exempt: false,
         }
     }
 
@@ -49,6 +63,7 @@ impl ComputronCosts {
             proof_verify: 0,
             signature_verify: 0,
             per_byte: 0,
+            coordination_exempt: false,
         }
     }
 }

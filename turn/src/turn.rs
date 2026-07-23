@@ -689,6 +689,35 @@ impl Turn {
         self.call_forest.action_count()
     }
 
+    /// Is this a COORDINATION turn — observable, append-only, non-state-mutating?
+    ///
+    /// True iff the call forest is non-empty AND every action in it (recursing
+    /// through children) declares no `balance_change` and produces ONLY
+    /// [`Effect::EmitEvent`](crate::action::Effect::EmitEvent) effects. Such
+    /// turns are oversight traffic (status posts, gate verdicts, chat): they
+    /// move no value and mutate no cell state beyond the append-only event log.
+    ///
+    /// Consumed by the opt-in
+    /// [`ComputronCosts::coordination_exempt`](crate::executor::ComputronCosts)
+    /// class ("leash, not ledger" — the computron is an oversight budget, not an
+    /// economic cost): when a deployment opts in, the executor waives the CHARGE
+    /// for this class (a `fee = 0` coordination turn admits) while metering
+    /// stays honest — receipts still report the true `computrons_used`. Any
+    /// non-`EmitEvent` effect or any `balance_change` disqualifies the whole
+    /// turn, so the class cannot leak to value moves.
+    pub fn is_coordination(&self) -> bool {
+        fn tree_is_coordination(tree: &crate::forest::CallTree) -> bool {
+            tree.action.balance_change.is_none()
+                && tree
+                    .action
+                    .effects
+                    .iter()
+                    .all(|e| matches!(e, crate::action::Effect::EmitEvent { .. }))
+                && tree.children.iter().all(tree_is_coordination)
+        }
+        !self.call_forest.is_empty() && self.call_forest.roots.iter().all(tree_is_coordination)
+    }
+
     /// Every effect this turn will apply, paired with the target of the action
     /// that carries it, **in the executor's apply order**.
     ///

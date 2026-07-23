@@ -390,6 +390,13 @@ pub fn configure_turn_executor(
         executor.register_issuer_well(*token_id, *well);
     }
 
+    // COORDINATION-TURN CLASS ("leash, not ledger"): genesis-declared opt-in
+    // (`genesis.json` `coordination_fee_exempt` → NodeState). EmitEvent-only
+    // turns with no `balance_change` may carry `fee = 0` — the executor waives
+    // the CHARGE while the receipt's `computrons_used` stays honest. Default
+    // off: zero behavior change unless a deployment opts in at genesis.
+    executor.costs.coordination_exempt = s.coordination_fee_exempt;
+
     let base = attested_block_height(s);
     let height = match height_mode {
         BlockHeightMode::Current => base,

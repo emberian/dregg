@@ -1455,6 +1455,20 @@ async fn run_node(
                                 ),
                             }
                         }
+                        // COORDINATION-TURN CLASS ("leash, not ledger"):
+                        // genesis-declared opt-in. EmitEvent-only turns (no
+                        // balance_change) may carry fee = 0 — the charge is
+                        // waived at admission, the receipt's computrons_used
+                        // stays honest. Genesis-declared so every committee
+                        // node agrees; default off = exact legacy behavior.
+                        if let Some(exempt) = genesis["coordination_fee_exempt"].as_bool() {
+                            s.coordination_fee_exempt = exempt;
+                            if exempt {
+                                info!(
+                                    "genesis coordination_fee_exempt: EmitEvent-only turns are fee-exempt"
+                                );
+                            }
+                        }
                         if let Some(issuer_well_hex) = genesis["issuer_well"].as_str() {
                             match hex_decode_32(issuer_well_hex) {
                                 // The well backs the asset it is MINTED IN — read
