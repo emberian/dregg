@@ -1543,6 +1543,27 @@ async fn run_node(
                 "starbridge devnet backfill seeding complete (default cell set)"
             );
         }
+        // THE FEE LOOP (revolving fund): a genesis-less devnet cave node never
+        // hits the `genesis.json`-exists branch above (lib.rs:1229-1236), so
+        // `s.fee_well` is still None here — which means every per-turn fee
+        // remainder BURNS (execute.rs distribute_fee_shares fallback), and the
+        // faucet, a pure payer-out, drains monotonically (~800-turn runway →
+        // "insufficient balance ... need 1254" → signing DEGRADED). Point the
+        // fee well at the FAUCET cell so each committed turn's fee move
+        // recirculates into the exact pool the faucet pays out of: the
+        // {agents + faucet} value set is now closed (no external sink), payouts
+        // out are offset by fees in, and the coordination-turn class stays
+        // fee-bearing (the debit + budget gate + 1/min faucet rate-limit remain
+        // the oversight leash — no fee is zeroed). Idempotent: only sets the
+        // well when unset, so a genesis-configured well is never overwritten.
+        if s.fee_well.is_none() {
+            let faucet_cell_id = crate::api::faucet_cell_id();
+            info!(
+                fee_well = %faucet_cell_id,
+                "fee loop: genesis-less devnet fee well pointed at the faucet cell (recirculate, not burn)"
+            );
+            s.fee_well = Some(faucet_cell_id);
+        }
     }
 
     // Demo execution-lease seed — the local-cloud loop's mint. An external

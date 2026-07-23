@@ -7674,6 +7674,17 @@ pub(crate) fn faucet_public_key() -> [u8; 32] {
     faucet_signing_key().verifying_key().to_bytes()
 }
 
+/// The faucet cell's deterministic `CellId` under the default asset.
+///
+/// THE FEE LOOP (revolving fund): this is the single cell the genesis-less
+/// devnet backfill (`lib.rs`) points the fee well at, so every per-turn fee
+/// move recirculates into the pool the faucet pays out of — closing the loop
+/// that otherwise drained the faucet monotonically. Derived identically to the
+/// genesis faucet cell, so both boot modes name the SAME cell.
+pub(crate) fn faucet_cell_id() -> dregg_cell::CellId {
+    dregg_cell::CellId::derive_raw(&faucet_public_key(), &faucet_token_id())
+}
+
 #[derive(Deserialize)]
 pub struct FaucetRequest {
     /// Hex-encoded 32-byte recipient cell ID.

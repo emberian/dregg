@@ -16,8 +16,18 @@ use super::*;
 /// unconfigured or missing) moves to the FEE WELL when one is configured, so
 /// the turn's total value delta is exactly zero (`reachable_total_zero`'s
 /// hypotheses hold on the deployed chain, where genesis always configures
-/// the well). With no fee well configured the undelivered remainder is
-/// burned — the legacy pre-epoch semantics, kept only for well-less tests.
+/// the well).
+///
+/// THE FEE LOOP (revolving fund): on devnet the fee well POINTS AT the faucet
+/// cell (genesis-less backfill at `node/src/lib.rs`, and `fee_well: faucet_id`
+/// in `node/src/genesis.rs`). So the `fee - delivered` credit here recirculates
+/// straight back into the pool the faucet pays out of — closing the loop that
+/// otherwise drained the faucet monotonically. NO fee is zeroed: the debit +
+/// budget gate + faucet 1/min rate-limit remain the oversight leash.
+///
+/// With no fee well configured the undelivered remainder is burned — the legacy
+/// pre-epoch semantics, kept only for well-less tests (every deployed boot mode
+/// now configures the well, so this fallback is test-only).
 fn distribute_fee_shares(
     ledger: &mut Ledger,
     proposer: Option<&CellId>,
