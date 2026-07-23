@@ -248,7 +248,8 @@ fn integration_closed_loop_solvent_over_10k_turns() {
     ledger.insert_cell(faucet).unwrap();
 
     let standing_before = ledger_total(&ledger);
-    assert_eq!(standing_before, FAUCET_START + AGENT_BUFFER as i64);
+    // ledger_total() is i128 (real Ledger balances are i128) — match the width.
+    assert_eq!(standing_before, FAUCET_START as i128 + AGENT_BUFFER as i128);
 
     let mut agent_nonce = 0u64;
     let mut faucet_nonce = 0u64;
