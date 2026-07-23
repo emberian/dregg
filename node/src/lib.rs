@@ -1578,6 +1578,24 @@ async fn run_node(
             );
             s.fee_well = Some(faucet_cell_id);
         }
+        // COORDINATION-TURN CLASS ("leash, not ledger") — half (a) of the
+        // signed-turn transport fix. Same genesis-less devnet cave node never
+        // hits the `genesis.json`-exists branch above (lib.rs:1229-1247), so
+        // `s.coordination_fee_exempt` is still its `false` default here — which
+        // means the compiled-in exempt class is OFF on our devnet, and every
+        // coordination turn (chat/gate/status/meld — EmitEvent-only, no
+        // balance_change) still pays the per-turn fee, drains its cell, and hits
+        // the faucet's 1/min grant rate-limit → falls back to `[unsigned]`.
+        // Mirror the fee_well backfill above: turn the class ON at this dogfood
+        // boot so `configure_turn_executor` wires `costs.coordination_exempt =
+        // true` onto every executor. Metering stays honest (receipts keep the
+        // true `computrons_used`); only the ADMISSION CHARGE is waived, and only
+        // for EmitEvent-only turns — economic turns (Transfer/Burn/…) charge
+        // exactly as before. Gated by the same `--enable-faucet` devnet path.
+        info!(
+            "coordination class: genesis-less devnet fee-exempts EmitEvent-only turns (leash, not ledger)"
+        );
+        s.coordination_fee_exempt = true;
     }
 
     // Demo execution-lease seed — the local-cloud loop's mint. An external
