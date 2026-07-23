@@ -30,11 +30,11 @@ use std::collections::HashMap;
 
 use dregg_cell::permissions::AuthRequired;
 use dregg_cell::{Cell, CellId, Ledger, Permissions};
-use dregg_exec_lean::lean_apply::{ProducerOutcome, execute_via_lean, produce_via_lean};
+use dregg_exec_lean::lean_apply::{execute_via_lean, produce_via_lean, ProducerOutcome};
 use dregg_exec_lean::lean_shadow::ShadowHostCtx;
 use dregg_turn::{
-    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Event, TurnExecutor,
-    turn::Turn,
+    turn::Turn, Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, Event,
+    TurnExecutor,
 };
 
 fn open_permissions() -> Permissions {
@@ -104,6 +104,10 @@ fn chat_turn(agent: CellId, payload: &[u8], fee: u64) -> Turn {
             word
         })
         .collect();
+    // The current verified wire carries event topics losslessly only in its low-64 lane.
+    // Keep the chat-sized payload exact while choosing a topic that stays on the Lean producer.
+    let mut topic = [0u8; 32];
+    topic[24..].copy_from_slice(&11u64.to_be_bytes());
     let mut forest = CallForest::new();
     forest.add_root(Action {
         target: agent,
@@ -113,7 +117,7 @@ fn chat_turn(agent: CellId, payload: &[u8], fee: u64) -> Turn {
         preconditions: Default::default(),
         effects: vec![Effect::EmitEvent {
             cell: agent,
-            event: Event::new(*blake3::hash(b"helm.chat").as_bytes(), data),
+            event: Event::new(topic, data),
         }],
         may_delegate: DelegationMode::None,
         commitment_mode: Default::default(),
@@ -149,12 +153,17 @@ fn assert_producer_agreed(outcome: ProducerOutcome, label: &str) {
             lean_root,
             rust_root,
             rust_committed,
+            divergence,
         } => {
             assert!(committed, "Lean must commit the {label}");
             assert!(rust_committed, "Rust must commit the {label}");
             assert!(
                 rust_agreed,
-                "Lean/Rust authority divergence on {label}: lean_root={lean_root:?} rust_root={rust_root:?}"
+                "Lean/Rust authority divergence on {label}: lean_root={lean_root:?} rust_root={rust_root:?} divergence={divergence:?}"
+            );
+            assert!(
+                divergence.is_none(),
+                "divergence leg named on {label} despite agreement: {divergence:?}"
             );
             assert_eq!(lean_root, rust_root, "root agreement on {label}");
         }
@@ -428,8 +437,8 @@ fn committed_height_family_agrees() {
 /// Regression for the shared-chat starvation incident. The signer already existed with only 90
 /// computrons, so treating `found:true` as "funded" left every later chat turn permanently rejected.
 /// Prove the owner faucet can commit a top-up INTO that existing cell, the authoritative balance
-/// rises to 5,000, and the exact next metered chat-sized `EmitEvent` then commits. Both commits stay
-/// on the verified producer and require full Lean/Rust verdict + root agreement.
+/// rises to 5,000, and the same metered chat-sized `EmitEvent` then commits. Both commits stay on
+/// the verified producer and require full Lean/Rust verdict + root agreement.
 #[test]
 fn low_balance_recipient_top_up_commits_then_chat_send_commits() {
     if skip_no_lean() {
