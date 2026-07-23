@@ -91,6 +91,29 @@ fn build_chat_turn(
     turn
 }
 
+/// The cost model the CLIENT estimates its declared `turn.fee` against.
+///
+/// This bin only ever builds a single-action `EmitEvent` turn
+/// ([`build_chat_turn`]), which is exactly dregg's COORDINATION class
+/// ([`Turn::is_coordination`]: EmitEvent-only, no `balance_change`). When the
+/// deployment opts in via `DREGG_COORDINATION_EXEMPT` (truthy — helm forwards it
+/// on the chat send path), the estimate carries `coordination_exempt = true`, so
+/// [`TurnExecutor::estimate_cost`] returns 0 for the class and the client
+/// declares `fee = 0`: the turn rides the node's coordination-exempt admission
+/// free — no cell drain, no faucet grant, no `[unsigned]` throttle. Default OFF =
+/// exact legacy behavior (estimate the full computron cost), so a non-exempt node
+/// still gets a fully-funded fee.
+fn fee_cost_model() -> ComputronCosts {
+    let mut costs = ComputronCosts::default();
+    if env("DREGG_COORDINATION_EXEMPT")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        costs.coordination_exempt = true;
+    }
+    costs
+}
+
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
@@ -466,7 +489,9 @@ async fn cmd_send(f: Flags) -> Result<()> {
         &federation_id,
         estimate_nonce,
     );
-    turn.fee = TurnExecutor::new(ComputronCosts::default()).estimate_cost(&turn);
+    // Coordination-aware estimate: `fee = 0` when opted in (this is always an
+    // EmitEvent-only turn), so the send rides dregg's exempt admission free.
+    turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
 
     // Funding is SEND correctness, not a one-time join convenience. One grant
     // reserves a bounded six-send burst inside the faucet's 60-second window;
@@ -489,7 +514,7 @@ async fn cmd_send(f: Flags) -> Result<()> {
         .await
         .map_err(|e| err(format!("refetch own-cell nonce after funding: {e}")))?;
     turn = build_chat_turn(&clerk, cell, &f.topic, &payload, &federation_id, nonce);
-    turn.fee = TurnExecutor::new(ComputronCosts::default()).estimate_cost(&turn);
+    turn.fee = TurnExecutor::new(fee_cost_model()).estimate_cost(&turn);
     if turn.fee > funding.balance {
         return Err(err(format!(
             "final turn fee {} exceeds the observed funded balance {}",
