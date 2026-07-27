@@ -1,0 +1,128 @@
+⚠ THE SUBJECT LINE OF THIS COMMIT IS WRONG — it is a sibling lane's, not this work's.
+
+WHAT HAPPENED: the message was written to a shared scratchpad path (`…/scratchpad/msg.txt`)
+that a concurrent captp lane overwrote between the write and the `git commit -F`. The commit
+therefore carries that lane's captp message verbatim, and that lane's own commit (1a2093acf)
+carries the same text, which is why two adjacent commits have identical subjects. THE FILES
+IN THIS COMMIT ARE CORRECT AND ARE MINE — the 16 listed below, nothing else. History was not
+rewritten to fix it: the working tree held 31 files of concurrent lanes' uncommitted work, so
+a rebase would have needed a stash, and the fix would have rewritten a sibling's commit hash.
+A note is the swarm-safe repair. LESSON: a commit-message file in a shared scratchpad needs a
+lane-unique name.
+
+THE REAL SUBJECT:
+
+docs: a ```ignore fence now has to SAY WHY — and 48 of the 71 turned out to just be broken
+
+A doctest is the one form of documentation the compiler can check. This tree had 71 fences
+marked ```ignore, and not one said why — structurally none COULD, because a fence
+info-string rejects unknown attributes: there is nowhere to put a reason. So the question
+"is this off because it cannot compile here, or because it stopped compiling and someone
+silenced it?" had no answer anywhere in the tree.
+
+It has one now, and it is mostly the second. Positionally matched against the base tree, the
+fate of all 71:
+
+    35  now compile AND RUN, with no marker at all
+    13  ```no_run — compile and LINK, but must not execute
+    15  ```ignore WITH a stated structural reason
+     1  ```text — never was Rust
+     7  untouched remainder, baselined (4 vendored upstream, 3 owned by a concurrent lane)
+
+This commit carries the shared instrument plus my own 15 fences; the app-framework half
+(29 repairs) landed in a73e2ba72 and the leaf-crate half (16) in 24c004a4f.
+
+THE INSTRUMENT (`scripts/check-bare-ignore.py --fences`)
+
+  It lives beside the `#[ignore]` attribute gate because it is the same disease one altitude
+  up: a test switched off, and a documentation example switched off. Two contracts:
+
+    F1  a ```ignore fence whose first CONTENT line is not `// IGNORED: <reason>`. A
+        `#`-hidden reason does not count — rustdoc hides it, and the reader is who the
+        reason is for.
+    F2  an INERT ATTRIBUTE: an info-string mixing a doctest attribute with a token rustdoc
+        does not know (```ascii,no_run). rustdoc reads any unknown token as "not Rust", so
+        the attribute beside it silently does nothing. That is the gating-defaults-to-silence
+        class, in a code fence. Our own code has zero; the eight in the tree are upstream
+        curve25519-dalek's AVX2 lane diagrams.
+
+  It is NOT a grep — and, the part worth knowing, it is not `strip_noise` either. That
+  function BLANKS comments, and a doctest fence lives inside one, so reusing it would have
+  reported ZERO on a tree with 71 findings. This is the same lexer run inside-out: it keeps
+  `///` / `//!` / `/** */` and skips string literals, char literals, plain `//` comments and
+  `////` banners. Three shapes in this tree need exactly that, and each is a `-red` case: a
+  ```ignore line INSIDE an already-open ```text block (content, not an opener), the marker
+  named in prose, and a fence body inside a raw string literal — this repo's own gate scripts
+  embed fence text constantly.
+
+  THE FLOOR: it asserts it SAW at least 500 fences (676 today). A negative headline passes
+  just as happily when the reader is broken and sees nothing at all.
+
+  THE BASELINE (`scripts/doctest-ignore-baseline.tsv`) RATCHETS. A row is keyed on (path,
+  hash of the fence BODY), so it survives the file moving around the fence and DIES when the
+  example is rewritten. A row that matches nothing FAILS the gate: a repaired fence retires
+  its own exemption, or the file decays into a list of things that used to be wrong. There is
+  deliberately no regenerate flag — adding a row is supposed to cost a sentence.
+
+  RED-PROOF, three ways. `--fences --self-test` drives 7 disease shapes and 12 shapes a naive
+  grep gets wrong here, plus 3 ratchet properties (exempts the right one; FAILS on a stale
+  row; an empty baseline leaves every finding live). Withholding the baseline on the live
+  tree reports all 15 baselined findings. And before the repairs the same sweep printed 13 F1
+  rows across app-framework, sdk and the askama vendor drop.
+
+WHAT THE COMPILER FOUND ONCE IT COULD SEE (this commit's half)
+
+  `circuit/src/dsl/derivation.rs` documented `prove_derivation_dsl` / `verify_derivation_dsl`
+  from `dregg_dsl_runtime`. NEITHER EXISTS — and the crate it named depends on this one, so
+  the import was backwards as well. The real pair is `prove_derivation_p3` /
+  `verify_derivation_p3`, in this very module. Rewritten to a full honest witness; `no_run`
+  because it drives a real FRI STARK.
+
+  `circuit/src/non_membership.rs` documented `prover.prove_non_membership(..)` and
+  `.verify_non_membership(..)`. NEITHER EXISTS — `NonMembershipProver` has never had a
+  proving method; the AIR that proves the statement is `crate::dsl::accumulator`. The example
+  now uses the API that is there and RUNS: the accumulator agrees with an independent
+  evaluation, a member is a root of it, and the set identifier changes the challenge (which
+  IS the cross-set replay defence the module claims). The stale paragraph calling
+  `AccumulatorNonRevocationAir` "a thin wrapper over this generalized system" is gone too —
+  that type does not exist either.
+
+THE STRUCTURAL FIFTEEN, and why each earns its ```ignore
+
+  Proc-macro expansion (`dregg-dsl`, 3): the crate's dependencies are exactly
+  syn/quote/proc-macro2 while every expansion names `dregg_dsl_runtime::*`, and `gen_sp1`'s
+  is a `#![no_main]` zkVM guest against `sp1_zkvm`. The compiled counterpart is
+  `dregg-dsl-tests/src/dregg_definitions.rs`, and the reason now says so.
+
+  Live gpui handles (`starbridge-v2`, 3): `Window` / `Context` / `App` exist only inside a
+  running `gpui_platform::application().run(..)` callback.
+
+  Quoted foreign source (`circuit-prove/tests/binding_tooth`, 2): lines lifted from
+  `p3_circuit`'s Runner and from `joint_turn_recursive`'s locals.
+
+  Deliberately-broken exhibits (2): `circuit/src/refusal.rs`'s any-`Err` anti-pattern, shown
+  BECAUSE it is wrong, and `node/src/strand_admission_gate.rs`'s DELETED fail-open bypass
+  line — whose reason says, in as many words, not to resurrect it.
+
+  A proposed-not-yet-written guard (`orb` dataplane, 1), and the rest across the two sibling
+  commits.
+
+`deos-terminal`'s quick-start had an elision where the window setup goes; it is now
+`src/bin/demo.rs` verbatim under `no_run`, which links the whole native gpui stack — the
+check that was absent.
+
+VERIFIED, debug profile, `--test-threads=4`, on persvati warm lanes. `cargo nextest` does not
+run doctests, so `cargo test --doc` is the only thing that covers this work:
+  dregg-circuit   4 doctests, 0 failed  (native-anchor)
+  deos-terminal   1 doctest,  0 failed  (darkpool)
+
+FILES IN THIS COMMIT (16):
+  circuit/src/dsl/derivation.rs · circuit/src/non_membership.rs · circuit/src/refusal.rs
+  circuit-prove/src/effect_vm_p3_air.rs · circuit-prove/tests/binding_tooth/mod.rs
+  dregg-dsl/src/lib.rs · dregg-dsl/src/gen_sp1.rs · node/src/strand_admission_gate.rs
+  orb/crates/dataplane/tests/borrow_recycle_prop.rs · deos-terminal/src/lib.rs
+  starbridge-v2/src/cockpit/root.rs · starbridge-v2/src/dock/chat_surface.rs
+  starbridge-v2/src/dock/terminal_surface.rs · scripts/check-bare-ignore.py
+  scripts/local-gates.sh · scripts/doctest-ignore-baseline.tsv
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
