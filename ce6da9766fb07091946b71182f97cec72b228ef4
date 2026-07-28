@@ -1,0 +1,14 @@
+⚠ MIXED COMMIT — the subject is correct for half of this diff and wrong for the
+other half. Measured 2026-07-27 in the opus-4.8 commit review.
+
+MATCHES the message (the opening-soundness lane):
+    docs/OPENING-SOUNDNESS-DECONFLATED.md          420 +
+    docs/PLAN-fri-proximity-apex-connection.md     317 +
+
+DOES NOT match it (the dregg-in-dregg lane, swept in by a shared tree):
+    docs/DREGG-IN-DREGG-BUILD.md                   170 +
+    metatheory/Dregg2/Distributed/SelfSettlement.lean  592 +
+
+The sibling e9a6605d5 carries the SAME subject and is 100% the dregg-in-dregg
+lane. 592e746a7 records the real content of both, but only inside a doc file —
+this note makes it visible from `git log`.
