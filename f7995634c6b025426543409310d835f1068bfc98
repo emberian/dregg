@@ -1,0 +1,25 @@
+⚠ "GATE TO 0/0" WAS TRUE WHEN WRITTEN AND IS NOT TRUE NOW — and the regression came
+entirely from docs landed later in this same window.
+
+MEASURED 2026-07-27, running the gate at HEAD (not inferring it):
+
+    scripts/check-doc-refs.sh
+    -> scanned 10740 resolvable refs across 676 markdown files
+    -> 26 DEAD, 0 WARN     REAL EXIT = 1
+
+(Read the real exit code, not a `| tail` pipeline's — that pipeline reports 0.)
+
+This commit's own repairs still hold; nothing here rotted. The 26 belong to docs
+committed AFTER it:
+
+    10  ce6da9766   (9 in PLAN-fri-proximity-apex-connection.md, 1 in
+                     OPENING-SOUNDNESS-DECONFLATED.md) — the missing
+                     `metatheory/Dregg2/` path shorthand
+     4  cfbec66d5   TABLEOPENINGS-LIVE-OR-MODEL.md -> `verifier/mod.rs:*`, a p3
+                     shorthand that resolves against THIS repo's own verifier/ crate
+     3  592e746a7   DREGG-IN-DREGG-BUILD.md
+     3  c183acdce · 2  409bd18f3 · 2  14b4475b5 · 1  5c1423632 · 1  a0c384365
+
+413f29f1e (229 refs repointed) and b05533649 (45 Lean refs) both reproduce exactly.
+The class they cleared reopened within a day, because the gate reports and does not
+block. THIS IS LIVE AND RED AT HEAD.
