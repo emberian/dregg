@@ -1,0 +1,21 @@
+⚠ THE LENIENCY IS WIDER THAN THIS COMMIT'S OWN PROSE, AND THE SURVIVING VERDICT IS
+CLI-ONLY. Measured 2026-07-27 in the opus-4.8 commit review.
+
+1. SCOPE. Subject and doc scope the new tolerance to the no-checkpoint crash window
+   ("the ONE case"; "With no ledger checkpoint this is INCONCLUSIVE rather than a
+   corruption finding"). node/src/state.rs computes `let checkpointed =
+   matches!(store.load_latest_ledger_checkpoint(), Ok(Some(_)));` and passes it ONLY
+   as a `tracing::warn!` field — it is never used as a decision. Every
+   `StoreError::Integrity` now warns and returns `Ok(())`, checkpoint present or
+   absent. The test's second pole stays "in the SAME no-checkpoint window", so the
+   checkpointed-and-divergent case is untested.
+
+2. WHERE THE VERDICT WENT. The refusal moves out of the constructor into
+   `verify_recovery_convergence`, which has exactly ONE production caller —
+   node/src/lib.rs:1682, inside `run_node`. Every embedder, in-process router and
+   host that builds a node through `NodeState::new` now gets no corruption verdict
+   at all. That is the same "armed by the CLI only" class 4b7a3935e names three
+   hours later, and the same UN-CALLED INITIALIZER class 87a695f68 was written for.
+
+The kill -9 / bricked-data-dir fix itself is real and the direction is defensible;
+what is understated is how much of the check went with it.
