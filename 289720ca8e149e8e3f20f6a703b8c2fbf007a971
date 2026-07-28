@@ -1,0 +1,19 @@
+⚠ THE SUBJECT'S PAST TENSE IS PREMATURE — the named hole is still open in the
+SHIPPED artifact. Measured 2026-07-27 in the opus-4.8 commit review.
+
+Subject: "a `&&` on an absent export LET passkey custody enroll ANY STRING".
+
+extension/src/passkey.ts:223 still reads
+    if (this.wasm.validate_mnemonic && !this.wasm.validate_mnemonic(mnemonic))
+This commit adds a comment above it and leaves the `&&`. The guard is armed ONLY
+if the loaded wasm bundle exports `validate_mnemonic`.
+
+wasm/src/lib.rs:1997 DOES export it now — that half is real. But the checked-in
+bundle extension/dregg_wasm.js was last committed 2026-07-10 and contains ZERO
+occurrences of `validate_mnemonic`, so against the artifact this repo actually
+ships, the `&&` still short-circuits and passkey custody still enrolls any string.
+
+The sibling path WAS hard-required: extension/src/background.ts:560 does
+`if (typeof wasm!.validate_mnemonic !== "function") throw staleBundle(...)`.
+passkey.ts did not get that treatment. The asymmetry is the residual: either
+rebuild the bundle, or give passkey.ts the same hard require.
