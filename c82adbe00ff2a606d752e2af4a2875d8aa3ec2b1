@@ -1,0 +1,24 @@
+⚑ THIS COMMIT PLANTED A RED-PROOF MUTANT IN MAIN, under a subject announcing a
+security fix. Measured 2026-07-27 in the opus-4.8 commit review.
+
+discord-bot/src/db.rs, in the NEW `get_dungeon_host` this commit adds:
+
+    let row: Option<(String,)> = None; // MUTANT-M2b: nothing survives the restart
+    let _ = channel_id;
+
+The doc-comment three lines above says the opposite: "A row that does not parse
+decodes as `None`: an unreadable record must mean 'I do not know who hosts this
+run', never a fabricated host." The query is gone and `channel_id` is discarded,
+so the host is unknown after every restart.
+
+The treasury fix in this commit's subject IS real and stands. The mutant is a
+separate lane's scaffold captured by the shared tree; this commit's own body flags
+the db.rs hunks as another lane's and calls the tree "verified green".
+
+CHAIN: 6f38efbe3 replaced M2b with the WORSE, fail-OPEN `MUTANT-M2c`; 43d114c11
+fixed it but named only M2c and attributed it to 88bf68819, which is not reachable
+from main. The on-main carriers are THIS COMMIT and 6f38efbe3.
+
+Third instance of the class in this window (cell/src/program/eval.rs's
+`if false && …` Monotonic arm is the one AGENTS.md documents). Nothing in the tree
+detects a `MUTANT-` marker.
