@@ -1,0 +1,18 @@
+⚠ THE SUBJECT IS WRONG — it describes work that is not in this diff.
+
+Measured 2026-07-27 in the opus-4.8 commit review. Subject claims deos-view
+`MenuItem` / `wants_text` work across "53 MenuItem sites". This diff contains
+ZERO occurrences of `MenuItem` and touches NO file under `deos-view/`
+(`git show --format='' eeaddfff4 | grep -c MenuItem` => 0).
+
+WHAT IS ACTUALLY HERE (5 files, +2687/-20):
+    dreggnet-web/src/identity_link.rs        1942 +   (NEW FILE)
+    dreggnet-web/tests/seed_identity_web.rs   728 +   (NEW FILE)
+    dreggnet-offerings/src/lib.rs, sdk/src/lib.rs, wasm/src/lib.rs   (small)
+
+AND IT SILENTLY REPAIRED A BUILD BREAK NOBODY ANNOUNCED: `pub mod identity_link;`
+was added to dreggnet-web/src/lib.rs by 5776cb706 ("automatafl: the hero board
+burst its frame"), whose diff is lib.rs alone and which named a file that existed
+in no tree. `dreggnet-web` therefore did not compile from 5776cb706 until here —
+eight commits. Same class as 87a695f68 (node/src/init.rs) and 587b00d8b
+(attest-check workspace member).
