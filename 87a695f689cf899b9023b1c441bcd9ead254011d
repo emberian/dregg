@@ -1,0 +1,21 @@
+⚠ THIS COMMIT DOES NOT BUILD AS LANDED. Measured 2026-07-27 in the opus-4.8 review.
+
+node/src/lib.rs at this tree declares
+    :79   mod init;
+    :90   mod operator_turn_receipt_head_e2e;
+    :731  Command::Init { data_dir } => init::init_node(&data_dir),
+and NEITHER file exists here (`git ls-tree 87a695f68 node/src/` returns neither).
+node/src/init.rs first lands 54 minutes later in 4cbc60752, whose own subject says
+"repair a HEAD that already referenced this file".
+
+So the before/after `dregg-node genesis` transcript in this body was taken against a
+working tree that held an uncommitted init.rs — an incomplete `git add` in a shared
+tree, not a false claim about behaviour. THE NAMED INSTALLER ITSELF IS REAL and the
+marshal-only tripwire survives.
+
+Nit: "the six verified-PQ installs" — the function makes seven install calls; six
+are distinct cores plus the scalar `install_mldsa_verified_sign_core`.
+
+This is one of seven commits in this window that reference a file or workspace
+member arriving later: also 5776cb706, 587b00d8b, b7f7f249e, bfa7cd9aa, f52464507,
+4015c5abc. No gate in the tree detects it.
