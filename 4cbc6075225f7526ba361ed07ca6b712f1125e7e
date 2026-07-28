@@ -1,0 +1,14 @@
+⚠ THE ATTRIBUTION IN THIS BODY IS WRONG. Measured 2026-07-27 in the opus-4.8 review.
+
+The body says 792260ea9 "swept [`mod init;`] in while this file was still
+untracked". 792260ea9 is "node: serve the explorer at `/`" and touches only
+dreggnet-web/src/explorer.rs, node/src/api.rs and site/explorer/* — it does not
+touch node/src/lib.rs at all.
+
+`mod init;` was added by 87a695f68 ("node: give the six verified-PQ installs a
+name…", 2026-07-26 02:40), which shipped node/src/lib.rs referencing
+node/src/init.rs and node/src/operator_turn_receipt_head_e2e.rs without either
+file. This commit lands init.rs 54 minutes later.
+
+THE DEFECT CLAIM AND THE FIX ARE BOTH CORRECT — only the forensic pointer is,
+which sends the next reader to an explorer commit.
