@@ -1,0 +1,9 @@
+⚠ "C1-C9" NAMES NINE CHECKS WHERE EIGHT EXIST. Measured 2026-07-27 in the opus-4.8
+commit review.
+
+Enumerating the check labels in metatheory/Dregg2/Circuit/Emit/KimchiVerify.lean at
+HEAD gives C1, C3, C4, C5, C6, C7, C8, C9 — there is no C2, and there never was
+one in this file. The range notation reads as an unbroken nine.
+
+The assembly itself is real; what the subject overstates is the completeness the
+range implies. Read the per-check status in the file rather than the range.
