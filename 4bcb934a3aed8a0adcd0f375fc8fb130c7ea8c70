@@ -1,0 +1,31 @@
+⚑ "sweep-up commits (sorry claudes)" IS NOT AN HONEST SUBJECT FOR 1,739 FILES AND
+492,812 INSERTIONS. Measured 2026-07-27 in the opus-4.8 commit review.
+
+WHAT IS INSIDE: the whole `orb` subsystem (a Lean-authored HTTP/TLS/QUIC proxy
+stack with its own 28-line axiom manifest, orb/AXIOMS.txt) at 271k lines of Lean +
+40k lines of Rust; `orb-compiler` (23k Lean); a NEW crate `attest-check`; a NEW
+453-line Lean module Metatheory/OptimisticAdjudication.lean ROOTED in Dregg2.lean;
+scripts/player-copy-punctuation-allow.tsv (the allowlist b7f7f249e described a day
+earlier but did not ship); and ~1,853 lines of hand edits across 62 pre-existing
+files. Zero file deletions.
+
+GUARD SWEEP IS CLEAN: no `if false &&`, no `if true {`, no RED-PROOF/MUST NOT BE
+COMMITTED, no todo!/unimplemented!, no `sorry` term added to any .lean. The
+sdk/src/{runtime,cipherclerk}.rs hunks are comment-only and correct in the safe
+direction. Nothing under turn/ cell/ circuit/ node/ blocklace/ verifier/.
+
+⚑ TWO THINGS THE SUBJECT HIDES:
+
+1. TEN RUST CRATES LANDED OUTSIDE EVERY GATE. orb/.workspace-members lists ten
+   paths (orb/crates/{aes-fallback, borrow-recycle-twin, config-publish-twin,
+   conn-limit-twin, dataplane, multishot-twin, oneshot-recv-twin, ring-twin,
+   splitsend-twin, wake-twin}). None is in the root Cargo.toml `members` OR
+   `exclude`, and none declares its own [workspace]. `cargo metadata --no-deps
+   --offline --manifest-path orb/crates/dataplane/Cargo.toml` errors: "current
+   package believes it's in a workspace when it's not". orb/scripts/ci.sh cannot
+   run, and nothing under .github/ or scripts/ mentions orb/. 40k lines of Rust,
+   including the TLS/HTTP dataplane, are compiled by nothing.
+
+2. IT SILENTLY REPAIRED A ~17-HOUR-BROKEN ROOT WORKSPACE. 587b00d8b (subject about
+   the Linux CI workspace test) added "attest-check" to Cargo.toml `members`; the
+   directory arrives only here.
