@@ -1,0 +1,27 @@
+⚠ THE SUBJECT ASSERTS A REFUTATION THAT NOTHING IN THIS COMMIT ESTABLISHES.
+Measured 2026-07-27 in the opus-4.8 commit review.
+
+Subject: "the composition law is FALSE of the deployed executor".
+
+The only Lean here is metatheory/EffectAlgebraSketch.lean, whose own header
+(:10-13) reads:
+
+    ⚑⚑ STATUS: **UNELABORATED.** This file has NOT been run (`lake build` /
+    `lake env lean` were forbidden by the task that produced it). Every proof
+    script below is a PROPOSAL, not a result.
+
+Confirmed at HEAD: it is imported by nothing, has no `.olean`, and is deliberately
+self-contained (no `Dregg2` imports), so it is outside the default lake targets and
+cannot go red. Its negative results are about a self-contained TOY model, not the
+deployed `execFullTurnA_append`.
+
+The body DOES say UNELABORATED. The subject does not, and the subject is what gets
+cited. Read as: "a Lean SKETCH, unelaborated and unchecked, ARGUES the composition
+law fails" — not that it was refuted.
+
+Related, same doc: docs/reference/EFFECT-ALGEBRA-RECKONING-2026-07-26.md:560,738
+says "Six of eight are transitive"; the sketch proposes three
+(`immutable_transB`, `monotonic_transB`, `boundedBy_transB`) and refutes one.
+
+The SetField half of the subject ("SetField's denotation is RIGHT") is not in
+question here.
