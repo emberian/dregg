@@ -1,0 +1,36 @@
+⚑ AN UNMENTIONED WEAKENING SHIPPED HERE — AND IT WAS AN UNSOUNDNESS IN THE IMPORT
+PATH. Found 2026-07-27 in the opus-4.8 commit review. ALREADY FIXED — see below.
+
+THE DEFECT, at this commit. `thm` in docs/opentheory-importer-poc/OTPoC.lean
+extended Γ handling from empty-only to non-empty, and checked the declared
+hypotheses by COUNT alone (:992-993):
+
+    unless th.hyps.size == ls.size do
+      throwError "thm: declared Γ ({ls.size}) disagrees with the proof's open hypotheses ..."
+
+`ls` — the article's declared hypothesis TERMS — was bound and then used only for
+`.size`. The exported statement was built from the proof's own fvars, never from
+`ls`. So an article could declare a sequent it had not proved, as long as the
+COUNT matched, and the importer would mint a true, kernel-checked Lean theorem
+whose stated antecedents were never established. Measured by the repairing lane on
+an article declaring the FALSE sequent `q ⊢ p` over a proof of `p ⊢ p`: sizes
+agreed, the check passed, success was logged, and `∀ p, p → p` was exported.
+
+⚠ BLAST RADIUS, stated so it is not over-read: this is the PoC importer under
+docs/opentheory-importer-poc/, not the production TCB, and nothing in the tree
+builds it — which is also why nothing caught it.
+
+FIXED in 40a59541b — "OpenTheory importer: an article declaring `q ⊢ p` minted a
+Lean `p → p` and nothing could tell — Γ checked by CONTENT, the axiom gate made
+exact, and the whole file wired to something that RUNS". At HEAD, `ls` feeds
+`declaredΓ ← ls.mapM (fun o => o.asTerm)` and each declared hypothesis must be
+defeq-matched against the proof's assumed Γ, with its own error
+("the article asserts a sequent it did not prove").
+
+ALSO WRONG IN THIS BODY: "the 1561-subst / 64k-line article". The article this
+commit adds, docs/opentheory-importer-poc/pair-closed.art, contains 2243 `subst`
+lines (`grep -cx subst`), not 1561.
+
+The axiom gate in the sibling f1addb715 is genuinely fail-closed and was verified
+separately: 12 real discharge theorems, a throwing fall-through, `collectAxioms`
+gating the output, and both reject articles observed refusing live.
