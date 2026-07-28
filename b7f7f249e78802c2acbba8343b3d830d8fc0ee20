@@ -1,0 +1,13 @@
+⚠ THIS COMMIT DESCRIBES AN ALLOWLIST IT DID NOT COMMIT, so the gate it adds could
+not have been green as landed. Measured 2026-07-27 in the opus-4.8 review.
+
+The body says "19 are named allowlist rows … allowlisted BY NAME with their
+reasons". scripts/player-copy-punctuation-allow.tsv is not in this commit; it first
+appears ~25 hours later in 4bcb934a3 ("sweep-up commits (sorry claudes)"). With the
+file absent, `read_allowlist` returns [], those 19 sites report as violations, and
+the gate exits 1.
+
+The 19 figure itself is right (verified at HEAD), the scope table is exactly 13
+entries, and the em-dash gate is real — this is an incomplete `git add` in a shared
+tree, not a false claim about behaviour. One of seven such commits in this window
+(87a695f68, 5776cb706, 587b00d8b, bfa7cd9aa, f52464507, 4015c5abc are the others).
