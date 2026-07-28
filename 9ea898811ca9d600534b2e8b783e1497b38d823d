@@ -1,0 +1,15 @@
+⚠ ONE CLAUSE OF THIS SUBJECT RE-ASSERTS A CLAIM THIS REPO HAD ALREADY RETRACTED.
+Measured 2026-07-27 in the opus-4.8 commit review.
+
+Subject: "…and a game that draws 100% of the time."
+
+docs/CLAIM-CORRECTIONS-2026-07-25.md §4 ("⚠ RETRACTED BY ME — 'automatafl is a dead
+draw between competent players'") withdrew exactly that finding on 2026-07-25,
+about 21 hours before this commit, on the ground that two DETERMINISTIC agents on a
+MIRROR-SYMMETRIC board play mirror-symmetric games, so the observed freeze is an
+artifact of the method, not a property of the game.
+
+5286ea0bb later measures the real rate at 17-21%.
+
+The rest of the commit — the play-driven fixes, the 720/20 legal-move census — is
+not in question here.
