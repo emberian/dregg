@@ -1,0 +1,14 @@
+⚠ TWO CLAUSES OF THIS SUBJECT OUTRUN THE FILE. Measured 2026-07-27 in the opus-4.8
+commit review. The Lean work itself is substantial and clean — no `sorry`, no
+`axiom`, no `native_decide` (independently swept).
+
+1. "across all 4 chains". In this repo "the four chains" is ETH/Base, Cosmos,
+   Solana and MIDNIGHT (docs/TRUE-PEERS-ARCHITECTURE-2026-07-26.md:27). This commit
+   discharges four fold CARRIERS across THREE of them; Midnight is BLAKE2b and was
+   done separately in 44fd59970. Four carriers, not four chains.
+
+2. "no assumption". The four payoffs still take `hcr`/`hinj`, `hchain`/`hforce` and
+   `hpin` as hypotheses, and the module's own header
+   (Sha256HfoldDischarge.lean:37-44) lists the residuals that remain. What is
+   discharged is the HFOLD, which is exactly what the first half of the subject
+   claims — the "no assumption" tail is what overreaches.
