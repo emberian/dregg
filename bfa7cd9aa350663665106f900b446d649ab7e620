@@ -1,0 +1,18 @@
+⚠ THE RATCHET THIS COMMIT ANNOUNCES COULD NOT RUN — its data file was not in the
+commit. Measured 2026-07-27 in the opus-4.8 commit review.
+
+Every number in this body checks out exactly: scripts/feature-tiers.tsv is 243 rows
+/ 145 distinct feature names / 73 crates; T1 152 + T2 3 + T3 79 + T4 9 = 243;
+243-152 = 91 = 37.4%.
+
+But scripts/feature-t3-sweep.sh:67 points KNOWN_RED at
+scripts/feature-t3-known-red.tsv, and its ratchet opens
+
+    [ -f "$known" ] || { echo "…$known is missing; it IS the ratchet" >&2; return 2; }
+
+That file is not in this commit. It first lands 7h39m later, swept into an
+unrelated commit (456070596, "copy: 1,370 em-dashes…"). In between, the nightly
+t3-compile-sweep exits 2 on every shard, and the push-side check is a SILENT SKIP —
+scripts/check-feature-tiers.py:531 reads `if known_red is not None and
+known_red.is_file():` — so the push gate stayed green about a ledger that did not
+exist. Same gating-defaults-to-silence class the tiering itself was written to find.
