@@ -1,0 +1,15 @@
+⚠ "EXHAUSTIVELY VERIFIED" IS NOT REPRODUCIBLE IN THIS REPO. Measured 2026-07-27 in
+the opus-4.8 commit review.
+
+This commit is ONE markdown file, 104 lines. The exhaustive search that produced
+"ZERO strategic forks on all 16 days", and the negative control the subject
+advertises (BREATH 30->34 => 0 forks; cap 8->9 => 370 forks), rest on a solver the
+document itself locates outside the tree — line 104:
+
+    Solver scripts: `<session scratchpad>/descent_solve.py` (the mover replica) and siblings.
+
+There is no committed script, test, or Lean `#guard` for any of these numbers, so
+nothing in this repo can go red if the fact changes. By this project's own standard
+("a documented wound is not a detected one"), this is a RECORDED MEASUREMENT, not a
+verified one — the finding may well be right, but the subject's "exhaustively
+verified" and its negative control are unfalsifiable at HEAD.
