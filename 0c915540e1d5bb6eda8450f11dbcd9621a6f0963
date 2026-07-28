@@ -1,0 +1,19 @@
+⚠ THIS COMMIT DOES NOT COMPILE. Measured 2026-07-27 in the opus-4.8 commit review.
+
+dreggnet-web/src/seed_identity.rs:113 does
+    use dregg_sdk::mnemonic::{MnemonicError, derive_keypair, generate_mnemonic, mnemonic_to_seed};
+and this commit ships NO Cargo.toml. At this tree dreggnet-web/Cargo.toml's only
+occurrence of `dregg-sdk` is a comment on line 124 — there is no dependency.
+aa3ae64c7 adds it ~4h later and its own subject says so: "the dregg-sdk dep I
+committed seed_identity.rs without".
+
+THE SEED HANDLING ITSELF IS CLEAN, and worth recording because the subject invites
+the question: no `tracing`/`println`/`dbg` touches the phrase (the two log macros
+at :657/:667 are off the phrase path); `derive_pubkey_hex` (:383-387, :406-410)
+zeroizes both the KDF seed and the Ed25519 secret and returns `Zeroizing`;
+phrase-bearing responses are `private, no-store` (:487, :498-502); only the 32-byte
+pubkey is retained. The residual — the phrase transits the server in a POST body —
+is stated in the module doc, not hidden.
+
+Sixth of eight commits in this window that do not build as landed. See also
+87a695f68, 5776cb706, 587b00d8b, b7f7f249e, bfa7cd9aa, f52464507, 4015c5abc.
