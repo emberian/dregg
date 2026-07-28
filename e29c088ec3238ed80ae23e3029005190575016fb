@@ -1,0 +1,21 @@
+⚠ THE HEADLINE IS EXACT AND THE BREAKDOWN IS WRONG — and the wrong arithmetic is
+now committed into a gate's own data file. Measured 2026-07-27 in the opus-4.8
+commit review.
+
+"29" is right: scanned at this commit, 13 `no_run` fences carry a `NO_RUN:` reason
+and 29 do not.
+
+The breakdown does not add up, in the message AND in the comment block written into
+scripts/doctest-ignore-baseline.tsv:23-25:
+
+    "20 in `sdk/` + `dregg-sdk-net/`, 8 upstream in `vendor/curve25519-dalek-dregg`,
+     and one each in `chain/`, `dregg-pay/`, `git-deploy/`, `host-gateway/`, `wire/`"
+
+20+8+1+1+1+1+1 = 33, for a population of 29. Both halves of the first term are also
+wrong: sdk/ has 11 and dregg-sdk-net/ has 4 (= 15), and `chain/` has TWO
+(chain/src/bridge.rs:10, chain/src/listener.rs:25), not one.
+
+Also: the subject says "NAME the 29"; the diff names buckets, not fences.
+
+Nothing was relaxed — the gate is left un-armed on purpose with the reason written
+down, which is the right call. It is the census beside it that is off.
