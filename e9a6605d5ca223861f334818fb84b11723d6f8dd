@@ -1,0 +1,21 @@
+⚠ THE SUBJECT AND BODY OF THIS COMMIT ARE WRONG — they belong to the
+opening-soundness lane, and NOTHING in this diff is that work.
+
+Measured 2026-07-27 in the opus-4.8 commit review. The message describes an
+opening-soundness-floor census (~310 citation sites, eps_C, Poseidon2SpongeCR).
+The diff is TWO files and both are the dregg-in-dregg lane's:
+
+    docs/DREGG-IN-DREGG-BUILD.md                       34 +/-
+    metatheory/Dregg2/Distributed/SelfSettlement.lean  64 +/-
+
+Zero overlap. Same shared-scratchpad message-file race that produced the note on
+001bc449e: a concurrent lane overwrote the commit-message path between write and
+`git commit -F`.
+
+THE REAL SUBJECT: the self-settlement effect's Lean semantics + binding lemma —
+see 592e746a7, which records the content but only inside a doc file, so `git log`
+did not show it. This note closes that.
+
+SEE ALSO ce6da9766, which carries the same wrong subject and is a MIXED commit:
+its OPENING-SOUNDNESS-DECONFLATED.md + PLAN-fri-proximity-apex-connection.md DO
+match the message; its DREGG-IN-DREGG-BUILD.md + SelfSettlement.lean do not.
