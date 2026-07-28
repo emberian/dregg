@@ -1,0 +1,21 @@
+⚠ THE CLOSING PARAGRAPH OF THIS BODY ("NOT MINE, MEASURED, AND WORSE THAN IT
+LOOKS") IS A MISDIAGNOSIS. Corrected 2026-07-27, and the correction is 68ca51abe.
+
+THE EFFECTS-HASH WORK ITSELF IS CORRECT AND STANDS. Verified against the diff:
+witness rule 7b in turn/src/executor/execute.rs now computes
+`turn.sovereign_effects_hash(cell_id)` and rejects with
+`TurnError::EffectsHashMismatch` BEFORE the forest mutates anything. The zero
+sentinel is retired in favour of the rule that binds. Both poles are driven.
+
+WHAT IS WRONG is the attribution at the end. It reports that slot caveats stopped
+firing and concludes "the divergence is in the RESOLUTION: the delta contains
+1b90d8a99, which deleted dregg-sdk's exec-lean feature…". It was not a feature
+unification hazard. The cause was a RED-PROOF SCAFFOLD another lane left in the
+shared tree: cell/src/program/eval.rs's `Monotonic` arm sat as
+
+    // RED-PROOF SCAFFOLD — MUST NOT BE COMMITTED. Restored in the same session.
+    if false && !field_gte(&new_state.fields[idx], &old.fields[idx]) {
+
+after that lane died on a weekly API limit. The "flap" (green in two runs of four)
+was which builds had picked up the edit. 68ca51abe restored the arm; 905e0a5f3
+wrote the lesson into AGENTS.md. 1b90d8a99 is exonerated.
