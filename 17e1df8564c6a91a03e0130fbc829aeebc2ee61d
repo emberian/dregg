@@ -1,0 +1,21 @@
+⚠ TWO CLAIMS IN THIS BODY ARE WRONG. Measured 2026-07-27 in the opus-4.8 review.
+
+1. "40 UI screenshots, ~40 MB" / "reclaims the whole 40 MB". The file COUNT is
+   right (40). The SIZE is not: summing the `size` field of the 40 deleted LFS
+   pointers gives 24,698,113 B = 24.70 MB (23.55 MiB). The body's own other
+   figures agree with 24.70, not 40 — it says descriptors are "~21 MB" (21,291,508
+   B, correct) and total LFS "45 MB", and 24.70 + 21.29 = 45.99.
+
+2. "Verified: … `.gitattributes` now tracks only the descriptor TSVs." No
+   `.gitattributes` was touched by this commit. `dregg-atlas/.gitattributes` is
+   unchanged at HEAD and still reads:
+       site/ui-states/*.jpg   filter=lfs …
+       site/screenshots/*.png filter=lfs …
+       site/*.png             filter=lfs …
+   Low impact today (0 tracked files remain, and 1b4aa6d91 added the directory to
+   .gitignore), but a new capture dropped into dregg-atlas/site/ is still
+   LFS-tracked. The wrong "40 MB" was then written into .gitignore and
+   scripts/build-pages-dist.sh by 1b4aa6d91.
+
+Also: 16 of this commit's 56 changed files are zkoracle test-file mode changes
+from a concurrent lane, unrelated to the atlas.
