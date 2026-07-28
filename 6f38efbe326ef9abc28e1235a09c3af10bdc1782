@@ -1,0 +1,18 @@
+⚑ AN UNMENTIONED HUNK IN THIS HARDENING COMMIT SWAPPED ONE RED-PROOF MUTANT FOR A
+FAIL-OPEN ONE. Measured 2026-07-27 in the opus-4.8 commit review.
+
+discord-bot/src/db.rs, inside `get_dungeon_host`:
+
+    // MUTANT-M2c: guess a host rather than reporting the row unreadable
+    match v.split_once(':') {
+        Some((o, t)) => (o.parse::<u64>().unwrap_or(0), t.parse::<i64>().unwrap_or(0)),
+        None => (0, 0),
+    }
+
+A malformed row now decodes as host 0 instead of "unreadable" — a FABRICATED host,
+which is exactly what the function's own doc-comment forbids. The predecessor
+(`MUTANT-M2b`, planted in c82adbe00) at least failed closed.
+
+The attested-narration work this commit's subject describes is real and stands.
+43d114c11 fixed M2c, but named it as one 10-minute slip attributed to 88bf68819
+(not reachable from main); the real chain is c82adbe00 -> here -> 43d114c11.
