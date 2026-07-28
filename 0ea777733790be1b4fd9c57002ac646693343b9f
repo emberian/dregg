@@ -1,0 +1,16 @@
+⚠ THIS COMMIT SWEPT ANOTHER LANE'S WORK, and the sweep was mine.
+
+`discord-bot/src/commands/admin.rs` in this commit is NOT bounty work. It is the admin surface of
+the treasury fuel-gauge repair — the new `/dregg admin treasury refuel:<usd>` operator key, and
+`refuel_signal` split out of `run_treasury` as a pure fn so the REFUEL NOW alarm is drivable from a
+genuinely drained tank.
+
+I committed `discord-bot/src/commands/` as a DIRECTORY and caught a live lane's in-progress file
+with it. The rest of that work landed separately as `1259679bf` ("treasury: the fuel gauge could not
+fall, so the REFUEL alarm could not fire"), which carries the full flag day: a hosted run now
+requires funded fuel and refuses with `FuelExhausted` when the tank cannot cover one run.
+
+So the flag day for the refuel key is NOT findable from this commit's subject. It is here.
+
+The lesson is narrower than 'be careful': COMMIT NAMED PATHS, NOT DIRECTORIES, in a shared tree.
+AGENTS.md says commit only named paths and I read a directory as one.
