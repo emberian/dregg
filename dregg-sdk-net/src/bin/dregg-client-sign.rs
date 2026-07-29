@@ -427,7 +427,39 @@ async fn cmd_join(f: Flags) -> Result<()> {
     let (name, clerk) = resolve_clerk(f.profile.as_deref(), true)?;
     let cell_hex = hex::encode(clerk.cell_id("default").as_bytes());
     let pk_hex = hex::encode(clerk.public_key().0);
-    let funding = ensure_cell(&http, &f.node_url, &cell_hex, &pk_hex, f.fund, f.fund).await?;
+
+    // COORDINATION-EXEMPT JOIN: when the deployment opts into the coordination
+    // class (DREGG_COORDINATION_EXEMPT truthy — helm's `cell.coord_fee()==0`
+    // forwards the env), materializing the cell requires the amount=0 path
+    // (cell creation, free) and NEVER a faucet-funded grant. A faucet grant
+    // bricks the nonce on devnet after ~1 successful call and drains the cell
+    // on every failed retry — an exempt join that still routes through the
+    // faucet is the whole reason every seat has been DEGRADED|join_failed
+    // since the fleet reboot. The signer's own docs promised this class was
+    // free four months before any deployment turned it on.
+    //
+    // Non-exempt join is unchanged: `--fund N` (default 5000) calls the faucet.
+    // BOTH BOUNDS GO TO ZERO, not just the minimum. `ensure_cell` computes
+    // `funding_shortfall(initial, minimum_balance, target_balance)` and only
+    // returns early on `!materialized && shortfall == 0`. An ABSENT cell is
+    // `materialized`, so it always POSTs — with `amount: shortfall`, derived
+    // from TARGET. Leaving target at `f.fund` therefore still requested a
+    // FUNDED grant on the exact path an exempt join must never take: first
+    // join, cell does not exist yet. Measured live 2026-07-28 — the exempt
+    // banner printed and the very next line was
+    // `faucet refused funding: ... Ed25519 (classical) signature half failed`.
+    //
+    // With both at 0 the shortfall is 0, so the POST carries amount=0: the
+    // free materialization path, which returns success before any Transfer is
+    // built and needs no faucet signature at all.
+    let costs = fee_cost_model();
+    let (minimum_balance, target_balance) = if costs.coordination_exempt {
+        eprintln!("[client-sign] coordination-exempt join — materializing cell {cell_hex} (free, no faucet grant)");
+        (0u64, 0u64)
+    } else {
+        (f.fund, f.fund)
+    };
+    let funding = ensure_cell(&http, &f.node_url, &cell_hex, &pk_hex, minimum_balance, target_balance).await?;
     println!(
         "{}",
         serde_json::json!({
