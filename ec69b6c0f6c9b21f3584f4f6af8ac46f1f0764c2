@@ -1,0 +1,59 @@
+⚑ THIS COMMIT CARRIES THE ROUNDS-LEAK FIX. Its subject does not say so.
+
+Swept in by another lane's tree-wide commit. The work is a Lean-authored consensus SAFETY repair —
+HORIZONLOG B6's named residual — and it is findable only here and in the HORIZONLOG entry.
+
+## B6's residual was UNDERSTATED. It was written up as "wave TIMING". Three faces, all constructed:
+
+1. **AN ORDER FORK BETWEEN TWO HONEST NODES.** `traceOrderFork`: identical enrolled sub-lace, differing
+   only in two OUTSIDER blocks. Same leader, same wave-end round under both maps — so not a stall and
+   not a delay. Finalized orders `[10,20,30,11,21,12,22,31,32,13,23,33]` vs
+   `[10,20,30,11,21,31,12,22,32,13,23,33]`: **the same twelve enrolled coordinates, permuted, and
+   neither is a prefix of the other.**
+2. **A TOTAL STALL.** `traceRelayStall`: a 3-block relay leaves the wave-END round occupied by the relay
+   tip and NO committee block at all — zero enrolled ratifiers, `tauOrder = []`, every validator up and
+   correct.
+3. **A MANUFACTURED EQUIVOCATOR** — the same-creator/same-round pair the equivocation guard keys on.
+
+## The fix
+
+`computeRounds B participants` maxes only over participant-created predecessors, threaded through
+`roundOf`/`maxRound`/`blocksAtRound`/`xsortBy`/`hasEquivInPast`/`approves`, `mkRoundCache`,
+`fastRoundMap`, and `tauOrderFastImpl` — the `@[implemented_by]` FFI target.
+
+⚑ **EDGES FILTERED, NOT NODES**, and that distinction is load-bearing: dropping outsider blocks from
+the map entirely (what `compute_rounds_filtered` does for `tau_unified`) would have **SUBSUMED B6** —
+`traceSybilOnly`'s wave-end round would have gone empty. Every pre-existing `#guard` is green at its
+ORIGINAL value.
+
+## Theorems
+
+`computeRounds_depth_exhibits_enrolled_pred` — safety, **no hypothesis on the lace**, proved by
+induction on the folded block LIST so no `qsort` permutation lemma is needed.
+`tauOrder_eq_preRounds_of_enrolled` — liveness, and **its conclusion FAILS without the hypothesis**,
+`#guard`ed rather than merely claimed. `computeRoundsPreParticipant` kept as a falsification witness.
+
+## Say what broke
+
+`SuperRatifyBridge.Model.forked` needed repair — and the reason is a STRENGTHENING: its hidden fork hung
+off a non-participant genesis, so under the filtered clock it collapses to the leader's round and the
+node correctly refuses that wave. Signatures ripple to `StrandAdmission`, `TauPrefixMonotone`,
+`SuperRatifyBridge`.
+
+## Two findings from driving it
+
+⚑ **A FOURTH FORK MECHANISM, measured not inferred**: after the fix the two views still differ
+intra-cohort, because `poll_finalized_blocks` **re-hashes each block over only the acks that resolved**,
+so the ordering-lace id — `xsort`'s tie-break — is a function of the VIEW. Reproduced
+(`ordering_projection_ids`); the fix is in `node/src/blocklace_sync.rs`, left to its owner.
+
+**The upstream gate, checked rather than assumed**: the two-honest-view fork is NOT reachable via gossip
+(`insert_checked`/`merge` enforce closure). It is reachable via `from_checkpoint_trusted`, which has no
+closure check. **The stall needs no divergence at all.**
+
+## Verification
+
+Reverse-dependency closure of `BlocklaceFinality` — all 23 modules incl. `FinalityGate`,
+`Consensus.Safety`, `Dregg2.FFI` — green, 3547 jobs, 0 errors. `dregg-blocklace` 275 tests, 0 failed.
+Red-proof on a scratch copy: deleting the one `.filter (enrolledId …)` turns **15 `#guard`s red and 4
+safety theorems unprovable.**
