@@ -193,12 +193,25 @@ pub(super) async fn tool_submit_turn(params: &Value, state: &NodeState) -> McpTo
     // swapping the accessor alone would only move the failure to this agent's SECOND
     // turn.
     let previous_receipt_hash = s.cclerk.agent_receipt_head_hash(&agent_cell_id);
+    // `valid_until: None` means the Rust executor's expiration check is SKIPPED entirely
+    // (`if let Some(valid_until) = turn.valid_until { ... }`, executor/execute.rs:426) — a
+    // turn built here never expires, no matter how stale. Bound it with the node's own
+    // default rather than a third copy of the wall-clock-horizon logic; mirrors the same
+    // fix already applied to the thin-HTTP `/turn/submit` path (`api::default_valid_until`)
+    // and the SDK (`dregg_sdk::runtime::default_valid_until`, issue #46).
+    //
+    // NOTE: this does NOT make `submit_turn` reach the verified Lean producer. This
+    // handler always builds an empty `action.effects` (below), which fails
+    // `lean_shadow::forest_is_marshallable` on its own — independently of `valid_until` —
+    // so `mcp_execute_via_producer` still fences every call onto the demoted Rust
+    // reference today. That is a separate, larger gap (this tool has no way to carry
+    // caller-specified effects yet); fixing the unbounded expiry here does not fix it.
     let turn = Turn {
         agent: agent_cell_id,
         nonce,
         fee,
         memo,
-        valid_until: None,
+        valid_until: crate::api::default_valid_until(),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,
@@ -919,7 +932,13 @@ pub(super) async fn tool_captp_deliver(params: &Value, state: &NodeState) -> Mcp
         nonce: turn_nonce,
         fee: 10_000,
         memo: Some("captp.route (mcp)".to_string()),
-        valid_until: None,
+        // `valid_until: None` skips the executor's expiration check entirely
+        // (`if let Some(valid_until) = turn.valid_until { ... }`,
+        // `turn/src/executor/execute.rs:426`) — a turn built that way never expires,
+        // no matter how stale. Bound it with the node's own default instead
+        // (`api::default_valid_until`), same fix already applied to the thin-HTTP
+        // `/turn/submit` path.
+        valid_until: crate::api::default_valid_until(),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,
@@ -1182,7 +1201,13 @@ pub(super) async fn tool_bilateral_action(params: &Value, state: &NodeState) -> 
         nonce: turn_nonce,
         fee: 10_000,
         memo: Some(format!("bilateral {mode}")),
-        valid_until: None,
+        // `valid_until: None` skips the executor's expiration check entirely
+        // (`if let Some(valid_until) = turn.valid_until { ... }`,
+        // `turn/src/executor/execute.rs:426`) — a turn built that way never expires,
+        // no matter how stale. Bound it with the node's own default instead
+        // (`api::default_valid_until`), same fix already applied to the thin-HTTP
+        // `/turn/submit` path.
+        valid_until: crate::api::default_valid_until(),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,

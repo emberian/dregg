@@ -747,7 +747,10 @@ pub(super) async fn tool_sign_sovereign_witness(
         call_forest: super::proof::build_forest_with_effects(cell_id, effects),
         fee: 0,
         memo: None,
-        valid_until: None,
+        // This is the exact turn the tool tells the caller to submit
+        // (`witnessed_turn_postcard_hex`, below) — `None` would skip the executor's
+        // expiration check entirely (`turn/src/executor/execute.rs:426`) on it.
+        valid_until: crate::api::default_valid_until(),
         previous_receipt_hash: None,
         depends_on: Vec::new(),
         conservation_proof: None,

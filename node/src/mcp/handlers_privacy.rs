@@ -271,7 +271,10 @@ pub(super) async fn tool_private_transfer(params: &Value, state: &NodeState) -> 
         nonce,
         fee: 0,
         memo: Some("private transfer".to_string()),
-        valid_until: None,
+        // `None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it instead
+        // (`api::default_valid_until`).
+        valid_until: crate::api::default_valid_until(),
         call_forest: build_forest_with_effects(from_cell_id, effects),
         depends_on: vec![],
         previous_receipt_hash,

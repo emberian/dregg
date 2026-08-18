@@ -5022,7 +5022,7 @@ const DEFAULT_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
 /// executor enforces `current_timestamp <= valid_until` (a TIMESTAMP deadline,
 /// not a height), so the default is wall-clock now + a horizon — never a block
 /// height, which would be in the past as a timestamp and expire every turn.
-fn default_valid_until() -> Option<i64> {
+pub(crate) fn default_valid_until() -> Option<i64> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
