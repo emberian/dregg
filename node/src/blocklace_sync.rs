@@ -18477,6 +18477,7 @@ mod tests {
             vec![], // no explicit preconditions: the participant validates locally
             from,
             0,
+            None,
         )
     }
 
@@ -18679,8 +18680,14 @@ mod tests {
         };
         let mut call_forest = dregg_turn::CallForest::new();
         call_forest.add_root(transfer);
-        let forest =
-            dregg_coord::AtomicForest::new(vec![node_a, node_b], call_forest, vec![], cell_a, 0);
+        let forest = dregg_coord::AtomicForest::new(
+            vec![node_a, node_b],
+            call_forest,
+            vec![],
+            cell_a,
+            0,
+            None,
+        );
         let forest_hash = forest.hash;
         let mut participant_keys = HashMap::new();
         participant_keys.insert(node_a, node_a);

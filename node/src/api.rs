@@ -8343,6 +8343,11 @@ async fn post_atomic_proposal(
         vec![], // preconditions left empty; participants validate locally
         initiator,
         req.fee,
+        // Decided ONCE here, at propose time, and carried (hashed, signed) inside the
+        // forest — NOT re-derived independently wherever the forest is later turned
+        // into a Turn (coordinator commit, each participant's apply_commit). See
+        // AtomicForest::valid_until's doc.
+        dregg_coord::default_valid_until(),
     );
 
     // Create the coordinator with the node's identity.
@@ -12630,7 +12635,7 @@ mod tests {
             witness_blobs: vec![],
         };
         forest.add_root(action);
-        AtomicForest::new(participants, forest, vec![], cell_id, 0)
+        AtomicForest::new(participants, forest, vec![], cell_id, 0, None)
     }
 
     fn test_event(height: u64) -> CommittedEvent {

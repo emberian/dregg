@@ -241,6 +241,7 @@ mod atomicity_diff {
             preconditions,
             id0,
             0,
+            None,
         );
 
         let nodes = vec![node_id(1), node_id(2), node_id(3)];

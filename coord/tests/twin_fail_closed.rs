@@ -62,7 +62,7 @@ fn twoc_pc_fails_closed_without_gate() {
         balance_change: None,
         witness_blobs: vec![],
     });
-    let af = AtomicForest::new(nodes.clone(), forest, vec![], initiator, 0);
+    let af = AtomicForest::new(nodes.clone(), forest, vec![], initiator, 0, None);
 
     let mut coord = Coordinator::new(
         node_id(1),

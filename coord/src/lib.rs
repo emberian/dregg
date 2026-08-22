@@ -115,7 +115,7 @@ mod coord_diff;
 pub use atomic::{
     AbortMessage, AssetId, AtomicForest, ChainBreak, CommitMessage, Coordinator, CoordinatorState,
     Decision, JointId, MixedAdmitError, MixedJoint, Participant, PrivateContribution, PrivateLeg,
-    PrivateLegProof, ProposeMessage, StateCommit, Vote, check_chain_bound,
+    PrivateLegProof, ProposeMessage, StateCommit, Vote, check_chain_bound, default_valid_until,
 };
 pub use budget::{
     BudgetError, BudgetSlice, FastUnlockManager, StingrayCounter, UnlockCertificate, UnlockRequest,

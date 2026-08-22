@@ -97,7 +97,7 @@ fn public_backbone() -> (Ledger, AtomicForest) {
     let mut forest = CallForest::new();
     forest.add_root(transfer_action(id0, id1, 10));
 
-    let af = AtomicForest::new(vec![node_id(1)], forest, vec![], id0, 0);
+    let af = AtomicForest::new(vec![node_id(1)], forest, vec![], id0, 0, None);
     (ledger, af)
 }
 
