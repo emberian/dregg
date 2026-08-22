@@ -1793,6 +1793,26 @@ pub fn bare_turn(agent: CellId, nonce: u64, effects: Vec<Effect>) -> Turn {
     wrap_turn(agent, nonce, forest)
 }
 
+/// Validity horizon (wall-clock seconds) stamped onto turns this module constructs.
+///
+/// `wrap_turn` feeds `World::commit_turn`, which runs `executor.execute(&turn, &mut
+/// ledger)` against a REAL `TurnExecutor` (module docs above) — not a mock. That
+/// executor's expiration check is `if let Some(valid_until) = turn.valid_until { .. }`
+/// (`turn/src/executor/execute.rs:426`) — entirely SKIPPED on `None`, so a turn built
+/// that way never expires, no matter how stale. Mirrors `default_valid_until` in
+/// `node/src/api.rs` / `sdk/src/runtime.rs` (same rationale, same fix, same 1-hour
+/// horizon); `dregg-sdk`'s copy is crate-private and this crate's dependency on it is
+/// optional (`embedded-executor` feature) besides, hence this module's own copy.
+const STARBRIDGE_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
+
+fn default_valid_until() -> Option<i64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Some(now + STARBRIDGE_TURN_VALIDITY_HORIZON_SECS)
+}
+
 /// Wrap a built call-forest into the bare `Turn` shape (no proofs/witnesses —
 /// the single-custody embedded world's operator path).
 fn wrap_turn(agent: CellId, nonce: u64, forest: CallForest) -> Turn {
@@ -1802,7 +1822,10 @@ fn wrap_turn(agent: CellId, nonce: u64, forest: CallForest) -> Turn {
         call_forest: forest,
         fee: 0,
         memo: None,
-        valid_until: None,
+        // `valid_until: None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it with the module's shared
+        // wall-clock horizon instead.
+        valid_until: default_valid_until(),
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
@@ -4626,6 +4649,60 @@ mod tests {
         assert!(
             !is_deferred(w.receipts().last().unwrap()),
             "Full receipt is real"
+        );
+    }
+
+    /// The sentinel must be `Some` — `None` here skips the executor's expiration check
+    /// entirely (`turn/src/executor/execute.rs:426`), so a turn built via `wrap_turn` /
+    /// `bare_turn` would never expire no matter how stale.
+    #[test]
+    fn default_valid_until_is_some() {
+        assert!(
+            default_valid_until().is_some(),
+            "a None here means every bare_turn/wrap_turn built by this module never \
+             expires — see the doc comment on default_valid_until"
+        );
+    }
+
+    /// The stamped deadline must be strictly in the future and within the declared
+    /// horizon.
+    #[test]
+    fn default_valid_until_is_a_future_wall_clock_horizon() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let stamped =
+            default_valid_until().expect("must be Some, see default_valid_until_is_some");
+        assert!(
+            stamped > now,
+            "stamped valid_until ({stamped}) must be strictly after now ({now})"
+        );
+        assert!(
+            stamped <= now + STARBRIDGE_TURN_VALIDITY_HORIZON_SECS,
+            "stamped valid_until ({stamped}) must not exceed the declared horizon (now={now} \
+             + {STARBRIDGE_TURN_VALIDITY_HORIZON_SECS}s)"
+        );
+    }
+
+    /// Ratchet against the unbounded `valid_until` sentinel regrowing in a `Turn` literal
+    /// this file builds. `include_str!` reads this file at COMPILE time, so this cannot go
+    /// stale against what actually ships. This file is itself the one scanned, which is
+    /// why the needle is assembled at runtime rather than written as one literal — a
+    /// literal copy of it here would trivially match itself.
+    #[test]
+    fn no_world_turn_rebuilds_the_unbounded_valid_until_sentinel() {
+        let src = include_str!("mod.rs");
+        let sentinel_field = "valid_until";
+        let sentinel_value = "None";
+        let needle = format!("{sentinel_field}: {sentinel_value},");
+        assert!(
+            !src.contains(&needle),
+            "world/mod.rs builds a Turn with `{sentinel_field}` bound to a bare \
+             `{sentinel_value}` — this turn will NEVER expire (the executor's expiration \
+             check is skipped entirely when this field is `{sentinel_value}`, \
+             turn/src/executor/execute.rs:426). Use `default_valid_until()` instead, as \
+             `wrap_turn` now does."
         );
     }
 }
