@@ -23,7 +23,10 @@
 //! situation right and is the model: it documents that FNSP-v2 publicly binds `value`
 //! and `asset_type`, and sets `value_commitment: None` rather than implying a hiding it
 //! does not do. Hiding the amounts means a spend path that does not publish `value` at
-//! all; that is not this builder, and no production code calls this builder today.
+//! all; that is not this builder. Also stale as of the same date: this builder IS called
+//! from production code — `AgentCipherclerk::build_committed_transfer` and
+//! `::private_transfer` in `cipherclerk.rs` both construct a `CommittedTurnBuilder` and
+//! return the resulting turn "ready for signing and submission."
 
 use curve25519_dalek::scalar::Scalar;
 
@@ -276,7 +279,10 @@ impl CommittedTurnBuilder {
             call_forest,
             fee,
             memo: Some("committed transfer".into()),
-            valid_until: None,
+            // `valid_until: None` skips the executor's expiration check entirely
+            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
+            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
+            valid_until: crate::runtime::default_valid_until(),
             previous_receipt_hash: None,
             depends_on: Vec::new(),
             conservation_proof: None,

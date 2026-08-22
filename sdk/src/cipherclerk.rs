@@ -3598,7 +3598,10 @@ impl AgentCipherclerk {
                 forest_hash: [0u8; 32],
             },
             memo: None,
-            valid_until: None,
+            // `valid_until: None` skips the executor's expiration check entirely
+            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
+            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
+            valid_until: crate::runtime::default_valid_until(),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -3722,7 +3725,10 @@ impl AgentCipherclerk {
                 forest_hash: [0u8; 32],
             },
             memo: None,
-            valid_until: None,
+            // `valid_until: None` skips the executor's expiration check entirely
+            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
+            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
+            valid_until: crate::runtime::default_valid_until(),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -5220,7 +5226,10 @@ impl AgentCipherclerk {
             call_forest: forest,
             fee: 0,
             memo: Some("make_sovereign".to_string()),
-            valid_until: None,
+            // `valid_until: None` skips the executor's expiration check entirely
+            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
+            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
+            valid_until: crate::runtime::default_valid_until(),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent_cell),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -5366,7 +5375,10 @@ impl AgentCipherclerk {
             call_forest: forest,
             fee,
             memo: None,
-            valid_until: None,
+            // `valid_until: None` skips the executor's expiration check entirely
+            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
+            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
+            valid_until: crate::runtime::default_valid_until(),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent_cell),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -6078,7 +6090,10 @@ impl AgentCipherclerk {
             call_forest: forest,
             fee,
             memo: Some("sovereign_proof_carrying_rotated".to_string()),
-            valid_until: None,
+            // `valid_until: None` skips the executor's expiration check entirely
+            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
+            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
+            valid_until: crate::runtime::default_valid_until(),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent_cell),
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -6430,7 +6445,10 @@ impl AgentCipherclerk {
             call_forest: forest,
             fee,
             memo: Some("sovereign_proof_carrying_rotated_chain".to_string()),
-            valid_until: None,
+            // `valid_until: None` skips the executor's expiration check entirely
+            // (`turn/src/executor/execute.rs:426`) and falls this turn off the verified
+            // Lean producer (issue #46) — bound it with the crate's shared horizon instead.
+            valid_until: crate::runtime::default_valid_until(),
             previous_receipt_hash: self.agent_receipt_head_hash(&agent_cell),
             depends_on: Vec::new(),
             conservation_proof: None,

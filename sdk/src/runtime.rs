@@ -845,6 +845,33 @@ pub struct AgentRuntime {
     executor_signing_seed: Option<[u8; 32]>,
 }
 
+/// Validity horizon (wall-clock seconds) stamped onto turns this SDK constructs.
+///
+/// The Lean producer's wire marshal REQUIRES the turn envelope's `valid_until`
+/// (`dregg_turn::lean_apply::produce_via_lean` / `lean_shadow::turn_to_wire_turn`); leaving it
+/// `None` means every turn built this way falls off the verified Lean producer to the legacy
+/// Rust producer, per-turn, forever — silently, since `ProducerOutcome::Fallback` is not
+/// surfaced to the caller. Worse, on the real executor (`turn/src/executor/execute.rs:426`)
+/// `None` skips the expiration check ENTIRELY — the turn never expires, no matter how stale.
+/// Mirrors `default_valid_until` in `node/src/api.rs` (same rationale, same fix — see issue
+/// #46): wall-clock now + a generous horizon, never a block height (which would already be in
+/// the past as a timestamp and expire the turn immediately).
+///
+/// `pub(crate)` so every `Turn`-constructing site in this crate shares one horizon policy
+/// instead of re-deriving (or omitting) it — originally scoped to `AgentRuntime::execute` /
+/// `execute_on` / sub-agent submit, now also used by `cipherclerk.rs`'s sovereign/committed
+/// turn builders and `committed_turn.rs`'s `CommittedTurnBuilder`, which had the identical
+/// `None` sentinel at 7 more sites.
+const SDK_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
+
+pub(crate) fn default_valid_until() -> Option<i64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    Some(now + SDK_TURN_VALIDITY_HORIZON_SECS)
+}
+
 impl AgentRuntime {
     /// Create a new agent runtime with simplified ownership.
     ///
@@ -1294,7 +1321,7 @@ impl AgentRuntime {
             call_forest: forest,
             fee,
             memo: None,
-            valid_until: None,
+            valid_until: default_valid_until(),
             previous_receipt_hash,
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -1357,7 +1384,7 @@ impl AgentRuntime {
             call_forest: forest,
             fee,
             memo: None,
-            valid_until: None,
+            valid_until: default_valid_until(),
             previous_receipt_hash: None,
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -2167,7 +2194,7 @@ impl SubAgent {
             call_forest: forest,
             fee: 5_000,
             memo: None,
-            valid_until: None,
+            valid_until: default_valid_until(),
             previous_receipt_hash,
             depends_on: Vec::new(),
             conservation_proof: None,
@@ -2204,5 +2231,94 @@ impl SubAgent {
     /// Get the sub-agent's current nonce.
     pub fn nonce(&self) -> u64 {
         *self.nonce.lock().unwrap()
+    }
+}
+
+/// Issue #46 (github.com/emberian/dregg): the SDK's turn-construction sites stamped
+/// `valid_until: None`, which the Lean producer's wire marshal rejects — silently demoting
+/// every SDK-built turn to the legacy Rust producer, forever. Pin `default_valid_until()`'s
+/// contract directly so the sentinel can never regress back to `None` unnoticed.
+#[cfg(test)]
+mod default_valid_until_tests {
+    use super::*;
+
+    /// The sentinel must be `Some` (a `None` here is exactly the bug: it silently falls the
+    /// turn off the verified Lean producer to the legacy Rust producer — see module docs on
+    /// `default_valid_until`).
+    #[test]
+    fn default_valid_until_is_some() {
+        assert!(
+            default_valid_until().is_some(),
+            "a None here silently falls every SDK-built turn off the verified Lean producer \
+             (issue #46) — the sentinel must always be Some"
+        );
+    }
+
+    /// The stamped deadline must be strictly in the future (wall-clock `now` at the call site,
+    /// which is always <= `now` observed here) and within the declared horizon — never a block
+    /// height (which would already be in the past as a timestamp and expire the turn on arrival).
+    #[test]
+    fn default_valid_until_is_a_future_wall_clock_horizon() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let stamped =
+            default_valid_until().expect("must be Some, see default_valid_until_is_some");
+        assert!(
+            stamped > now,
+            "stamped valid_until ({stamped}) must be strictly after now ({now}), or the turn \
+             expires before it can ever be submitted"
+        );
+        assert!(
+            stamped <= now + SDK_TURN_VALIDITY_HORIZON_SECS,
+            "stamped valid_until ({stamped}) must not exceed the declared horizon (now={now} + \
+             {SDK_TURN_VALIDITY_HORIZON_SECS}s)"
+        );
+    }
+
+    /// Ratchet against the unbounded `valid_until` sentinel regrowing in a `Turn` literal
+    /// this crate builds for production use.
+    ///
+    /// `default_valid_until()` above exists precisely so every `Turn`-constructing site in
+    /// this crate can share ONE horizon policy instead of re-deriving (or omitting) it. This
+    /// test doesn't re-assert that function's own contract (the two tests above already do) —
+    /// it pins the narrower, source-level fact that regressed here twice already: `runtime.rs`
+    /// itself (issue #46) and then `cipherclerk.rs` / `committed_turn.rs` (7 more sites, found
+    /// in the same sweep that produced this test). `include_str!` reads each file at COMPILE
+    /// time, so this cannot go stale against what actually ships — it fails the moment a
+    /// `Turn { .. }` literal in any of these files spells out the sentinel again (`valid_until`
+    /// bound to a bare `None`, trailing comma), by any author, in any function added later to
+    /// these same files. This file (`runtime.rs`) is itself among the files scanned, which is
+    /// why the needle below is assembled at runtime rather than written as one literal — a
+    /// literal copy of it here would trivially match itself via `include_str!`.
+    ///
+    /// Deliberately excludes `sdk/src/tool_gateway.rs`: its one occurrence builds a `Turn`
+    /// that is only ever `.hash()`-ed for local bookkeeping (`PendingTurnRegistry`) and never
+    /// reaches a `TurnExecutor` — a real Turn-shaped value, but not an instance of this bug,
+    /// so ratcheting it here would be scanning for the wrong thing.
+    #[test]
+    fn no_sdk_turn_builder_rebuilds_the_unbounded_valid_until_sentinel() {
+        let files: &[(&str, &str)] = &[
+            ("runtime.rs", include_str!("runtime.rs")),
+            ("cipherclerk.rs", include_str!("cipherclerk.rs")),
+            ("committed_turn.rs", include_str!("committed_turn.rs")),
+        ];
+        // Assembled rather than written as one literal: this file is itself in `files`
+        // above, so a literal copy of the full needle here would match itself.
+        let sentinel_field = "valid_until";
+        let sentinel_value = "None";
+        let needle = format!("{sentinel_field}: {sentinel_value},");
+        for (name, src) in files {
+            assert!(
+                !src.contains(&needle),
+                "{name} builds a Turn with `{sentinel_field}` bound to a bare `{sentinel_value}` \
+                 — this turn will NEVER expire (the executor's expiration check is skipped \
+                 entirely when this field is `{sentinel_value}`, turn/src/executor/execute.rs:426) \
+                 and falls off the verified Lean producer (issue #46). Use \
+                 `crate::runtime::default_valid_until()` instead, as every other Turn literal in \
+                 these files now does."
+            );
+        }
     }
 }
