@@ -16,8 +16,18 @@ use super::*;
 /// unconfigured or missing) moves to the FEE WELL when one is configured, so
 /// the turn's total value delta is exactly zero (`reachable_total_zero`'s
 /// hypotheses hold on the deployed chain, where genesis always configures
-/// the well). With no fee well configured the undelivered remainder is
-/// burned — the legacy pre-epoch semantics, kept only for well-less tests.
+/// the well).
+///
+/// THE FEE LOOP (revolving fund): on devnet the fee well POINTS AT the faucet
+/// cell (genesis-less backfill at `node/src/lib.rs`, and `fee_well: faucet_id`
+/// in `node/src/genesis.rs`). So the `fee - delivered` credit here recirculates
+/// straight back into the pool the faucet pays out of — closing the loop that
+/// otherwise drained the faucet monotonically. NO fee is zeroed: the debit +
+/// budget gate + faucet 1/min rate-limit remain the oversight leash.
+///
+/// With no fee well configured the undelivered remainder is burned — the legacy
+/// pre-epoch semantics, kept only for well-less tests (every deployed boot mode
+/// now configures the well, so this fallback is test-only).
 fn distribute_fee_shares(
     ledger: &mut Ledger,
     proposer: Option<&CellId>,
@@ -983,6 +993,20 @@ impl TurnExecutor {
         let mut journal = LedgerJournal::with_capacity(16);
         let mut computrons_used: u64 = 0;
         let mut all_effects_hashes: Vec<[u8; 32]> = Vec::new();
+
+        // COORDINATION EXEMPTION ("leash, not ledger") — opt-in via
+        // `ComputronCosts::coordination_exempt`. An EmitEvent-only turn with no
+        // `balance_change` anywhere in its forest (`Turn::is_coordination`) is
+        // oversight traffic, so its CHARGE is waived: the tree walk meters with
+        // an uncapped budget (so `computrons_used` stays the TRUE cost in the
+        // receipt) and the admission comparison below charges 0. Economic turns
+        // are untouched — any non-EmitEvent effect disqualifies the whole turn.
+        let coordination_exempt = self.costs.coordination_exempt && turn.is_coordination();
+        let metering_budget = if coordination_exempt {
+            u64::MAX
+        } else {
+            turn.fee
+        };
         let mut excess: i64 = 0; // Mina-style excess: must be zero at turn end.
         // Per-asset conservation accumulator: `(target-cell 32-byte asset id,
         // delta)` for every `balance_change`, grouped by the target's committed
@@ -1015,7 +1039,7 @@ impl TurnExecutor {
                 // implemented) in execute_tree.
                 DelegationMode::ParentsOwn,
                 &mut computrons_used,
-                turn.fee,
+                metering_budget,
                 &mut all_effects_hashes,
                 vec![root_idx],
                 &mut journal,
@@ -1066,8 +1090,16 @@ impl TurnExecutor {
         }
         let _pt_post = super::turn_profile::Instant::now();
 
-        // Check total cost against fee.
-        if computrons_used > turn.fee {
+        // Check total cost against fee. A coordination-exempt turn CHARGES 0
+        // (the class waiver) while `computrons_used` keeps the true metered
+        // cost for the receipt — the leash stays observable, only the toll is
+        // waived.
+        let charged = if coordination_exempt {
+            0
+        } else {
+            computrons_used
+        };
+        if charged > turn.fee {
             journal.rollback(
                 ledger,
                 &self.bridged_nullifiers,
@@ -1720,7 +1752,16 @@ impl TurnExecutor {
     }
 
     /// Estimate the computron cost of a turn without applying it.
+    ///
+    /// A COORDINATION turn (`Turn::is_coordination`) estimates 0 when the
+    /// executor opts into `ComputronCosts::coordination_exempt` — the
+    /// admission-side mirror of the execution-path charge waiver, so
+    /// `validate_without_apply` and fee-sizing clients agree that the class
+    /// rides free ("leash, not ledger").
     pub fn estimate_cost(&self, turn: &Turn) -> u64 {
+        if self.costs.coordination_exempt && turn.is_coordination() {
+            return 0;
+        }
         let mut total: u64 = 0;
         for root in &turn.call_forest.roots {
             total = total.saturating_add(self.estimate_tree_cost(root));
