@@ -16,19 +16,22 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-A1:accumulator_nonrev_emit_gate.rs:GOLDEN_JSON:dregg-accumulator-nonrev-emit-v2  # A/A1-second-author
-A1:bilateral_aggregation_emit_gate.rs:GOLDEN_JSON:dregg-bilateral-aggregation-v3  # A/A1-second-author  [re-keyed v2->v3 by the b15b30972 descriptor cutover; same file, same const, same unwelded literal]
-A1:dfa_routing_audit_extra.rs:GOLDEN_JSON:dfa-routing-toggle-2state::poseidon2-v1  # A/A1-second-author
-A1:dfa_routing_emit_gate.rs:GOLDEN_JSON:dfa-routing-toggle-2state::poseidon2-v1  # A/A1-second-author
 A1:lean_descriptor_air.rs:TRANSFER_VM_DESCRIPTOR_JSON:dregg-effectvm-transfer-v1  # A/A1-second-author
-A1:merkle_membership_emit_gate.rs:GOLDEN_JSON:merkle-membership-depth2-4ary::poseidon2-v1  # A/A1-second-author
-A1:note_spending_emit_gate.rs:GOLDEN_JSON:note-spend-leaf::dregg-note-spending-dsl-v3  # A/A1-second-author
-A1:poseidon2_hash_emit_audit_extra.rs:GOLDEN_JSON:poseidon2-hash-arity2::poseidon2-v1  # A/A1-second-author
-A1:presentation_emit_gate.rs:GOLDEN_JSON:dregg-presentation-freshness::summary-v1  # A/A1-second-author
-A1:quantified_absence_emit_gate.rs:GOLDEN_JSON:quantified-absence-quotient-accumulator::babybear4-v1  # A/A1-second-author
-A1:temporal_predicate_audit_extra.rs:GOLDEN_JSON:dregg-temporal-predicate-gte::dsl-v1  # A/A1-second-author
-A1:temporal_predicate_emit_gate.rs:GOLDEN_JSON:dregg-temporal-predicate-gte::dsl-v1  # A/A1-second-author
+A2:accumulator_nonrev_audit_extra.rs:GOLDEN_JSON:circuit/descriptors/by-name/accumulator-nonrev.json  # A/A2-golden-is-the-artifact  [RE-KEYED (no A1 twin: new site) by 472090975 — same 2026-08-06 cutover as the row below, "28 emit-gate goldens were COPIES of an artifact no re-emit reaches — 13 are now the artifact itself". The Lean-author pin lives in check-descriptor-drift.sh (issue #76), not in this test file.]
+A2:accumulator_nonrev_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/by-name/accumulator-nonrev.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover), same file + same const: the inline `r#"..."#` transcription is GONE, replaced by include_str! of the shipped artifact. See accumulator_nonrev_audit_extra.rs row for the commit note.]
 A2:bilateral_aggregation_adversarial_audit.rs:GOLDEN_JSON:circuit/descriptors/dregg-bilateral-aggregation-v3.json  # A/A2-golden-is-the-artifact  [re-keyed v2->v3 by the b15b30972 descriptor cutover; same file, same const, same self-include]
+A2:bilateral_aggregation_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/dregg-bilateral-aggregation-v3.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:dfa_routing_audit_extra.rs:GOLDEN_JSON:circuit/descriptors/by-name/dfa-routing.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:dfa_routing_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/by-name/dfa-routing.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:merkle_membership_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/by-name/merkle-membership-depth2.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:note_spending_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/by-name/note-spend-leaf.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:poseidon2_hash_emit_audit_extra.rs:GOLDEN_JSON:circuit/descriptors/by-name/poseidon2-hash-arity2.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:presentation_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/by-name/presentation-freshness.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:quantified_absence_audit_extra.rs:GOLDEN_JSON:circuit/descriptors/by-name/quantified-absence.json  # A/A2-golden-is-the-artifact  [RE-KEYED (no A1 twin: new site) by 472090975 — same 2026-08-06 cutover as quantified_absence_emit_gate.rs. See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:quantified_absence_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/by-name/quantified-absence.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:temporal_predicate_audit_extra.rs:GOLDEN_JSON:circuit/descriptors/by-name/temporal-predicate.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:temporal_predicate_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/by-name/temporal-predicate.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by 472090975 (2026-08-06 cutover). See accumulator_nonrev_audit_extra.rs row for the commit note.]
+A2:turn_chain_emit_gate.rs:GOLDEN_JSON:circuit/descriptors/by-name/turn-chain-binding.json  # A/A2-golden-is-the-artifact  [RE-KEYED (no A1 twin: new site) by 472090975 — same 2026-08-06 cutover. See accumulator_nonrev_audit_extra.rs row for the commit note.]
 A2:blinded_membership_witness.rs:GOLDEN_JSON:circuit/descriptors/by-name/blinded-membership.json  # A/A2-golden-is-the-artifact
 A2:bound_presentation_witness.rs:GOLDEN_JSON:circuit/descriptors/by-name/bound-presentation.json  # A/A2-golden-is-the-artifact
 A2:derivation_emit_audit_extra.rs:GOLDEN_JSON:circuit/descriptors/by-name/derivation.json  # A/A2-golden-is-the-artifact  [RE-KEYED A1->A2 by f48ed5a21, same file + same const: the `r#"..."#` second author is GONE (map §M13 step 4, "delete the literal -> include_str! the deployed file" — the same move predicates_arithmetic_emit_gate.rs made, which is why its row is A2 and has no A1 twin). Gate A's concern is unchanged and still filed under M13/L1: this const is not an author the artifact lacks. NOTE for the next reader — A2's finding TEXT does not literally hold here: `GOLDEN_JSON` is never compared to anything, it is the descriptor UNDER TEST for two adversarial canaries.]
@@ -51,6 +54,4 @@ D3:starbridge-agent-orchestration:CellProgram:board_service_program|coordinator_
 D3:starbridge-domains:DomainRegistry:with_authority|new  # D3/D3-tested-twin-is-not-the-deployed-one
 D3:starbridge-subscription:CellProgram:subscription_program|feed_invariants_program  # D3/D3-tested-twin-is-not-the-deployed-one
 D3:starbridge-swarm-orchestration:CellProgram:board_service_program|coordinator_program  # D3/D3-tested-twin-is-not-the-deployed-one
-G1:accumulator_nonrev_golden.json:GOLDEN_JSON  # G1/G1-unpinned-test-golden  [sweep-two §5.1 blind spot — 1 of the 4 tests-local goldens; matches deployed 48==48 today, but single-author so free to drift]
 G1:committed_threshold_golden.json:GOLDEN_JSON  # G1/G1-unpinned-test-golden  [sweep-two §5.1 blind spot — no by-name twin (name dregg-committed-threshold::poseidon2-v2); single-author, needs a Lean #guard]
-G1:quantified_absence_golden.json:GOLDEN_JSON  # G1/G1-unpinned-test-golden  [sweep-two §5.1 blind spot — matches deployed 20==20 today, but single-author so free to drift]
