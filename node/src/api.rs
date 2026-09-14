@@ -5013,7 +5013,8 @@ pub(crate) async fn enqueue_async_proof(
 const DEFAULT_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
 
 /// Default `valid_until` for turns the node constructs itself (the thin-HTTP
-/// `/turn/submit` and faucet paths).
+/// `/turn/submit` and faucet paths, plus `mcp::handlers_act::tool_submit_turn` —
+/// see that call site for why this is `pub(crate)`).
 ///
 /// The Lean producer's wire marshal REQUIRES the turn envelope's `valid_until`
 /// (`lean_shadow::turn_to_wire_turn`); a `None` here meant every thin-HTTP turn
@@ -5022,7 +5023,7 @@ const DEFAULT_TURN_VALIDITY_HORIZON_SECS: i64 = 3600;
 /// executor enforces `current_timestamp <= valid_until` (a TIMESTAMP deadline,
 /// not a height), so the default is wall-clock now + a horizon — never a block
 /// height, which would be in the past as a timestamp and expire every turn.
-fn default_valid_until() -> Option<i64> {
+pub(crate) fn default_valid_until() -> Option<i64> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -10990,6 +10991,91 @@ struct QueueAtomicTxResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `default_valid_until` is `pub(crate)` specifically so
+    /// `mcp::handlers_act::tool_submit_turn` can reuse it instead of stamping
+    /// `valid_until: None` (see that call site's comment). This pins the property
+    /// that actually matters at every one of its call sites: with `None`, the Rust
+    /// executor's expiration check (`turn/src/executor/execute.rs:426`,
+    /// `if let Some(valid_until) = turn.valid_until { ... }`) is SKIPPED entirely —
+    /// a turn built from a `None` sentinel never expires, no matter how stale.
+    /// `default_valid_until()` must stay `Some`, and — the part a bare `is_some()`
+    /// check cannot catch — a turn stamped from it must still be REJECTED once its
+    /// horizon has actually passed, proving the field is wired to the executor's
+    /// enforcement and not merely non-`None`.
+    ///
+    /// (Note this only pins the expiration leg. It does NOT claim `tool_submit_turn`
+    /// now runs on the verified Lean producer: that handler's turns carry an empty
+    /// `effects` list, which fails `forest_is_marshallable` independently of
+    /// `valid_until` — a separate, larger gap this change does not touch.)
+    #[test]
+    fn default_valid_until_is_some_and_an_expired_stamp_is_still_rejected() {
+        assert!(
+            default_valid_until().is_some(),
+            "a None here means every turn built from it never expires (the executor skips \
+             the check entirely on None, turn/src/executor/execute.rs:426) — the sentinel \
+             must always be Some"
+        );
+
+        let mut agent = dregg_cell::Cell::with_balance([9u8; 32], [0u8; 32], 100);
+        agent.permissions = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+        let agent_id = agent.id();
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger.insert_cell(agent).expect("insert test agent cell");
+
+        let action = dregg_turn::Action {
+            target: agent_id,
+            method: [0u8; 32],
+            args: vec![],
+            authorization: dregg_turn::Authorization::Unchecked,
+            preconditions: Default::default(),
+            effects: vec![],
+            may_delegate: dregg_turn::DelegationMode::None,
+            commitment_mode: Default::default(),
+            balance_change: None,
+            witness_blobs: vec![],
+        };
+        let mut forest = CallForest::new();
+        forest.add_root(action);
+        let turn = Turn {
+            agent: agent_id,
+            nonce: 0,
+            call_forest: forest,
+            fee: 0,
+            memo: None,
+            valid_until: Some(1), // one second past the UNIX epoch — always in the past
+            previous_receipt_hash: None,
+            depends_on: vec![],
+            conservation_proof: None,
+            sovereign_witnesses: std::collections::HashMap::new(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: Vec::new(),
+            cross_effect_dependencies: Vec::new(),
+            effect_witness_index_map: Vec::new(),
+        };
+
+        let mut executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::zero());
+        executor.set_timestamp(2_000_000_000); // 2033-ish — well past the stamped deadline
+        let result = executor.execute(&turn, &mut ledger);
+        assert!(
+            !result.is_committed(),
+            "a turn stamped with an already-expired valid_until must be REJECTED, not \
+             committed — if this fires, the deadline check in \
+             turn/src/executor/execute.rs stopped enforcing valid_until: {result:?}"
+        );
+    }
 
     /// ⚑ THE JOINER POLE OF `/status`. Measured 2026-08-09 on port 8465: a node
     /// that asked to join and was refused for 345 s reported `"healthy": true`
