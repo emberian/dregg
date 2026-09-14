@@ -249,7 +249,10 @@ pub(super) async fn tool_create_cell_from_factory_effect(
         nonce,
         fee: 10_000,
         memo: Some("create cell from factory (mcp)".to_string()),
-        valid_until: None,
+        // `None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it instead
+        // (`api::default_valid_until`).
+        valid_until: crate::api::default_valid_until(),
         call_forest: build_signed_forest(
             agent_cell_id,
             vec![effect],
@@ -426,7 +429,10 @@ pub(super) async fn run_starbridge_action(
         nonce,
         fee: 10_000,
         memo: Some(memo),
-        valid_until: None,
+        // `None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it instead
+        // (`api::default_valid_until`).
+        valid_until: crate::api::default_valid_until(),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,

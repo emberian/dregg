@@ -1951,4 +1951,45 @@ mod tests {
             "a non-covering/garbage _cap must be rejected"
         );
     }
+
+    /// Ratchet against the `valid_until: None` sentinel regrowing in an MCP handler.
+    ///
+    /// Every `Turn` these handlers build is executed by a real `TurnExecutor`
+    /// (`mcp_execute`, `mcp_execute_via_producer`), whose expiration check is
+    /// `if let Some(valid_until) = turn.valid_until { ... }` (`turn/src/executor/execute.rs`,
+    /// around line 426) — entirely SKIPPED on `None`. A turn built that way never expires,
+    /// no matter how stale. This was a real, repeated bug: found and fixed at three other
+    /// call sites (the thin-HTTP `/turn/submit` path, the SDK's `runtime::default_valid_until`
+    /// for issue #46, and `tool_submit_turn` itself, above in this same handler set) before
+    /// this pass swept the remaining ones.
+    ///
+    /// `default_valid_until()` (`api.rs`) exists precisely so every one of these sites can
+    /// share ONE horizon policy instead of re-deriving (or omitting) it. This test does not
+    /// re-assert that function's own contract — `api::tests::
+    /// default_valid_until_is_some_and_an_expired_stamp_is_still_rejected` already pins that
+    /// `Some` alone is not enough, an *expired* stamp must still be rejected — it pins the
+    /// narrower, source-level fact that regressed here: no handler literally spells out the
+    /// sentinel again. `include_str!` reads each file at COMPILE time, so this cannot go stale
+    /// against what actually ships; it fails the moment a `Turn { .. }` literal in any of these
+    /// files is written with `valid_until: None,` again, by any author, in any handler added
+    /// later to these same files.
+    #[test]
+    fn no_mcp_handler_rebuilds_the_unbounded_valid_until_sentinel() {
+        let files: &[(&str, &str)] = &[
+            ("handlers_act.rs", include_str!("handlers_act.rs")),
+            ("handlers_delegate.rs", include_str!("handlers_delegate.rs")),
+            ("handlers_apps.rs", include_str!("handlers_apps.rs")),
+            ("handlers_privacy.rs", include_str!("handlers_privacy.rs")),
+            ("handlers_verify.rs", include_str!("handlers_verify.rs")),
+        ];
+        for (name, src) in files {
+            assert!(
+                !src.contains("valid_until: None,"),
+                "{name} builds a Turn with `valid_until: None` — this turn will NEVER expire \
+                 (the executor's expiration check is skipped entirely on `None`, \
+                 turn/src/executor/execute.rs:426). Use `crate::api::default_valid_until()` \
+                 instead, as every other Turn literal in the mcp handlers now does."
+            );
+        }
+    }
 }

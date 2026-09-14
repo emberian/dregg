@@ -100,7 +100,10 @@ pub(super) async fn tool_grant_capability(params: &Value, state: &NodeState) -> 
         // GrantCapability effect (~100 + 50 computrons by default; round up).
         fee: 10_000,
         memo: Some(format!("grant capability: {permissions}")),
-        valid_until: None,
+        // `None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it instead
+        // (`api::default_valid_until`).
+        valid_until: crate::api::default_valid_until(),
         // Use a signed action so the cell's `delegate: Signature` permission
         // accepts it. (Hosted-cell grants require the cell owner's signature.)
         call_forest: build_signed_forest(
@@ -244,7 +247,10 @@ pub(super) async fn tool_revoke_capability(params: &Value, state: &NodeState) ->
         nonce,
         fee: 0,
         memo: Some(format!("revoke capability slot {cap_slot}")),
-        valid_until: None,
+        // `None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it instead
+        // (`api::default_valid_until`).
+        valid_until: crate::api::default_valid_until(),
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
         previous_receipt_hash,
@@ -406,7 +412,10 @@ pub(super) async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolR
             "delegate capability slot {} to {}",
             capability, to_agent_hex
         )),
-        valid_until: None,
+        // `None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it instead
+        // (`api::default_valid_until`).
+        valid_until: crate::api::default_valid_until(),
         call_forest: build_forest_with_effects(agent_cell_id, vec![effect]),
         depends_on: vec![],
         previous_receipt_hash,
@@ -757,7 +766,10 @@ pub(super) async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) 
         // Cover Action-base + per-effect cost for the parsed effects.
         fee: 10_000,
         memo: Some(format!("bearer cap exercise: {method}")),
-        valid_until: None,
+        // `None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it instead
+        // (`api::default_valid_until`).
+        valid_until: crate::api::default_valid_until(),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,
@@ -1222,7 +1234,10 @@ pub(super) async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState
         nonce: turn_nonce,
         fee: 10_000,
         memo: Some("captp.handoff-cert-exercise (mcp)".to_string()),
-        valid_until: None,
+        // `None` skips the executor's expiration check entirely
+        // (`turn/src/executor/execute.rs:426`) — bound it instead
+        // (`api::default_valid_until`).
+        valid_until: crate::api::default_valid_until(),
         call_forest: forest,
         depends_on: vec![],
         previous_receipt_hash,
