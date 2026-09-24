@@ -769,6 +769,10 @@ pub fn run_genesis_with_options(
         threshold,
         initial_cells,
         issuer_well: issuer_well_id,
+        // Upstream's standalone fee-well cell stands in FRESH genesis; the
+        // fork's revolving fund (fee well == faucet) applies on the
+        // genesis-less devnet via the lib.rs backfill, which is the mode the
+        // cave node actually runs.
         fee_well: fee_well_id,
         genesis_moves,
         player_grant: player_grant_id,
