@@ -41,7 +41,11 @@ lean-objs
 libdregg_lean.a*
 # Starbridge Lean-as-web-citizen workspace: 3.7GB lean4-src checkout + WASM
 # build spikes; a build/scratch area, never committed.
-/web
+/web/*
+# ...except the committed in-browser node spike (source, tracked deliberately)
+!/web/spike/
+/web/spike/*
+!/web/spike/poc/
 /target-swaplane
 /site/pkg
 /sdk-ts/dist
@@ -84,8 +88,13 @@ scratchpad/
 tmp/
 .codex/
 *.log
+# committed evidence logs (cited by docs / SHA256SUMS), tracked deliberately
+!/docs/deos/artifacts/direct-logic-dregg-workloads-2026-07-22-m2-max/raw.log
+!/sel4/deos-live-boot-evidence.log
+!/sel4/dregg-pd/executor-microkit-pd/microkit-patch/assembly-boot-evidence.log
+!/tools/token-factory/artifacts/GOOD/GOOD.halmos.log
+!/tools/token-factory/artifacts/RMOON/RMOON.halmos.log
 cosmos-settlement/artifacts/
-chain/gnark/emitted
 rhlp-web
 
 .hol
