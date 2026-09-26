@@ -175,6 +175,8 @@ jobs:
         with:
           toolchain: nightly
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       # --release is not a nicety: these are FRI folds, and debug is the dominant cost (the
       # nextest heavy profile documents the same reasoning). A debug run would not finish.
@@ -389,6 +391,8 @@ jobs:
         with:
           toolchain: nightly
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Every `#[ignore]`d test carries a route
         run: python3 scripts/check-ignored-test-routing.py
@@ -546,6 +550,8 @@ jobs:
         with:
           toolchain: nightly
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       # EXPLICIT TARGETS, PLUS A DISCOVERY FLOOR. `binding-teeth` learned both halves the
       # hard way and this job inherits them:
@@ -909,6 +915,8 @@ jobs:
         with:
           toolchain: nightly
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       # ⚑ THE REGISTRY CAP TEETH ARE A `--lib` TARGET, AND `--test` NEVER SELECTS ONE.
       # `app_registry` is `#[cfg(feature = "app-registry")]`, which the DEFAULT feature set

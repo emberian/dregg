@@ -182,6 +182,8 @@ jobs:
         with:
           toolchain: nightly-2026-06-21
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: ci-invariants.sh build
         run: bash scripts/ci-invariants.sh build
 
@@ -206,5 +208,7 @@ jobs:
         with:
           toolchain: nightly-2026-06-21
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: ci-invariants.sh falsifiers
         run: bash scripts/ci-invariants.sh falsifiers
