@@ -1,5 +1,27 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## SEPTEMBER 26 — active overnight Mini / fn construction
+
+Resume through the [suite handoff](https://github.com/emberian/dregg-assortia/blob/main/HANDOFF.md),
+the [overnight construction brief](https://github.com/emberian/dregg-assortia/blob/main/sprints/2026-09-26/overnight.md),
+and the [published intermediate checkpoint](https://github.com/emberian/dregg-assortia/blob/main/sprints/2026-09-26/checkpoint-1.md).
+Ember authorized overnight work, mostly Sol lanes, toward actual shared shell/grain
+infrastructure using Mini and fn. The goal is active; September 19 is a historical
+stopping point, not today's assignment state.
+
+Mini main recovered the intervening fn integration branch and now contains
+admitted-history session composition, a persistent client/host interface,
+pinned gateway law and contextual reply authoring. Narrow source checks have
+passed; source-matched native builds and hosted lifecycle integration are in
+progress. A complete fn exchange with distinct Mini A/B identities used the
+older pinned binary; a separate fresh run exposed its Message-ID length bug.
+Those scopes and the retained evidence are explicit in the checkpoint links.
+Claude owns active fn development; our integration uses qualified isolated
+nodes without editing its shared checkout or protected live node.
+
+Bread remains reference material for this cycle. This entry changes continuity
+only, and does not adopt the unrelated staged/unstaged Bread work into the cycle.
+
 ## SEPTEMBER 19 — Mini core cycle 1 complete; hosted runtime remains next
 
 For a new person or session, begin with the [suite handoff](https://github.com/emberian/dregg-assortia/blob/main/HANDOFF.md): settled decisions, current evidence, run instructions, next work and shared-tree precautions.
