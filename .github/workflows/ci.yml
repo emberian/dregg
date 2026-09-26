@@ -106,14 +106,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libgl1-mesa-dev libegl-dev libgles-dev libharfbuzz-dev libfreetype-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gperf libunwind-dev
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # `--keep-going` (2026-07-25): without it cargo stops scheduling new units at
       # the first failure ("warning: build failed, waiting for other jobs to
       # finish...") and the log ends there. So this step reported ONE broken crate
@@ -211,15 +211,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
         # solana-lock/Cargo.toml declares NO path dependency — it is a sealed workspace.
         # The LFS allowance is the repo's only real Actions bill and it is EXHAUSTED; a job
         # that pulls 22.5 MB it never opens is pure bill. See the LFS block at the top.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: solana-lock
       - run: cargo test
@@ -240,15 +240,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
         # solana-settlement/Cargo.toml declares NO path dependency — sealed workspace.
         # The LFS allowance is the repo's only real Actions bill and it is EXHAUSTED; a job
         # that pulls 22.5 MB it never opens is pure bill. See the LFS block at the top.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: solana-settlement
       - run: cargo test --locked
@@ -280,14 +280,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: wasm
       - name: Fetch the plonky3-recursion fork as a sibling (wasm/ patch target)
@@ -445,7 +445,7 @@ jobs:
             toolchain: nightly-2026-06-21
             timeout: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
       # Same system-dep set as the Check job: these workspaces path-dep deep into
@@ -466,10 +466,10 @@ jobs:
       # graph as it RESOLVES; narrowing the features is a build-behaviour change and
       # belongs to whoever owns that embed.
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libgl1-mesa-dev libegl-dev libgles-dev libharfbuzz-dev libfreetype-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gperf libunwind-dev liburing-dev
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: ${{ matrix.toolchain }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ matrix.dir }}
       # forge-ci-runner's `[patch]` path-points ../../plonky3-recursion (same
@@ -505,7 +505,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
       - if: runner.os == 'Linux'
@@ -522,10 +522,10 @@ jobs:
             /usr/local/share/powershell /usr/share/swift
           sudo docker image prune --all --force || true
           df -h /
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # ─────────────────────────────────────────────────────────────────────────
       # ARM THIS LANE AGAINST THE VACUOUS GREEN (docs/ASSESS-cold-build-silent-export.md).
@@ -802,7 +802,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
 
@@ -825,10 +825,10 @@ jobs:
       # needs the gpui/servo system headers the `test` job installs, and the armed set contains
       # no GPU binary. If a link here ever fails for a missing system library, copy the `test`
       # job's apt line rather than narrowing the armed set.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Every named gate EXECUTED (parsed from libtest, not inferred from an exit code)
         env:
@@ -851,15 +851,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
         # dregg-agent is NOT in dregg-circuit reverse-dep cone (cargo metadata, 184 of 225 members are; this is one of the 41 that are not).
         # The LFS allowance is the repo's only real Actions bill and it is EXHAUSTED; a job
         # that pulls 22.5 MB it never opens is pure bill. See the LFS block at the top.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: cargo test (dregg-agent, live-brain)
         run: cargo test -p dregg-agent --features live-brain
 
@@ -938,15 +938,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libgl1-mesa-dev libegl-dev libgles-dev libharfbuzz-dev libfreetype-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gperf libunwind-dev
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: correctness sweep over every target
         env:
           CARGO_PROFILE_DEV_DEBUG: "0"
@@ -1149,12 +1149,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
         # rustfmt parses .rs files; it compiles nothing and reads no descriptor.
         # The LFS allowance is the repo's only real Actions bill and it is EXHAUSTED; a job
         # that pulls 22.5 MB it never opens is pure bill. See the LFS block at the top.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
           components: rustfmt
@@ -1169,12 +1169,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
         # cargo-audit reads Cargo.lock against the RustSec DB; it compiles nothing.
         # The LFS allowance is the repo's only real Actions bill and it is EXHAUSTED; a job
         # that pulls 22.5 MB it never opens is pure bill. See the LFS block at the top.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: stable
       # Run `cargo audit` directly rather than via `rustsec/audit-check@v2`
@@ -1225,13 +1225,13 @@ jobs:
     # infrastructure that has not been stood up yet. lean-seed.yml's `pin` job writes TAG on the
     # first successful publish — at which point this gate arms itself with no further edit here.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Is a seed release published? (reads dregg-lean-ffi/lean-seed.pin)
         id: pin
@@ -1451,14 +1451,14 @@ jobs:
     # everywhere else here. ~13 min for the headline run; the self-test is much
     # longer (38 faults, several of them re-running the Rung-2/4 measurements). No Lean.
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: circuit-prove/sketches/mina-pasta-hash-probe
       # ⚑ TIERED 2026-07-30. The gate's default is now TIER 0 — out-of-circuit
@@ -1489,7 +1489,7 @@ jobs:
     env:
       MATHLIB_REV: 1c2b90b13009c65b090d95a83c98e248deafb6f1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
         # lake/Lean only. The staged TSVs are named in metatheory/Emit*.lean COMMENTS as emit TARGETS; no Lean module reads one, and no script this job runs (axiom-hygiene-guard.sh, ci-mathlib-cache.sh, floor_ratchet_check.sh, cone_cutover_textual_check.sh, dregg-multiway-tug/program/regen.sh) mentions circuit/descriptors at all.
         # The LFS allowance is the repo's only real Actions bill and it is EXHAUSTED; a job
@@ -1870,7 +1870,7 @@ jobs:
     env:
       MATHLIB_REV: 1c2b90b13009c65b090d95a83c98e248deafb6f1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
         # lake/Lean only, same as metatheory-no-sorry.
         # The LFS allowance is the repo's only real Actions bill and it is EXHAUSTED; a job
@@ -1989,8 +1989,8 @@ jobs:
     # with the measurement, never to make a timing red go away.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: chain/gnark/go.mod
           cache-dependency-path: chain/gnark/go.sum
@@ -2050,7 +2050,7 @@ jobs:
     env:
       MATHLIB_REV: 1c2b90b13009c65b090d95a83c98e248deafb6f1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
 

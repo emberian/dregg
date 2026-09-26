@@ -97,16 +97,18 @@ jobs:
             runner: macos-13
             target: x86_64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # starbridge-v2 pins the ROLLING nightly (gpui needs std::hint::cold_path,
       # stabilized after the repo root's dated pin). rust-toolchain.toml is
       # directory-scoped, so cargo picks it up when we build FROM INSIDE the
       # crate. Install the rolling nightly explicitly.
       - name: Install rolling Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: nightly
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: starbridge-v2 -> target
           key: starbridge-v2-macos-${{ matrix.arch }}
@@ -146,7 +148,7 @@ jobs:
       # cache the result.
       - name: Cache libdregg_lean.a + Lean build (.lake)
         id: lean-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             dregg-lean-ffi/libdregg_lean.a
@@ -282,7 +284,7 @@ jobs:
           ls -la dist
 
       - name: Upload macOS ${{ matrix.arch }} installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: starbridge-v2-macos-${{ matrix.arch }}
           path: |
@@ -293,7 +295,7 @@ jobs:
 
       - name: Attach to release (starbridge-v* tag)
         if: startsWith(github.ref, 'refs/tags/starbridge-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             starbridge-v2/dist/*.dmg
@@ -307,7 +309,7 @@ jobs:
     name: Linux installer (AppImage)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # gpui's native deps on Linux: the windowing/font/vulkan/wayland/x11 stack
       # (the subset of zed's script/linux that gpui itself needs). build-essential
@@ -326,7 +328,9 @@ jobs:
             zstd
 
       - name: Install rolling Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with:
+          toolchain: nightly
 
       # dregg-node lives in the REPO-ROOT workspace, which pins nightly-2026-01-01
       # (rust-toolchain.toml). Install it explicitly so the node build resolves a
@@ -335,7 +339,7 @@ jobs:
       - name: Install repo-root pinned nightly (for dregg-node)
         run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml | head -1)" --profile minimal
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: starbridge-v2 -> target
           key: starbridge-v2-linux
@@ -362,7 +366,7 @@ jobs:
       # bootstrap.sh (same as the macOS job — see its comment for the rationale).
       - name: Cache libdregg_lean.a + Lean build (.lake)
         id: lean-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             dregg-lean-ffi/libdregg_lean.a
@@ -567,7 +571,7 @@ jobs:
             usr/share/dregg-src/dregg-src.tar.zst, incl. metatheory/CONSTRUCTIVE-KNOWLEDGE.md"
 
       - name: Upload Linux installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: starbridge-v2-linux-x86_64
           path: |
@@ -578,7 +582,7 @@ jobs:
 
       - name: Attach to release (starbridge-v* tag)
         if: startsWith(github.ref, 'refs/tags/starbridge-v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             starbridge-v2/dist/*.AppImage

@@ -69,14 +69,14 @@ jobs:
   wasm-webimage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # the include_str!'d staged registries live in LFS (see .gitattributes)
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: pages-wasm-webimage
       - name: Install wasm-pack
@@ -95,7 +95,7 @@ jobs:
           fi
       - name: Build the WebImage cockpit wasm (starbridge-v2/web, default features)
         run: wasm-pack build starbridge-v2/web --target web --out-dir pkg --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wasm-webimage
           path: starbridge-v2/web/pkg
@@ -108,14 +108,14 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.gpui }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # the include_str!'d staged registries live in LFS (see .gitattributes)
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: pages-wasm-gpui
       - name: Install wasm-pack
@@ -134,7 +134,7 @@ jobs:
         # the fast path ships the site without /cockpit-gpui/ — as a marker page naming
         # this artifact, not as a bare 404.
         run: wasm-pack build starbridge-v2/web --target web --out-dir pkg-gpui --release -- --features gpui-web
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wasm-gpui
           path: starbridge-v2/web/pkg-gpui
@@ -143,14 +143,14 @@ jobs:
   wasm-cards:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # the include_str!'d staged registries live in LFS (see .gitattributes)
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: pages-wasm-cards
       - name: Install wasm-pack
@@ -205,13 +205,13 @@ jobs:
       # `if-no-files-found: error` is deliberately kept: an upload of nothing must not read as
       # a publish.
       # ══════════════════════════════════════════════════════════════════════════════════════
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
           name: wasm-cards
           path: wasm/pkg
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
           name: cards-baked
