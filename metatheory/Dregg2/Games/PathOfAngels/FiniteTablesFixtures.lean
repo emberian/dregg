@@ -52,22 +52,22 @@ theorem relayStateCounts_pinned : check_relayStateCounts_pinned = true := by nat
 /-! ## Salvage Lock — the parametric machine -/
 
 theorem salvage_machine_shape_is_seed_independent :
-    check_salvage_machine_shape_is_seed_independent = true := by native_decide
+    check_salvage_machine_shape_is_seed_independent () = true := by native_decide
 
 theorem salvage_parametric_table_is_the_kernel :
-    check_salvage_parametric_table_is_the_kernel = true := by native_decide
+    check_salvage_parametric_table_is_the_kernel () = true := by native_decide
 
 theorem salvage_parametric_table_is_well_formed :
-    check_salvage_parametric_table_is_well_formed = true := by native_decide
+    check_salvage_parametric_table_is_well_formed () = true := by native_decide
 
 theorem salvageParametricStates_count :
-    check_salvageParametricStates_count = true := by native_decide
+    check_salvageParametricStates_count () = true := by native_decide
 
 theorem salvageParametricTransitions_count :
-    check_salvageParametricTransitions_count = true := by native_decide
+    check_salvageParametricTransitions_count () = true := by native_decide
 
 theorem parametric_closure_covers_every_board :
-    check_parametric_closure_covers_every_board = true := by native_decide
+    check_parametric_closure_covers_every_board () = true := by native_decide
 
 #assert_compiled relayTable_closed
 #assert_compiled relayStates_nodup

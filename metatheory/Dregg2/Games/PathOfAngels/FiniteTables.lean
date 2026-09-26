@@ -198,7 +198,22 @@ archive.
 same eight boards — `List.finRange 8` is exactly the inhabitants of `Fin 8`.
 
 Named residue: NONE.  Nothing in this module needs an evaluated table to elaborate; every
-declaration below is a closure, a projection or a Bool. -/
+declaration below is a closure, a projection or a Bool.
+
+⚑ **BUT A PARAMETERLESS `check_* : Bool` IS A CLOSED TERM, AND A CLOSED TERM IS FORCED AT
+MODULE INIT (2026-09-12).**  Moving the `native_decide` out bought the ELABORATION, not the
+RUN: `leanc` compiles a parameterless `def x : Bool` into an `_init_` closed-term computation
+that `initialize_Dregg2_Dregg2_Games_PathOfAngels_FiniteTables` forces the first time anything
+in the module's closure initialises.  Measured on a client signer linked against an archive
+that exports `dregg_poa_signal_judge`, whose `install_verified_mldsa_sign_core_real` ran the
+full init before argv was read: `dregg_ffi_init` initialises `NetworkJudge` → `Emit` → this
+module, and the six SALVAGE checks below (fifteen seeds × a 12-round closure to 260 states
+with quadratic `eraseDups`, plus the 90-seed parametric refinement) had not finished after
+three minutes at 5 GB — the process never reached `main`.  They therefore carry a `(_ : Unit)` parameter, which
+makes them functions rather than closed terms, so nothing is computed until a pin applies `()`.
+The eight RELAY checks above are still parameterless and still forced at init; they are cheap
+enough to leave, and their cost is the thing to re-measure before adding another.
+Rule: a `check_*` in this module whose body walks a state closure takes `(_ : Unit)`. -/
 
 /-- Every board's transition table is closed: no accepted successor leaves the board's own
 enumerated state closure. (Pinned `= true` in `FiniteTablesFixtures`.) -/
@@ -401,7 +416,7 @@ def salvagePairingRepresentatives : List (Fin SalvageLock.SEED_SPACE) :=
 /-- Every seed's own machine has the same size and the same hygiene.  Kept because
 it is what makes the size of a per-seed table uninformative; it is no longer what
 the wire carries. (Pinned `= true` in `FiniteTablesFixtures`.) -/
-def check_salvage_machine_shape_is_seed_independent : Bool :=
+def check_salvage_machine_shape_is_seed_independent (_ : Unit) : Bool :=
   salvagePairingRepresentatives.length == 15 &&
     (salvagePairingRepresentatives.all (fun seed =>
       (salvageStates seed).length == 260 &&
@@ -533,14 +548,14 @@ def salvageParametricRefinesB (seed : Fin SalvageLock.SEED_SPACE) : Bool :=
 /-- ⚑ **The refinement, over every board.**  For all ninety seeds, the parametric row
 instantiated at that seed's match bit is exactly `salvageStep`.
 (Pinned `= true` in `FiniteTablesFixtures`.) -/
-def check_salvage_parametric_table_is_the_kernel : Bool :=
+def check_salvage_parametric_table_is_the_kernel (_ : Unit) : Bool :=
   (List.finRange SalvageLock.SEED_SPACE).all salvageParametricRefinesB
 
 /-- The emitted closure is closed, duplicate-free and uniquely identified.  The
 counts are here because a client is told them and must be able to refuse a table
 of a different size; they are NOT a property of any board.
 (Pinned `= true` in `FiniteTablesFixtures`.) -/
-def check_salvage_parametric_table_is_well_formed : Bool :=
+def check_salvage_parametric_table_is_well_formed (_ : Unit) : Bool :=
   salvageParametricClosedB && salvageParametricStatesNodupB &&
     salvageParametricStateIdsUniqueB
 
@@ -548,19 +563,19 @@ def check_salvage_parametric_table_is_well_formed : Bool :=
 grew from 12 exposures to 18 — the closure carries `turns`, so a bigger budget is a
 bigger table).
 (Pinned `= true` in `FiniteTablesFixtures`.) -/
-def check_salvageParametricStates_count : Bool :=
+def check_salvageParametricStates_count (_ : Unit) : Bool :=
   decide (salvageParametricStates.length = 1016)
 
 /-- The emitted parametric table has exactly 6096 rows (3792 before the budget grew).
 (Pinned `= true` in `FiniteTablesFixtures`.) -/
-def check_salvageParametricTransitions_count : Bool :=
+def check_salvageParametricTransitions_count (_ : Unit) : Bool :=
   decide (salvageParametricTransitions.length = 6096)
 
 /-- The parametric closure strictly contains every single board's reachable set:
 a client that fetched a 260-state table could ask which board has 260 reachable
 states, and this one cannot be asked that.
 (Pinned `= true` in `FiniteTablesFixtures`.) -/
-def check_parametric_closure_covers_every_board : Bool :=
+def check_parametric_closure_covers_every_board (_ : Unit) : Bool :=
   (List.finRange SalvageLock.SEED_SPACE).all fun seed =>
     (salvageStates seed).all fun state => salvageParametricStates.contains state
 
