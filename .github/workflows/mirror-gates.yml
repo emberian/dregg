@@ -34,7 +34,7 @@ jobs:
     name: No new re-authored mirrors
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # No `lfs: true`: the gates read Rust source and the JSON/TSV descriptor artifacts. The
         # LFS-tracked staged TSVs are not parsed for identity (only `.json` carries a `name`), so an
         # LFS pointer stub cannot make this gate lie — it simply has no `name` to collide on.

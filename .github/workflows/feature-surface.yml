@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # ══════════════════════════════════════════════════════════════════════════════════════
       # ⚑ THE SELF-TEST RUNS FIRST, AND BEFORE THE TOOLCHAIN (2026-08-08).
@@ -128,7 +128,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 scripts/check-feature-tiers.py
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         id: toolchain
         if: ${{ !cancelled() }}
         with:
@@ -154,7 +154,7 @@ jobs:
       matrix:
         shard: [0, 1, 2, 3, 4, 5]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
       # ci.yml's list, PLUS glib/gtk/atk/soup. `deos-zed-full` (shard 4) pulls the real Zed stack,
@@ -162,7 +162,7 @@ jobs:
       # pairs fail at that build script on a host without it. ci.yml never needed these because
       # no push job builds that workspace at all — which is precisely the gap this sweep closes.
       - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libgl1-mesa-dev libegl-dev libgles-dev libharfbuzz-dev libfreetype-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-dev libxext-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gperf libunwind-dev liburing-dev libglib2.0-dev libgtk-3-dev libatk1.0-dev libsoup-3.0-dev
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly-2026-06-21
       # The T3 plan spans EIGHT cargo workspaces, and each has its own target dir. rust-cache
@@ -170,8 +170,9 @@ jobs:
       # rebuild from scratch on every nightly — the shard would look expensive for a reason that
       # is entirely cache configuration. `scripts/check-feature-tiers.py --emit-t3-plan | cut -f1
       # | sort -u` is the list; sel4/dregg-pd is absent because its two pairs are T4.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          save-if: ${{ github.event_name != 'pull_request' }}
           key: t3-shard-${{ matrix.shard }}
           workspaces: |
             .
@@ -204,7 +205,7 @@ jobs:
         run: scripts/feature-t3-sweep.sh --shard ${{ matrix.shard }}/6 --log t3-shard-${{ matrix.shard }}.tsv
       - name: Upload the per-pair record
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: t3-sweep-shard-${{ matrix.shard }}
           path: t3-shard-${{ matrix.shard }}.tsv

@@ -1,5 +1,7 @@
 target/
 out/
+!/out/
+/out/*
 
 # ⚑ EXCEPTION — `out/srs_fold_gold.json` IS TRACKED, and must stay so.
 #
@@ -9,4 +11,4 @@ out/
 # knowing which extractor writes it.
 #
 # Found 2026-07-31 by `emit_descriptors.py --verify-by-name-routing`, which flagged it INCLUDE-UNTRACKED.
-!out/srs_fold_gold.json
+!/out/srs_fold_gold.json

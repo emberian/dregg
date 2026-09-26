@@ -6,6 +6,10 @@ fv-workspace/cache/
 # Raw codex logs are large; the committed sample report cites them. Ignore by default,
 # but the committed sample run's codex log is force-added.
 reports/*.codex.log
+!reports/MoonRugToken.codex.log
+# committed halmos evidence cited by README.md (root .gitignore ignores *.log)
+!reports/MoonRugToken.halmos.log
+!reports/UnguardedMintToken.halmos.log
 reports/*.raw/
 # Transient per-run FV harness-gen stderr (empty on success; the halmos.log carries the proof).
 reports/*.fv.log

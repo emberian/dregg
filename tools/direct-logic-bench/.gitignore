@@ -1,3 +1,5 @@
-/artifacts/
+/artifacts/*
+# the committed reference run is kept deliberately
+!/artifacts/20260722-reference-macos-arm64/
 __pycache__/
 *.pyc

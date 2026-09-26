@@ -1,5 +1,9 @@
 # Foundry
 out/
+# ...except the generated EVM VK injection vector: gen_verifiers.py --check reads it
+!/codegen/out/
+/codegen/out/*
+!/codegen/out/dregg_vk.evm.json
 cache/
 # lib/ is NOT ignored: Foundry dependencies (forge-std, ...) live here as tracked
 # git submodules pinned via /.gitmodules. Ignoring lib/ orphaned forge-std and made

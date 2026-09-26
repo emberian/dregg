@@ -157,7 +157,7 @@ jobs:
     # 6h ceiling is a lane nobody reads.
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
 
@@ -171,10 +171,12 @@ jobs:
           sudo docker image prune --all --force || true
           df -h /
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       # --release is not a nicety: these are FRI folds, and debug is the dominant cost (the
       # nextest heavy profile documents the same reasoning). A debug run would not finish.
@@ -372,7 +374,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
 
@@ -385,10 +387,12 @@ jobs:
           sudo docker image prune --all --force || true
           df -h /
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Every `#[ignore]`d test carries a route
         run: python3 scripts/check-ignored-test-routing.py
@@ -435,7 +439,7 @@ jobs:
 
       - name: Upload the dark-teeth log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dark-teeth-log
           path: dark-teeth.log
@@ -529,7 +533,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
 
@@ -542,10 +546,12 @@ jobs:
           sudo docker image prune --all --force || true
           df -h /
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       # EXPLICIT TARGETS, PLUS A DISCOVERY FLOOR. `binding-teeth` learned both halves the
       # hard way and this job inherits them:
@@ -674,7 +680,7 @@ jobs:
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
 
@@ -901,14 +907,16 @@ jobs:
     runs-on: ${{ inputs.desktop_runner || fromJSON('["self-hosted","lean-seed","linux-x86_64"]') }}
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: true
 
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: nightly
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
 
       # ⚑ THE REGISTRY CAP TEETH ARE A `--lib` TARGET, AND `--test` NEVER SELECTS ONE.
       # `app_registry` is `#[cfg(feature = "app-registry")]`, which the DEFAULT feature set

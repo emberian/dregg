@@ -118,7 +118,7 @@ jobs:
       # The only LFS content the site wants is the atlas screenshots. Losing those must cost
       # us the screenshots, NOT the deploy — the same staging posture we took for wasm: ship
       # the site, mark what is missing. A billing limit is not a reason to have no website.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           lfs: false
 
@@ -127,7 +127,7 @@ jobs:
         run: git lfs pull --include="dregg-atlas/site/screenshots/*" || true
 
       - name: Install Typst for the papers
-        uses: typst-community/setup-typst@v4
+        uses: typst-community/setup-typst@48aeee7543d37f01afd1ffb27307dc277387ba13 # v4.3.1
         with:
           typst-version: "0.15.0"
 
@@ -221,7 +221,7 @@ jobs:
 
       # continue-on-error on ALL of these: a download hiccup must degrade the SITE, never
       # fail the deploy. Whatever fails to land is marked in the rendered page by the stamp.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: ${{ steps.wasm.outputs.found == 'true' }}
         continue-on-error: true
         with:
@@ -229,7 +229,7 @@ jobs:
           path: starbridge-v2/web/pkg
           run-id: ${{ steps.wasm.outputs.run_id }}
           github-token: ${{ github.token }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         # Absent whenever the source run shipped without it (the gpui job was skipped by a
         # dispatch input, or its documented matrix+zed sqlite3 wall bit). /cockpit-gpui/
         # then becomes a marker page naming this artifact.
@@ -240,7 +240,7 @@ jobs:
           path: starbridge-v2/web/pkg-gpui
           run-id: ${{ steps.wasm.outputs.run_id }}
           github-token: ${{ github.token }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: ${{ steps.wasm.outputs.found == 'true' }}
         continue-on-error: true
         with:
@@ -248,7 +248,7 @@ jobs:
           path: wasm/pkg
           run-id: ${{ steps.wasm.outputs.run_id }}
           github-token: ${{ github.token }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: ${{ steps.wasm.outputs.found == 'true' }}
         continue-on-error: true
         with:
@@ -380,7 +380,7 @@ jobs:
           echo "dist OK: $(find site/dist -type f | wc -l) files"
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: site/dist
 
@@ -394,4 +394,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
