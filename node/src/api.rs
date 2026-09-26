@@ -6159,7 +6159,7 @@ async fn post_submit_encrypted_turn(
                 drop(s);
                 return Ok(Json(SubmitEncryptedTurnResponse {
                     accepted: false,
-                    turn_hash: Some(format!("receipt chain mismatch: {err}")),
+                    turn_hash: Some(format!("rejected: receipt chain mismatch: {err}")),
                     was_encrypted: false,
                     proof_status: ActivityProofStatus::NotCommitted,
                     has_witness: false,
