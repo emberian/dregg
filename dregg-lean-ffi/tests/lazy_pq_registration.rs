@@ -74,8 +74,37 @@ fn pq_route_discovery_is_lazy_but_first_real_call_initializes() {
         "def581b81977c7f6ff10ebe0ab358bf78b6a86850087ef0b30274086b8ae0c77",
         "installed verified keygen route did not produce NIST ACVP kg26"
     );
+    // THE FIRST REAL CALL STARTS THE NARROW PQ FAMILY, NOT THE FULL INIT. The
+    // default family also runs the game modules, whose initializers take about
+    // 144 s of a 146 s full init; a signer or an SDK agent needs none of them.
+    let narrow = dregg_lean_ffi::lean_initialization_status();
+    assert!(narrow.pq_ready, "the keygen call must have initialized the PQ family");
+    assert!(!narrow.executor_ready && !narrow.delegated_admission_ready);
+    assert_eq!(narrow.failure, None);
+    assert_eq!(
+        dregg_lean_ffi::lean_runtime_init_status(),
+        None,
+        "a PQ call must not run the default full initializer"
+    );
+
+    // Sign and verify through the installed verified cores, still narrow.
+    let message = b"lazy pq registration: sign and verify under the narrow family";
+    let signature = key.sign(b"", message);
+    assert!(dregg_pq::ml_dsa_verify(&key.public_bytes(), b"", message, &signature));
+    let mut forged = signature.clone();
+    forged[0] ^= 1;
+    assert!(!dregg_pq::ml_dsa_verify(&key.public_bytes(), b"", message, &forged));
+    assert_eq!(dregg_lean_ffi::lean_runtime_init_status(), None);
+
+    // A later full init still completes after the narrow family, and the PQ
+    // cores answer the same way under it.
+    assert!(dregg_lean_ffi::lean_available());
     assert!(matches!(
         dregg_lean_ffi::lean_runtime_init_status(),
         Some(Ok(()))
     ));
+    assert!(dregg_lean_ffi::lean_initialization_status().pq_ready);
+    assert_eq!(key.sign(b"", message), signature, "the verified signer is deterministic");
+    assert!(dregg_pq::ml_dsa_verify(&key.public_bytes(), b"", message, &signature));
+    assert!(!dregg_pq::ml_dsa_verify(&key.public_bytes(), b"", message, &forged));
 }

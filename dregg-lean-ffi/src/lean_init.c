@@ -1223,6 +1223,73 @@ int dregg_ffi_init_executor_module(void) {
 #endif
 }
 
+/* THE NARROW PQ FAMILY: the modules of the verified ML-DSA and ML-KEM cores and
+ * nothing else. They are outside the FFI closure, and their import closures are
+ * the Crypto bricks. Measured on the default family (DREGG_LEAN_INIT_PROFILE=1,
+ * 2026-09-23): these modules cost about 0.2 s of a 146 s default init, and the
+ * Path of Angels game modules cost about 144 s of it. A process whose only Lean
+ * use is signing, verifying or key generation initializes this family alone.
+ * Like the DelegAdmit and FFIDirect families it never marks the end of
+ * initialization, so a later full init still runs every module it lists; a
+ * module initialized here is a no-op there, through its generated guard.
+ * Returns 0 on success, 1 on a failed initializer, 2 when no PQ core is linked. */
+static int dregg_ffi_init_one_pq_module(lean_object *res) {
+    if (!lean_io_result_is_ok(res)) {
+        lean_io_result_show_error(res);
+        lean_dec_ref(res);
+        return 1;
+    }
+    lean_dec_ref(res);
+    return 0;
+}
+
+int dregg_ffi_init_pq_modules(void) {
+    int linked = 0;
+#if defined(DREGG_FIPS204_VERIFY) || defined(DREGG_FIPS204_VERIFY_REAL)
+    linked = 1;
+    if (dregg_ffi_init_one_pq_module(
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_Fips204Verify)) != 0)
+        return 1;
+#endif
+#ifdef DREGG_FIPS203
+    linked = 1;
+    if (dregg_ffi_init_one_pq_module(
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_Fips203Kem)) != 0)
+        return 1;
+#endif
+#ifdef DREGG_MLKEM_DECAPS_REAL
+    linked = 1;
+    if (dregg_ffi_init_one_pq_module(
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemDecaps)) != 0)
+        return 1;
+#endif
+#ifdef DREGG_MLKEM_ENCAPS_REAL
+    linked = 1;
+    if (dregg_ffi_init_one_pq_module(
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemEncaps)) != 0)
+        return 1;
+#endif
+#ifdef DREGG_MLKEM_KEYGEN_REAL
+    linked = 1;
+    if (dregg_ffi_init_one_pq_module(
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlKemKeygen)) != 0)
+        return 1;
+#endif
+#ifdef DREGG_MLDSA_KEYGEN_REAL
+    linked = 1;
+    if (dregg_ffi_init_one_pq_module(
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlDsaKeygen)) != 0)
+        return 1;
+#endif
+#ifdef DREGG_FIPS204_SIGN_REAL
+    linked = 1;
+    if (dregg_ffi_init_one_pq_module(
+            DREGG_INIT_MODULE(initialize_Dregg2_Dregg2_Crypto_MlDsaSignReal)) != 0)
+        return 1;
+#endif
+    return linked ? 0 : 2;
+}
+
 /* Preserve the complete default module list; runtime start and end-of-init are
  * separate so an earlier narrow admission does not restart or prematurely end it. */
 int dregg_ffi_init_modules(void) {
