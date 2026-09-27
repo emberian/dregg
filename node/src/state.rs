@@ -509,6 +509,17 @@ pub struct NodeStateInner {
     /// shares MOVE here instead of burning — committed turns conserve
     /// exactly.
     pub fee_well: Option<CellId>,
+    /// COORDINATION-TURN fee exemption from genesis (`genesis.json`
+    /// `coordination_fee_exempt`, default `false`). Genesis-declared so every
+    /// committee node agrees — admission is consensus-relevant. Wired onto
+    /// every executor via
+    /// [`crate::executor_setup::configure_turn_executor`] as
+    /// `costs.coordination_exempt`: EmitEvent-only turns with no
+    /// `balance_change` may then carry `fee = 0` ("leash, not ledger" — the
+    /// computron is an oversight budget, and coordination turns ARE the
+    /// oversight traffic). Economic turns charge exactly as before; receipts
+    /// keep the true `computrons_used`.
+    pub coordination_fee_exempt: bool,
     /// THE EPOCH §5 ("burn as issuer-move"): (token_id → issuer well cell)
     /// registrations from genesis (`genesis.json` `issuer_well`, registered
     /// for the default asset). Wired onto every executor so `Burn` executes
@@ -1454,6 +1465,7 @@ impl NodeState {
                     dregg_lean_ffi::lean_available(),
                 ),
                 fee_well: None,
+                coordination_fee_exempt: false,
                 issuer_wells: Vec::new(),
                 mcp_cap_enforce: mcp_cap_enforce_env_enabled(),
                 pir_index_cache: None,
@@ -1652,6 +1664,7 @@ impl NodeState {
                     dregg_lean_ffi::lean_available(),
                 ),
                 fee_well: None,
+                coordination_fee_exempt: false,
                 issuer_wells: Vec::new(),
                 mcp_cap_enforce: mcp_cap_enforce_env_enabled(),
                 pir_index_cache: None,
