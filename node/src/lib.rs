@@ -2422,6 +2422,20 @@ async fn run_node(
                                 ),
                             }
                         }
+                        // COORDINATION-TURN CLASS ("leash, not ledger"):
+                        // genesis-declared opt-in. EmitEvent-only turns (no
+                        // balance_change) may carry fee = 0 — the charge is
+                        // waived at admission, the receipt's computrons_used
+                        // stays honest. Genesis-declared so every committee
+                        // node agrees; default off = exact legacy behavior.
+                        if let Some(exempt) = genesis["coordination_fee_exempt"].as_bool() {
+                            s.coordination_fee_exempt = exempt;
+                            if exempt {
+                                info!(
+                                    "genesis coordination_fee_exempt: EmitEvent-only turns are fee-exempt"
+                                );
+                            }
+                        }
                         if let Some(issuer_well_hex) = genesis["issuer_well"].as_str() {
                             match hex_decode_32(issuer_well_hex) {
                                 // The well backs the asset it is MINTED IN — read
@@ -2547,6 +2561,45 @@ async fn run_node(
                 "starbridge devnet backfill seeding complete (default cell set)"
             );
         }
+        // THE FEE LOOP (revolving fund): a genesis-less devnet cave node never
+        // hits the `genesis.json`-exists branch above (lib.rs:1229-1236), so
+        // `s.fee_well` is still None here — which means every per-turn fee
+        // remainder BURNS (execute.rs distribute_fee_shares fallback), and the
+        // faucet, a pure payer-out, drains monotonically (~800-turn runway →
+        // "insufficient balance ... need 1254" → signing DEGRADED). Point the
+        // fee well at the FAUCET cell so each committed turn's fee move
+        // recirculates into the exact pool the faucet pays out of: the
+        // {agents + faucet} value set is now closed (no external sink), payouts
+        // out are offset by fees in, and the coordination-turn class stays
+        // fee-bearing (the debit + budget gate + 1/min faucet rate-limit remain
+        // the oversight leash — no fee is zeroed). Idempotent: only sets the
+        // well when unset, so a genesis-configured well is never overwritten.
+        if s.fee_well.is_none() {
+            let faucet_cell_id = crate::api::faucet_cell_id();
+            info!(
+                fee_well = %faucet_cell_id,
+                "fee loop: genesis-less devnet fee well pointed at the faucet cell (recirculate, not burn)"
+            );
+            s.fee_well = Some(faucet_cell_id);
+        }
+        // COORDINATION-TURN CLASS ("leash, not ledger") — half (a) of the
+        // signed-turn transport fix. Same genesis-less devnet cave node never
+        // hits the `genesis.json`-exists branch above (lib.rs:1229-1247), so
+        // `s.coordination_fee_exempt` is still its `false` default here — which
+        // means the compiled-in exempt class is OFF on our devnet, and every
+        // coordination turn (chat/gate/status/meld — EmitEvent-only, no
+        // balance_change) still pays the per-turn fee, drains its cell, and hits
+        // the faucet's 1/min grant rate-limit → falls back to `[unsigned]`.
+        // Mirror the fee_well backfill above: turn the class ON at this dogfood
+        // boot so `configure_turn_executor` wires `costs.coordination_exempt =
+        // true` onto every executor. Metering stays honest (receipts keep the
+        // true `computrons_used`); only the ADMISSION CHARGE is waived, and only
+        // for EmitEvent-only turns — economic turns (Transfer/Burn/…) charge
+        // exactly as before. Gated by the same `--enable-faucet` devnet path.
+        info!(
+            "coordination class: genesis-less devnet fee-exempts EmitEvent-only turns (leash, not ledger)"
+        );
+        s.coordination_fee_exempt = true;
     }
 
     // Demo execution-lease seed — the local-cloud loop's mint. An external
