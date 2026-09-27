@@ -70,6 +70,10 @@ pub struct TestNode {
     receipts: Vec<TurnReceipt>,
     fed_id: [u8; 32],
     node_public_key: [u8; 32],
+    /// Members of a CONFIGURED committee, as `/api/federations` counts them.
+    /// `0` is the unconfigured node: its local entry lists no members and the
+    /// executor signs under `blake3(node_public_key)`.
+    committee_members: usize,
 }
 
 impl TestNode {
@@ -88,9 +92,19 @@ impl TestNode {
             receipts: Vec::new(),
             fed_id,
             node_public_key,
+            committee_members: 0,
         };
         let agent = node.seed_open_cell(agent_public_key, balance);
         (node, agent)
+    }
+
+    /// Configure a committee of one whose committee-derived id is
+    /// `federation_id`, the shape `dregg-node init` mints: the executor then
+    /// signs under that id, while `/status` still says `"solo"`.
+    pub fn with_configured_committee(mut self, federation_id: [u8; 32]) -> Self {
+        self.fed_id = federation_id;
+        self.committee_members = 1;
+        self
     }
 
     /// Seed a funded, fully-open cell for `public_key` (default token) and insert
@@ -112,8 +126,9 @@ impl TestNode {
         id
     }
 
-    /// The executor federation id a client signs its fire actions over
-    /// (`blake3(node_public_key)`; the value `/status` advertises for a solo node).
+    /// The executor federation id a client signs its fire actions over:
+    /// `blake3(node_public_key)`, or the configured committee's id after
+    /// [`Self::with_configured_committee`].
     pub fn fed_id(&self) -> [u8; 32] {
         self.fed_id
     }
@@ -341,6 +356,21 @@ fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> serde_js
             "federation_mode": "solo",
             "public_key": dregg_types::hex_encode(&node.node_public_key),
         }),
+        // The node's `federation_infos` shape. An unconfigured node lists its
+        // local entry with no members and an id that is NOT the executor's.
+        ("GET", "/api/federations") => {
+            let listed = if node.committee_members > 0 {
+                node.fed_id
+            } else {
+                *blake3::hash(b"unconfigured local federation id").as_bytes()
+            };
+            serde_json::json!([{
+                "id": dregg_types::hex_encode(&listed),
+                "federation_id": dregg_types::hex_encode(&listed),
+                "member_count": node.committee_members,
+                "is_local": true,
+            }])
+        }
         ("POST", "/turns/submit") => handle_submit(node, body),
         ("GET", p) if p.starts_with("/api/cell/") => {
             let id_hex = p.trim_start_matches("/api/cell/");

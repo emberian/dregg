@@ -189,38 +189,87 @@ impl NodeHttpClient {
     }
 
     /// The executor's federation id — the binding a fire action is signed over.
-    /// A remote client cannot derive it: an unconfigured/solo node uses
-    /// `blake3(node_public_key)` (from `GET /status`), a configured federation
-    /// uses its raw `federation_id` (from `GET /api/federation`). For a
-    /// federation whose configured/solo state is ambiguous, obtain the id from
-    /// [`crate::deos_server::discover_server_affordances`] (the proven source
-    /// that hands back `executor_federation_id`) and pass it explicitly.
+    ///
+    /// The node signs and verifies under `federation_id_for_executor`: the
+    /// committee-derived `federation_id` once a committee is configured, else
+    /// `blake3(node_public_key)`. A remote client cannot derive it, and
+    /// `/status.federation_mode` does not decide it: that field says `"solo"`
+    /// for ANY committee of one, and the chain `dregg-node init` mints is a
+    /// configured committee of one. Signing such a node's actions over
+    /// `blake3(public_key)` yields a signature the Rust executor never checks
+    /// on an open cell, and that the verified producer's WHO leg refuses, so
+    /// every turn is vetoed with no reason named.
+    ///
+    /// So the configured committee is read first: `GET /api/federations` lists
+    /// the local federation as the `is_local` entry, and a non-empty member
+    /// list means a configured committee whose `federation_id` is the id. A
+    /// node with no configured committee lists its local entry with no
+    /// members; it, and a node that does not serve the route, signs under
+    /// `blake3(public_key)` from `/status` when it is solo.
     pub async fn fetch_executor_federation_id(&self) -> Result<[u8; 32], SdkError> {
+        if let Some(id) = self.fetch_configured_local_federation_id().await? {
+            return Ok(id);
+        }
         let status: serde_json::Value = self.get_json(&format!("{}/status", self.base_url)).await?;
         let mode = status
             .get("federation_mode")
             .and_then(|m| m.as_str())
             .unwrap_or("solo");
-        if mode == "solo" {
-            let pk_hex = status
-                .get("public_key")
-                .and_then(|p| p.as_str())
-                .ok_or_else(|| SdkError::Wire("/status missing public_key".into()))?;
-            let pk = decode_32(pk_hex).ok_or_else(|| {
-                SdkError::Wire("/status public_key is not 32 bytes of hex".into())
-            })?;
-            Ok(*blake3::hash(&pk).as_bytes())
-        } else {
-            let fed: serde_json::Value = self
-                .get_json(&format!("{}/api/federation", self.base_url))
-                .await?;
-            let fid_hex = fed
-                .get("federation_id")
-                .and_then(|f| f.as_str())
-                .ok_or_else(|| SdkError::Wire("/api/federation missing federation_id".into()))?;
-            decode_32(fid_hex)
-                .ok_or_else(|| SdkError::Wire("federation_id is not 32 bytes of hex".into()))
+        if mode != "solo" {
+            return Err(SdkError::Wire(format!(
+                "a {mode}-mode node lists no configured local federation on /api/federations"
+            )));
         }
+        let pk_hex = status
+            .get("public_key")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| SdkError::Wire("/status missing public_key".into()))?;
+        let pk = decode_32(pk_hex)
+            .ok_or_else(|| SdkError::Wire("/status public_key is not 32 bytes of hex".into()))?;
+        Ok(*blake3::hash(&pk).as_bytes())
+    }
+
+    /// The `federation_id` of the `is_local` entry of `GET /api/federations`
+    /// when that entry has members (a configured committee). `None` when the
+    /// node does not serve the route (a non-success status) or lists no
+    /// configured local committee. A transport failure, or a configured entry
+    /// whose id does not decode, is an `Err`: guessing the id there would sign
+    /// every action over the wrong binding.
+    async fn fetch_configured_local_federation_id(&self) -> Result<Option<[u8; 32]>, SdkError> {
+        let url = format!("{}/api/federations", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| SdkError::Wire(format!("GET {url} failed: {e}")))?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| SdkError::Wire(format!("parse {url}: {e}")))?;
+        let Some(local) = body.as_array().and_then(|feds| {
+            feds.iter()
+                .find(|f| f.get("is_local").and_then(|l| l.as_bool()) == Some(true))
+        }) else {
+            return Ok(None);
+        };
+        let members = local.get("member_count").and_then(|m| m.as_u64());
+        if members.unwrap_or(0) == 0 {
+            return Ok(None);
+        }
+        let id = local
+            .get("federation_id")
+            .and_then(|f| f.as_str())
+            .and_then(decode_32)
+            .ok_or_else(|| {
+                SdkError::Wire(format!(
+                    "{url}: the configured local federation has no 32-byte hex federation_id"
+                ))
+            })?;
+        Ok(Some(id))
     }
 
     /// `GET /api/cell/{id}` → the cell's current nonce (the executor rejects a
@@ -651,6 +700,15 @@ mod tests {
             "an UNHELD cap must NOT read reachable (fail-closed, no fabricated authority)"
         );
     }
+}
+
+/// The federation-id fetch against the REAL-executor [`TestNode`]. It needs
+/// only `test-support`, not the SpiderMonkey `world-sink` feature the sink
+/// tests above need, so a plain `--features test-support` run reaches it.
+#[cfg(all(test, feature = "test-support"))]
+mod federation_id_tests {
+    use super::*;
+    use crate::test_support::TestNode;
 
     /// The federation-id fetch helper resolves a solo node's executor id
     /// (`blake3(node_public_key)`) off `/status`.
@@ -670,5 +728,29 @@ mod tests {
             got, fed_id,
             "solo executor fed id = blake3(node public key)"
         );
+        assert_eq!(got, *blake3::hash(&node_public_key).as_bytes());
+    }
+
+    /// A configured committee of one — the chain `dregg-node init` mints —
+    /// still says `"solo"` on `/status`, but its executor signs under the
+    /// committee-derived id. The fetch must return that id, not
+    /// `blake3(public_key)`: a node built this way vetoed every client turn
+    /// signed over the latter.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fetch_executor_federation_id_reads_a_configured_committee_of_one() {
+        let node_public_key = *blake3::hash(b"init-minted-node-key").as_bytes();
+        let committee_id = *blake3::hash(b"committee-derived federation id").as_bytes();
+        let (node, _agent) = TestNode::genesis(node_public_key, [1u8; 32], 0);
+        let node = node.with_configured_committee(committee_id);
+        let spawned = node.spawn().await;
+
+        let client = NodeHttpClient::new(spawned.base_url().to_string());
+        let got = client
+            .fetch_executor_federation_id()
+            .await
+            .expect("fetch fed id");
+        assert_eq!(got, committee_id);
+        assert_eq!(got, spawned.fed_id(), "the id the executor verifies under");
+        assert_ne!(got, *blake3::hash(&node_public_key).as_bytes());
     }
 }
