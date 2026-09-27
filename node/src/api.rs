@@ -9142,6 +9142,17 @@ pub(crate) fn faucet_public_key() -> [u8; 32] {
     faucet_signing_key().verifying_key().to_bytes()
 }
 
+/// The faucet cell's deterministic `CellId` under the default asset.
+///
+/// THE FEE LOOP (revolving fund): this is the single cell the genesis-less
+/// devnet backfill (`lib.rs`) points the fee well at, so every per-turn fee
+/// move recirculates into the pool the faucet pays out of — closing the loop
+/// that otherwise drained the faucet monotonically. Derived identically to the
+/// genesis faucet cell, so both boot modes name the SAME cell.
+pub(crate) fn faucet_cell_id() -> dregg_cell::CellId {
+    dregg_cell::CellId::derive_raw(&faucet_public_key(), &faucet_token_id())
+}
+
 #[derive(Deserialize)]
 pub struct FaucetRequest {
     /// Hex-encoded 32-byte recipient cell ID.
@@ -14093,6 +14104,234 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).expect("replay json");
         assert_eq!(json["accepted"], false, "replayed envelope must refuse");
         assert_eq!(json["error"], serde_json::json!("receipt chain mismatch"));
+    }
+
+    /// WHICH RECEIPT HEAD A CLIENT THREADS, against the real admission check.
+    ///
+    /// `stage_signed_turn_admission` admits a signed turn only when its
+    /// `previous_receipt_hash` equals `agent_receipt_head_hash(turn.agent)`.
+    /// `dregg-client-sign` used to thread `NodeHttpClient::fetch_chain_head`,
+    /// the node-wide tip, which is some other agent's receipt as soon as another
+    /// agent commits. It now threads `NodeHttpClient::fetch_agent_receipt_head`.
+    /// Both reads run here over real HTTP against this node's router, and every
+    /// turn goes through the real `/turns/submit`. Two cases are covered:
+    ///   * B has no receipt and the chain is not empty: the tip is refused, and
+    ///     the agent head (`None`) commits;
+    ///   * A has a receipt and B committed after it: the tip (B's receipt) is
+    ///     refused, and A's own head commits.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_threads_the_agent_scoped_receipt_head() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        state.write().await.unlocked = true;
+        {
+            let mut s = state.write().await;
+            let sk = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+        }
+        // Receipts, and so agent heads, are written only by finalization.
+        let handle = crate::blocklace_sync::run_blocklace_sync_with_policy(
+            state.clone(),
+            0,
+            true,
+            100,
+            10_000,
+            50,
+            2_000,
+            0,
+            None,
+            dregg_blocklace::finality::ConsensusTimePolicyV1::new(1_700_000_000),
+        )
+        .await
+        .expect("solo blocklace handle");
+        state.set_blocklace(handle).await;
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state.clone(), true, recorder.handle());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let url = format!("http://{}", listener.local_addr().expect("local addr"));
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("serve");
+        });
+        let client = dregg_sdk_net::NodeHttpClient::new(url.clone());
+        let http = reqwest::Client::new();
+
+        // Two agents and a recipient: funded, pk-bound, PQ-committed cells.
+        let default_token_id = *blake3::hash(b"default").as_bytes();
+        let clerks = [
+            dregg_sdk::AgentCipherclerk::new(),
+            dregg_sdk::AgentCipherclerk::new(),
+            dregg_sdk::AgentCipherclerk::new(),
+        ];
+        let cells = clerks
+            .each_ref()
+            .map(|c| dregg_cell::CellId::derive_raw(&c.public_key().0, &default_token_id));
+        {
+            let mut s = state.write().await;
+            for (cell, owner) in cells.iter().zip(&clerks) {
+                let ml_dsa_public_key = dregg_turn::pq::MlDsaTurnKey::from_ed25519_seed(
+                    &owner.gossip_signing_key().to_bytes(),
+                )
+                .public_bytes();
+                let funded = dregg_cell::Cell::with_hybrid_balance(
+                    owner.public_key().0,
+                    &ml_dsa_public_key,
+                    default_token_id,
+                    5_000,
+                )
+                .expect("canonical ML-DSA-65 identity");
+                assert_eq!(funded.id(), *cell, "seeded cell must be the derived id");
+                s.ledger.insert_cell(funded).expect("seed cell");
+            }
+        }
+        let [(a, clerk_a), (b, clerk_b)] = [(cells[0], &clerks[0]), (cells[1], &clerks[1])];
+        let recipient = cells[2];
+        let fed_id = crate::executor_setup::federation_id_for_executor(&*state.read().await);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        // One hybrid-signed transfer turn by `agent` at its current nonce,
+        // threading `prev`, submitted through the real ingress.
+        let submit = |clerk: &dregg_sdk::AgentCipherclerk,
+                      agent: dregg_cell::CellId,
+                      nonce: u64,
+                      prev: Option<[u8; 32]>| {
+            let unsigned = Action {
+                target: agent,
+                method: *blake3::hash(b"execute").as_bytes(),
+                args: vec![],
+                authorization: Authorization::Unchecked,
+                preconditions: dregg_cell::Preconditions::default(),
+                effects: vec![Effect::Transfer {
+                    from: agent,
+                    to: recipient,
+                    amount: 7,
+                }],
+                may_delegate: DelegationMode::None,
+                commitment_mode: CommitmentMode::Full,
+                balance_change: None,
+                witness_blobs: vec![],
+            };
+            let mut forest = CallForest::new();
+            forest.add_root(clerk.sign_action_hybrid(unsigned, &fed_id, nonce));
+            let turn = Turn {
+                agent,
+                nonce,
+                fee: 1_000,
+                memo: None,
+                valid_until: Some(now + 3600),
+                call_forest: forest,
+                depends_on: vec![],
+                previous_receipt_hash: prev,
+                conservation_proof: None,
+                sovereign_witnesses: std::collections::HashMap::new(),
+                execution_proof: None,
+                execution_proof_cell: None,
+                execution_proof_new_commitment: None,
+                custom_program_proofs: None,
+                effect_binding_proofs: Vec::new(),
+                cross_effect_dependencies: Vec::new(),
+                effect_witness_index_map: Vec::new(),
+            };
+            let body = postcard::to_stdvec(&clerk.sign_turn(&turn)).expect("envelope encode");
+            let (http, url) = (http.clone(), url.clone());
+            async move {
+                let json: serde_json::Value = http
+                    .post(format!("{url}/turns/submit"))
+                    .header("content-type", "application/octet-stream")
+                    .body(body)
+                    .send()
+                    .await
+                    .expect("submit")
+                    .json()
+                    .await
+                    .expect("submit json");
+                (hex_encode(&turn.hash()), json)
+            }
+        };
+        // The receipt hash of `turn_hash` once finalization writes it.
+        let receipted = |turn_hash: String| {
+            let (http, url) = (http.clone(), url.clone());
+            async move {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                loop {
+                    let rows: serde_json::Value = http
+                        .get(format!("{url}/api/receipts"))
+                        .send()
+                        .await
+                        .expect("receipts")
+                        .json()
+                        .await
+                        .expect("receipts json");
+                    if let Some(row) = rows
+                        .as_array()
+                        .expect("receipts array")
+                        .iter()
+                        .find(|r| r["turn_hash"] == serde_json::json!(turn_hash))
+                    {
+                        let hex = row["receipt_hash"].as_str().expect("receipt_hash");
+                        return hex_decode_32(hex).expect("32 bytes");
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "turn {turn_hash} was accepted but no receipt landed: {rows}"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+        };
+        let refused_for_the_chain = |json: &serde_json::Value| {
+            assert_eq!(
+                json["accepted"], false,
+                "the node-wide tip must refuse: {json}"
+            );
+            assert_eq!(json["error"], serde_json::json!("receipt chain mismatch"));
+        };
+
+        // A's first turn. Nothing has committed, so both reads say `None`.
+        assert_eq!(client.fetch_chain_head().await.expect("tip"), None);
+        let head = client.fetch_agent_receipt_head(&a).await.expect("A head");
+        assert_eq!(head, None);
+        let (turn_hash, json) = submit(clerk_a, a, 0, head).await;
+        assert_eq!(json["accepted"], true, "A's first turn must commit: {json}");
+        let a_receipt = receipted(turn_hash).await;
+
+        // B has no receipt, but the chain now does: its tip is A's receipt.
+        let tip = client.fetch_chain_head().await.expect("tip");
+        assert_eq!(tip, Some(a_receipt), "the node-wide tip is A's receipt");
+        let head = client.fetch_agent_receipt_head(&b).await.expect("B head");
+        assert_eq!(head, None, "B has committed nothing");
+        refused_for_the_chain(&submit(clerk_b, b, 0, tip).await.1);
+        let (turn_hash, json) = submit(clerk_b, b, 0, head).await;
+        assert_eq!(json["accepted"], true, "B's own head must commit: {json}");
+        let b_receipt = receipted(turn_hash).await;
+
+        // A again. B committed after A, so the tip is B's receipt, and A's head
+        // is still A's.
+        let nonce = client.fetch_cell_nonce(&a).await.expect("A nonce");
+        let tip = client.fetch_chain_head().await.expect("tip");
+        assert_eq!(tip, Some(b_receipt), "the node-wide tip is B's receipt");
+        let head = client.fetch_agent_receipt_head(&a).await.expect("A head");
+        assert_eq!(head, Some(a_receipt), "A's head is A's own receipt");
+        assert_eq!(
+            head,
+            state.read().await.cclerk.agent_receipt_head_hash(&a),
+            "the served head is the one admission checks"
+        );
+        refused_for_the_chain(&submit(clerk_a, a, nonce, tip).await.1);
+        let (turn_hash, json) = submit(clerk_a, a, nonce, head).await;
+        assert_eq!(json["accepted"], true, "A's own head must commit: {json}");
+        receipted(turn_hash).await;
+        server.abort();
     }
 
     #[test]

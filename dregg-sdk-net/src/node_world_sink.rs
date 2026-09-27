@@ -261,6 +261,31 @@ impl NodeHttpClient {
         }
     }
 
+    /// `GET /api/cell/{cell}` → the receipt-chain head of `cell` acting as an
+    /// AGENT (`last_receipt_hash`), or `None` when it has committed no turn.
+    ///
+    /// This, not [`Self::fetch_chain_head`], is the value a turn whose `agent`
+    /// is `cell` must thread as `previous_receipt_hash`. The node admits a
+    /// signed turn only when that field equals the agent's own head
+    /// (`stage_signed_turn_admission` compares it with
+    /// `agent_receipt_head_hash(turn.agent)`), and the node-wide tip is some
+    /// other agent's receipt whenever another agent committed since. It is the
+    /// same read as `RemoteAgent::agent_receipt_chain_head`.
+    ///
+    /// A cell the node does not hold is not an error: the node serves the head
+    /// for a not-found cell too. See `agent_receipt_head` for what IS one.
+    pub async fn fetch_agent_receipt_head(
+        &self,
+        cell: &CellId,
+    ) -> Result<Option<[u8; 32]>, SdkError> {
+        let url = format!(
+            "{}/api/cell/{}",
+            self.base_url,
+            dregg_types::hex_encode(cell.as_bytes())
+        );
+        agent_receipt_head(&self.get_json(&url).await?)
+    }
+
     /// Find the committed turn `turn_hash` on `/api/receipts` and return its
     /// `receipt_hash`. Fail-closed: a committed turn not yet visible (finality /
     /// gossip lag — the Pillar-2 handoff) is an `Err`, never a fabricated hash.
@@ -365,6 +390,31 @@ fn cell_from_detail(v: &serde_json::Value) -> Option<Cell> {
         cell.capabilities = CapabilitySet::reconstruct(refs, tombstones);
     }
     Some(cell)
+}
+
+/// Read `last_receipt_hash` off a `GET /api/cell/{id}` body.
+///
+/// `null` is a real answer: the agent has no receipt yet, and its first turn
+/// threads `None`. An ABSENT field is not that answer, so it is an error. Every
+/// node this client talks to serializes the field, `null` included, so a body
+/// without it is not a cell view, and reading it as `None` would sign a turn
+/// against a head nobody reported.
+fn agent_receipt_head(cell_view: &serde_json::Value) -> Result<Option<[u8; 32]>, SdkError> {
+    match cell_view.get("last_receipt_hash") {
+        Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(hex)) => decode_32(hex).map(Some).ok_or_else(|| {
+            SdkError::Wire(format!(
+                "cell last_receipt_hash is not 32 hex bytes: {hex:?}"
+            ))
+        }),
+        Some(other) => Err(SdkError::Wire(format!(
+            "cell last_receipt_hash is not a hex string: {other}"
+        ))),
+        None => Err(SdkError::Wire(
+            "the cell view carries no last_receipt_hash, so this agent's receipt head is unknown"
+                .into(),
+        )),
+    }
 }
 
 /// Decode a 64-char hex string into a 32-byte array. `None` on malformed input.
@@ -670,5 +720,35 @@ mod tests {
             got, fed_id,
             "solo executor fed id = blake3(node public key)"
         );
+    }
+}
+
+#[cfg(test)]
+mod agent_receipt_head_tests {
+    use super::agent_receipt_head;
+
+    #[test]
+    fn null_is_a_fresh_agent_and_hex_is_its_head() {
+        let fresh = serde_json::json!({"found": true, "last_receipt_hash": null});
+        assert_eq!(agent_receipt_head(&fresh).expect("null is an answer"), None);
+        // A cell the node does not hold still has a head once it has acted.
+        let acted = serde_json::json!({"found": false, "last_receipt_hash": "ab".repeat(32)});
+        assert_eq!(agent_receipt_head(&acted).expect("hex"), Some([0xab; 32]));
+    }
+
+    #[test]
+    fn an_absent_or_malformed_head_is_an_error_not_none() {
+        for body in [
+            serde_json::json!({"found": true, "nonce": 3}),
+            serde_json::json!({"error": "not found"}),
+            serde_json::json!({"last_receipt_hash": "ab".repeat(31)}),
+            serde_json::json!({"last_receipt_hash": "zz".repeat(32)}),
+            serde_json::json!({"last_receipt_hash": 7}),
+        ] {
+            assert!(
+                agent_receipt_head(&body).is_err(),
+                "{body} must not read as a head"
+            );
+        }
     }
 }
