@@ -51,7 +51,9 @@ use dregg_sdk::AgentCipherclerk;
 use dregg_turn::action::Effect;
 use dregg_types::hex_encode;
 
-use crate::faucet_grant_e2e::{await_balance, faucet_node, post_faucet};
+use crate::faucet_grant_e2e::{
+    await_balance, faucet_node, faucet_node_with, post_faucet, post_faucet_json,
+};
 use crate::state::NodeState;
 
 /// The `blake3("default")` asset every actor cell lives in
@@ -426,4 +428,136 @@ async fn claiming_never_fabricates_authority_over_a_foreign_agent() {
         s.ledger.get(&victim).is_none(),
         "no cell may be fabricated at a foreign agent id"
     );
+}
+
+/// The client's own fee-0 `EmitEvent` on its own cell, signed with its own key:
+/// the chat send `dregg-client-sign` builds on a coordination-exempt node.
+async fn client_emit_turn(state: &NodeState, client: &AgentCipherclerk) -> dregg_sdk::SignedTurn {
+    let actor = client.cell_id("default");
+    let federation_id = {
+        let s = state.read().await;
+        crate::executor_setup::federation_id_for_executor(&s)
+    };
+    let emit = Effect::EmitEvent {
+        cell: actor,
+        event: dregg_turn::action::Event {
+            topic: dregg_turn::action::symbol("helm.chat"),
+            data: vec![[0x42; 32]],
+        },
+    };
+    let action = client.make_action(actor, "helm.chat", vec![emit], &federation_id);
+    let mut turn = client.make_turn(action);
+    turn.fee = 0;
+    turn.valid_until = Some(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+            + 3_600,
+    );
+    client.sign_turn(&turn)
+}
+
+/// [6] THE ZERO-AMOUNT FAUCET'S TWO SHAPES, on the node `run` builds without a
+/// genesis: solo, no configured committee, the default posture (required PQ).
+/// A chat client materializes its cell this way and then sends fee-0 events.
+///
+///   * WITH `public_key`, the node mints a hosted cell already bound to the
+///     Ed25519 key and carrying NO ML-DSA anchor. The first-turn claim declines
+///     it (it is already the signer's account), and `validate_signed_turn`
+///     refuses the hybrid turn as not enrolled, a branch that returns before it
+///     reads the posture. The cell can never act.
+///   * WITHOUT it, the node leaves a zero-pk stub, and the same first turn
+///     claims it with the envelope's hybrid identity and finalizes.
+///
+/// So a client materializes without `public_key` on every node shape.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_key_bound_zero_amount_cell_cannot_act_but_a_stub_takes_its_first_turn() {
+    let (state, app, _faucet, _tmp) = faucet_node_with(|s| {
+        // `run` arms solo consensus for a node with no peers; the faucet mints
+        // the key-bound hosted cell only under it.
+        let sk = s.cclerk.gossip_signing_key().to_bytes();
+        s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+        // Fee-0 EmitEvent-only turns, as a chat seat sends them.
+        s.coordination_fee_exempt = true;
+    })
+    .await;
+    {
+        let s = state.read().await;
+        assert!(
+            !s.federation_configured,
+            "the node under test is the genesis-less one: no configured committee"
+        );
+        assert!(
+            crate::executor_setup::new_submit_executor(&s).require_pq(),
+            "the node under test runs the default posture: post-quantum admission required"
+        );
+    }
+
+    for (seed, bind_key) in [(0xC7u8, true), (0xC8u8, false)] {
+        let client = AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new([seed; 32]));
+        let actor = client.cell_id("default");
+        let mut body = serde_json::json!({ "recipient": hex_encode(&actor.0), "amount": 0 });
+        if bind_key {
+            body["public_key"] = hex_encode(&client.public_key().0).into();
+        }
+        let json = post_faucet_json(&app, body).await;
+        assert_eq!(json["success"], true, "materialization: {json}");
+        let key = state
+            .read()
+            .await
+            .ledger
+            .get(&actor)
+            .map(|c| *c.public_key());
+        let want = if bind_key {
+            client.public_key().0
+        } else {
+            [0u8; 32]
+        };
+        assert_eq!(
+            key,
+            Some(want),
+            "bind_key={bind_key}: the materialized cell is not the shape under test"
+        );
+
+        let response = post_signed_turn(&app, &client_emit_turn(&state, &client).await).await;
+        if bind_key {
+            let error = response["error"].as_str().unwrap_or_default();
+            assert_eq!(response["accepted"], false, "key-bound cell: {response}");
+            assert!(
+                error.contains("neither Cell-committed nor independently enrolled"),
+                "a key-bound cell with no PQ anchor is refused as not enrolled; got {response}"
+            );
+            let anchored = state
+                .read()
+                .await
+                .ledger
+                .get(&actor)
+                .map(|c| c.pq_identity().is_some());
+            assert_eq!(anchored, Some(false), "the refused turn anchored nothing");
+            continue;
+        }
+        assert_eq!(
+            response["accepted"], true,
+            "a stub's first hybrid turn must be admitted: {response}"
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            let claimed = state
+                .read()
+                .await
+                .ledger
+                .get(&actor)
+                .map(|c| (*c.public_key(), c.state.nonce(), c.pq_identity().is_some()));
+            if claimed == Some((client.public_key().0, 1, true)) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the stub's first turn must FINALIZE: claimed by the signer, nonce 1, ML-DSA \
+                 anchor committed; last saw (key, nonce, anchored) = {claimed:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }

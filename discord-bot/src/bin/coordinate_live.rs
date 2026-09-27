@@ -119,11 +119,11 @@ async fn main() -> ExitCode {
     println!("consumer cell: {}\n", consumer.cell_hex);
 
     // Materialize both cells; fund the consumer enough to settle.
-    if let Err(e) = materialize(&http, &node, &producer.cell_hex, &producer.public_key_hex).await {
+    if let Err(e) = materialize(&http, &node, &producer.cell_hex).await {
         eprintln!("could not materialize producer cell: {e}");
         return ExitCode::FAILURE;
     }
-    if let Err(e) = materialize(&http, &node, &consumer.cell_hex, &consumer.public_key_hex).await {
+    if let Err(e) = materialize(&http, &node, &consumer.cell_hex).await {
         eprintln!("could not materialize consumer cell: {e}");
         return ExitCode::FAILURE;
     }
@@ -404,7 +404,6 @@ struct Agent {
     app: AppCipherclerk,
     cell_bytes: [u8; 32],
     cell_hex: String,
-    public_key_hex: String,
 }
 
 impl Agent {
@@ -414,29 +413,27 @@ impl Agent {
         input.extend_from_slice(&id.to_le_bytes());
         let seed = blake3::derive_key("dregg-discord-bot-v1", &input);
         let agent = AgentCipherclerk::from_key_bytes(Zeroizing::new(seed));
-        let public_key_hex = hex::encode(agent.public_key().0);
         let app = AppCipherclerk::new(agent, fed);
         let cell = app.cell_id();
         Self {
             app,
             cell_bytes: cell.0,
             cell_hex: hex::encode(cell.0),
-            public_key_hex,
         }
     }
 }
 
 // ─── Thin node HTTP helpers ───────────────────────────────────────────────────
 
-async fn materialize(
-    http: &reqwest::Client,
-    node: &str,
-    cell: &str,
-    public_key: &str,
-) -> Result<(), String> {
+/// Materialize `cell` as a zero-pk stub. No `public_key`: with one, a solo
+/// node mints a hosted cell bound to the Ed25519 key and carrying no ML-DSA
+/// anchor, which the first-turn claim declines and admission refuses as not
+/// enrolled, so it could never act. The agent's first hybrid turn claims the
+/// stub instead.
+async fn materialize(http: &reqwest::Client, node: &str, cell: &str) -> Result<(), String> {
     let resp = http
         .post(format!("{node}/api/faucet"))
-        .json(&serde_json::json!({ "recipient": cell, "public_key": public_key, "amount": 0 }))
+        .json(&serde_json::json!({ "recipient": cell, "amount": 0 }))
         .send()
         .await
         .map_err(|e| e.to_string())?;

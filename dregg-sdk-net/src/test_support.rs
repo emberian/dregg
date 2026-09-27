@@ -5,9 +5,9 @@
 //! client threads. It cannot depend on the `node` crate (that crate depends on
 //! `dregg-sdk-net`, a cycle), so it re-checks a submitted turn exactly the way
 //! [`node::api::post_submit_signed_turn`] does and serves — over a hand-rolled
-//! HTTP/1.1 loop — the four routes [`crate::node_world_sink::NodeHttpClient`]
-//! speaks (`/turns/submit`, `/api/cells`, `/api/cell/{id}`, `/api/receipts`,
-//! `/status`).
+//! HTTP/1.1 loop — the routes [`crate::node_world_sink::NodeHttpClient`] and
+//! the client signer speak (`/turns/submit`, `/api/cells`, `/api/cell/{id}`,
+//! `/api/receipts`, `/status`, `/api/federations`, `/api/faucet`).
 //!
 //! The whole value is that the REFUSAL pole is a genuine authority rejection
 //! (the executor's gate), not a stub: an over-reaching effect is refused BY THE
@@ -70,6 +70,12 @@ pub struct TestNode {
     receipts: Vec<TurnReceipt>,
     fed_id: [u8; 32],
     node_public_key: [u8; 32],
+    /// Members of a CONFIGURED committee, as `/api/federations` counts them.
+    /// `0` is the unconfigured node: its local entry lists no members and the
+    /// executor signs under `blake3(node_public_key)`.
+    committee_members: usize,
+    /// Every `POST /api/faucet` body, in arrival order.
+    faucet_requests: Vec<serde_json::Value>,
 }
 
 impl TestNode {
@@ -88,9 +94,20 @@ impl TestNode {
             receipts: Vec::new(),
             fed_id,
             node_public_key,
+            committee_members: 0,
+            faucet_requests: Vec::new(),
         };
         let agent = node.seed_open_cell(agent_public_key, balance);
         (node, agent)
+    }
+
+    /// Configure a committee of one whose committee-derived id is
+    /// `federation_id`, the shape `dregg-node init` mints: the executor then
+    /// signs under that id, while `/status` still says `"solo"`.
+    pub fn with_configured_committee(mut self, federation_id: [u8; 32]) -> Self {
+        self.fed_id = federation_id;
+        self.committee_members = 1;
+        self
     }
 
     /// Seed a funded, fully-open cell for `public_key` (default token) and insert
@@ -112,8 +129,9 @@ impl TestNode {
         id
     }
 
-    /// The executor federation id a client signs its fire actions over
-    /// (`blake3(node_public_key)`; the value `/status` advertises for a solo node).
+    /// The executor federation id a client signs its fire actions over:
+    /// `blake3(node_public_key)`, or the configured committee's id after
+    /// [`Self::with_configured_committee`].
     pub fn fed_id(&self) -> [u8; 32] {
         self.fed_id
     }
@@ -121,6 +139,11 @@ impl TestNode {
     /// The node's ledger (the committed world the client's crawl reads back).
     pub fn ledger(&self) -> &Ledger {
         &self.ledger
+    }
+
+    /// Every `POST /api/faucet` body this node received, in arrival order.
+    pub fn faucet_requests(&self) -> &[serde_json::Value] {
+        &self.faucet_requests
     }
 
     /// The receipt chain (one entry per committed turn).
@@ -276,6 +299,50 @@ fn handle_submit(node: &mut TestNode, body: &[u8]) -> serde_json::Value {
     }
 }
 
+/// `POST /api/faucet`, as a solo node answers it: record the body, then
+/// materialize an absent recipient. With `public_key` the cell is bound to that
+/// key (the solo node's hosted cell); without it, a zero-pk stub in the default
+/// asset. A positive amount credits the recipient, as finalization does.
+fn handle_faucet(node: &mut TestNode, body: &[u8]) -> serde_json::Value {
+    let Ok(req) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return serde_json::json!({"success": false, "error": "malformed faucet request"});
+    };
+    node.faucet_requests.push(req.clone());
+    let recipient = req["recipient"].as_str().and_then(decode_32).map(CellId);
+    let amount = req["amount"].as_u64().unwrap_or(0);
+    let Some(recipient) = recipient else {
+        return serde_json::json!({"success": false, "error": "malformed recipient"});
+    };
+    if node.ledger.get(&recipient).is_none() {
+        let cell = match req["public_key"].as_str().and_then(decode_32) {
+            Some(pk) => Cell::with_balance(pk, default_token_id(), 0),
+            None => Cell::remote_stub_with_id_pk_token_balance(
+                recipient,
+                [0u8; 32],
+                default_token_id(),
+                0,
+            ),
+        };
+        if node.ledger.insert_cell(cell).is_err() {
+            return serde_json::json!({"success": false, "error": "recipient insert refused"});
+        }
+    }
+    if amount > 0
+        && let Some(cell) = node.ledger.get_mut(&recipient)
+    {
+        let balance = cell.state.balance();
+        cell.state.set_balance(balance + amount as i64);
+    }
+    let hash = dregg_types::hex_encode(blake3::hash(body).as_bytes());
+    let turn_hash = (amount > 0).then(|| hash.clone());
+    serde_json::json!({
+        "success": true,
+        "tx_hash": hash,
+        "amount": amount,
+        "turn_hash": turn_hash,
+    })
+}
+
 fn cell_detail_json(id_hex: &str, node: &TestNode) -> serde_json::Value {
     let bytes = match decode_32(id_hex) {
         Some(b) => b,
@@ -341,7 +408,23 @@ fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> serde_js
             "federation_mode": "solo",
             "public_key": dregg_types::hex_encode(&node.node_public_key),
         }),
+        // The node's `federation_infos` shape. An unconfigured node lists its
+        // local entry with no members and an id that is NOT the executor's.
+        ("GET", "/api/federations") => {
+            let listed = if node.committee_members > 0 {
+                node.fed_id
+            } else {
+                *blake3::hash(b"unconfigured local federation id").as_bytes()
+            };
+            serde_json::json!([{
+                "id": dregg_types::hex_encode(&listed),
+                "federation_id": dregg_types::hex_encode(&listed),
+                "member_count": node.committee_members,
+                "is_local": true,
+            }])
+        }
         ("POST", "/turns/submit") => handle_submit(node, body),
+        ("POST", "/api/faucet") => handle_faucet(node, body),
         ("GET", p) if p.starts_with("/api/cell/") => {
             let id_hex = p.trim_start_matches("/api/cell/");
             cell_detail_json(id_hex, node)

@@ -57,6 +57,19 @@ pub(crate) async fn faucet_node() -> (
     dregg_cell::CellId,
     tempfile::TempDir,
 ) {
+    faucet_node_with(|_| {}).await
+}
+
+/// [`faucet_node`], with `prep` applied to the node state before consensus
+/// starts: the point where `run` arms boot-time state such as solo consensus.
+pub(crate) async fn faucet_node_with(
+    prep: impl FnOnce(&mut crate::state::NodeStateInner),
+) -> (
+    NodeState,
+    axum::Router,
+    dregg_cell::CellId,
+    tempfile::TempDir,
+) {
     let _ = rustls::crypto::ring::default_provider().install_default();
     // The deployed node installs the Lean-verified ML-DSA cores in `run()`; a lib
     // test never reaches that, so install them here. Without this the fixture
@@ -89,6 +102,7 @@ pub(crate) async fn faucet_node() -> (
         .expect("canonical ML-DSA-65 faucet identity");
         let id = faucet.id();
         s.ledger.insert_cell(faucet).expect("insert faucet cell");
+        prep(&mut *s);
         id
     };
 
@@ -119,8 +133,20 @@ pub(crate) async fn post_faucet(
     recipient_hex: &str,
     amount: u64,
 ) -> serde_json::Value {
+    post_faucet_json(
+        app,
+        serde_json::json!({ "recipient": recipient_hex, "amount": amount }),
+    )
+    .await
+}
+
+/// `POST /api/faucet` with a caller-built request body (e.g. one carrying
+/// `public_key`); returns the parsed JSON body.
+pub(crate) async fn post_faucet_json(
+    app: &axum::Router,
+    body: serde_json::Value,
+) -> serde_json::Value {
     let addr: std::net::SocketAddr = "127.0.0.1:4444".parse().unwrap();
-    let body = serde_json::json!({ "recipient": recipient_hex, "amount": amount });
     let response = app
         .clone()
         .oneshot(
