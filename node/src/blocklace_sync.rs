@@ -55,6 +55,24 @@ pub const TOPIC_BLOCKLACE: &str = "dregg/blocklace";
 /// to bound storage growth.
 const MAX_RETAINED_CHECKPOINTS: usize = 5;
 
+/// How many blocklace checkpoints to retain: `DREGG_RETAINED_CHECKPOINTS` (a positive integer),
+/// else [`MAX_RETAINED_CHECKPOINTS`].
+///
+/// Each checkpoint is a full copy of the blocklace, so the retained set grows with the blocklace
+/// itself. Measured on a single-node devnet at height 11,600 (redb 2.6.3): each checkpoint was
+/// 170-177 MB, the five retained ones held 828 MB of a 4 GiB database, and redb allocated a
+/// 256 MiB run for each. A node with no peers to bootstrap from an older height can keep one or two.
+pub fn retained_checkpoints() -> usize {
+    parse_retained_checkpoints(std::env::var("DREGG_RETAINED_CHECKPOINTS").ok().as_deref())
+}
+
+fn parse_retained_checkpoints(value: Option<&str>) -> usize {
+    value
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(MAX_RETAINED_CHECKPOINTS)
+}
+
 /// How many cadence ticks a cast finalization vote is re-emitted before it is
 /// dropped from the pending set (the vote-layer anti-entropy budget). Re-emission
 /// runs on the FREQUENT cadence tick (default 2s), so this is ~60s of re-delivery.
@@ -12407,6 +12425,19 @@ mod tests {
     use dregg_circuit::field::BabyBear;
     use dregg_types::CellId;
 
+    /// `DREGG_RETAINED_CHECKPOINTS` lowers (or raises) how many full blocklace checkpoints a node
+    /// keeps; anything that is not a positive integer keeps the default.
+    #[test]
+    fn retained_checkpoints_reads_a_positive_count_and_defaults_otherwise() {
+        assert_eq!(parse_retained_checkpoints(None), MAX_RETAINED_CHECKPOINTS);
+        assert_eq!(parse_retained_checkpoints(Some("2")), 2);
+        assert_eq!(parse_retained_checkpoints(Some(" 1 ")), 1);
+        assert_eq!(parse_retained_checkpoints(Some("12")), 12);
+        for bad in ["0", "", "-1", "two", "2.5"] {
+            assert_eq!(parse_retained_checkpoints(Some(bad)), MAX_RETAINED_CHECKPOINTS, "{bad:?}");
+        }
+    }
+
     /// THE SIGNAL THAT COULD NOT GO FALSE. `/status` reported `healthy: true`
     /// through a quorum-losing 2-of-4 partition because nothing it consulted was
     /// about the other members. These are the facts it consults now, asserted as
@@ -20248,7 +20279,8 @@ async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
             .unwrap_or_default();
         heights.push(finalized_height);
 
-        while heights.len() > MAX_RETAINED_CHECKPOINTS {
+        let retained = retained_checkpoints();
+        while heights.len() > retained {
             let old_height = heights.remove(0);
             let old_cp_key = format!("blocklace_checkpoint_{}", old_height);
             let old_ledger_key = format!("blocklace_ledger_snapshot_{}", old_height);
