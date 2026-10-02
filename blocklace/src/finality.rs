@@ -1868,6 +1868,12 @@ impl Blocklace {
             // If EITHER direction holds the two blocks are causally ordered
             // (honest chain extension), so this is NOT an equivocation.
             let existing_observed_by_block = block_past.contains(existing_id);
+            if existing_observed_by_block {
+                // existing ≺ block: causally ordered, so not an equivocation. Skipping
+                // the second BFS keeps replay of an honest chain O(n²), not O(n³)
+                // (a one-creator lace replays every earlier block here; emberian/dregg#101).
+                continue;
+            }
             let block_observed_by_existing = self.causal_past(existing_id).contains(&id);
 
             if !existing_observed_by_block && !block_observed_by_existing {
