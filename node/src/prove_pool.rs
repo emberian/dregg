@@ -50,6 +50,24 @@
 //! self-healing (a later finalized-turn prove pass / verifier re-request can
 //! regenerate it). This bounds memory and CPU under a proving flood instead of
 //! letting it wedge the node — the exact failure mode F-DOS-1 described.
+//!
+//! ## Operator knobs
+//!
+//! * `DREGG_PROVE_WORKERS` — concurrent proving jobs (default 2). **`0` turns
+//!   async proving OFF**: no worker is spawned, `enqueue` accepts nothing, and
+//!   every committed receipt stays committed-but-unattested. That is the same
+//!   sound state a dropped job leaves (see above), chosen up front by a node
+//!   whose consumers never read the attestation. Each proof costs whole
+//!   CPU-seconds (measured ~16-25 CPU-s per turn on a 24-thread laptop), so a
+//!   chat-style node that only needs the executor's commit pays that for
+//!   nothing.
+//! * `DREGG_PROVE_THREADS` — the rayon threads ONE proof may use. Unset (or
+//!   `0`): the process-global rayon pool, which is sized to every logical CPU,
+//!   so each proof bursts across all of them. Set: proving runs inside a
+//!   dedicated pool of that many threads named `dregg-prove-N`, shared by the
+//!   workers. Unlike `RAYON_NUM_THREADS`, this bounds the async prover alone
+//!   and leaves every other rayon user in the process at full width.
+//! * `DREGG_PROVE_QUEUE_DEPTH` — queued jobs before new ones drop (default 256).
 
 use std::sync::Arc;
 
@@ -90,9 +108,10 @@ pub struct ProveJob {
 }
 
 /// Handle to the async prove pool. Cheaply cloneable (wraps an mpsc sender).
+/// `tx` is `None` when proving is switched off (`DREGG_PROVE_WORKERS=0`).
 #[derive(Clone)]
 pub struct ProvePool {
-    tx: mpsc::Sender<ProveJob>,
+    tx: Option<mpsc::Sender<ProveJob>>,
 }
 
 /// Default number of concurrent proving workers. Proving is CPU-bound; we keep
@@ -104,12 +123,48 @@ const DEFAULT_PROVE_WORKERS: usize = 2;
 /// succeeded — see module docs). Override with `DREGG_PROVE_QUEUE_DEPTH`.
 const DEFAULT_QUEUE_DEPTH: usize = 256;
 
-fn env_usize(key: &str, default: usize) -> usize {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(default)
+/// The pool's shape, read once at spawn. Parsed from a lookup function rather
+/// than the process environment so the parsing is testable without mutating
+/// global state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProveConfig {
+    /// Concurrent proving jobs. `0` = async proving off.
+    pub workers: usize,
+    /// Queued jobs before new ones drop.
+    pub queue_depth: usize,
+    /// Rayon threads per proof; `None` = the process-global rayon pool.
+    pub threads: Option<usize>,
+}
+
+impl ProveConfig {
+    /// Read `DREGG_PROVE_WORKERS`, `DREGG_PROVE_QUEUE_DEPTH` and
+    /// `DREGG_PROVE_THREADS` from the process environment.
+    pub fn from_env() -> Self {
+        Self::from_lookup(|k| std::env::var(k).ok())
+    }
+
+    /// Parse the knobs through `get`. An unparsable value falls back to the
+    /// default, exactly as an unset one does.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Self {
+        let parse = |k: &str| get(k).and_then(|v| v.trim().parse::<usize>().ok());
+        Self {
+            workers: parse("DREGG_PROVE_WORKERS").unwrap_or(DEFAULT_PROVE_WORKERS),
+            queue_depth: parse("DREGG_PROVE_QUEUE_DEPTH")
+                .filter(|&n| n > 0)
+                .unwrap_or(DEFAULT_QUEUE_DEPTH),
+            threads: parse("DREGG_PROVE_THREADS").filter(|&n| n > 0),
+        }
+    }
+}
+
+/// The dedicated rayon pool one proof runs inside when `DREGG_PROVE_THREADS`
+/// is set. Every `par_iter`/`join` the prover makes while `install`ed here is
+/// scheduled on these `n` threads instead of the global pool.
+fn prover_threads(n: usize) -> Result<rayon::ThreadPool, rayon::ThreadPoolBuildError> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .thread_name(|i| format!("dregg-prove-{i}"))
+        .build()
 }
 
 impl ProvePool {
@@ -118,14 +173,39 @@ impl ProvePool {
     /// acquisition for the `push_witnessed_receipt` write only — never held
     /// across the proving itself).
     pub fn spawn(state: NodeState) -> Self {
-        let workers = env_usize("DREGG_PROVE_WORKERS", DEFAULT_PROVE_WORKERS);
-        let depth = env_usize("DREGG_PROVE_QUEUE_DEPTH", DEFAULT_QUEUE_DEPTH);
+        Self::spawn_with(state, ProveConfig::from_env())
+    }
+
+    /// [`Self::spawn`] with an explicit shape instead of the environment.
+    pub fn spawn_with(state: NodeState, config: ProveConfig) -> Self {
+        let ProveConfig {
+            workers,
+            queue_depth: depth,
+            threads,
+        } = config;
+        if workers == 0 {
+            tracing::info!(
+                "async STARK proving OFF (DREGG_PROVE_WORKERS=0): committed receipts stay \
+                 unattested; the executor's commit is unchanged"
+            );
+            return Self { tx: None };
+        }
+        // A pool that cannot be built (the OS refused a thread) degrades to the
+        // global pool rather than refusing to prove: the bound is a cost knob.
+        let prover = threads.and_then(|n| match prover_threads(n) {
+            Ok(p) => Some(Arc::new(p)),
+            Err(e) => {
+                tracing::warn!(threads = n, error = %e, "dedicated prover pool not built; proving on the global rayon pool");
+                None
+            }
+        });
         let (tx, rx) = mpsc::channel::<ProveJob>(depth);
         let rx = Arc::new(tokio::sync::Mutex::new(rx));
 
         for worker_id in 0..workers {
             let rx = rx.clone();
             let state = state.clone();
+            let prover = prover.clone();
             tokio::spawn(async move {
                 loop {
                     // Take the next job. The receiver mutex is held only across
@@ -138,7 +218,7 @@ impl ProvePool {
                         tracing::debug!(worker_id, "prove pool channel closed; worker exiting");
                         return;
                     };
-                    run_job(worker_id, job, &state).await;
+                    run_job(worker_id, job, &state, prover.clone()).await;
                 }
             });
         }
@@ -146,17 +226,27 @@ impl ProvePool {
         tracing::info!(
             workers,
             queue_depth = depth,
+            prover_threads = prover.as_ref().map(|p| p.current_num_threads()),
             "async STARK prove pool started (proving moved OFF the commit/request path)"
         );
-        Self { tx }
+        Self { tx: Some(tx) }
+    }
+
+    /// Whether this pool proves at all (`false` under `DREGG_PROVE_WORKERS=0`).
+    pub fn is_enabled(&self) -> bool {
+        self.tx.is_some()
     }
 
     /// Enqueue a proving job. Returns `true` if the job was accepted into the
     /// queue, `false` if the queue is full (job dropped — the commit is already
     /// sound; see module docs). Never blocks the caller.
     pub fn enqueue(&self, job: ProveJob) -> bool {
+        let Some(tx) = &self.tx else {
+            tracing::debug!(turn_hash = %job.turn_hash_hex, "async proving OFF; receipt left unattested");
+            return false;
+        };
         let turn_hash = job.turn_hash_hex.clone();
-        match self.tx.try_send(job) {
+        match tx.try_send(job) {
             Ok(()) => {
                 // Loud (info-level) job-lifecycle line: the pool's only other
                 // success logs were debug-level, so a healthy pipeline looked
@@ -186,7 +276,12 @@ impl ProvePool {
 
 /// Run one proving job on the blocking pool, then attach the resulting
 /// `WitnessedReceipt` back into state under a brief write-lock acquisition.
-async fn run_job(worker_id: usize, job: ProveJob, state: &NodeState) {
+async fn run_job(
+    worker_id: usize,
+    job: ProveJob,
+    state: &NodeState,
+    prover: Option<Arc<rayon::ThreadPool>>,
+) {
     let ProveJob {
         agent,
         pre_balance,
@@ -227,14 +322,20 @@ async fn run_job(worker_id: usize, job: ProveJob, state: &NodeState) {
     // the next reader to rediscover: an attestation minted on this path claims the
     // STATE TRANSITION and nothing about authority.
     let prove_result = tokio::task::spawn_blocking(move || {
-        let proven = crate::turn_proving::prove_and_verify_finalized_turn(
-            &agent,
-            pre_balance,
-            pre_nonce,
-            &effects,
-            turn_hash,
-            rotation,
-        )
+        let prove = || {
+            crate::turn_proving::prove_and_verify_finalized_turn(
+                &agent,
+                pre_balance,
+                pre_nonce,
+                &effects,
+                turn_hash,
+                rotation,
+            )
+        };
+        let proven = match &prover {
+            Some(pool) => pool.install(prove),
+            None => prove(),
+        }
         .map_err(|e| format!("async full-turn proof generation failed: {e}"))?;
         let proof_bytes = proven.proof_bytes().to_vec();
         let public_inputs_u32: Vec<u32> = proven
@@ -300,4 +401,75 @@ async fn run_job(worker_id: usize, job: ProveJob, state: &NodeState) {
         elapsed_ms = started.elapsed().as_millis(),
         "async proof attached to committed receipt (has_proof flips true)"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(vars: &[(&str, &str)]) -> ProveConfig {
+        ProveConfig::from_lookup(|k| {
+            vars.iter()
+                .find(|(name, _)| *name == k)
+                .map(|(_, v)| v.to_string())
+        })
+    }
+
+    #[test]
+    fn unset_knobs_keep_the_defaults_and_the_global_pool() {
+        assert_eq!(
+            config(&[]),
+            ProveConfig {
+                workers: DEFAULT_PROVE_WORKERS,
+                queue_depth: DEFAULT_QUEUE_DEPTH,
+                threads: None,
+            }
+        );
+    }
+
+    #[test]
+    fn zero_workers_means_proving_off_not_the_default() {
+        assert_eq!(config(&[("DREGG_PROVE_WORKERS", "0")]).workers, 0);
+        assert_eq!(config(&[("DREGG_PROVE_WORKERS", "3")]).workers, 3);
+        assert_eq!(
+            config(&[("DREGG_PROVE_WORKERS", "many")]).workers,
+            DEFAULT_PROVE_WORKERS
+        );
+    }
+
+    #[test]
+    fn zero_depth_and_zero_threads_fall_back() {
+        let c = config(&[("DREGG_PROVE_QUEUE_DEPTH", "0"), ("DREGG_PROVE_THREADS", "0")]);
+        assert_eq!(c.queue_depth, DEFAULT_QUEUE_DEPTH);
+        assert_eq!(c.threads, None);
+        assert_eq!(config(&[("DREGG_PROVE_THREADS", " 4 ")]).threads, Some(4));
+    }
+
+    #[test]
+    fn installed_prover_pool_bounds_parallel_work_to_its_own_threads() {
+        use rayon::prelude::*;
+        let pool = prover_threads(2).expect("pool");
+        let (width, names): (usize, Vec<String>) = pool.install(|| {
+            let names = (0..256)
+                .into_par_iter()
+                .map(|_| std::thread::current().name().unwrap_or("").to_string())
+                .collect();
+            (rayon::current_num_threads(), names)
+        });
+        assert_eq!(width, 2);
+        assert!(
+            names.iter().all(|n| n.starts_with("dregg-prove-")),
+            "parallel work escaped the prover pool: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_workers_spawns_a_pool_that_accepts_nothing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let off = ProvePool::spawn_with(state.clone(), config(&[("DREGG_PROVE_WORKERS", "0")]));
+        assert!(!off.is_enabled());
+        let on = ProvePool::spawn_with(state, config(&[("DREGG_PROVE_WORKERS", "1")]));
+        assert!(on.is_enabled());
+    }
 }
