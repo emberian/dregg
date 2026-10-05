@@ -470,10 +470,6 @@ pub struct NodeStateInner {
     /// Maps CellId -> reachable peers, enabling three-party introductions to
     /// produce actual network-level connectivity.
     pub routing_table: RoutingTable,
-    /// Whether automatic pruning is enabled (--enable-pruning flag).
-    /// When true, old blocks/roots/audit entries are deleted after each checkpoint.
-    /// Archival nodes should leave this false.
-    pub pruning_enabled: bool,
     /// Checkpoint interval in blocks. Defaults to 1000.
     pub checkpoint_interval: u64,
     /// Whether to generate STARK proofs of block state transitions (--prove-transitions).
@@ -1469,7 +1465,6 @@ impl NodeState {
                 decryption_threshold: 0,
                 pending_decryption_shares: HashMap::new(),
                 routing_table: RoutingTable::new(),
-                pruning_enabled: false,
                 checkpoint_interval: dregg_federation::DEFAULT_CHECKPOINT_INTERVAL,
                 prove_transitions: false,
                 full_turn_proving_enabled: false,
@@ -1667,7 +1662,6 @@ impl NodeState {
                 decryption_threshold: 0,
                 pending_decryption_shares: HashMap::new(),
                 routing_table: RoutingTable::new(),
-                pruning_enabled: false,
                 checkpoint_interval: dregg_federation::DEFAULT_CHECKPOINT_INTERVAL,
                 prove_transitions: false,
                 full_turn_proving_enabled: false,

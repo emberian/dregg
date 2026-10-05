@@ -2,7 +2,7 @@
 # Dregg2.Distributed.CheckpointPrune — CHECKPOINT-PRUNE SAFETY: a FAITHFUL, EXECUTABLE model of
 # the node's REAL checkpoint-based block pruning (`node/src/blocklace_sync.rs::maybe_produce_checkpoint`
 # + `node/src/config.rs::RetentionPolicy::would_prune`, attested by `federation/src/checkpoint.rs`),
-# with the safety property the devnet's `--enable-pruning` path relies on: **pruning a checkpoint
+# with the safety property the storage-prune path relies on: **pruning a checkpoint
 # NEVER drops a finalized turn from the RECOVERABLE history, and a node that recovers from a
 # checkpoint reaches the SAME finalized executed state as a peer that never pruned.**
 
@@ -13,7 +13,9 @@ node JOINING fresh and catching up (`catchup.rs::apply_with_buffering`) reaching
 state. `Distributed.Consensus` carries an AUTHENTICATED, MONOTONE `CheckpointChain` (long-range /
 posterior-corruption defence) but NOT the *storage-side* prune operation: actually DELETING blocks
 below a checkpoint to bound disk, and the obligation that you can still RECOVER the finalized state
-afterwards. The devnet runs this under `--enable-pruning` (`node/src/main.rs:79`). NOTHING here
+afterwards. (The `--enable-pruning` flag this comment used to name was DELETED 2026-10-05: it was
+parsed into `state.pruning_enabled`, which nothing ever read, so it pruned nothing. The model below
+is of the INTENDED prune, not of a wired path.) NOTHING here
 models that the prune is SAFE — that the deleted blocks are recoverable from the checkpoint + tail,
 and that a recovered node converges to the same finalized state. THIS module closes that gap.
 
@@ -408,7 +410,7 @@ theorem recovered_converges_to_unpruned
 
 /-- **`prune_recovers_full_keyset` (the no-loss bound, corollary).** The id-set the recovered
 node holds EQUALS the original lace's id-set: the checkpoint + retained tail together hold every id
-the prune deleted. So `--enable-pruning` bounds storage growth WITHOUT erasing any causal history —
+the prune deleted. So the prune bounds storage growth WITHOUT erasing any causal history —
 the recovered keyset is the full keyset. (Direct from `recover_keyset`; restated as the storage
 soundness bound the devnet relies on.) -/
 theorem prune_recovers_full_keyset (cp : Checkpoint) (B : Lace) (pol : RetentionPolicy) (tip : Nat)
