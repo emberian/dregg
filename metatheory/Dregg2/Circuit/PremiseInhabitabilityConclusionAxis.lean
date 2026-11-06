@@ -427,7 +427,15 @@ end DecoRow
 `dfa_verify_sound` concludes `∃ trace, DfaAccepts stmt.δ stmt.q₀ stmt.accept trace`. The existential
 is over the whole run, which is what makes MODE 3 plausible here — but `DfaAccepts` demands a
 NON-EMPTY trace whose last `next` is ACCEPTING, so the conclusion forces the disclosed automaton to
-have a reachable accepting state. At an automaton that accepts nothing there is no such trace. -/
+have a reachable accepting state. At an automaton that accepts nothing there is no such trace.
+
+⚑ 2026-11-05: this section's subject is the UNBOUND kernel, retained in `Dfa.lean` exactly for this
+row and for its falsifier. The deployed-shape statement is now `Dfa.dfa_bound_verify_sound` over
+`Dfa.BoundStatement` (the automaton PLUS a content commitment `c`), whose conclusion
+`∃ w, commit w = stmt.c ∧ ∃ trace, DfaAccepts … ∧ traceWord trace = w` is a property of the RECORD
+as well as the automaton; `Dfa.Reference.splice_fails_bound` exhibits the acceptance test that meets
+this section's conclusion and refutes the bound one. The verdict below is unchanged (the bound
+conclusion implies the unbound one, so it bites wherever this does). -/
 
 section DfaRow
 
@@ -860,6 +868,7 @@ end ProvedCarrier
 | `CustomVerifierKernel` | `Custom.lean:137` `custom_verify_sound` | `∃ wit, R.Relation stmt wit` | **MODE 3 at the in-tree `eqRegistration`** (`∃ wit, stmt = wit`); bites at `emptyRegistration` | `eqRegistration_conclusion_is_total`, `custom_conclusion_axis_inverts_against_the_carrier_axis` |
 | `DecoVerifierKernel` | `Deco.lean:296` `deco_verify_sound` | `∃ w, DecoRelation … stmt w` | **NOT MODE 3 at EVERY instantiation** (zero amount); at the reference kernel TOTAL ON `1 ≤ amountCents` and the carrier is IDLE | `deco_verdict`, `deco_reference_conclusion_is_total_on_nonzero_amount`, `deco_reference_carrier_is_idle` |
 | `DfaVerifierKernel` | `Dfa.lean:200` `dfa_verify_sound` | `∃ trace, DfaAccepts …` | **NOT MODE 3 at EVERY instantiation** — refuted at an empty accept set | `dfa_conclusion_bites`, `dfa_verdict` |
+| `DfaBoundVerifierKernel` (2026-11-05) | `Dfa.lean` `dfa_bound_verify_sound` | `∃ w, commit w = c ∧ ∃ trace, DfaAccepts … ∧ traceWord trace = w` | **NOT MODE 3** — strictly stronger than the row above, so it bites wherever that does; the splice (record-ignoring acceptance) meets the unbound shape and FAILS this one | `Dfa.Reference.splice_meets_unbound`, `Dfa.Reference.splice_fails_bound` |
 | `DfaAirVerifierKernel` | `DfaAcceptanceAir.lean:526` `dfaAir_verify_sound` | `∃ rows, Satisfies … ∧ finalState = classify …` | **NOT MODE 3 at EVERY instantiation** — the public `finalState` must be a table cell | `dfaAir_conclusion_forces_finalState_in_the_table_image`, `dfaAir_verdict` |
 | `CfgVerifierKernel` | `Cfg.lean:122` `cfg_verify_sound` | `stmt.input ∈ stmt.g.language` | **NOT MODE 3** — refuted at the rule-free grammar (same shape as the `Temporal` control) | `ruleFree_language_empty`, `cfg_verdict` |
 | `BridgeVerifierKernel` | `Bridge.lean:205` `bridge_verify_sound` | `∃ v vD salt, Opens ∧ threshold ≤ v` | **MODE 3 at the in-tree reference kernel** — an `∃-image` claim under a surjective `compress`; bites at the forge hash | `bridge_conclusion_is_total_at_the_reference_compress`, `bridge_conclusion_axis_inverts_against_the_carrier_axis` |

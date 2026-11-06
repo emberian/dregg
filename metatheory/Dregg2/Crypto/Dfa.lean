@@ -17,6 +17,20 @@ accepting state. Per-step `Lookup` membership, `Transition` chaining, and bounda
 
 The DFA gadget is pure structural matching — no `compress`/hash, no primitive seam. Crypto residue:
 the STARK `extractable` carrier only.
+
+⚑ **THE STATEMENT NOW NAMES THE WORD (2026-11-05; `zkml-research/docs/CERTIFICATES.md` §0.1, L0, P6).**
+`Statement` holds `δ, q₀, accept` and NOTHING else — no input, no commitment — so `dfa_verify_sound`
+concludes `∃ trace, DfaAccepts …`, a sentence about the AUTOMATON that never mentions which record was
+read. For a complement automaton (the absence use) it holds for nearly every proof, and an accepting
+run over a benign word discharges it for ANY record: the zero-work "splice". Layer B′ below repairs it:
+`BoundStatement` carries a content commitment `c`, `DfaBoundVerifierKernel.extract` delivers a run
+WHOSE WORD COMMITS TO `c`, and `dfa_bound_verify_sound` concludes
+`∃ w, commit w = stmt.c ∧ ∃ trace, DfaAccepts … trace ∧ traceWord trace = w`. The dial wiring (Layer C)
+is re-pointed to the bound kernel. The unbound `DfaVerifierKernel`/`dfa_verify_sound` are RETAINED,
+unchanged, as the subject of `PremiseInhabitabilityConclusionAxis` §5 and of the falsifier
+`Reference.splice_meets_unbound` / `Reference.splice_fails_bound`: the SAME acceptance test (a run
+checked against the automaton, record ignored) meets the unbound extract shape and refutes the bound
+one. That pair is the exhibited separation; it is what the repair buys.
 -/
 import Dregg2.Crypto.Chain
 import Dregg2.Crypto.Primitives
@@ -206,6 +220,93 @@ theorem dfa_verify_sound {State Sym : Type} [K : DfaVerifierKernel State Sym Pro
 
 #assert_axioms dfa_verify_sound
 
+/-! ## Layer B′ — THE CONTENT-BOUND statement and kernel (law L0: the statement binds content).
+
+`dfa_verify_sound` is honest about what the unbound kernel delivers, and that is the problem: its
+conclusion is a property of the public automaton, not of any record. The bound kernel's `extract`
+hands back a satisfying trace together with the fact that the trace's WORD commits to the
+statement's `c`. Binding of the commitment (two words behind one `c` agree) is deliberately NOT
+assumed here — it is the separate, advantage-shaped hypothesis a consumer adds when it conjoins two
+certificates over one `c` (CERTIFICATES.md P1/L1); soundness of ONE certificate needs only that the
+extracted word opens `c`. -/
+
+/-- The word a trace reads: its `sym` column, in order. -/
+def traceWord (trace : List (Step State Sym)) : List Sym := trace.map (·.sym)
+
+@[simp] theorem traceWord_nil : traceWord ([] : List (Step State Sym)) = [] := rfl
+@[simp] theorem traceWord_cons (s : Step State Sym) (rest : List (Step State Sym)) :
+    traceWord (s :: rest) = s.sym :: traceWord rest := rfl
+
+/-- A content scheme: the ONLY cryptographic object the bound statement names. `commit` is total
+and abstract. (The identity scheme `⟨id⟩` is a legitimate instance — perfectly binding, not hiding —
+and is what the falsifier below uses.) -/
+structure ContentScheme (Sym D : Type) where
+  /-- The commitment to a word. -/
+  commit : List Sym → D
+
+/-- **The content-bound DFA statement**: the disclosed automaton PLUS the commitment `c` of the word
+the accepted run must read. -/
+structure BoundStatement (State Sym D : Type) extends Statement State Sym where
+  /-- The content commitment of the input word. -/
+  c : D
+
+/-- **Layer B′ — the content-bound `VerifierKernel`.** As `DfaVerifierKernel`, but `extract` delivers
+a satisfying trace WHOSE WORD COMMITS TO THE STATEMENT'S `c`. In the deployed routing AIR
+(`DfaAcceptanceAir.lean`) this is the hash chain `routeCommitment` over the `(state, sym, next)`
+rows; here it is abstract in the scheme `S`. -/
+class DfaBoundVerifierKernel (State Sym D : Type) (S : ContentScheme Sym D) (Proof : Type) where
+  /-- The §8 verify oracle over the bound statement. -/
+  verify : BoundStatement State Sym D → Proof → Bool
+  /-- CARRIER — STARK extractability/soundness. A `Prop`; never proved. -/
+  extractable : Prop
+  /-- `extractable` UNPACKED: an accepted proof witnesses a satisfying trace whose word commits to
+  the disclosed `c`. -/
+  extract : extractable →
+    ∀ (stmt : BoundStatement State Sym D) (proof : Proof), verify stmt proof = true →
+      ∃ circuit : CircuitIR State Sym,
+        Satisfies stmt.δ stmt.q₀ stmt.accept circuit
+          ∧ S.commit (traceWord circuit.trace) = stmt.c
+
+/-- ⚑ **`dfa_bound_verify_sound`** — the repaired soundness statement. Given `extractable`, an accepted
+proof of the bound statement proves: SOME WORD `w` commits to the disclosed `c`, and there is an
+accepting run of the disclosed automaton that READS `w`. Derived off `extract` and `dfa_sound`. -/
+theorem dfa_bound_verify_sound {State Sym D : Type} {S : ContentScheme Sym D}
+    [K : DfaBoundVerifierKernel State Sym D S Proof]
+    (hext : K.extractable) (stmt : BoundStatement State Sym D) (proof : Proof)
+    (haccept : K.verify stmt proof = true) :
+    ∃ w : List Sym, S.commit w = stmt.c ∧
+      ∃ trace : List (Step State Sym),
+        DfaAccepts stmt.δ stmt.q₀ stmt.accept trace ∧ traceWord trace = w := by
+  obtain ⟨circuit, hsat, hc⟩ := K.extract hext stmt proof haccept
+  exact ⟨traceWord circuit.trace, hc, circuit.trace,
+    dfa_sound stmt.δ stmt.q₀ stmt.accept circuit hsat, rfl⟩
+
+#assert_axioms dfa_bound_verify_sound
+
+/-- ⚑ **`dfa_bound_identifies_record_or_collides`** — the form that names THE record (codex round 1,
+`docs/automata/codex-synthesis.md` §1): for a named `record` whose commitment is the disclosed `c`,
+an accepted proof yields an accepting run that READS `record`, or an accepting run whose word is a
+DIFFERENT preimage of the same commitment — the collision event, pinned to the extracted word and
+the record. A computational consumer bounds that event by the scheme's binding advantage
+(CERTIFICATES.md P1); this theorem does not assume it, it NAMES it. (`dfa_bound_verify_sound` says
+"some word commits to `c`", which at a trivial scheme `commit := fun _ => ()` is as weak as the
+unbound form; this one is not: the disjunct is a concrete equivocation.) -/
+theorem dfa_bound_identifies_record_or_collides {State Sym D : Type} {S : ContentScheme Sym D}
+    [K : DfaBoundVerifierKernel State Sym D S Proof]
+    (hext : K.extractable) (stmt : BoundStatement State Sym D) (proof : Proof)
+    (haccept : K.verify stmt proof = true)
+    (record : List Sym) (hrec : S.commit record = stmt.c) :
+    ∃ trace : List (Step State Sym), DfaAccepts stmt.δ stmt.q₀ stmt.accept trace ∧
+      (traceWord trace = record ∨
+        (traceWord trace ≠ record ∧ S.commit (traceWord trace) = S.commit record)) := by
+  obtain ⟨w, hw, trace, hacc, hword⟩ := dfa_bound_verify_sound hext stmt proof haccept
+  refine ⟨trace, hacc, ?_⟩
+  by_cases heq : traceWord trace = record
+  · exact Or.inl heq
+  · exact Or.inr ⟨heq, by rw [hword, hw, hrec]⟩
+
+#assert_axioms dfa_bound_identifies_record_or_collides
+
 /-! ## Layer C — the kind obligation + the DIAL wiring at the `fullDisclosure` floor.
 
 The DFA structure and the entire accepted state-trace are PUBLIC — the verifier learns the cleartext
@@ -225,48 +326,53 @@ structure KindObligation (State Sym : Type) where
   /-- The dial floor — `fullDisclosure` for the public DFA. -/
   dialFloor : Dial
 
-/-- The DFA kind's obligation: statement = the disclosed automaton, floor = `fullDisclosure`. -/
-def dfaKindObligation (State Sym : Type) : KindObligation State Sym where
-  Statement := Statement State Sym
+/-- The DFA kind's obligation: statement = the disclosed automaton PLUS the content commitment
+(`BoundStatement`), floor = `fullDisclosure`. -/
+def dfaKindObligation (State Sym D : Type) : KindObligation State Sym where
+  Statement := BoundStatement State Sym D
   dialFloor := Dial.fullDisclosure
 
-@[simp] theorem dfaKindObligation_floor (State Sym : Type) :
-    (dfaKindObligation State Sym).dialFloor = Dial.fullDisclosure := rfl
+@[simp] theorem dfaKindObligation_floor (State Sym D : Type) :
+    (dfaKindObligation State Sym D).dialFloor = Dial.fullDisclosure := rfl
 
 /-- `fullDisclosure` is strictly above `selective`: the public DFA discloses more than Pedersen's
 chosen-facts floor. -/
-theorem dfa_floor_above_selective (State Sym : Type) :
-    Dial.selective < (dfaKindObligation State Sym).dialFloor := by
+theorem dfa_floor_above_selective (State Sym D : Type) :
+    Dial.selective < (dfaKindObligation State Sym D).dialFloor := by
   show Dial.selective < Dial.fullDisclosure
   exact Dial.selective_lt_fullDisclosure
 
-/-! ### The dial wiring — `DiscloseAt` instantiated at the DFA verifier's `fullDisclosure` floor. -/
+/-! ### The dial wiring — `DiscloseAt` instantiated at the BOUND DFA verifier's `fullDisclosure` floor.
+
+Re-pointed (2026-11-05) from `DfaVerifierKernel` to `DfaBoundVerifierKernel`: the registry's
+`dfa` entry now dispatches on `BoundStatement`, and the cascade's third conjunct is the
+content-bound conclusion. -/
 
 section Wiring
 
-variable {S Y : Type} {P : Type}
+variable {S Y D : Type} {P : Type}
 
-/-- A `Verifier (Statement S Y) P` from the kernel's §8 `verify` oracle. -/
-def dfaVerifier [K : DfaVerifierKernel S Y P] : Verifier (Statement S Y) P :=
+/-- A `Verifier (BoundStatement S Y D) P` from the bound kernel's §8 `verify` oracle. -/
+def dfaVerifier (C : ContentScheme Y D) [K : DfaBoundVerifierKernel S Y D C P] :
+    Verifier (BoundStatement S Y D) P :=
   fun stmt proof => K.verify stmt proof
 
-/-- The DFA-kind registry: the §8 `verify` oracle installed at `dfa`. -/
-def dfaReg [DfaVerifierKernel S Y P]
-    (base : Registry (Statement S Y) P) : Registry (Statement S Y) P :=
-  fun j => if j = .dfa then some dfaVerifier else base j
+/-- The DFA-kind registry: the bound `verify` oracle installed at `dfa`. -/
+def dfaReg (C : ContentScheme Y D) [DfaBoundVerifierKernel S Y D C P]
+    (base : Registry (BoundStatement S Y D) P) : Registry (BoundStatement S Y D) P :=
+  fun j => if j = .dfa then some (dfaVerifier C) else base j
 
 /-- The `Verifiable` seam this kind dispatches through (explicit `base`, not auto-synthesized). -/
-@[reducible] def dfaSeam [DfaVerifierKernel S Y P]
-    (base : Registry (Statement S Y) P) : Verifiable (Statement S Y) P :=
-  verifiableOfRegistry (dfaReg base) .dfa
+@[reducible] def dfaSeam (C : ContentScheme Y D) [DfaBoundVerifierKernel S Y D C P]
+    (base : Registry (BoundStatement S Y D) P) : Verifiable (BoundStatement S Y D) P :=
+  verifiableOfRegistry (dfaReg C base) .dfa
 
-/-- **`dfaDisclose` — the dial pinned to the DFA verifier.** `accepts d` is the position-independent
-`Discharged stmt proof`; `accepts_eq := fun _ => Iff.rfl`. Realizes "instantiate `DiscloseAt` at the
-`fullDisclosure` floor (the automaton and run are public)". -/
-def dfaDisclose [DfaVerifierKernel S Y P]
-    (base : Registry (Statement S Y) P) (stmt : Statement S Y) (proof : P) :
-    @DiscloseAt Unit (Statement S Y) P _ (dfaSeam base) :=
-  letI : Verifiable (Statement S Y) P := dfaSeam base
+/-- **`dfaDisclose` — the dial pinned to the bound DFA verifier.** `accepts d` is the
+position-independent `Discharged stmt proof`; `accepts_eq := fun _ => Iff.rfl`. -/
+def dfaDisclose (C : ContentScheme Y D) [DfaBoundVerifierKernel S Y D C P]
+    (base : Registry (BoundStatement S Y D) P) (stmt : BoundStatement S Y D) (proof : P) :
+    @DiscloseAt Unit (BoundStatement S Y D) P _ (dfaSeam C base) :=
+  letI : Verifiable (BoundStatement S Y D) P := dfaSeam C base
   { leaked := fun _ => ()
     mono := fun _ _ _ => le_refl _
     pred := stmt
@@ -276,37 +382,41 @@ def dfaDisclose [DfaVerifierKernel S Y P]
 
 /-- **`dfa_dial_wired`** — the DFA kind's floor is `fullDisclosure` (public automaton + run), the
 dial's bottom notch IS the verifier's `Discharged` bit, and an accepting proof proves a valid run
-exists. Dial pinned to the per-kind verifier. -/
-theorem dfa_dial_wired [K : DfaVerifierKernel S Y P]
+exists THAT READS A WORD COMMITTING TO THE DISCLOSED `c`. Dial pinned to the per-kind verifier. -/
+theorem dfa_dial_wired (C : ContentScheme Y D) [K : DfaBoundVerifierKernel S Y D C P]
     (hext : K.extractable)
-    (base : Registry (Statement S Y) P) (stmt : Statement S Y) (proof : P) :
+    (base : Registry (BoundStatement S Y D) P) (stmt : BoundStatement S Y D) (proof : P) :
     -- (1) the floor is fullDisclosure:
-    (dfaKindObligation S Y).dialFloor = Dial.fullDisclosure ∧
+    (dfaKindObligation S Y D).dialFloor = Dial.fullDisclosure ∧
     -- (2) the dial's bottom notch accepts IFF the DFA verifier discharges:
-    (@DiscloseAt.accepts Unit (Statement S Y) P _ (dfaSeam base)
-        (dfaDisclose base stmt proof) (⊥ : Dial)
-      ↔ @Discharged (Statement S Y) P (dfaSeam base) stmt proof) ∧
-    -- (3) and an accepting proof PROVES a valid accepting run (the cascade):
+    (@DiscloseAt.accepts Unit (BoundStatement S Y D) P _ (dfaSeam C base)
+        (dfaDisclose C base stmt proof) (⊥ : Dial)
+      ↔ @Discharged (BoundStatement S Y D) P (dfaSeam C base) stmt proof) ∧
+    -- (3) and an accepting proof PROVES a valid accepting run over a word committing to `c`:
     (K.verify stmt proof = true →
-      ∃ trace : List (Step S Y), DfaAccepts stmt.δ stmt.q₀ stmt.accept trace) := by
+      ∃ w : List Y, C.commit w = stmt.c ∧
+        ∃ trace : List (Step S Y),
+          DfaAccepts stmt.δ stmt.q₀ stmt.accept trace ∧ traceWord trace = w) := by
   refine ⟨rfl, ?_, ?_⟩
-  · exact @DiscloseAt.accepts_bot_iff_discharged Unit (Statement S Y) P _ (dfaSeam base)
-      (dfaDisclose base stmt proof)
-  · exact fun haccept => dfa_verify_sound hext stmt proof haccept
+  · exact @DiscloseAt.accepts_bot_iff_discharged Unit (BoundStatement S Y D) P _ (dfaSeam C base)
+      (dfaDisclose C base stmt proof)
+  · exact fun haccept => dfa_bound_verify_sound hext stmt proof haccept
 
 /-- **`dfa_registry_cascade`** — registering the DFA kind, an accepted proof both `Discharged`s the
-kind's predicate (`registry_sound`) and — given `extractable` — proves a valid accepting run exists
-(`dfa_verify_sound`). Single trust boundary: `extractable`. -/
-theorem dfa_registry_cascade [K : DfaVerifierKernel S Y P]
+kind's predicate (`registry_sound`) and — given `extractable` — proves a content-bound accepting run
+exists (`dfa_bound_verify_sound`). Single trust boundary: `extractable`. -/
+theorem dfa_registry_cascade (C : ContentScheme Y D) [K : DfaBoundVerifierKernel S Y D C P]
     (hext : K.extractable)
-    (base : Registry (Statement S Y) P)
-    (stmt : Statement S Y) (proof : P)
+    (base : Registry (BoundStatement S Y D) P)
+    (stmt : BoundStatement S Y D) (proof : P)
     (haccept : K.verify stmt proof = true) :
-    (@Discharged (Statement S Y) P (verifiableOfRegistry (dfaReg base) .dfa) stmt proof)
-      ∧ ∃ trace : List (Step S Y), DfaAccepts stmt.δ stmt.q₀ stmt.accept trace := by
-  refine ⟨?_, dfa_verify_sound hext stmt proof haccept⟩
-  apply registry_sound (dfaReg base) .dfa stmt proof
-  show registryVerify (dfaReg base) .dfa stmt proof = true
+    (@Discharged (BoundStatement S Y D) P (verifiableOfRegistry (dfaReg C base) .dfa) stmt proof)
+      ∧ ∃ w : List Y, C.commit w = stmt.c ∧
+          ∃ trace : List (Step S Y),
+            DfaAccepts stmt.δ stmt.q₀ stmt.accept trace ∧ traceWord trace = w := by
+  refine ⟨?_, dfa_bound_verify_sound hext stmt proof haccept⟩
+  apply registry_sound (dfaReg C base) .dfa stmt proof
+  show registryVerify (dfaReg C base) .dfa stmt proof = true
   unfold registryVerify dfaReg
   simp only [↓reduceIte]
   exact haccept
@@ -379,6 +489,70 @@ run), certifies `DfaAccepts`. This exercises the deliverable on a real automaton
 `circuit.rs:1724`) with NO crypto. -/
 example : DfaAccepts δ q₀ accept aabTrace :=
   (dfa_bridge δ q₀ accept aabTrace).1 ⟨aabTrace⟩ rfl aab_accepts
+
+/-! ### ⚑ THE FALSIFIER — the splice meets the UNBOUND extract shape and refutes the BOUND one.
+
+The acceptance test of a kernel that checks the proof (a trace) against the AUTOMATON ONLY — the
+statement's commitment is never read. Under the unbound shape (`DfaVerifierKernel.extract`'s
+conclusion) it is a perfectly good carrier: an accepting run is a satisfying trace. Under the bound
+shape it is REFUTED: the commitment `[0x7a]` (identity scheme: the word `"z"` itself) is accepted
+together with the `"aab"` run, and no satisfying trace reads `"z"` because `δ` has no `0x7a` edge.
+This is the separation the repair buys, exhibited rather than asserted. -/
+
+/-- The splice's acceptance test: the proof is a run of the reference automaton; `c` is ignored. -/
+def spliceAccepts (_c : List Nat) (tr : List (Step Nat Nat)) : Prop := DfaAccepts δ q₀ accept tr
+
+/-- The same test at an arbitrary commitment type (for the scheme-generic separation). -/
+def spliceAccepts' {D : Type} (_c : D) (tr : List (Step Nat Nat)) : Prop := DfaAccepts δ q₀ accept tr
+
+/-- The identity content scheme: the commitment IS the word. -/
+def idScheme : ContentScheme Nat (List Nat) := ⟨id⟩
+
+/-- **The splice MEETS the unbound extract shape**: whatever `c` says, an accepted run is a
+satisfying trace. (This is why the unbound statement certifies "any record".) -/
+theorem splice_meets_unbound :
+    ∀ (c : List Nat) (tr : List (Step Nat Nat)), spliceAccepts c tr →
+      ∃ circuit : CircuitIR Nat Nat, Satisfies δ q₀ accept circuit :=
+  fun _ tr h => ⟨⟨tr⟩, h⟩
+
+/-- **The splice FAILS the bound extract shape**: at `c := [0x7a]` and the `"aab"` run it accepts,
+yet no satisfying trace reads a word committing to `[0x7a]`. -/
+theorem splice_fails_bound :
+    ¬ ∀ (c : List Nat) (tr : List (Step Nat Nat)), spliceAccepts c tr →
+      ∃ circuit : CircuitIR Nat Nat,
+        Satisfies δ q₀ accept circuit ∧ idScheme.commit (traceWord circuit.trace) = c := by
+  intro hall
+  obtain ⟨circuit, hsat, hw⟩ := hall [0x7a] aabTrace aab_accepts
+  obtain ⟨_, _, _, _, _, _, hvalid, _⟩ := hsat
+  have hw' : traceWord circuit.trace = [0x7a] := hw
+  cases htr : circuit.trace with
+  | nil => rw [htr] at hw'; simp at hw'
+  | cons s rest =>
+    rw [htr] at hw'
+    simp only [traceWord_cons, List.cons.injEq] at hw'
+    have hs : s.sym = 0x7a := hw'.1
+    have hv := hvalid s (by rw [htr]; exact List.mem_cons_self)
+    unfold stepValid δ at hv
+    rw [hs] at hv
+    rcases hv with ⟨_, h, _⟩ | ⟨_, h, _⟩ | ⟨_, h, _⟩ | ⟨_, h, _⟩ | ⟨_, h, _⟩ <;> omega
+
+/-- **The separation, scheme-generic** (codex round 1 §2): for ANY scheme `S` and commitment `c` that
+NO accepting run's word opens, the splice accepts `(c, aabTrace)` and the bound extract shape is
+refuted at `c`. The identity scheme discharges the hypothesis at `c := [0x7a]` (`splice_fails_bound`
+is this theorem's instance); a constant scheme cannot, which is exactly why a constant scheme makes
+the bound statement as weak as the unbound one. -/
+theorem splice_fails_bound_of_sep {D : Type} (S : ContentScheme Nat D) (c : D)
+    (hsep : ∀ tr : List (Step Nat Nat), DfaAccepts δ q₀ accept tr → S.commit (traceWord tr) ≠ c) :
+    spliceAccepts' c aabTrace ∧
+      ¬ ∃ circuit : CircuitIR Nat Nat,
+        Satisfies δ q₀ accept circuit ∧ S.commit (traceWord circuit.trace) = c := by
+  refine ⟨aab_accepts, ?_⟩
+  rintro ⟨circuit, hsat, hc⟩
+  exact hsep circuit.trace (dfa_sound δ q₀ accept circuit hsat) hc
+
+#assert_axioms splice_meets_unbound
+#assert_axioms splice_fails_bound
+#assert_axioms splice_fails_bound_of_sep
 
 /-! ### The reference `VerifierKernel`/cascade.
 
