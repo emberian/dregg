@@ -26,8 +26,8 @@ import floor and under about a minute".
 SRS literal files (`MinaStepSrsG` 65,688 lines, `MinaWrapSrsG` 32,838). Consumers outside Lean:
 descriptors emitted through `EmitByName.lean` into `circuit/descriptors/by-name/`, read by
 `circuit-prove/src/mina_body_preimage_adapter.rs`, `turn/src/executor/mina_head_verifier.rs`
-(shipped executor code) and tests under `circuit/tests/mina_*`. The fixtures under
-`metatheory/fixtures/{kimchi-extractors,pickles-*}` are the extractors and harnesses the gold values
+(shipped executor code) and tests named `mina_*` under `circuit/tests/`. The fixtures under
+`metatheory/fixtures/kimchi-extractors` and the `pickles-*-harness` fixture directories are the extractors and harnesses the gold values
 came from; they stay.
 
 Nothing in the two modules measured so far is a retirement candidate: both emit descriptors that
