@@ -85,18 +85,29 @@ pub fn fetch(round: Option<u64>) -> Result<DrandRound, String> {
     Ok(r)
 }
 
-/// The 64-bit audit coin of MMR position `position` under the drand round `sig_hex`:
-/// the first 8 bytes, little-endian, of BLAKE3-derive-key("fpaudit coin v1", sig ‖ position).
-pub fn coin(sig_hex: &str, position: u64) -> u64 {
-    let sig = hex::decode(sig_hex).unwrap_or_default();
-    let mut h = blake3::Hasher::new_derive_key("dregg audit-flashprove 2026-11-06 coin v1");
+/// The 64-bit audit coin of MMR position `position` in session `session` under the drand round
+/// signature `sig_hex`: the first 8 bytes, little-endian, of
+/// BLAKE3-derive-key("... coin v2", session ‖ sig ‖ position). The session is fixed and
+/// countersigned before any of its rounds, so positions cannot be reset across sessions to reuse
+/// a known round. A primitive (a hash), not a decision: `fires` decides in Lean.
+pub fn coin(session: &str, sig_hex: &str, position: u64) -> Result<u64, String> {
+    let sig = hex::decode(sig_hex).map_err(|e| format!("signature hex: {e}"))?;
+    if sig.len() != 48 {
+        return Err("signature is not a compressed G1 point".into());
+    }
+    let mut h = blake3::Hasher::new_derive_key("dregg audit-flashprove 2026-11-06 coin v2");
+    h.update(session.as_bytes());
     h.update(&sig);
     h.update(&position.to_le_bytes());
     let d = h.finalize();
-    u64::from_le_bytes(d.as_bytes()[..8].try_into().expect("8 bytes"))
+    Ok(u64::from_le_bytes(
+        d.as_bytes()[..8].try_into().expect("8 bytes"),
+    ))
 }
 
-/// `⌊p · 2^64⌋` for a rate given in parts per million.
-pub fn p_num_ppm(ppm: u64) -> u64 {
-    ((u128::from(ppm) << 64) / 1_000_000) as u64
+/// Unix time now.
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }

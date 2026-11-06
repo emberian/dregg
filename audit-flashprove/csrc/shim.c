@@ -11,6 +11,10 @@ extern uint8_t minidregg_fp_audit_fires(uint64_t, uint64_t);
 extern uint8_t minidregg_fp_audit_verdict(uint8_t, lean_object *, uint8_t, uint32_t, lean_object *,
                                           lean_object *, uint32_t, uint32_t, uint8_t);
 extern uint8_t minidregg_fp_audit_alarm(uint8_t, uint8_t);
+extern uint8_t minidregg_fp_audit_opening_ok(uint8_t, uint8_t, lean_object *, lean_object *, lean_object *,
+                                             lean_object *, uint8_t, lean_object *, uint8_t, lean_object *);
+extern uint8_t minidregg_fp_audit_round_ok(uint64_t, uint64_t);
+extern uint64_t minidregg_fp_audit_pnum_of_ppm(uint64_t);
 extern uint8_t minidregg_fp_audit_alarm_open(uint8_t, uint8_t);
 
 int fpaudit_init(void) {
@@ -42,3 +46,19 @@ uint8_t fpaudit_alarm(uint8_t fired, uint8_t verdict) { return minidregg_fp_audi
 uint8_t fpaudit_alarm_open(uint8_t fired, uint8_t verdict) {
   return minidregg_fp_audit_alarm_open(fired, verdict);
 }
+
+static lean_object *mk(const char *p, size_t n) { return lean_mk_string_from_bytes(p, n); }
+
+uint8_t fpaudit_opening_ok(uint8_t stage_ok, uint8_t mmr_ok, const char *req_c, size_t req_c_len,
+                           const char *y_c, size_t y_c_len, const char *req_s, size_t req_s_len,
+                           const char *y_s, size_t y_s_len, uint8_t has_proof_c, const char *proof_c,
+                           size_t proof_c_len, uint8_t has_proof_s, const char *proof_s,
+                           size_t proof_s_len) {
+  return minidregg_fp_audit_opening_ok(stage_ok, mmr_ok, mk(req_c, req_c_len), mk(y_c, y_c_len),
+                                       mk(req_s, req_s_len), mk(y_s, y_s_len), has_proof_c,
+                                       mk(proof_c, proof_c_len), has_proof_s, mk(proof_s, proof_s_len));
+}
+
+uint8_t fpaudit_round_ok(uint64_t seen, uint64_t round) { return minidregg_fp_audit_round_ok(seen, round); }
+
+uint64_t fpaudit_pnum_of_ppm(uint64_t ppm) { return minidregg_fp_audit_pnum_of_ppm(ppm); }

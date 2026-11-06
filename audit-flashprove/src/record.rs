@@ -7,6 +7,8 @@ use sha2::{Digest, Sha256};
 /// One served request, as committed before its beacon round exists.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestRecord {
+    /// The audit session (64 hex digits), fixed and countersigned before any of its rounds.
+    pub session: String,
     /// MMR position.
     pub position: u64,
     /// The requester's nonce (distinct records for replayed payloads).
@@ -15,8 +17,8 @@ pub struct RequestRecord {
     pub commitment_id: String,
     pub r: u32,
     pub e: u32,
-    /// SHA-256 of the request file, the token file, and the proof file (`None`: no proof was
-    /// handed over).
+    /// SHA-256 of the request file, the token file, and the proof file (`None`: the provider
+    /// committed to handing over no proof).
     pub req_sha256: String,
     pub y_sha256: String,
     pub proof_sha256: Option<String>,
@@ -29,7 +31,7 @@ impl RequestRecord {
     /// by the struct).
     pub fn digest(&self) -> [u8; 32] {
         let j = serde_json::to_vec(self).expect("record serializes");
-        let mut h = blake3::Hasher::new_derive_key("dregg audit-flashprove 2026-11-06 record v1");
+        let mut h = blake3::Hasher::new_derive_key("dregg audit-flashprove 2026-11-06 record v2");
         h.update(&j);
         *h.finalize().as_bytes()
     }
@@ -40,14 +42,37 @@ pub fn sha256_file(p: &std::path::Path) -> std::io::Result<String> {
     Ok(hex::encode(Sha256::digest(std::fs::read(p)?)))
 }
 
-/// The bytes the requester signs.
+/// The audit policy the requester agrees to: what the auditor will pin, at what rate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Policy {
+    pub session: String,
+    pub commitment_id: String,
+    pub build: String,
+    pub accept_work: bool,
+    pub p_num: u64,
+}
+
+impl Policy {
+    pub fn digest(&self) -> [u8; 32] {
+        let j = serde_json::to_vec(self).expect("policy serializes");
+        *blake3::Hasher::new_derive_key("dregg audit-flashprove 2026-11-06 policy v1")
+            .update(&j)
+            .finalize()
+            .as_bytes()
+    }
+}
+
+/// The bytes the requester signs: the policy, the position, the record, the root after the
+/// append, and the round it had seen.
 pub fn countersign_msg(
+    policy: &Policy,
     position: u64,
     digest: &[u8; 32],
     root: &[u8; 32],
     seen_round: u64,
 ) -> Vec<u8> {
-    let mut m = b"dregg audit-flashprove countersign v1".to_vec();
+    let mut m = b"dregg audit-flashprove countersign v2".to_vec();
+    m.extend_from_slice(&policy.digest());
     m.extend_from_slice(&position.to_le_bytes());
     m.extend_from_slice(digest);
     m.extend_from_slice(root);
@@ -71,4 +96,12 @@ pub fn verify_countersign(pk_hex: &str, msg: &[u8], sig_hex: &str) -> Result<(),
         .map_err(|_| "sig length")?;
     pk.verify(msg, &Signature::from_bytes(&sig))
         .map_err(|e| e.to_string())
+}
+
+/// 32 bytes from the operating system's random source.
+pub fn os_random32() -> std::io::Result<[u8; 32]> {
+    use std::io::Read;
+    let mut b = [0u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+    Ok(b)
 }

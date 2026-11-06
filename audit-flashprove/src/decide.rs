@@ -24,6 +24,27 @@ unsafe extern "C" {
     ) -> u8;
     fn fpaudit_alarm(fired: u8, verdict: u8) -> u8;
     fn fpaudit_alarm_open(fired: u8, verdict: u8) -> u8;
+    #[allow(clippy::too_many_arguments)]
+    fn fpaudit_opening_ok(
+        stage_ok: u8,
+        mmr_ok: u8,
+        req_c: *const u8,
+        req_c_len: usize,
+        y_c: *const u8,
+        y_c_len: usize,
+        req_s: *const u8,
+        req_s_len: usize,
+        y_s: *const u8,
+        y_s_len: usize,
+        has_proof_c: u8,
+        proof_c: *const u8,
+        proof_c_len: usize,
+        has_proof_s: u8,
+        proof_s: *const u8,
+        proof_s_len: usize,
+    ) -> u8;
+    fn fpaudit_round_ok(seen: u64, round: u64) -> u8;
+    fn fpaudit_pnum_of_ppm(ppm: u64) -> u64;
 }
 
 static INIT: Once = Once::new();
@@ -117,4 +138,57 @@ pub fn alarm_open(fired: bool, v: Verdict) -> bool {
     init();
     let _g = LEAN.lock().unwrap_or_else(|e| e.into_inner());
     unsafe { fpaudit_alarm_open(u8::from(fired), v.code()) != 0 }
+}
+
+/// Lean `openingOk`: staging succeeded, the MMR opening verified, and the staged digests are
+/// well-formed and equal the committed ones.
+#[allow(clippy::too_many_arguments)]
+pub fn opening_ok(
+    stage_ok: bool,
+    mmr_ok: bool,
+    req_c: &str,
+    y_c: &str,
+    req_s: &str,
+    y_s: &str,
+    proof_c: Option<&str>,
+    proof_s: Option<&str>,
+) -> bool {
+    init();
+    let _g = LEAN.lock().unwrap_or_else(|e| e.into_inner());
+    let (pc, ps) = (proof_c.unwrap_or(""), proof_s.unwrap_or(""));
+    unsafe {
+        fpaudit_opening_ok(
+            u8::from(stage_ok),
+            u8::from(mmr_ok),
+            req_c.as_ptr(),
+            req_c.len(),
+            y_c.as_ptr(),
+            y_c.len(),
+            req_s.as_ptr(),
+            req_s.len(),
+            y_s.as_ptr(),
+            y_s.len(),
+            u8::from(proof_c.is_some()),
+            pc.as_ptr(),
+            pc.len(),
+            u8::from(proof_s.is_some()),
+            ps.as_ptr(),
+            ps.len(),
+        ) != 0
+    }
+}
+
+/// Lean `auditRoundOk`: the audit round is the seen round plus two.
+pub fn round_ok(seen: u64, round: u64) -> bool {
+    init();
+    let _g = LEAN.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe { fpaudit_round_ok(seen, round) != 0 }
+}
+
+/// Lean `pNumOfPpm`: `None` outside `0 < ppm < 10^6`.
+pub fn p_num_of_ppm(ppm: u64) -> Option<u64> {
+    init();
+    let _g = LEAN.lock().unwrap_or_else(|e| e.into_inner());
+    let v = unsafe { fpaudit_pnum_of_ppm(ppm) };
+    (v != 0).then_some(v)
 }

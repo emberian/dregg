@@ -5,11 +5,15 @@
 //!                      [--strategy rate:F | burst:F:K] [--arm closed|open|peek]
 //!                      [--horizon-mult M] [--threads T] [--timeout-s S] [--mem-gib G]
 //!   fpaudit live --stored DIR --cp-verify BIN --build HEX --out DIR --p-ppm N --n N
-//!   fpaudit recheck --pins FILE RECEIPT... [--rerun BIN --stored DIR]
+//!                [--requester-key FILE] [--false-at T]
+//!   fpaudit recheck --pins FILE RECEIPT... [--rerun BIN --files DIR --stored DIR]
 //!
-//! `live` serves `n` requests from the stored proof (the last one with a false next token), has a
-//! requester countersign each commitment with the latest drand round it has seen, waits for round
-//! seen + 2, and audits: receipts and the pins a re-checker needs are written under `--out`.
+//! `live` serves `n` requests from the stored proof (the one at position `--false-at`, default the
+//! last, with a false next token), has a requester countersign each commitment with the latest
+//! drand round it has seen (refusing a stale or late round by the beacon schedule), waits for round
+//! seen + 2, and audits: receipts and the pins a re-checker needs are written under `--out`. It is a
+//! single-process demonstration: the requester key is generated here (from the OS random source)
+//! unless `--requester-key` names a 32-byte secret held by someone else.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,9 +21,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use audit_flashprove::beacon::{self, DrandRound};
+use audit_flashprove::decide;
 use audit_flashprove::experiment::{self, Arm, Config, Stored, Strategy};
 use audit_flashprove::receipt::{self, Ledger, Pins, Receipt};
-use audit_flashprove::record::{self, RequestRecord};
+use audit_flashprove::record::{self, Policy, RequestRecord};
 use audit_flashprove::runner::{self, CallFiles};
 
 fn args() -> (String, HashMap<String, String>, Vec<String>) {
@@ -83,7 +88,10 @@ fn drand_rounds(cache: &PathBuf, base: u64, n: u64) -> Vec<DrandRound> {
 fn experiment(kv: &HashMap<String, String>) {
     let stored = Stored::load(&PathBuf::from(need(kv, "stored"))).expect("stored proof");
     let p_ppm: u64 = num(kv, "p-ppm", 10_000);
-    let p_num = beacon::p_num_ppm(p_ppm);
+    let p_num = decide::p_num_of_ppm(p_ppm).unwrap_or_else(|| {
+        eprintln!("fpaudit: --p-ppm must be in 1..=999999");
+        std::process::exit(2)
+    });
     let seeds: u64 = num(kv, "seeds", 100);
     let strategy = {
         let s = kv.get("strategy").map_or("rate:0.25", String::as_str);
@@ -158,7 +166,8 @@ fn experiment(kv: &HashMap<String, String>) {
         / (n - 1.0).max(1.0);
     let p = p_num as f64 / 18_446_744_073_709_551_616.0;
     let summary = serde_json::json!({
-        "p_ppm": p_ppm, "p_num": p_num, "one_over_q": 1.0 / p, "strategy": format!("{strategy:?}"),
+        "p_ppm": p_ppm, "p_num": p_num, "ideal_one_over_p": 1.0 / p,
+        "note": "historical-beacon simulation of fresh coins; ideal 1/p is the Lean bound at eps_beacon = 0 without its n*(delta_chk + delta_bind) term; censored seeds hit the horizon", "strategy": format!("{strategy:?}"),
         "arm": format!("{arm:?}"), "seeds": res.len(), "horizon": horizon,
         "mean_corrupt_before_alarm": mean, "stderr": (var / n).sqrt(),
         "sum_corrupt": total_c,
@@ -169,6 +178,8 @@ fn experiment(kv: &HashMap<String, String>) {
         "fired_honest_not_accepted": res.iter().map(|r| r.fired_honest_not_accepted).sum::<u64>(),
         "call_seconds": res.iter().map(|r| r.call_millis).sum::<u64>() as f64 / 1000.0,
         "openings_failed": res.iter().map(|r| r.openings_failed).sum::<u64>(),
+        "faults": res.iter().fold(std::collections::BTreeMap::<String, u64>::new(), |mut m, r| {
+            for (k, v) in &r.faults { *m.entry(k.clone()).or_default() += v; } m }),
         "verdicts": res.iter().fold(std::collections::BTreeMap::<String, u64>::new(), |mut m, r| {
             for (k, v) in &r.verdicts { *m.entry(k.clone()).or_default() += v; } m }),
         "calls_by_exit": res.iter().fold(std::collections::BTreeMap::<String, u64>::new(), |mut m, r| {
@@ -184,16 +195,28 @@ fn live(kv: &HashMap<String, String>) {
     let out = PathBuf::from(need(kv, "out"));
     std::fs::create_dir_all(&out).unwrap();
     let n: u64 = num(kv, "n", 4);
-    let p_num = beacon::p_num_ppm(num(kv, "p-ppm", 500_000));
-    let mut seed = [0u8; 32];
-    let now = format!("{:?}", std::time::SystemTime::now());
-    seed.copy_from_slice(blake3::hash(now.as_bytes()).as_bytes());
-    let sk = SigningKey::from_bytes(&seed);
+    let false_at: u64 = num(kv, "false-at", n.saturating_sub(1));
+    let p_num = decide::p_num_of_ppm(num(kv, "p-ppm", 500_000)).unwrap_or_else(|| {
+        eprintln!("fpaudit: --p-ppm must be in 1..=999999");
+        std::process::exit(2)
+    });
+    let secret: [u8; 32] = match kv.get("requester-key") {
+        Some(p) => std::fs::read(p)
+            .expect("requester key")
+            .try_into()
+            .expect("32-byte requester key"),
+        None => record::os_random32().expect("OS random source"),
+    };
+    let sk = SigningKey::from_bytes(&secret);
+    let session = hex::encode(record::os_random32().expect("OS random source"));
     let pins = Pins {
-        commitment_id: stored.id.clone(),
-        build: need(kv, "build").to_string(),
-        accept_work: true,
-        p_num,
+        policy: Policy {
+            session: session.clone(),
+            commitment_id: stored.id.clone(),
+            build: need(kv, "build").to_string(),
+            accept_work: true,
+            p_num,
+        },
         requester_pk: hex::encode(sk.verifying_key().to_bytes()),
     };
     std::fs::write(
@@ -203,8 +226,9 @@ fn live(kv: &HashMap<String, String>) {
     .unwrap();
     let mut ledger = Ledger::default();
     let bin = PathBuf::from(need(kv, "cp-verify"));
-    for t in 0..n {
-        let false_claim = t == n - 1;
+    let mut t = 0u64;
+    while t < n {
+        let false_claim = t == false_at;
         let dir = out.join(format!("files-{t}"));
         std::fs::create_dir_all(&dir).unwrap();
         let mut y = stored.y;
@@ -216,8 +240,9 @@ fn live(kv: &HashMap<String, String>) {
         std::fs::copy(stored.dir.join("example.proof"), dir.join("example.proof")).unwrap();
         let seen = beacon::fetch(None).expect("latest drand round");
         let rec = RequestRecord {
+            session: session.clone(),
             position: t,
-            nonce: hex::encode(blake3::hash(format!("{now}/{t}").as_bytes()).as_bytes()),
+            nonce: hex::encode(record::os_random32().expect("OS random source")),
             commitment_id: stored.id.clone(),
             r: stored.r,
             e: stored.e,
@@ -226,13 +251,35 @@ fn live(kv: &HashMap<String, String>) {
             proof_sha256: Some(record::sha256_file(&dir.join("example.proof")).unwrap()),
             seen_round: seen.round,
         };
-        let (pos, root, opening) = ledger.append(rec.clone());
-        let digest = rec.digest();
+        // Freshness by the schedule: `seen` must be the current round (not a stale response) and
+        // the countersignature must be made before round seen + 2 is emitted, with a second spare.
+        let deadline = seen.emitted_at() + beacon::AUDIT_ROUND_MARGIN * beacon::QUICKNET_PERIOD;
+        let now = beacon::now_unix();
+        if now >= seen.emitted_at() + beacon::QUICKNET_PERIOD + 1 || now + 1 >= deadline {
+            eprintln!(
+                "position {t}: round {} is stale or the deadline is too close; fetching again",
+                seen.round
+            );
+            continue;
+        }
+        let mut probe = Ledger::default();
+        for r in &ledger.records {
+            probe.append(r.clone());
+        }
+        let (_, root_probe, _) = probe.append(rec.clone());
         let cs = record::countersign(
             &sk,
-            &record::countersign_msg(pos, &digest, &root, seen.round),
+            &record::countersign_msg(&pins.policy, t, &rec.digest(), &root_probe, seen.round),
         );
-        // wait for the audit round, which did not exist when the requester countersigned
+        if beacon::now_unix() + 1 >= deadline {
+            eprintln!(
+                "position {t}: countersigned too late for round {}; discarding",
+                seen.round + 2
+            );
+            continue;
+        }
+        let (pos, root, opening) = ledger.append(rec.clone());
+        assert_eq!((pos, root), (t, root_probe));
         let target = seen.round + beacon::AUDIT_ROUND_MARGIN;
         let audit_round = loop {
             match beacon::fetch(Some(target)) {
@@ -247,14 +294,18 @@ fn live(kv: &HashMap<String, String>) {
             y: dir.join("example.y"),
             proof: dir.join("example.proof"),
         };
-        let staged_dir = out.join(format!("staged-{t}"));
+        let scratch = out.join("staging");
         let rc = receipt::audit(&rec, root, opening, cs, audit_round, &pins, || {
-            let (sf, st) = runner::stage(&files, &staged_dir).expect("stage files");
-            (
-                st,
-                runner::run_cp_verify(&bin, &sf, &stored.id, Duration::from_secs(120), 8 << 30),
-            )
-        });
+            let (sf, st) = runner::stage(&files, &scratch);
+            let c = match sf {
+                Some(sf) => {
+                    runner::run_cp_verify(&bin, &sf, &stored.id, Duration::from_secs(120), 8 << 30)
+                }
+                None => runner::CallOutcome::not_made(st.fault.clone().unwrap_or_default()),
+            };
+            (st, c)
+        })
+        .expect("admission");
         let path = out.join(format!("receipt-{t}.json"));
         std::fs::write(&path, serde_json::to_vec_pretty(&rc).unwrap()).unwrap();
         println!(
@@ -267,21 +318,40 @@ fn live(kv: &HashMap<String, String>) {
             rc.alarm,
             path.display()
         );
+        t += 1;
     }
 }
 
 fn recheck(kv: &HashMap<String, String>, pos: &[String]) {
     let pins: Pins =
         serde_json::from_slice(&std::fs::read(need(kv, "pins")).unwrap()).expect("pins");
+    let rerun = match (kv.get("rerun"), kv.get("files"), kv.get("stored")) {
+        (Some(b), Some(f), Some(s)) => Some((PathBuf::from(b), PathBuf::from(f), PathBuf::from(s))),
+        (None, None, _) => None,
+        _ => {
+            eprintln!("fpaudit recheck: --rerun needs --files and --stored");
+            std::process::exit(2)
+        }
+    };
     let mut bad = 0;
+    let mut seen_positions: HashMap<u64, String> = HashMap::new();
     for p in pos {
         let r: Receipt = serde_json::from_slice(&std::fs::read(p).unwrap()).expect("receipt json");
+        if let Some(prev) = seen_positions.insert(r.record.position, r.record_digest.clone())
+            && prev != r.record_digest
+        {
+            println!(
+                "{p}: FAIL two receipts open position {} to different records",
+                r.record.position
+            );
+            bad += 1;
+            continue;
+        }
         match receipt::recheck(&r, &pins) {
             Ok(rep) => {
                 print!("{p}: OK {}", serde_json::to_string(&rep).unwrap());
-                if let (Some(bin), Some(dir)) = (kv.get("rerun"), kv.get("files")) {
-                    let dir = PathBuf::from(dir).join(format!("files-{}", r.record.position));
-                    let stored = PathBuf::from(need(kv, "stored"));
+                if let Some((bin, files, stored)) = &rerun {
+                    let dir = files.join(format!("files-{}", r.record.position));
                     let f = CallFiles {
                         config: stored.join("config"),
                         ivk: stored.join("ivk"),
@@ -289,8 +359,14 @@ fn recheck(kv: &HashMap<String, String>, pos: &[String]) {
                         y: dir.join("example.y"),
                         proof: dir.join("example.proof"),
                     };
-                    match receipt::rerun(&r, &pins, &PathBuf::from(bin), &f) {
-                        Ok(v) if Some(v) == r.verdict || !r.fired => print!(" rerun {v:?}"),
+                    match receipt::rerun(
+                        &r,
+                        &pins,
+                        bin,
+                        &f,
+                        &std::env::temp_dir().join("fpaudit-rerun"),
+                    ) {
+                        Ok(v) if !r.fired || Some(v) == r.verdict => print!(" rerun {v:?}"),
                         Ok(v) => {
                             print!(" RERUN DISAGREES {v:?}");
                             bad += 1;

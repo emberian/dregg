@@ -8,9 +8,15 @@
 //! bytes alone never counts as corruption, because FlashProve's verifier may accept proof
 //! alterations that leave the claim true (their `lean/THEOREM.md`, "Altered proof files").
 //!
-//! The coin of position `t` in seed `s` is `beacon::coin(sig, t)` under one historical drand
-//! round per seed, so the ordering is simulated here (the round is old); the `live` path of the
-//! binary does it in real time.
+//! The coin of position `t` in seed `s` is `beacon::coin(session_s, sig_s, t)` under one
+//! HISTORICAL drand round per seed: this is a simulation of fresh coins, not a deployment. Every
+//! coin of a seed is computable from its one public signature; the closed-arm schedules never read
+//! it (they read separate-domain hashes and the past fire decisions), the `peek` arm reads exactly
+//! the current coin, as the ordering falsifier. The `live` path of the binary uses one future round
+//! per request. The mean count is reported against the ideal `1/p`, which is the bound of
+//! `Selvage/AuditFlashProve.lean` with `εbeacon = 0` and its `n·(δchk + δbind)` correction (not
+//! estimated here: no false claim is ever accepted in these runs, which is a count, not a bound
+//! on `δ`); a seed that reaches the horizon is censored and counted as such.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -133,6 +139,7 @@ pub struct SeedResult {
     pub openings_failed: u64,
     /// `kind/verdict` counts over fired audits.
     pub verdicts: std::collections::BTreeMap<String, u64>,
+    pub faults: std::collections::BTreeMap<String, u64>,
 }
 
 fn unit_hash(seed: u64, t: u64, tag: &str) -> f64 {
@@ -189,9 +196,17 @@ fn sha(b: &[u8]) -> String {
 }
 
 /// The record the provider commits to for this round (before the coin).
-fn commit(s: &Stored, kind: Kind, seed: u64, t: u64, seen_round: u64) -> RequestRecord {
+fn commit(
+    s: &Stored,
+    session: &str,
+    kind: Kind,
+    seed: u64,
+    t: u64,
+    seen_round: u64,
+) -> RequestRecord {
     let (req, y) = payload(s, kind, seed, t);
     RequestRecord {
+        session: session.to_string(),
         position: t,
         nonce: format!("{seed}/{t}"),
         commitment_id: s.id.clone(),
@@ -247,11 +262,15 @@ pub fn run_seed(cfg: &Config, seed: u64, beacon: &DrandRound) -> SeedResult {
         accept_work: true,
     };
     let dir = cfg.work.join(format!("seed-{seed}"));
+    let session = hex::encode(
+        blake3::hash(format!("experiment seed {seed} round {}", beacon.round).as_bytes())
+            .as_bytes(),
+    );
     let mut ledger = Ledger::default();
     let mut burst_left = 0u32;
     for t in 0..cfg.horizon {
         res.rounds = t + 1;
-        let coin = beacon::coin(&beacon.signature, t);
+        let coin = beacon::coin(&session, &beacon.signature, t).expect("verified drand signature");
         let fired = decide::fires(coin, cfg.p_num);
         let corrupt = match cfg.arm {
             // commits AFTER seeing the coin: cheats exactly when the audit will not fire
@@ -269,6 +288,7 @@ pub fn run_seed(cfg: &Config, seed: u64, beacon: &DrandRound) -> SeedResult {
         };
         let rec = commit(
             &cfg.stored,
+            &session,
             kind,
             seed,
             t,
@@ -289,19 +309,24 @@ pub fn run_seed(cfg: &Config, seed: u64, beacon: &DrandRound) -> SeedResult {
             hand_over(&cfg.stored, kind, &dir.join("handed"), seed, t).unwrap_or_else(|e| {
                 panic!("seed {seed} round {t}: cannot write the handed files: {e}")
             });
-        let (files, staged) = runner::stage(&handed, &dir.join("staged"))
-            .unwrap_or_else(|e| panic!("seed {seed} round {t}: cannot stage: {e}"));
+        let (files, staged) = runner::stage(&handed, &dir.join("staged"));
         let open_ok = receipt::opening_ok(&rec, &staged, &root, &opening);
         if !open_ok {
             res.openings_failed += 1;
         }
-        let call = runner::run_cp_verify(
-            &cfg.cp_verify,
-            &files,
-            &cfg.stored.id,
-            cfg.timeout,
-            cfg.mem_bytes,
-        );
+        let call = match files {
+            Some(f) => runner::run_cp_verify(
+                &cfg.cp_verify,
+                &f,
+                &cfg.stored.id,
+                cfg.timeout,
+                cfg.mem_bytes,
+            ),
+            None => runner::CallOutcome::not_made(staged.fault.clone().unwrap_or_default()),
+        };
+        if let Some(f) = &call.fault {
+            *res.faults.entry(f.chars().take(60).collect()).or_default() += 1;
+        }
         res.calls += 1;
         res.call_millis += call.millis;
         let key = call.exit.map_or_else(

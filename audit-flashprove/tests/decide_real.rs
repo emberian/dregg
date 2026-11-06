@@ -155,3 +155,56 @@ fn real_cp_verify_verdicts() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn codex_round2_teeth() {
+    use audit_flashprove::runner::{CallFiles, stage};
+    // the rate endpoints are refused by the Lean rule, not wrapped
+    assert_eq!(decide::p_num_of_ppm(1_000_000), None);
+    assert_eq!(decide::p_num_of_ppm(0), None);
+    assert_eq!(decide::p_num_of_ppm(10_000), Some(184_467_440_737_095_516));
+    // an empty digest never matches, even an empty committed one
+    assert!(!decide::opening_ok(true, true, "", "", "", "", None, None));
+    let d = "a".repeat(64);
+    assert!(decide::opening_ok(true, true, &d, &d, &d, &d, None, None));
+    assert!(!decide::opening_ok(false, true, &d, &d, &d, &d, None, None));
+    assert!(!decide::opening_ok(
+        true,
+        true,
+        &d,
+        &d,
+        &d,
+        &d,
+        Some(&d),
+        None
+    ));
+    assert!(decide::round_ok(5, 7) && !decide::round_ok(5, 6));
+    // staging refuses a FIFO without blocking, and a missing request file
+    let tmp = std::env::temp_dir().join(format!("fpaudit-stage-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(tmp.join("req"), b"r").unwrap();
+    std::fs::write(tmp.join("y"), b"y").unwrap();
+    let fifo = tmp.join("proof.fifo");
+    let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    let f = |req: &str, proof: PathBuf| CallFiles {
+        config: tmp.clone(),
+        ivk: tmp.clone(),
+        req: tmp.join(req),
+        y: tmp.join("y"),
+        proof,
+    };
+    let (files, st) = stage(&f("req", fifo.clone()), &tmp.join("s"));
+    assert!(
+        files.is_none()
+            && st
+                .fault
+                .as_deref()
+                .is_some_and(|m| m.contains("not a regular file"))
+    );
+    let (files, st) = stage(&f("absent", tmp.join("none")), &tmp.join("s"));
+    assert!(files.is_none() && st.fault.is_some());
+    let (files, st) = stage(&f("req", tmp.join("none")), &tmp.join("s"));
+    assert!(files.is_some() && st.fault.is_none() && st.proof_sha256.is_none());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
