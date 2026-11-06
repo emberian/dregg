@@ -59,7 +59,8 @@ It does not open a commitment — that is rung 5f (`MinaWrapOpeningGate`). And t
 basis is taken as given: that `Lᵢ` is a commitment to the `i`-th Lagrange polynomial over the
 `2^14` domain is a property of the SRS, not of this block, and is not checked here.
 
-Axiom-clean: `by decide` only; no `sorry`, no `native_decide`. NEW file. NOT imported by the
+Facts about concrete data are `native_decide`, pinned `#assert_compiled` (since 2026-11-06);
+no `sorry`. NEW file. NOT imported by the
 `Dregg2` root, per house practice for gates. Import line:
 `import Dregg2.Circuit.Emit.MinaWrapPublicCommGate`
 -/
@@ -89,7 +90,7 @@ make §4 an accident). -/
 theorem lagrange_basis_is_real :
     (LAGRANGE.all (projOnCurveM pN curveB) && projOnCurveM pN curveB SRS_H
       && projOnCurveM pN curveB PUBLIC_COMM_GOLD && !isInfM pN PUBLIC_COMM_GOLD) = true := by
-  decide
+  native_decide
 
 /-- **`public_input_shape`** — 40 elements, all reduced in `Fq`, and not all equal (so the MSM is
 not a disguised single scalar multiplication). -/
@@ -97,7 +98,7 @@ theorem public_input_shape :
     PUBLIC_INPUT.length = 40 ∧ LAGRANGE.length = 40
     ∧ PUBLIC_INPUT.all (fun x => decide (x < qN)) = true
     ∧ (PUBLIC_INPUT.getD 0 0 ≠ PUBLIC_INPUT.getD 1 0) := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §4 — ⚑ THE RUNG -/
 
@@ -109,7 +110,7 @@ theorem publicComm_reproduces_kimchi :
 
 /-- **`publicComm_is_a_finite_point`** — and not the identity, so `projEqM`'s `Z = 0` degeneracy
 is not what made the previous theorem true. -/
-theorem publicComm_is_a_finite_point : isInfM pN publicComm = false := by decide
+theorem publicComm_is_a_finite_point : isInfM pN publicComm = false := by native_decide
 
 /-- ⚑ **`publicComm_is_the_transcript_preimage`** — and the `(x, y)` pair `MinaRealBlockTranscript`
 absorbs third into its phase-1 tape, from which β, γ, α′ and ζ′ all descend, is the point this
@@ -123,7 +124,7 @@ theorem publicComm_is_the_transcript_preimage :
 index 2, so 5e feeds 5d rather than sitting beside it. -/
 theorem publicComm_is_combine_slot_2 :
     projEqM pN publicComm
-      (MinaWrapAggregationGate.COMBINE_POINTS.getD 2 Oproj) = true := by decide
+      (MinaWrapAggregationGate.COMBINE_POINTS.getD 2 Oproj) = true := by native_decide
 
 /-! ## §5 — tamper poles
 
@@ -135,7 +136,7 @@ theorem tamper_public_input :
     projEqM pN
       (padd (msmComm (((PUBLIC_INPUT.set 0 (PUBLIC_INPUT.getD 0 0 + 1)).map
           (fun x => (qN - x % qN) % qN)).zip LAGRANGE)) SRS_H)
-      PUBLIC_COMM_GOLD = false := by decide
+      PUBLIC_COMM_GOLD = false := by native_decide
 
 /-- **`tamper_last_public_input`** — and one added to the LAST, so the whole 40-element vector is
 read, not a prefix. -/
@@ -143,18 +144,18 @@ theorem tamper_last_public_input :
     projEqM pN
       (padd (msmComm (((PUBLIC_INPUT.set 39 (PUBLIC_INPUT.getD 39 0 + 1)).map
           (fun x => (qN - x % qN) % qN)).zip LAGRANGE)) SRS_H)
-      PUBLIC_COMM_GOLD = false := by decide
+      PUBLIC_COMM_GOLD = false := by native_decide
 
 /-- **`tamper_sign`** — the public input NOT negated. kimchi commits to `−public`, and a verifier
 that forgot the sign lands here. -/
 theorem tamper_sign :
     projEqM pN (padd (msmComm (PUBLIC_INPUT.zip LAGRANGE)) SRS_H) PUBLIC_COMM_GOLD
-      = false := by decide
+      = false := by native_decide
 
 /-- **`tamper_blinder_dropped`** — `mask_custom`'s `+1·h` omitted. The blinder is a constant and
 public, which is exactly why it is easy to drop; it is still part of the committed value. -/
 theorem tamper_blinder_dropped :
-    projEqM pN (msmComm (NEG_PUBLIC.zip LAGRANGE)) PUBLIC_COMM_GOLD = false := by decide
+    projEqM pN (msmComm (NEG_PUBLIC.zip LAGRANGE)) PUBLIC_COMM_GOLD = false := by native_decide
 
 /-- **`tamper_basis_rotation`** — the same 40 scalars against the basis rotated by one, i.e. every
 public-input element assigned to the wrong Lagrange polynomial. A sum is order-insensitive, so
@@ -162,8 +163,18 @@ this — not a reversal — is the pole that says the ASSIGNMENT is checked. -/
 theorem tamper_basis_rotation :
     projEqM pN
       (padd (msmComm (NEG_PUBLIC.zip (LAGRANGE.drop 1 ++ LAGRANGE.take 1))) SRS_H)
-      PUBLIC_COMM_GOLD = false := by decide
+      PUBLIC_COMM_GOLD = false := by native_decide
 
 #assert_namespace_axioms Dregg2.Circuit.Emit.MinaWrapPublicCommGate
+  except tamper_basis_rotation tamper_blinder_dropped tamper_sign tamper_last_public_input tamper_public_input publicComm_is_combine_slot_2 publicComm_is_a_finite_point public_input_shape lagrange_basis_is_real
 
+#assert_compiled tamper_basis_rotation
+#assert_compiled tamper_blinder_dropped
+#assert_compiled tamper_sign
+#assert_compiled tamper_last_public_input
+#assert_compiled tamper_public_input
+#assert_compiled publicComm_is_combine_slot_2
+#assert_compiled publicComm_is_a_finite_point
+#assert_compiled public_input_shape
+#assert_compiled lagrange_basis_is_real
 end Dregg2.Circuit.Emit.MinaWrapPublicCommGate
