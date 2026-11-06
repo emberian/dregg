@@ -209,3 +209,152 @@ on ember's Mac in `demo/absence-receipt/keys/`), then write item 5 against that 
 ### Uncommitted in the tree under lane C's directories (not lane C's; listed, not committed)
 
 - `demo/absence-receipt/tests/differential.rs` (modified), `demo/absence-receipt/policyc/` (untracked).
+
+## Lane A (Datalog, demo b)
+
+Written by lane A (Opus) at handover, 2026-11-06. Everything below is on origin/main unless
+marked LOCAL.
+
+**Files lane A owns**
+- `metatheory/Dregg2/Datalog/StratifiedCert.lean`, `metatheory/Dregg2/Datalog/Aggregates.lean`,
+  `metatheory/Dregg2/Datalog/JoinClosure.lean`, `metatheory/Dregg2/Datalog/SafeCoincidence.lean`,
+  `metatheory/Dregg2/Datalog/README.md`. In `FixpointCert.lean`, lane A changed only the two
+  header lines about safe coincidence.
+- `metatheory/DatalogCheck.lean` (the `datalog-check` `[[lean_exe]]` block in
+  `metatheory/lakefile.toml`).
+- `demo/datalog-governance/` (all of it), plus note `docs/automata/13-datalog.md` §8 rows.
+- One import line each in `metatheory/Dregg2.lean` for the four Datalog modules.
+
+**Landed (SHAs on main)**
+| SHA | what |
+|---|---|
+| `6c866b129` | StratifiedCert: stratified negation, per-stratum closure, `verifyS_sound`, `countS_unique_or_collides`, `verifyS_strata_exact`, `verifyS_supported_model`, falsifiers |
+| `de25f90e9` | Aggregates: `seq_acc_is_fold`, `verifyBudget_sound`, tampered-row falsifier, `BudgetProof` restatement |
+| `9e529d6d9` | JoinClosure (`verifyJ_verifyS`), `DatalogCheck.lean` + `lake exe datalog-check`, demo (b) on the real session (count 0, signed receipt) |
+| `193549878` | SafeCoincidence: active domain = unrestricted semantics for safe programs; `verifyJ_sound_unrestricted` |
+| `64e2caf1b` | codex round 4: named separation theorems, `verifyS_receipt`/`verifyJ_receipt`, dense-numbering statement, demo README wording |
+| `135236dd9` (LOCAL at handover: push blocked by other lanes' dead doc refs, `docs/automata/HANDOFF.md:93` and `MinaBodyPreimageBitsAir.lean:437`; push it once those are fixed) | demo: synthetic forest (`synth_transcript.py`) is the default input; `data/synthetic/{violating,fixed}/` (count 2 / count 0, signed receipts); `run.sh --real` keeps the real path |
+
+Keystones: StratifiedCert 40, Aggregates 21, JoinClosure 20, SafeCoincidence 19 (FixpointCert 28).
+All are `#assert_all_clean`, with no `sorry` and no `native_decide`.
+
+**Half-built:** nothing in breadstuffs. The synthetic-transcript quest is complete and committed in
+`135236dd9` (see the push note above). The synthetic data and receipts are committed; `--real` was tested into a temporary
+directory and its certificate is byte-identical to the committed one.
+
+**Unpushed microsite commits (LOCAL, `/Users/ember/src/dregg-microsites`, branch main, ahead of
+origin by 3):** `f6f7fe1` (the governance-receipt page), `65dcc31` (codex round 4 wording),
+`d1699f6` (the page re-pointed at the SYNTHETIC run: its numbers, its receipt, and a sentence that
+the real-session run exists under ember's decision). They are unsigned because 1Password refused.
+**Rule: they stay unpushed until ember rules on `demo/datalog-governance/data/transcript.json`.**
+After `d1699f6` the page carries no session-derived data, so it could publish once ember agrees.
+Publishing is ember's step.
+
+**Pending ember decision:** whether the real-session artifacts stay in breadstuffs. Those are
+`demo/datalog-governance/data/transcript.json`, `edb.json`, `certificate.json`, `check.out`,
+`receipt.txt`, `receipt.txt.sig`: a projection of session `e3ba49ed` with file paths, agent ids
+and timestamps, and no message text. If they go, `git rm` those six files. The synthetic default
+does not depend on them.
+
+**Next steps (commands)**
+```
+cd /Users/ember/dev/breadstuffs/metatheory
+lake build Dregg2.Datalog.FixpointCert            # olean for the imports
+for f in StratifiedCert Aggregates JoinClosure SafeCoincidence; do lake env lean Dregg2/Datalog/$f.lean; done
+lake build datalog-check                          # 2 min 53 s cold
+cd ../demo/datalog-governance && ./run.sh         # synthetic default; ./run.sh --real for the session
+```
+Open items, in the order lane A would take them:
+1. FixpointCert's `verifyNoClosure` vs `verify` pair is still `#guard`-only. Make it a named
+   theorem `verifyNoClosure … = true ∧ verify … = false` in an APPENDED block. This was codex
+   round 4 item 8, and FixpointCert is append-only.
+2. Prove injectivity of `DatalogCheck.enc` (the byte codec): `decodeEnc (enc l) = some l` as a
+   theorem. Today it is only round-trip `#guard`s; both the root and the program-digest residuals
+   cite it.
+3. Prove independence of the count from the chosen stratification, so `countS_unique_or_collides`
+   no longer needs equal `strata`.
+4. `safeB` needs dense variable numbering: normalize variable ids, or prove a renaming lemma.
+   Today the gap only causes refusals.
+5. A Tower256 / L3 shape for the per-stratum closure (note 13 §3) is not started.
+
+**Codex-round defects lane A still holds:** item 1 above (round 4, item 8, FixpointCert part).
+Everything else lane A was assigned in rounds 3 and 4 (findings 2, 5, 17, 18 of round 3; items 8,
+10, 11, 13, 15, 17 of round 4) is landed in the SHAs above.
+
+**Processes, PID files, clones:** none. Lane A started no detached jobs and made no clones. The
+signing key for the demo receipts is in the gitignored `keys/` directory of the demo (local to this
+Mac); `allowed_signers` is committed.
+
+## Lane F (dfa compiler, demo a table source)
+
+2026-11-06. Tags: [MEASURED] a run on the Mac today; [READ] seen in the file.
+
+### Files owned
+
+`dfa/src/derivative.rs` (the ACI canonical form; invariant on `enum Re`), `dfa/src/compiler.rs`
+(`Dfa::minimize` only), `demo/absence-receipt/src/lib.rs`, `demo/absence-receipt/tests/differential.rs`,
+`demo/absence-receipt/policyc/`, the compiler and claim parts of `demo/absence-receipt/README.md`, and the
+corresponding parts of the microsite page `absence-receipt/index.html` in the dregg-microsites repository.
+
+### Landed
+
+- `dd0f0a74a`: `Re::or`/`Re::and` flatten to sorted, deduplicated, right-nested chains; `then`
+  right-associates; `∅`/`any*` units and absorbers; `~∅ = any*`, `~any* = ∅`; `Re::canonical`;
+  `Dfa::minimize` (Moore, canonical numbering: dead 0, start 1, BFS by byte). `~(any*·AKIA·any*)`
+  5 states; with `~(any*·-----BEGIN·any*)` 14 [MEASURED].
+- `922eb8407`: demo (a) uses one compiler (`Re::compile` + `minimize`); the former interim compiler
+  is frozen in `demo/absence-receipt/tests/differential.rs` as the differential partner. Crate 4,577
+  states, interim 9,153, both 129 after minimization, byte-identical tables. `run.sh` re-run
+  reproduced every artifact byte for byte; compile leg 42.4 s to 2.7 s.
+- `db844d64e`: README claim corrections (codex round 4 items 6, 12, 13). Microsites `820fdb7`,
+  published as `3b59013`.
+- `145c0b9f7`: policyc as the third partner, per pattern (below).
+
+### The policyc table swap: NOT done
+
+Table source today: the crate (`absence-receipt compile`). Receipt unchanged:
+`table_blake3` 7434e218c9b055c6e1ea2c8de1a6bc667e02f4a633c9269d7eec2fa6c78468a4,
+`policy_blake3` 984aba5ff04830d0f99b43a769954144a0734fdf77dc6f0011ac390726dab69c,
+`corpus_mmr_root` 17d69bbfa284b201d354dc3c9ae35a291d79d291c0bcfb78364e62fefcf2d6b7, `count` 0;
+`./run.sh verify` green.
+
+`policyc compile --absence` [MEASURED, native, Mac]: AWS `"AKIA" [0-9A-Z]{16}` 21 states in
+42.2 s (64 MB); PEM `"-----BEGIN " [A-Z ]* "PRIVATE KEY-----"` 28 states in 37.0 s. Both are checked
+in under `demo/absence-receipt/policyc/` and minimize byte for byte to the crate's tables; their
+product minimizes to the receipt's 129-state table (`policyc_tables_minimize_to_the_crate_tables`).
+The union of both in ONE pattern had not finished after 12 minutes at handoff (started 11:33, under
+`timeout 3600`, so it ends by 12:33 PST on its own; PID file `laneF/both.pid` in lane F's scratchpad;
+stop it only by that PID).
+
+Next steps:
+
+1. Compile the union and time it:
+   ```
+   cd metatheory && lake build policyc
+   printf '%s\n' 'pattern secrets = "AKIA" [0-9A-Z]{16} | "-----BEGIN " [A-Z ]* "PRIVATE KEY-----";' \
+     'policy p { forbid pattern secrets in body; }' > "$SCRATCH"/secrets.policy
+   time ./.lake/build/bin/policyc compile "$SCRATCH"/secrets.policy --pattern secrets --absence > "$SCRATCH"/secrets.json
+   ```
+2. If it finishes: add it as `demo/absence-receipt/policyc/secrets-absence.json` (+ the `.policy`),
+   assert in `tests/differential.rs` that its `minimize()` equals `absence_table(POLICY)` byte for byte,
+   then make it the table source: `run.sh`'s `compile` leg runs policyc instead of `absence-receipt
+   compile`, the receipt's `policy_blake3` names the lane-B-syntax policy file (keep `policy.txt` beside it
+   for the crate path), re-run `INDEX=<clone at the pin> demo/absence-receipt/run.sh`, which re-signs
+   with `demo/absence-receipt/keys/` (gitignored, on the Mac). policyc's numbering differs (its start
+   state is not 1), so `record-1598.descriptor.json` changes and `START` in
+   `circuit/tests/absence_receipt_record.rs` must become the new start; re-run only
+   `cargo test -p dregg-circuit --release --test absence_receipt_record -- --nocapture`.
+3. If it does not finish: either a receipt over two tables (one `dfa-run` per pattern; a receipt
+   format change, ember's call), or keep the crate table with policyc as per-pattern partner (today).
+
+### Behaviour change for other crates
+
+`Re::compile` now numbers states differently for patterns that take the derivative path
+(`Pattern::not`, `Pattern::all` containing a `not`, `FilterTree`): same languages, fewer states,
+different numbering, so any route-table commitment pinned over such a pattern changes [INFERRED; all
+55 `dregg-dfa` lib tests pass; the only outside user found, `zkoracle-prove/src/injection.rs`, uses
+`matches` only].
+
+### Uncommitted
+
+Nothing of lane F's in the tree.
