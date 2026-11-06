@@ -150,6 +150,15 @@ About 9 GB in all: 7.5 GB of packages, 0.3 GB of Dregg2 build output, 0.9 GB of 
 <!-- ===== Emit and stamp (C2) — appended by lane C2, 2026-11-06; edit only this section ===== -->
 ## Emit and stamp (C2)
 
+**Current host and ownership (2026-11-06, Codex deputy).** New builds run on bb2 in the
+builder's own clone, under `swarm-build`; `/tank` on hbox receives no new data. The predecessor's
+`/home/build/automata/bs` is occupied by the detached stamp chain (`chain.pid` and `chain.log`
+in its parent directory). Read its results; do not start another build there. The successor's
+integration clone is `/home/build/astra-integration`. Keep at least 40 GiB beyond summed
+process RSS, accounting for the unused memory allowance of already running capped jobs before
+starting another. The gate is `metatheory/scripts/automata-check.sh`; this document is
+`docs/automata/BUILD.md` (there is no `metatheory/BUILD.md`).
+
 `scripts/emit_descriptors.py` has no acknowledgement step (SUBSTRATE-DECISION §9 row 4, as amended
 by codex round 3). It refuses (exit 3) when any file in the emitters' transitive Lean closure or
 the lake configuration is uncommitted, and with `--rev <sha>` it also refuses unless the checkout
@@ -157,39 +166,42 @@ IS that commit. Otherwise it builds the emitter modules, emits, installs, and wr
 `circuit/descriptors/PROVENANCE.json` (tree hash, repo HEAD, toolchain, emitter list,
 `emitter_closure_clean`, per-file sha256) with no environment variable and no operator.
 
-The canonical host is a clean clone at a committed revision with its own `.lake`: hbox's
-`~/lanes/automata/bs`. Do not run the full emit on the Mac. The shared working tree is never
+The canonical emission input is a clean clone at a committed revision with its own `.lake`.
+Do not run the full emit on the Mac. The shared working tree is never
 clean, and on 2026-11-06 about 91 emitter-closure modules were out of date in the Mac's `.lake`.
 
 ```
-ssh hbox
-cd ~/lanes/automata/bs
-git fetch origin && git checkout --detach origin/main
+ssh bb2
+cd /home/build/astra-integration
+# Prepare this dedicated clone at the intended committed revision before launching.
+# Never switch, reset, stash or rebase the shared Mac checkout.
 test -z "$(git status --porcelain)" || { echo "clone not clean"; exit 1; }
 REV=$(git rev-parse HEAD)
 nohup env SWARM_MEM_MAX=12G swarm-build python3 scripts/emit_descriptors.py --rev "$REV" \
-  > ~/lanes/automata/emit-$REV.log 2>&1 &
-echo $! > ~/lanes/automata/emit.pid      # stop it only by this PID
+  > ../astra-integration-emit.log 2>&1 &
+echo $! > ../astra-integration-emit.pid # stop your own job only by this PID
 # when it exits:
-tail -5 ~/lanes/automata/emit-$REV.log   # NO-OP / STAMP-ONLY REGEN / REGEN line
+tail -5 ../astra-integration-emit.log   # NO-OP / STAMP-ONLY REGEN / REGEN line
 git status --porcelain                   # expected: only circuit/descriptors/PROVENANCE.json
 ```
 
 If `git status` lists any other file (a descriptor, a `*_FP` source, a `*_generated.rs`), the
 checked-in artifacts were stale relative to Lean at `$REV`. That is drift: report it with the
-log, and do not commit only the stamp. If only the stamp moved:
+log, and do not commit only the stamp. If only the stamp moved, copy that named artifact back to
+the shared Mac checkout, inspect its diff, verify it against the current committed emitter
+closure, and commit only that file on `main`. No branch or rebase is part of this procedure:
 
 ```
-git switch -c stamp-$REV
-git add circuit/descriptors/PROVENANCE.json
-git commit -m "descriptors: automatic provenance stamp at $REV (emit_descriptors.py --rev)"
-git pull --rebase origin main
 python3 scripts/emit_descriptors.py --verify-provenance --rev HEAD   # must PASS before push
-git push origin HEAD:main
+git add circuit/descriptors/PROVENANCE.json
+git -c commit.gpgsign=false commit -F /path/to/prepared-message -- circuit/descriptors/PROVENANCE.json
+git push origin main
 ```
 
-The verify after the rebase is required: the stamp stays valid on main only if no stamped artifact
-changed between `$REV` and main.
+The verification is required: a stamp from the predecessor's older revision does not certify
+subsequent emitter changes. Sequence the final emission after the Mina rescue and automata
+shape changes have landed. If emission changes descriptors as well, review and land that full
+generated delta with its source; a stamp-only commit would hide drift.
 <!-- ===== end Emit and stamp (C2) ===== -->
 
 ### hbox memory for the emitter closure (deputy, 2026-11-06, [MEASURED])
