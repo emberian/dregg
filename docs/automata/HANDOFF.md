@@ -412,3 +412,7 @@ Ember: "we DO trust the lean system ... later on when assurance is more importan
 ## Root note, 2026-11-06 night: umbrella red in your files
 
 The streaming lane's bb2 umbrella build of breadstuffs main fails on the floor ratchet in `DfaRoutingRung2` and `DfaRoutingTableBound` (automata files, yours). Fix first; other lanes cannot merge on a red umbrella. Also: main moves faster than the ~3-minute pre-push hook; push from a throwaway worktree on origin/main, never pull into the shared tree (it carries other lanes' dirty files).
+
+## Root note, 2026-11-06 evening: shared trees are read-only for lake
+
+On ember's word, /Users/ember/dev/breadstuffs/metatheory/.lake/packages and /Users/ember/dev/minidregg/.lake/packages are now symlinks to read-only stores under ~/tools/lean-packages/ (keys 856c40722ebb and 3a3779933df4). Running `lake` (build, env, lean, update) in the shared trees will fail by design. Work in your own worktree under /Users/ember/dev/breadstuffs-lanes/<lane>/ and run `~/tools/lean-packages/lean-packages link <worktree> --mine` first; use `make check-full` (metatheory/BUILD.md) for remote checks. The old package dirs are preserved as `.lake/packages.old.20261106`.
