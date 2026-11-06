@@ -169,7 +169,10 @@ impl RouteTable {
     }
 }
 
-fn compute_commitment(
+/// The route-table commitment: what a federation constitution binds and what
+/// [`crate::air::verify_acceptance`] RECOMPUTES from the proof's own table so a
+/// trace can never carry a root it did not earn (2026-11-06).
+pub(crate) fn compute_commitment(
     transitions: &[StateId],
     accept_map: &BTreeMap<StateId, RouteTarget>,
     prefix_lens: &BTreeMap<StateId, usize>,
@@ -310,6 +313,11 @@ impl RouteTableBuilder {
         let (combined_dfa, accept_map, prefix_lens) = compose_tagged_union(&self.items);
         let mut table = RouteTable::from_dfa(combined_dfa, accept_map);
         table.prefix_lens = prefix_lens;
+        // ⚑ 2026-11-06: `from_dfa` hashed an EMPTY prefix map, so the stored
+        // commitment did not cover `prefix_lens` although its docstring said so;
+        // `air::verify_acceptance` now recomputes the root from the proof's own
+        // table and would have refused every honest prefix-route trace.
+        table.recompute_commitment();
         table
     }
 }
