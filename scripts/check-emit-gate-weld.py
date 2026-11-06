@@ -276,27 +276,31 @@ def drift_detail(rust_payload: str, pin_payload: str) -> str:
 
 
 def src_tree_files() -> list[Path]:
-    """Every `.rs` under a `src/` tree in the repo — the load-bearing half of the scan.
+    """Every TRACKED `.rs` under a `src/` tree in the repo — the load-bearing half of the scan.
 
     Same skip list as the law-#1 ratchet's walker, and the same reason: `target/`, the vendored
     forks and the `docs/` byte-copies hold no first-party compiled Rust, and `metatheory/` is the
-    authoring language rather than a consumer of its own bytes."""
-    out: list[Path] = []
-    stack = [ROOT]
-    while stack:
-        d = stack.pop()
-        try:
-            entries = list(d.iterdir())
-        except OSError:
+    authoring language rather than a consumer of its own bytes.
+
+    ⚑ TRACKED ONLY (2026-11-06). This was a filesystem walk, so a gitignored side checkout in the
+    working tree (`headver/`, a second copy of the repo) doubled the unpinned src/ population to
+    132 and held this gate red at "66 NEW unpinned golden(s)" for files no commit contains. The
+    question is about committed production Rust, so the population is `git ls-files`."""
+    import subprocess
+    out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z", "--", "*.rs"],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        sys.exit("check-emit-gate-weld: `git ls-files` failed; the tracked population is the "
+                 "question, so there is no honest fallback to a filesystem walk.")
+    files: list[Path] = []
+    for rel in out.stdout.split("\0"):
+        if not rel or "/src/" not in "/" + rel:
             continue
-        for p in entries:
-            if p.is_dir():
-                if p.name in SRC_SKIP_DIRS or p.name.startswith("."):
-                    continue
-                stack.append(p)
-            elif p.suffix == ".rs" and "/src/" in p.as_posix():
-                out.append(p)
-    return sorted(out)
+        parts = rel.split("/")
+        if any(seg in SRC_SKIP_DIRS or seg.startswith(".") for seg in parts[:-1]):
+            continue
+        files.append(ROOT / rel)
+    return sorted(files)
 
 
 def check_fragment_pins(
