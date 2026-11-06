@@ -52,7 +52,30 @@ THE REMAINING FIX, named precisely: move `MapOp.holdsAt`/`MapOp.rowAt` off `(m.r
 `opensToMerkle8`/`writesToMerkle8` so the denotation forces all eight lanes. That edit touches
 `DescriptorIR2` and therefore every MapOp consumer in the tree — a genuine red-umbrella change.
 
-⚑ DO NOT DUPLICATE IT: that work is ALREADY IN FLIGHT in this tree by another terminal —
+⚑ 2026-11-05 — THE DENOTATION HALF NOW EXISTS, WITHOUT THE SHARED EDIT: `AttestedAutomatonLanes8`
+defines `MapOp.holdsAt8` (the `.mapOp` arm opening the FULL 8-felt group against the deployed `node8`
+tree), the 19-felt `MapOp.rowAt8`/`mapLog8`, and `Satisfied2Lanes8` (= `Satisfied2Public` with those
+two legs swapped). Under it: `weldWit8_satisfies_constructed` (a witness, no hypothesis),
+`lanes8_row_opens_public` (every accepted row opens its edge at the PUBLIC 8-felt root),
+`weld8_forged_edge_refused` (THE BINDING THEOREM FOR THE FULL DIGEST: a forged step forces the named
+`MapRootColl` between the row's heap and the committing heap), and the falsifier
+`weld_completion_lanes_not_free` — the exact flip of `weld_completion_lanes_free` below, which still
+holds under the SCALAR denotation. The pair is the exhibited separation. The shared
+`DescriptorIR2.MapOp.holdsAt` is unchanged (43 consumer files); moving it remains the named follow-up,
+after which `Satisfied2Lanes8` is definitionally `Satisfied2Public`. The routing half: the `EmitByName`
+row and the by-name artifact `circuit/descriptors/by-name/attested-automaton-map-committed-weld8-v1.json`
+(generator output, 2611 bytes) land with this file. ⚠ ROUTED IS NOT SERVED: the v2 assembly's
+`check_descriptor2_wellformed` (`circuit/src/descriptor_ir2.rs:2315`) REFUSES any descriptor with a
+non-empty `ranges` carrier ("requires a GRADUATED descriptor"), and `weldDesc` — like the unwelded
+`attestedDesc` — declares `ranges := [⟨CURRENT, 15⟩, ⟨SYMBOL, 1⟩]`. A `descriptor_by_name.rs` arm was
+written and REVERTED because its dispatch test and the pre-existing `every_static_golden_decodes_and_dispatches`
+go red on that refusal (diff kept at the lane's scratch). The graduation is a Lean authoring change,
+not a routing one: replace the two range teeth by range-table lookups (`rangeTableDef BAL_LIMB_BITS`
+is 30-bit, so `CURRENT < 2^15` needs a limb split or a dedicated 15-bit table) and re-emit; the
+`#guard` cost pins below move with it. Until then no shipped prover or verifier serves the attested
+family at all, welded or not.
+
+⚑ (historical) DO NOT DUPLICATE IT: that work was reported IN FLIGHT in this tree by another terminal —
 `Dregg2/Circuit/MapKindImtGates.lean` ("STAGE 2 PROPER OF THE DENOTATION MOVE") is building
 `MapOp.holdsAtS` with `writesToMerkleS`/`opensToMerkleS` arms, having already done the `.absent` arm
 in `MapAbsentImtGate`. When that lands, THIS file's binding becomes a deployed property for free:
@@ -580,6 +603,121 @@ def weldWit (d : TableDfa Nat Nat) (R8 : Digest8) (q : Nat) (w : List Nat) : VmT
   , pub  := weldPub q (classifyFrom d q w) R8
   , tf   := attTf (rowsW d R8 q w) }
 
+/-- **Every NON-map constraint of the welded descriptor holds on every row of the welded witness, for
+ANY `hash` and ANY table family** — none of continuity, the two state pins, the eight constancy windows
+or the eight lane pins reads either. Factored out of `weldWit_satisfies` (2026-11-05) so the
+LANE-COMPLETE denotation in `AttestedAutomatonLanes8` reuses it verbatim instead of re-proving it. -/
+theorem weldWit_rowConstraints_nonmap (hash : List ℤ → ℤ) (tf : TraceFamily)
+    (d : TableDfa Nat Nat) (R8 : Digest8) (q : Nat) (w : List Nat) (hw : w ≠ []) (name : String)
+    (i : Nat) (hi : i < (weldWit d R8 q w).rows.length)
+    (c : VmConstraint2) (hc : c ∈ (weldDesc name).constraints) (hne : c ≠ weldTransitionOpen) :
+    c.holdsAt hash tf (envAt (weldWit d R8 q w) i) (i == 0)
+      (i + 1 == (weldWit d R8 q w).rows.length) := by
+  have hi' : i < (rowsW d R8 q w).length := hi
+  have hloc : (envAt (weldWit d R8 q w) i).loc = (rowsW d R8 q w)[i]'hi' :=
+    envAt_loc (t := weldWit d R8 q w) hi
+  simp only [weldDesc, List.mem_cons] at hc
+  rcases hc with rfl | rfl | rfl | rfl | hc
+  · exact absurd rfl hne
+  · -- continuity
+    show WindowConstraint.holdsAt (envAt (weldWit d R8 q w) i)
+      (i + 1 == (weldWit d R8 q w).rows.length) ⟨contWindowBody, true⟩
+    simp only [WindowConstraint.holdsAt, if_true]
+    intro hnl
+    have hlt : i + 1 < (rowsW d R8 q w).length := by
+      have hne' : ¬ (i + 1 = (rowsW d R8 q w).length) := by
+        intro hEq
+        rw [show (weldWit d R8 q w).rows = rowsW d R8 q w from rfl, hEq] at hnl
+        simp at hnl
+      omega
+    have hnxt : (envAt (weldWit d R8 q w) i).nxt = (rowsW d R8 q w)[i + 1]'hlt :=
+      envAt_nxt (t := weldWit d R8 q w) hlt
+    have hch : ((rowsW d R8 q w)[i + 1]'hlt) CURRENT = ((rowsW d R8 q w)[i]'hi') NEXT :=
+      rowsW_chain d R8 w q i hlt
+    show (WindowExpr.add (.nxt CURRENT) (.mul (.const (-1)) (.loc NEXT))).eval
+      (envAt (weldWit d R8 q w) i) ≡ 0 [ZMOD 2013265921]
+    simp only [WindowExpr.eval]
+    rw [hloc, hnxt, hch]
+    have hz : ((rowsW d R8 q w)[i]'hi') NEXT + (-1) * ((rowsW d R8 q w)[i]'hi') NEXT = 0 := by
+      ring
+    rw [hz]
+  · -- B1
+    show (i == 0) = true → (envAt (weldWit d R8 q w) i).loc CURRENT
+      ≡ (envAt (weldWit d R8 q w) i).pub PI_INITIAL [ZMOD 2013265921]
+    intro hf
+    have hi0 : i = 0 := by simpa using hf
+    subst hi0
+    rw [hloc, rowsW_head_current d R8 q w hw hi']
+    exact Int.ModEq.refl _
+  · -- B2
+    show (i + 1 == (weldWit d R8 q w).rows.length) = true →
+      (envAt (weldWit d R8 q w) i).loc NEXT
+        ≡ (envAt (weldWit d R8 q w) i).pub PI_FINAL [ZMOD 2013265921]
+    intro hl
+    have hlast : i + 1 = (rowsW d R8 q w).length := by simpa using hl
+    rw [hloc, rowsW_last_next d R8 w q i hi' hlast]
+    exact Int.ModEq.refl _
+  · -- the EIGHT lane constraints: constancy and the public pin, per lane
+    obtain ⟨l, hl | hl⟩ := weldLane_classify hc
+    · subst hl
+      show WindowConstraint.holdsAt (envAt (weldWit d R8 q w) i)
+        (i + 1 == (weldWit d R8 q w).rows.length) ⟨weldRootBody l, true⟩
+      simp only [WindowConstraint.holdsAt, if_true]
+      intro hnl
+      have hlt : i + 1 < (rowsW d R8 q w).length := by
+        have hne' : ¬ (i + 1 = (rowsW d R8 q w).length) := by
+          intro hEq
+          rw [show (weldWit d R8 q w).rows = rowsW d R8 q w from rfl, hEq] at hnl
+          simp at hnl
+        omega
+      have hnxt : (envAt (weldWit d R8 q w) i).nxt = (rowsW d R8 q w)[i + 1]'hlt :=
+        envAt_nxt (t := weldWit d R8 q w) hlt
+      show (WindowExpr.add (.nxt (W8ROOT l)) (.mul (.const (-1)) (.loc (W8ROOT l)))).eval
+        (envAt (weldWit d R8 q w) i) ≡ 0 [ZMOD 2013265921]
+      simp only [WindowExpr.eval]
+      rw [hloc, hnxt, rowsW_root d R8 l w q (i + 1) hlt, rowsW_root d R8 l w q i hi']
+      have hz : R8 l + (-1) * R8 l = 0 := by ring
+      rw [hz]
+    · subst hl
+      show (i == 0) = true → (envAt (weldWit d R8 q w) i).loc (W8ROOT l)
+        ≡ (envAt (weldWit d R8 q w) i).pub (PI_W8ROOT l) [ZMOD 2013265921]
+      intro hf
+      have hi0 : i = 0 := by simpa using hf
+      subst hi0
+      rw [hloc, rowsW_root d R8 l w q 0 hi']
+      show R8 l ≡ weldPub q (classifyFrom d q w) R8 (PI_W8ROOT l) [ZMOD 2013265921]
+      rw [weldPub_root]
+
+/-- **Both range teeth hold on every row of the welded witness** (`CURRENT < 2^15`, `SYMBOL < 2`).
+Hash-free; factored out for the same reason as `weldWit_rowConstraints_nonmap`. -/
+theorem weldWit_rowRanges (d : TableDfa Nat Nat) (R8 : Digest8)
+    (hstep : ∀ s y, d.step s y < ASTATES) (q : Nat) (hq : q < ASTATES)
+    (w : List Nat) (hsym : ∀ y ∈ w, y < ASYM) (name : String)
+    (i : Nat) (hi : i < (weldWit d R8 q w).rows.length) (r : VmRange)
+    (hr : r ∈ (weldDesc name).ranges) : r.holds (envAt (weldWit d R8 q w) i) := by
+  have hi' : i < (rowsW d R8 q w).length := hi
+  have hloc : (envAt (weldWit d R8 q w) i).loc = (rowsW d R8 q w)[i]'hi' :=
+    envAt_loc (t := weldWit d R8 q w) hi
+  obtain ⟨s, y, hs, hy, hrow⟩ := rowsW_shape d hstep R8 w q hq hsym i hi'
+  simp only [weldDesc, List.mem_cons, List.not_mem_nil, or_false] at hr
+  rcases hr with rfl | rfl
+  · show 0 ≤ (envAt (weldWit d R8 q w) i).loc CURRENT
+      ∧ (envAt (weldWit d R8 q w) i).loc CURRENT < (2 : ℤ) ^ 15
+    rw [hloc, hrow]
+    refine ⟨Int.natCast_nonneg s, ?_⟩
+    show Int.ofNat s < (2 : ℤ) ^ 15
+    have hlt : s < 2 ^ 15 := by simpa [ASTATES] using hs
+    rw [Int.ofNat_eq_natCast]
+    exact_mod_cast hlt
+  · show 0 ≤ (envAt (weldWit d R8 q w) i).loc SYMBOL
+      ∧ (envAt (weldWit d R8 q w) i).loc SYMBOL < (2 : ℤ) ^ 1
+    rw [hloc, hrow]
+    refine ⟨Int.natCast_nonneg y, ?_⟩
+    show Int.ofNat y < (2 : ℤ) ^ 1
+    have hlt : y < 2 ^ 1 := by simpa [ASYM] using hy
+    rw [Int.ofNat_eq_natCast]
+    exact_mod_cast hlt
+
 /-- ⚑ **THE GATE — a real `Satisfied2Public` witness for the WELDED descriptor.** General in the
 automaton, the start state, the word, the descriptor name, and in ALL EIGHT root lanes. The only
 crypto-shaped input is `hscal`, the LANE-0 scalar opening the IR's `MapOp.holdsAt` reads (⚠ §3a) —
@@ -592,13 +730,13 @@ theorem weldWit_satisfies (hash : List ℤ → ℤ) (d : TableDfa Nat Nat) (R8 :
       (fun _ => 0) (fun _ => (0, 0)) [] (weldWit d R8 q w) where
   rowConstraints := by
     intro i hi c hc
-    have hi' : i < (rowsW d R8 q w).length := hi
-    have hloc : (envAt (weldWit d R8 q w) i).loc = (rowsW d R8 q w)[i]'hi' :=
-      envAt_loc (t := weldWit d R8 q w) hi
-    obtain ⟨s, y, hs, hy, hrow⟩ := rowsW_shape d hstep R8 w q hq hsym i hi'
-    simp only [weldDesc, List.mem_cons] at hc
-    rcases hc with rfl | rfl | rfl | rfl | hc
-    · -- the ATTESTATION tooth, at lane 0 (the leg the IR denotes)
+    by_cases hne : c = weldTransitionOpen
+    · subst hne
+      have hi' : i < (rowsW d R8 q w).length := hi
+      have hloc : (envAt (weldWit d R8 q w) i).loc = (rowsW d R8 q w)[i]'hi' :=
+        envAt_loc (t := weldWit d R8 q w) hi
+      obtain ⟨s, y, hs, hy, hrow⟩ := rowsW_shape d hstep R8 w q hq hsym i hi'
+      -- the ATTESTATION tooth, at lane 0 (the leg the shared IR denotes; ⚠ §3a)
       show ((1 : ℤ) = 1 → _)
       intro _
       rw [hloc, hrow]
@@ -613,99 +751,9 @@ theorem weldWit_satisfies (hash : List ℤ → ℤ) (d : TableDfa Nat Nat) (R8 :
         rw [hkey]
         exact hscal s y hs hy
       · rfl
-    · -- continuity
-      show WindowConstraint.holdsAt (envAt (weldWit d R8 q w) i)
-        (i + 1 == (weldWit d R8 q w).rows.length) ⟨contWindowBody, true⟩
-      simp only [WindowConstraint.holdsAt, if_true]
-      intro hnl
-      have hlt : i + 1 < (rowsW d R8 q w).length := by
-        have hne' : ¬ (i + 1 = (rowsW d R8 q w).length) := by
-          intro hEq
-          rw [show (weldWit d R8 q w).rows = rowsW d R8 q w from rfl, hEq] at hnl
-          simp at hnl
-        omega
-      have hnxt : (envAt (weldWit d R8 q w) i).nxt = (rowsW d R8 q w)[i + 1]'hlt :=
-        envAt_nxt (t := weldWit d R8 q w) hlt
-      have hch : ((rowsW d R8 q w)[i + 1]'hlt) CURRENT = ((rowsW d R8 q w)[i]'hi') NEXT :=
-        rowsW_chain d R8 w q i hlt
-      show (WindowExpr.add (.nxt CURRENT) (.mul (.const (-1)) (.loc NEXT))).eval
-        (envAt (weldWit d R8 q w) i) ≡ 0 [ZMOD 2013265921]
-      simp only [WindowExpr.eval]
-      rw [hloc, hnxt, hch]
-      have hz : ((rowsW d R8 q w)[i]'hi') NEXT + (-1) * ((rowsW d R8 q w)[i]'hi') NEXT = 0 := by
-        ring
-      rw [hz]
-    · -- B1
-      show (i == 0) = true → (envAt (weldWit d R8 q w) i).loc CURRENT
-        ≡ (envAt (weldWit d R8 q w) i).pub PI_INITIAL [ZMOD 2013265921]
-      intro hf
-      have hi0 : i = 0 := by simpa using hf
-      subst hi0
-      rw [hloc, rowsW_head_current d R8 q w hw hi']
-      exact Int.ModEq.refl _
-    · -- B2
-      show (i + 1 == (weldWit d R8 q w).rows.length) = true →
-        (envAt (weldWit d R8 q w) i).loc NEXT
-          ≡ (envAt (weldWit d R8 q w) i).pub PI_FINAL [ZMOD 2013265921]
-      intro hl
-      have hlast : i + 1 = (rowsW d R8 q w).length := by simpa using hl
-      rw [hloc, rowsW_last_next d R8 w q i hi' hlast]
-      exact Int.ModEq.refl _
-    · -- the EIGHT lane constraints: constancy and the public pin, per lane
-      obtain ⟨l, hl | hl⟩ := weldLane_classify hc
-      · subst hl
-        show WindowConstraint.holdsAt (envAt (weldWit d R8 q w) i)
-          (i + 1 == (weldWit d R8 q w).rows.length) ⟨weldRootBody l, true⟩
-        simp only [WindowConstraint.holdsAt, if_true]
-        intro hnl
-        have hlt : i + 1 < (rowsW d R8 q w).length := by
-          have hne' : ¬ (i + 1 = (rowsW d R8 q w).length) := by
-            intro hEq
-            rw [show (weldWit d R8 q w).rows = rowsW d R8 q w from rfl, hEq] at hnl
-            simp at hnl
-          omega
-        have hnxt : (envAt (weldWit d R8 q w) i).nxt = (rowsW d R8 q w)[i + 1]'hlt :=
-          envAt_nxt (t := weldWit d R8 q w) hlt
-        show (WindowExpr.add (.nxt (W8ROOT l)) (.mul (.const (-1)) (.loc (W8ROOT l)))).eval
-          (envAt (weldWit d R8 q w) i) ≡ 0 [ZMOD 2013265921]
-        simp only [WindowExpr.eval]
-        rw [hloc, hnxt, rowsW_root d R8 l w q (i + 1) hlt, rowsW_root d R8 l w q i hi']
-        have hz : R8 l + (-1) * R8 l = 0 := by ring
-        rw [hz]
-      · subst hl
-        show (i == 0) = true → (envAt (weldWit d R8 q w) i).loc (W8ROOT l)
-          ≡ (envAt (weldWit d R8 q w) i).pub (PI_W8ROOT l) [ZMOD 2013265921]
-        intro hf
-        have hi0 : i = 0 := by simpa using hf
-        subst hi0
-        rw [hloc, rowsW_root d R8 l w q 0 hi']
-        show R8 l ≡ weldPub q (classifyFrom d q w) R8 (PI_W8ROOT l) [ZMOD 2013265921]
-        rw [weldPub_root]
+    · exact weldWit_rowConstraints_nonmap hash _ d R8 q w hw name i hi c hc hne
   rowHashes := by intro i _; trivial
-  rowRanges := by
-    intro i hi r hr
-    have hi' : i < (rowsW d R8 q w).length := hi
-    have hloc : (envAt (weldWit d R8 q w) i).loc = (rowsW d R8 q w)[i]'hi' :=
-      envAt_loc (t := weldWit d R8 q w) hi
-    obtain ⟨s, y, hs, hy, hrow⟩ := rowsW_shape d hstep R8 w q hq hsym i hi'
-    simp only [weldDesc, List.mem_cons, List.not_mem_nil, or_false] at hr
-    rcases hr with rfl | rfl
-    · show 0 ≤ (envAt (weldWit d R8 q w) i).loc CURRENT
-        ∧ (envAt (weldWit d R8 q w) i).loc CURRENT < (2 : ℤ) ^ 15
-      rw [hloc, hrow]
-      refine ⟨Int.natCast_nonneg s, ?_⟩
-      show Int.ofNat s < (2 : ℤ) ^ 15
-      have hlt : s < 2 ^ 15 := by simpa [ASTATES] using hs
-      rw [Int.ofNat_eq_natCast]
-      exact_mod_cast hlt
-    · show 0 ≤ (envAt (weldWit d R8 q w) i).loc SYMBOL
-        ∧ (envAt (weldWit d R8 q w) i).loc SYMBOL < (2 : ℤ) ^ 1
-      rw [hloc, hrow]
-      refine ⟨Int.natCast_nonneg y, ?_⟩
-      show Int.ofNat y < (2 : ℤ) ^ 1
-      have hlt : y < 2 ^ 1 := by simpa [ASYM] using hy
-      rw [Int.ofNat_eq_natCast]
-      exact_mod_cast hlt
+  rowRanges := fun i hi r hr => weldWit_rowRanges d R8 hstep q hq w hsym name i hi r hr
   memAddrsNodup := List.nodup_nil
   memClosed := by rw [weld_memLog]; simp
   memDisciplined := by rw [weld_memLog]; trivial

@@ -35,6 +35,7 @@ import Dregg2.Circuit.Emit.AccumulatorNonRevocationEmit
 import Dregg2.Circuit.Emit.AdjacencyMembershipEmit
 import Dregg2.Circuit.Emit.AdjacencyMembershipWideEmit
 import Dregg2.Circuit.Emit.AttestedFactMembershipEmit
+import Dregg2.Circuit.Emit.AttestedAutomatonWeld8
 import Dregg2.Circuit.Emit.AutomataflResolveEmit
 import Dregg2.Circuit.Emit.AutomataflStepEmit
 import Dregg2.Circuit.Emit.AutomataflNGenGolden
@@ -196,6 +197,13 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
       Dregg2.Circuit.Emit.AdjacencyMembershipWideEmit.adjacencyWideDesc)
   , ("attested-fact-membership.json",
       Dregg2.Circuit.Emit.AttestedFactMembershipEmit.attestedFactMembershipDesc)
+  -- The 8-felt WELDED attested-automaton descriptor (`AttestedAutomatonWeld8.lean` §3): the
+  -- `.read` map op's root group is eight distinct columns (3..10), each pinned to a public input on
+  -- row 0 and threaded by a constancy window. The deployed map-ops table forces all eight lanes
+  -- through its arity-16 `node8` chain; the Lean `MapOp.holdsAt` denotation still reads lane 0
+  -- only (that file's §3a), so this route ships the wire, not yet the Lean refinement.
+  , ("attested-automaton-map-committed-weld8-v1.json",
+      Dregg2.Circuit.Emit.AttestedAutomatonWeld8.weldInstance)
   , ("automatafl-resolve.json",
       Dregg2.Circuit.Emit.AutomataflResolveEmit.automataflResolveDesc)
   , ("automatafl-step.json",
@@ -796,8 +804,9 @@ Both directions are gated outside Lean:
 -- ⚑ 2026-08-10: 132 = 131 + `dregg-mina-bodyhash-relimb-v1.json` (the bit-level re-limbing that
 -- makes tie 2 expressible as two descriptor-ended seams). Rows and pin are one atom — bumped in
 -- the same edit as the row, which is the discipline the six notes above were each paid for.
+-- ⚑ 133 = 132 + `attested-automaton-map-committed-weld8-v1.json`. Rows and pin are one atom.
 set_option maxRecDepth 8000 in
-theorem byNameDescriptors_length : byNameDescriptors.length = 132 := rfl
+theorem byNameDescriptors_length : byNameDescriptors.length = 133 := rfl
 
 def main : IO Unit := do
   for (file, d) in byNameDescriptors do
