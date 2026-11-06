@@ -93,3 +93,11 @@ transcript with receipts every 100 events, a follower, and a microsite with the 
   `windows_compose`; `reach_once_not_buchi` on `other, prompt^ω` (counter 1 forever, rejected);
   prefix-free tags `…:mmr:n` / `…:mmr:w`; a tokenizing classifier (wrappers peeled, `git -C`, option
   clusters, `pkill -x`, `ssh host '…'`) with 13 new `#guard`s; the vacuity of `sat` at the demo stated.
+- Standing policy (2026-11-06, from ember via the coordinator): facts about concrete data are checked
+  by compiled evaluation. The six toy-stream falsifiers in `Window.lean` are `native_decide` pinned with
+  `#assert_compiled`; every general theorem stays kernel-proved under `#assert_axioms`.
+- L3 runs (2026-11-06): this lane's own live session (5,300 lines, 53 windows, re-verified from genesis
+  against a root computed independently from the source file, `verify --anchor`); the largest local
+  session replayed (27,775 lines, 44.9 MB, 278 windows, hash calls 301-311 per full window, anchored);
+  a real violation (`git add -A`, window 6 of 6, `viol`, anchored). Page: `dregg-microsites/so-far/`
+  (local commit; publication is ember's call).
