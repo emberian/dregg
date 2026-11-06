@@ -1,0 +1,5 @@
+# absence-receipt policy v1. Interim syntax (one `forbid <pattern>` per line; literal bytes, `.`,
+# `[..]` classes, `* + ? {n}` on one atom) until lane B's policy language compiles it.
+# An AWS access key id, and any PEM private-key header.
+forbid AKIA[0-9A-Z]{16}
+forbid -----BEGIN [A-Z ]*PRIVATE KEY-----

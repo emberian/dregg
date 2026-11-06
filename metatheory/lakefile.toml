@@ -661,3 +661,14 @@ root = "MinaWrapOpeningSchedEmit"
 [[lean_exe]]
 name = "datalog-check"
 root = "DatalogCheck"
+
+# dfa-run — the flat-table DFA runner of the absence-receipt demo (lane C, 2026-11-06): reads a
+# `dfa`-crate table JSON and a document (or a corpus manifest) and prints the verdict / the count.
+# Imports Lean core only (Dregg2.Automata.TableRun); `TableRunSpec.accepts_iff` proves its verdict
+# is `Deriv.PredRE.TableDfa.accepts`. NOT a default target. Demo: ../demo/absence-receipt/run.sh
+#
+#     lake build dfa-run
+#     ./.lake/build/bin/dfa-run table.json --corpus <root> <manifest>
+[[lean_exe]]
+name = "dfa-run"
+root = "DfaRun"

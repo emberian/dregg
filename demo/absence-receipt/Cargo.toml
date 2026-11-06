@@ -1,0 +1,24 @@
+# absence-receipt: demo (a) of the automata program (docs/automata/SUBSTRATE-DECISION.md §5 item 1).
+# The Rust legs of the pipeline: document selection, the MMR root (dregg-query's Blake3Mmr), the
+# INTERIM absence table (dregg-dfa's derivative compiler; unproved, to be replaced by the
+# Lean-compiled table from `policyc compile --absence`), a Rust cross-check count, and the receipt
+# body. The verdicts the receipt signs come from the Lean runner `lake exe dfa-run`. See README.md.
+[package]
+name = "absence-receipt"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "absence-receipt"
+path = "src/main.rs"
+
+[dependencies]
+dregg-dfa = { path = "../../dfa" }
+dregg-query = { path = "../../dregg-query" }
+blake3 = "1"
+hex = "0.4"
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
