@@ -289,24 +289,36 @@ def full(argv):
     if elan:
         prep.append(f'[ -x {elan}/bin/lake ] || (curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh '
                     f'| ELAN_HOME={elan} sh -s -- -y --default-toolchain none --no-modify-path)')
-    if pk:
-        prep.append(f'if [ -d {pk} ] && [ ! -e .lake/packages ]; then mkdir -p .lake && ln -s {pk} .lake/packages; fi')
-    prep.append('[ -e .lake/packages/mathlib/.lake/build/lib/lean/Mathlib.olean ] || lake exe cache get')
+    # Packages: one shared directory per (manifest, toolchain) key on each box, never one per clone
+    # (a Mathlib is ~7.5 GB). minidregg uses the pool's read-only packages-<key> where the box has
+    # one; otherwise <base>/packages-<key> is filled once by `lake exe cache get` and then shared.
+    shared = pk if pk else f"{b['base']}/packages-{key}"
+    prep.append(f'mkdir -p .lake; if [ -d {shared} ]; then [ -L .lake/packages ] || ln -s {shared} .lake/packages; '
+                f'else lake exe cache get && mv .lake/packages {shared} && ln -s {shared} .lake/packages; fi')
+    # A cold clone starts from the box's own snapshot store (iter-check publish): the newest READY
+    # snapshot with this manifest key is copied in (never linked) before the first build.
+    store = os.path.join(store_dir(pick['box']), REPO)
+    prep.append(f'if [ ! -d .lake/build/lib ]; then s=$(ls -td {store}/*/READY 2>/dev/null | while read r; do d=$(dirname $r); '
+                f'[ "$(sed -n 2p $d/MANIFEST)" = "{manifest_key()}" ] && echo $d && break; done); '
+                f'if [ -n "$s" ]; then mkdir -p .lake/build && cp -r $s/lib $s/ir .lake/build/ && chmod -R u+w .lake/build '
+                f'&& echo "seeded from $s"; fi; fi')
     if REPO == 'minidregg': prep.append('bash scripts/build-mini-kernels.sh')
     wrap = b['wrap'].format(repo=REPO, cap=b['cap'])
     body = (f'cd {shlex.quote(rroot)} && {env}' + ' && '.join(prep) +
             f' && {wrap} lake build {" ".join(map(shlex.quote, targets))}')
-    script = (f'#!/usr/bin/env bash\n# iter-check full run {run}\ncd {shlex.quote(rroot)}\n'
+    script = (f'#!/usr/bin/env bash\n# iter-check full run {run}\n'
+              # the script is its own session leader (setsid): its PID is the group to stop
+              f'echo $$ > {rdir}/run-{run}.pid; cp {rdir}/run-{run}.pid {rdir}/run.pid\ncd {shlex.quote(rroot)}\n'
               f'( t=$(date +%s); {body}; rc=$?; echo "iter-check: rc=$rc wall $(( $(date +%s)-t )) s" ) '
               f'> {rdir}/run-{run}.log 2>&1\necho done > {rdir}/run-{run}.done\n')
     sh(['ssh', b['ssh'], f'cat > {rdir}/run-{run}.sh && chmod +x {rdir}/run-{run}.sh'], input=script)
     # Detach on the box; some hosts keep the ssh channel open after a background child, so the launch
     # call is bounded and the PID is read back by a second call.
     try:
-        sh(['ssh', '-n', b['ssh'], f'cd {rdir} && (nohup setsid ./run-{run}.sh > /dev/null 2>&1 < /dev/null & '
-                                   f'echo $! > {rdir}/run.pid; cp {rdir}/run.pid {rdir}/run-{run}.pid)'], timeout=60)
+        sh(['ssh', '-n', b['ssh'], f'cd {rdir} && nohup setsid ./run-{run}.sh > /dev/null 2>&1 < /dev/null &'], timeout=60)
     except subprocess.TimeoutExpired:
         pass
+    time.sleep(2)
     pid = sh(['ssh', '-n', b['ssh'], f'cat {rdir}/run-{run}.pid']).stdout.strip()
     meta = dict(run=run, box=pick['box'], ssh=b['ssh'], dir=rdir, pid=pid, targets=len(targets),
                 umbrella=umbrella, started=time.time())
@@ -336,7 +348,7 @@ def wait_run(run):
 def stop(run):
     m = load_meta(run)
     cmd = (f"p=$(cat {m['dir']}/run-{m['run']}.pid); tr '\\0' ' ' < /proc/$p/cmdline | grep -q 'run-{m['run']}.sh' "
-           f"&& kill -- -$p && echo stopped $p || echo 'not ours or gone'")
+           f"&& kill -- -$p && echo stopped group $p || echo 'not ours or gone'")
     print(sh(['ssh', m['ssh'], cmd]).stdout.strip())
 
 def store_dir(box=None):
