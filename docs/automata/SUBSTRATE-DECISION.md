@@ -75,6 +75,20 @@ move, so it is the one we invest in. Concretely, for every family:
 - counts are stated per symbol / per firing / per candidate, with the commitment term separate;
 - the checker is extractable: a `lake exe` target reads JSON and prints the verdict.
 
+**What L2 does not do (codex round 3, findings 1-2, adopted).** The semantic theorem is reusable;
+the cryptographic implementation is not. Each target must separately establish, and the counts
+table must name as rows: (i) canonical public-input decoding; (ii) accepted-trace refinement to
+`verify` (the arithmetized checker is the Lean checker); (iii) checker/program identity (the
+extracted executable or the AIR is the function the theorem is about); (iv) existential
+soundness or, where the conclusion is a named collision, the efficient extractor the reduction
+needs; (v) an error bound stated in the ADAPTIVE transcript experiment (a randomized check
+`e₀ + α·e₁ = 0` accepts `(α, −1)` chosen after `α`); (vi) an injective, framed codec on the
+admitted domain with range checks on every encoded value, bounded-limb integer arithmetic, and
+the exact length and positions the checker consumed. Encoding aliases (`e(0)` vs `e(p)` under a
+modular hash, `1 + 1 = 0` in a characteristic-2 accumulator, `[a]` vs `[a, 0]` under zero
+padding) are implementation failures, never hash-collision residuals; `flatten_injective` is
+injectivity over `List ℤ`, not over bytes.
+
 What this rules out: hand-written Rust AIRs (minidregg law C9, air-census W8); new BabyBear
 descriptors for new families (they would be rewritten on Tower256 within weeks); "demo" numbers
 that are STARK prove times over a BabyBear path the leaf will not use.
@@ -85,13 +99,13 @@ that are STARK prove times over a BabyBear path the leaf will not use.
 
 | crate / file | role today | verdict | action in this program |
 |---|---|---|---|
-| `dfa` (`compiler`, `router`, `filter`) | runtime DFA dispatch, 10 dependents | **keep as runtime** | conformance suite: the Rust `Pattern → Dfa` compile is checked against the Lean `Deriv` table (`tableDfa_faithful`) on a corpus of patterns; divergence is a red. A Lean-extracted `policyc` compiles the policy language to the same table encoding so the runtime can load Lean-compiled tables. |
-| `dfa/src/air.rs` + `circuit/src/dsl/dfa_routing.rs` | v1 AIR trace shape | **legacy** | not extended; the v2 route is `DfaRoutingTableEmit.lean`. Retire when the v1 epoch ends. |
+| `dfa` (`compiler`, `router`, `filter`) | runtime DFA dispatch, 10 dependents | **keep as runtime** | conformance suite: the Rust `Pattern → Dfa` compile is checked against the Lean `Deriv` table on a corpus of patterns; divergence is a red. This is REGRESSION evidence only: it does not discharge `tableDfa_faithful`'s agreement premise, and the runtime routes by longest-prefix acceptance while a content certificate binds the whole word (codex round 3, finding 6). Certified policies use Lean-produced tables. |
+| `dfa/src/air.rs` + `circuit/src/dsl/dfa_routing.rs` | v1 AIR trace shape AND a live native witness API (`verify_acceptance`, called by `cell/src/predicate.rs` `DfaAcceptanceVerifier` and `cell/src/interface.rs` route membership) | **the descriptor is legacy; the native API is live and was unsound** | codex round 3 finding 3 [READ, confirmed at `dfa/src/air.rs:235`]: the table, start and accepting set were read off the proof and never authenticated against `router_root`; an empty trace with the copied root verified for any input, and a trace over a shorter accepting prefix re-classified the input. Fixed 2026-11-06 (the verifier recomputes the commitment from the proof's table, derives acceptance from the committed accept-map, and requires the longest-match span; five forgery tests pinned red). The `RouteTableBuilder` commitment also never covered `prefix_lens` despite its docstring; fixed in the same commit. The v1 descriptor stays unextended. |
 | `zkoracle-prove` / `zkoracle-live` | TLSNotary attestation + one BabyBear zk leg | out of scope | `zk_leg.rs`'s hand-built descriptor is a C9 hit; it is listed for the Lean-first generator, not touched here. |
 | `tokenizer` | credential sealing (X25519 + ChaCha20) | out of scope | misnamed, not a tokenizer; the detokenizer family (hub `06`) has no consumer yet. |
 | `turn-prover` | proof production for turns | out of scope | nothing automata-shaped. |
-| `audit` (`CountProof`, `RangeProof`, `BudgetProof`) | token audit trail | **legacy statements** | restated over `FixpointCert.verify` (Count) and the weighted accumulator (Budget); the timed window waits on a timestamp-to-leaf binding. The old proofs stay until the restatement is served. |
-| `dregg-query` | conjunctive queries + MMR mirror + CALM grade | **keep as EDB source and MMR mirror** | its "no IDB rules, no recursion, no stratification" line moves to the Lean checker: rules, recursion and strata are `FixpointCert`/`StratifiedCert`. `fact.rs`'s schema is the EDB flattening for demo (b). |
+| `audit` (`CountProof`, `RangeProof`, `BudgetProof`) | token audit trail | **unsound verifiers of still-needed statements** | the statements (exact usage count, a timestamp in a window, remaining budget) are needed; the verifiers are not evidence of them (`count = 0` verifies for any token and root). Restated over `FixpointCert.verify` and the weighted accumulator, PRESERVING event-occurrence semantics: facts carry an authenticated occurrence id (position), token identity, snapshot coverage; `addFact` deduplicates, so two identical events at two positions must be two facts (codex round 3, finding 5). The old formats may stay readable; their verification is not trusted. |
+| `dregg-query` | conjunctive queries + MMR mirror + CALM grade | **keep as EDB source and MMR mirror, with one named obligation** | its "no IDB rules, no recursion, no stratification" line moves to the Lean checker: rules, recursion and strata are `FixpointCert`/`StratifiedCert`. Obligation (codex round 3, finding 4 [READ `dregg-query/src/attested.rs:149,269`, `receipt.rs:120`]): the MMR opening authenticates receipt hashes and positions, not the `effects` array that fact extraction reads; dropping a `Revoked` effect leaves the opening valid and the EDB wrong. The EDB must be proved to be the complete deterministic extraction of AUTHENTICATED receipt contents at the named snapshot (effect disclosures and heights bound, positional coverage preserved, the Rust-to-Lean fact codec faithful) before a `FixpointCert` over it says anything about the log. Demo (b) uses `cv` transcripts, not receipts, and states this. |
 | `Circuit/Emit/{DfaRoutingTableEmit, DyckStackEmit, AttestedAutomatonWeld8, DerivationEmit, TinyAutomata*}.lean` | Lean-emitted BabyBear AIRs | **served carrier, frozen shape** | Weld8 is graduated (range-table lookups, limb split for `CURRENT < 2^15`) so the attested shape is served; no other new BabyBear AIR. Their counts remain the BabyBear column of every table. |
 | `Crypto/Deriv/*`, `Crypto/Dfa.lean`, `Cfg*.lean`, `Datalog/FixpointCert.lean` | semantics + L2 | **the substrate** | extended additively (new files; shared declarations unmoved until the named flag day). |
 
@@ -101,11 +115,14 @@ that are STARK prove times over a BabyBear path the leaf will not use.
 
 Per family, per record size `n ∈ {256, 4096, 65536}` bytes, a row of:
 
-`rows · columns · lookups/symbol · degree | commit(BabyBear): ⌈n/8⌉+2 Poseidon2 perms · 352 cells | commit(Tower256): ⌈n/136⌉ Keccak-f (rate 1088 bits) + Merkle (cSHAKE per node)`
+`rows · columns · lookups/symbol · degree | universal leg (closure candidates, rejection checks) | commit(BabyBear): ⌈n/8⌉+2 Poseidon2 perms · 352 cells | commit(Tower256): ⌊n/136⌋+1 Keccak-f for the payload sponge (FIPS 202 Alg. 8: padding included, no extra squeeze for one 32-byte output; so 136 bytes is 2, 4096 is 31, empty is 1) + the cSHAKE customization prefix of SP 800-185 §3.3 unless precomputed + the Merkle nodes + the length framing`
 
-The Tower256 commitment column is [INFERRED] from LEAF-PROVER-DECISION §6's "31 Keccak-f per
-4 KiB" (4096/136 = 30.1, plus the squeeze); it is a model number until the leaf AIR exists and
-is marked so in `COUNTS.md`. The run term is substrate-neutral for table-routed families (one
+The Tower256 payload-sponge column matches LEAF-PROVER-DECISION §6's "31 Keccak-f per 4 KiB"
+(codex round 3, finding 15, corrected the derivation: `⌊n/136⌋+1`, not `⌈n/136⌉` plus a
+squeeze); it is a payload estimate, not the full commitment price, until the leaf's framing and
+Merkle topology are fixed, and `COUNTS.md` says so. A "lookup" is an abstract operation whose
+rows/columns/degree are target-dependent: the table reports the operation count and, per
+target, its deployed realization with a file:line (finding 16). The run term is substrate-neutral for table-routed families (one
 lookup per symbol) and is where the families differ; the commitment term is shared by every
 statement over one `c` and is the same for every family. The predecessor's two hot spots stand:
 the `⌈n/8⌉+2` permutations are the BabyBear commitment and do not transfer; the unary length
@@ -230,7 +247,25 @@ ceremony has nothing to protect. What survives is exactly what still has two ind
 witnesses to reconcile: Lean's emission against a checked-in cache (row 3), Lean's canonical
 encoder against Rust's (row 8), and the static routing table against disk (row 4's keeper).
 
-Who executes: lane C deletes rows 4, 5, 7 and the `*_FP` re-pin in one commit per row with the
-removed gate's own self-test run red-then-gone as the control, re-derives the emitter set (row 6),
-and moves row 9's two checks into the automata emitters first; the pin-literal removal (row 8)
-is a flag day on the Mina modules and is proposed, not done, here.
+**Amended after codex round 3 (findings 7-14; adopted).** The attack on rows 3-4: emit from an
+uncommitted weakened Lean source, restore it, commit only the descriptor; the emit commit does not
+contain the generating source, and `source_dirty=true` was the only refusal. So the verdict is
+"delete the human ceremony, keep the automatic record": the ack, `ALLOW_DIRTY`, `--strict` and
+`--stamp-existing` go; the emit always runs from a committed revision in a detached worktree
+(`--rev`, which exists) and writes the stamp (tree hash, toolchain, emitter list, per-file sha256)
+with no human in the loop; `--verify-provenance --rev HEAD` stays as a script. Row 2: the `*_FP`
+tripwire catches a descriptor-only edit that no source-closure trigger would select; it stays
+until the re-derive triggers on artifact changes too. Row 5: the Rust epoch test checks only the
+latest row and `include_str!`s the markdown log; the log file and the ledger script stay, only the
+emit's regen-row writer goes. Row 7: the weld script also covers production inline descriptors and
+JSON fragments (a `turn-prover` prefix kept width 3804 after emission moved to 3826); the test
+goldens become `include_str!`, the script is narrowed, not deleted. Row 8: the closure test does not
+establish the intended target, so row 4 may not cite it as "is this the deployed program". Row 9:
+port the connectivity/ratchet semantics, not occurrence counting (an anchor in a unary range lookup
+is still inert). Controls: a deleted leg's failure fixture must be REJECTED by the surviving check;
+"red-then-gone" shows loss of detection, not preservation.
+
+Who executes: lane C2, one commit per row with the fixture-against-survivor control recorded; the
+emitter-set derivation (row 6) must reconcile declared outputs against served consumers and disk
+in both directions and fail closed; the pin-literal removal (row 8) is a flag day on the Mina
+modules and is proposed, not done, here.

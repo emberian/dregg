@@ -52,3 +52,36 @@ accounting) and list missing families/operators and cost errors. Output: `scratc
 | cost | `hash_bytes_8` is `⌈n/8⌉ + 2` permutations (squeeze at `poseidon2.rs:430`); "3-11 cells" mixes a binary-symbol shape with map authentication into a byte-step comparison; "hash dominates every regular family" overstated. | ACCEPT-DOC | hub §0 and note `01` §3 corrected. |
 
 Not adopted: nothing refused outright this round.
+
+---
+
+## Round 3 (2026-11-06): the substrate decision, the crate verdicts, the ceremony review, the cost units, the stratified plan
+
+Prompt: attack `SUBSTRATE-DECISION.md` (all sections), name concrete counterexamples, demand the
+stratified-negation theorem and its forged-absence falsifier. Output: `scratchpad/codex/round3.out`
+(23 KB, 136K tokens). Codex did not run Lean. Routed the same hour: findings 2, 5, 17, 18 to lane A;
+6, 15, 16 to lane C; 7-9, 11, 12, 14 to lane C2; 3 fixed by the deputy.
+
+| # | finding (Codex) | verdict | what changed |
+|---|---|---|---|
+| 1 | L2 transfers only through a proved implementation bridge: canonical PI decoding, accepted-trace refinement to `verify`, checker/program identity, the efficient extractor a named-collision conclusion needs, and an error bound in the ADAPTIVE experiment (a randomized `e₀ + α·e₁ = 0` accepts `(α, −1)` chosen after `α`). "One extra ε_proof" conceals this. | ACCEPT-DOC | decision §2 lists the six per-target obligations; the counts table must carry them as rows |
+| 2 | Encoding, arithmetic and framing are part of the transported statement: `e(0)` vs `e(p)` under a modular hash, `1 + 1 = 0` in a char-2 accumulator, `[a]` vs `[a, 0]` under zero padding; `flatten_injective` is over `List ℤ`, not bytes. | ACCEPT | §2; lane A's `DatalogCheck` must instantiate a canonical, range-checked, framed codec and `#guard` a colliding-looking pair |
+| 3 | `dfa/src/air.rs:235` `verify_acceptance` never authenticates the table/start/accepting set against `router_root`; an empty trace with the copied root verifies for any input; live via `cell/src/predicate.rs:1663`. | ACCEPT, **confirmed and fixed** (`10b2727f6`) | the verifier recomputes the commitment from the proof's table, derives acceptance from the committed accept-map, requires the longest-match span; a second forgery (shorter accepting prefix re-classifies the input) found while fixing; `RouteTableBuilder` never covered `prefix_lens` in its commitment, fixed; five tests pinned red; decision §3 row rewritten |
+| 4 | `dregg-query`'s receipt→EDB extraction reads the `effects` array the MMR opening does not authenticate; drop a `Revoked` effect and a sound `FixpointCert` proves a fact about the substituted EDB. | ACCEPT-DOC | §3 row names the obligation (complete deterministic extraction of authenticated receipt contents at the named snapshot); demo (b) uses transcripts and says so |
+| 5 | `audit`'s statements are still needed; exact SET count is not EVENT count (`addFact` deduplicates two identical events at two positions). | ACCEPT-DOC | §3 row reworded: "unsound verifiers of still-needed statements"; occurrence ids mandatory in event facts (lane A) |
+| 6 | A compiler conformance corpus is regression evidence, not a discharge of `tableDfa_faithful`'s premise; runtime routes by longest prefix, the certificate binds the whole word. | ACCEPT-DOC | §3 `dfa` row |
+| 7 | FP re-pin: a descriptor-only edit leaves the old FP and the existing comparison catches it; load-time fingerprinting assigns identity, not EXPECTED identity; a source-closure trigger would not select any emitter. | ACCEPT | row 2 verdict reversed to "keep until the re-derive triggers on artifact changes" |
+| 8 | Rows 3-4: git records bytes, not the generating source (emit from a weakened uncommitted source, restore, commit the artifact); `source_dirty=true` was the only refusal. Replacement: emit from an immutable snapshot, automatic stamp, no ack. | ACCEPT | row 4 amended: ack/dirty/strict/stamp-existing go; the `--rev` detached-worktree emit writes the stamp automatically; `--verify-provenance --rev HEAD` stays |
+| 9 | Row 5: the Rust epoch test checks only the latest row and `include_str!`s the markdown log; deleting the log breaks it; `git log -- circuit/descriptors` misses a bump confined to `persist/src/lib.rs`. | ACCEPT | log file and ledger script stay; only the emit's regen-row writer goes |
+| 10 | Row 6: `Emit*.lean` glob misses emitters under `Circuit/Emit/`; a `-- emits:` header can be forgotten; "the check is the emit" cannot see an unselected emitter. | ACCEPT-DOC | row 6 must reconcile declared outputs against served consumers and disk, both directions, fail closed |
+| 11 | Row 7: the weld script also covers production inline descriptors and JSON fragments (a `turn-prover` prefix kept width 3804 after 3826). | ACCEPT | test goldens → `include_str!`; the script is narrowed, not deleted |
+| 12 | Row 8: the vk-pin closure test disclaims intended-target checking; a pin redirected to the wrong EXISTING descriptor passes; row 4 cannot cite it. | ACCEPT-DOC | §9 amended |
+| 13 | Row 9: "every PI occurs in a gate or lookup" is weaker than the inertness ratchet (an anchor in a unary range lookup is inert); a mirrored arity set is a second list, the existing check runs the implementation. | ACCEPT-DOC | §9 amended: port the connectivity semantics; the deployed-chip differential stays mandatory |
+| 14 | "Red-then-gone" demonstrates loss of detection, not preservation; the control must run the deleted leg's fixture against the surviving check. | ACCEPT | lane C2's control rule |
+| 15 | Keccak-f: `⌊n/136⌋+1` including padding, no extra squeeze for one 32-byte output (136 bytes is 2, empty is 1); cSHAKE customization prefix (SP 800-185 §3.3) and Merkle/framing are separate. | ACCEPT | §4 formula corrected; lane C's COUNTS.md |
+| 16 | Per-family row omits the universal leg, lookup realization, auxiliary columns, padded height, policy size, sharing conditions; `flatten` is `2 + arity` not `3 + arity`; closure by per-rule sorted list equality is wrong (two rules can derive disjoint subsets of one predicate). | ACCEPT | §4 and note `13` corrected (`2 + arity`); the "sorted-enumeration" L3 sketch in note `13` §3 is demoted to "every enabled candidate head present", not list equality (lane C's table) |
+| 17 | Stratified: the theorem must quantify cumulative models `M₋₁ = edb`, `Mᵢ = lfp(X ↦ Mᵢ₋₁ ∪ {head(rθ) | stratum i, positives ⊆ X, negatives ∩ Mᵢ₋₁ = ∅})`; every negative lookup against THAT exact frozen `Mᵢ₋₁`; plus the same-root corollary with the named collision. | ACCEPT | lane A's theorem shape (verbatim in its brief) |
+| 18 | The forged-absence falsifier must make the revocation derivable LATER (`revoked(X) :- flagged(X)` in stratum 0); a weak checker that evaluates `¬` against the current db accepts the schedule `active(a)` then `revoked(a)` at `count = 1`, and forward closure at the end still passes. Demanded `#guard`s: weak accepts, strong refuses, strong accepts the honest `count = 0`. | ACCEPT | lane A's falsifier (c), restated exactly |
+
+Not adopted: nothing refused outright. Finding 3 was the round's payoff: a live verifier forgery in a
+crate the decision had labelled "legacy", which is the reason the review asked for counterexamples.

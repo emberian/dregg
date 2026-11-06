@@ -51,7 +51,7 @@ L2 (this landing) is native: counts are checker steps.
 
 | leg | cost | source |
 |---|---|---|
-| root recompute | one MMR fold over `flatten edb` (`3 + arity` felts per fact), `≈ |flat|` sponge calls of arity 2 in the model | [READ `MMR.lean:402 mroot`] |
+| root recompute | one MMR fold over `flatten edb` (`2 + arity` felts per fact), `≈ |flat|` sponge calls of arity 2 in the model | [READ `MMR.lean:402 mroot`] |
 | replay | per firing: `|body|` membership tests + 1 `addFact`; transitive closure over 4 nodes: 6 firings in 3 rounds | [MEASURED `#guard`: 9 facts after replay, `countQ … PATH = 6`] |
 | closure | `|P| · |dom|^{varBound r}` body evaluations once: the 4-node instance has `|dom| = 6`, `rStep` has 3 variables, so 216 substitutions for `rStep` and 36 for `rBase` | [MEASURED `#guard (substs … (varBound rStep)).length == 216`, `(activeDomain tc edb).length == 6`] |
 
@@ -67,7 +67,7 @@ one lookup per candidate), which is `|dom|^{vars}` lookups, not map-op openings.
 the Count's price of exactness, and the program doc §3 names it as the place alternation does not
 help.
 
-Content commitment: the EDB is the committed object; `flatten` costs `3 + arity` felts per fact;
+Content commitment: the EDB is the committed object; `flatten` costs `2 + arity` felts per fact;
 at 2 bytes per lane the per-byte law of the hub does not apply (facts are felts, not bytes).
 
 ## 4. Binding to the content commitment
