@@ -142,7 +142,10 @@ def main():
   position, so the current wait is certified to be at most <code>n − last</code> events.</p>
 
   <h2>The receipts, <em>live.</em></h2>
-  <p>This lane's own session, followed while it wrote this page. The follower's last line:</p>
+  <p>This lane's own session transcript, tailed while the lane was still writing it: the producer
+  cut a window every hundred lines as they appeared and a Lean follower checked them as they
+  landed. When the producer was stopped the whole chain was checked once more, from genesis,
+  against an independently computed root. That run's last line:</p>
   <pre>{html.escape(live_accept)}</pre>
   <div class="tablewrap"><table>
     <tr><th>k</th><th>positions</th><th>verdict</th><th>tripped</th><th>waiting</th><th>marks</th><th>last mark</th><th>hashes</th><th>root</th></tr>
