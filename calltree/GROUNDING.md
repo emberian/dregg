@@ -119,3 +119,18 @@ Verdict: "the claimed property fails" as first built. Findings and actions:
 | 6 | Checker invocation: shared temp path, verdict not bound to the root. | **Fixed**: the bundle goes over stdin (`calltree-check -`); the CLI accepts only if the checker's echoed `root` equals the trusted root. The checker binary is whatever the stranger built (`lake build calltree-check`). |
 | 7 | Recorder completeness; root prompt/answer unattested; redaction checks sent bytes only. | **Limit, restated** (§6). Root `req`/`resp` digests are the recorder's claim. |
 | 8 | Extra roots were global CAs. | **Fixed**: `--extra-root host=path` pins are host-scoped — tried only after Mozilla refuses, and must authenticate exactly that host. Freshness/challenge: **open**. |
+
+## 12. The real tree (2026-11-06, bb2)
+
+Notary `k256:02dffefb…c0f925` (`fixtures/notary.pin`) as its own process on bb2, bound to localhost; the tool server and the recorder as separate processes on the same box (one operator: ember). The recorder and tool server link the Lean-built executor archive (`libdregg_lean.a` copied from a same-day bb2 clone); without it the verified admission oracle refuses every grain turn fail-closed (measured), which is the right behaviour.
+
+| Recording | Hops | Record wall | Per-hop MPC-TLS (ms) | Verify wall (extract + Lean) |
+|---|---|---|---|---|
+| `fixtures/glm.recording.json` — GLM `glm-5.3-flash` asks for `fetch_page`, the tool fetches `https://example.com/` through its own attested hop, GLM answers "This page exists as a domain reserved for use in documentation examples, without needing permission." | 4 (2 × api.z.ai, tool, example.com) | 36.4 s | 7712, 6473, 3314, 5442 | 0.06 s (extract 4 ms, Lean 57 ms) |
+| `fixtures/free.recording.json` — free mode (example.com direct; tool → en.wikipedia.org REST summary) | 3 | 29.2 s | — | 0.06 s |
+
+Edges in the GLM tree: kind 0 `https://example.com/` (GLM response → tool request); kind 1 the page's text span (example.com response → tool response, child → parent); kind 0 the same span (tool response → GLM's second request). No key material: the `Authorization` value is hidden in every LLM presentation (checked by the recorder, and the raw key bytes and their hex occur 0 times in the decoded presentations and the recording; the key file was shredded after the run).
+
+Falsifiers run against both real recordings (`run/falsify.py` on bb2): honest ACCEPT; dropped child, reordered children, tool relabelled 2→1, tool subtree dropped, a flipped presentation byte, a trailing presentation byte, a header-boilerplate edge span, a masked (`0x00`) edge span, a missing required edge, a wrong trusted root: each REJECT, with the failing component named (`tree_and_hops` / `edges_ok`).
+
+Stranger path: `calltree/verify/run.sh` (the light `dregg-calltree-verify` crate links only the tlsn extraction, not the grain executor; the Lean checker is core-only). Policy says facts about concrete data are compiled evaluations: the demo falsifiers are `native_decide` + `#assert_compiled`; the general theorems stay kernel-proved.

@@ -21,7 +21,7 @@ proves what an accepting `verify V hash root t` buys a stranger who holds only `
 * **`deployed_coll_is_blake3_coll`** (§5) — at the deployed `CallTreeDeploy.treeHash`, a collision
   `treeFind` names is a genuine BLAKE3-256 collision of the two encodings (within the 4-byte length
   prefixes' bounds).
-* Falsifiers (§4, by `decide`, at a toy hash): a dropped child, a swapped response, a reorder, an
+* Falsifiers (§4, by compiled evaluation, at a toy hash): a dropped child, a swapped response, a reorder, an
   attestation for a different host, each refused; the honest tree accepted.
 
 What this does NOT prove is listed in `calltree/GROUNDING.md` §6 (liveness, unrecorded calls, timing,
@@ -283,7 +283,11 @@ theorem verify_attested {V : Hop → ℤ → Bool} {Attested : Hop → ℤ → P
       exact hT _ _ (hall n hmem) (hkinds n hn')
     · exact absurd e hc
 
-/-! ## §4 — falsifiers and the honest witness, at a toy hash (decided by the kernel). -/
+/-! ## §4 — falsifiers and the honest witness, at a toy hash.
+
+Facts about CONCRETE data are checked by compiled evaluation (`native_decide`, pinned with
+`#assert_compiled`: they rest on `Lean.ofReduceBool`, i.e. Lean's compiler is trusted), per ember's
+standing policy; the general theorems above stay kernel-proved (`#assert_axioms`). -/
 
 namespace Demo
 
@@ -318,39 +322,39 @@ def turn : CallTree := .node ⟨0, 0, 0, 11, 12⟩ [llm1, tool, llm2]
 def root : ℤ := commit toyHash turn
 
 /-- The honest tree is accepted (non-vacuity). -/
-theorem honest_accepted : verify V toyHash root turn = true := by decide
+theorem honest_accepted : verify V toyHash root turn = true := by native_decide
 
 /-- A dropped child (the tool call) is refused: the root moves. -/
 theorem dropped_child_refused :
-    verify V toyHash root (.node ⟨0, 0, 0, 11, 12⟩ [llm1, llm2]) = false := by decide
+    verify V toyHash root (.node ⟨0, 0, 0, 11, 12⟩ [llm1, llm2]) = false := by native_decide
 
 /-- Reordered children are refused. -/
 theorem reordered_refused :
-    verify V toyHash root (.node ⟨0, 0, 0, 11, 12⟩ [tool, llm1, llm2]) = false := by decide
+    verify V toyHash root (.node ⟨0, 0, 0, 11, 12⟩ [tool, llm1, llm2]) = false := by native_decide
 
 /-- A swapped response, re-committed by the forger so the ROOT matches, is refused by `V`: the
 attested response is 4, the node claims 99. -/
 theorem swapped_response_refused :
     let t := CallTree.node ⟨0, 0, 0, 11, 12⟩ [llm1, .node ⟨1, 102, 8, 3, 99⟩ [], llm2]
-    verify V toyHash (commit toyHash t) t = false := by decide
+    verify V toyHash (commit toyHash t) t = false := by native_decide
 
 /-- An attestation for a DIFFERENT, ALSO ALLOWED host (att 104 authenticated the LLM host 7, with the
 tool hop's very request and response digests) presented under the tool host's name 8, re-committed
 so the root matches, is refused — by the host comparison alone (the allowlist admits 7). -/
 theorem other_host_refused :
     let t := CallTree.node ⟨0, 0, 0, 11, 12⟩ [llm1, .node ⟨1, 104, 8, 3, 4⟩ [], llm2]
-    verify V toyHash (commit toyHash t) t = false := by decide
+    verify V toyHash (commit toyHash t) t = false := by native_decide
 
 /-- The same attestation presented honestly under its own host is refused by the host policy. -/
 theorem unlisted_host_refused :
     let t := CallTree.node ⟨0, 0, 0, 11, 12⟩ [llm1, .node ⟨1, 105, 9, 3, 4⟩ [], llm2]
-    verify V toyHash (commit toyHash t) t = false := by decide
+    verify V toyHash (commit toyHash t) t = false := by native_decide
 
 /-- A transport hop RELABELLED as local (kind 0, so `V` would wave it through), re-committed so the
 root matches, is refused by the structural rule: only the root may be local. -/
 theorem relabelled_local_refused :
     let t := CallTree.node ⟨0, 0, 0, 11, 12⟩ [llm1, .node ⟨0, 0, 0, 3, 4⟩ [], llm2]
-    verify V toyHash (commit toyHash t) t = false := by decide
+    verify V toyHash (commit toyHash t) t = false := by native_decide
 
 end Demo
 
@@ -378,13 +382,13 @@ theorem deployed_coll_is_blake3_coll {p : List ℤ × List ℤ}
 #assert_axioms verify_attested
 #assert_axioms treeFind_self
 #assert_axioms treeFind_self_not_coll
-#assert_axioms Demo.honest_accepted
-#assert_axioms Demo.dropped_child_refused
-#assert_axioms Demo.reordered_refused
-#assert_axioms Demo.swapped_response_refused
-#assert_axioms Demo.other_host_refused
-#assert_axioms Demo.unlisted_host_refused
-#assert_axioms Demo.relabelled_local_refused
+#assert_compiled Demo.honest_accepted
+#assert_compiled Demo.dropped_child_refused
+#assert_compiled Demo.reordered_refused
+#assert_compiled Demo.swapped_response_refused
+#assert_compiled Demo.other_host_refused
+#assert_compiled Demo.unlisted_host_refused
+#assert_compiled Demo.relabelled_local_refused
 #assert_axioms Dregg2.Crypto.Blake3.hash_size
 #assert_axioms CallTreeDeploy.ofBE_natBE
 #assert_axioms CallTreeDeploy.ofBE_injective_of_size
