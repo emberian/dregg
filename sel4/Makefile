@@ -50,6 +50,8 @@ QEMU_AARCH64_GRAPHICAL := qemu-system-aarch64 -machine virt,virtualization=on \
 # `sdl`); everything else is identical.
 QEMU_DISPLAY ?= cocoa,show-cursor=on
 
+PHONY_CHOKEPOINT := build-chokepoint run-chokepoint
+.PHONY: $(PHONY_CHOKEPOINT)
 .PHONY: all run run-m0 run-m1 run-m2 run-stark run-net run-assembly run-riscv \
         build-executor-microkit verify-executor-microkit \
         build-assembly-real run-assembly-real \
@@ -244,6 +246,27 @@ run-assembly-real: build-assembly-real
 		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.31 \
 		-device loader,file=$(BUILD)/dregg-real.img,addr=0x90000000,cpu-num=0 \
 		-serial mon:stdio
+
+# ── build-chokepoint / run-chokepoint: the in-path receipt device ──────────────
+# Two PDs (chokepoint.system): commit (the Lean step `dregg_chokepoint_arrive`, Lean 4.30.0,
+# compiled to C and linked against the seL4-built runtime; SOLE holder of the NIC region and
+# IRQ) and persist (SOLE holder of the log; reached by a synchronous PPC). Boots in QEMU:
+# four frames persisted-then-forwarded, two refused at capacity
+# (chokepoint-boot-evidence.log). Needs the exec-sel4 runtime archives provisioned by
+# dregg-pd/executor-rootserver (as build-executor-microkit does).
+CP_DIR := $(PD_DIR)/chokepoint
+CP_REL := $(CP_DIR)/target/aarch64-sel4-microkit/release
+build-chokepoint:
+	$(CP_DIR)/scripts/build-lean.sh
+	cd $(CP_DIR) && cargo build $(CARGO_FLAGS)
+	mkdir -p build-chokepoint
+	cp $(CP_REL)/dregg-chokepoint-commit-pd.elf $(CP_REL)/dregg-chokepoint-persist-pd.elf build-chokepoint/
+	$(MICROKIT) chokepoint.system --search-path build-chokepoint --board $(BOARD) --config $(CONFIG) -o build-chokepoint/chokepoint.img -r build-chokepoint/chokepoint.report.txt
+
+run-chokepoint: build-chokepoint
+	$(QEMU_AARCH64) -global virtio-mmio.force-legacy=false \
+		-netdev user,id=net0 -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.31 \
+		-device loader,file=build-chokepoint/chokepoint.img,addr=0x70000000,cpu-num=0 -serial mon:stdio
 
 # ── build-assembly / run-assembly: the BOOTABLE 5-PD firmament demo ──────────
 # The same 5-PD firmament, with the executor seat held by the small stub PD

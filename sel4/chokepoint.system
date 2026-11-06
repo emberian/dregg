@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  chokepoint.system — the in-path receipt device as two protection domains.
+
+    commit  : dregg-chokepoint-commit-pd. Embeds the Lean step `dregg_chokepoint_arrive`
+              (degg-research/experiments/chokepoint-step). SOLE holder of the NIC: the
+              virtio-mmio region (the slot QEMU puts one virtio-net-device in, as in
+              net-driver-only.system) and its IRQ are mapped here and in no other PD. leaf_buf RW.
+              May make a protected procedure call to persist.
+    persist : dregg-chokepoint-persist-pd. SOLE holder of durable_log. leaf_buf R. Higher
+              priority than commit, as a PPC callee must be.
+
+  The capability statement this file is meant to satisfy (Lean:
+  degg-research/experiments/chokepoint-step/SystemCaps.lean): the only PD that maps the NIC
+  region or receives its IRQ is the PD running the step, and the only PD that maps the log
+  is persist, which the step reaches only by a synchronous PPC.
+-->
+<system>
+    <memory_region name="nic_mmio"    size="0x1000"  phys_addr="0xa003000" />
+    <memory_region name="leaf_buf"    size="0x1000" />
+    <memory_region name="durable_log" size="0x10000" />
+
+    <protection_domain name="commit" priority="100" stack_size="0x40000">
+        <program_image path="dregg-chokepoint-commit-pd.elf" />
+        <map mr="nic_mmio" vaddr="0x6_000_000_000" perms="rw" cached="false" setvar_vaddr="nic_mmio_vaddr" />
+        <map mr="leaf_buf" vaddr="0x4_000_000_000" perms="rw" cached="true" setvar_vaddr="leaf_buf_vaddr" />
+        <irq irq="79" id="2" />
+    </protection_domain>
+
+    <protection_domain name="persist" priority="200" stack_size="0x10000">
+        <program_image path="dregg-chokepoint-persist-pd.elf" />
+        <map mr="leaf_buf"    vaddr="0x4_000_000_000" perms="r"  cached="true" setvar_vaddr="leaf_buf_vaddr" />
+        <map mr="durable_log" vaddr="0x5_000_000_000" perms="rw" cached="true" setvar_vaddr="durable_log_vaddr" />
+    </protection_domain>
+
+    <channel>
+        <end pd="commit"  id="1" pp="true" />
+        <end pd="persist" id="1" />
+    </channel>
+</system>

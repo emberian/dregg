@@ -1,0 +1,17 @@
+[package]
+name = "dregg-chokepoint-commit-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-chokepoint-commit-pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { workspace = true }
+sel4 = { workspace = true }
+sel4-musl = { workspace = true }
+sel4-linux-syscall-types = { workspace = true }
+sel4-dlmalloc = { workspace = true }
+one-shot-mutex = "0.2.1"

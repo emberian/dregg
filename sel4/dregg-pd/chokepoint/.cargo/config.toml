@@ -1,0 +1,20 @@
+# As ../executor-microkit-pd/.cargo/config.toml: no_std Microkit target, build-std core/alloc,
+# and -L to the seL4 (sysinfo-routed) musl libc the Lean runtime archives bind to.
+[unstable]
+unstable-options = true
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[build]
+target = "../targets/aarch64-sel4-microkit.json"
+rustflags = ["-Zunstable-options"]
+
+[env]
+RUST_TARGET_PATH = { value = "../targets", relative = true }
+
+[target.'cfg(target_os = "none")']
+linker = "rust-lld"
+rustflags = [
+    "-Zunstable-options",
+    "-L", "/Users/ember/dev/breadstuffs/sel4/dregg-pd/executor-rootserver/out/musl-sel4/lib",
+]

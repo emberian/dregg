@@ -1,0 +1,12 @@
+[package]
+name = "dregg-chokepoint-persist-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-chokepoint-persist-pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { workspace = true }

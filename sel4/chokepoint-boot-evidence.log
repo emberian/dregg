@@ -1,0 +1,63 @@
+# chokepoint.system boot, 2026-11-06T06:03:41Z, qemu-system-aarch64 11.1.1, Microkit SDK 2.2.0, Lean 4.30.0
+# make run-chokepoint (serial captured; QEMU stopped by timeout 60)
+LDR|INFO: relocating from 0x0000000070000000 to 0x0000000090000000
+LDR|INFO: Setting all interrupts to Group 1
+LDR|INFO: GICv2 ITLinesNumber: 0x00000008
+LDR|INFO|CPU0: CurrentEL=EL2
+LDR|INFO|CPU0: Resetting CNTVOFF
+LDR|INFO: disabling MMU (if it was enabled)
+LDR|INFO: PSCI version is 1.1
+LDR|INFO: loader for seL4 starting
+LDR|INFO: flags:
+             seL4 configured as hypervisor
+LDR|INFO: kernel:      entry:   0x0000008060000000
+LDR|INFO: root server: physmem: 0x0000000060246000 -- 0x0000000060a05000
+LDR|INFO:              virtmem: 0x0000000000200000 -- 0x00000000009bf000
+LDR|INFO:              entry  : 0x0000000000221904
+LDR|INFO: region: 0x00000000   addr: 0x0000000060000000   size: 0x0000000000246000   offset: 0x0000000000000000   type: 0x0000000000000001
+LDR|INFO: region: 0x00000001   addr: 0x0000000060246000   size: 0x000000000000a304   offset: 0x0000000000246000   type: 0x0000000000000001
+LDR|INFO: region: 0x00000002   addr: 0x0000000060260308   size: 0x0000000000013a08   offset: 0x0000000000250304   type: 0x0000000000000001
+LDR|INFO: region: 0x00000003   addr: 0x0000000060283d10   size: 0x00000000000100b0   offset: 0x0000000000263d0c   type: 0x0000000000000001
+LDR|INFO: region: 0x00000004   addr: 0x0000000060294000   size: 0x00000000002954ac   offset: 0x0000000000273dbc   type: 0x0000000000000001
+LDR|INFO: region: 0x00000005   addr: 0x000000006052a000   size: 0x00000000004db000   offset: 0x0000000000509268   type: 0x0000000000000001
+LDR|INFO: copying region 0x00000000
+LDR|INFO: copying region 0x00000001
+LDR|INFO: copying region 0x00000002
+LDR|INFO: copying region 0x00000003
+LDR|INFO: copying region 0x00000004
+LDR|INFO: copying region 0x00000005
+LDR|INFO|CPU0: active CPUs to start: 0x00000001
+LDR|INFO|CPU0: enabling MMU
+LDR|INFO|CPU0: CurrentEL=EL2
+LDR|INFO|CPU0: Resetting CNTVOFF
+LDR|INFO|CPU0: enabling MMU
+LDR|INFO|CPU0: jumping to kernel
+Bootstrapping kernel
+Warning: Could not infer GIC interrupt target ID, assuming 0.
+available phys memory regions: 1
+  [60000000..c0000000)
+reserved virt address space regions: 2
+  [8060000000..8060246000)
+  [8060246000..8060a05000)
+Booting all finished, dropped to user space
+INFO  [sel4_capdl_initializer::initialize] Starting CapDL initializer
+INFO  [sel4_capdl_initializer::initialize] Starting threads
+MON|INFO: Microkit Monitor started!
+[persist] chokepoint persist-PD: sole holder of durable_log; leaf_buf (R)
+
+[commit] chokepoint commit-PD: the Lean step function on seL4
+[commit]   caps: nic_mmio + NIC IRQ (sole holder), leaf_buf (RW), PPC to persist
+[commit]   Lean runtime + CommitBytes initialised
+[persist]   PERSIST entry 1 (68-byte leaf, digest tail ..25) durable
+[commit]   FORWARD occ=0 job=100 (7 bytes) after persist ack (log=1); NIC magic=0x74726976
+[persist]   PERSIST entry 2 (68-byte leaf, digest tail ..29) durable
+[commit]   FORWARD occ=1 job=101 (7 bytes) after persist ack (log=2); NIC magic=0x74726976
+[persist]   PERSIST entry 3 (68-byte leaf, digest tail ..e7) durable
+[commit]   FORWARD occ=2 job=102 (7 bytes) after persist ack (log=3); NIC magic=0x74726976
+[persist]   PERSIST entry 4 (68-byte leaf, digest tail ..17) durable
+[commit]   FORWARD occ=3 job=103 (7 bytes) after persist ack (log=4); NIC magic=0x74726976
+[commit]   REFUSE job=104: nothing persisted, nothing forwarded (log=4)
+[commit]   REFUSE job=105: nothing persisted, nothing forwarded (log=4)
+[commit]   SUMMARY forwarded=4 refused=2 log_len=4 hw=6 halted=false
+[commit]   CHOKEPOINT-BOOT-OK
+qemu-system-aarch64: terminating on signal 15 from pid 74585 (<unknown process>)

@@ -1,0 +1,27 @@
+# chokepoint — the in-path receipt device as two Microkit protection domains
+# (../../chokepoint.system). Standalone workspace (own target dir) so the Lean link of
+# commit-pd never touches the shared dregg-pd members list, as executor-microkit-pd does.
+#
+#   commit-pd  : embeds the Lean step function `dregg_chokepoint_arrive`
+#                (degg-research/experiments/chokepoint-step/CommitBytes.lean, compiled by
+#                Lean 4.30.0) and is the SOLE holder of the NIC (virtio-mmio region + IRQ).
+#                For each offered frame it runs the step; on `F` it persists the leaf through
+#                a protected procedure call to persist-pd and forwards only after the call
+#                returns; on `R` it refuses.
+#   persist-pd : the durable-log seat. Holds the log region; nobody else does.
+[workspace]
+resolver = "2"
+members = ["commit-pd", "persist-pd"]
+
+[workspace.dependencies]
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608", default-features = false, features = ["alloc"] }
+sel4 = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608", default-features = false }
+sel4-musl = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-linux-syscall-types = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+sel4-dlmalloc = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

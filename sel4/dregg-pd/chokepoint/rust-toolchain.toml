@@ -1,0 +1,7 @@
+# Pinned to the nightly rust-sel4 itself pins (its rust-toolchain.toml at the
+# vendored commit efef73cc). build-std needs rust-src; the seL4 target is a
+# bare-metal tier-3 JSON target spec. Reproducible: `setup.sh` installs this.
+[toolchain]
+channel = "nightly-2026-04-04"
+profile = "minimal"
+components = ["rust-src"]
