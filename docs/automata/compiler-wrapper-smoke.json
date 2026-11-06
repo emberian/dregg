@@ -1,0 +1,36 @@
+{
+  "pattern": "byte7|byte9",
+  "words": [
+    [],
+    [
+      7
+    ],
+    [
+      9
+    ],
+    [
+      8
+    ],
+    [
+      7,
+      9
+    ]
+  ],
+  "whole": [
+    false,
+    true,
+    true,
+    false,
+    false
+  ],
+  "absence": [
+    true,
+    false,
+    false,
+    true,
+    false
+  ],
+  "status": "pass",
+  "validation_kind": "Executed proof-carrying compiler wrappers; not a kernel theorem proving execution success",
+  "command": "cd metatheory && lake env lean --run scripts/automata-compiler-smoke.lean"
+}

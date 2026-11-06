@@ -1,9 +1,9 @@
 {
-  "schema": 1,
+  "schema": 2,
   "initiative": 1,
   "reviewer": "Codex gpt-6-astra",
   "date": "2026-11-06",
-  "review_scope": "Named public statements and their defining relations; dependency hashes record identity, not a claim that every dependency was audited.",
+  "review_scope": "Named public statements, actual consumer wrappers and defining relations, with exact proof evidence and explicitly separate executed-wrapper evidence. Dependency hashes record identity, not review of every theorem.",
   "reviews": [
     {
       "id": "positive-exact-count",
@@ -54,10 +54,14 @@
       "id": "dfa-content-binding",
       "source": "metatheory/Dregg2/Crypto/Dfa.lean",
       "statement": "Dregg2.Crypto.Dfa.dfa_bound_identifies_record_or_collides",
-      "witness": "Dregg2.Crypto.Dfa.Reference.aab_accepts",
-      "falsifier": "Dregg2.Crypto.Dfa.Reference.splice_fails_bound",
-      "witness_scope": "relation-only",
-      "scope": "Conditional on kernel extractability and acceptance. Collision names the accepted trace word and intended record. The aab witness inhabits DfaAccepts only: no concrete full DfaBoundVerifierKernel/extractability instance is supplied by this file. Do not advertise full premise inhabitation or a deployed cryptographic reduction."
+      "witness": "Dregg2.Automata.DfaBoundReference.honest_full_premises",
+      "falsifier": "Dregg2.Automata.DfaBoundReference.wrong_record_separation",
+      "witness_scope": "checker-premise",
+      "scope": "The bound kernel interprets executable public input data as its semantic BoundStatement. The Boolean-table reference verifies actual transition/accept bits and identity record commitment, proves extraction and fires the generic theorem on both symbols. A rejecting word has no accepting trace; a valid trace with a wrong record is refused. Production STARK extraction and cryptographic binding remain separate assumptions, not inherited from the public-trace reference.",
+      "supporting_evidence": [
+        "Dregg2.Automata.DfaBoundReference.generic_bound_theorem_fires",
+        "Dregg2.Automata.DfaBoundReference.rejecting_word_not_in_language"
+      ]
     },
     {
       "id": "table-corpus-count",
@@ -76,52 +80,1247 @@
       "falsifier": "Dregg2.Automata.StatementAudit.table_validation_separation",
       "witness_scope": "relation-instance",
       "scope": "The runner is total using default state zero. A missing transition array can accept the empty word while wellFormed refuses the table; run/acceptance agreement must not be used as table validation."
+    },
+    {
+      "id": "committed-lrat",
+      "source": "metatheory/Dregg2/Sat/LratCert.lean",
+      "statement": "Dregg2.Sat.LratCert.refutes_intended_or_collides",
+      "witness": "Dregg2.Sat.LratCert.Reference.php3_verified",
+      "falsifier": "Dregg2.Automata.CertificateStatementAudit.lrat_false_claim_separation",
+      "witness_scope": "checker-premise",
+      "scope": "RUP-only LRAT checker, not general RAT completeness. The accepted CNF opens the intended root or the exact MMR pair collides. The no-RUP comparator retains live-hint requirements and is not an acceptance superset; the separate freshness example isolates freshness with both hints live. Zero literal evaluates false; the Std cross-check additionally requires zero-free translation.",
+      "supporting_evidence": [
+        "Dregg2.Sat.LratCert.Reference.reusedId_separation",
+        "Dregg2.Sat.LratCert.Reference.dropHint_separation",
+        "Dregg2.Sat.LratCert.Reference.noRup_not_superset"
+      ]
+    },
+    {
+      "id": "committed-bisimulation",
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "statement": "Dregg2.Crypto.Deriv.BisimCert.holds_intended_or_collides",
+      "witness": "Dregg2.Crypto.Deriv.BisimCert.Reference.upgrade_holds_or_collides",
+      "falsifier": "Dregg2.Crypto.Deriv.BisimCert.Reference.falseUpgrade_separation",
+      "witness_scope": "checker-premise",
+      "scope": "The checker computes covering symbolic classes over the admitted decidable-leaf fragment, checks root-pair membership, nullability and derivative closure. Both policies are opened; residuals name certificate/intended policy encodings, not arbitrary colliding policies. The false reverse inclusion has an explicit violating double-brace word. Encoding injectivity is over integers; a deployed field codec must preserve canonical encoding.",
+      "supporting_evidence": [
+        "Dregg2.Crypto.Deriv.BisimCert.Reference.ab_dropRoot_separation",
+        "Dregg2.Crypto.Deriv.BisimCert.Reference.ab_dropDerivative_separation",
+        "Dregg2.Crypto.Deriv.BisimCert.Reference.doubleBrace_violates"
+      ]
+    },
+    {
+      "id": "route8-binding",
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "statement": "Dregg2.Circuit.Emit.RouteChain8Binding.fold_binds_or_collides",
+      "witness": "Dregg2.Circuit.Emit.RouteChain8Binding.honest_route_inhabited",
+      "falsifier": "Dregg2.Circuit.Emit.RouteChain8Binding.order_splice_separated",
+      "witness_scope": "relation-instance",
+      "scope": "Binding requires equal run lengths and fixed payload widths, and returns one deterministically extracted collision between actual runs. Full output equality is used. Generic list theorem alone does not establish eight-lane canonical field encoding; consumer wrappers add it. Same-run residual is impossible for every hash; a separate constant-hash fixture inhabits the collision branch.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.RouteChain8Binding.no_self_collision",
+        "Dregg2.Circuit.Emit.RouteChain8Binding.collision_branch_inhabited",
+        "Dregg2.Circuit.Emit.RouteChain8Binding.variable_width_alias"
+      ]
+    },
+    {
+      "id": "table-route8-consumer",
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "statement": "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.bound_classifies_or_collides",
+      "witness": "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_bound_classifies",
+      "falsifier": "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.order_splice_strong_refuses",
+      "witness_scope": "checker-premise",
+      "scope": "The exact-public table variant binds ordered record and public length. Main statement requires full served descriptor satisfaction, sound eight-lane chip, canonical cells/record/hash outputs, nonempty trace, height below the field modulus, faithful graph table, and canonical initial/final states. Residual names distinct canonical arity-16 inputs belonging to the two actual chains. Raw descriptor SAT alone is not a record-opening check.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_satisfies",
+        "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_canonical",
+        "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.honest_strong_accepts",
+        "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.order_splice_weak_accepts",
+        "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.length_splice_strong_refuses"
+      ]
+    },
+    {
+      "id": "dyck-record-consumer",
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "statement": "Dregg2.Circuit.Emit.DyckStackBound.boundAccepts_sound",
+      "witness": "Dregg2.Circuit.Emit.DyckStackBound.fullWit_record_fires",
+      "falsifier": "Dregg2.Circuit.Emit.DyckStackBound.fullForged_strong_refuses",
+      "witness_scope": "checker-premise",
+      "scope": "The wrapper fixes word-derived route and padded row count. Main statement additionally requires sound/wired chip table, canonical rows and chain public inputs, the grammar start symbol, and record-core length below the field modulus. First-done/live rows are derived. The collision names actual trace/reference chain inputs. Route remains one field element (31 bits), not an eight-lane security claim. The accepted zeroHash witness rules out its exact residual; it asserts no cryptographic strength.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.DyckStackBound.fullWit_record_no_collision",
+        "Dregg2.Circuit.Emit.DyckStackBound.fullForged_weak_accepts",
+        "Dregg2.Circuit.Emit.DyckStackBound.fullForged_envelopes",
+        "Dregg2.Circuit.Emit.DyckStackBound.one_word_one_route"
+      ]
+    },
+    {
+      "id": "weld-route8-consumer",
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8.lean",
+      "statement": "Dregg2.Circuit.Emit.AttestedAutomatonRoute8.strongAccepts_sound",
+      "witness": "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.whole_theorem_inhabited",
+      "falsifier": "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.substitution_separation",
+      "witness_scope": "checker-premise",
+      "scope": "The actual strong acceptance relation consumes the same full descriptor/public endpoints as the weak one and adds ordered route/length openings. Soundness requires the real row heap opening family, faithful range tables, canonical cells/record/hash outputs, eight output lanes, sound chip, nonempty trace and height below the modulus, automaton commitment and bounded step/state data. Residual is either a specific bad row with that row opening heap or distinct canonical arity-16 inputs from the actual/reference routes. Existence of row heaps is denotational, not an efficient extractor implementation.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.witness_satisfies",
+        "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.witness_no_residual"
+      ]
+    },
+    {
+      "id": "cached-compiler-refinement",
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "statement": "Dregg2.Policy.reachCached_eq",
+      "witness": "Dregg2.Policy.cachedIdx_distinguishes",
+      "falsifier": "Dregg2.Policy.cached_zero_fuel",
+      "witness_scope": "relation-instance",
+      "scope": "Cached normalization preserves the entire established worklist result, including state order and fuel exhaustion; cached lookup is exact, not merely similar-language soundness. Positive/distinct one-byte lookup examples and explicit zero-fuel failure rule out an always-success implementation. Wall-clock performance and large-repeat success are independent measured properties.",
+      "supporting_evidence": [
+        "Dregg2.Policy.cachedIdx_eq",
+        "Dregg2.Policy.Compiled.memo_eq"
+      ]
+    },
+    {
+      "id": "certified-union",
+      "source": "metatheory/Dregg2/Policy/Union.lean",
+      "statement": "Dregg2.Policy.Certified.union",
+      "witness": "Dregg2.Policy.UnionReference.either_decides",
+      "falsifier": "Dregg2.Policy.UnionReference.malformed_refused",
+      "witness_scope": "constructor-instance",
+      "scope": "Constructor produces Certified for union semantics. Dense product decoding requires finite closed component bounds; certifyUnion checks both before constructing. Its language proof is quantified over all byte words. Right-only, left-only and neither cases refute projection/conjunction substitutes; a language certificate alone does not prove its n field is valid. Product has A.n*B.n states before checked optimization.",
+      "supporting_evidence": [
+        "Dregg2.Policy.UnionReference.union_choices",
+        "Dregg2.Policy.union_closed"
+      ]
+    },
+    {
+      "id": "checked-reachable-restriction",
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "statement": "Dregg2.Policy.Certified.restrict",
+      "witness": "Dregg2.Policy.trim_candidate_checked",
+      "falsifier": "Dregg2.Policy.trim_wrong_embedding_refused",
+      "witness_scope": "constructor-instance",
+      "scope": "Reverse simulation transfers the same Certified.hdec to the smaller closed table. The BFS candidate is untrusted: a commuting simulation is checked before restriction, and exploration/check failure retains the original table. The explicit three-row candidate into the six-row union product passes the actual checker and preserves empty/one-byte/two-byte verdicts; a shifted embedding is refused. This is not a theorem that the hash-map BFS itself always succeeds.",
+      "supporting_evidence": [
+        "Dregg2.Policy.trim_reference_choices"
+      ]
+    },
+    {
+      "id": "surface-compiler-consumer",
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "statement": "Dregg2.Policy.certifySurface",
+      "witness": "Dregg2.Policy.UnionReference.either_decides",
+      "falsifier": "Dregg2.Policy.UnionReference.union_choices",
+      "witness_scope": "constructor-instance",
+      "scope": "Actual policyc whole-word wrapper recursively composes surface alternatives, retaining derivative compilation for other forms. Every returned table intrinsically carries Certified.hdec; reachable trimming and optimization are accepted only after checked simulation. The named witness covers the certified constructor. Success of the actual partial wrapper is separately executed in the source-bound smoke artifact on byte7|byte9, both branches, empty and rejecting words; runtime success is not claimed as a kernel-decided proposition.",
+      "supporting_evidence": [
+        "Dregg2.Policy.Certified.hdec",
+        "Dregg2.Policy.Certified.union"
+      ],
+      "execution": {
+        "source": "metatheory/scripts/automata-compiler-smoke.lean",
+        "result": "docs/automata/compiler-wrapper-smoke.json"
+      }
+    },
+    {
+      "id": "surface-absence-consumer",
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "statement": "Dregg2.Policy.certifySurfaceAbsence",
+      "witness": "Dregg2.Policy.UnionReference.either_decides",
+      "falsifier": "Dregg2.Policy.UnionReference.malformed_refused",
+      "witness_scope": "constructor-instance",
+      "scope": "Actual policyc absence wrapper passes its certified whole-word table directly into certifyAbsenceFrom. Finite bounds and factor labelling are checked before Certified.ofFactor is returned; fuel exhaustion is an error. The returned hdec covers the padded complement language. Successful actual wrapper execution and five verdicts are recorded separately as runtime evidence; no native-evaluator theorem is introduced.",
+      "supporting_evidence": [
+        "Dregg2.Policy.Certified.hdec",
+        "Dregg2.Policy.nextSet_spec",
+        "Dregg2.Policy.nextSet_discriminates"
+      ],
+      "execution": {
+        "source": "metatheory/scripts/automata-compiler-smoke.lean",
+        "result": "docs/automata/compiler-wrapper-smoke.json"
+      }
+    },
+    {
+      "id": "generated-solvency",
+      "source": "metatheory/Dregg2/Circuit/Emit/SolvencyLeafEmit.lean",
+      "statement": "Dregg2.Circuit.Emit.SolvencyLeafEmit.solvency_commitments_sound",
+      "witness": "Dregg2.Automata.EmitterStatementAudit.solvency_main_fires",
+      "falsifier": "Dregg2.Circuit.Emit.SolvencyLeafEmit.arithmetic_refuses_insolvent",
+      "witness_scope": "checker-premise",
+      "scope": "The first row simultaneously constrains canonical 30-bit reserve/liability amounts and their exact nonwrapping subtraction. Public commitments are the hash heads from those same two rows of the sound chip. Full descriptor, chip and public canonical premises are jointly inhabited. The old modular-difference test accepts a concrete insolvent 30-bit pair; the new arithmetic refuses every canonical insolvent assignment. Hash-head identity is not collision resistance or an eight-lane commitment claim.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.SolvencyLeafEmit.solvency_emit_sound",
+        "Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_satisfies",
+        "Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_canonical",
+        "Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_chip_sound",
+        "Dregg2.Circuit.Emit.SolvencyLeafEmit.old_modular_difference_accepts_30bit_insolvent"
+      ]
+    },
+    {
+      "id": "generated-range-block",
+      "source": "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean",
+      "statement": "Dregg2.Circuit.Emit.BoundedFactEmit.rangeBodies_sound",
+      "witness": "Dregg2.Automata.EmitterStatementAudit.range_sound_inhabited",
+      "falsifier": "Dregg2.Automata.EmitterStatementAudit.range_reconstruction_separation",
+      "witness_scope": "checker-premise",
+      "scope": "Generated Boolean and reconstruction expressions imply integer range only with canonical assignments and fitting powers below the field modulus. The witness invokes the generic theorem; the same canonical value2 passes an omitted-reconstruction comparator but fails the actual one-bit block. Offset range is inclusive at its stated lower endpoint and exclusive at offset+2^bits. Fact-site hash-head projection additionally requires the actual sound full-lane chip table, instantiated by solvency and payment consumers.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.BoundedFactEmit.offset_range_sound",
+        "Dregg2.Circuit.Emit.BoundedFactEmit.factSite_sound"
+      ]
+    },
+    {
+      "id": "generated-borrow-chain",
+      "source": "metatheory/Dregg2/Circuit/Emit/BorrowChainEmit.lean",
+      "statement": "Dregg2.Circuit.Emit.BorrowChainEmit.bodies_sound",
+      "witness": "Dregg2.Automata.EmitterStatementAudit.borrow_sound_inhabited",
+      "falsifier": "Dregg2.Automata.EmitterStatementAudit.borrow_underflow_separation",
+      "witness_scope": "checker-premise",
+      "scope": "Arbitrary-width emitted limb equations yield the integer comparison under ranged limbs, Boolean borrows, 2*radix below the modulus, and final borrow zero. The actual generic theorem has a full-premise zero-chain instance. The underflow comparator checks the same emitted one-limb equations and all range/Boolean operands, admits 1<=0 without the final-zero check, and refuses when that check is restored."
+    },
+    {
+      "id": "generated-tuple-binding",
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "statement": "Dregg2.Circuit.Emit.TupleBindingEmit.all_rows_bound",
+      "witness": "Dregg2.Circuit.Emit.TupleBindingEmit.honest_satisfies",
+      "falsifier": "Dregg2.Circuit.Emit.TupleBindingEmit.changed_next_refused",
+      "witness_scope": "checker-premise",
+      "scope": "The constant-row descriptor binds every existing row to public tuple columns modulo the field. The first-only variant intentionally permits a different next row; the constant-row variant refuses a witnessed noncongruent next value. Empty row/width cases do not claim an existing nonempty tuple. Modular equality is not unqualified integer or byte identity and does not authenticate public provenance.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.TupleBindingEmit.tuple_semantics",
+        "Dregg2.Circuit.Emit.TupleBindingEmit.first_only_allows_distinct_next",
+        "Dregg2.Circuit.Emit.TupleBindingEmit.zero_ne_one_mod"
+      ]
+    },
+    {
+      "id": "generated-caveat-admission",
+      "source": "metatheory/Dregg2/Circuit/Emit/CaveatAdmissionEmit.lean",
+      "statement": "Dregg2.Circuit.Emit.CaveatAdmissionEmit.caveat_public_sound",
+      "witness": "Dregg2.Automata.EmitterStatementAudit.caveat_main_fires",
+      "falsifier": "Dregg2.Circuit.Emit.CaveatAdmissionEmit.strict_boundary_falsifier",
+      "witness_scope": "checker-premise",
+      "scope": "Actual descriptor satisfaction establishes three integer comparisons (one strict) and one asset equality over the public five-by-26-bit limb operands, with explicit canonical row/public values and faithful rangeRows26 table. Height-one full witness instantiates the main public theorem. The strict-boundary comparator uses actual emitted borrow bodies at equal operands, where inclusive accepts and strict refuses. This proves arithmetic admission, not external signatures or policy authorization.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.CaveatAdmissionEmit.honest_satisfies",
+        "Dregg2.Circuit.Emit.CaveatAdmissionEmit.honest_canonical"
+      ]
+    },
+    {
+      "id": "generated-payment-identity",
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "statement": "Dregg2.Circuit.Emit.DecoLeafEmit.payment_identity",
+      "witness": "Dregg2.Automata.EmitterStatementAudit.deco_main_fires",
+      "falsifier": "Dregg2.Circuit.Emit.DecoLeafEmit.invalid_amount_refused",
+      "witness_scope": "checker-premise",
+      "scope": "Actual first-row descriptor opens public amount/currency/recipient/intent through two sound chip sites to the public payment hash head. Canonicality, nonempty trace, sound chip and full satisfaction have one joint witness. Amount range is 1 through2^30 inclusive; the old transition-gated range is vacuous on the final row, while new first-row arithmetic refuses zero even at height one. The private salted transcript opening is explicitly not authentication of an externally supplied transcript; scalar hash heads are not a full-width binding claim.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.DecoLeafEmit.amount_range",
+        "Dregg2.Circuit.Emit.DecoLeafEmit.honest_satisfies",
+        "Dregg2.Circuit.Emit.DecoLeafEmit.honest_canonical",
+        "Dregg2.Circuit.Emit.DecoLeafEmit.honest_chip_sound",
+        "Dregg2.Circuit.Emit.DecoLeafEmit.old_final_row_range_vacuous",
+        "Dregg2.Circuit.Emit.DecoLeafEmit.zero_amount_arithmetic_refused",
+        "Dregg2.Circuit.Emit.DecoLeafEmit.upper_endpoint_arithmetic"
+      ]
+    },
+    {
+      "id": "served-note-spend",
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "statement": "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_committed_note_member",
+      "witness": "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_witness",
+      "falsifier": "Dregg2.Circuit.Emit.NoteSpendingLeafServed.repair_separates_same_trace",
+      "witness_scope": "checker-premise",
+      "scope": "The consumed fixed descriptor implies the earlier composed note/Merkle theorem with all path-shape, chip, canonicality and length envelopes explicit. The same two-row trace satisfies the fixed descriptor and every theorem premise; it exercises the legitimate zero-depth membership path under an abstract constant permutation, not a cryptographic collision claim. The identical one-row forge passes the old descriptor and fails the six added last-row constraints. The forged lookup table is abstract; it is not evidence of a real Poseidon2 proof forgery. Membership remains the scalar fact-hash fold, not the deployed Faithful8 tree; path-shape enforcement above this wrapper remains an explicit obligation.",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_inhabited",
+        "Dregg2.Circuit.Emit.NoteSpendingLeafServed.fixed_implies_base",
+        "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_spend_spec"
+      ]
     }
   ],
   "axiom_pins": {
-    "Dregg2.Datalog.FixpointCert.verify_sound": "info: 'Dregg2.Datalog.FixpointCert.verify_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
-    "Dregg2.Datalog.FixpointCert.Reference.honest_verifies": "info: 'Dregg2.Datalog.FixpointCert.Reference.honest_verifies' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Datalog.FixpointCert.Reference.open_trace_separation": "info: 'Dregg2.Datalog.FixpointCert.Reference.open_trace_separation' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Datalog.StratifiedCert.verifyS_receipt": "info: 'Dregg2.Datalog.StratifiedCert.verifyS_receipt' depends on axioms: [propext, Classical.choice, Quot.sound]",
-    "Dregg2.Datalog.StratifiedCert.Reference.honest_count0_verifies": "info: 'Dregg2.Datalog.StratifiedCert.Reference.honest_count0_verifies' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Datalog.StratifiedCert.Reference.current_db_separation": "info: 'Dregg2.Datalog.StratifiedCert.Reference.current_db_separation' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
-    "Dregg2.Datalog.JoinClosure.verifyJ_verifyS": "info: 'Dregg2.Datalog.JoinClosure.verifyJ_verifyS' depends on axioms: [propext, Classical.choice, Quot.sound]",
-    "Dregg2.Datalog.JoinClosure.Reference.join_safety_separation": "info: 'Dregg2.Datalog.JoinClosure.Reference.join_safety_separation' depends on axioms: [propext, Classical.choice, Quot.sound]",
-    "Dregg2.Datalog.SafeCoincidence.verifyJ_receipt": "info: 'Dregg2.Datalog.SafeCoincidence.verifyJ_receipt' depends on axioms: [propext, Classical.choice, Quot.sound]",
-    "Dregg2.Datalog.SafeCoincidence.Reference.unsafe_semantics_differ": "info: 'Dregg2.Datalog.SafeCoincidence.Reference.unsafe_semantics_differ' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
-    "Dregg2.Datalog.Aggregates.verifyBudget_sound": "info: 'Dregg2.Datalog.Aggregates.verifyBudget_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
-    "Dregg2.Crypto.Dfa.dfa_bound_identifies_record_or_collides": "info: 'Dregg2.Crypto.Dfa.dfa_bound_identifies_record_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound]",
-    "Dregg2.Crypto.Dfa.Reference.aab_accepts": "info: 'Dregg2.Crypto.Dfa.Reference.aab_accepts' depends on axioms: [propext]",
-    "Dregg2.Crypto.Dfa.Reference.splice_fails_bound": "info: 'Dregg2.Crypto.Dfa.Reference.splice_fails_bound' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Automata.TableRun.rejectCount_eq_zero_iff": "info: 'Dregg2.Automata.TableRun.rejectCount_eq_zero_iff' depends on axioms: [propext, Classical.choice, Quot.sound]",
-    "Dregg2.Automata.StatementAudit.join_accepts": "info: 'Dregg2.Automata.StatementAudit.join_accepts' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Automata.StatementAudit.runStrataJ_domain_congr": "info: 'Dregg2.Automata.StatementAudit.runStrataJ_domain_congr' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Automata.StatementAudit.budget_accepts": "info: 'Dregg2.Automata.StatementAudit.budget_accepts' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Automata.StatementAudit.join_budget_accepts": "info: 'Dregg2.Automata.StatementAudit.join_budget_accepts' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Automata.StatementAudit.budget_separation": "info: 'Dregg2.Automata.StatementAudit.budget_separation' depends on axioms: [propext, Quot.sound]",
-    "Dregg2.Automata.StatementAudit.table_accepts": "info: 'Dregg2.Automata.StatementAudit.table_accepts' depends on axioms: [propext]",
-    "Dregg2.Automata.StatementAudit.table_omission_changes_count": "info: 'Dregg2.Automata.StatementAudit.table_omission_changes_count' does not depend on any axioms",
-    "Dregg2.Automata.StatementAudit.table_validation_separation": "info: 'Dregg2.Automata.StatementAudit.table_validation_separation' depends on axioms: [propext]"
+    "Dregg2.Datalog.FixpointCert.verify_sound": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.FixpointCert.verify_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Dregg2.Datalog.FixpointCert.verify_sound"
+    },
+    "Dregg2.Datalog.FixpointCert.Reference.honest_verifies": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.FixpointCert.Reference.honest_verifies' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Datalog.FixpointCert.Reference.honest_verifies"
+    },
+    "Dregg2.Datalog.FixpointCert.Reference.open_trace_separation": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.FixpointCert.Reference.open_trace_separation' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Datalog.FixpointCert.Reference.open_trace_separation"
+    },
+    "Dregg2.Datalog.StratifiedCert.verifyS_receipt": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.StratifiedCert.verifyS_receipt' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Dregg2.Datalog.StratifiedCert.verifyS_receipt"
+    },
+    "Dregg2.Datalog.StratifiedCert.Reference.honest_count0_verifies": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.StratifiedCert.Reference.honest_count0_verifies' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Datalog.StratifiedCert.Reference.honest_count0_verifies"
+    },
+    "Dregg2.Datalog.StratifiedCert.Reference.current_db_separation": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.StratifiedCert.Reference.current_db_separation' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "Dregg2.Datalog.StratifiedCert.Reference.current_db_separation"
+    },
+    "Dregg2.Datalog.JoinClosure.verifyJ_verifyS": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.JoinClosure.verifyJ_verifyS' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Dregg2.Datalog.JoinClosure.verifyJ_verifyS"
+    },
+    "Dregg2.Datalog.JoinClosure.Reference.join_safety_separation": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.JoinClosure.Reference.join_safety_separation' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Dregg2.Datalog.JoinClosure.Reference.join_safety_separation"
+    },
+    "Dregg2.Datalog.SafeCoincidence.verifyJ_receipt": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.SafeCoincidence.verifyJ_receipt' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Dregg2.Datalog.SafeCoincidence.verifyJ_receipt"
+    },
+    "Dregg2.Datalog.SafeCoincidence.Reference.unsafe_semantics_differ": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.SafeCoincidence.Reference.unsafe_semantics_differ' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "Dregg2.Datalog.SafeCoincidence.Reference.unsafe_semantics_differ"
+    },
+    "Dregg2.Datalog.Aggregates.verifyBudget_sound": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Datalog.Aggregates.verifyBudget_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Dregg2.Datalog.Aggregates.verifyBudget_sound"
+    },
+    "Dregg2.Crypto.Dfa.dfa_bound_identifies_record_or_collides": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Crypto.Dfa.dfa_bound_identifies_record_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Dregg2.Crypto.Dfa.dfa_bound_identifies_record_or_collides"
+    },
+    "Dregg2.Crypto.Dfa.Reference.aab_accepts": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Crypto.Dfa.Reference.aab_accepts' depends on axioms: [propext]",
+      "command": "Dregg2.Crypto.Dfa.Reference.aab_accepts"
+    },
+    "Dregg2.Crypto.Dfa.Reference.splice_fails_bound": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Crypto.Dfa.Reference.splice_fails_bound' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Crypto.Dfa.Reference.splice_fails_bound"
+    },
+    "Dregg2.Automata.TableRun.rejectCount_eq_zero_iff": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.TableRun.rejectCount_eq_zero_iff' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Dregg2.Automata.TableRun.rejectCount_eq_zero_iff"
+    },
+    "Dregg2.Automata.StatementAudit.join_accepts": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.StatementAudit.join_accepts' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Automata.StatementAudit.join_accepts"
+    },
+    "Dregg2.Automata.StatementAudit.runStrataJ_domain_congr": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.StatementAudit.runStrataJ_domain_congr' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Automata.StatementAudit.runStrataJ_domain_congr"
+    },
+    "Dregg2.Automata.StatementAudit.budget_accepts": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.StatementAudit.budget_accepts' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Automata.StatementAudit.budget_accepts"
+    },
+    "Dregg2.Automata.StatementAudit.join_budget_accepts": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.StatementAudit.join_budget_accepts' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Automata.StatementAudit.join_budget_accepts"
+    },
+    "Dregg2.Automata.StatementAudit.budget_separation": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.StatementAudit.budget_separation' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Automata.StatementAudit.budget_separation"
+    },
+    "Dregg2.Automata.StatementAudit.table_accepts": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.StatementAudit.table_accepts' depends on axioms: [propext]",
+      "command": "Dregg2.Automata.StatementAudit.table_accepts"
+    },
+    "Dregg2.Automata.StatementAudit.table_omission_changes_count": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.StatementAudit.table_omission_changes_count' does not depend on any axioms",
+      "command": "Dregg2.Automata.StatementAudit.table_omission_changes_count"
+    },
+    "Dregg2.Automata.StatementAudit.table_validation_separation": {
+      "source": "metatheory/Dregg2/Automata/StatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.StatementAudit.table_validation_separation' depends on axioms: [propext]",
+      "command": "Dregg2.Automata.StatementAudit.table_validation_separation"
+    },
+    "Dregg2.Automata.DfaBoundReference.chainedB_iff": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.chainedB_iff' depends on axioms: [propext]",
+      "command": "chainedB_iff"
+    },
+    "Dregg2.Automata.DfaBoundReference.acceptsB_iff": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.acceptsB_iff' depends on axioms: [propext, Quot.sound]",
+      "command": "acceptsB_iff"
+    },
+    "Dregg2.Automata.DfaBoundReference.verify_iff": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.verify_iff' depends on axioms: [propext, Quot.sound]",
+      "command": "verify_iff"
+    },
+    "Dregg2.Automata.DfaBoundReference.honest_accepts": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.honest_accepts' depends on axioms: [propext]",
+      "command": "honest_accepts"
+    },
+    "Dregg2.Automata.DfaBoundReference.rejecting_word": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.rejecting_word' depends on axioms: [propext]",
+      "command": "rejecting_word"
+    },
+    "Dregg2.Automata.DfaBoundReference.wrong_record_separation": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.wrong_record_separation' depends on axioms: [propext]",
+      "command": "wrong_record_separation"
+    },
+    "Dregg2.Automata.DfaBoundReference.rejecting_word_not_in_language": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.rejecting_word_not_in_language' depends on axioms: [propext, Quot.sound]",
+      "command": "rejecting_word_not_in_language"
+    },
+    "Dregg2.Automata.DfaBoundReference.honest_full_premises": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.honest_full_premises' depends on axioms: [propext, Quot.sound]",
+      "command": "honest_full_premises"
+    },
+    "Dregg2.Automata.DfaBoundReference.generic_bound_theorem_fires": {
+      "source": "metatheory/Dregg2/Automata/DfaBoundReference.lean",
+      "report": "info: 'Dregg2.Automata.DfaBoundReference.generic_bound_theorem_fires' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "generic_bound_theorem_fires"
+    },
+    "Dregg2.Automata.CertificateStatementAudit.lrat_false_claim_separation": {
+      "source": "metatheory/Dregg2/Automata/CertificateStatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.CertificateStatementAudit.lrat_false_claim_separation' depends on axioms: [propext]",
+      "command": "lrat_false_claim_separation"
+    },
+    "Dregg2.Sat.LratCert.Reference.php3_verified": {
+      "source": "metatheory/Dregg2/Automata/CertificateStatementAudit.lean",
+      "report": "info: 'Dregg2.Sat.LratCert.Reference.php3_verified' depends on axioms: [propext]",
+      "command": "Dregg2.Sat.LratCert.Reference.php3_verified"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.Reference.upgrade_holds_or_collides": {
+      "source": "metatheory/Dregg2/Automata/CertificateStatementAudit.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.upgrade_holds_or_collides' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "Dregg2.Crypto.Deriv.BisimCert.Reference.upgrade_holds_or_collides"
+    },
+    "Dregg2.Policy.Compiled.memo_eq": {
+      "source": "metatheory/Dregg2/Automata/CertificateStatementAudit.lean",
+      "report": "info: 'Dregg2.Policy.Compiled.memo_eq' depends on axioms: [propext, Quot.sound]",
+      "command": "Dregg2.Policy.Compiled.memo_eq"
+    },
+    "Dregg2.Policy.cachedIdx_distinguishes": {
+      "source": "metatheory/Dregg2/Automata/CertificateStatementAudit.lean",
+      "report": "info: 'Dregg2.Policy.cachedIdx_distinguishes' depends on axioms: [propext]",
+      "command": "Dregg2.Policy.cachedIdx_distinguishes"
+    },
+    "Dregg2.Policy.cached_zero_fuel": {
+      "source": "metatheory/Dregg2/Automata/CertificateStatementAudit.lean",
+      "report": "info: 'Dregg2.Policy.cached_zero_fuel' depends on axioms: [propext]",
+      "command": "Dregg2.Policy.cached_zero_fuel"
+    },
+    "Dregg2.Policy.Certified.hdec": {
+      "source": "metatheory/Dregg2/Automata/CertificateStatementAudit.lean",
+      "report": "info: 'Dregg2.Policy.Certified.hdec' depends on axioms: [propext]",
+      "command": "Dregg2.Policy.Certified.hdec"
+    },
+    "Dregg2.Sat.LratCert.checkLrat_sound": {
+      "source": "metatheory/Dregg2/Sat/LratCert.lean",
+      "report": "info: 'Dregg2.Sat.LratCert.checkLrat_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "checkLrat_sound"
+    },
+    "Dregg2.Sat.LratCert.verify_sound": {
+      "source": "metatheory/Dregg2/Sat/LratCert.lean",
+      "report": "info: 'Dregg2.Sat.LratCert.verify_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "verify_sound"
+    },
+    "Dregg2.Sat.LratCert.refutes_intended_or_collides": {
+      "source": "metatheory/Dregg2/Sat/LratCert.lean",
+      "report": "info: 'Dregg2.Sat.LratCert.refutes_intended_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "refutes_intended_or_collides"
+    },
+    "Dregg2.Sat.LratCert.Reference.reusedId_separation": {
+      "source": "metatheory/Dregg2/Sat/LratCert.lean",
+      "report": "info: 'Dregg2.Sat.LratCert.Reference.reusedId_separation' depends on axioms: [propext]",
+      "command": "Reference.reusedId_separation"
+    },
+    "Dregg2.Sat.LratCert.Reference.dropHint_separation": {
+      "source": "metatheory/Dregg2/Sat/LratCert.lean",
+      "report": "info: 'Dregg2.Sat.LratCert.Reference.dropHint_separation' depends on axioms: [propext]",
+      "command": "Reference.dropHint_separation"
+    },
+    "Dregg2.Sat.LratCert.Reference.noRup_not_superset": {
+      "source": "metatheory/Dregg2/Sat/LratCert.lean",
+      "report": "info: 'Dregg2.Sat.LratCert.Reference.noRup_not_superset' depends on axioms: [propext]",
+      "command": "Reference.noRup_not_superset"
+    },
+    "Dregg2.Sat.LratCert.Reference.php3_counts": {
+      "source": "metatheory/Dregg2/Sat/LratCert.lean",
+      "report": "info: 'Dregg2.Sat.LratCert.Reference.php3_counts' depends on axioms: [propext]",
+      "command": "Reference.php3_counts"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.bisimCheck_sound": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.bisimCheck_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "bisimCheck_sound"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.bisimEqCheck_sound": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.bisimEqCheck_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "bisimEqCheck_sound"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.verify_sound": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.verify_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "verify_sound"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.holds_intended_or_collides": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.holds_intended_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "holds_intended_or_collides"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.Reference.ab_dropRoot_separation": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.ab_dropRoot_separation' depends on axioms: [propext]",
+      "command": "Reference.ab_dropRoot_separation"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.Reference.ab_dropDerivative_separation": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.ab_dropDerivative_separation' depends on axioms: [propext]",
+      "command": "Reference.ab_dropDerivative_separation"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.Reference.doubleBrace_violates": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.doubleBrace_violates' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "Reference.doubleBrace_violates"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.Reference.falseUpgrade_separation": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.falseUpgrade_separation' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "Reference.falseUpgrade_separation"
+    },
+    "Dregg2.Crypto.Deriv.BisimCert.Reference.replay_counts": {
+      "source": "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean",
+      "report": "info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.replay_counts' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Reference.replay_counts"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.preimage_injective": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.preimage_injective' depends on axioms: [propext, Quot.sound]",
+      "command": "preimage_injective"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.fold_binds_or_collides": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.fold_binds_or_collides' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "fold_binds_or_collides"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.find_mem": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.find_mem' depends on axioms: [propext]",
+      "command": "find_mem"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.chain_binds_or_collides": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.chain_binds_or_collides' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "chain_binds_or_collides"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.no_self_collision": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.no_self_collision' depends on axioms: [propext]",
+      "command": "no_self_collision"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.honest_route_inhabited": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.honest_route_inhabited' depends on axioms: [propext]",
+      "command": "honest_route_inhabited"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.order_splice_separated": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.order_splice_separated' depends on axioms: [propext]",
+      "command": "order_splice_separated"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.collision_branch_inhabited": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.collision_branch_inhabited' depends on axioms: [propext]",
+      "command": "collision_branch_inhabited"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.preimage_arity": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.preimage_arity' depends on axioms: [propext]",
+      "command": "preimage_arity"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.fold_width": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.fold_width' does not depend on any axioms",
+      "command": "fold_width"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.variable_width_alias": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.variable_width_alias' does not depend on any axioms",
+      "command": "variable_width_alias"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.preimages_arity": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.preimages_arity' depends on axioms: [propext]",
+      "command": "preimages_arity"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.find_arity": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.find_arity' depends on axioms: [propext]",
+      "command": "find_arity"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Binding.preimages_all": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Binding.preimages_all' depends on axioms: [propext]",
+      "command": "preimages_all"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Refine.index_exact": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Refine.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Refine.index_exact' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "index_exact"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Refine.length_exact": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Refine.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Refine.length_exact' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "length_exact"
+    },
+    "Dregg2.Circuit.Emit.RouteChain8Refine.route_eq_fold": {
+      "source": "metatheory/Dregg2/Circuit/Emit/RouteChain8Refine.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.RouteChain8Refine.route_eq_fold' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "route_eq_fold"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.bound_word_or_collides": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.bound_word_or_collides' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "bound_word_or_collides"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.bound_classifies_or_collides": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.bound_classifies_or_collides' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "bound_classifies_or_collides"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_satisfies' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "witness_satisfies"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_canonical": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_canonical' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "witness_canonical"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_bound_classifies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.witness_bound_classifies' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "witness_bound_classifies"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.honest_strong_accepts": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.honest_strong_accepts' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "honest_strong_accepts"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.order_splice_weak_accepts": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.order_splice_weak_accepts' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "order_splice_weak_accepts"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.order_splice_strong_refuses": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.order_splice_strong_refuses' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "order_splice_strong_refuses"
+    },
+    "Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.length_splice_strong_refuses": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableRoute8Bound.length_splice_strong_refuses' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "length_splice_strong_refuses"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.dyck_route_binds_rows_or_collides": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.dyck_route_binds_rows_or_collides' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "dyck_route_binds_rows_or_collides"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.dyck_bound_or_collides": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.dyck_bound_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "dyck_bound_or_collides"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.boundAccepts_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.boundAccepts_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "boundAccepts_sound"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.one_word_one_route": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.one_word_one_route' depends on axioms: [propext, Quot.sound]",
+      "command": "one_word_one_route"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.fullWit_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.fullWit_satisfies' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "fullWit_satisfies"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.fullWit_record_fires": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.fullWit_record_fires' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "fullWit_record_fires"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.fullWit_record_no_collision": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.fullWit_record_no_collision' depends on axioms: [propext]",
+      "command": "fullWit_record_no_collision"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.fullForged_weak_accepts": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.fullForged_weak_accepts' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "fullForged_weak_accepts"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.fullForged_strong_refuses": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.fullForged_strong_refuses' depends on axioms: [propext, Quot.sound]",
+      "command": "fullForged_strong_refuses"
+    },
+    "Dregg2.Circuit.Emit.DyckStackBound.fullForged_envelopes": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DyckStackBound.fullForged_envelopes' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "fullForged_envelopes"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8.strongAccepts_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8.strongAccepts_sound' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "strongAccepts_sound"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8.weldBound_reads_or_collides": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8.weldBound_reads_or_collides' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "weldBound_reads_or_collides"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8.weldBound_classifies_or_collides": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8.weldBound_classifies_or_collides' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "weldBound_classifies_or_collides"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8.honest_record_no_collision": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8.honest_record_no_collision' depends on axioms: [propext]",
+      "command": "honest_record_no_collision"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.witness_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.witness_satisfies' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "witness_satisfies"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.whole_theorem_inhabited": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.whole_theorem_inhabited' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "whole_theorem_inhabited"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.witness_no_residual": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.witness_no_residual' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "witness_no_residual"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.strong_refuses_substitution": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.strong_refuses_substitution' depends on axioms: [propext,\n Quot.sound]",
+      "command": "strong_refuses_substitution"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.weak_accepts_substitution": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.weak_accepts_substitution' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "weak_accepts_substitution"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.honest_strong_accepts": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.honest_strong_accepts' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "honest_strong_accepts"
+    },
+    "Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.substitution_separation": {
+      "source": "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.AttestedAutomatonRoute8Witness.substitution_separation' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "substitution_separation"
+    },
+    "Dregg2.Policy.reachCached_eq": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.reachCached_eq' depends on axioms: [propext, Quot.sound]",
+      "command": "reachCached_eq"
+    },
+    "Dregg2.Policy.cachedIdx_eq": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.cachedIdx_eq' depends on axioms: [propext]",
+      "command": "cachedIdx_eq"
+    },
+    "Dregg2.Policy.union_run": {
+      "source": "metatheory/Dregg2/Policy/Union.lean",
+      "report": "info: 'Dregg2.Policy.union_run' depends on axioms: [propext, Quot.sound]",
+      "command": "union_run"
+    },
+    "Dregg2.Policy.union_closed": {
+      "source": "metatheory/Dregg2/Policy/Union.lean",
+      "report": "info: 'Dregg2.Policy.union_closed' depends on axioms: [propext, Quot.sound]",
+      "command": "union_closed"
+    },
+    "Dregg2.Policy.union_verdict": {
+      "source": "metatheory/Dregg2/Policy/Union.lean",
+      "report": "info: 'Dregg2.Policy.union_verdict' depends on axioms: [propext, Quot.sound]",
+      "command": "union_verdict"
+    },
+    "Dregg2.Policy.Certified.union": {
+      "source": "metatheory/Dregg2/Policy/Union.lean",
+      "report": "info: 'Dregg2.Policy.Certified.union' depends on axioms: [propext, Quot.sound]",
+      "command": "Certified.union"
+    },
+    "Dregg2.Policy.UnionReference.either_decides": {
+      "source": "metatheory/Dregg2/Policy/Union.lean",
+      "report": "info: 'Dregg2.Policy.UnionReference.either_decides' depends on axioms: [propext, Quot.sound]",
+      "command": "UnionReference.either_decides"
+    },
+    "Dregg2.Policy.UnionReference.union_choices": {
+      "source": "metatheory/Dregg2/Policy/Union.lean",
+      "report": "info: 'Dregg2.Policy.UnionReference.union_choices' depends on axioms: [propext, Quot.sound]",
+      "command": "UnionReference.union_choices"
+    },
+    "Dregg2.Policy.UnionReference.malformed_refused": {
+      "source": "metatheory/Dregg2/Policy/Union.lean",
+      "report": "info: 'Dregg2.Policy.UnionReference.malformed_refused' depends on axioms: [propext, Quot.sound]",
+      "command": "UnionReference.malformed_refused"
+    },
+    "Dregg2.Policy.nextSet_discriminates": {
+      "source": "metatheory/Dregg2/Policy/Factor.lean",
+      "report": "info: 'Dregg2.Policy.nextSet_discriminates' depends on axioms: [propext]",
+      "command": "nextSet_discriminates"
+    },
+    "Dregg2.Policy.nextSet_spec": {
+      "source": "metatheory/Dregg2/Policy/Factor.lean",
+      "report": "info: 'Dregg2.Policy.nextSet_spec' depends on axioms: [propext, Quot.sound]",
+      "command": "nextSet_spec"
+    },
+    "Dregg2.Policy.Certified.restrict": {
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "report": "info: 'Dregg2.Policy.Certified.restrict' depends on axioms: [propext, Quot.sound]",
+      "command": "Certified.restrict"
+    },
+    "Dregg2.Policy.trim_candidate_checked": {
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "report": "info: 'Dregg2.Policy.trim_candidate_checked' depends on axioms: [propext, Quot.sound]",
+      "command": "trim_candidate_checked"
+    },
+    "Dregg2.Policy.trim_reference_choices": {
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "report": "info: 'Dregg2.Policy.trim_reference_choices' depends on axioms: [propext, Quot.sound]",
+      "command": "trim_reference_choices"
+    },
+    "Dregg2.Policy.trim_wrong_embedding_refused": {
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "report": "info: 'Dregg2.Policy.trim_wrong_embedding_refused' depends on axioms: [propext, Quot.sound]",
+      "command": "trim_wrong_embedding_refused"
+    },
+    "Dregg2.Policy.certify": {
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "report": "info: 'Dregg2.Policy.certify' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "certify"
+    },
+    "Dregg2.Policy.certifySurface": {
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "report": "info: 'Dregg2.Policy.certifySurface' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "certifySurface"
+    },
+    "Dregg2.Policy.certifySurfaceAbsence": {
+      "source": "metatheory/Dregg2/Policy/Compositional.lean",
+      "report": "info: 'Dregg2.Policy.certifySurfaceAbsence' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "certifySurfaceAbsence"
+    },
+    "Dregg2.Automata.EmitterStatementAudit.solvency_main_fires": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.EmitterStatementAudit.solvency_main_fires' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "solvency_main_fires"
+    },
+    "Dregg2.Automata.EmitterStatementAudit.caveat_main_fires": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.EmitterStatementAudit.caveat_main_fires' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "caveat_main_fires"
+    },
+    "Dregg2.Automata.EmitterStatementAudit.deco_main_fires": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.EmitterStatementAudit.deco_main_fires' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "deco_main_fires"
+    },
+    "Dregg2.Automata.EmitterStatementAudit.range_reconstruction_separation": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.EmitterStatementAudit.range_reconstruction_separation' depends on axioms: [propext]",
+      "command": "range_reconstruction_separation"
+    },
+    "Dregg2.Automata.EmitterStatementAudit.range_sound_inhabited": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.EmitterStatementAudit.range_sound_inhabited' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "range_sound_inhabited"
+    },
+    "Dregg2.Automata.EmitterStatementAudit.borrow_underflow_separation": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.EmitterStatementAudit.borrow_underflow_separation' does not depend on any axioms",
+      "command": "borrow_underflow_separation"
+    },
+    "Dregg2.Automata.EmitterStatementAudit.borrow_sound_inhabited": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Automata.EmitterStatementAudit.borrow_sound_inhabited' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "borrow_sound_inhabited"
+    },
+    "Dregg2.Circuit.Emit.SolvencyLeafEmit.old_modular_difference_accepts_30bit_insolvent": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.old_modular_difference_accepts_30bit_insolvent' depends on axioms: [propext]",
+      "command": "SolvencyLeafEmit.old_modular_difference_accepts_30bit_insolvent"
+    },
+    "Dregg2.Circuit.Emit.SolvencyLeafEmit.arithmetic_refuses_insolvent": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.arithmetic_refuses_insolvent' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "SolvencyLeafEmit.arithmetic_refuses_insolvent"
+    },
+    "Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_canonical": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_canonical' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "SolvencyLeafEmit.honest_canonical"
+    },
+    "Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_chip_sound": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_chip_sound' depends on axioms: [propext, Quot.sound]",
+      "command": "SolvencyLeafEmit.honest_chip_sound"
+    },
+    "Dregg2.Circuit.Emit.CaveatAdmissionEmit.strict_boundary_falsifier": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.CaveatAdmissionEmit.strict_boundary_falsifier' does not depend on any axioms",
+      "command": "CaveatAdmissionEmit.strict_boundary_falsifier"
+    },
+    "Dregg2.Circuit.Emit.CaveatAdmissionEmit.honest_canonical": {
+      "source": "metatheory/Dregg2/Automata/EmitterStatementAudit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.CaveatAdmissionEmit.honest_canonical' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "CaveatAdmissionEmit.honest_canonical"
+    },
+    "Dregg2.Circuit.Emit.SolvencyLeafEmit.solvency_emit_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/SolvencyLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.solvency_emit_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "solvency_emit_sound"
+    },
+    "Dregg2.Circuit.Emit.SolvencyLeafEmit.solvency_commitments_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/SolvencyLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.solvency_commitments_sound' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "solvency_commitments_sound"
+    },
+    "Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/SolvencyLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.honest_satisfies' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "honest_satisfies"
+    },
+    "Dregg2.Circuit.Emit.BoundedFactEmit.boolean_forces": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BoundedFactEmit.boolean_forces' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "boolean_forces"
+    },
+    "Dregg2.Circuit.Emit.BoundedFactEmit.recompose_fold_eval": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BoundedFactEmit.recompose_fold_eval' depends on axioms: [propext, Quot.sound]",
+      "command": "recompose_fold_eval"
+    },
+    "Dregg2.Circuit.Emit.BoundedFactEmit.bitSum_bounds": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BoundedFactEmit.bitSum_bounds' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "bitSum_bounds"
+    },
+    "Dregg2.Circuit.Emit.BoundedFactEmit.rangeBodies_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BoundedFactEmit.rangeBodies_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "rangeBodies_sound"
+    },
+    "Dregg2.Circuit.Emit.BoundedFactEmit.offset_range_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BoundedFactEmit.offset_range_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "offset_range_sound"
+    },
+    "Dregg2.Circuit.Emit.BoundedFactEmit.factSite_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BoundedFactEmit.factSite_sound' depends on axioms: [propext, Quot.sound]",
+      "command": "factSite_sound"
+    },
+    "Dregg2.Circuit.Emit.BorrowChainEmit.modular_limb_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BorrowChainEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BorrowChainEmit.modular_limb_sound' depends on axioms: [propext, Quot.sound]",
+      "command": "modular_limb_sound"
+    },
+    "Dregg2.Circuit.Emit.BorrowChainEmit.bodies_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BorrowChainEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BorrowChainEmit.bodies_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "bodies_sound"
+    },
+    "Dregg2.Circuit.Emit.CaveatAdmissionEmit.caveat_emit_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/CaveatAdmissionEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.CaveatAdmissionEmit.caveat_emit_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "caveat_emit_sound"
+    },
+    "Dregg2.Circuit.Emit.CaveatAdmissionEmit.honest_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/CaveatAdmissionEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.CaveatAdmissionEmit.honest_satisfies' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "honest_satisfies"
+    },
+    "Dregg2.Circuit.Emit.CaveatAdmissionEmit.caveat_public_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/CaveatAdmissionEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.CaveatAdmissionEmit.caveat_public_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "caveat_public_sound"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.descriptor_count": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.descriptor_count' depends on axioms: [propext, Quot.sound]",
+      "command": "descriptor_count"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.amount_range": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.amount_range' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "amount_range"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.payment_identity": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.payment_identity' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "payment_identity"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.transcript_opening": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.transcript_opening' depends on axioms: [propext, Quot.sound]",
+      "command": "transcript_opening"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.invalid_amount_refused": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.invalid_amount_refused' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "invalid_amount_refused"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.honest_arithmetic_check": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.honest_arithmetic_check' depends on axioms: [propext]",
+      "command": "honest_arithmetic_check"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.honest_arithmetic": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.honest_arithmetic' depends on axioms: [propext, Quot.sound]",
+      "command": "honest_arithmetic"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.honest_canonical": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.honest_canonical' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "honest_canonical"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.honest_chip_sound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.honest_chip_sound' depends on axioms: [propext, Quot.sound]",
+      "command": "honest_chip_sound"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.honest_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.honest_satisfies' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "honest_satisfies"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.old_final_row_range_vacuous": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.old_final_row_range_vacuous' depends on axioms: [propext]",
+      "command": "old_final_row_range_vacuous"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.zero_amount_arithmetic_refused": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.zero_amount_arithmetic_refused' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "zero_amount_arithmetic_refused"
+    },
+    "Dregg2.Circuit.Emit.DecoLeafEmit.upper_endpoint_arithmetic": {
+      "source": "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.DecoLeafEmit.upper_endpoint_arithmetic' depends on axioms: [propext]",
+      "command": "upper_endpoint_arithmetic"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.constraint_count": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.constraint_count' depends on axioms: [propext]",
+      "command": "constraint_count"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.copy_semantics": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.copy_semantics' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "copy_semantics"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.tuple_semantics": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.tuple_semantics' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "tuple_semantics"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.honest_tuple": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.honest_tuple' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "honest_tuple"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.changed_public_refused": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.changed_public_refused' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "changed_public_refused"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.changed_next_refused": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.changed_next_refused' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "changed_next_refused"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.all_rows_bound": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.all_rows_bound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "all_rows_bound"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.no_mem_ops": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.no_mem_ops' depends on axioms: [propext, Quot.sound]",
+      "command": "no_mem_ops"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.no_map_ops": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.no_map_ops' depends on axioms: [propext, Quot.sound]",
+      "command": "no_map_ops"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.honest_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.honest_satisfies' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "honest_satisfies"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.zero_ne_one_mod": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.zero_ne_one_mod' does not depend on any axioms",
+      "command": "zero_ne_one_mod"
+    },
+    "Dregg2.Circuit.Emit.TupleBindingEmit.first_only_allows_distinct_next": {
+      "source": "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.TupleBindingEmit.first_only_allows_distinct_next' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "first_only_allows_distinct_next"
+    },
+    "Dregg2.Circuit.Emit.NoteSpendingLeafServed.fixed_implies_base": {
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.fixed_implies_base' depends on axioms: [propext, Quot.sound]",
+      "command": "fixed_implies_base"
+    },
+    "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_spend_spec": {
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_spend_spec' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "served_spend_spec"
+    },
+    "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_committed_note_member": {
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_committed_note_member' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "served_committed_note_member"
+    },
+    "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_honest": {
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_honest' depends on axioms: [propext, Quot.sound]",
+      "command": "served_honest"
+    },
+    "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_refuses_old_forge": {
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_refuses_old_forge' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "served_refuses_old_forge"
+    },
+    "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_inhabited": {
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_inhabited' depends on axioms: [propext, Quot.sound]",
+      "command": "served_member_inhabited"
+    },
+    "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_witness": {
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_witness' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "served_member_witness"
+    },
+    "Dregg2.Circuit.Emit.NoteSpendingLeafServed.repair_separates_same_trace": {
+      "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.repair_separates_same_trace' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "repair_separates_same_trace"
+    }
   },
   "source_sha256": {
+    "docs/automata/compiler-wrapper-smoke.json": "a2f895d00ea04a8e4054fb76fdb665fed0880dafe2f7d69394c234e4f73992c6",
     "metatheory/Dregg2/Authority/Blocklace.lean": "29a163262d54c6dde7b784cfceaad9f3d34126275805692a1eca82040318cbf2",
     "metatheory/Dregg2/Authority/CDT.lean": "c726884d1541b337a94ba86f6d804784bc1f57c1435a2196f0781315fa4b49e7",
     "metatheory/Dregg2/Authority/Caveat.lean": "c30cee767b249bfb8b59b6898f50eb72996b12bd8d92b4cae4268bd16ba90271",
     "metatheory/Dregg2/Authority/ClearanceGraph.lean": "daca078b4eb37a8d8f35540f329aaf317f28109f2379567b11e514d1301f2142",
     "metatheory/Dregg2/Authority/Positional.lean": "b2895cf5d663f93cb212ebafc6728f205ceeff608d6c3a9c5588fe8e85cb6c15",
     "metatheory/Dregg2/Authority/Predicate.lean": "997919eab42931a65885dac4b70195ed9a1fe63b010b5d29f2a79d2e0cb260da",
-    "metatheory/Dregg2/Automata/StatementAudit.lean": "5d1d84cc2967416a86a3c58c5d32128666bc03afd45c26e455e7ea1e36a9ed6e",
+    "metatheory/Dregg2/Automata/CertificateStatementAudit.lean": "5e38384a22597434d8e5df5934a4634a30da50e293d1e9c1ef5f52aecd4d11d1",
+    "metatheory/Dregg2/Automata/DfaBoundReference.lean": "0ac400211be5e8bd8deb0f18ff3bbda6833c824af7bb6bb7cc9012277e408d83",
+    "metatheory/Dregg2/Automata/EmitterStatementAudit.lean": "8dbb1a5947ab04ba9f5cc3356dec7d791a1a16ab7bcb64e491499fd642a99897",
+    "metatheory/Dregg2/Automata/StatementAudit.lean": "035b4268ec500cbe3bc7e217ff1bde5eaa20bf9084d867d1b6b0577992f11ed3",
     "metatheory/Dregg2/Automata/TableRun.lean": "a69be8535b7d46a8a966c585ed664642d6ae6dfc7e69d021d2bbfb1f572d205c",
     "metatheory/Dregg2/Automata/TableRunSpec.lean": "f5353cf6110718099539f1b4fc2c785bd618f7a11f013aa4a51d4377d0d619e5",
+    "metatheory/Dregg2/Boundary.lean": "63784f8d547344a34e7fd26c407a7a72245a9b3e582cdcbf1d8cc0b4a6ebcdab",
     "metatheory/Dregg2/Catalog.lean": "f362234b3242b7b5dd7dd2bd9d978b1bf3e0b4ab9ea179438fe78bf241fa4374",
     "metatheory/Dregg2/CatalogEffects.lean": "87b3dd53da04c5427578d7422542af2609f1e96778acf6565618bbe52ab9a935",
     "metatheory/Dregg2/CatalogInstances.lean": "af7deae332ee61f64ec0b4390a92a084300fa60367c5af7415dbe0f09ec6d8f2",
     "metatheory/Dregg2/Circuit.lean": "ad7540ceca3d04ff67f72240e0882eab84f87a4291f8af68aba2304eea541e21",
+    "metatheory/Dregg2/Circuit/Argus/InterpCore.lean": "743beb811d5b0cf02325fffb15976fb1cf1a48d15849953356a18ca5d3200ca1",
+    "metatheory/Dregg2/Circuit/BabyBearFriField.lean": "f24c82177606d8c8762ee9fbc56ded025cc532f231f80243bfcbacdabfd1199c",
+    "metatheory/Dregg2/Circuit/CapMerkleGeneric.lean": "4c98436de4f9dc6abe589c16737d68152bf6e52467e4f3a829f3ceef1682e15e",
+    "metatheory/Dregg2/Circuit/CaveatBignumCompare.lean": "dc0bd085775219c40b2b49a2402b4e138af4c4f4125cc641f9b2ecbad4138717",
+    "metatheory/Dregg2/Circuit/ChipNarrowLookup.lean": "e8b8a68eed8c70376b3f7fb6e0f3252fc14538d626f3884ea9ebe8ee957337f9",
     "metatheory/Dregg2/Circuit/CollisionReduce.lean": "99e91d91c37092e84676baf5c4982fb3a4bb567c2028ac174431f4af30227040",
     "metatheory/Dregg2/Circuit/CommitmentReduction.lean": "a3fbbfbaf23b49ad95a61b44149f432a679cf1b7fd79a7bf3b45d61573e71d70",
+    "metatheory/Dregg2/Circuit/DecideSatisfied2.lean": "51052fcc7ad6751a91a141fe8104c95839df4483bf82a950ff8a2c7b0a3e9c48",
+    "metatheory/Dregg2/Circuit/DeployedCapTree.lean": "15a5740f92f485611dd00aa9988f1d956efa610e0713363bbc582261155bab33",
+    "metatheory/Dregg2/Circuit/DeployedHeapTree.lean": "c93a28ec05d3a8838b67880ca4b9fc3822be67304aff642501180d33a39c7f8f",
+    "metatheory/Dregg2/Circuit/DeployedMapDenotation.lean": "bb2933b39f5b91234605d2a9f591a76f6bd0612f5dc94342d0f9918bec139ef0",
+    "metatheory/Dregg2/Circuit/DescriptorIR2.lean": "df58b2f0755982cbaa5859dbe1bd1d558e3c1c728ebe2467927ec3c265191b4d",
+    "metatheory/Dregg2/Circuit/EffectAirIR.lean": "e56f6971d8a5fad3b3653cdad92099044bcd7143a2d21879a7d0158d5adca9fc",
+    "metatheory/Dregg2/Circuit/Emit/AirBuilder.lean": "6107c8127e5988210d4d94be260707e1b3ec2edfa7506b9b5a422fdab1ea52a7",
+    "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonBound.lean": "cf2c22562be0011d9a5b5dd9c2cf361796b3488f1f4187cc973dde06dcfd1d33",
+    "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonEmit.lean": "524e8f4008e224e0f00b2197dc50669038cb15781ac47a8f2fe46ecd384af45e",
+    "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonLanes8.lean": "e1aacd35d37c2951942daa8617ca931d4c1846b09b66c82decb994b7f70f2704",
+    "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8.lean": "169467132dbba98f9473cd52bdbc7572af7a90710aa89b9ff47bcab17547f0d4",
+    "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean": "f7df53de5c7879acb0a1f30073056385d63a98662462e572882b8d0cde68907e",
+    "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonWeld8.lean": "4f0fcb9b577b940f89b38c796ad8370e817a0784c3a97cb8e9bb71ed5dc3403c",
+    "metatheory/Dregg2/Circuit/Emit/BorrowChainEmit.lean": "8e0eb56009544ca36b4d5e95ebc45f526c80a1a1ee7be70851922d51e728384e",
+    "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean": "dab114eeae739d55f46cf90b62d70eae794f06801fca4c36dc066384242289a5",
+    "metatheory/Dregg2/Circuit/Emit/CaveatAdmissionEmit.lean": "a3c3e4524006d421cbc7c085ebf6e832b74ce4ae422846d87b036c95d7bbf08e",
+    "metatheory/Dregg2/Circuit/Emit/DecoLeafEmit.lean": "c106aa882f8672ecb0aff37dfaffeeed0fb07e0e98d4122b553a91ca501cda2c",
+    "metatheory/Dregg2/Circuit/Emit/DfaRoutingChainBound.lean": "f4b802f0c277e304fe77d2e63190592b49cf16349ca0270c411e41baa45e8734",
+    "metatheory/Dregg2/Circuit/Emit/DfaRoutingEmit.lean": "cbc9aebf5445fe05d15865727153197d1204a13343fc89e623785f39c16436cd",
+    "metatheory/Dregg2/Circuit/Emit/DfaRoutingRefine.lean": "2238f9fc2aa7eecefc71d092cbb52a630e3575e9f4bb76f6f95cb1095cab2539",
+    "metatheory/Dregg2/Circuit/Emit/DfaRoutingRung2.lean": "7373e8eaef83eb54f84699b47f10501893773aca6947f5d359d4fa33145dce11",
+    "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableBound.lean": "069375818c24e132cd481f2d6d809999e6f4ddc3255092b98bdb2823429eb914",
+    "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableEmit.lean": "9aa8482d5f45d969163455f8f40f1e84e5ac6411fea6e3566ddcc1729674a227",
+    "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8.lean": "e1d675772baa4d270d1b7062d4c636d8aaef3159bf336f87abef237f81e070b8",
+    "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean": "5e914bf7b20dcee037877be784775bf28ce8e028eef694d1ee5e1eef5189b486",
+    "metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean": "927ac58acebbd1e9d7dd03c1ddae554a6e4e4740f4c94bf8e24e7d752bc1f320",
+    "metatheory/Dregg2/Circuit/Emit/DyckStackEmit.lean": "600700b9bf5c6620053cfcc25207ae5e88ef7a1889c468137b4f40db0ff28a97",
+    "metatheory/Dregg2/Circuit/Emit/DyckStackRefine.lean": "b71f8170b678ff39696686d25ee74c221f5c1731671239233d318e1a50aff77e",
+    "metatheory/Dregg2/Circuit/Emit/DyckStackReplay.lean": "7dfb92e659615bf85f1bf19de46e4c8845b8862ac3a1068998dab69c24c8e252",
+    "metatheory/Dregg2/Circuit/Emit/EffectLowerCertified.lean": "4c700613f998e561b505e8a9b383fc264af27cb1b974d534c12df61b260812db",
+    "metatheory/Dregg2/Circuit/Emit/EffectLowerCore.lean": "620523da26797e82796c4d4ae1b1beefdadbacc93474a0999e6cb73ace57d2a4",
+    "metatheory/Dregg2/Circuit/Emit/EffectVmEmit.lean": "7985d1f2f944187d33c98aeff1b8eeb3b8cb998765398bdcf0a83e3218f64ccf",
+    "metatheory/Dregg2/Circuit/Emit/EffectVmEmitCapReshape.lean": "d09bf89b4765a4db828a180956e51fb98ddf900554721733dbfd257135c007df",
+    "metatheory/Dregg2/Circuit/Emit/EffectVmEmitCapRoot.lean": "863ccd61597bca53490a5c9c3bd31aab576e159274da604e85a64cc5c41be545",
+    "metatheory/Dregg2/Circuit/Emit/EffectVmEmitTransfer.lean": "d55a13a7c4c8698251b57f9faf33a2458da119f4ee5bdc67b3f955b80cbfed31",
+    "metatheory/Dregg2/Circuit/Emit/FieldDeltaRangeEmit.lean": "b50885216c6efd6ca55be6529c3acc8038c0a32055c3070b5864ed09d4e12337",
+    "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafEmit.lean": "b344c8ec1a3a67dc94cee0ba86680fd818c046c39a0235a31678a3d401974916",
+    "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafRefine.lean": "e87b48aba13fb3e0dd1aace6a5c45775413522d18e65b93912b6b470ae2bb4ee",
+    "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafRung2.lean": "ec5cd6c159f1c6d2183ff6f697e84541d9b221a9f8e4304a2640275444f290f8",
+    "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean": "8bac039e9bec41f108ce3660576b62438ae8d46a1922cf6256836789ef220fec",
+    "metatheory/Dregg2/Circuit/Emit/RouteChain8.lean": "8ea8e368afdaa6a5fffae36d5b38c8d03fcd5cfe995f586ba7c61c87fdc26610",
+    "metatheory/Dregg2/Circuit/Emit/RouteChain8Binding.lean": "99ff3c5ba9ca7c26c74bd65c3f4f5c17933a2c865f096ff227dd87714bc8e3fc",
+    "metatheory/Dregg2/Circuit/Emit/RouteChain8Canonical.lean": "f699de548e235a7282e1e9b644182e427965f04d0dd89d5b5fe546e1bb842b6a",
+    "metatheory/Dregg2/Circuit/Emit/RouteChain8Refine.lean": "a6197b2af9d4494a9fd3abb0291f45f425ded4485f09d673ad571956be886ea2",
+    "metatheory/Dregg2/Circuit/Emit/SolvencyLeafEmit.lean": "9c3859c91d852e755ea1a2161f229f6f65fa09cee75df50e020fe6c03480600e",
+    "metatheory/Dregg2/Circuit/Emit/TinyAutomataCompose.lean": "ed0e12333b89e7a9cc6de6a6f36a1e0d7ebc738ce7b750881943970aa90f54eb",
+    "metatheory/Dregg2/Circuit/Emit/TinyAutomataSatisfiable.lean": "32a7513a9de1a261f524d240128111a761e829e676c7baeafe7f4371e70c725e",
+    "metatheory/Dregg2/Circuit/Emit/TupleBindingEmit.lean": "a59b7cc97ddd2d0c25cfa8d50f7b333be1f8e3bed9096f7a94936de1cfcb288f",
     "metatheory/Dregg2/Circuit/FinKernelState.lean": "0c55fd9a1b737d4a533e0ddd5d31ffbd9a8c1d147ac36cef1455e360024d0753",
+    "metatheory/Dregg2/Circuit/FriSoundness.lean": "60f9c5dad09da6b79b897bb4a22174a444a68920581f16efd35edfca0cb06e99",
+    "metatheory/Dregg2/Circuit/GateExpr.lean": "31dd163786addded6c9d7bea33564021a0327b53b96264afc0e4436e147e4659",
     "metatheory/Dregg2/Circuit/HashFloorHonesty.lean": "907921ed593e1a95f14b8b3db0c3f7b8463707c6f687806af3045838a323ca20",
     "metatheory/Dregg2/Circuit/Lookup.lean": "20cc58dd0e0db421871bc243a1ce5f6f8604d1d4f124397b8db4a1799b480b7d",
+    "metatheory/Dregg2/Circuit/MapMerkleRoot.lean": "d9aec071cfbf60b0e43c6da24ee3b45e49f7cb6bbd03863876b7946f5da5c227",
+    "metatheory/Dregg2/Circuit/NarrowChip.lean": "e4ec2384ea1baf54f1595250403bd71ae1e161c52803142decaa70cf0ab0fdfa",
     "metatheory/Dregg2/Circuit/OodCommitmentBinding.lean": "83a4304984cffc6f963983a5d13561ce9c10a006e5c8cdea359eed5711bf7553",
     "metatheory/Dregg2/Circuit/Poseidon2Binding.lean": "d27ae8d6bfb03baec8dc243093eabbad1f587dbc44df94c46e7cfa80cd7b463c",
     "metatheory/Dregg2/Circuit/RecursiveAggregation.lean": "015d18841bfa3f6dd5315507e4e815d9ec32eedd8460eb627580fd1fe1b5bfb0",
@@ -130,29 +1329,55 @@
     "metatheory/Dregg2/Circuit/StateCommit.lean": "ed7a1f230b7b04fcef5bd98f07eebc9548bda3cfc84d0e875850dd4c490b3e5e",
     "metatheory/Dregg2/Circuit/StateCommitLeafRegrounded.lean": "559c1e088e34a6f2e515e4c5affaca8d72fba5f4317faa85f4473fb8e463ecde",
     "metatheory/Dregg2/Circuit/StateCommitReduceRaw.lean": "dd475561e8f6f865ad8b4a4089203773814ed82a6416b6e1ee44c5d02e1dcbb6",
+    "metatheory/Dregg2/Circuit/TableAirIR.lean": "d7deec26d6b8d80eefe56f25775a491baa2d48801e3f9c86ee1577970feaa6ea",
     "metatheory/Dregg2/Circuit/Transfer.lean": "b5dfd890c6ba4649891b571e87f1e7ce83fd87e296aa43b44dc0a95752a9e1c0",
     "metatheory/Dregg2/Confluence.lean": "e82168d7ec538f1a5bd03f48199354d6b51cd6e2e67f91fd28e27db2fcec5b50",
     "metatheory/Dregg2/Core.lean": "dc76275a7d3adb96ffa4b031c491027e31a27049d60c67161ac1e83fddaaa11b",
+    "metatheory/Dregg2/Crypto/AbstractMachine.lean": "31a2a2b2fd5a175df122c449f42cb8b3479445d5cd465d8fc3031f57bb4eb191",
+    "metatheory/Dregg2/Crypto/Cfg.lean": "b41791495157c529646c5e4de5131d4944119cc0907a30f58e35ad4e0a610d6c",
+    "metatheory/Dregg2/Crypto/CfgCompact.lean": "75bcac79b9c1f535c387e571e8d59ae50de917f4f220a370a89f928ed46ee510",
     "metatheory/Dregg2/Crypto/Chain.lean": "44c04fcfac64ba2686e564b7763beacdb6a529af8f85c1ae2ef27f736c5b2f31",
+    "metatheory/Dregg2/Crypto/CommitmentBinding.lean": "59964d8b6e6886acfac631b2a1493d3bfd327357a88704fcc3468851ac86e93d",
     "metatheory/Dregg2/Crypto/ConcreteSecurity.lean": "101746bfa3f36d1c98f64179ba4d1249c8b31e26addffef6d64e3b9498869ef4",
     "metatheory/Dregg2/Crypto/CostAdversary.lean": "1ed158f37033cdc8636082e6e1a2e9cf3e44577f570028de1d90be9b4bb3b844",
     "metatheory/Dregg2/Crypto/CostNormAttr.lean": "85c38c5b1fe529cdea7d416680dd1015797bbdcf3dc4d13257059e7bd8f21fb7",
     "metatheory/Dregg2/Crypto/CostTactics.lean": "6b1316812037cc84d32ccb5e892fab9e50b5fdc2cff8ccd6bbbca62d42c2d681",
+    "metatheory/Dregg2/Crypto/Deriv/AciComplete.lean": "c28fe7bb3157c52b9f84abb9dae826c6b3112654fef5f7bf1acf9d07abb963ca",
+    "metatheory/Dregg2/Crypto/Deriv/AciNormal.lean": "a41925116417dc8d6694df1f63bd4ac6f0701bbd25a1439d01becb03b0551a42",
+    "metatheory/Dregg2/Crypto/Deriv/BisimCert.lean": "28c01d478401cde0e5377651dd990cea6030a41e293f558c559b52ac5758bac5",
     "metatheory/Dregg2/Crypto/Deriv/Combinatorics.lean": "ae3756169bbaaaf62840f378bb696c87afb4ccbd6f73b53244eba0f62cfe951d",
     "metatheory/Dregg2/Crypto/Deriv/Core.lean": "a4305845c2d0217e9264e73b44087f706364e0ee071de6eb0c98a4bf14565a39",
     "metatheory/Dregg2/Crypto/Deriv/Correctness.lean": "efa1aaf1e81bbaaa227eb405868d3770bf2ad3d6e84c9d5732a2270834ca6965",
     "metatheory/Dregg2/Crypto/Deriv/Determinize.lean": "ed7cb27ffecc7cc160b222945ade294cb7c5c41e4292bccf4fbebaf073e1738c",
+    "metatheory/Dregg2/Crypto/Deriv/EquivalenceFixpoint.lean": "8854cc3def1fb5b1a41ebe889f8a14240f4ca914a2c706a51b2ee086de8e9ab0",
     "metatheory/Dregg2/Crypto/Deriv/Finite.lean": "515444df2124e20d5decf1cb4835feda85947ae970dc76ecc59baf5368cd502f",
     "metatheory/Dregg2/Crypto/Deriv/Finiteness.lean": "962261e1fa7e31b5431932c46df2ff31bc12f31fbceacb260a034469e5e42925",
     "metatheory/Dregg2/Crypto/Deriv/Monotone.lean": "e3bc117c8844956c59a094f6de85b5bc246aec5fe6fae805390375221f91012e",
     "metatheory/Dregg2/Crypto/Deriv/Permute.lean": "5162c100ff956cdf8b950441ad33e1a91b6ea133a03144c875dc1aa8159c0d61",
     "metatheory/Dregg2/Crypto/Deriv/Pieces.lean": "4fd673aa842e7856a01a79139cc801b5e0c281594117650b95dc31dc96edae0c",
+    "metatheory/Dregg2/Crypto/Deriv/SatOracle.lean": "67eb83395ea6ddfc77865cb07bfb47aeb2f4ede89c861cb60edeb5921c36dfc9",
     "metatheory/Dregg2/Crypto/Deriv/Similarity.lean": "edf210c50ac71a155f0b7a3b5c5b68cb8adaa80fc5707c0cac242a32751b944e",
+    "metatheory/Dregg2/Crypto/Deriv/StepBridge.lean": "fa07f4aaf35f196257c50feac38b4c60c2e2273d0f57fc3b07ce9d97cf231bc2",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicDecision.lean": "87c078b0b3b06f952a5c48a443682b746475e4776a4d5d64c147f2d2c6c925d0",
     "metatheory/Dregg2/Crypto/Deriv/SymbolicDerivative.lean": "e804bf7c889477d4978d190e38aee914fb8837baf46c1aeda8e041603da903c9",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicDifference.lean": "8c3fe2b4b1130a02ea481ea0613d335f18ec8ed454e9623f1dc4c5601f2593be",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicEmptiness.lean": "cf62ee71ce63f2445c3af8835ae69bfaa73bb67c02497155f11936fe3b34fa9d",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicEmptinessUnbounded.lean": "cbfe6d2b216430b070b277b6743b51e4efb474e89950345bf2c8ecf53c7f5dd6",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicEquivalence.lean": "6b11de77aac4974b4ea4c031370eb1d1492d9c8cb918740a367800d6945f9667",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicFixpoint.lean": "973e8a5c9eaf512fe002df28c3b3429c6976d8ebea168ce6fb50fb14f71300cd",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicIntervals.lean": "9a3b2c2320bb280f6c33d69e4927ec6675610583c1cf119741c66eed491e6e68",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicMinterms.lean": "d3f4d8ff3b5268af1d6e9ff6e1f86b18fafde4fa2e9ea303d7187aca3dbb2175",
+    "metatheory/Dregg2/Crypto/Deriv/SymbolicMintermsPlus.lean": "eb58e491a56f2bfd0347c0b545f7d13c25e1de0d51b0b93a2eab878658092b5a",
     "metatheory/Dregg2/Crypto/Deriv/TTerm.lean": "8c6a41ba99e554f1e8e6093895de2ea59772b772cc2d64a68ff8329d9906fa8e",
     "metatheory/Dregg2/Crypto/Deriv/TableDfa.lean": "a03fd86620881319b5e47cf6f4a370103f017d862dcf2cd2db3cf1cd889ca79d",
-    "metatheory/Dregg2/Crypto/Dfa.lean": "f3eb75f9947ad71d0c40e20b8d96a482f0d6c4affa90191e089b0beaa0e5ded2",
+    "metatheory/Dregg2/Crypto/Dfa.lean": "e578a62f44ff96badec23a5ee6ddccf77f3612c65172cf4766f4b08d999a7c4c",
+    "metatheory/Dregg2/Crypto/DfaAcceptanceAir.lean": "2500d965c8ead2f4215f8f9db67d27d8d5b7495719960491f0dad6bb1e8f0a59",
     "metatheory/Dregg2/Crypto/FloorGames.lean": "1b2914e933e06ed0d3afd63764da724633002a59ae424fd697aecadd42c14c3a",
+    "metatheory/Dregg2/Crypto/GuardToAutomatonCircuit.lean": "ec0582c66e7b4897c9de091101c1d9b4f36cd60b4901a3e312f052d45478e6ce",
+    "metatheory/Dregg2/Crypto/Handlebars.lean": "5e636a3a31304ccf40d9c2ec5e473e9e1bd9f1db59ff9df97d9350ad882b0462",
+    "metatheory/Dregg2/Crypto/HandlebarsGuardDecision.lean": "356f242b6a375d96820ce90b36b5746e99b7b0fc44f96ca5c957385af3f7fbbb",
+    "metatheory/Dregg2/Crypto/HandlebarsGuarded.lean": "888d66ed52ae2488934fd0b6fe91acce899a15a6e494a604c78787cf1b19c8f8",
+    "metatheory/Dregg2/Crypto/HandlebarsGuardedWitness.lean": "9fdf739e17ce93d0e0289f5c536017eb01c713f064fff493730179ce51e3429d",
     "metatheory/Dregg2/Crypto/HermineExtractor.lean": "5db077dea8d76f95f25a0e9e7a89fac8e71071d546c782f219d4bbca720edb97",
     "metatheory/Dregg2/Crypto/HermineHashCRRegrounded.lean": "b0c872bd282af16d3b416bc905fb2becccad35007e25ee4ab699be901af8d206",
     "metatheory/Dregg2/Crypto/HermineHiding.lean": "74638b0e1c96f86a984097188b373ef438f7746c6bec87889daad52c15813182",
@@ -161,16 +1386,20 @@
     "metatheory/Dregg2/Crypto/HermineSelfTargetMSIS.lean": "b26487a12ee39b16dcd25232a3e674f55e9bf73c73ab3b20d686f667361c22d2",
     "metatheory/Dregg2/Crypto/HermineTSUF.lean": "a569bbc7da2948352ca91bbeb5bd3ee884ecd30554a29a40ef4414733f3a55a7",
     "metatheory/Dregg2/Crypto/HermineThreshold.lean": "743988de2993fd672fbff3b72db11e216749498a1cee99e9968c3f2434eef826",
+    "metatheory/Dregg2/Crypto/Hypergraph.lean": "d6cf8b654f19714a62c29d020ab9e09a03757d881788b4349135a9496caba811",
     "metatheory/Dregg2/Crypto/KeyedRomFloor.lean": "4626362e49d583a769a63a68171dac870c19d79e86d3a93436410e7f336501ed",
     "metatheory/Dregg2/Crypto/Lattice.lean": "47dd09c1242f5be838553363cfad1984bcf8852ee56f9b856a3b56aa4f3317a7",
+    "metatheory/Dregg2/Crypto/MemoryChecking.lean": "a561a80c62a4a96ba5a075359d0578d5a481d603129e92a6f7212b9f72c6085f",
     "metatheory/Dregg2/Crypto/Merkle.lean": "ec4be0596292b04c7e1ceb1f3bfe18a31febd040b4aa40386f4a9ba3ef2d55d0",
     "metatheory/Dregg2/Crypto/NonMembership.lean": "29eba059903f71b9948962d894574b2a0a6d47de2e01ae3dfdb9a6d6117442b5",
+    "metatheory/Dregg2/Crypto/PortalFloor.lean": "f00391a7f2f8da940c8191baef14e5897674c662dcad01602009d02e758d623c",
     "metatheory/Dregg2/Crypto/Primitives.lean": "cb0fe6e3bd71f173890583c82c8f4423c00ece967c64b816585d46954b4fb41d",
     "metatheory/Dregg2/Crypto/ProbCrypto.lean": "819068a5f272fe5aa1a45a84d781f2b0905c7bf903a694c768a1190c4e5a98d4",
     "metatheory/Dregg2/Crypto/RomBindingReduction.lean": "89a066e6184960e9461d85fdf80512a2cc1ffab25177d810253c0e1dec209742",
     "metatheory/Dregg2/Crypto/RomCarrierSites.lean": "e7a6d90bbee261185647218f3b89ffabad12ca78a622afc08b39032eab575e95",
     "metatheory/Dregg2/Crypto/RomChainedReduction.lean": "1928928baae7005dfe112f49064f8b2256ad81682beb04873612dd6ae49f0869",
     "metatheory/Dregg2/Crypto/RomCounting.lean": "71eb950907dae559dcf0766f6a2beb559a97bf22757a42f4ef9bf6c40c2270e9",
+    "metatheory/Dregg2/Crypto/RomHashedLeafOpening.lean": "3bb87168b43e4cb66f772c3f17ac71c4624ea256154888688b1cfbb3162f7e8a",
     "metatheory/Dregg2/Crypto/RomMerkleOpening.lean": "397081d1bcecfb7449c291ccc8310c326c3ec841c1573f36e57cd7dd131138f8",
     "metatheory/Dregg2/Crypto/RomOracle.lean": "bc25e9581ec532964bcee97c402a5c776ac1f98787fb83cc411737dd85112a16",
     "metatheory/Dregg2/Crypto/RomQueryFloor.lean": "687693729831c24fee54d1b1f3c9ae80fb1d560f6368fbc85dc37f41e9cb22ad",
@@ -178,6 +1407,8 @@
     "metatheory/Dregg2/Crypto/ShamirPrivacy.lean": "520e14e31ef245a966975cc8a6b8d4e3fc13342e8d67c7e25d0b062ffed21118",
     "metatheory/Dregg2/Crypto/Smudging.lean": "63328f43a40f13d53860c016f74285cfb5f9a35b3ad9409d3c1049a4d7e56d3b",
     "metatheory/Dregg2/Crypto/SpongeCarrierReduction.lean": "1182eaef070fdacc0cf86628b8b33e05f63bd1bbf66fcf41a65c07c2a99f4d10",
+    "metatheory/Dregg2/Crypto/SpongeReduction.lean": "b286b0a5909370bbaf227c42e647cd7b41f3f984d4403cc28e3824357952747b",
+    "metatheory/Dregg2/Crypto/UniversalMemory.lean": "d0d728a014261f6df6ae92f95ee60f2d4fca0aaab8258c2d3b4c3e65ac1fc8f2",
     "metatheory/Dregg2/CryptoKernel.lean": "9d59f91d0b3db60a4e1b02436b5890637332819eb70f7b5aa32e75e48179c356",
     "metatheory/Dregg2/Datalog/Aggregates.lean": "1edeaed8c847055a3f6b8de48b5933ca9d0b1951fd4d3716fe079ce2964ebce7",
     "metatheory/Dregg2/Datalog/FixpointCert.lean": "1348ccc9670c23e94dbddeb0f6b36be875dc061b412184a15fb6a89e9a5a7093",
@@ -189,6 +1420,7 @@
     "metatheory/Dregg2/Exec/CircuitEmit.lean": "4402a4a9bc86806a084358e8fcc97d8faa317dbf01d54d9f4b6c39a552877373",
     "metatheory/Dregg2/Exec/ConsensusExec.lean": "d7bb66e7f4c377be00983e87a494d2e136bd48798907c86fd1781865989ea347",
     "metatheory/Dregg2/Exec/EffectsState.lean": "9beafbaca814eb02dd423734db9b70718911a8f65c01f1c389f47829247f6218",
+    "metatheory/Dregg2/Exec/FacetAuthority.lean": "6c47d0d50c5293e07e4b0805a42ff1b2de50bbfc39dd07e09931a717b69c47c2",
     "metatheory/Dregg2/Exec/Kernel.lean": "9ad75144433d90fb2a8c569900b2831aa21a64f37a4f40cbd94a6e89a7c9f22e",
     "metatheory/Dregg2/Exec/PredAlgebra.lean": "a3318e465dcc95bafe14da57595dca2b539f3d70aead0fe8738ef863831267d7",
     "metatheory/Dregg2/Exec/Program.lean": "ffdf282e48f0779b67ebfc458558d26d34e7e33186539fe0f1c3cfbf9140c112",
@@ -203,8 +1435,23 @@
     "metatheory/Dregg2/Lightclient/AttestedQuery.lean": "692beca47c39e03cf111cdd5d3b635b5527925df5e791d56676d1f1b07d0de2d",
     "metatheory/Dregg2/Lightclient/HistoryIndex.lean": "c460e91141b6c15750454058d1b8853ca87c2854a80bbccb4d4770dbec06b8ff",
     "metatheory/Dregg2/Lightclient/MMR.lean": "a3605a350e916cd2cd2cc9e18129578bf67bc54f3b4ce6c3180c4f7352ef2b0c",
+    "metatheory/Dregg2/Policy/Compile.lean": "036a4ff3f24d27ab1b52a6d2ad1910a8b44274cfee02ed564c1612bf88095872",
+    "metatheory/Dregg2/Policy/Compositional.lean": "9663b51b5dd44986a04e9da2a94f1f0a1e00b0095e788997de9e1b9619132e34",
+    "metatheory/Dregg2/Policy/Elab.lean": "429d78f09e0c3ae5e8f6d25a8477b5c1e8ebccdffcac50f077617fd130c8ee88",
+    "metatheory/Dregg2/Policy/Factor.lean": "6cf519bf32dc278b396df13bbbccc4c938c2d2d1c477e04c13b3a2a64be43151",
+    "metatheory/Dregg2/Policy/LexRoundTrip.lean": "313461b17563b9554f38af25b4920159719007ab5eb253feb08d70252a95c7c8",
+    "metatheory/Dregg2/Policy/Lexer.lean": "f9ef6eb5db9d6913444e3533be27287d9cf698844f770fcfe1194ebe25d457f3",
+    "metatheory/Dregg2/Policy/ParseRoundTrip.lean": "93f184d14c3803ab50fda2da8eb973dcf0705c6ea0684e66702cbb0bb8251879",
+    "metatheory/Dregg2/Policy/Parser.lean": "3a578a23f4a6b8cc75c99aeb484920679be293973d6d7ad97b3a5c1119defbcf",
+    "metatheory/Dregg2/Policy/Pretty.lean": "ea4af1c18c08a59d0f464997e67ebded7471d6227926d5c957d0c83607d668eb",
+    "metatheory/Dregg2/Policy/Syntax.lean": "ae357882ce44a68737d9a82678bf71144bc669ead6306d24d4db9150b4cd2951",
+    "metatheory/Dregg2/Policy/Theorems.lean": "e5a332ae2088ffe4d39d2e2dd2668433210cad351914029240017df43d2bb911",
+    "metatheory/Dregg2/Policy/Union.lean": "957ce34bfafbdc274a1d38941526315fe60fc7fba55c959638543f395b1287da",
+    "metatheory/Dregg2/Privacy.lean": "5bd0b18570966e78c63a5c816367dee20dcbc34b25543b6f83175dc0c42d5bf2",
     "metatheory/Dregg2/Proof/BFT.lean": "a7c1cae459e48ee45e1953b70713b509979e20bd8f29a1950815cb494b2928c2",
     "metatheory/Dregg2/Proof/CordialMiners.lean": "f95f9766bc9321f5a3cb1737467af35ca9b8a2fc35832286e15a4c13b4edda05",
+    "metatheory/Dregg2/Resource.lean": "c2a436abb774e20b8281b54e81e0c82d80f4116ec8c65765af7e66dc1b632cfc",
+    "metatheory/Dregg2/Sat/LratCert.lean": "cdfc7fe85c4564926bf34770a2355aa07ccb19e44a9b8367afb8a0a05bf4919c",
     "metatheory/Dregg2/Spec/Authority.lean": "46dab01d2f367355d3b1c2b9144ab506a3ba0c7ee1507d2f161721bdd13281f5",
     "metatheory/Dregg2/Spec/Conservation.lean": "a15326200fc2711f4b312db8ae9525b2b336265d749c7710351a73a2c67a0b54",
     "metatheory/Dregg2/Spec/ExecRefinement.lean": "ce21a7016a310071683a8196c5b02cc2f7f4eae8d772945973d5b357ac97b457",
@@ -213,7 +1460,19 @@
     "metatheory/Dregg2/Tactics.lean": "f50027103a1e80f1f0dbf71c6587a39e3c6643858b713cfa638deedd8fe8c0c2",
     "metatheory/Dregg2/Tactics/ThreadAdvantageBound.lean": "0f5a8586e4f921d696b0534e5d3eda09522ac1c3307d8082b7c0e8b420587fb1",
     "metatheory/Dregg2/World.lean": "1b349a8d49c715a2bcf33d5964fb742c0fcf890d375ed63947f2d516aad3f5f3",
+    "metatheory/Metatheory/ConstructiveKnowledge.lean": "7e074b73ce9d9881c8ec840a6d270f6aa80468b790d02a2022a9bf98ee96e98f",
+    "metatheory/Metatheory/Dynamics/Production.lean": "6ccabd73d592c51d80447e07998e7eceed9cefe22abc0d1efd2bd3a2c780c2a3",
+    "metatheory/Metatheory/Dynamics/Substance.lean": "6996709fafffbc74d68d82d52f05b09415c1db1fa1465cfbd34f3d3531f3b473",
+    "metatheory/Metatheory/Dynamics/VerbSignature.lean": "311c8b6885b2f1924f88db6ee355e6e7a42f5ad8f0114fca9a92008b99316142",
+    "metatheory/Metatheory/EpistemicDial.lean": "6108a42f8db59be2066f35844134499c7b9ac1458f789ddc9cf9faadc85e312e",
+    "metatheory/Policyc.lean": "229fdd8f75f5179eb3fd8cc514e9b9ef7df8174715ecf26a5cc8604da71b334b",
     "metatheory/lake-manifest.json": "fbb75db7dac9ef00186fe79bc26957f7e38a6cd69dbea72877e2ba70aff30e9e",
-    "metatheory/lean-toolchain": "54727eec5cba149c18842e6deb5c41b369d66455c93ce135d7d5347c782b2325"
-  }
+    "metatheory/lean-toolchain": "54727eec5cba149c18842e6deb5c41b369d66455c93ce135d7d5347c782b2325",
+    "metatheory/scripts/automata-compiler-smoke.lean": "57297afcc82f6e780692e682eaa645ad20dda5b8ab17489724ffa5cc27f6da3a"
+  },
+  "supporting_sources": [
+    "metatheory/Policyc.lean",
+    "metatheory/scripts/automata-compiler-smoke.lean",
+    "docs/automata/compiler-wrapper-smoke.json"
+  ]
 }

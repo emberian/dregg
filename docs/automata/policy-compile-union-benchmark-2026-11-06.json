@@ -1,0 +1,21 @@
+{
+  "schema": "policy-compile-benchmark-v1",
+  "cases": [
+    {
+      "pattern": "\"AKIA\" [0-9A-Z]{16} | \"-----BEGIN \" [A-Z ]* \"PRIVATE KEY-----\"",
+      "absence": true,
+      "cached": {
+        "status": "ok",
+        "states": 129,
+        "transitions": 33024,
+        "table_sha256": "e61f7621be8f2ce4f019dfd57b73613fb79bb2f0abb261a1c9f65569d8a0adca",
+        "seconds": 28.858509,
+        "phases": [
+          "policyc profile: whole-word states=48 milliseconds=661",
+          "policyc profile: absence states=129 milliseconds=28059"
+        ],
+        "semantic_checks": 12
+      }
+    }
+  ]
+}

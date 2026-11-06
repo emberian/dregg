@@ -36,7 +36,15 @@ def memB (S : Bits) (q : Nat) : Bool := S.getD q false
 
 /-- Successor set: every state stepped by `b`, plus `D.start` (the empty suffix). -/
 def nextSet (D : Table) (S : Bits) (b : Nat) : Bits :=
-  (List.range D.n).map fun q => q == D.start || (List.range D.n).any (fun p => memB S p && D.step p b == q)
+  let targets := ((List.range D.n).filter (memB S)).map (fun p => D.step p b)
+  (List.range D.n).map fun q => q == D.start || targets.any (fun t => t == q)
+
+/-- The cached successor image is exactly the original pointwise set semantics.
+Membership and stepping are computed once per source, rather than once per destination. -/
+theorem nextSet_spec (D : Table) (S : Bits) (b : Nat) :
+    nextSet D S b = (List.range D.n).map (fun q => q == D.start ||
+      (List.range D.n).any (fun p => memB S p && D.step p b == q)) := by
+  simp [nextSet, List.any_filter]
 
 def anyAcc (D : Table) (S : Bits) : Bool := (List.range D.n).any (fun q => memB S q && D.acc q)
 
@@ -170,7 +178,7 @@ theorem absRun_spec (D : Table) (hD : closedB D = true) :
       have hS' : ∀ q, memB (nextSet D (absRun D w).1 b) q = true ↔
           ∃ u v, w ++ [b] = u ++ v ∧ D.run D.start v = q := by
         intro q
-        simp only [nextSet, memB_map_range, Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true,
+        simp only [nextSet_spec, memB_map_range, Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true,
           beq_iff_eq, List.any_eq_true, List.mem_range]
         constructor
         · rintro ⟨-, rfl | ⟨p, hp, hm, rfl⟩⟩
@@ -275,34 +283,13 @@ def Certified.ofFactor (r : Re) (D : Certified (elabRe r)) (hD : closedB D.t = t
 
 /-- Breadth-first exploration of the reachable abstract states; returns the labels and the
 numbered transition rows, or `none` when `limit` states are exceeded. -/
-def explore (D : Table) (limit : Nat) : Option (Array (Bits × Bool) × Array (Array Nat)) := Id.run do
-  let mut labels : Array (Bits × Bool) := #[absInit D]
-  let mut index : Std.HashMap (Bits × Bool) Nat := ({} : Std.HashMap (Bits × Bool) Nat).insert (absInit D) 0
-  let mut rows : Array (Array Nat) := #[]
-  let mut k := 0
-  for _ in [0:limit] do
-    if k ≥ labels.size then break
-    let x := labels[k]!
-    let mut row : Array Nat := #[]
-    for b in [0:256] do
-      let y := absStep D x b
-      match index.get? y with
-      | some j => row := row.push j
-      | none =>
-        let j := labels.size
-        labels := labels.push y
-        index := index.insert y j
-        row := row.push j
-    rows := rows.push row
-    k := k + 1
-  if k < labels.size then return none
-  return some (labels, rows)
+def explore (D : Table) (limit : Nat) : Option (Array (Bits × Bool) × Array (Array Nat)) :=
+  exploreStates (absInit D) (absStep D) limit
 
-/-- **`certifyAbsence r`** — whole-word table by derivatives (`certify`), then the checked factor
-construction, then minimization (checked again). -/
-def certifyAbsence (r : Re) (limit : Nat := 100000) :
-    Except String (Certified (absenceOf (elabRe r)) × List String) := do
-  let (D, notes) ← certify (elabRe r)
+/-- Checked absence construction from any certified whole-word table. This lets compositional
+compilers reuse the factor theorem without repeating derivative determinization. -/
+def certifyAbsenceFrom (r : Re) (D : Certified (elabRe r)) (notes : List String := [])
+    (limit : Nat := 100000) : Except String (Certified (absenceOf (elabRe r)) × List String) := do
   if hD : closedB D.t = true then
     match explore D.t limit with
     | none => .error s!"factor construction exceeded {limit} states"
@@ -312,16 +299,32 @@ def certifyAbsence (r : Re) (limit : Nat := 100000) :
       let lab := fun k => labels.getD k ([], false)
       if h : labCheck D.t E lab = true then
         let c0 := Certified.ofFactor r D hD E lab h
-        let (t1, m1) := minimize c0.t
-        let (c1, notes1) := if h1 : simCheck c0.t t1 m1 = true then (c0.along t1 m1 h1, notes)
-          else (c0, notes ++ ["absence minimization check failed; unminimized"])
-        let (t2, m2) := relabelDead c1.t
-        if h2 : simCheck c1.t t2 m2 = true then pure (c1.along t2 m2 h2, notes1)
-        else pure (c1, notes1 ++ ["dead-state relabelling check failed"])
+        pure (c0.optimize notes)
       else .error "factor table failed its label check"
   else .error "whole-word table is not closed"
 
-#assert_all_clean [suffix_snoc, factor_snoc, absRun_spec, labCheck_run, factor_decides, absence_decides,
+/-- Whole-word compilation followed by the checked factor construction. -/
+def certifyAbsence (r : Re) (limit : Nat := 100000) :
+    Except String (Certified (absenceOf (elabRe r)) × List String) := do
+  let (D, notes) ← certify (elabRe r)
+  certifyAbsenceFrom r D notes limit
+
+/-- The image includes active successors and excludes inactive ones. -/
+theorem nextSet_discriminates :
+    nextSet ⟨3, fun s _ => if s = 0 then 1 else 2, fun _ => false, 0⟩
+      [true, false, false] 7 = [true, true, false] ∧
+    nextSet ⟨3, fun s _ => if s = 0 then 1 else 2, fun _ => false, 0⟩
+      [false, true, false] 7 = [true, false, true] := by constructor <;> rfl
+
+/-- info: 'Dregg2.Policy.nextSet_discriminates' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms nextSet_discriminates
+
+/-- info: 'Dregg2.Policy.nextSet_spec' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms nextSet_spec
+
+#assert_all_clean [nextSet_spec, nextSet_discriminates, suffix_snoc, factor_snoc, absRun_spec, labCheck_run, factor_decides, absence_decides,
   closed_run]
 
 end Dregg2.Policy

@@ -74,4 +74,67 @@ state search or the dependence on regex-term size.
 
 [MEASURED] A separate demo union (`"AKIA" [0-9A-Z]{16} | "-----BEGIN " [A-Z ]*
 "PRIVATE KEY-----"`, absence mode) still exceeded 180 seconds with the cached compiler.
-That is a separate open construction cost, not hidden by the repeat result.
+That was a separate construction cost, resolved by the composed pipeline below.
+
+## Composed absence policy
+
+[MEASURED] The policy used by demo (a) is now compiled by `certifySurface` and
+`certifySurfaceAbsence`. Its two whole-word branches contain **22** and **29** states.
+Their dense product has **638** pairs; an independent traversal of the retained native
+branch tables finds **49 reachable pairs**. The checked trimmed and optimized whole-word
+table has **48 states**. The final absence table has **129 states / 33,024 transitions**.
+These are output counts; no claim of minimum table size is made.
+
+[MEASURED] The complete native compilation finished in **28.858509 s** under a **1 GiB**
+`swarm-build` cap on bb2. The recorded launch RSS was 84,289,104 KiB (80.38 GiB), leaving
+40.62 GiB after reserving that cap against the 122 GiB budget. Phase clocks report
+**661 ms** for the whole-word table and **28,059 ms** for the absence phase. The twelve
+controls include both pattern branches, clean text, count boundaries, incomplete and
+case-changed markers, and embedded NUL/255 bytes. All pass. Raw results are in
+`policy-compile-union-benchmark-2026-11-06.json`.
+
+Three costs were separated:
+
+1. Raw derivative union exceeded 180 s even with normalization caching.
+2. The certified dense product also exceeded 180 s. Reachability restriction removes
+   pairs the byte input can never reach, before minimization and factor construction.
+3. The old factor successor calculation still exceeded 180 s on the trimmed input. It
+   scanned destination × source states while repeatedly indexing a linked-list bitmap.
+   The replacement collects active successor targets once. `nextSet_spec` proves exact
+   equality to the old set expression for **every** table, bitmap and byte. With list
+   membership its worst-case step cost drops from cubic to quadratic in the table size;
+   it also evaluates each active source transition only once.
+
+[READ] The union constructor is `Certified.union`, with `union_run`, `union_closed` and
+`union_verdict`; the unequal-size reference inhabits its bounds and accepts each branch
+alone while rejecting a two-byte counterexample. `Certified.restrict` uses the reverse
+orientation of the existing `simCheck_verdict`, so dropping unreachable rows does not
+invent images for those rows. `trim_candidate_checked` checks the actual three-row
+embedding into the six-row reference, and `trim_wrong_embedding_refused` rejects a bad
+embedding. Exploration is untrusted and shared with the factor compiler as
+`exploreStates`; both consumers check its output before producing a certificate.
+
+`Certified.optimize` is now the common checked minimization/relabeling path.
+`certifyAbsenceFrom` accepts any certified whole-word table, avoiding a second
+compilation. The CLI profiles these same components when `POLICYC_PROFILE=1`; its
+normal path retains the `certifySurfaceAbsence` facade. Final constructor axiom reports
+pin the same `propext`, `Classical.choice`, `Quot.sound` as the pre-existing `certify`.
+The new union/restriction proofs use only `propext` and `Quot.sound`; no `native_decide`
+was added. Native builds and the single-file Mac checks pass.
+
+Reproduce compilation, twelve controls, phase clocks and the exact synthetic table:
+
+```sh
+python3 scripts/benchmarks/policy-compile.py metatheory/.lake/build/bin/policyc   --union --output /tmp/policy-union.json --table-output /tmp/absence-table.json
+```
+
+The repeat benchmark still requires exact baseline table identity. The union benchmark
+checks byte-language controls and records table digests; a different numbering of
+product states need not match a derivative compiler's numbering. Timed-out baselines
+supply neither tables nor equivalence evidence.
+
+Remaining performance scope: the absence phase is about 28 s, and the factor bitmap
+image is quadratic in its worst case. The measured output is usable by the demo now;
+this is not a claim that every surface expression has a fast compositional backend.
+Only alternatives at a surface root use the new product path; other roots retain the
+proved derivative compiler.

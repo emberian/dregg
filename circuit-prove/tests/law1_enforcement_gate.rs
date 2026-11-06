@@ -244,11 +244,13 @@
 //! * INTERPRETERS (the law WORKING — they evaluate Lean-authored constraints): `descriptor_ir2.rs`,
 //!   `descriptor_ir2_canonical.rs`, `dsl/dsl_p3_air.rs`, `lean_lookup_air.rs` (the proven range gadget).
 //!   Their *pattern* halves are now free; the residual is the IR they construct while translating.
-//! * PROVED-FAITHFUL LOWERINGS: `custom_leaf_adapter.rs` / `custom_leaf_lowering.rs` —
-//!   `CustomLeafEncoding.lean::cell_to_descriptor_faithful` proves the encoding preserves semantics.
-//! * DRIFT-DETECTORS, deliberately kept: `dsl/derivation.rs`, `dsl/note_spending.rs` — the EMITTED paths
-//!   walk these v1 descriptors as their SOURCE, so "a drift in the deployed circuit is a build-time
-//!   refusal, never a silent divergence" (`note_spend_witness.rs:225-227`).
+//! * LOWERING DEBT: `custom_leaf_adapter.rs` / `custom_leaf_lowering.rs` —
+//!   `CustomLeafEncoding.lean::cell_to_descriptor_faithful` explicitly covers the Lean mirror,
+//!   not the deployed Rust lowerer. That citation does not discharge compiler refinement.
+//! * LEGACY SOURCE DESCRIPTORS: `dsl/derivation.rs`, `dsl/note_spending.rs` remain Rust-authored
+//!   DSL constraints. Note-spend consumers now parse the repaired Lean artifact directly;
+//!   the DSL remains the witness recipe's source, not a proof of descriptor equivalence.
+//!   The removed lowerers checked supported kinds/layout, not arbitrary semantic drift.
 //! * THE USER-PROGRAM GRAMMAR: `dsl/predicates/*`, `dsl/descriptors.rs` — the host-trusted smart-contract
 //!   surface users deploy programs against; interpreted, fails closed on an unknown vk_hash.
 //! * THE ONE TEST-ONLY TOY AIR: `dregg_outer_config.rs` (8) — `toy_fib_air::ToyFibAir`, the p3
@@ -998,7 +1000,8 @@ const BASELINE: &[(&str, usize)] = &[
     ("circuit-prove/src/lean_lookup_air.rs", 3),
     ("circuit-prove/src/membership_leaf_adapter.rs", 3),
     ("circuit-prove/src/mpt_holding_leaf.rs", 8),
-    ("circuit-prove/src/note_spend_leaf_adapter.rs", 41),
+    // Note-spend adapter: 41 -> 0 (2026-11-06), shared Lean artifact consumer.
+    // No slack row: its remaining VmConstraint matches only inspect generated IR.
     ("circuit-prove/src/private_book_bfv_terminal/fused.rs", 24),
     ("circuit-prove/src/private_graph_rewrite_cell.rs", 2),
     ("circuit-prove/src/private_preference_cell.rs", 2),
@@ -1303,7 +1306,8 @@ const BASELINE: &[(&str, usize)] = &[
     ("circuit/src/membership_descriptor_4ary.rs", 1),
     ("circuit/src/membership_descriptor_general.rs", 39),
     ("circuit/src/merkle_types.rs", 4),
-    ("circuit/src/note_spend_witness.rs", 41),
+    // Note-spend core: 41 -> 0 (2026-11-06), noteSpendLeafDescFixed authors the AIR.
+    // Witness generation and production-evaluator mutants construct no constraints.
     ("circuit/src/plonky3_prover.rs", 7),
     ("circuit/src/plonky3_recursion.rs", 6),
     // ⚑ THE LAW WON HERE (2026-08-06). `circuit/src/presentation.rs`'s row was 1 — the closure

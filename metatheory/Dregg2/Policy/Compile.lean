@@ -300,6 +300,32 @@ theorem simCheck_verdict {t t' : Table} {cls : Nat → Nat} (h : simCheck t t' c
   obtain ⟨e1, -, e3⟩ := simCheck_run h w hw t.start hs
   rw [hst, ← e1, e3]
 
+/-- Untrusted reachable-state exploration shared by table restriction and factor construction.
+The consumers check its labels/simulation before constructing a `Certified` value. -/
+def exploreStates {α : Type} [BEq α] [Hashable α] (initial : α) (step : α → Nat → α)
+    (limit : Nat) : Option (Array α × Array (Array Nat)) := Id.run do
+  let mut labels := #[initial]
+  let mut index : Std.HashMap α Nat := ({} : Std.HashMap α Nat).insert initial 0
+  let mut rows : Array (Array Nat) := #[]
+  let mut k := 0
+  for _ in [0:limit] do
+    if k ≥ labels.size then break
+    let x := labels.getD k initial
+    let mut row : Array Nat := #[]
+    for b in [0:256] do
+      let y := step x b
+      match index.get? y with
+      | some j => row := row.push j
+      | none =>
+        let j := labels.size
+        labels := labels.push y
+        index := index.insert y j
+        row := row.push j
+    rows := rows.push row
+    k := k + 1
+  if k < labels.size then return none
+  return some (labels, rows)
+
 /-- Moore partition refinement: class id = least state with the same signature. -/
 def refineStep (t : Table) (cls : Array Nat) : Array Nat := Id.run do
   let mut seen : Std.HashMap (Nat × List Nat) Nat := {}
@@ -361,17 +387,40 @@ def Certified.along {R : PredRE} (c : Certified R) (t' : Table) (cls : Nat → N
     (h : simCheck c.t t' cls = true) : Certified R :=
   ⟨t', fun w hw => by rw [simCheck_verdict h w hw]; exact c.hdec w hw⟩
 
-/-- **`certify R`** — compile, minimize, relabel the dead state to 0; each step is kept only
-when its simulation check passes (otherwise the previous table is kept and the step is named). -/
+/-- Restrict to a checked simulation into an already-certified table. This is the reverse
+orientation of `along`: it can discard unreachable states without assigning them fake images. -/
+def Certified.restrict {R : PredRE} (c : Certified R) (t' : Table) (embedding : Nat → Nat)
+    (h : simCheck t' c.t embedding = true) : Certified R :=
+  ⟨t', fun w hw => by rw [← simCheck_verdict h w hw]; exact c.hdec w hw⟩
+
+/-- Candidate reachable table, accepted only when its embedding commutes on every byte.
+Exploration failure or a bad candidate retains the original certified table. -/
+def Certified.trim {R : PredRE} (c : Certified R) (limit : Nat := 100000) :
+    Certified R × List String :=
+  match exploreStates c.t.start c.t.step limit with
+  | none => (c, ["reachable-state limit exhausted; original table retained"])
+  | some (labels, rows) =>
+    let t : Table := ⟨labels.size, fun s b => (rows.getD s #[]).getD b 0,
+      fun s => c.t.acc (labels.getD s c.t.start), 0⟩
+    let embedding := fun s => labels.getD s c.t.start
+    if h : simCheck t c.t embedding = true then (c.restrict t embedding h, [])
+    else (c, ["reachable-state simulation failed; original table retained"])
+
+/-- Optimize any certified table. Each transformation is retained only after its simulation
+check, so derivative and compositional compilers share one proof-preserving output pipeline. -/
+def Certified.optimize {R : PredRE} (c0 : Certified R) (notes : List String := []) :
+    Certified R × List String :=
+  let (t1, m1) := minimize c0.t
+  let (c1, notes) := if h : simCheck c0.t t1 m1 = true then (c0.along t1 m1 h, notes)
+    else (c0, notes ++ ["minimization check failed; unminimized table emitted"])
+  let (t2, m2) := relabelDead c1.t
+  if h : simCheck c1.t t2 m2 = true then (c1.along t2 m2 h, notes)
+  else (c1, notes ++ ["dead-state relabelling check failed; not relabelled"])
+
+/-- Compile derivatives, then use the shared checked output optimization. -/
 def certify (R : PredRE) : Except String (Certified R × List String) := do
   let c ← compile R
-  let c0 := c.certified
-  let (t1, m1) := minimize c0.t
-  let (c1, notes) := if h : simCheck c0.t t1 m1 = true then (c0.along t1 m1 h, [])
-    else (c0, ["minimization check failed; unminimized table emitted"])
-  let (t2, m2) := relabelDead c1.t
-  if h : simCheck c1.t t2 m2 = true then pure (c1.along t2 m2 h, notes)
-  else pure (c1, notes ++ ["dead-state relabelling check failed; not relabelled"])
+  pure c.certified.optimize
 
 def Certified.rows {R : PredRE} (c : Certified R) : List (List Nat) :=
   (List.range c.t.n).map fun s => (List.range 256).map fun b => c.t.step s b

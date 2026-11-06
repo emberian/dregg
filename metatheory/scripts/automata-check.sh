@@ -24,7 +24,7 @@
 #   scripts/automata-check.sh --files Dregg2/Crypto/Dfa.lean,Dregg2/Datalog/FixpointCert.lean
 #   scripts/automata-check.sh --no-deps        # skip step 1 (only when you know the oleans are current)
 #   scripts/automata-check.sh --list           # print the resolved file list and exit
-#   scripts/automata-check.sh --statements-only # review identity + warm kernel evidence, no deps build
+#   scripts/automata-check.sh --statements-only # all review identities + warm audit modules, no deps build
 #
 # hbox: `scripts/automata-check.sh --hbox [other flags]` re-executes the same script inside
 # `swarm-build` (cgroup memory cap `SWARM_MEM_MAX`, default 12G here; taskset + nice inside), so
@@ -53,7 +53,7 @@ while [ $# -gt 0 ]; do
     --jobs) JOBS="$2"; shift 2 ;;
     --json) JSON=1; shift ;;
     --no-deps) DEPS=0; shift ;;
-    --statements-only) DEPS=0; FILES_OVERRIDE="Dregg2/Automata/StatementAudit.lean"; shift ;;
+    --statements-only) DEPS=0; FILES_OVERRIDE="Dregg2/Automata/StatementAudit.lean,Dregg2/Automata/DfaBoundReference.lean,Dregg2/Automata/CertificateStatementAudit.lean,Dregg2/Automata/EmitterStatementAudit.lean"; shift ;;
     --hbox) HBOX=1; shift ;;
     --list) LIST=1; shift ;;
     --files) FILES_OVERRIDE="$2"; shift 2 ;;
@@ -98,6 +98,21 @@ Dregg2/Circuit/Emit/AttestedAutomatonBound.lean
 Dregg2/Circuit/Emit/DfaRoutingChainBound.lean
 Dregg2/Circuit/Emit/DfaRoutingTableBound.lean
 Dregg2/Circuit/Emit/DyckStackBound.lean
+Dregg2/Circuit/Emit/RouteChain8.lean
+Dregg2/Circuit/Emit/RouteChain8Binding.lean
+Dregg2/Circuit/Emit/RouteChain8Refine.lean
+Dregg2/Circuit/Emit/RouteChain8Canonical.lean
+Dregg2/Circuit/Emit/DfaRoutingTableRoute8.lean
+Dregg2/Circuit/Emit/DfaRoutingTableRoute8Bound.lean
+Dregg2/Circuit/Emit/AttestedAutomatonRoute8.lean
+Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean
+Dregg2/Circuit/Emit/SolvencyLeafEmit.lean
+Dregg2/Circuit/Emit/TupleBindingEmit.lean
+Dregg2/Circuit/Emit/BoundedFactEmit.lean
+Dregg2/Circuit/Emit/BorrowChainEmit.lean
+Dregg2/Circuit/Emit/CaveatAdmissionEmit.lean
+Dregg2/Circuit/Emit/DecoLeafEmit.lean
+Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean
 Dregg2/Circuit/Emit/TinyAutomataLanesK.lean
 Dregg2/Circuit/Emit/DerivationEmit.lean
 Dregg2/Datalog/FixpointCert.lean
@@ -186,7 +201,12 @@ for f in files:
     src = open(f, errors="replace").read()
     guards = len(re.findall(r"(?m)^\s*#guard(?![_\w])", src))
     single = len(re.findall(r"(?m)^\s*#assert_(?:clean|axioms)\s", src))
-    single += len(re.findall(r"(?m)^#guard_msgs in\n#print axioms ", src))
+    # Exact axiom reports count only when not already included in this file's assertion macro.
+    asserted = set(re.findall(r"[A-Za-z_][A-Za-z0-9_.']*", " ".join(
+        re.findall(r"#assert_all_clean\s*\[([^]]*)\]", src))))
+    asserted.update(re.findall(r"(?m)^\s*#assert_(?:clean|axioms)\s+([\w.]+)", src))
+    exact_pins = re.findall(r"(?m)^#guard_msgs in\n#print axioms ([\w.]+)", src)
+    single += sum(name not in asserted for name in exact_pins)
     reported = sum(int(n) for n in re.findall(r"#assert_all_clean: (\d+) keystones pinned kernel-clean", out))
     errors = [l for l in out.splitlines() if re.search(r":\d+:\d+: error", l) or l.startswith("error:")]
     sorry = [l for l in out.splitlines() if "declaration uses 'sorry'" in l]

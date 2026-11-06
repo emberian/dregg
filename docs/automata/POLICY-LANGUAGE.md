@@ -152,6 +152,14 @@ All theorem files end in `#assert_all_clean`. There is no `sorry` and no `native
 
 ## 4. Counts
 
+The original measurements below are retained as the baseline. The normalization cache
+now compiles `"sk-" \w{20,64}` in 3.1 seconds on bb2 (69 states, 17,664 transitions);
+see [the reproducible comparison](policy-compile-performance.md). Surface alternatives
+now compile their branches separately and use the proved finite-table union product,
+followed by checked reachability restriction, the shared checked minimization and absence
+construction. The demo union compiles to 129 states / 33,024 transitions in 28.86 seconds
+on bb2, with twelve byte-language controls passing.
+
 - **Parser** [MEASURED, `#guard`]: the falsifiers below are `#guard`s in `Theorems.lean`.
   - An unbalanced `(` is reported at `1:23`, found `;`, expected `` `)` ``. On a second line it is reported at `2:17`.
   - `\q` is reported at `1:18`, with the expected set `\d \w \s`.
@@ -217,9 +225,9 @@ every seen state, not the table size.
 
 ## 6. Follow-ups
 
-1. The counted-class compile time: either memoize `nrm` per state (`simDecide` normalizes both
-   sides on every comparison) or determinize counting classes by a dedicated counter construction
-   with its own checked table.
+1. Counted-class normalization caching is implemented and measured; exact worklist and lookup
+   equivalence are proved. Remaining performance work is tracked in
+   [policy-compile-performance.md](policy-compile-performance.md).
 2. A theorem that `parse` output is well formed (`parse s = .ok p → p.wf`). With it,
    `print_injective` would become `parse ∘ print = id` on the image of `parse`.
 3. Named pattern references (`pattern b = a & ~c`) need an environment in `elabRe`. They are

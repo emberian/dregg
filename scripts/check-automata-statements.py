@@ -38,8 +38,10 @@ def closure(root, sources):
         for imports in re.findall(r'^\s*(?:public\s+)?import\s+([^\n]+)',
                                   path.read_text(), re.M):
             for module in imports.split('--', 1)[0].split():
-                if re.fullmatch(r'Dregg2\.[\w.]+', module):
-                    pending.append('metatheory/' + module.replace('.', '/') + '.lean')
+                if re.fullmatch(r'[A-Z][\w.]*', module):
+                    imported = 'metatheory/' + module.replace('.', '/') + '.lean'
+                    if (root / imported).is_file():
+                        pending.append(imported)
     return found | {'metatheory/lean-toolchain', 'metatheory/lake-manifest.json'}
 
 
@@ -50,9 +52,10 @@ def check(root):
         reviews = data['reviews']
         pins = data['axiom_pins']
         snapshots = data['source_sha256']
-        if data['schema'] != 1 or not reviews or not pins:
+        if data['schema'] != 2 or not reviews or not pins:
             raise ValueError('empty or unsupported review manifest')
-        sources = {r['source'] for r in reviews} | {str(COMPANION)}
+        supporting = set(data.get('supporting_sources', []))
+        sources = {r['source'] for r in reviews} | {p['source'] for p in pins.values()} | {str(COMPANION)} | supporting
         expected = closure(root, sources)
         if set(snapshots) != expected:
             errors.append('source snapshot does not cover exactly the local import closure')
@@ -70,18 +73,32 @@ def check(root):
             for key in ('statement', 'witness', 'falsifier', 'scope'):
                 if not isinstance(review[key], str) or not review[key].strip():
                     errors.append(f'{review["id"]}: missing {key}')
-            if review['witness_scope'] not in ('checker-premise', 'relation-instance', 'relation-only'):
+            if review['witness_scope'] not in ('checker-premise', 'relation-instance', 'constructor-instance'):
                 errors.append(f'{review["id"]}: unspecified witness scope')
             for key in ('statement', 'witness', 'falsifier'):
                 if review[key] not in pins:
                     errors.append(f'{review["id"]}: {key} lacks exact axiom pin')
-        for name, report in pins.items():
-            block = f'/-- {report} -/\n#guard_msgs in\n#print axioms {name}'
-            if block not in companion:
+            for name in review.get('supporting_evidence', []):
+                if name not in pins:
+                    errors.append(f'{review["id"]}: supporting evidence lacks exact axiom pin: {name}')
+            if 'execution' in review:
+                evidence = review['execution']
+                if not {evidence['source'], evidence['result']} <= supporting:
+                    errors.append(f'{review["id"]}: runtime evidence is not source-bound')
+                elif json.loads((root / evidence['result']).read_text()).get('status') != 'pass':
+                    errors.append(f'{review["id"]}: runtime evidence did not pass')
+        for name, pin in pins.items():
+            axioms = re.search(r'depends on axioms: \[([^]]*)\]', pin['report'])
+            if axioms and not {a.strip() for a in axioms[1].split(',')} <= {
+                    'propext', 'Classical.choice', 'Quot.sound'}:
+                errors.append(f'non-kernel axiom in reviewed evidence: {name}')
+            block = f'/-- {pin["report"]} -/\n#guard_msgs in\n#print axioms {pin["command"]}'
+            if f"'{name}'" not in pin['report'] or block not in (root / pin['source']).read_text():
                 errors.append(f'missing exact axiom tripwire: {name}')
         # Pin removal/extra evidence cannot silently evade manifest coverage.
         actual = set(re.findall(r'^#print axioms ([\w.]+)$', companion, re.M))
-        if actual != set(pins):
+        companion_pins = {p['command'] for p in pins.values() if p['source'] == str(COMPANION)}
+        if actual != companion_pins:
             errors.append('companion and manifest disagree on axiom coverage')
         return errors, len(reviews), len(pins), len(snapshots)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -94,6 +111,7 @@ def self_test(root):
     if baseline[0]:
         return baseline[0]
     data = json.loads((root / MANIFEST).read_text())
+    external = next(p['source'] for p in data['axiom_pins'].values() if p['source'] != str(COMPANION))
     mutations = (
         ('changed reviewed statement', lambda p, d: (p / d['reviews'][0]['source']).write_text(
             (p / d['reviews'][0]['source']).read_text() + '\n-- changed\n')),
@@ -101,6 +119,8 @@ def self_test(root):
             (p / COMPANION).read_text().replace('#guard_msgs in', '-- removed', 1))),
         ('missing falsifier', lambda p, d: d['reviews'][0].update(falsifier='')),
         ('changed transitive dependency', lambda p, d: (p / 'metatheory/lean-toolchain').write_text('changed')),
+        ('removed family axiom pin', lambda p, d: (p / external).write_text(
+            (p / external).read_text().replace('#guard_msgs in', '-- removed', 1))),
     )
     errors = []
     for label, mutate in mutations:
@@ -115,6 +135,8 @@ def self_test(root):
             if label == 'removed axiom pin':
                 # Exercise the evidence check independently of the digest check.
                 fixture['source_sha256'][str(COMPANION)] = digest(copy / COMPANION)
+            if label == 'removed family axiom pin':
+                fixture['source_sha256'][external] = digest(copy / external)
             (copy / MANIFEST).write_text(json.dumps(fixture))
             if not check(copy)[0]:
                 errors.append(f'mutation survived: {label}')
@@ -163,7 +185,7 @@ def main():
         print('Review changed definitions and their consumers; do not merely refresh hashes.', file=sys.stderr)
         return 1
     print(f'automata-statements: {reviews} scoped reviews, {pins} exact axiom pins, '
-          f'{sources} source identities current' + ('; 4 copy-only mutations rejected' if args.self_test else ''))
+          f'{sources} source identities current' + ('; 5 copy-only mutations rejected' if args.self_test else ''))
     print('Source/evidence gate only; Lean checks the pins, reviewers check the statements.')
     if args.kernel_self_test:
         print('Kernel mutation: injected custom axiom rejected by the unchanged exact pin.')

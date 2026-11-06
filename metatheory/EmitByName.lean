@@ -173,9 +173,10 @@ Three notes the mechanical reader needs:
 * `blindedMembership4aryDesc` is depth-PARAMETERIZED in Lean; the two checked-in artifacts are its
   `depth := 2` and `depth := 8` instances. (The constraint block is depth-uniform — only the `name`
   field differs — but both are checked in, so both are emitted.)
-* `NoteSpendingLeafEmit` carries a DECOY: `noteSpendLeafDescFixed` shares `noteSpendLeafDesc`'s
-  exact `name` and `trace_width` (149) while emitting different bytes. The deployed artifact is
-  `noteSpendLeafDesc`; matching on the header alone would pick the wrong one.
+* `NoteSpendingLeafEmit.noteSpendLeafDescFixed` is served: six last-row boundaries repair
+  the earlier 27-constraint artifact. Width149 and the seven PIs stay unchanged, but the
+  canonical descriptor bytes (and derived verification key) change. The original descriptor
+  remains a theorem-level counterexample; matching its name alone would miss the repair.
 * `mina-fixture.json` is EMITTED but not DISPATCHED, and never will be: it is not a predicate
   descriptor. `circuit/src/bin/mina_stark_fixture.rs` `include_str!`s it directly to mint the
   fixture proof `bridge/mina-zkapp` verifies. It is routed here for the same reason everything
@@ -284,7 +285,7 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
   , ("mina-fixture.json",
       Dregg2.Circuit.Emit.MinaFixtureEmit.minaFixtureDesc)
   , ("note-spend-leaf.json",
-      Dregg2.Circuit.Emit.NoteSpendingLeafEmit.noteSpendLeafDesc)
+      Dregg2.Circuit.Emit.NoteSpendingLeafEmit.noteSpendLeafDescFixed)
   , ("poseidon2-hash-arity2.json",
       Dregg2.Circuit.Emit.Poseidon2HashEmit.poseidon2HashDesc)
   -- The two Pasta ALU descriptors are the shared fp/fq modular-arithmetic
