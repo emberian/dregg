@@ -81,7 +81,8 @@ exhibited beside `verifyS`'s refusal (codex round 2 §1d):
       support is `¬p(1)`.
 
 ## Scope, stated
-  * Active-domain semantics, as `FixpointCert` (unsafe rules derive over the active domain only).
+  * Active-domain semantics, as `FixpointCert`. For safe programs it IS the unrestricted stratified
+    model (`SafeCoincidence.derivesS_eq_unrestricted`; `verifyJ_sound_unrestricted` for the exe).
   * Count is exact for the strata NAMED in the statement. Independence of the perfect model from the
     choice of stratification (Apt-Blair-Walker) is NOT proved here; `countS_unique_or_collides`
     therefore needs equal `strata` as well as equal rule lists.

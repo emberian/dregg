@@ -22,8 +22,8 @@ rounds of rule firings `(rule index, substitution)`. The verifier `verify hash s
 
   * `replay_sound`: every fact of a replayed database is derivable (`Derives`, the inductive
     least-fixpoint semantics with active-domain substitutions — the finite Herbrand semantics of
-    Datalog; for safe programs it coincides with the unrestricted one, and that coincidence is a
-    named follow-up, NOT claimed here).
+    Datalog; for safe programs it coincides with the unrestricted one:
+    `SafeCoincidence.derives_iff_unrestricted`).
   * `closed_complete`: a closed replayed database contains EVERY derivable fact.
   * `verify_sound`: an accepted certificate yields a duplicate-free database that is EXACTLY the
     set of derivable facts, whose `pred`-count is the claimed count, and whose EDB flattens to the
@@ -54,7 +54,7 @@ proofs — the `Prop`-level content is §4-§5; `path14_derives` is the one kern
 
 ## Scope, stated (codex round 2)
   * `Derives` is the ACTIVE-DOMAIN fixpoint. For safe programs it coincides with the standard one
-    (unproved here); for an unsafe `p(X) :- q()` with EDB `{q()}` the active domain is empty and
+    (`SafeCoincidence.derives_iff_unrestricted`, `verify_sound_unrestricted`); for an unsafe `p(X) :- q()` with EDB `{q()}` the active domain is empty and
     this semantics derives NO `p`-fact where unrestricted semantics derives every `p(z)`. Count is
     exact for THIS semantics.
   * `countQ` counts by predicate symbol, not by `(pred, arity)`; `{p(), p(7)}` counts 2.

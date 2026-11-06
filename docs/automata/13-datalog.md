@@ -23,7 +23,7 @@ inductive Derives (P : Program) (edb : List Fact) : Fact → Prop
 ```
 This is the **active-domain (finite Herbrand) least fixpoint**: rule substitutions range over the
 constants of the EDB and the program. For safe (range-restricted) programs it is the standard
-semantics; the coincidence theorem is a named follow-up and is NOT claimed in the file. The
+semantics: `M/Datalog/SafeCoincidence.lean` proves the coincidence (`derives_iff_unrestricted`). The
 single-firing AIR that already exists, `M/Circuit/Emit/DerivationEmit.lean`, has no Lean semantics
 object of its own: it transcribes the hand AIR's 28 constraint families and proves one gate lemma
 [READ header].
@@ -113,7 +113,7 @@ Falsifiers [MEASURED, kernel-evaluated `#guard`s in `Reference`]:
 - a wrong root is refused.
 Non-vacuity of the semantics: `path14_derives : Derives tc edb (PATH, [1, 4])` as a term.
 
-What is NOT claimed: coincidence with the unrestricted fixpoint for safe programs; stratified
+What is NOT claimed here (since landed: the safe-program coincidence in `SafeCoincidence.lean`); stratified
 negation (a `¬` body atom needs the closed-world leg: absence of the negated fact in the FINAL
 database, which is a statement about closure of the lower stratum — the shape is the same gate,
 run per stratum, and is the first extension); an executable extractor for the trace (the trace is
@@ -163,4 +163,5 @@ root binding and the named-pair collision residual.
 | Sum/Min/Max over the exact database; `seq_acc_is_fold`, `accValid_iff`; budget statement `verifyBudget_sound`, `budget_final_unique_or_collides`; tampered-row falsifier | `M/Datalog/Aggregates.lean` (21 keystones) | **L2** |
 | closure by join for safe rules (`closedJoinS_closedS`), fast domain, `verifyJ_verifyS`, `verifyBudgetJ_verifyBudget` | `M/Datalog/JoinClosure.lean` (18 keystones) | **L2** (what the executable runs) |
 | extracted checker `lake exe datalog-check` + demo (b): governance over a 73-transcript Claude Code forest, 8,839 EDB facts, count 0, signed receipt | `metatheory/DatalogCheck.lean`, `demo/datalog-governance/` | L2 executable; native re-execution, no STARK |
-| safe-program coincidence theorem; independence of the count from the chosen stratification | proposed | L1 each; one file |
+| safe-program coincidence: `derives_iff_unrestricted`, `derivesS_eq_unrestricted`, `verifyJ_sound_unrestricted`; falsifier `unsafe_semantics_differ` | `M/Datalog/SafeCoincidence.lean` (18 keystones) | **L2** |
+| independence of the count from the chosen stratification | proposed | L1; one file |
