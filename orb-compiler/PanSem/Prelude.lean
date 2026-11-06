@@ -7,7 +7,7 @@
   witness pair, proved on the HOL side by `EVAL` (DreggNet
   p3-bridge/audit/hol_eval_vectors.txt) and on the Lean side in
   GenVectors.lean against the same printed statement.  The rows that also
-  carry a proved contract are listed in PanSem/Contracts.lean.
+  carry a proved contract are listed in the planned `Contracts` module (not yet in the tree).
 
   Rows inherited from P2 (bool ↦ Prop classical, num ↦ Nat, char ↦ UInt8,
   string ↦ List UInt8, list/option/prod/sum) keep P2's soundness arguments.
