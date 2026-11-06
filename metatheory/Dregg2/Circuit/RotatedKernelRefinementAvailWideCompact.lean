@@ -13,11 +13,11 @@ row expands to a witness of the pre-compact member, and the whole availability k
 (`RotatedKernelRefinementAvailWide`) fires on the expansion — so the wrap-forgery teeth hold of
 the object the light client actually resolves, not of a retired sibling.
 
-The per-member side condition `compactOk … = true` is discharged HERE by KERNEL reduction
-(`decide +kernel` — NOT `native_decide`, which would carry `Lean.ofReduceBool` and fail the
-`#assert_axioms` pin below): the same decidable bundle the emit driver enforces at emit time
-(interpreter), now a kernel-checked fact (~2 min of kernel compute; the elaborator-whnf route
-times out at default heartbeats, the kernel route needs no limit raise).
+The per-member side condition `compactOk … = true` is a fact about the deployed descriptor's
+concrete bytes, so it is discharged HERE by compiled evaluation (`native_decide`; ember,
+2026-11-06: concrete data by the compiler, general theorems by the kernel): the same decidable
+bundle the emit driver enforces at emit time. Kernel reduction (`decide +kernel`) took ~2 min and
+14 GB for this module.
 
 The decode (`rotatedEncodesAvail`) is stated over the EXPANDED trace. That is not a weakening:
 `expandTrace_shape` pins the expansion to the compact trace row-for-row on every surviving
@@ -27,7 +27,9 @@ chain columns are recomputed), same row count, same public inputs. The remaining
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem.
+The two side conditions rest on their own `<theorem>._native.native_decide.ax_1_1` and are pinned
+with `#assert_compiled`; so are the two keystones that use them. `RotTableSideW_expand` and
+`expandTrace_tf_other` stay `#assert_axioms`-clean.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementAvailWide
 import Dregg2.Circuit.Emit.RotWideCompactS2
@@ -60,12 +62,12 @@ went `sorryAx`-red. BYTE SOURCE:
 def transferWideDeployedC : EffectVmDescriptor2 :=
   compactS2 transferAvailWideRefused 198 885
 
-/-- The emit gate, kernel-checked: the deployed transfer row's S2 stratum is EXACTLY the
+/-- The emit gate, by compiled evaluation: the deployed transfer row's S2 stratum is EXACTLY the
 expected dead pair of chains and nothing surviving touches a deleted column. (The same
 decidable bundle the emit driver enforces; a falsifying member would refuse to emit AND
 refuse to elaborate here.) -/
 theorem transferWide_compactOk : compactOk transferAvailWideRefused 198 885 = true := by
-  decide +kernel
+  native_decide
 
 /-- Non-poseidon2 tables are untouched by the expansion (the range/memory/map tables the
 faithful side pins). -/
@@ -92,7 +94,7 @@ theorem RotTableSideW_expand {permOut : List ℤ → List ℤ} {hash : List ℤ 
       exact hside.rangesWide b hb }
 
 /-- `planOk` for the deployed transfer geometry (a projection of `compactOk`, decided once). -/
-theorem transferWide_planOk : planOk (s2Plan 198 885) = true := by decide +kernel
+theorem transferWide_planOk : planOk (s2Plan 198 885) = true := by native_decide
 
 /-- **THE CROWN COROLLARY** — the availability + exact-debit forcing, over the DEPLOYED
 S2-compacted wide transfer row. A satisfying witness of `transferWideDeployedC` EXPANDS
@@ -131,9 +133,9 @@ theorem deployedCompact_rejects_overdebit (hash : List ℤ → ℤ) {permOut : L
     pre post tr a henc).1
   omega
 
-#assert_axioms transferWide_compactOk
-#assert_axioms transferWide_planOk
-#assert_axioms availability_and_exact_move_forced_deployedCompact
-#assert_axioms deployedCompact_rejects_overdebit
+#assert_compiled transferWide_compactOk
+#assert_compiled transferWide_planOk
+#assert_compiled availability_and_exact_move_forced_deployedCompact
+#assert_compiled deployedCompact_rejects_overdebit
 
 end Dregg2.Circuit.RotatedKernelRefinementAvailWideCompact
