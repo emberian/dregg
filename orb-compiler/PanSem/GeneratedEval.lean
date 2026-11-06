@@ -14,34 +14,34 @@ opaque evaluate_unspec {θ : Type} : (P3.Pan.prog × (P3.Pan.state θ)) → (Opt
   fun p => (Option.none, p.2)
 noncomputable def evaluate {θ : Type} : (P3.Pan.prog × (P3.Pan.state θ)) → (Option P3.Pan.result) × (P3.Pan.state θ)
   | (P3.Pan.prog.Skip, s) =>
-    (Option.none, s)
+    ((Option.none : Option P3.Pan.result), s)
   | ((P3.Pan.prog.Dec v sh e prog), s) =>
     (match P3.Pan.eval s e with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some value) => if (sh = (P3.Pan.shape_of value)) then (let p_1 := P3.Pan.evaluate (prog, { s with locals := (P3.Pan.FUPDATE (P3.Pan.state.locals s) (v, value)) })
     let res := p_1.1
     let st := p_1.2
     (res, { st with locals := P3.Pan.res_var (P3.Pan.state.locals st) (v, ((P3.Pan.state.locals s) v)) })) else ((Option.some P3.Pan.result.Error), s))
   | ((P3.Pan.prog.Assign vk v src), s) =>
     (match P3.Pan.eval s src with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
-  | (Option.some value) => if P3.Pan.is_valid_value s vk v value then (Option.none, (P3.Pan.set_kvar vk v value s)) else ((Option.some P3.Pan.result.Error), s))
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
+  | (Option.some value) => if P3.Pan.is_valid_value s vk v value then ((Option.none : Option P3.Pan.result), (P3.Pan.set_kvar vk v value s)) else ((Option.some P3.Pan.result.Error), s))
   | ((P3.Pan.prog.Store dst src), s) =>
     (match ((P3.Pan.eval s dst), (P3.Pan.eval s src)) with
-  | (Option.none, v3) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v10)), Option.none) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.none : Option P3.Pan.v), v3) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.none : Option P3.Pan.v)) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word addr))), (Option.some value)) => (match P3.Pan.mem_stores addr (P3.Pan.flatten value) (P3.Pan.state.memaddrs s) (P3.Pan.state.memory s) with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
-  | (Option.some m) => (Option.none, { s with memory := m }))
+  | (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)) => ((Option.some P3.Pan.result.Error), s)
+  | (Option.some m) => ((Option.none : Option P3.Pan.result), { s with memory := m }))
   | ((Option.some (P3.Pan.v.RStruct v11)), v3) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.NStruct v12 v13)), v3) => ((Option.some P3.Pan.result.Error), s))
   | ((P3.Pan.prog.StoreByte dst src), s) =>
     (match ((P3.Pan.eval s dst), (P3.Pan.eval s src)) with
-  | (Option.none, v3) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v10)), Option.none) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.none : Option P3.Pan.v), v3) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.none : Option P3.Pan.v)) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word adr))), (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w)))) => (match P3.Pan.mem_store_byte (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s) adr (BitVec.setWidth 8 w) with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
-  | (Option.some m) => (Option.none, { s with memory := m }))
+  | (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)) => ((Option.some P3.Pan.result.Error), s)
+  | (Option.some m) => ((Option.none : Option P3.Pan.result), { s with memory := m }))
   | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.RStruct v21))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.NStruct v22 v23))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.RStruct v11)), v3) => ((Option.some P3.Pan.result.Error), s)
@@ -50,10 +50,10 @@ noncomputable def evaluate {θ : Type} : (P3.Pan.prog × (P3.Pan.state θ)) → 
     (let p_2 := P3.Pan.fix_clock s (P3.Pan.evaluate (c1, s))
     let res := p_2.1
     let s1 := p_2.2
-    if (res = Option.none) then P3.Pan.evaluate (c2, s1) else (res, s1))
+    if (res = (Option.none : Option P3.Pan.result)) then P3.Pan.evaluate (c2, s1) else (res, s1))
   | ((P3.Pan.prog.If e c1 c2), s) =>
     (match P3.Pan.eval s e with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => P3.Pan.evaluate ((if (¬ (w = (BitVec.ofNat 64 0))) then c1 else c2), s)
   | (Option.some (P3.Pan.v.RStruct v7)) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some (P3.Pan.v.NStruct v8 v9)) => ((Option.some P3.Pan.result.Error), s))
@@ -63,41 +63,41 @@ noncomputable def evaluate {θ : Type} : (P3.Pan.prog × (P3.Pan.state θ)) → 
     ((Option.some P3.Pan.result.Continue), s)
   | ((P3.Pan.prog.While e c), s) =>
     (match P3.Pan.eval s e with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => if (¬ (w = (BitVec.ofNat 64 0))) then if ((P3.Pan.state.clock s) = 0) then ((Option.some P3.Pan.result.TimeOut), (P3.Pan.empty_locals s)) else (let p_3 := P3.Pan.fix_clock (P3.Pan.dec_clock s) (P3.Pan.evaluate (c, (P3.Pan.dec_clock s)))
     let res := p_3.1
     let s1 := p_3.2
     (match res with
-  | Option.none => P3.Pan.evaluate ((P3.Pan.prog.While e c), s1)
+  | (Option.none : Option P3.Pan.result) => P3.Pan.evaluate ((P3.Pan.prog.While e c), s1)
   | (Option.some P3.Pan.result.Error) => (res, s1)
   | (Option.some P3.Pan.result.TimeOut) => (res, s1)
-  | (Option.some P3.Pan.result.Break) => (Option.none, s1)
+  | (Option.some P3.Pan.result.Break) => ((Option.none : Option P3.Pan.result), s1)
   | (Option.some P3.Pan.result.Continue) => P3.Pan.evaluate ((P3.Pan.prog.While e c), s1)
   | (Option.some (P3.Pan.result.Return v6)) => (res, s1)
   | (Option.some (P3.Pan.result.Exception v7 v8)) => (res, s1)
-  | (Option.some (P3.Pan.result.FinalFFI v9)) => (res, s1))) else (Option.none, s)
+  | (Option.some (P3.Pan.result.FinalFFI v9)) => (res, s1))) else ((Option.none : Option P3.Pan.result), s)
   | (Option.some (P3.Pan.v.RStruct v12)) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some (P3.Pan.v.NStruct v13 v14)) => ((Option.some P3.Pan.result.Error), s))
   | ((P3.Pan.prog.Return e), s) =>
     (match P3.Pan.eval s e with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some value) => if ((P3.Pan.size_of_sh_with_ctxt (P3.Pan.state.structs s) (P3.Pan.shape_of value)) ≤ 32) then ((Option.some (P3.Pan.result.Return value)), (P3.Pan.empty_locals s)) else ((Option.some P3.Pan.result.Error), s))
   | (P3.Pan.prog.Tick, s) =>
-    if ((P3.Pan.state.clock s) = 0) then ((Option.some P3.Pan.result.TimeOut), (P3.Pan.empty_locals s)) else (Option.none, (P3.Pan.dec_clock s))
+    if ((P3.Pan.state.clock s) = 0) then ((Option.some P3.Pan.result.TimeOut), (P3.Pan.empty_locals s)) else ((Option.none : Option P3.Pan.result), (P3.Pan.dec_clock s))
   | ((P3.Pan.prog.Annot v0 v1), s) =>
-    (Option.none, s)
+    ((Option.none : Option P3.Pan.result), s)
   | ((P3.Pan.prog.ExtCall ffi_index ptr1 len1 ptr2 len2), s) =>
     (match ((P3.Pan.eval s ptr1), ((P3.Pan.eval s len1), ((P3.Pan.eval s ptr2), (P3.Pan.eval s len2)))) with
-  | (Option.none, v5) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v12)), (Option.none, v19)) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), (Option.none, v33))) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.some (P3.Pan.v.Val v40)), Option.none))) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.none : Option P3.Pan.v), v5) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v12)), ((Option.none : Option P3.Pan.v), v19)) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.none : Option P3.Pan.v), v33))) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.some (P3.Pan.v.Val v40)), (Option.none : Option P3.Pan.v)))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word sz1))), ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word ad1))), ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word sz2))), (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word ad2)))))) => (match ((P3.Pan.read_bytearray sz1 (BitVec.toNat ad1) (P3.Pan.mem_load_byte (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s))), (P3.Pan.read_bytearray sz2 (BitVec.toNat ad2) (P3.Pan.mem_load_byte (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s)))) with
-  | (Option.none, v3) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some bytes), Option.none) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.none : Option (List (BitVec 8))), v3) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some bytes), (Option.none : Option (List (BitVec 8)))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some bytes), (Option.some bytes2)) => (match P3.Pan.call_FFI (P3.Pan.state.ffi s) (P3.Pan.ffiname.ExtCall ffi_index) bytes bytes2 with
   | P3.Pan.ffi_result.FFI_return new_ffi new_bytes => (let nmem := P3.Pan.write_bytearray sz2 new_bytes (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s)
-    (Option.none, { { s with ffi := new_ffi } with memory := nmem }))
+    ((Option.none : Option P3.Pan.result), { { s with ffi := new_ffi } with memory := nmem }))
   | P3.Pan.ffi_result.FFI_final outcome => ((Option.some (P3.Pan.result.FinalFFI outcome)), (P3.Pan.empty_locals s))))
   | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.some (P3.Pan.v.Val v40)), (Option.some (P3.Pan.v.RStruct v51))))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.some (P3.Pan.v.Val v40)), (Option.some (P3.Pan.v.NStruct v52 v53))))) => ((Option.some P3.Pan.result.Error), s)
@@ -116,12 +116,12 @@ decreasing_by all_goals pan_decreasing
 -- every equation the HOL4 kernel proved, by unfolding only.
 -- ------------------------------------------------------------
 theorem evaluate_hol_eqn_1 {θ : Type}  (s : P3.Pan.state θ) :
-    P3.Pan.evaluate (P3.Pan.prog.Skip, s) = (Option.none, s) := by
+    P3.Pan.evaluate (P3.Pan.prog.Skip, s) = ((Option.none : Option P3.Pan.result), s) := by
   hol_eqn P3.Pan.evaluate
 
 theorem evaluate_hol_eqn_2 {θ : Type}  (v : P3.Pan.mlstring) (sh : P3.Pan.shape) (e : P3.Pan.exp) (prog : P3.Pan.prog) (s : P3.Pan.state θ) :
     P3.Pan.evaluate ((P3.Pan.prog.Dec v sh e prog), s) = (match P3.Pan.eval s e with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some value) => if (sh = (P3.Pan.shape_of value)) then (let p_4 := P3.Pan.evaluate (prog, { s with locals := (P3.Pan.FUPDATE (P3.Pan.state.locals s) (v, value)) })
     let res := p_4.1
     let st := p_4.2
@@ -130,28 +130,28 @@ theorem evaluate_hol_eqn_2 {θ : Type}  (v : P3.Pan.mlstring) (sh : P3.Pan.shape
 
 theorem evaluate_hol_eqn_3 {θ : Type}  (vk : P3.Pan.varkind) (v : P3.Pan.mlstring) (src : P3.Pan.exp) (s : P3.Pan.state θ) :
     P3.Pan.evaluate ((P3.Pan.prog.Assign vk v src), s) = (match P3.Pan.eval s src with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
-  | (Option.some value) => if P3.Pan.is_valid_value s vk v value then (Option.none, (P3.Pan.set_kvar vk v value s)) else ((Option.some P3.Pan.result.Error), s)) := by
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
+  | (Option.some value) => if P3.Pan.is_valid_value s vk v value then ((Option.none : Option P3.Pan.result), (P3.Pan.set_kvar vk v value s)) else ((Option.some P3.Pan.result.Error), s)) := by
   hol_eqn P3.Pan.evaluate
 
 theorem evaluate_hol_eqn_4 {θ : Type}  (dst : P3.Pan.exp) (src : P3.Pan.exp) (s : P3.Pan.state θ) :
     P3.Pan.evaluate ((P3.Pan.prog.Store dst src), s) = (match ((P3.Pan.eval s dst), (P3.Pan.eval s src)) with
-  | (Option.none, v3) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v10)), Option.none) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.none : Option P3.Pan.v), v3) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.none : Option P3.Pan.v)) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word addr))), (Option.some value)) => (match P3.Pan.mem_stores addr (P3.Pan.flatten value) (P3.Pan.state.memaddrs s) (P3.Pan.state.memory s) with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
-  | (Option.some m) => (Option.none, { s with memory := m }))
+  | (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)) => ((Option.some P3.Pan.result.Error), s)
+  | (Option.some m) => ((Option.none : Option P3.Pan.result), { s with memory := m }))
   | ((Option.some (P3.Pan.v.RStruct v11)), v3) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.NStruct v12 v13)), v3) => ((Option.some P3.Pan.result.Error), s)) := by
   hol_eqn P3.Pan.evaluate
 
 theorem evaluate_hol_eqn_5 {θ : Type}  (dst : P3.Pan.exp) (src : P3.Pan.exp) (s : P3.Pan.state θ) :
     P3.Pan.evaluate ((P3.Pan.prog.StoreByte dst src), s) = (match ((P3.Pan.eval s dst), (P3.Pan.eval s src)) with
-  | (Option.none, v3) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v10)), Option.none) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.none : Option P3.Pan.v), v3) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.none : Option P3.Pan.v)) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word adr))), (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w)))) => (match P3.Pan.mem_store_byte (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s) adr (BitVec.setWidth 8 w) with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
-  | (Option.some m) => (Option.none, { s with memory := m }))
+  | (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)) => ((Option.some P3.Pan.result.Error), s)
+  | (Option.some m) => ((Option.none : Option P3.Pan.result), { s with memory := m }))
   | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.RStruct v21))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.NStruct v22 v23))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.RStruct v11)), v3) => ((Option.some P3.Pan.result.Error), s)
@@ -162,12 +162,12 @@ theorem evaluate_hol_eqn_6 {θ : Type}  (c1 : P3.Pan.prog) (c2 : P3.Pan.prog) (s
     P3.Pan.evaluate ((P3.Pan.prog.Seq c1 c2), s) = (let p_5 := P3.Pan.fix_clock s (P3.Pan.evaluate (c1, s))
     let res := p_5.1
     let s1 := p_5.2
-    if (res = Option.none) then P3.Pan.evaluate (c2, s1) else (res, s1)) := by
+    if (res = (Option.none : Option P3.Pan.result)) then P3.Pan.evaluate (c2, s1) else (res, s1)) := by
   hol_eqn P3.Pan.evaluate
 
 theorem evaluate_hol_eqn_7 {θ : Type}  (e : P3.Pan.exp) (c1 : P3.Pan.prog) (c2 : P3.Pan.prog) (s : P3.Pan.state θ) :
     P3.Pan.evaluate ((P3.Pan.prog.If e c1 c2), s) = (match P3.Pan.eval s e with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => P3.Pan.evaluate ((if (¬ (w = (BitVec.ofNat 64 0))) then c1 else c2), s)
   | (Option.some (P3.Pan.v.RStruct v7)) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some (P3.Pan.v.NStruct v8 v9)) => ((Option.some P3.Pan.result.Error), s)) := by
@@ -183,49 +183,49 @@ theorem evaluate_hol_eqn_9 {θ : Type}  (s : P3.Pan.state θ) :
 
 theorem evaluate_hol_eqn_10 {θ : Type}  (e : P3.Pan.exp) (c : P3.Pan.prog) (s : P3.Pan.state θ) :
     P3.Pan.evaluate ((P3.Pan.prog.While e c), s) = (match P3.Pan.eval s e with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => if (¬ (w = (BitVec.ofNat 64 0))) then if ((P3.Pan.state.clock s) = 0) then ((Option.some P3.Pan.result.TimeOut), (P3.Pan.empty_locals s)) else (let p_6 := P3.Pan.fix_clock (P3.Pan.dec_clock s) (P3.Pan.evaluate (c, (P3.Pan.dec_clock s)))
     let res := p_6.1
     let s1 := p_6.2
     (match res with
-  | Option.none => P3.Pan.evaluate ((P3.Pan.prog.While e c), s1)
+  | (Option.none : Option P3.Pan.result) => P3.Pan.evaluate ((P3.Pan.prog.While e c), s1)
   | (Option.some P3.Pan.result.Error) => (res, s1)
   | (Option.some P3.Pan.result.TimeOut) => (res, s1)
-  | (Option.some P3.Pan.result.Break) => (Option.none, s1)
+  | (Option.some P3.Pan.result.Break) => ((Option.none : Option P3.Pan.result), s1)
   | (Option.some P3.Pan.result.Continue) => P3.Pan.evaluate ((P3.Pan.prog.While e c), s1)
   | (Option.some (P3.Pan.result.Return v6)) => (res, s1)
   | (Option.some (P3.Pan.result.Exception v7 v8)) => (res, s1)
-  | (Option.some (P3.Pan.result.FinalFFI v9)) => (res, s1))) else (Option.none, s)
+  | (Option.some (P3.Pan.result.FinalFFI v9)) => (res, s1))) else ((Option.none : Option P3.Pan.result), s)
   | (Option.some (P3.Pan.v.RStruct v12)) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some (P3.Pan.v.NStruct v13 v14)) => ((Option.some P3.Pan.result.Error), s)) := by
   hol_eqn P3.Pan.evaluate
 
 theorem evaluate_hol_eqn_11 {θ : Type}  (e : P3.Pan.exp) (s : P3.Pan.state θ) :
     P3.Pan.evaluate ((P3.Pan.prog.Return e), s) = (match P3.Pan.eval s e with
-  | Option.none => ((Option.some P3.Pan.result.Error), s)
+  | (Option.none : Option P3.Pan.v) => ((Option.some P3.Pan.result.Error), s)
   | (Option.some value) => if ((P3.Pan.size_of_sh_with_ctxt (P3.Pan.state.structs s) (P3.Pan.shape_of value)) ≤ 32) then ((Option.some (P3.Pan.result.Return value)), (P3.Pan.empty_locals s)) else ((Option.some P3.Pan.result.Error), s)) := by
   hol_eqn P3.Pan.evaluate
 
 theorem evaluate_hol_eqn_12 {θ : Type}  (s : P3.Pan.state θ) :
-    P3.Pan.evaluate (P3.Pan.prog.Tick, s) = (if ((P3.Pan.state.clock s) = 0) then ((Option.some P3.Pan.result.TimeOut), (P3.Pan.empty_locals s)) else (Option.none, (P3.Pan.dec_clock s))) := by
+    P3.Pan.evaluate (P3.Pan.prog.Tick, s) = (if ((P3.Pan.state.clock s) = 0) then ((Option.some P3.Pan.result.TimeOut), (P3.Pan.empty_locals s)) else ((Option.none : Option P3.Pan.result), (P3.Pan.dec_clock s))) := by
   hol_eqn P3.Pan.evaluate
 
 theorem evaluate_hol_eqn_13 {θ : Type}  (v0 : P3.Pan.mlstring) (v1 : P3.Pan.mlstring) (s : P3.Pan.state θ) :
-    P3.Pan.evaluate ((P3.Pan.prog.Annot v0 v1), s) = (Option.none, s) := by
+    P3.Pan.evaluate ((P3.Pan.prog.Annot v0 v1), s) = ((Option.none : Option P3.Pan.result), s) := by
   hol_eqn P3.Pan.evaluate
 
 theorem evaluate_hol_eqn_14 {θ : Type}  (ffi_index : P3.Pan.mlstring) (ptr1 : P3.Pan.exp) (len1 : P3.Pan.exp) (ptr2 : P3.Pan.exp) (len2 : P3.Pan.exp) (s : P3.Pan.state θ) :
     P3.Pan.evaluate ((P3.Pan.prog.ExtCall ffi_index ptr1 len1 ptr2 len2), s) = (match ((P3.Pan.eval s ptr1), ((P3.Pan.eval s len1), ((P3.Pan.eval s ptr2), (P3.Pan.eval s len2)))) with
-  | (Option.none, v5) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v12)), (Option.none, v19)) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), (Option.none, v33))) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.some (P3.Pan.v.Val v40)), Option.none))) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.none : Option P3.Pan.v), v5) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v12)), ((Option.none : Option P3.Pan.v), v19)) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.none : Option P3.Pan.v), v33))) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.some (P3.Pan.v.Val v40)), (Option.none : Option P3.Pan.v)))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word sz1))), ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word ad1))), ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word sz2))), (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word ad2)))))) => (match ((P3.Pan.read_bytearray sz1 (BitVec.toNat ad1) (P3.Pan.mem_load_byte (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s))), (P3.Pan.read_bytearray sz2 (BitVec.toNat ad2) (P3.Pan.mem_load_byte (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s)))) with
-  | (Option.none, v3) => ((Option.some P3.Pan.result.Error), s)
-  | ((Option.some bytes), Option.none) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.none : Option (List (BitVec 8))), v3) => ((Option.some P3.Pan.result.Error), s)
+  | ((Option.some bytes), (Option.none : Option (List (BitVec 8)))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some bytes), (Option.some bytes2)) => (match P3.Pan.call_FFI (P3.Pan.state.ffi s) (P3.Pan.ffiname.ExtCall ffi_index) bytes bytes2 with
   | P3.Pan.ffi_result.FFI_return new_ffi new_bytes => (let nmem := P3.Pan.write_bytearray sz2 new_bytes (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s)
-    (Option.none, { { s with ffi := new_ffi } with memory := nmem }))
+    ((Option.none : Option P3.Pan.result), { { s with ffi := new_ffi } with memory := nmem }))
   | P3.Pan.ffi_result.FFI_final outcome => ((Option.some (P3.Pan.result.FinalFFI outcome)), (P3.Pan.empty_locals s))))
   | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.some (P3.Pan.v.Val v40)), (Option.some (P3.Pan.v.RStruct v51))))) => ((Option.some P3.Pan.result.Error), s)
   | ((Option.some (P3.Pan.v.Val v12)), ((Option.some (P3.Pan.v.Val v26)), ((Option.some (P3.Pan.v.Val v40)), (Option.some (P3.Pan.v.NStruct v52 v53))))) => ((Option.some P3.Pan.result.Error), s)

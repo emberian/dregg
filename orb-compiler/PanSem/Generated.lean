@@ -222,12 +222,12 @@ noncomputable def byte_align : (BitVec 64) → BitVec 64
 /-- reflected from HOL4 `misc$read_bytearray` via misc$read_bytearray_def (whole, 'a:=64) (2 clauses) -/
 noncomputable def read_bytearray {α : Type} : (BitVec 64) → Nat → ((BitVec 64) → Option α) → Option (List α)
   | a, 0, get_byte =>
-    (Option.some [])
+    (Option.some ([] : List α))
   | a, (n + 1), get_byte =>
     (match get_byte a with
-  | Option.none => Option.none
+  | (Option.none : Option α) => (Option.none : Option (List α))
   | (Option.some b) => (match P3.Pan.read_bytearray (a + (BitVec.ofNat 64 1)) n get_byte with
-  | Option.none => Option.none
+  | (Option.none : Option (List α)) => (Option.none : Option (List α))
   | (Option.some bs) => (Option.some (b :: bs))))
 
 /-- reflected from HOL4 `asm$word_cmp` via asm$word_cmp_def (whole, 'a:=64) (8 clauses) -/
@@ -254,10 +254,10 @@ noncomputable def word_op : P3.Pan.binop → (List (BitVec 64)) → Option (BitV
   | op, ws =>
     (match (op, ws) with
   | (P3.Pan.binop.Add, ws) => (Option.some (List.foldr (fun x y => x + y) (BitVec.ofNat 64 0) ws))
-  | (P3.Pan.binop.Sub, []) => Option.none
-  | (P3.Pan.binop.Sub, (w1 :: [])) => Option.none
-  | (P3.Pan.binop.Sub, (w1 :: (w2 :: []))) => (Option.some (w1 - w2))
-  | (P3.Pan.binop.Sub, (w1 :: (w2 :: (v14 :: v15)))) => Option.none
+  | (P3.Pan.binop.Sub, ([] : List (BitVec 64))) => (Option.none : Option (BitVec 64))
+  | (P3.Pan.binop.Sub, (w1 :: ([] : List (BitVec 64)))) => (Option.none : Option (BitVec 64))
+  | (P3.Pan.binop.Sub, (w1 :: (w2 :: ([] : List (BitVec 64))))) => (Option.some (w1 - w2))
+  | (P3.Pan.binop.Sub, (w1 :: (w2 :: (v14 :: v15)))) => (Option.none : Option (BitVec 64))
   | (P3.Pan.binop.And, ws) => (Option.some (List.foldr (fun x y => x &&& y) (~~~ (BitVec.ofNat 64 0)) ws))
   | (P3.Pan.binop.Or, ws) => (Option.some (List.foldr (fun x y => x ||| y) (BitVec.ofNat 64 0) ws))
   | (P3.Pan.binop.Xor, ws) => (Option.some (List.foldr (fun x y => x ^^^ y) (BitVec.ofNat 64 0) ws)))
@@ -265,7 +265,7 @@ noncomputable def word_op : P3.Pan.binop → (List (BitVec 64)) → Option (BitV
 /-- reflected from HOL4 `wordLang$word_sh` via wordLang$word_sh_def (whole, 'a:=64) (1 clauses) -/
 noncomputable def word_sh : P3.Pan.shift → (BitVec 64) → Nat → Option (BitVec 64)
   | sh, w, n =>
-    if ((¬ (n = 0)) ∧ (n ≥ 64)) then Option.none else (match sh with
+    if ((¬ (n = 0)) ∧ (n ≥ 64)) then (Option.none : Option (BitVec 64)) else (match sh with
   | P3.Pan.shift.Lsl => (Option.some (w <<< n))
   | P3.Pan.shift.Lsr => (Option.some (w >>> n))
   | P3.Pan.shift.Asr => (Option.some (BitVec.sshiftRight w n))
@@ -275,7 +275,7 @@ noncomputable def word_sh : P3.Pan.shift → (BitVec 64) → Nat → Option (Bit
 noncomputable def call_FFI {θ : Type} : (P3.Pan.ffi_state θ) → P3.Pan.ffiname → (List (BitVec 8)) → (List (BitVec 8)) → P3.Pan.ffi_result θ
   | st, s, conf, bytes =>
     if (¬ (s = (P3.Pan.ffiname.ExtCall (P3.Pan.mlstring.implode ([] : List P3.Pan.HolChar))))) then (match P3.Pan.ffi_state.oracle st s (P3.Pan.ffi_state.ffi_state st) conf bytes with
-  | P3.Pan.oracle_result.Oracle_return ffi' bytes' => if ((List.length bytes') = (List.length bytes)) then P3.Pan.ffi_result.FFI_return { { st with io_events := ((P3.Pan.ffi_state.io_events st) ++ ((P3.Pan.io_event.IO_event s conf (P3.Pan.ZIP (bytes, bytes'))) :: [])) } with ffi_state := ffi' } bytes' else P3.Pan.ffi_result.FFI_final (P3.Pan.final_event.Final_event s conf bytes P3.Pan.ffi_outcome.FFI_failed)
+  | P3.Pan.oracle_result.Oracle_return ffi' bytes' => if ((List.length bytes') = (List.length bytes)) then P3.Pan.ffi_result.FFI_return { { st with io_events := ((P3.Pan.ffi_state.io_events st) ++ ((P3.Pan.io_event.IO_event s conf (P3.Pan.ZIP (bytes, bytes'))) :: ([] : List P3.Pan.io_event))) } with ffi_state := ffi' } bytes' else P3.Pan.ffi_result.FFI_final (P3.Pan.final_event.Final_event s conf bytes P3.Pan.ffi_outcome.FFI_failed)
   | P3.Pan.oracle_result.Oracle_final outcome => P3.Pan.ffi_result.FFI_final (P3.Pan.final_event.Final_event s conf bytes outcome)) else P3.Pan.ffi_result.FFI_return st bytes
 
 /-- reflected from HOL4 `panSem$shape_of` via panSem$shape_of_def (whole, 'a:=64) (3 clauses) -/
@@ -305,61 +305,61 @@ noncomputable def size_of_sh_with_ctxt : (List (P3.Pan.mlstring × P3.Pan.struct
 noncomputable def mem_load_byte : ((BitVec 64) → P3.Pan.word_lab) → ((BitVec 64) → Prop) → Prop → (BitVec 64) → Option (BitVec 8)
   | m, dm, be, w =>
     (match m (P3.Pan.byte_align w) with
-  | P3.Pan.word_lab.Word v => if (dm (P3.Pan.byte_align w)) then (Option.some (P3.Pan.get_byte w v be)) else Option.none)
+  | P3.Pan.word_lab.Word v => if (dm (P3.Pan.byte_align w)) then (Option.some (P3.Pan.get_byte w v be)) else (Option.none : Option (BitVec 8)))
 
 /-- reflected from HOL4 `panSem$mem_load` via certified slice mem_load_One_slice ('a:=64) (1 clauses; opaque remainder: Lean proves nothing outside them) -/
 opaque mem_load_unspec : P3.Pan.shape → (BitVec 64) → ((BitVec 64) → Prop) → ((BitVec 64) → P3.Pan.word_lab) → (List (P3.Pan.mlstring × P3.Pan.struct_info)) → Option P3.Pan.v
 noncomputable def mem_load : P3.Pan.shape → (BitVec 64) → ((BitVec 64) → Prop) → ((BitVec 64) → P3.Pan.word_lab) → (List (P3.Pan.mlstring × P3.Pan.struct_info)) → Option P3.Pan.v
   | P3.Pan.shape.One, addr, dm, m, stcs =>
-    if (dm addr) then (Option.some (P3.Pan.v.Val (m addr))) else Option.none
+    if (dm addr) then (Option.some (P3.Pan.v.Val (m addr))) else (Option.none : Option P3.Pan.v)
   | x0, x1, x2, x3, x4 => P3.Pan.mem_load_unspec x0 x1 x2 x3 x4
 
 /-- reflected from HOL4 `panSem$mem_store_byte` via panSem$mem_store_byte_def (whole, 'a:=64) (1 clauses) -/
 noncomputable def mem_store_byte : ((BitVec 64) → P3.Pan.word_lab) → ((BitVec 64) → Prop) → Prop → (BitVec 64) → (BitVec 8) → Option ((BitVec 64) → P3.Pan.word_lab)
   | m, dm, be, w, b =>
     (match m (P3.Pan.byte_align w) with
-  | P3.Pan.word_lab.Word v => if (dm (P3.Pan.byte_align w)) then (Option.some (P3.Pan.UPDATE (P3.Pan.byte_align w) (P3.Pan.word_lab.Word (P3.Pan.set_byte w b v be)) m)) else Option.none)
+  | P3.Pan.word_lab.Word v => if (dm (P3.Pan.byte_align w)) then (Option.some (P3.Pan.UPDATE (P3.Pan.byte_align w) (P3.Pan.word_lab.Word (P3.Pan.set_byte w b v be)) m)) else (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)))
 
 /-- reflected from HOL4 `panSem$write_bytearray` via panSem$write_bytearray_def (whole, 'a:=64) (2 clauses) -/
 noncomputable def write_bytearray : (BitVec 64) → (List (BitVec 8)) → ((BitVec 64) → P3.Pan.word_lab) → ((BitVec 64) → Prop) → Prop → (BitVec 64) → P3.Pan.word_lab
-  | a, [], m, dm, be =>
+  | a, ([] : List (BitVec 8)), m, dm, be =>
     m
   | a, (b :: bs), m, dm, be =>
     (match P3.Pan.mem_store_byte (P3.Pan.write_bytearray (a + (BitVec.ofNat 64 1)) bs m dm be) dm be a b with
-  | Option.none => m
+  | (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)) => m
   | (Option.some v) => v)
 
 /-- reflected from HOL4 `panSem$mem_store` via panSem$mem_store_def (whole, 'a:=64) (1 clauses) -/
 noncomputable def mem_store : (BitVec 64) → P3.Pan.word_lab → ((BitVec 64) → Prop) → ((BitVec 64) → P3.Pan.word_lab) → Option ((BitVec 64) → P3.Pan.word_lab)
   | addr, w, dm, m =>
-    if (dm addr) then (Option.some (P3.Pan.UPDATE addr w m)) else Option.none
+    if (dm addr) then (Option.some (P3.Pan.UPDATE addr w m)) else (Option.none : Option ((BitVec 64) → P3.Pan.word_lab))
 
 /-- reflected from HOL4 `panSem$mem_stores` via panSem$mem_stores_def (whole, 'a:=64) (2 clauses) -/
 noncomputable def mem_stores : (BitVec 64) → (List P3.Pan.word_lab) → ((BitVec 64) → Prop) → ((BitVec 64) → P3.Pan.word_lab) → Option ((BitVec 64) → P3.Pan.word_lab)
-  | a, [], dm, m =>
+  | a, ([] : List P3.Pan.word_lab), dm, m =>
     (Option.some m)
   | a, (w :: ws), dm, m =>
     (match P3.Pan.mem_store a w dm m with
-  | Option.none => Option.none
+  | (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)) => (Option.none : Option ((BitVec 64) → P3.Pan.word_lab))
   | (Option.some m') => P3.Pan.mem_stores (a + (BitVec.ofNat 64 8)) ws dm m')
 
 /-- reflected from HOL4 `panSem$flatten` via certified slice flatten_Val_slice ('a:=64) (1 clauses; opaque remainder: Lean proves nothing outside them) -/
 opaque flatten_unspec : P3.Pan.v → List P3.Pan.word_lab
 noncomputable def flatten : P3.Pan.v → List P3.Pan.word_lab
   | P3.Pan.v.Val w =>
-    (w :: [])
+    (w :: ([] : List P3.Pan.word_lab))
   | x0 => P3.Pan.flatten_unspec x0
 
 /-- reflected from HOL4 `panSem$pan_op` via panSem$pan_op_def (whole, 'a:=64) (4 clauses) -/
 noncomputable def pan_op : P3.Pan.panop → (List (BitVec 64)) → Option (BitVec 64)
-  | P3.Pan.panop.Mul, (w1 :: (w2 :: [])) =>
+  | P3.Pan.panop.Mul, (w1 :: (w2 :: ([] : List (BitVec 64)))) =>
     (Option.some (w1 * w2))
-  | P3.Pan.panop.Mul, [] =>
-    Option.none
-  | P3.Pan.panop.Mul, (v3 :: []) =>
-    Option.none
+  | P3.Pan.panop.Mul, ([] : List (BitVec 64)) =>
+    (Option.none : Option (BitVec 64))
+  | P3.Pan.panop.Mul, (v3 :: ([] : List (BitVec 64))) =>
+    (Option.none : Option (BitVec 64))
   | P3.Pan.panop.Mul, (v3 :: (v7 :: (v11 :: v12))) =>
-    Option.none
+    (Option.none : Option (BitVec 64))
 
 /-- reflected from HOL4 `panSem$eval` via panSem$eval_def (selected clauses Const,Var,RStruct,Load,LoadByte,Op,Panop,Cmp,Shift,BaseAddr,TopAddr,BytesInWord, 'a:=64) (13 clauses; opaque remainder: Lean proves nothing outside them) -/
 opaque eval_unspec {θ : Type} : (P3.Pan.state θ) → P3.Pan.exp → Option P3.Pan.v
@@ -372,57 +372,57 @@ noncomputable def eval {θ : Type} : (P3.Pan.state θ) → P3.Pan.exp → Option
     ((P3.Pan.state.globals s) v)
   | s, P3.Pan.exp.RStruct es =>
     (match (List.mapM (fun a => P3.Pan.eval s a) es) with
-  | Option.none => Option.none
+  | (Option.none : Option (List P3.Pan.v)) => (Option.none : Option P3.Pan.v)
   | (Option.some vs) => (Option.some (P3.Pan.v.RStruct vs)))
   | s, P3.Pan.exp.Load shape addr =>
     if P3.Pan.is_wf_shape (P3.Pan.state.structs s) shape then (match P3.Pan.eval s addr with
-  | Option.none => Option.none
+  | (Option.none : Option P3.Pan.v) => (Option.none : Option P3.Pan.v)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => P3.Pan.mem_load shape w (P3.Pan.state.memaddrs s) (P3.Pan.state.memory s) (P3.Pan.state.structs s)
-  | (Option.some (P3.Pan.v.RStruct v7)) => Option.none
-  | (Option.some (P3.Pan.v.NStruct v8 v9)) => Option.none) else Option.none
+  | (Option.some (P3.Pan.v.RStruct v7)) => (Option.none : Option P3.Pan.v)
+  | (Option.some (P3.Pan.v.NStruct v8 v9)) => (Option.none : Option P3.Pan.v)) else (Option.none : Option P3.Pan.v)
   | s, P3.Pan.exp.LoadByte addr =>
     (match P3.Pan.eval s addr with
-  | Option.none => Option.none
+  | (Option.none : Option P3.Pan.v) => (Option.none : Option P3.Pan.v)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => (match P3.Pan.mem_load_byte (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s) w with
-  | Option.none => Option.none
+  | (Option.none : Option (BitVec 8)) => (Option.none : Option P3.Pan.v)
   | (Option.some w) => (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word (BitVec.setWidth 64 w)))))
-  | (Option.some (P3.Pan.v.RStruct v7)) => Option.none
-  | (Option.some (P3.Pan.v.NStruct v8 v9)) => Option.none)
+  | (Option.some (P3.Pan.v.RStruct v7)) => (Option.none : Option P3.Pan.v)
+  | (Option.some (P3.Pan.v.NStruct v8 v9)) => (Option.none : Option P3.Pan.v))
   | s, P3.Pan.exp.Op op es =>
     (match (List.mapM (fun a => P3.Pan.eval s a) es) with
-  | Option.none => Option.none
+  | (Option.none : Option (List P3.Pan.v)) => (Option.none : Option P3.Pan.v)
   | (Option.some ws) => if (P3.Pan.EVERY (fun w => (match w with
   | P3.Pan.v.Val v4 => True
   | P3.Pan.v.RStruct v5 => False
   | P3.Pan.v.NStruct v6 v7 => False)) ws) then (Option.map (fun w => P3.Pan.v.Val (P3.Pan.word_lab.Word w)) (P3.Pan.word_op op (List.map (fun w => (match w with
   | P3.Pan.v.Val (P3.Pan.word_lab.Word n) => n
   | P3.Pan.v.RStruct v1 => P3.Pan.holARB
-  | P3.Pan.v.NStruct v3 v4 => P3.Pan.holARB)) ws))) else Option.none)
+  | P3.Pan.v.NStruct v3 v4 => P3.Pan.holARB)) ws))) else (Option.none : Option P3.Pan.v))
   | s, P3.Pan.exp.Panop op es =>
     (match (List.mapM (fun a => P3.Pan.eval s a) es) with
-  | Option.none => Option.none
+  | (Option.none : Option (List P3.Pan.v)) => (Option.none : Option P3.Pan.v)
   | (Option.some ws) => if (P3.Pan.EVERY (fun w => (match w with
   | P3.Pan.v.Val v4 => True
   | P3.Pan.v.RStruct v5 => False
   | P3.Pan.v.NStruct v6 v7 => False)) ws) then (Option.map (fun w => P3.Pan.v.Val (P3.Pan.word_lab.Word w)) (P3.Pan.pan_op op (List.map (fun w => (match w with
   | P3.Pan.v.Val (P3.Pan.word_lab.Word n) => n
   | P3.Pan.v.RStruct v1 => P3.Pan.holARB
-  | P3.Pan.v.NStruct v3 v4 => P3.Pan.holARB)) ws))) else Option.none)
+  | P3.Pan.v.NStruct v3 v4 => P3.Pan.holARB)) ws))) else (Option.none : Option P3.Pan.v))
   | s, P3.Pan.exp.Cmp cmp e1 e2 =>
     (match ((P3.Pan.eval s e1), (P3.Pan.eval s e2)) with
-  | (Option.none, v3) => Option.none
-  | ((Option.some (P3.Pan.v.Val v10)), Option.none) => Option.none
+  | ((Option.none : Option P3.Pan.v), v3) => (Option.none : Option P3.Pan.v)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.none : Option P3.Pan.v)) => (Option.none : Option P3.Pan.v)
   | ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w1))), (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w2)))) => (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word (if P3.Pan.word_cmp cmp w1 w2 then BitVec.ofNat 64 1 else BitVec.ofNat 64 0))))
-  | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.RStruct v21))) => Option.none
-  | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.NStruct v22 v23))) => Option.none
-  | ((Option.some (P3.Pan.v.RStruct v11)), v3) => Option.none
-  | ((Option.some (P3.Pan.v.NStruct v12 v13)), v3) => Option.none)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.RStruct v21))) => (Option.none : Option P3.Pan.v)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.NStruct v22 v23))) => (Option.none : Option P3.Pan.v)
+  | ((Option.some (P3.Pan.v.RStruct v11)), v3) => (Option.none : Option P3.Pan.v)
+  | ((Option.some (P3.Pan.v.NStruct v12 v13)), v3) => (Option.none : Option P3.Pan.v))
   | s, P3.Pan.exp.Shift sh e n =>
     (match P3.Pan.eval s e with
-  | Option.none => Option.none
+  | (Option.none : Option P3.Pan.v) => (Option.none : Option P3.Pan.v)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => (Option.map (fun w => P3.Pan.v.Val (P3.Pan.word_lab.Word w)) (P3.Pan.word_sh sh w n))
-  | (Option.some (P3.Pan.v.RStruct v7)) => Option.none
-  | (Option.some (P3.Pan.v.NStruct v8 v9)) => Option.none)
+  | (Option.some (P3.Pan.v.RStruct v7)) => (Option.none : Option P3.Pan.v)
+  | (Option.some (P3.Pan.v.NStruct v8 v9)) => (Option.none : Option P3.Pan.v))
   | s, P3.Pan.exp.BaseAddr =>
     (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word (P3.Pan.state.base_addr s))))
   | s, P3.Pan.exp.TopAddr =>
@@ -460,12 +460,12 @@ noncomputable def lookup_kvar {θ : Type} : P3.Pan.varkind → P3.Pan.mlstring �
 noncomputable def is_valid_value {β : Type} : (P3.Pan.state β) → P3.Pan.varkind → P3.Pan.mlstring → P3.Pan.v → Prop
   | s, vk, v, value =>
     (match P3.Pan.lookup_kvar vk v s with
-  | Option.none => False
+  | (Option.none : Option P3.Pan.v) => False
   | (Option.some w) => ((P3.Pan.shape_of value) = (P3.Pan.shape_of w)))
 
 /-- reflected from HOL4 `panSem$res_var` via panSem$res_var_def (whole, 'a:=64) (2 clauses) -/
 noncomputable def res_var {β α : Type} : (P3.Pan.FMap α β) → (α × (Option β)) → P3.Pan.FMap α β
-  | lc, (n, Option.none) =>
+  | lc, (n, (Option.none : Option β)) =>
     (P3.Pan.DOMSUB lc n)
   | lc, (n, (Option.some v)) =>
     (P3.Pan.FUPDATE lc (n, v))
@@ -473,7 +473,7 @@ noncomputable def res_var {β α : Type} : (P3.Pan.FMap α β) → (α × (Optio
 /-- reflected from HOL4 `panSem$empty_locals` via panSem$empty_locals_def (whole, 'a:=64) (1 clauses) -/
 noncomputable def empty_locals {θ : Type} : (P3.Pan.state θ) → P3.Pan.state θ
   | s =>
-    { s with locals := P3.Pan.FEMPTY }
+    { s with locals := (P3.Pan.FEMPTY : P3.Pan.FMap P3.Pan.mlstring P3.Pan.v) }
 
 /-- reflected from HOL4 `panSem$dec_clock` via panSem$dec_clock_def (whole, 'a:=64) (1 clauses) -/
 noncomputable def dec_clock {θ : Type} : (P3.Pan.state θ) → P3.Pan.state θ
@@ -512,14 +512,14 @@ theorem byte_align_hol_eqn_1  (w : BitVec 64) :
   hol_eqn P3.Pan.byte_align
 
 theorem read_bytearray_hol_eqn_1 {α : Type}  (a : BitVec 64) (get_byte : (BitVec 64) → Option α) :
-    P3.Pan.read_bytearray a 0 get_byte = (Option.some []) := by
+    P3.Pan.read_bytearray a 0 get_byte = (Option.some ([] : List α)) := by
   hol_eqn P3.Pan.read_bytearray
 
 theorem read_bytearray_hol_eqn_2 {α : Type}  (a : BitVec 64) (n : Nat) (get_byte : (BitVec 64) → Option α) :
     P3.Pan.read_bytearray a (n + 1) get_byte = (match get_byte a with
-  | Option.none => Option.none
+  | (Option.none : Option α) => (Option.none : Option (List α))
   | (Option.some b) => (match P3.Pan.read_bytearray (a + (BitVec.ofNat 64 1)) n get_byte with
-  | Option.none => Option.none
+  | (Option.none : Option (List α)) => (Option.none : Option (List α))
   | (Option.some bs) => (Option.some (b :: bs)))) := by
   hol_eqn P3.Pan.read_bytearray
 
@@ -558,17 +558,17 @@ theorem word_cmp_hol_eqn_8  (w1 : BitVec 64) (w2 : BitVec 64) :
 theorem word_op_hol_eqn_1  (op : P3.Pan.binop) (ws : List (BitVec 64)) :
     P3.Pan.word_op op ws = (match (op, ws) with
   | (P3.Pan.binop.Add, ws) => (Option.some (List.foldr (fun x y => x + y) (BitVec.ofNat 64 0) ws))
-  | (P3.Pan.binop.Sub, []) => Option.none
-  | (P3.Pan.binop.Sub, (w1 :: [])) => Option.none
-  | (P3.Pan.binop.Sub, (w1 :: (w2 :: []))) => (Option.some (w1 - w2))
-  | (P3.Pan.binop.Sub, (w1 :: (w2 :: (v14 :: v15)))) => Option.none
+  | (P3.Pan.binop.Sub, ([] : List (BitVec 64))) => (Option.none : Option (BitVec 64))
+  | (P3.Pan.binop.Sub, (w1 :: ([] : List (BitVec 64)))) => (Option.none : Option (BitVec 64))
+  | (P3.Pan.binop.Sub, (w1 :: (w2 :: ([] : List (BitVec 64))))) => (Option.some (w1 - w2))
+  | (P3.Pan.binop.Sub, (w1 :: (w2 :: (v14 :: v15)))) => (Option.none : Option (BitVec 64))
   | (P3.Pan.binop.And, ws) => (Option.some (List.foldr (fun x y => x &&& y) (~~~ (BitVec.ofNat 64 0)) ws))
   | (P3.Pan.binop.Or, ws) => (Option.some (List.foldr (fun x y => x ||| y) (BitVec.ofNat 64 0) ws))
   | (P3.Pan.binop.Xor, ws) => (Option.some (List.foldr (fun x y => x ^^^ y) (BitVec.ofNat 64 0) ws))) := by
   hol_eqn P3.Pan.word_op
 
 theorem word_sh_hol_eqn_1  (sh : P3.Pan.shift) (w : BitVec 64) (n : Nat) :
-    P3.Pan.word_sh sh w n = (if ((¬ (n = 0)) ∧ (n ≥ 64)) then Option.none else (match sh with
+    P3.Pan.word_sh sh w n = (if ((¬ (n = 0)) ∧ (n ≥ 64)) then (Option.none : Option (BitVec 64)) else (match sh with
   | P3.Pan.shift.Lsl => (Option.some (w <<< n))
   | P3.Pan.shift.Lsr => (Option.some (w >>> n))
   | P3.Pan.shift.Asr => (Option.some (BitVec.sshiftRight w n))
@@ -577,7 +577,7 @@ theorem word_sh_hol_eqn_1  (sh : P3.Pan.shift) (w : BitVec 64) (n : Nat) :
 
 theorem call_FFI_hol_eqn_1 {θ : Type}  (st : P3.Pan.ffi_state θ) (s : P3.Pan.ffiname) (conf : List (BitVec 8)) (bytes : List (BitVec 8)) :
     P3.Pan.call_FFI st s conf bytes = (if (¬ (s = (P3.Pan.ffiname.ExtCall (P3.Pan.mlstring.implode ([] : List P3.Pan.HolChar))))) then (match P3.Pan.ffi_state.oracle st s (P3.Pan.ffi_state.ffi_state st) conf bytes with
-  | P3.Pan.oracle_result.Oracle_return ffi' bytes' => if ((List.length bytes') = (List.length bytes)) then P3.Pan.ffi_result.FFI_return { { st with io_events := ((P3.Pan.ffi_state.io_events st) ++ ((P3.Pan.io_event.IO_event s conf (P3.Pan.ZIP (bytes, bytes'))) :: [])) } with ffi_state := ffi' } bytes' else P3.Pan.ffi_result.FFI_final (P3.Pan.final_event.Final_event s conf bytes P3.Pan.ffi_outcome.FFI_failed)
+  | P3.Pan.oracle_result.Oracle_return ffi' bytes' => if ((List.length bytes') = (List.length bytes)) then P3.Pan.ffi_result.FFI_return { { st with io_events := ((P3.Pan.ffi_state.io_events st) ++ ((P3.Pan.io_event.IO_event s conf (P3.Pan.ZIP (bytes, bytes'))) :: ([] : List P3.Pan.io_event))) } with ffi_state := ffi' } bytes' else P3.Pan.ffi_result.FFI_final (P3.Pan.final_event.Final_event s conf bytes P3.Pan.ffi_outcome.FFI_failed)
   | P3.Pan.oracle_result.Oracle_final outcome => P3.Pan.ffi_result.FFI_final (P3.Pan.final_event.Final_event s conf bytes outcome)) else P3.Pan.ffi_result.FFI_return st bytes) := by
   hol_eqn P3.Pan.call_FFI
 
@@ -603,60 +603,60 @@ theorem size_of_sh_with_ctxt_hol_eqn_1  (ctxt : List (P3.Pan.mlstring × P3.Pan.
 
 theorem mem_load_byte_hol_eqn_1  (m : (BitVec 64) → P3.Pan.word_lab) (dm : (BitVec 64) → Prop) (be : Prop) (w : BitVec 64) :
     P3.Pan.mem_load_byte m dm be w = (match m (P3.Pan.byte_align w) with
-  | P3.Pan.word_lab.Word v => if (dm (P3.Pan.byte_align w)) then (Option.some (P3.Pan.get_byte w v be)) else Option.none) := by
+  | P3.Pan.word_lab.Word v => if (dm (P3.Pan.byte_align w)) then (Option.some (P3.Pan.get_byte w v be)) else (Option.none : Option (BitVec 8))) := by
   hol_eqn P3.Pan.mem_load_byte
 
 theorem mem_load_hol_eqn_1  (addr : BitVec 64) (dm : (BitVec 64) → Prop) (m : (BitVec 64) → P3.Pan.word_lab) (stcs : List (P3.Pan.mlstring × P3.Pan.struct_info)) :
-    P3.Pan.mem_load P3.Pan.shape.One addr dm m stcs = (if (dm addr) then (Option.some (P3.Pan.v.Val (m addr))) else Option.none) := by
+    P3.Pan.mem_load P3.Pan.shape.One addr dm m stcs = (if (dm addr) then (Option.some (P3.Pan.v.Val (m addr))) else (Option.none : Option P3.Pan.v)) := by
   hol_eqn P3.Pan.mem_load
 
 theorem mem_store_byte_hol_eqn_1  (m : (BitVec 64) → P3.Pan.word_lab) (dm : (BitVec 64) → Prop) (be : Prop) (w : BitVec 64) (b : BitVec 8) :
     P3.Pan.mem_store_byte m dm be w b = (match m (P3.Pan.byte_align w) with
-  | P3.Pan.word_lab.Word v => if (dm (P3.Pan.byte_align w)) then (Option.some (P3.Pan.UPDATE (P3.Pan.byte_align w) (P3.Pan.word_lab.Word (P3.Pan.set_byte w b v be)) m)) else Option.none) := by
+  | P3.Pan.word_lab.Word v => if (dm (P3.Pan.byte_align w)) then (Option.some (P3.Pan.UPDATE (P3.Pan.byte_align w) (P3.Pan.word_lab.Word (P3.Pan.set_byte w b v be)) m)) else (Option.none : Option ((BitVec 64) → P3.Pan.word_lab))) := by
   hol_eqn P3.Pan.mem_store_byte
 
 theorem write_bytearray_hol_eqn_1  (a : BitVec 64) (m : (BitVec 64) → P3.Pan.word_lab) (dm : (BitVec 64) → Prop) (be : Prop) :
-    P3.Pan.write_bytearray a [] m dm be = m := by
+    P3.Pan.write_bytearray a ([] : List (BitVec 8)) m dm be = m := by
   hol_eqn P3.Pan.write_bytearray
 
 theorem write_bytearray_hol_eqn_2  (a : BitVec 64) (b : BitVec 8) (bs : List (BitVec 8)) (m : (BitVec 64) → P3.Pan.word_lab) (dm : (BitVec 64) → Prop) (be : Prop) :
     P3.Pan.write_bytearray a (b :: bs) m dm be = (match P3.Pan.mem_store_byte (P3.Pan.write_bytearray (a + (BitVec.ofNat 64 1)) bs m dm be) dm be a b with
-  | Option.none => m
+  | (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)) => m
   | (Option.some v) => v) := by
   hol_eqn P3.Pan.write_bytearray
 
 theorem mem_store_hol_eqn_1  (addr : BitVec 64) (w : P3.Pan.word_lab) (dm : (BitVec 64) → Prop) (m : (BitVec 64) → P3.Pan.word_lab) :
-    P3.Pan.mem_store addr w dm m = (if (dm addr) then (Option.some (P3.Pan.UPDATE addr w m)) else Option.none) := by
+    P3.Pan.mem_store addr w dm m = (if (dm addr) then (Option.some (P3.Pan.UPDATE addr w m)) else (Option.none : Option ((BitVec 64) → P3.Pan.word_lab))) := by
   hol_eqn P3.Pan.mem_store
 
 theorem mem_stores_hol_eqn_1  (a : BitVec 64) (dm : (BitVec 64) → Prop) (m : (BitVec 64) → P3.Pan.word_lab) :
-    P3.Pan.mem_stores a [] dm m = (Option.some m) := by
+    P3.Pan.mem_stores a ([] : List P3.Pan.word_lab) dm m = (Option.some m) := by
   hol_eqn P3.Pan.mem_stores
 
 theorem mem_stores_hol_eqn_2  (a : BitVec 64) (w : P3.Pan.word_lab) (ws : List P3.Pan.word_lab) (dm : (BitVec 64) → Prop) (m : (BitVec 64) → P3.Pan.word_lab) :
     P3.Pan.mem_stores a (w :: ws) dm m = (match P3.Pan.mem_store a w dm m with
-  | Option.none => Option.none
+  | (Option.none : Option ((BitVec 64) → P3.Pan.word_lab)) => (Option.none : Option ((BitVec 64) → P3.Pan.word_lab))
   | (Option.some m') => P3.Pan.mem_stores (a + (BitVec.ofNat 64 8)) ws dm m') := by
   hol_eqn P3.Pan.mem_stores
 
 theorem flatten_hol_eqn_1  (w : P3.Pan.word_lab) :
-    P3.Pan.flatten (P3.Pan.v.Val w) = (w :: []) := by
+    P3.Pan.flatten (P3.Pan.v.Val w) = (w :: ([] : List P3.Pan.word_lab)) := by
   hol_eqn P3.Pan.flatten
 
 theorem pan_op_hol_eqn_1  (w1 : BitVec 64) (w2 : BitVec 64) :
-    P3.Pan.pan_op P3.Pan.panop.Mul (w1 :: (w2 :: [])) = (Option.some (w1 * w2)) := by
+    P3.Pan.pan_op P3.Pan.panop.Mul (w1 :: (w2 :: ([] : List (BitVec 64)))) = (Option.some (w1 * w2)) := by
   hol_eqn P3.Pan.pan_op
 
 theorem pan_op_hol_eqn_2  :
-    P3.Pan.pan_op P3.Pan.panop.Mul [] = Option.none := by
+    P3.Pan.pan_op P3.Pan.panop.Mul ([] : List (BitVec 64)) = (Option.none : Option (BitVec 64)) := by
   hol_eqn P3.Pan.pan_op
 
 theorem pan_op_hol_eqn_3  (v3 : BitVec 64) :
-    P3.Pan.pan_op P3.Pan.panop.Mul (v3 :: []) = Option.none := by
+    P3.Pan.pan_op P3.Pan.panop.Mul (v3 :: ([] : List (BitVec 64))) = (Option.none : Option (BitVec 64)) := by
   hol_eqn P3.Pan.pan_op
 
 theorem pan_op_hol_eqn_4  (v3 : BitVec 64) (v7 : BitVec 64) (v11 : BitVec 64) (v12 : List (BitVec 64)) :
-    P3.Pan.pan_op P3.Pan.panop.Mul (v3 :: (v7 :: (v11 :: v12))) = Option.none := by
+    P3.Pan.pan_op P3.Pan.panop.Mul (v3 :: (v7 :: (v11 :: v12))) = (Option.none : Option (BitVec 64)) := by
   hol_eqn P3.Pan.pan_op
 
 theorem eval_hol_eqn_1 {θ : Type}  (s : P3.Pan.state θ) (w : BitVec 64) :
@@ -673,69 +673,69 @@ theorem eval_hol_eqn_3 {θ : Type}  (s : P3.Pan.state θ) (v : P3.Pan.mlstring) 
 
 theorem eval_hol_eqn_4 {θ : Type}  (s : P3.Pan.state θ) (es : List P3.Pan.exp) :
     P3.Pan.eval s (P3.Pan.exp.RStruct es) = (match (List.mapM (fun a => P3.Pan.eval s a) es) with
-  | Option.none => Option.none
+  | (Option.none : Option (List P3.Pan.v)) => (Option.none : Option P3.Pan.v)
   | (Option.some vs) => (Option.some (P3.Pan.v.RStruct vs))) := by
   hol_eqn P3.Pan.eval
 
 theorem eval_hol_eqn_5 {θ : Type}  (s : P3.Pan.state θ) (shape : P3.Pan.shape) (addr : P3.Pan.exp) :
     P3.Pan.eval s (P3.Pan.exp.Load shape addr) = (if P3.Pan.is_wf_shape (P3.Pan.state.structs s) shape then (match P3.Pan.eval s addr with
-  | Option.none => Option.none
+  | (Option.none : Option P3.Pan.v) => (Option.none : Option P3.Pan.v)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => P3.Pan.mem_load shape w (P3.Pan.state.memaddrs s) (P3.Pan.state.memory s) (P3.Pan.state.structs s)
-  | (Option.some (P3.Pan.v.RStruct v7)) => Option.none
-  | (Option.some (P3.Pan.v.NStruct v8 v9)) => Option.none) else Option.none) := by
+  | (Option.some (P3.Pan.v.RStruct v7)) => (Option.none : Option P3.Pan.v)
+  | (Option.some (P3.Pan.v.NStruct v8 v9)) => (Option.none : Option P3.Pan.v)) else (Option.none : Option P3.Pan.v)) := by
   hol_eqn P3.Pan.eval
 
 theorem eval_hol_eqn_6 {θ : Type}  (s : P3.Pan.state θ) (addr : P3.Pan.exp) :
     P3.Pan.eval s (P3.Pan.exp.LoadByte addr) = (match P3.Pan.eval s addr with
-  | Option.none => Option.none
+  | (Option.none : Option P3.Pan.v) => (Option.none : Option P3.Pan.v)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => (match P3.Pan.mem_load_byte (P3.Pan.state.memory s) (P3.Pan.state.memaddrs s) (P3.Pan.state.be s) w with
-  | Option.none => Option.none
+  | (Option.none : Option (BitVec 8)) => (Option.none : Option P3.Pan.v)
   | (Option.some w) => (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word (BitVec.setWidth 64 w)))))
-  | (Option.some (P3.Pan.v.RStruct v7)) => Option.none
-  | (Option.some (P3.Pan.v.NStruct v8 v9)) => Option.none) := by
+  | (Option.some (P3.Pan.v.RStruct v7)) => (Option.none : Option P3.Pan.v)
+  | (Option.some (P3.Pan.v.NStruct v8 v9)) => (Option.none : Option P3.Pan.v)) := by
   hol_eqn P3.Pan.eval
 
 theorem eval_hol_eqn_7 {θ : Type}  (s : P3.Pan.state θ) (op : P3.Pan.binop) (es : List P3.Pan.exp) :
     P3.Pan.eval s (P3.Pan.exp.Op op es) = (match (List.mapM (fun a => P3.Pan.eval s a) es) with
-  | Option.none => Option.none
+  | (Option.none : Option (List P3.Pan.v)) => (Option.none : Option P3.Pan.v)
   | (Option.some ws) => if (P3.Pan.EVERY (fun w => (match w with
   | P3.Pan.v.Val v4 => True
   | P3.Pan.v.RStruct v5 => False
   | P3.Pan.v.NStruct v6 v7 => False)) ws) then (Option.map (fun w => P3.Pan.v.Val (P3.Pan.word_lab.Word w)) (P3.Pan.word_op op (List.map (fun w => (match w with
   | P3.Pan.v.Val (P3.Pan.word_lab.Word n) => n
   | P3.Pan.v.RStruct v1 => P3.Pan.holARB
-  | P3.Pan.v.NStruct v3 v4 => P3.Pan.holARB)) ws))) else Option.none) := by
+  | P3.Pan.v.NStruct v3 v4 => P3.Pan.holARB)) ws))) else (Option.none : Option P3.Pan.v)) := by
   hol_eqn P3.Pan.eval
 
 theorem eval_hol_eqn_8 {θ : Type}  (s : P3.Pan.state θ) (op : P3.Pan.panop) (es : List P3.Pan.exp) :
     P3.Pan.eval s (P3.Pan.exp.Panop op es) = (match (List.mapM (fun a => P3.Pan.eval s a) es) with
-  | Option.none => Option.none
+  | (Option.none : Option (List P3.Pan.v)) => (Option.none : Option P3.Pan.v)
   | (Option.some ws) => if (P3.Pan.EVERY (fun w => (match w with
   | P3.Pan.v.Val v4 => True
   | P3.Pan.v.RStruct v5 => False
   | P3.Pan.v.NStruct v6 v7 => False)) ws) then (Option.map (fun w => P3.Pan.v.Val (P3.Pan.word_lab.Word w)) (P3.Pan.pan_op op (List.map (fun w => (match w with
   | P3.Pan.v.Val (P3.Pan.word_lab.Word n) => n
   | P3.Pan.v.RStruct v1 => P3.Pan.holARB
-  | P3.Pan.v.NStruct v3 v4 => P3.Pan.holARB)) ws))) else Option.none) := by
+  | P3.Pan.v.NStruct v3 v4 => P3.Pan.holARB)) ws))) else (Option.none : Option P3.Pan.v)) := by
   hol_eqn P3.Pan.eval
 
 theorem eval_hol_eqn_9 {θ : Type}  (s : P3.Pan.state θ) (cmp : P3.Pan.cmp) (e1 : P3.Pan.exp) (e2 : P3.Pan.exp) :
     P3.Pan.eval s (P3.Pan.exp.Cmp cmp e1 e2) = (match ((P3.Pan.eval s e1), (P3.Pan.eval s e2)) with
-  | (Option.none, v3) => Option.none
-  | ((Option.some (P3.Pan.v.Val v10)), Option.none) => Option.none
+  | ((Option.none : Option P3.Pan.v), v3) => (Option.none : Option P3.Pan.v)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.none : Option P3.Pan.v)) => (Option.none : Option P3.Pan.v)
   | ((Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w1))), (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w2)))) => (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word (if P3.Pan.word_cmp cmp w1 w2 then BitVec.ofNat 64 1 else BitVec.ofNat 64 0))))
-  | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.RStruct v21))) => Option.none
-  | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.NStruct v22 v23))) => Option.none
-  | ((Option.some (P3.Pan.v.RStruct v11)), v3) => Option.none
-  | ((Option.some (P3.Pan.v.NStruct v12 v13)), v3) => Option.none) := by
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.RStruct v21))) => (Option.none : Option P3.Pan.v)
+  | ((Option.some (P3.Pan.v.Val v10)), (Option.some (P3.Pan.v.NStruct v22 v23))) => (Option.none : Option P3.Pan.v)
+  | ((Option.some (P3.Pan.v.RStruct v11)), v3) => (Option.none : Option P3.Pan.v)
+  | ((Option.some (P3.Pan.v.NStruct v12 v13)), v3) => (Option.none : Option P3.Pan.v)) := by
   hol_eqn P3.Pan.eval
 
 theorem eval_hol_eqn_10 {θ : Type}  (s : P3.Pan.state θ) (sh : P3.Pan.shift) (e : P3.Pan.exp) (n : Nat) :
     P3.Pan.eval s (P3.Pan.exp.Shift sh e n) = (match P3.Pan.eval s e with
-  | Option.none => Option.none
+  | (Option.none : Option P3.Pan.v) => (Option.none : Option P3.Pan.v)
   | (Option.some (P3.Pan.v.Val (P3.Pan.word_lab.Word w))) => (Option.map (fun w => P3.Pan.v.Val (P3.Pan.word_lab.Word w)) (P3.Pan.word_sh sh w n))
-  | (Option.some (P3.Pan.v.RStruct v7)) => Option.none
-  | (Option.some (P3.Pan.v.NStruct v8 v9)) => Option.none) := by
+  | (Option.some (P3.Pan.v.RStruct v7)) => (Option.none : Option P3.Pan.v)
+  | (Option.some (P3.Pan.v.NStruct v8 v9)) => (Option.none : Option P3.Pan.v)) := by
   hol_eqn P3.Pan.eval
 
 theorem eval_hol_eqn_11 {θ : Type}  (s : P3.Pan.state θ) :
@@ -772,12 +772,12 @@ theorem lookup_kvar_hol_eqn_1 {θ : Type}  (vk : P3.Pan.varkind) (v : P3.Pan.mls
 
 theorem is_valid_value_hol_eqn_1 {β : Type}  (s : P3.Pan.state β) (vk : P3.Pan.varkind) (v : P3.Pan.mlstring) (value : P3.Pan.v) :
     P3.Pan.is_valid_value s vk v value = (match P3.Pan.lookup_kvar vk v s with
-  | Option.none => False
+  | (Option.none : Option P3.Pan.v) => False
   | (Option.some w) => ((P3.Pan.shape_of value) = (P3.Pan.shape_of w))) := by
   hol_eqn P3.Pan.is_valid_value
 
 theorem res_var_hol_eqn_1 {β α : Type}  (lc : P3.Pan.FMap α β) (n : α) :
-    P3.Pan.res_var lc (n, Option.none) = (P3.Pan.DOMSUB lc n) := by
+    P3.Pan.res_var lc (n, (Option.none : Option β)) = (P3.Pan.DOMSUB lc n) := by
   hol_eqn P3.Pan.res_var
 
 theorem res_var_hol_eqn_2 {β α : Type}  (lc : P3.Pan.FMap α β) (n : α) (v : β) :
@@ -785,7 +785,7 @@ theorem res_var_hol_eqn_2 {β α : Type}  (lc : P3.Pan.FMap α β) (n : α) (v :
   hol_eqn P3.Pan.res_var
 
 theorem empty_locals_hol_eqn_1 {θ : Type}  (s : P3.Pan.state θ) :
-    P3.Pan.empty_locals s = { s with locals := P3.Pan.FEMPTY } := by
+    P3.Pan.empty_locals s = { s with locals := (P3.Pan.FEMPTY : P3.Pan.FMap P3.Pan.mlstring P3.Pan.v) } := by
   hol_eqn P3.Pan.empty_locals
 
 theorem dec_clock_hol_eqn_1 {θ : Type}  (s : P3.Pan.state θ) :
