@@ -1,0 +1,16 @@
+program digest : 0xfbfed331b71870666a978d5daf2736c01e97f0496da36f500de4f5b31c3d350a
+EDB root       : 0xadd345fac87b5ba195cc8db38dd0a5259f5141029474395d0411e6fbe36b8327   (over 2769 flattened integers)
+statement
+  rules        : 11
+  strata       : [[0, 1, 2, 3, 4, 5, 6], [7, 8, 9, 10]]
+  root         : 0xadd345fac87b5ba195cc8db38dd0a5259f5141029474395d0411e6fbe36b8327
+  pred         : 16
+  claimed count: 2
+counts
+  EDB facts    : 550
+  active domain: 276 distinct constants
+  stratum 0    : 412 firings, 412 facts added, join candidates per rule [(0, 8), (1, 75), (2, 8), (3, 21), (4, 305), (5, 5), (6, 1)]
+  stratum 1    : 4 firings, 4 facts added, join candidates per rule [(7, 6), (8, 1), (9, 1), (10, 1)]
+  final db     : 966 facts; count at pred 16 = 2
+verify time    : 695 ms (verifyJ, native)
+verdict        : ACCEPT

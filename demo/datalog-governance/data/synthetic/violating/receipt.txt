@@ -1,0 +1,6 @@
+dregg datalog receipt v1
+program_digest=0xfbfed331b71870666a978d5daf2736c01e97f0496da36f500de4f5b31c3d350a
+root=0xadd345fac87b5ba195cc8db38dd0a5259f5141029474395d0411e6fbe36b8327
+pred=16
+count=2
+checker=lake exe datalog-check (metatheory/DatalogCheck.lean)

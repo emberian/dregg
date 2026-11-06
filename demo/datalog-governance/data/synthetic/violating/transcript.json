@@ -1,0 +1,1269 @@
+{
+"source": {
+"generator": "synth_transcript.py",
+"project": "/home/demo/acme-ledger/",
+"seed": 20261106,
+"synthetic": true,
+"variant": "violating"
+},
+"transcripts": [
+{
+"agent": "root",
+"calls": [
+{
+"path": "/home/demo/acme-ledger/src/ledger/currency.py",
+"seq": 0,
+"tool": "Read",
+"ts": "2000-01-01T00:00:00Z",
+"use_id": "synth_root_0000"
+},
+{
+"seq": 1,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:01Z",
+"use_id": "synth_root_0001"
+},
+{
+"seq": 2,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:02Z",
+"use_id": "synth_root_0002"
+},
+{
+"path": "/home/demo/acme-ledger/docs/glossary.md",
+"seq": 3,
+"tool": "Read",
+"ts": "2000-01-01T00:00:03Z",
+"use_id": "synth_root_0003"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/accounts.py",
+"seq": 4,
+"tool": "Read",
+"ts": "2000-01-01T00:00:04Z",
+"use_id": "synth_root_0004"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/journal.py",
+"seq": 5,
+"tool": "Read",
+"ts": "2000-01-01T00:00:05Z",
+"use_id": "synth_root_0005"
+},
+{
+"seq": 6,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:06Z",
+"use_id": "synth_root_0006"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/audit.py",
+"seq": 7,
+"tool": "Read",
+"ts": "2000-01-01T00:00:07Z",
+"use_id": "synth_root_0007"
+},
+{
+"seq": 8,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:08Z",
+"use_id": "synth_root_0008"
+},
+{
+"seq": 9,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:09Z",
+"use_id": "synth_root_0009"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/accounts.py",
+"seq": 10,
+"tool": "Read",
+"ts": "2000-01-01T00:00:10Z",
+"use_id": "synth_root_0010"
+},
+{
+"seq": 11,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:11Z",
+"use_id": "synth_root_0011"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/accounts.py",
+"seq": 12,
+"tool": "Read",
+"ts": "2000-01-01T00:00:12Z",
+"use_id": "synth_root_0012"
+},
+{
+"seq": 13,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:13Z",
+"use_id": "synth_root_0013"
+},
+{
+"path": "/home/demo/acme-ledger/pyproject.toml",
+"seq": 14,
+"tool": "Read",
+"ts": "2000-01-01T00:00:14Z",
+"use_id": "synth_root_0014"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_accounts.py",
+"seq": 15,
+"tool": "Read",
+"ts": "2000-01-01T00:00:15Z",
+"use_id": "synth_root_0015"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/currency.py",
+"seq": 16,
+"tool": "Read",
+"ts": "2000-01-01T00:00:16Z",
+"use_id": "synth_root_0016"
+},
+{
+"path": "/home/demo/acme-ledger/docs/runbook.md",
+"seq": 17,
+"tool": "Read",
+"ts": "2000-01-01T00:00:17Z",
+"use_id": "synth_root_0017"
+},
+{
+"path": "/home/demo/acme-ledger/docs/design.md",
+"seq": 18,
+"tool": "Read",
+"ts": "2000-01-01T00:00:18Z",
+"use_id": "synth_root_0018"
+},
+{
+"seq": 19,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:19Z",
+"use_id": "synth_root_0019"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/audit.py",
+"seq": 20,
+"tool": "Read",
+"ts": "2000-01-01T00:00:20Z",
+"use_id": "synth_root_0020"
+},
+{
+"path": "/home/demo/acme-ledger/docs/runbook.md",
+"seq": 21,
+"tool": "Read",
+"ts": "2000-01-01T00:00:21Z",
+"use_id": "synth_root_0021"
+},
+{
+"seq": 22,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:22Z",
+"use_id": "synth_root_0022"
+},
+{
+"seq": 23,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:23Z",
+"use_id": "synth_root_0023"
+},
+{
+"seq": 24,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:24Z",
+"use_id": "synth_root_0024"
+},
+{
+"seq": 25,
+"spawned": "lane-a",
+"tool": "Agent",
+"ts": "2000-01-01T00:00:25Z",
+"use_id": "synth_root_0025"
+},
+{
+"seq": 26,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:26Z",
+"use_id": "synth_root_0026"
+},
+{
+"seq": 27,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:27Z",
+"use_id": "synth_root_0027"
+},
+{
+"seq": 28,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:28Z",
+"use_id": "synth_root_0028"
+},
+{
+"seq": 29,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:29Z",
+"use_id": "synth_root_0029"
+},
+{
+"seq": 30,
+"spawned": "lane-b",
+"tool": "Agent",
+"ts": "2000-01-01T00:00:30Z",
+"use_id": "synth_root_0030"
+},
+{
+"seq": 31,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:31Z",
+"use_id": "synth_root_0031"
+},
+{
+"seq": 32,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:32Z",
+"use_id": "synth_root_0032"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/posting.py",
+"seq": 33,
+"tool": "Read",
+"ts": "2000-01-01T00:00:33Z",
+"use_id": "synth_root_0033"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/__init__.py",
+"seq": 34,
+"tool": "Read",
+"ts": "2000-01-01T00:00:34Z",
+"use_id": "synth_root_0034"
+},
+{
+"seq": 35,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:35Z",
+"use_id": "synth_root_0035"
+},
+{
+"seq": 36,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:36Z",
+"use_id": "synth_root_0036"
+},
+{
+"seq": 37,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:37Z",
+"use_id": "synth_root_0037"
+},
+{
+"seq": 38,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:38Z",
+"use_id": "synth_root_0038"
+},
+{
+"seq": 39,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:39Z",
+"use_id": "synth_root_0039"
+},
+{
+"seq": 40,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:40Z",
+"use_id": "synth_root_0040"
+}
+]
+},
+{
+"agent": "lane-a",
+"calls": [
+{
+"seq": 0,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:00Z",
+"use_id": "synth_lane-a_0000"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/__init__.py",
+"seq": 1,
+"tool": "Read",
+"ts": "2000-01-01T00:00:01Z",
+"use_id": "synth_lane-a_0001"
+},
+{
+"seq": 2,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:02Z",
+"use_id": "synth_lane-a_0002"
+},
+{
+"seq": 3,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:03Z",
+"use_id": "synth_lane-a_0003"
+},
+{
+"seq": 4,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:04Z",
+"use_id": "synth_lane-a_0004"
+},
+{
+"seq": 5,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:05Z",
+"use_id": "synth_lane-a_0005"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_posting.py",
+"seq": 6,
+"tool": "Read",
+"ts": "2000-01-01T00:00:06Z",
+"use_id": "synth_lane-a_0006"
+},
+{
+"path": "/home/demo/acme-ledger/docs/design.md",
+"seq": 7,
+"tool": "Read",
+"ts": "2000-01-01T00:00:07Z",
+"use_id": "synth_lane-a_0007"
+},
+{
+"seq": 8,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:08Z",
+"use_id": "synth_lane-a_0008"
+},
+{
+"seq": 9,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:09Z",
+"use_id": "synth_lane-a_0009"
+},
+{
+"seq": 10,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:10Z",
+"use_id": "synth_lane-a_0010"
+},
+{
+"path": "/home/demo/acme-ledger/README.md",
+"seq": 11,
+"tool": "Read",
+"ts": "2000-01-01T00:00:11Z",
+"use_id": "synth_lane-a_0011"
+},
+{
+"seq": 12,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:12Z",
+"use_id": "synth_lane-a_0012"
+},
+{
+"seq": 13,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:13Z",
+"use_id": "synth_lane-a_0013"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_posting.py",
+"seq": 14,
+"tool": "Read",
+"ts": "2000-01-01T00:00:14Z",
+"use_id": "synth_lane-a_0014"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/posting.py",
+"seq": 15,
+"tool": "Read",
+"ts": "2000-01-01T00:00:15Z",
+"use_id": "synth_lane-a_0015"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_rounding.py",
+"seq": 16,
+"tool": "Read",
+"ts": "2000-01-01T00:00:16Z",
+"use_id": "synth_lane-a_0016"
+},
+{
+"path": "/home/demo/acme-ledger/pyproject.toml",
+"seq": 17,
+"tool": "Read",
+"ts": "2000-01-01T00:00:17Z",
+"use_id": "synth_lane-a_0017"
+},
+{
+"seq": 18,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:18Z",
+"use_id": "synth_lane-a_0018"
+},
+{
+"seq": 19,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:19Z",
+"use_id": "synth_lane-a_0019"
+},
+{
+"path": "/home/demo/acme-ledger/docs/design.md",
+"seq": 20,
+"tool": "Read",
+"ts": "2000-01-01T00:00:20Z",
+"use_id": "synth_lane-a_0020"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/posting.py",
+"seq": 21,
+"tool": "Edit",
+"ts": "2000-01-01T00:00:21Z",
+"use_id": "synth_lane-a_0021"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/posting.py",
+"seq": 22,
+"tool": "Edit",
+"ts": "2000-01-01T00:00:22Z",
+"use_id": "synth_lane-a_0022"
+},
+{
+"path": "/home/demo/acme-ledger/docs/design.md",
+"seq": 23,
+"tool": "Edit",
+"ts": "2000-01-01T00:00:23Z",
+"use_id": "synth_lane-a_0023"
+},
+{
+"seq": 24,
+"spawned": "lane-c",
+"tool": "Agent",
+"ts": "2000-01-01T00:00:24Z",
+"use_id": "synth_lane-a_0024"
+},
+{
+"seq": 25,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:25Z",
+"use_id": "synth_lane-a_0025"
+},
+{
+"seq": 26,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:26Z",
+"use_id": "synth_lane-a_0026"
+},
+{
+"seq": 27,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:27Z",
+"use_id": "synth_lane-a_0027"
+},
+{
+"seq": 28,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:28Z",
+"use_id": "synth_lane-a_0028"
+},
+{
+"path": "/home/demo/acme-ledger/docs/design.md",
+"seq": 29,
+"tool": "Read",
+"ts": "2000-01-01T00:00:29Z",
+"use_id": "synth_lane-a_0029"
+},
+{
+"seq": 30,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:30Z",
+"use_id": "synth_lane-a_0030"
+},
+{
+"seq": 31,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:31Z",
+"use_id": "synth_lane-a_0031"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_rounding.py",
+"seq": 32,
+"tool": "Read",
+"ts": "2000-01-01T00:00:32Z",
+"use_id": "synth_lane-a_0032"
+},
+{
+"seq": 33,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:33Z",
+"use_id": "synth_lane-a_0033"
+},
+{
+"path": "/home/demo/acme-ledger/pyproject.toml",
+"seq": 34,
+"tool": "Read",
+"ts": "2000-01-01T00:00:34Z",
+"use_id": "synth_lane-a_0034"
+},
+{
+"path": "/home/demo/acme-ledger/docs/glossary.md",
+"seq": 35,
+"tool": "Read",
+"ts": "2000-01-01T00:00:35Z",
+"use_id": "synth_lane-a_0035"
+},
+{
+"seq": 36,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:36Z",
+"use_id": "synth_lane-a_0036"
+},
+{
+"seq": 37,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:37Z",
+"use_id": "synth_lane-a_0037"
+},
+{
+"path": "/home/demo/acme-ledger/docs/runbook.md",
+"seq": 38,
+"tool": "Read",
+"ts": "2000-01-01T00:00:38Z",
+"use_id": "synth_lane-a_0038"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_journal.py",
+"seq": 39,
+"tool": "Read",
+"ts": "2000-01-01T00:00:39Z",
+"use_id": "synth_lane-a_0039"
+},
+{
+"seq": 40,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:40Z",
+"use_id": "synth_lane-a_0040"
+},
+{
+"seq": 41,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:41Z",
+"use_id": "synth_lane-a_0041"
+},
+{
+"seq": 42,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:42Z",
+"use_id": "synth_lane-a_0042"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/reports.py",
+"seq": 43,
+"tool": "Read",
+"ts": "2000-01-01T00:00:43Z",
+"use_id": "synth_lane-a_0043"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/currency.py",
+"seq": 44,
+"tool": "Read",
+"ts": "2000-01-01T00:00:44Z",
+"use_id": "synth_lane-a_0044"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_posting.py",
+"seq": 45,
+"tool": "Read",
+"ts": "2000-01-01T00:00:45Z",
+"use_id": "synth_lane-a_0045"
+},
+{
+"seq": 46,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:46Z",
+"use_id": "synth_lane-a_0046"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_accounts.py",
+"seq": 47,
+"tool": "Read",
+"ts": "2000-01-01T00:00:47Z",
+"use_id": "synth_lane-a_0047"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/accounts.py",
+"seq": 48,
+"tool": "Read",
+"ts": "2000-01-01T00:00:48Z",
+"use_id": "synth_lane-a_0048"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_journal.py",
+"seq": 49,
+"tool": "Read",
+"ts": "2000-01-01T00:00:49Z",
+"use_id": "synth_lane-a_0049"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/journal.py",
+"seq": 50,
+"tool": "Read",
+"ts": "2000-01-01T00:00:50Z",
+"use_id": "synth_lane-a_0050"
+},
+{
+"seq": 51,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:51Z",
+"use_id": "synth_lane-a_0051"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/currency.py",
+"seq": 52,
+"tool": "Read",
+"ts": "2000-01-01T00:00:52Z",
+"use_id": "synth_lane-a_0052"
+}
+]
+},
+{
+"agent": "lane-b",
+"calls": [
+{
+"seq": 0,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:00Z",
+"use_id": "synth_lane-b_0000"
+},
+{
+"path": "/home/demo/acme-ledger/README.md",
+"seq": 1,
+"tool": "Read",
+"ts": "2000-01-01T00:00:01Z",
+"use_id": "synth_lane-b_0001"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_rounding.py",
+"seq": 2,
+"tool": "Read",
+"ts": "2000-01-01T00:00:02Z",
+"use_id": "synth_lane-b_0002"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/reports.py",
+"seq": 3,
+"tool": "Read",
+"ts": "2000-01-01T00:00:03Z",
+"use_id": "synth_lane-b_0003"
+},
+{
+"path": "/home/demo/acme-ledger/README.md",
+"seq": 4,
+"tool": "Read",
+"ts": "2000-01-01T00:00:04Z",
+"use_id": "synth_lane-b_0004"
+},
+{
+"seq": 5,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:05Z",
+"use_id": "synth_lane-b_0005"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_posting.py",
+"seq": 6,
+"tool": "Read",
+"ts": "2000-01-01T00:00:06Z",
+"use_id": "synth_lane-b_0006"
+},
+{
+"seq": 7,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:07Z",
+"use_id": "synth_lane-b_0007"
+},
+{
+"seq": 8,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:08Z",
+"use_id": "synth_lane-b_0008"
+},
+{
+"path": "/home/demo/acme-ledger/pyproject.toml",
+"seq": 9,
+"tool": "Read",
+"ts": "2000-01-01T00:00:09Z",
+"use_id": "synth_lane-b_0009"
+},
+{
+"seq": 10,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:10Z",
+"use_id": "synth_lane-b_0010"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_journal.py",
+"seq": 11,
+"tool": "Read",
+"ts": "2000-01-01T00:00:11Z",
+"use_id": "synth_lane-b_0011"
+},
+{
+"seq": 12,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:12Z",
+"use_id": "synth_lane-b_0012"
+},
+{
+"seq": 13,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:13Z",
+"use_id": "synth_lane-b_0013"
+},
+{
+"seq": 14,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:14Z",
+"use_id": "synth_lane-b_0014"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_rounding.py",
+"seq": 15,
+"tool": "Read",
+"ts": "2000-01-01T00:00:15Z",
+"use_id": "synth_lane-b_0015"
+},
+{
+"seq": 16,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:16Z",
+"use_id": "synth_lane-b_0016"
+},
+{
+"seq": 17,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:17Z",
+"use_id": "synth_lane-b_0017"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_currency.py",
+"seq": 18,
+"tool": "Write",
+"ts": "2000-01-01T00:00:18Z",
+"use_id": "synth_lane-b_0018"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_currency.py",
+"seq": 19,
+"tool": "Edit",
+"ts": "2000-01-01T00:00:19Z",
+"use_id": "synth_lane-b_0019"
+},
+{
+"seq": 20,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:20Z",
+"use_id": "synth_lane-b_0020"
+},
+{
+"seq": 21,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:21Z",
+"use_id": "synth_lane-b_0021"
+},
+{
+"seq": 22,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:22Z",
+"use_id": "synth_lane-b_0022"
+},
+{
+"seq": 23,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:23Z",
+"use_id": "synth_lane-b_0023"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_journal.py",
+"seq": 24,
+"tool": "Read",
+"ts": "2000-01-01T00:00:24Z",
+"use_id": "synth_lane-b_0024"
+},
+{
+"seq": 25,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:25Z",
+"use_id": "synth_lane-b_0025"
+},
+{
+"seq": 26,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:26Z",
+"use_id": "synth_lane-b_0026"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_journal.py",
+"seq": 27,
+"tool": "Read",
+"ts": "2000-01-01T00:00:27Z",
+"use_id": "synth_lane-b_0027"
+},
+{
+"seq": 28,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:28Z",
+"use_id": "synth_lane-b_0028"
+},
+{
+"seq": 29,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:29Z",
+"use_id": "synth_lane-b_0029"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/rounding.py",
+"seq": 30,
+"tool": "Edit",
+"ts": "2000-01-01T00:00:30Z",
+"use_id": "synth_lane-b_0030"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_rounding.py",
+"seq": 31,
+"tool": "Read",
+"ts": "2000-01-01T00:00:31Z",
+"use_id": "synth_lane-b_0031"
+},
+{
+"seq": 32,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:32Z",
+"use_id": "synth_lane-b_0032"
+},
+{
+"seq": 33,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:33Z",
+"use_id": "synth_lane-b_0033"
+},
+{
+"seq": 34,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:34Z",
+"use_id": "synth_lane-b_0034"
+},
+{
+"seq": 35,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:35Z",
+"use_id": "synth_lane-b_0035"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/reports.py",
+"seq": 36,
+"tool": "Read",
+"ts": "2000-01-01T00:00:36Z",
+"use_id": "synth_lane-b_0036"
+},
+{
+"seq": 37,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:37Z",
+"use_id": "synth_lane-b_0037"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_rounding.py",
+"seq": 38,
+"tool": "Read",
+"ts": "2000-01-01T00:00:38Z",
+"use_id": "synth_lane-b_0038"
+},
+{
+"seq": 39,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:39Z",
+"use_id": "synth_lane-b_0039"
+},
+{
+"seq": 40,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:40Z",
+"use_id": "synth_lane-b_0040"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/currency.py",
+"seq": 41,
+"tool": "Read",
+"ts": "2000-01-01T00:00:41Z",
+"use_id": "synth_lane-b_0041"
+},
+{
+"seq": 42,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:42Z",
+"use_id": "synth_lane-b_0042"
+},
+{
+"seq": 43,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:43Z",
+"use_id": "synth_lane-b_0043"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/posting.py",
+"seq": 44,
+"tool": "Read",
+"ts": "2000-01-01T00:00:44Z",
+"use_id": "synth_lane-b_0044"
+},
+{
+"path": "/home/demo/acme-ledger/README.md",
+"seq": 45,
+"tool": "Read",
+"ts": "2000-01-01T00:00:45Z",
+"use_id": "synth_lane-b_0045"
+},
+{
+"seq": 46,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:46Z",
+"use_id": "synth_lane-b_0046"
+},
+{
+"seq": 47,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:47Z",
+"use_id": "synth_lane-b_0047"
+},
+{
+"seq": 48,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:48Z",
+"use_id": "synth_lane-b_0048"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_accounts.py",
+"seq": 49,
+"tool": "Read",
+"ts": "2000-01-01T00:00:49Z",
+"use_id": "synth_lane-b_0049"
+},
+{
+"seq": 50,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:50Z",
+"use_id": "synth_lane-b_0050"
+},
+{
+"seq": 51,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:51Z",
+"use_id": "synth_lane-b_0051"
+},
+{
+"path": "/home/demo/acme-ledger/README.md",
+"seq": 52,
+"tool": "Read",
+"ts": "2000-01-01T00:00:52Z",
+"use_id": "synth_lane-b_0052"
+},
+{
+"seq": 53,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:53Z",
+"use_id": "synth_lane-b_0053"
+},
+{
+"seq": 54,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:54Z",
+"use_id": "synth_lane-b_0054"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_accounts.py",
+"seq": 55,
+"tool": "Read",
+"ts": "2000-01-01T00:00:55Z",
+"use_id": "synth_lane-b_0055"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_rounding.py",
+"seq": 56,
+"tool": "Read",
+"ts": "2000-01-01T00:00:56Z",
+"use_id": "synth_lane-b_0056"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_accounts.py",
+"seq": 57,
+"tool": "Read",
+"ts": "2000-01-01T00:00:57Z",
+"use_id": "synth_lane-b_0057"
+},
+{
+"seq": 58,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:58Z",
+"use_id": "synth_lane-b_0058"
+},
+{
+"path": "/home/demo/acme-ledger/docs/glossary.md",
+"seq": 59,
+"tool": "Read",
+"ts": "2000-01-01T00:00:59Z",
+"use_id": "synth_lane-b_0059"
+},
+{
+"seq": 60,
+"tool": "Bash",
+"ts": "2000-01-01T00:01:00Z",
+"use_id": "synth_lane-b_0060"
+}
+]
+},
+{
+"agent": "lane-c",
+"calls": [
+{
+"seq": 0,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:00Z",
+"use_id": "synth_lane-c_0000"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/__init__.py",
+"seq": 1,
+"tool": "Read",
+"ts": "2000-01-01T00:00:01Z",
+"use_id": "synth_lane-c_0001"
+},
+{
+"seq": 2,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:02Z",
+"use_id": "synth_lane-c_0002"
+},
+{
+"path": "/home/demo/acme-ledger/docs/design.md",
+"seq": 3,
+"tool": "Read",
+"ts": "2000-01-01T00:00:03Z",
+"use_id": "synth_lane-c_0003"
+},
+{
+"seq": 4,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:04Z",
+"use_id": "synth_lane-c_0004"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_posting.py",
+"seq": 5,
+"tool": "Read",
+"ts": "2000-01-01T00:00:05Z",
+"use_id": "synth_lane-c_0005"
+},
+{
+"seq": 6,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:06Z",
+"use_id": "synth_lane-c_0006"
+},
+{
+"seq": 7,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:07Z",
+"use_id": "synth_lane-c_0007"
+},
+{
+"seq": 8,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:08Z",
+"use_id": "synth_lane-c_0008"
+},
+{
+"seq": 9,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:09Z",
+"use_id": "synth_lane-c_0009"
+},
+{
+"seq": 10,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:10Z",
+"use_id": "synth_lane-c_0010"
+},
+{
+"seq": 11,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:11Z",
+"use_id": "synth_lane-c_0011"
+},
+{
+"seq": 12,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:12Z",
+"use_id": "synth_lane-c_0012"
+},
+{
+"seq": 13,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:13Z",
+"use_id": "synth_lane-c_0013"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/journal.py",
+"seq": 14,
+"tool": "Read",
+"ts": "2000-01-01T00:00:14Z",
+"use_id": "synth_lane-c_0014"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/journal.py",
+"seq": 15,
+"tool": "Edit",
+"ts": "2000-01-01T00:00:15Z",
+"use_id": "synth_lane-c_0015"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/accounts.py",
+"seq": 16,
+"tool": "Read",
+"ts": "2000-01-01T00:00:16Z",
+"use_id": "synth_lane-c_0016"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/__init__.py",
+"seq": 17,
+"tool": "Read",
+"ts": "2000-01-01T00:00:17Z",
+"use_id": "synth_lane-c_0017"
+},
+{
+"path": "/home/demo/acme-ledger/docs/runbook.md",
+"seq": 18,
+"tool": "Read",
+"ts": "2000-01-01T00:00:18Z",
+"use_id": "synth_lane-c_0018"
+},
+{
+"path": "/home/demo/acme-ledger/docs/glossary.md",
+"seq": 19,
+"tool": "Read",
+"ts": "2000-01-01T00:00:19Z",
+"use_id": "synth_lane-c_0019"
+},
+{
+"seq": 20,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:20Z",
+"use_id": "synth_lane-c_0020"
+},
+{
+"seq": 21,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:21Z",
+"use_id": "synth_lane-c_0021"
+},
+{
+"seq": 22,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:22Z",
+"use_id": "synth_lane-c_0022"
+},
+{
+"path": "/home/demo/acme-ledger/docs/design.md",
+"seq": 23,
+"tool": "Read",
+"ts": "2000-01-01T00:00:23Z",
+"use_id": "synth_lane-c_0023"
+},
+{
+"path": "/etc/hosts",
+"seq": 24,
+"tool": "Write",
+"ts": "2000-01-01T00:00:24Z",
+"use_id": "synth_lane-c_0024"
+},
+{
+"seq": 25,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:25Z",
+"use_id": "synth_lane-c_0025"
+},
+{
+"seq": 26,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:26Z",
+"use_id": "synth_lane-c_0026"
+},
+{
+"seq": 27,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:27Z",
+"use_id": "synth_lane-c_0027"
+},
+{
+"seq": 28,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:28Z",
+"use_id": "synth_lane-c_0028"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/audit.py",
+"seq": 29,
+"tool": "Read",
+"ts": "2000-01-01T00:00:29Z",
+"use_id": "synth_lane-c_0029"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_journal.py",
+"seq": 30,
+"tool": "Read",
+"ts": "2000-01-01T00:00:30Z",
+"use_id": "synth_lane-c_0030"
+},
+{
+"seq": 31,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:31Z",
+"use_id": "synth_lane-c_0031"
+},
+{
+"seq": 32,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:32Z",
+"use_id": "synth_lane-c_0032"
+},
+{
+"seq": 33,
+"tool": "Bash",
+"ts": "2000-01-01T00:00:33Z",
+"use_id": "synth_lane-c_0033"
+},
+{
+"path": "/home/demo/acme-ledger/src/ledger/posting.py",
+"seq": 34,
+"tool": "Read",
+"ts": "2000-01-01T00:00:34Z",
+"use_id": "synth_lane-c_0034"
+},
+{
+"path": "/home/demo/acme-ledger/docs/runbook.md",
+"seq": 35,
+"tool": "Read",
+"ts": "2000-01-01T00:00:35Z",
+"use_id": "synth_lane-c_0035"
+},
+{
+"path": "/home/demo/acme-ledger/tests/test_posting.py",
+"seq": 36,
+"tool": "Read",
+"ts": "2000-01-01T00:00:36Z",
+"use_id": "synth_lane-c_0036"
+}
+]
+}
+]
+}

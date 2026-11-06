@@ -3,7 +3,29 @@
 Lane A of `docs/automata/SUBSTRATE-DECISION.md` §7, 2026-11-06. Tags: [MEASURED] a run on ember's
 Mac (Apple silicon) on that day; [READ] seen in a file.
 
-## The question
+## The default run is synthetic
+
+`./run.sh` runs on a SYNTHETIC forest by default. `synth_transcript.py` (seeded, deterministic)
+writes a projection in the same shape as the real one: a root and three sub-agents in a depth-2
+tree (three spawns), about 190 tool calls of Read / Edit / Write / Bash / Agent, all over invented
+paths in a fictitious project `/home/demo/acme-ledger/`. No field comes from a real session. There
+are two variants, with the same program:
+
+| variant | what differs | EDB facts | stratum 0 / 1 firings | count(violation) | verifyJ | EDB root |
+|---|---|---|---|---|---|---|
+| `data/synthetic/violating/` | `lane-b` edits `src/ledger/rounding.py` unseen (one `blind_edit`); `lane-c` writes `/etc/hosts` (one `forbidden_write`) | 550 | 412 / 4 | **2** | 0.70 s | `0xadd345fa…6b8327` |
+| `data/synthetic/fixed/` | `lane-b` reads the file first; `lane-c` writes in the project | 557 | 416 / 0 | **0** | 0.57 s | `0x20f64ad4…f1227d` |
+
+[MEASURED]: both are accepted, each with its own signed receipt. On the fixed certificate,
+`open-lower` (claims 6), `wrong-count` and `dropped-fact` are refused, and the weaker checker
+accepts `open-lower`. Both variants also exercise the allowed paths: an edit after the agent's own
+read, an edit after its own earlier write, and an edit of a file the parent read before the spawn.
+
+The real-session run below exists. Its artifacts (`data/transcript.json` and everything derived
+from it directly under `data/`) are session-derived and under ember's decision. `./run.sh --real`
+re-runs it from the local file without re-exporting; `REAL_OUT=<dir>` sends its outputs elsewhere.
+
+## The question (the real-session run)
 
 The session is `e3ba49ed-a526-4ecd-8807-58b73757aaca`, a completed Claude Code session in
 `~/dev/aidev`. With its 72 sub-agents it is 73 transcripts and 3,382 tool calls. The question,
@@ -119,18 +141,20 @@ Falsifiers, run by `run.sh` on this data [MEASURED]:
 
 ```
 cd demo/datalog-governance
-./run.sh            # extract, prove, check, sign, verify, falsifiers (uses the checked-in transcript)
-./run.sh --export   # first re-export the session with cv (only on the machine that has it)
+./run.sh                       # synthetic: both variants, receipts, falsifiers (the default)
+./run.sh --real                # the real-session run from the local data/transcript.json
+REAL_OUT=/tmp/x ./run.sh --real  # the same, with its outputs written elsewhere
 ```
 
-Check the checked-in certificate and receipt without running anything else:
+Check a checked-in certificate and receipt without running anything else (synthetic fixed shown;
+`data/synthetic/violating/` and `data/` work the same way):
 
 ```
 cd metatheory && lake build datalog-check
-./.lake/build/bin/datalog-check ../demo/datalog-governance/data/certificate.json
+./.lake/build/bin/datalog-check ../demo/datalog-governance/data/synthetic/fixed/certificate.json
 cd ../demo/datalog-governance
 ssh-keygen -Y verify -f allowed_signers -I datalog-governance@dregg -n dregg-datalog-receipt \
-  -s data/receipt.txt.sig < data/receipt.txt
+  -s data/synthetic/fixed/receipt.txt.sig < data/synthetic/fixed/receipt.txt
 ```
 
 The receipt signs `(program_digest, root, pred, count)` as the checker printed them. Verifying the
@@ -141,7 +165,7 @@ the signed body. The private key
 lives in `keys/`, which git ignores. Running `run.sh` without that directory makes a new key and
 rewrites `allowed_signers`.
 
-Files: `program.json` (rules, strata, policy), `project_transcript.py`, `extract_edb.py`,
+Files: `program.json` (rules, strata, policy), `synth_transcript.py`, `project_transcript.py`, `extract_edb.py`,
 `prove.py`, `forge.py`, `run.sh`, `allowed_signers`. Under `data/`: `transcript.json`, `edb.json`,
 `certificate.json` (the checker's input: statement and certificate), `check.out`, `receipt.txt`,
 `receipt.txt.sig`.
