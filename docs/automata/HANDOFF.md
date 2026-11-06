@@ -336,7 +336,7 @@ Next steps:
    time ./.lake/build/bin/policyc compile "$SCRATCH"/secrets.policy --pattern secrets --absence > "$SCRATCH"/secrets.json
    ```
 2. If it finishes: add it as `demo/absence-receipt/policyc/secrets-absence.json` (+ the `.policy`),
-   assert in `tests/differential.rs` that its `minimize()` equals `absence_table(POLICY)` byte for byte,
+   assert in `demo/absence-receipt/tests/differential.rs` that its `minimize()` equals `absence_table(POLICY)` byte for byte,
    then make it the table source: `run.sh`'s `compile` leg runs policyc instead of `absence-receipt
    compile`, the receipt's `policy_blake3` names the lane-B-syntax policy file (keep `policy.txt` beside it
    for the crate path), re-run `INDEX=<clone at the pin> demo/absence-receipt/run.sh`, which re-signs
@@ -358,3 +358,43 @@ different numbering, so any route-table commitment pinned over such a pattern ch
 ### Uncommitted
 
 Nothing of lane F's in the tree.
+
+## Lane E (LRAT, bisimulation, bound statements)
+
+Written 2026-11-06 by lane E (Claude) at hand-over. Paths are from the repo root.
+
+### Files lane E owns
+- `metatheory/Dregg2/Sat/LratCert.lean`: LRAT unsat certificates. The CNF is committed by `mroot`. `checkLrat` is a list-based RUP checker, proved sound here. The shipped `Std.Tactic.BVDecide.LRAT.check` is reused as `checkStd`. The test proof is CaDiCaL's refutation of PHP(3,2).
+- `metatheory/Dregg2/Crypto/Deriv/BisimCert.lean`: derivative-bisimulation inclusion and equivalence certificates. Both policies are committed by `mroot` over `encRE`.
+- `metatheory/Dregg2/Circuit/Emit/DfaRoutingChainBound.lean`: the content-bound statement for the hash-chained routing descriptor.
+- `metatheory/Dregg2/Circuit/Emit/DfaRoutingTableBound.lean`: what table routing binds about its word (a transition multiset, a trail).
+- `metatheory/Dregg2/Circuit/Emit/DyckStackBound.lean`: the Dyck parse bound to its table and route public inputs.
+- `metatheory/Dregg2/Circuit/Emit/AttestedAutomatonBound.lean`: the whole-run corollary for the 8-felt weld. The word is not bound.
+- Lane E also added these files' rows to `metatheory/scripts/automata-check.sh` and to `metatheory/Dregg2/Crypto/Deriv/README.md`, and made a one-line arity repair in `metatheory/Dregg2/Circuit/Emit/DfaRoutingRung2.lean`.
+
+### What landed (on main)
+`94cea66a3` (LRAT), `db7b263c0` (bisimulation), `6ee530a10` (bisimulation commits its policies by mroot), `d244c09d6` (chain bound, plus the Rung2 repair), `334460d09` (table bound), `b2a2fe0f2` (Dyck bound), `f58d30e1b` (attested bound), `274f65a80` (gate list), and `f476bd3e0` (codex round 4 repairs, below). The last family gate run with `--files` on the six files passed: 35 guards, 145 keystones.
+
+### Codex round 4 (`docs/automata/codex-synthesis.md`, round 4)
+- FIXED in `f476bd3e0` (`DfaRoutingChainBound.lean`):
+  - Item 1. `dfaAir_bound_identifies_record` takes the statement first and requires only `Function.Injective stmt.encSym`. `identifies_record_inhabited` meets every hypothesis over `Sy = ℤ` through `refKernel`.
+  - Item 3 for this file. `chain_binds_or_collides`: equal-length preimage lists with one chain are equal, or the deterministic extractor `chainFind` names a `SpongeColl hash` pair. `dfaRouting_bound_or_collides` needs no `CollisionFree`. The `CollisionFree` lemmas are labelled ideal injective-hash lemmas, the first residual in the header.
+  - Item 5. `UnboundAccepts`, `BoundAccepts`, and `splice_separation` (weak acceptance, bound refusal and a false claim for one trace and one record).
+- UNTOUCHED, with nothing half-built and no uncommitted lane E file:
+  - Item 2 (blocker, `AttestedAutomatonBound.lean`). Carry per-row opening heaps and conclude `∃ i, badEdge i ∧ MapRootColl … (rowHeap i) m`. `Lanes8.weld8_forged_edge_refused` already supplies the opening witness (its `obtain` in `weld8_run_or_collides` discards it).
+  - Item 3 for `DyckStackBound.lean`. Reuse `DfaRoutingChainBound.chain_binds_or_collides` with `P = t.rows.map pre` for the two traces: `chainFold_eq_runningFold` gives the fold, and `entry_eq` gives the entries. Import the chain-bound module.
+  - Item 4 (`DyckStackBound.lean`). Reword `dyck_bound` with codex's sentence. Add first-done rows for both traces, successors and `n < p` to the residuals. The falsifier needs a full `dyckParseDesc` witness with a sound chip table, or the header must say why one cannot be built.
+  - Items 7 and 9 (`LratCert.lean`). Add the fresh-id case `f = [[1],[-1]]`, `p = [.add 1 [] [1,2]]`, with a checker that omits only the freshness test. Reword `checkNoRup` as "a comparator omitting RUP but requiring all supplied hints to be live".
+  - Item 8. Add the comparator acceptances: a hint-check-omitting comparator in `LratCert.lean`, and root-omitting and closure-omitting comparators in `BisimCert.lean`, each as a named `weak = true ∧ strong = false` theorem.
+  - Item 14 (`DfaRoutingTableBound.lean`). `tableRouting_trail` is a necessary characterization, not a complete one: reword it.
+  - Item 16 (`BisimCert.lean`). Commit the false `anyStar ⊆ noDoubleBraceRE`, splice in the valid `a ⊆ a|b` certificate, and show weak acceptance, strong refusal and a violating word (`"{{"`).
+
+### Approved shape changes, not started
+1. Dyck (`metatheory/Dregg2/Circuit/Emit/DyckStackEmit.lean`): gates `(1 − IS_RULE)·RULE_ID` and `(1 − IS_TERM)·INPUT_TOKEN`, so one word has one route. Then restate `dyck_bound` in the one-trace `record ↦ route` form and keep the two-trace theorem as a corollary. Re-emit `dregg-dyck-parse-v1` by-name JSON by running the emitter directly. Run the Dyck served test with `cargo test -p dregg-circuit --test <name>`, filtered. Do NOT stage `circuit/descriptors/by-name/` or `EmitByName.lean` while the by-name pre-commit leg is red for the weld; leave the JSON uncommitted for the stamp.
+2. The routing chain (per-row entry-hash and running-hash chip lookups, `ACC` copy-forward, and table seed and route PIs, as in `DfaRoutingEmit.dfaRoutingDesc`). Add it to `metatheory/Dregg2/Circuit/Emit/DfaRoutingTableEmit.lean` and to `metatheory/Dregg2/Circuit/Emit/AttestedAutomatonWeld8.lean`, keeping `AttestedAutomatonLanes8.lean` green. Then restate `DfaRoutingTableBound` and `AttestedAutomatonBound` in the BoundStatement shape with the route PI.
+3. Make the trace length a public input of the routing statement, so the unequal-length alternative leaves `dfaRouting_bound` and `dfaRouting_bound_or_collides`.
+
+Each change is one commit. Pin the counts delta with `#guard`, and record it in the file header, `docs/automata/COUNTS.md` (regenerate with `space.py --certs --markdown` if its pins move) and the family note (`docs/automata/04-vpa-dyck.md` or `docs/automata/01-dfa.md`).
+
+### Processes and clones
+No PID files, no background jobs and no clones. Scratch is under the session scratchpad `.../scratchpad/e/` (probes, commit messages, temporary indexes), none of it needed.
