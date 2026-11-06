@@ -163,3 +163,46 @@ data, as this initiative does. No session content or derived artifact is authori
 public publication by this parser task. These notes do not change another initiative's source
 ownership. The theorem's exact codec, row-length and root-opening premises must travel with
 any consumer; an unrelated valid table or certificate is not enough.
+
+## Integration checkpoint, 20:55 UTC
+
+Register row remains **#1** above. Landed locally: `7f0c7efae` repeat-cache improvement;
+`635b3b3d8` initial statement gate; `8eab9c5d8` static-source/provenance phase repair;
+`bf583f317` ordered table/weld routes, Dyck canonical record verifier, shared DECO/caveat
+generators and current counts. The initial 21-file solvency/tuple/injection set was accidentally
+included by another lane in `a63744ae4` (stream commit); its subject/author do not describe those
+files. Preserve the useful changes; their checks and construction are recorded in the AIR reports.
+The counts model landed on zkml-research dev in `2fcf3c5d` plus pin follow-up `a77ab620`, both pushed.
+
+The predecessor chain completed at 20:36:15 UTC, emit exit 0: all 247 descriptor files matched
+source `609ae705400dd4636a39d5a5acac9138a6e192f8`, one missing stamp row repaired, only
+PROVENANCE changed. The two peaks above are its complete over-12-GiB list, with the sampler
+limitation unchanged. Its stamp is not installed as evidence for our newer source. Mina rescue
+`e4919780a` now reduces wrap stages to 9.4 GB / 1:53; body rescue was `7c90a9b60`.
+
+### Current coordination and verification
+
+The push gate's missing grain-session manifest was repaired by its owner in `1f0c4a331`.
+The next push was blocked by a different lane's documentation reference:
+`metatheory/Dregg2/Tree/Cert.lean:14` names the Spec module with a path the reference checker
+does not resolve. The Tree owner should use its full Dregg2-relative path; this deputy does not
+edit Tree-owned source. No gate bypass is used. SSH keepalives now cover long pre-push scans.
+
+Native Rust compilation reached the real Lean FFI under an 8 GiB cap; when aggregate box RSS
+rose to 94.09 GiB, only our PID-file-owned process group was stopped. Result: RESOURCE
+INTERRUPTION, no test verdict. Its cached dependencies survive. Retry uses completed independent
+iteration/stamp artifacts, one Rust/Lean/C worker and a launch threshold of 50 GiB summed RSS.
+Long-lived idle controller scopes make the old sum-of-declared-caps rule unusable on this box;
+current scheduling follows the task's explicit summed-RSS plus 40-GiB headroom criterion and the
+enforced 100-GiB aggregate slice. No foreign process or cache is changed.
+
+The composed compiler still needed work after the first union proof: 638 product states trim to
+49 reachable states, but the absence constructor's linked-list indexing repeated inside nested
+loops remains cubic. The lane is replacing that loop with an exactly equivalent precomputed
+successor set. No final absence table or newly signed receipt is published before it runs.
+
+The next C9 consolidation is grounded, not speculative: both note-spend constructors are fixed
+zero-argument Rust lowerers despite the original census calling them parameterized. A routed
+Lean emitter and refinement already exist, including a stronger descriptor that closes six
+last-row freedoms. The lane is connecting those existing proofs and bytes to both consumers.
+The deeper path-shape premise remains explicit until actually enforced.
