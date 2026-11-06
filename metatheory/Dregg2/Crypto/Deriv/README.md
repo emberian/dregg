@@ -71,7 +71,7 @@ Keystone column: **yes** marks the five files on the program gate list and the t
 | `SymbolicEquivalence.lean` | `symDiff`, `langEq_iff_symDiff_empty`: language equivalence via emptiness of the symmetric difference | **yes** | 2 | 7 |
 | `SymbolicFixpoint.lean` | the runnable worklist fixpoint (`reachFix`, `emptyFix`) over `simDecide`; rigidity is root-only |  | 13 | 15 |
 | `EquivalenceFixpoint.lean` | the `≅`-fixpoint composed onto `symDiff`: runnable equivalence (`role3_not_equiv_role4`) |  | 12 | 5 |
-| `BisimCert.lean` | derivative-bisimulation CERTIFICATES (lane E, 2026-11-06): `bisimOk`/`bisimCheck` over a pair list with classes from `atomCands`; `closed_under_symbols`, `bisimCheck_sound` (⊆) and `bisimEqCheck_sound` (≡); `noDoubleBraceRE ⊆ star any` as a term; the untrusted emitter `emitPairs`; the committed form `(rootP, rootQ, claim)` over the injective `encRE` with `holds_intended_or_collides` |  | 20 | 41 |
+| `BisimCert.lean` | derivative-bisimulation CERTIFICATES (lane E, 2026-11-06): `bisimOk`/`bisimCheck` over a pair list with classes from `atomCands`; `closed_under_symbols`, `bisimCheck_sound` (⊆) and `bisimEqCheck_sound` (≡); `noDoubleBraceRE ⊆ star any` as a term; the untrusted emitter `emitPairs`; the committed form `(rootP, rootQ, claim)` over the injective `encRE` with `holds_intended_or_collides` |  | 20 | 46 |
 
 ## Real-guard audits
 
@@ -88,3 +88,38 @@ Keystone column: **yes** marks the five files on the program gate list and the t
   regression evidence for that premise, not a discharge of it.
 - `SatOracle.lean` is not imported by any module (its header says so); the gate checks it standalone.
 - Pinned counts for the circuit side of these families live in `docs/automata/COUNTS.md`.
+
+## Bisimulation certificate audit and reproducible counts
+
+[READ] `BisimCert.lean` keeps the untrusted emitter separate from the checker.
+`bisimCheck_sound` and `bisimEqCheck_sound` quantify over every word of `Value`s;
+`holds_intended_or_collides` binds the conclusion to both intended policy roots.
+Exact `#guard_msgs` axiom pins cover those boundaries and the audit witnesses.
+
+```sh
+cd metatheory
+lake env lean Dregg2/Crypto/Deriv/BisimCert.lean
+```
+
+[MEASURED] The file pins 46 kernel-clean theorems. The named
+`Reference.ab_dropRoot_separation` and `ab_dropDerivative_separation` remove a
+root/derivative pair from an honest certificate: comparators omitting exactly
+root membership/closure accept, while the production checker refuses.
+`falseUpgrade_separation` uses an unrelated valid certificate to make the
+unbound verifier accept the **false** claim `star any ⊆ noDoubleBraceRE`, proves
+both intended commitment openings exist, and records rejection by the bound
+verifier. `doubleBrace_violates` supplies the concrete `{{` word refuting that
+inclusion. All these witnesses are kernel checked.
+
+[MEASURED] `Reference.replay_counts` recomputes the benchmark fixtures:
+
+| Certificate | Pairs | Classes | Derivative-pair obligations |
+|---|---:|---:|---:|
+| `noDoubleBraceRE ⊆ star any` | 11 | 2 | 22 |
+| `a ⊆ a ∪ b` | 4 | 3 | 12 |
+| Policy equivalent to its reassociation | 11 | 2 | 22 |
+
+The policy and `star any` encodings contain 20 and 3 integer cells. Obligation
+counts exclude the root lookup and count one derivative pair per pair/class;
+they do not count the linear `memSim` scan or recursive `simDecide` work. No
+wall-clock speed or arithmetized lookup cost is inferred from these counts.

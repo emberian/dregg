@@ -51,13 +51,14 @@ PHP(3,2) — three pigeons, two holes, 9 clauses over 6 variables — with its L
 CaDiCaL 3.0.1 `--lrat --binary=false` printed it (7 additions, no deletions):
   (a) the refutation is ACCEPTED (`checkLrat`, `verify`, and the shipped `checkStd`);
   (b) the same proof with one hint removed (the last step loses clause 9) is REFUSED;
-  (c) `checkNoRup` — the same replay (fresh ids, every hint resolves to a live clause, the empty
-      clause ends it) with the RUP check forgotten — ACCEPTS a bogus addition (`¬x₁` from
-      `x₁ ∨ x₂`, then the empty clause) on a satisfiable CNF that `checkLrat` refuses;
+  (c) `checkNoRup` — a no-RUP comparator retaining fresh ids and requiring EVERY hint to
+      resolve (not an acceptance superset, as `noRup_not_superset` proves) — ACCEPTS a bogus
+      addition (`¬x₁` from `x₁ ∨ x₂`, then the empty clause) on a satisfiable CNF that `checkLrat` refuses;
   (d) a SATISFIABLE CNF with a forged empty-clause step is refused by `checkLrat` and ACCEPTED by
       `checkNoRup`; through `verifyNoRup` / `verify` the same split holds at a correct root;
   (e) a wrong root is refused (the PHP certificate at the root of the satisfiable CNF);
-  (f) a reused id (step id `1`, an input clause's) is refused.
+  (f) `reusedId_separation`: `[[1],[-1]]` with `.add 1 [] [1,2]` passes every RUP obligation
+      but is refused solely by freshness; `checkNoFresh` accepts it.
 
 ## Counts (§6, pinned) and per-step cost
 
@@ -387,7 +388,8 @@ def php3Proof : List Step :=
 /-- The same proof with ONE hint removed: the last step loses clause 9 (`¬x₄ ∨ ¬x₆`). -/
 def php3DropHint : List Step := php3Proof.take 6 ++ [.add 16 [] [14, 15]]
 
-/-- The same proof whose first step reuses id `1` (an input clause's). -/
+/-- A malformed replay: the first step reuses input id `1`, and later hints still cite `10`.
+This is not an isolated freshness falsifier; see `reusedId_separation`. -/
 def php3ReusedId : List Step := .add 1 [-2] [7, 8, 2, 3, 6] :: php3Proof.drop 1
 
 /-- A satisfiable CNF: `x₁`, `x₁ ∨ x₂`. -/
@@ -397,8 +399,9 @@ def forgedEmpty : List Step := [.add 3 [] [1, 2]]
 /-- A bogus addition: `¬x₁` cited from `x₁ ∨ x₂` (not RUP), then the empty clause. -/
 def bogusAdd : List Step := [.add 3 [-1] [2], .add 4 [] [1, 3]]
 
-/-- The WEAKER checker: the same replay (fresh ids, every hint a live clause, the empty clause ends
-it), with the RUP check forgotten. -/
+/-- A no-RUP comparator retaining fresh ids and requiring EVERY hint to name a live clause.
+It separates the examples below, but is not an acceptance superset of `run`: RUP may return
+early on a conflict without reading later hints. See `noRup_not_superset`. -/
 def runNoRup : Table → List Step → Bool
   | _, [] => false
   | t, .add id c hints :: rest =>
@@ -428,12 +431,12 @@ theorem php3_unsat : Unsat php3 := checkLrat_sound _ _ php3_accepted
 theorem php3_dropHint_refused : checkLrat php3 php3DropHint = false := by decide
 #guard !checkLrat php3 php3DropHint && !checkStd php3 php3DropHint
 
--- (c) the weaker checker ACCEPTS the bogus addition that `checkLrat` REFUSES.
+-- (c) the no-RUP comparator ACCEPTS the bogus addition that `checkLrat` REFUSES.
 theorem bogus_accepted_by_noRup : checkNoRup satCnf bogusAdd = true := by decide
 theorem bogus_refused : checkLrat satCnf bogusAdd = false := by decide
 #guard checkNoRup satCnf bogusAdd && !checkLrat satCnf bogusAdd && !checkStd satCnf bogusAdd
 
--- (d) a SATISFIABLE CNF with a forged empty clause: refused, and the weaker checker accepts it,
+-- (d) a SATISFIABLE CNF with a forged empty clause: refused, and the no-RUP comparator accepts it,
 -- also at the verifier level with a correct root.
 theorem forged_accepted_by_noRup : verifyNoRup hash0 satStmt ⟨satCnf, forgedEmpty⟩ = true := by
   decide
@@ -450,9 +453,32 @@ theorem satCnf_sat : Satisfies (fun _ => true) satCnf := by
 theorem wrong_root_refused : verify hash0 satStmt ⟨php3, php3Proof⟩ = false := by decide
 #guard !verify hash0 satStmt ⟨php3, php3Proof⟩
 
--- (f) a reused id is refused (the RUP check alone would pass: the step is the honest one).
+-- (f) The malformed PHP replay is refused; it violates both freshness and later hint lookup.
 theorem reusedId_refused : checkLrat php3 php3ReusedId = false := by decide
 #guard rupCheck (index 1 php3) [-2] [7, 8, 2, 3, 6]
+
+/-- Freshness-omitting comparator: all RUP obligations and replay behavior are unchanged. -/
+def runNoFresh : Table → List Step → Bool
+  | _, [] => false
+  | t, .add id c hints :: rest =>
+    rupCheck t c hints && (c.isEmpty || runNoFresh ((id, c) :: t) rest)
+  | t, .del ids :: rest => runNoFresh (t.filter fun e => !ids.contains e.1) rest
+
+def checkNoFresh (f : Cnf) (p : List Step) : Bool := runNoFresh (index 1 f) p
+
+/-- The reused id is the ONLY failed obligation: both hints are live and produce a conflict. -/
+theorem reusedId_separation :
+    checkNoFresh [[1], [-1]] [.add 1 [] [1, 2]] = true ∧
+    checkLrat [[1], [-1]] [.add 1 [] [1, 2]] = false := by decide
+
+/-- Removing the final conflict hint passes the no-RUP comparator but fails real replay. -/
+theorem dropHint_separation :
+    checkNoRup php3 php3DropHint = true ∧ checkLrat php3 php3DropHint = false := by decide
+
+/-- Early conflict makes the unused, nonexistent hint irrelevant to RUP, but not `checkNoRup`. -/
+theorem noRup_not_superset :
+    checkLrat [[]] [.add 2 [] [1, 999]] = true ∧
+    checkNoRup [[]] [.add 2 [] [1, 999]] = false := by decide
 
 /-! ### Counts, pinned.
 
@@ -482,6 +508,13 @@ def literalReads : Table → List Step → Nat
 #guard (php3Proof.map stepWidth).foldl max 0 == 1
 #guard literalReads (index 1 php3) php3Proof == 29
 
+/-- Reproducible operation counts for the entire honest replay (including all hinted widths). -/
+theorem php3_counts :
+    php3.length = 9 ∧ php3Proof.length = 7 ∧
+    (php3Proof.map stepHints).sum = 18 ∧ (php3Proof.map stepHints).foldl max 0 = 5 ∧
+    (php3.map List.length).foldl max 0 = 2 ∧ (php3Proof.map stepWidth).foldl max 0 = 1 ∧
+    literalReads (index 1 php3) php3Proof = 29 := by decide
+
 end Reference
 
 /-! ## §7 — axiom tripwires. -/
@@ -492,6 +525,30 @@ end Reference
   Reference.php3_accepted, Reference.php3_verified, Reference.php3_unsat,
   Reference.php3_dropHint_refused, Reference.bogus_accepted_by_noRup, Reference.bogus_refused,
   Reference.forged_accepted_by_noRup, Reference.forged_refused, Reference.satCnf_sat,
-  Reference.wrong_root_refused, Reference.reusedId_refused]
+  Reference.wrong_root_refused, Reference.reusedId_refused, Reference.reusedId_separation,
+  Reference.dropHint_separation, Reference.noRup_not_superset, Reference.php3_counts]
+
+/-! Exact axiom sets for the soundness boundary and the new separation/count terms. -/
+/-- info: 'Dregg2.Sat.LratCert.checkLrat_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms checkLrat_sound
+/-- info: 'Dregg2.Sat.LratCert.verify_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms verify_sound
+/-- info: 'Dregg2.Sat.LratCert.refutes_intended_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms refutes_intended_or_collides
+/-- info: 'Dregg2.Sat.LratCert.Reference.reusedId_separation' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Reference.reusedId_separation
+/-- info: 'Dregg2.Sat.LratCert.Reference.dropHint_separation' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Reference.dropHint_separation
+/-- info: 'Dregg2.Sat.LratCert.Reference.noRup_not_superset' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Reference.noRup_not_superset
+/-- info: 'Dregg2.Sat.LratCert.Reference.php3_counts' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Reference.php3_counts
 
 end Dregg2.Sat.LratCert

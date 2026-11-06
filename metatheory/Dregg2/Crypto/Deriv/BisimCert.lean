@@ -28,8 +28,9 @@ claim; `holds_intended_or_collides` says that for the policies `P`, `Q` intended
 claim holds of `P` and `Q`, or the sponge collides at a named pair (`RECollides`). Falsifiers
 (kernel-decided): swapped roots and a wrong second root are refused; `verifyNoBind` (bisimulation
 without the openings) ACCEPTS a certificate about unrelated regexes (`a ⊆ a | b`) for the
-policy-upgrade statement, which `verify` refuses. `encRE` covers exactly the leaves `bisimCheck`
-accepts (`tt`, `ff`, `symEq`, `digEq`, `symMemberOf` under `and`/`or`/`not`); any other leaf has
+FALSE reversed policy-upgrade statement, which `verify` refuses. `doubleBrace_violates`
+exhibits the violating `{{` word and `falseUpgrade_separation` pins both intended openings.
+`encRE` covers exactly the leaves `bisimCheck` accepts (`tt`, `ff`, `symEq`, `digEq`, `symMemberOf` under `and`/`or`/`not`); any other leaf has
 no encoding, so no root. `encRE` is injective over `ℤ` (string code points included); the
 canonical-felt obligation (vi) of the substrate decision §2 applies to its deployment.
 
@@ -53,7 +54,8 @@ canonical-felt obligation (vi) of the substrate decision §2 applies to its depl
   (a) accepted: `noDoubleBraceRE ⊆ star any`; `a ⊆ a | b` on the alphabet `t = 0` / `t = 1`;
       `noDoubleBraceRE ≡` its reassociation;
   (b) refused: the policy certificate with its root pair dropped, and with an interior derivative
-      pair dropped; the `a ⊆ a | b` certificate with a derivative pair dropped;
+      pair dropped; `ab_dropRoot_separation` / `ab_dropDerivative_separation` additionally
+      prove acceptance by comparators omitting exactly root membership / closure;
   (c) refused: the policy's inclusion certificate as an EQUIVALENCE certificate, and the reverse
       inclusion `star any ⊆ noDoubleBraceRE`;
   (d) `bisimNoNullable` (same closure, same computed classes, nullability forgotten) ACCEPTS the
@@ -310,6 +312,28 @@ theorem nodb_dropRoot_refused :
 theorem nodb_dropDerivative_refused :
     bisimCheck (nodbPairs.eraseIdx 3) noDoubleBraceRE anyStar = false := by decide +kernel
 theorem ab_dropDerivative_refused :
+    bisimCheck (abPairs.eraseIdx 1) aRE (.alt aRE bRE) = false := by decide +kernel
+
+/-- Root-membership-omitting comparator; nullability, computed classes and closure remain. -/
+def bisimNoRootCheck (ps : Pairs) : Bool :=
+  match classesOf ps with
+  | some cls => ps.all fun pq => (!null pq.1 || null pq.2) && closedAt cls ps pq
+  | none => false
+
+/-- Closure-omitting comparator; root membership, computed classes and nullability remain. -/
+def bisimNoClosureCheck (ps : Pairs) (r s : PredRE) : Bool :=
+  match classesOf ps with
+  | some _ => memSim ps r s && ps.all fun pq => !null pq.1 || null pq.2
+  | none => false
+
+/-- Root deletion is isolated: the remaining relation is closed and nullable-compatible. -/
+theorem ab_dropRoot_separation :
+    bisimNoRootCheck (abPairs.eraseIdx 0) = true ∧
+    bisimCheck (abPairs.eraseIdx 0) aRE (.alt aRE bRE) = false := by decide +kernel
+
+/-- Derivative deletion is isolated: the root and every nullable obligation still pass. -/
+theorem ab_dropDerivative_separation :
+    bisimNoClosureCheck (abPairs.eraseIdx 1) aRE (.alt aRE bRE) = true ∧
     bisimCheck (abPairs.eraseIdx 1) aRE (.alt aRE bRE) = false := by decide +kernel
 
 -- (c) the inclusion is not an equivalence: the same pair list fails the `↔` checker, and the reverse
@@ -755,6 +779,41 @@ theorem spliced_accepted_by_noBind : verifyNoBind hash0 upgradeStmt splicedCert 
   decide +kernel
 theorem spliced_refused : verify hash0 upgradeStmt splicedCert = false := by decide +kernel
 
+/-- A false committed inclusion, unlike the honest `upgradeStmt`. -/
+def falseUpgradeStmt : Statement := ⟨rootOf anyStar, rootOf noDoubleBraceRE, .inclusion⟩
+
+/-- The concrete token word `{{`, embedded using the deployed brace tag. -/
+def doubleBraceWord : List Value :=
+  [Dregg2.Crypto.HandlebarsGuarded.braceVal, Dregg2.Crypto.HandlebarsGuarded.braceVal]
+
+theorem doubleBrace_violates :
+    Matches doubleBraceWord anyStar ∧ ¬ Matches doubleBraceWord noDoubleBraceRE := by
+  constructor
+  · exact (correctness _ _).mp (by decide +kernel)
+  · intro h
+    exact absurd ((correctness _ _).mpr h) (by decide +kernel)
+
+/-- Both intended openings exist; an unrelated VALID certificate fools the unbound verifier
+about a FALSE inclusion, while the bound verifier rejects that same certificate. -/
+theorem falseUpgrade_separation :
+    commitRE hash0 anyStar = some falseUpgradeStmt.rootP ∧
+    commitRE hash0 noDoubleBraceRE = some falseUpgradeStmt.rootQ ∧
+    bisimCheck splicedCert.pairs splicedCert.r splicedCert.s = true ∧
+    verifyNoBind hash0 falseUpgradeStmt splicedCert = true ∧
+    verify hash0 falseUpgradeStmt splicedCert = false ∧
+    ¬ Holds falseUpgradeStmt.claim anyStar noDoubleBraceRE := by
+  refine ⟨by decide +kernel, by decide +kernel, by decide +kernel,
+    by decide +kernel, by decide +kernel, ?_⟩
+  intro h
+  exact doubleBrace_violates.2 (h doubleBraceWord doubleBrace_violates.1)
+
+/-- Counts-first benchmark, recomputed from emitted certificates by the kernel. -/
+theorem replay_counts :
+    nodbPairs.length = 11 ∧ abPairs.length = 4 ∧ assocPairs.length = 11 ∧
+    lookups nodbPairs = 22 ∧ lookups abPairs = 12 ∧ lookups assocPairs = 22 ∧
+    (encRE noDoubleBraceRE).map List.length = some 20 ∧
+    (encRE anyStar).map List.length = some 3 := by decide +kernel
+
 -- An out-of-fragment leaf has no encoding, so no root to open against.
 #guard (encRE (.sym (.digFieldEq "a" "b"))).isNone
 #guard verify hash0 upgradeStmt upgradeCert
@@ -778,7 +837,42 @@ end Reference
   decStr_enc, decNats_enc, decPred_enc, decRE_enc, encRE_injective, commitRE_some, verify_sound,
   same_or_collides, holds_intended_or_collides, Reference.upgrade_verified,
   Reference.upgrade_holds_or_collides, Reference.swapped_roots_refused, Reference.wrong_root_refused,
-  Reference.spliced_accepted_by_noBind, Reference.spliced_refused]
+  Reference.spliced_accepted_by_noBind, Reference.spliced_refused,
+  Reference.ab_dropRoot_separation, Reference.ab_dropDerivative_separation,
+  Reference.doubleBrace_violates, Reference.falseUpgrade_separation, Reference.replay_counts]
+
+/-! Exact axiom sets at the semantic and commitment boundaries and for audit witnesses. -/
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.bisimCheck_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms bisimCheck_sound
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.bisimEqCheck_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms bisimEqCheck_sound
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.verify_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms verify_sound
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.holds_intended_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms holds_intended_or_collides
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.ab_dropRoot_separation' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Reference.ab_dropRoot_separation
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.ab_dropDerivative_separation' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms Reference.ab_dropDerivative_separation
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.doubleBrace_violates' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in
+#print axioms Reference.doubleBrace_violates
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.falseUpgrade_separation' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in
+#print axioms Reference.falseUpgrade_separation
+/-- info: 'Dregg2.Crypto.Deriv.BisimCert.Reference.replay_counts' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Reference.replay_counts
 
 end BisimCert
 

@@ -37,19 +37,21 @@ read word, and no commitment under an injective scheme is opened by both. The co
 statement `∃ w, commit w = c ∧ run accepts w ∧ traceWord = w` is therefore NOT available for this
 family.
 
-## What the AIR would need (stated, not built)
+## Content binding requires a full-width route
 
-The routing chain of `DfaRoutingEmit.dfaRoutingDesc`: per row an entry hash `H(current, symbol,
-next, 0)` and a running hash `H(acc, entry)` by two chip lookups (`acc` copy-forward), seeded at a
-table PI (the 8-felt root group can serve as the seed) and pinned at a route PI. Then the bound
-statement is `DfaRoutingChainBound.dfaRouting_bound`'s shape conjoined with this file's
-`weld8_run_or_collides`. Cost: +3 columns (`entry`, `running`, `acc`) and a zero lane, +2 chip
-lookups per row, +1 PI. Not added to the served descriptor.
+The legacy descriptor audited here has no route or length public inputs. Its successor must bind
+all eight root lanes as the route seed and publish all eight final route lanes plus the length.
+A scalar entry/fold chain would reintroduce a scalar collision-security bottleneck. The approved
+shared decorator appends eight accumulator columns, eight output columns and an index; each row
+absorbs domain, index, current, symbol, next, accumulator8 and three zero pads in one arity-16
+chip lookup. This file's legacy falsifiers remain controls for that separate shape.
 
 ## NOT claimed
   * The denotation is Lanes8's DENSE model (its header): not the deployed padded-IMT root.
-  * The collision disjunct names a row heap that lives inside `opensToMerkle8`'s existential, as in
-    `weld8_forged_edge_refused`; the OR is true, not exclusive.
+  * The collision disjunct names the fixed `RowHeaps` family's heap at an actually bad edge,
+    preserving sortedness, length, public root and exact key/value opening. Accepted traces have
+    such families (`rowHeaps_nonempty`); packaging them uses choice, not an executable extractor.
+    The residual is false on the honest run even for a constant chip (`T1_no_row_collision`).
   * `hdstep : ∀ s y, d.step s y < ASTATES` (the committed automaton's targets are in range) and the
     canonicality of `pi[initial]`, `pi[final]` are hypotheses.
 
@@ -198,18 +200,48 @@ theorem weld8_run_classifies (h : Satisfied2Lanes8 S8 hash (weldDesc name) minit
   rw [List.getLast_eq_getElem hne, hhon _ hlt]
   rfl
 
-/-- ⚑ **`weld8_run_or_collides` — THE WHOLE-RUN COROLLARY.** For a public root group committing `d`,
-the public final state is the classification of the read word, or some row's heap collides with the
-committing heap at the named pair. -/
+/-- Explicit opening witnesses indexed by the actual trace row. Supplying this family fixes
+which heap the collision extractor examines; an unrelated preimage cannot substitute. -/
+structure RowHeaps (S8 : Heap8Scheme) (t : VmTrace) where
+  heap : Fin t.rows.length → Heap.FeltHeap
+  sorted : ∀ i, Heap.SortedKeys (heap i)
+  length : ∀ i, (heap i).length = 2 ^ MAP_TREE_DEPTH
+  root : ∀ i, mapRoot8 S8 MAP_TREE_DEPTH (heap i) = pubRoot t
+  opening : ∀ i, Heap.get (heap i)
+    (2 * (t.rows[i]) CURRENT + (t.rows[i]) SYMBOL) = some ((t.rows[i]) NEXT)
+
+/-- Acceptance supplies an opening family. Choice packages the existing witnesses; it does not
+claim that existential denotation implements a computational heap extractor. -/
+theorem rowHeaps_nonempty
+    (h : Satisfied2Lanes8 S8 hash (weldDesc name) minit mfin maddrs t)
+    (hcan : LaneCanonical t) : Nonempty (RowHeaps S8 t) := by
+  classical
+  have hopen := fun i : Fin t.rows.length =>
+    lanes8_row_opens_public S8 hash name minit mfin maddrs t h hcan i i.isLt
+  choose heap hs hl hr hg using hopen
+  exact ⟨⟨heap, hs, hl, hr, fun i => by simpa only [envAt_loc i.isLt] using hg i⟩⟩
+
+/-- The bad edge and collision use the SAME row's supplied heap, retaining every opening fact. -/
+def RowCollision (S8 : Heap8Scheme) (t : VmTrace) (d : TableDfa Nat Nat)
+    (openings : RowHeaps S8 t) (m : Heap.FeltHeap) : Prop :=
+  ∃ i : Fin t.rows.length,
+    (t.rows[i]) NEXT ≠ Int.ofNat (d.step ((t.rows[i]) CURRENT).toNat ((t.rows[i]) SYMBOL).toNat) ∧
+    Heap.SortedKeys (openings.heap i) ∧
+    (openings.heap i).length = 2 ^ MAP_TREE_DEPTH ∧
+    mapRoot8 S8 MAP_TREE_DEPTH (openings.heap i) = pubRoot t ∧
+    Heap.get (openings.heap i) (2 * (t.rows[i]) CURRENT + (t.rows[i]) SYMBOL)
+      = some ((t.rows[i]) NEXT) ∧
+    MapRootColl S8 MAP_TREE_DEPTH (openings.heap i) m
+
+/-- Whole-run classification or a collision on a specific bad row's explicit opening heap. -/
 theorem weld8_run_or_collides (h : Satisfied2Lanes8 S8 hash (weldDesc name) minit mfin maddrs t)
-    (hcan : LaneCanonical t) (htf : WeldRangeTablesFaithful t.tf) (hne : t.rows ≠ [])
+    (openings : RowHeaps S8 t) (htf : WeldRangeTablesFaithful t.tf) (hne : t.rows ≠ [])
     (d : TableDfa Nat Nat) (hdstep : ∀ s y, d.step s y < ASTATES)
     {m : Heap.FeltHeap} (hd : CommitsAutomaton8By S8 m (pubRoot t) d)
     (q0 : ℕ) (hq0 : q0 < 2013265921) (hpi : t.pub PI_INITIAL = Int.ofNat q0)
     (fN : ℕ) (hfN : fN < 2013265921) (hpf : t.pub PI_FINAL = Int.ofNat fN) :
     fN = classifyFrom d q0 (readWord t) ∨
-      ∃ i, i < t.rows.length ∧ ∃ mRow : Heap.FeltHeap,
-        mapRoot8 S8 MAP_TREE_DEPTH mRow = pubRoot t ∧ MapRootColl S8 MAP_TREE_DEPTH mRow m := by
+      RowCollision S8 t d openings m := by
   by_cases hhon : ∀ i (hi : i < t.rows.length), (t.rows[i]'hi) NEXT
       = Int.ofNat (d.step ((t.rows[i]'hi) CURRENT).toNat ((t.rows[i]'hi) SYMBOL).toNat)
   · exact Or.inl (weld8_run_classifies h htf hne d hdstep hhon q0 hq0 hpi fN hfN hpf)
@@ -217,24 +249,36 @@ theorem weld8_run_or_collides (h : Satisfied2Lanes8 S8 hash (weldDesc name) mini
     push Not at hhon
     obtain ⟨i, hi, hbad⟩ := hhon
     obtain ⟨hc0, hb0, hs0, hb1⟩ := row_nat h htf hi
-    obtain ⟨mRow, _, _, hroot, _, hcoll⟩ := weld8_forged_edge_refused S8 hash name minit mfin
-      maddrs t h hcan d hd i hi _ _ hb0 hb1 (by rw [envAt_loc hi]; exact hc0)
-      (by rw [envAt_loc hi]; exact hs0) (by rw [envAt_loc hi]; exact hbad)
-    exact ⟨i, hi, mRow, hroot, hcoll⟩
+    let j : Fin t.rows.length := ⟨i, hi⟩
+    refine ⟨j, hbad, openings.sorted j, openings.length j, openings.root j,
+      openings.opening j, ?_⟩
+    rcases Dregg2.Circuit.MapMerkleRoot.mapRoot8_binds_or_collides S8 MAP_TREE_DEPTH
+        (openings.length j) hd.2.1 ((openings.root j).trans hd.2.2.1.symm) with heq | hc
+    · exfalso
+      have hg := openings.opening j
+      rw [heq] at hg
+      have hkey : 2 * (t.rows[i]'hi) CURRENT + (t.rows[i]'hi) SYMBOL =
+          ((keyOf ((t.rows[i]'hi) CURRENT).toNat ((t.rows[i]'hi) SYMBOL).toNat : ℕ) : ℤ) := by
+        rw [hc0, hs0]
+        simp [keyOf]
+      change Heap.get m (2 * (t.rows[i]'hi) CURRENT + (t.rows[i]'hi) SYMBOL) =
+        some ((t.rows[i]'hi) NEXT) at hg
+      rw [hkey, hd.2.2.2 _ _ hb0 hb1] at hg
+      exact hbad (Option.some.inj hg.symm)
+    · exact hc
 
 /-- ⚑ **`weld8_run_accepts_or_collides`** — from `d.start` to `d.accepts`: an accepting public final
 state means the read word's run of the committed automaton accepts, or the named collision. -/
 theorem weld8_run_accepts_or_collides
     (h : Satisfied2Lanes8 S8 hash (weldDesc name) minit mfin maddrs t)
-    (hcan : LaneCanonical t) (htf : WeldRangeTablesFaithful t.tf) (hne : t.rows ≠ [])
+    (openings : RowHeaps S8 t) (htf : WeldRangeTablesFaithful t.tf) (hne : t.rows ≠ [])
     (d : TableDfa Nat Nat) (hdstep : ∀ s y, d.step s y < ASTATES)
     {m : Heap.FeltHeap} (hd : CommitsAutomaton8By S8 m (pubRoot t) d)
     (hst : d.start < 2013265921) (hpi : t.pub PI_INITIAL = Int.ofNat d.start)
     (fN : ℕ) (hfN : fN < 2013265921) (hpf : t.pub PI_FINAL = Int.ofNat fN) (hacc : d.accepts fN) :
     d.accepts (Dregg2.Crypto.DfaAcceptanceAir.classify d (readWord t)) ∨
-      ∃ i, i < t.rows.length ∧ ∃ mRow : Heap.FeltHeap,
-        mapRoot8 S8 MAP_TREE_DEPTH mRow = pubRoot t ∧ MapRootColl S8 MAP_TREE_DEPTH mRow m := by
-  rcases weld8_run_or_collides h hcan htf hne d hdstep hd d.start hst hpi fN hfN hpf with he | hc
+      RowCollision S8 t d openings m := by
+  rcases weld8_run_or_collides h openings htf hne d hdstep hd d.start hst hpi fN hfN hpf with he | hc
   · left
     show d.accepts (classifyFrom d d.start (readWord t))
     rw [← he]; exact hacc
@@ -286,6 +330,20 @@ theorem T2_honest : ∀ i (hi : i < T2.rows.length), (T2.rows[i]'hi) NEXT
 theorem T_tf (w : List ℕ) : WeldRangeTablesFaithful (weldWit8 zeroD zeroDigest8 0 w).tf :=
   attTf8_faithful _
 
+/-- The explicit opening-family hypothesis is inhabited by the same accepted witness. -/
+theorem T1_openings_nonempty (hash : List ℤ → ℤ) (name : String) :
+    Nonempty (RowHeaps constChip T1) :=
+  rowHeaps_nonempty (T1_satisfies hash name)
+    (weldWit8_laneCanonical zeroD zeroDigest8
+      (fun _ => ⟨(by decide : (0 : ℤ) ≤ 0), (by decide : (0 : ℤ) < 2013265921)⟩) 0 [0, 1])
+
+/-- The residual is false on the honest run even under a constant (maximally colliding) chip.
+An unrelated heap collision therefore cannot satisfy it. No collision-resistance premise occurs. -/
+theorem T1_no_row_collision (openings : RowHeaps constChip T1) (m : Heap.FeltHeap) :
+    ¬ RowCollision constChip T1 zeroD openings m := by
+  rintro ⟨i, hbad, _⟩
+  exact hbad (T1_honest i i.isLt)
+
 /-- ⚑ Both runs MEET the whole-run classification (the chaining corollary fires). -/
 theorem both_classify (hash : List ℤ → ℤ) (name : String) :
     (0 : ℕ) = classifyFrom zeroD 0 (readWord T1) ∧ (0 : ℕ) = classifyFrom zeroD 0 (readWord T2) :=
@@ -296,11 +354,10 @@ theorem both_classify (hash : List ℤ → ℤ) (name : String) :
 
 /-- The whole-run corollary's hypotheses are jointly inhabited on `T1` (the public root group
 commits `zeroD` at the toy chip), and its conclusion holds. -/
-theorem T1_run_or_collides (hash : List ℤ → ℤ) (name : String) :
+theorem T1_run_or_collides (hash : List ℤ → ℤ) (name : String)
+    (openings : RowHeaps constChip T1) :
     (0 : ℕ) = classifyFrom zeroD 0 (readWord T1) ∨
-      ∃ i, i < T1.rows.length ∧ ∃ mRow : Heap.FeltHeap,
-        mapRoot8 constChip MAP_TREE_DEPTH mRow = pubRoot T1 ∧
-          MapRootColl constChip MAP_TREE_DEPTH mRow (autoHeapW zeroD) := by
+      RowCollision constChip T1 zeroD openings (autoHeapW zeroD) := by
   have hpub : pubRoot T1 = zeroDigest8 := by
     funext l
     show weldPub 0 (classifyFrom zeroD 0 [0, 1]) zeroDigest8 (PI_W8ROOT l) = zeroDigest8 l
@@ -309,9 +366,7 @@ theorem T1_run_or_collides (hash : List ℤ → ℤ) (name : String) :
     rw [hpub, ← autoRoot8_constChip zeroD]
     exact autoRoot8_commits constChip zeroD
   exact weld8_run_or_collides (T1_satisfies hash name)
-    (weldWit8_laneCanonical zeroD zeroDigest8
-      (fun _ => ⟨(by decide : (0 : ℤ) ≤ 0), (by decide : (0 : ℤ) < 2013265921)⟩) 0 [0, 1])
-    (T_tf _) (by simp [T1, weldWit8, rowsW]) zeroD zeroD_step hd 0 (by decide) rfl 0 (by decide) rfl
+    openings (T_tf _) (by simp [T1, weldWit8, rowsW]) zeroD zeroD_step hd 0 (by decide) rfl 0 (by decide) rfl
 
 /-! ## §3 — The falsifier: one public statement, two words. -/
 
@@ -342,9 +397,21 @@ theorem bound_shape_fails (hash : List ℤ → ℤ) (name : String) {D : Type}
 
 /-! ## §4 — axiom tripwires. -/
 
-#assert_all_clean [row_nat, weld8_run_classifies, weld8_run_or_collides,
+/-- info: 'Dregg2.Circuit.Emit.AttestedAutomatonBound.weld8_run_or_collides' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in
+#print axioms weld8_run_or_collides
+
+/-- info: 'Dregg2.Circuit.Emit.AttestedAutomatonBound.T1_no_row_collision' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in
+#print axioms T1_no_row_collision
+
+#assert_all_clean [rowHeaps_nonempty, row_nat, weld8_run_classifies, weld8_run_or_collides,
   weld8_run_accepts_or_collides, zeroD_step, T_satisfies, T1_satisfies, T2_satisfies, T1_word,
-  T2_word, pubs_equal, T1_honest, T2_honest, T_tf, both_classify, T1_run_or_collides, word_not_public,
+  T2_word, pubs_equal, T1_honest, T2_honest, T1_openings_nonempty, T1_no_row_collision, T_tf, both_classify, T1_run_or_collides, word_not_public,
   bound_shape_fails]
 
 end Dregg2.Circuit.Emit.AttestedAutomatonBound

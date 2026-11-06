@@ -157,7 +157,7 @@ in its parent directory). Read its results; do not start another build there. Th
 integration clone is `/home/build/astra-integration`. Keep at least 40 GiB beyond summed
 process RSS, accounting for the unused memory allowance of already running capped jobs before
 starting another. The gate is `metatheory/scripts/automata-check.sh`; this document is
-`docs/automata/BUILD.md` (there is no `metatheory/BUILD.md`).
+`docs/automata/BUILD.md` (the build guide lives under the automata documentation).
 
 `scripts/emit_descriptors.py` has no acknowledgement step (SUBSTRATE-DECISION §9 row 4, as amended
 by codex round 3). It refuses (exit 3) when any file in the emitters' transitive Lean closure or
