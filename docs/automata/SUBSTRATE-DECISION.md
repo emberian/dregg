@@ -268,4 +268,21 @@ is still inert). Controls: a deleted leg's failure fixture must be REJECTED by t
 Who executes: lane C2, one commit per row with the fixture-against-survivor control recorded; the
 emitter-set derivation (row 6) must reconcile declared outputs against served consumers and disk
 in both directions and fail closed; the pin-literal removal (row 8) is a flag day on the Mina
-modules and is proposed, not done, here.
+modules and is proposed, not done, here. **Status (C2, 2026-11-06):** row 4 **done** `3efb24697`
+(+ `d2fc7e76d`, remedy text): ack, `ALLOW_DIRTY`, `--strict`, `--stamp-existing` deleted; the emit
+refuses an uncommitted closure (transitive Lean imports + lake config, no override) and, with
+`--rev`, a checkout that is not that commit; the stamp is written automatically; verify refuses a
+non-`emit` stamp; `--verify-by-name-routing` runs in pre-commit. Fixtures F1-F4 rejected by
+survivors, F5 (`--strict` tree hash) by none, as the verdict intends. The worktree form was replaced
+by "a clean clone with its own `.lake`" (`BUILD.md` "Emit and stamp (C2)"); the re-stamp of
+`PROVENANCE.json` from hbox is **pending** (hbox disk). Row 5 **done** `e619ca6f6`: the regen-row
+writer is gone, the log is frozen with a note, ledger and script kept (the script is red for epoch
+27, `89238335a`, and its self-test injection is stale; both pre-existing, not touched). Row 7
+**done** `a0337134b`: the 22 tests were already single-copy (`472090975`, `067f63780`); the script
+is kept with its test leg (dropping it would lose detection) and now scans tracked Rust only, which
+unmasked one real drifted production literal (`dregg-effectvm-transfer-v1` in
+`circuit/src/lean_descriptor_air.rs`). Row 2 (FP) **kept, not deleted**: no `*_FP` feeds the
+recursive VK hash (`air_descriptor::fingerprint` is computed at use) or by-name dispatch;
+`WIDE_REGISTRY_STAGED_FP` + `UMEM_WELD_TABLE_FP` are a WIRE pin (`dregg_epoch` handshake
+`registry_fp`) and stay regardless; the rest are tamper tripwires whose deletion waits on an
+artifact-triggered re-derive (one artifact from warm oleans: 7.0 s [MEASURED]).
