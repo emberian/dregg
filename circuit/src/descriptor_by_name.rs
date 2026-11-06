@@ -67,10 +67,8 @@ static GOLDEN_CACHE: LazyLock<HashMap<&'static str, EffectVmDescriptor2>> = Lazy
         .collect()
 });
 
-/// Singleton caches for the two BUILT (not parsed) descriptors — each is a parameterless, immutable
-/// construction, so we build once and clone on dispatch. Note-spend is the single most expensive
-/// entry (~56 µs to lower the deployed DSL circuit); delegate is cheaper but likewise wasteful to
-/// rebuild per verify.
+/// Parse the immutable Lean-emitted note-spend and delegate artifacts once, then clone on dispatch.
+/// These helpers no longer lower constraints from the Rust DSL.
 static NOTE_SPEND_CACHE: LazyLock<Option<EffectVmDescriptor2>> =
     LazyLock::new(|| note_spend_leaf_descriptor().ok());
 static DELEGATE_CACHE: LazyLock<EffectVmDescriptor2> = LazyLock::new(delegate_binding_descriptor);
@@ -968,13 +966,12 @@ pub fn descriptor_by_name(name: &str) -> Option<EffectVmDescriptor2> {
             .ok()
             .map(blinded_membership_descriptor_of_depth_4ary);
     }
-    // The IR-v2 delegation scope-binding descriptor (built once, then cloned — it is a singleton).
+    // The Lean-emitted delegation scope-binding descriptor (parsed once, then cloned).
     if name == DELEGATE_V2_NAME {
         return Some(DELEGATE_CACHE.clone());
     }
-    // The note-spend recursion-leaf descriptor (built by lowering the deployed DSL note-spending
-    // circuit — the most expensive build, ~56 µs; memoized as a singleton, cloned on dispatch).
-    // Fail-closed on a lowering refusal (absent from the cache → `None`).
+    // The fixed Lean-emitted note-spend recursion-leaf descriptor, parsed once and cloned.
+    // Fail-closed on a parse/validation refusal (absent from the cache → `None`).
     if name == NOTE_SPEND_LEAF_NAME {
         return NOTE_SPEND_CACHE.clone();
     }

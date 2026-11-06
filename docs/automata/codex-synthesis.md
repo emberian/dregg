@@ -120,3 +120,25 @@ Output: `scratchpad/codex/round4.out` (17 KB). Codex did not run Lean. Routed th
 Codex would refuse to merge: the model-level chain record theorem (1), the weld's whole-run collision
 export (2), the content-bound certification claims without 3-5, the demo wording (6, 10-13) and the
 reused-ID falsifier (7). All are open repairs, assigned; none of the landed cores is retracted.
+
+
+### Round 4 repair status — Codex deputy, 2026-11-06
+
+[READ, MEASURED] The table above records the audit at its original revision. Its final
+"all are open" sentence is historical. Initiative **#1** now has these source landings:
+
+| Findings | Landed evidence | Remaining boundary |
+|---|---|---|
+| 1, 3, 5 | `f476bd3e0`: statement-specific symbol injectivity, deterministic chain collision extraction, actual `BoundAccepts` and same-trace weak/strong separation | Ideal injective-hash lemmas remain explicitly ideal; operational reductions name collisions. |
+| 2 | `fbfe63c51`: collision at the indexed bad row, with that row heap's sortedness, size, root and opening retained | A deployed efficient extractor remains a separate bridge; an unrelated colliding heap no longer discharges the result. |
+| 4 | `bf583f317`: six Dyck field pins, deterministic record construction and padding, jointly inhabited full witness, named collision and actual record verifier | Canonicality, finite-field/no-wrap and chip premises remain stated. |
+| 6, 12, 13 | Governance signed-tuple checks in `4afe19bef`; final certified absence rerun prepared against the 129-state table | Final absence source/publication and native proof gate are tracked in the deputy report. A demo signature does not attest binary execution or provenance. |
+| 7–9, 16 | `fbfe63c51`: isolated LRAT freshness and hint checks; bisimulation root/closure comparators and a committed false inclusion with concrete counterword | Comparator semantics remain documented; no claim that every weak checker is an acceptance superset. |
+| 8, 17 | `9773903d3`: `CertificateStatementAudit`, `EmitterStatementAudit`, executable `DfaBoundReference`, four-module statement gate | Source identities and pinned axioms detect drift; independent statement review is still required. |
+| 10, 11, 15 | Governance README names canonical encoding, request-vs-success, lexical paths, event identity and dense safe-variable hypotheses | No byte-codec injectivity theorem or authenticated executor extraction is inferred from example checks. |
+
+[MEASURED] The standing source gate now checks 26 scoped reviews, 180 exact axiom pins and
+228 source identities. Actual served route additions in `bf583f317` bind ordered records for
+both table routing and the attested weld; the old descriptors remain explicitly unbound to
+record order. Native integration and fresh emitter provenance are independent gates, recorded
+with their actual verdicts in `DEPUTY-REPORT-2026-11-06.md`.

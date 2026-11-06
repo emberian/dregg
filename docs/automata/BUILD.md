@@ -152,11 +152,13 @@ About 9 GB in all: 7.5 GB of packages, 0.3 GB of Dregg2 build output, 0.9 GB of 
 
 **Current host and ownership (2026-11-06, Codex deputy).** New builds run on bb2 in the
 builder's own clone, under `swarm-build`; `/tank` on hbox receives no new data. The predecessor's
-`/home/build/automata/bs` is occupied by the detached stamp chain (`chain.pid` and `chain.log`
+`/home/build/automata/bs` completed its stamp chain (`chain.pid` and `chain.log`
 in its parent directory). Read its results; do not start another build there. The successor's
 integration clone is `/home/build/astra-integration`. Keep at least 40 GiB beyond summed
-process RSS, accounting for the unused memory allowance of already running capped jobs before
-starting another. The gate is `metatheory/scripts/automata-check.sh`; this document is
+process RSS plus the proposed job's cap. Long-lived idle controller scopes currently declare
+more caps than the box has memory; the task's current scheduling rule uses actual summed RSS
+and the 100-GiB aggregate slice. Our integration jobs also stop only their PID-file-owned group
+if global RSS exceeds 82 GiB twice. Launching at 50 GiB leaves room for foreign load spikes. The gate is `metatheory/scripts/automata-check.sh`; this document is
 `docs/automata/BUILD.md` (the build guide lives under the automata documentation).
 
 `scripts/emit_descriptors.py` has no acknowledgement step (SUBSTRATE-DECISION §9 row 4, as amended
@@ -229,18 +231,25 @@ and committed-source refusal are unchanged. Ten scratch-only tests in
 `scripts/test-emit-routing-phases.py` include the same unstamped artifact passing static routing
 and failing provenance, plus changed bytes, dirty-source/non-emit stamps, ghosts and imports.
 
-### bb2 peaks and parsimony (2026-11-06, provisional chain observations)
+### bb2 peaks and parsimony (2026-11-06, completed predecessor chain)
 
 | module | chain sample KiB | chain wall seconds | exit | attribution |
 |---|---:|---:|---:|---|
 | MinaBodyPreimageBitsAir | 25,952,960 | 448 | 0 | largest Lean process on whole box |
 | MinaWrapCommitStages | 17,278,016 | 342 | 0 | largest Lean process on whole box |
 
-The predecessor chain at source `609ae705400dd4636a39d5a5acac9138a6e192f8` continues; these
-are completed module observations, **not its final verdict**. Its sampler is not cgroup-specific,
-so these cannot establish isolated module peaks. The rescue lane's directly attributed figures
-are in `metatheory/docs/MINA-PICKLES-RESCUE.md`: body preimage fell from 25.9 GB / 6:16 to
-5.6 GB / 0:50 with unchanged statements, axioms and emitted bytes.
+The predecessor chain at source `609ae705400dd4636a39d5a5acac9138a6e192f8` completed
+at 20:36:15 UTC, emit exit 0: 247 descriptor files were byte-identical, one missing stamp row
+was repaired, and only PROVENANCE changed. The table is its complete over-12-GiB list. Its
+sampler is not cgroup-specific, so these cannot establish isolated module peaks. This stamp
+is not evidence for newer source.
+
+The rescue lane's directly attributed figures are in `metatheory/docs/MINA-PICKLES-RESCUE.md`:
+body preimage fell from 25.9 GB / 6:16 to 5.6 GB / 0:50 (`7c90a9b60`), and wrap stages
+from 15.7 GB / 5:22 to 9.4 GB / 1:53 (`e4919780a`), with unchanged statements, axioms
+and emitted bytes. The later opening-gate and scheduled-curve repairs (`5b89f003b`,
+`f6c2e607e`) report 7.9 GB and 6.6 GB respectively; no definition changed. The successor
+emission must include these committed sources.
 
 [INFERRED from those measurements] The expensive part is elaborator evaluation of large closed
 objects and repeated scalar multiplication, not descriptor size. Structural proofs replace

@@ -1,6 +1,6 @@
 # Initiative 1 — parser/language excellence
 
-Codex gpt-6-astra deputy, 2026-11-06. **In progress; integration checkpoint at 20:18 UTC.**
+Codex gpt-6-astra deputy, 2026-11-06. **In progress; integration checkpoint at 21:30 UTC.**
 The register is `/Users/ember/dev/whatember/INITIATIVES.md`; its row at takeover is:
 
 | # | Initiative | Owner lane | Repo | Rung | Bar | Next gate | Last report |
@@ -206,3 +206,58 @@ zero-argument Rust lowerers despite the original census calling them parameteriz
 Lean emitter and refinement already exist, including a stronger descriptor that closes six
 last-row freedoms. The lane is connecting those existing proofs and bytes to both consumers.
 The deeper path-shape premise remains explicit until actually enforced.
+
+
+## Integration checkpoint, 21:30 UTC
+
+Register row remains **#1** above. Source batch `9773903d3` is now on public main. It adds
+certified union, checked reachable-state trimming, exact factor successor optimization,
+the executable bound-DFA reference instance, 26 scoped statement reviews / 180 exact pins /
+228 source identities, and the shared fixed note-spend artifact. The latter removes two
+more Rust lowerers (ten production constructors removed in this cycle), retains all actual
+path/canonicality/chip premises, and has a jointly inhabited member theorem plus same-trace
+old-accept/new-refuse separation. The umbrella imports the new modules.
+
+[MEASURED] Native absence compilation now completes in 28.858509 s with 129 states and
+33,024 transitions; all 12 controls pass. Product size 638 trims to 49 reachable states,
+then 48 whole-word states; checked factor construction produces the final 129-state table.
+The new table was replayed over all 100,000 public corpus documents: 1,770,996,081 bytes,
+Lean and Rust count 0, all three controls pass. A new tuple is signed with the unchanged demo
+key. The demo source/artifacts are coherent but await their named landing and native proof
+verification; no final route-bound proof timing is claimed yet.
+
+The served Rust harness reached production-library compilation but first missed a harness-only
+`postcard` dependency. That setup was repaired and the workspace nightly pinned; its next
+run was stopped by our own resource monitor at two global-RSS samples above 84 GiB, before
+any tests ran. These are setup/resource outcomes, not a proof-test green. The next build uses
+a 50-GiB launch threshold, one compiler and 4-GiB cap. The actual full-crate command remains
+required, because the stranger's default replay invokes it; a standalone harness cannot replace
+that bootstrap check. Whole-tree Lean and current-source provenance are pending.
+
+[READ] The iteration-speed note has now arrived at
+`/Users/ember/dev/redregg/landscape/ITERATION-SPEED-2026-11-06.md`. Its cold breadstuffs build
+was deliberately stopped after 2,115 modules; borrowed artifacts are cache, not a complete green.
+Its snapshots carry `.c` as well as oleans/IR, and it reports keyed read-only package tooling
+and `make check-fast` / `check-full`. The two-minute bar is not yet measured here.
+`LEAN_NUM_THREADS` alone does not cap Lake's concurrent module processes; our full-tree job
+needs admission control. Use `/usr/bin/flock`: the bb2 PATH version is an unrelated shim.
+
+The Mina lane additionally landed `e601f3b13`, taking wrap stages to the import floor with
+compiled block-data facts. This changes the evidence class of those facts; do not repeat the
+earlier rescue's unchanged-axiom claim for this newer step. The final emitter run must include
+the latest committed Mina source and state its actual source revision.
+
+C9 remains open beyond these static leaves. `AIR-REMAINING-DEBT.md` separates interpreters,
+test scaffolds, live generators and composition transformations. Two further grounded cuts
+are underway: UMem cohort staging can carry domains directly instead of constructing a discarded
+descriptor; the binary membership block is depth-uniform and can be generated with a real
+actual-height SAT-to-path theorem. Its depth label currently does not enforce proof height,
+and the existing 4-ary functional theorem cannot serve as that bridge. The direct-logic,
+custom-leaf, zkOracle and live composition compiler obligations remain explicit work, with no
+private information or permission needed from Ember.
+
+The synthetic governance source is public in microsites `3702f886`; a later public-main
+commit contains it. GitHub Pages build succeeded, but deployment remains queued. Neither
+page is reported live until its actual HTTP content is checked. No old local microsite history
+was pushed. Another initiative's session-derived Tree demo is outside this deputy's publication
+scope; this initiative's demos and new fixtures use synthetic or independently public data.
