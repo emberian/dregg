@@ -10,10 +10,12 @@
     persist : dregg-chokepoint-persist-pd. SOLE holder of durable_log. leaf_buf R. Higher
               priority than commit, as a PPC callee must be.
 
-  The capability statement this file is meant to satisfy (Lean:
-  degg-research/experiments/chokepoint-step/SystemCaps.lean): the only PD that maps the NIC
-  region or receives its IRQ is the PD running the step, and the only PD that maps the log
-  is persist, which the step reaches only by a synchronous PPC.
+  The capability statement, proved over the Microkit tool's CapDL output for this file
+  (degg-research/experiments/chokepoint-step/capdl/ChokepointCapTheorems.lean, chokepoint_caps):
+  only commit maps the NIC window or can invoke IRQ 79's handler; only persist maps the log;
+  only the two of them hold persist's endpoint. Finding (persist_can_wait_on_nic_irq): Microkit
+  2.2.0 gives persist a Read-right cap on commit's notification, the object IRQ 79 signals, so
+  persist can consume the NIC's interrupts (not touch the NIC).
 -->
 <system>
     <memory_region name="nic_mmio"    size="0x1000"  phys_addr="0xa003000" />
