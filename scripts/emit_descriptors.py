@@ -120,7 +120,6 @@ COVERAGE_EXEMPT = frozenset({
     "dregg-cert-qp-portfolio6-s3-ir2.json",
     "regen-cert-qp.sh",
 })
-AUDIT_LOG_REL = Path("docs") / "VK-REGEN-LOG.md"   # git-tracked append-only regen log
 EXIT_REFUSED = 3
 
 # The Rust sources that carry `include_str!(...descriptors/<file>)` + a matching
@@ -922,63 +921,11 @@ def provenance_stamp_gap(written: dict[str, str]) -> list[str]:
     return findings
 
 
-def current_schema_epoch() -> str:
-    """`CANONICAL_STATE_SCHEMA_EPOCH` as the audit row's machine-readable trailer.
-
-    ⚑ THIS SCRIPT IS NOT THE GATE, and must never become it. The epoch is a Rust constant ANY
-    COMMIT CAN BUMP while only this function appends to the log, so a check placed here is blind
-    to exactly the case that motivated it (`6441705e8` bumped 20 → 21 and ran no emit). The gate
-    is `scripts/check-schema-epoch-log.py` + `dregg_persist::schema_epoch_log_row`, both keyed on
-    the CONSTANT. All this does is stop an emit row from being the malformed one that trips them.
-    """
-    src = ROOT / "persist" / "src" / "lib.rs"
-    hits = re.findall(r"^\s*pub const CANONICAL_STATE_SCHEMA_EPOCH: u64 = (\d+);",
-                      src.read_text(errors="replace"), re.M) if src.exists() else []
-    if len(hits) != 1:
-        sys.exit(
-            f"emit_descriptors: persist/src/lib.rs carries {len(hits)} definitions of "
-            f"CANONICAL_STATE_SCHEMA_EPOCH; the audit row's `epoch:` trailer has no single value "
-            f"to record. Refusing to append a row this repo's own gate cannot parse."
-        )
-    return f"epoch:{hits[0]}"
-
-
-def append_audit(mode: str, auth: dict, changed: list[str]) -> None:
-    """The AUDIT TRAIL: one git-tracked row per applied regen/stamp."""
-    log = ROOT / AUDIT_LOG_REL
-    if not log.exists():
-        log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(
-            "# VK-REGEN LOG — append-only audit trail of descriptor regen events\n"
-            "\n"
-            "Every authorized descriptor install / provenance stamp appends one row\n"
-            "(written by `scripts/emit_descriptors.py`; see docs/VK-REGEN-CONTROLS.md).\n"
-            "Rows are never edited or removed; git history is the tamper-evidence.\n"
-            "\n"
-            "## SCHEMA EPOCH LEDGER\n"
-            "\n"
-            "| epoch | set by | when (UTC) | what it re-genesised |\n"
-            "|---|---|---|---|\n"
-            "\n"
-            "## EVENT ROWS\n"
-            "\n"
-            "| when (UTC) | operator | mode | HEAD:metatheory/Dregg2 | repo HEAD | source dirty "
-            "| changed | epoch |\n"
-            "|---|---|---|---|---|---|---|---|\n"
-        )
-    when = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    operator = f"{getpass.getuser()}@{socket.gethostname()}"
-    shown = ", ".join(changed[:6]) + (f", … +{len(changed) - 6}" if len(changed) > 6 else "")
-    # A BARE `|` inside a cell is not a column — it silently ends one. Four rows written before
-    # 2026-08-01 carried unescaped pipes out of code spans (`d8 || iroot`, `lo | mid1<<8`) and
-    # had therefore never rendered as table rows at all, in any reader.
-    shown = shown.replace("|", r"\|")
-    with log.open("a") as fh:
-        fh.write(
-            f"| {when} | {operator} | {mode} | {auth['tree']} | {auth['head']} "
-            f"| {'YES' if auth['dirty'] else 'no'} | {shown or '(stamp only)'} "
-            f"| {current_schema_epoch()} |\n"
-        )
+# The `docs/VK-REGEN-LOG.md` row writer (`append_audit`, `current_schema_epoch`) was deleted
+# 2026-11-06 (SUBSTRATE-DECISION §9 row 5 as amended by codex round 3): the regen record is
+# `git log -- circuit/descriptors` plus the automatic PROVENANCE stamp. The log file and its
+# SCHEMA EPOCH LEDGER stay; their gates are `scripts/check-schema-epoch-log.py` and
+# `dregg_persist::schema_epoch_log_row`, keyed on the constant, never on this script.
 
 
 @contextlib.contextmanager
@@ -3126,7 +3073,7 @@ def install_and_stamp(written: dict[str, str]) -> None:
     # descriptor already carrying exactly the Lean bytes but with no row in PROVENANCE.json is
     # invisible to every term of it. Ask the stamp directly.
     stamp_gap = provenance_stamp_gap(written)
-    # `reasons` is what the operator is shown and what the audit row records — the byte change-set
+    # `reasons` is what the operator is shown — the byte change-set
     # AND the stamp's shortfall, so a stamp-only regen is never logged as "(stamp only)" with no
     # statement of what it was short of.
     reasons = changed + [f"{PROVENANCE_FILE}: {g}" for g in stamp_gap]
@@ -3175,7 +3122,6 @@ def install_and_stamp(written: dict[str, str]) -> None:
         for p in RUST_FP_FILES if p.exists()
     }
     write_provenance(build_provenance("emit", auth, desc_hashes, fp_hashes))
-    append_audit("emit", auth, reasons)
     if not changed:
         # The bytes were already the Lean emission — this run WITNESSED that (it re-derived every
         # descriptor and found no difference) and is recording it. `mode` stays "emit", which is the
@@ -3184,14 +3130,14 @@ def install_and_stamp(written: dict[str, str]) -> None:
             f"emit_descriptors: STAMP-ONLY REGEN — all {len(written)} descriptor files were already "
             f"byte-identical to the Lean emission, but {PROVENANCE_FILE} did not attest "
             f"{len(stamp_gap)} of them; re-stamped from the emitted bytes (mode=emit, tree "
-            f"{auth['tree'][:12]}…); audit row appended to {AUDIT_LOG_REL}."
+            f"{auth['tree'][:12]}…)."
         )
         return
     print(
         f"emit_descriptors: AUTHORIZED REGEN — installed {len(changed_desc)} changed "
         f"descriptor files + {len(fp_changes)} FP-bearing Rust files "
         f"(of {len(written)} emitted / {n_fp} FP constants); provenance stamped "
-        f"(tree {auth['tree'][:12]}…); audit row appended to {AUDIT_LOG_REL}."
+        f"(tree {auth['tree'][:12]}…)."
     )
 
 

@@ -4,6 +4,8 @@ Every authorized descriptor install / provenance stamp appends one row
 (written by `scripts/emit_descriptors.py`; see docs/VK-REGEN-CONTROLS.md).
 Rows are never edited or removed; git history is the tamper-evidence.
 
+**Regen event rows ended 2026-11-06.** `scripts/emit_descriptors.py` no longer appends here; descriptor provenance is the automatic stamp `circuit/descriptors/PROVENANCE.json` plus `git log -- circuit/descriptors` (SUBSTRATE-DECISION §9 row 5). The SCHEMA EPOCH LEDGER and the `epoch` column below are still live and still gated.
+
 ## The `epoch` column and the ledger — and why the emit script cannot be the gate
 
 `PersistentStore::CANONICAL_STATE_SCHEMA_EPOCH` (`persist/src/lib.rs`) is a **Rust constant that
