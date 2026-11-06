@@ -6,9 +6,11 @@
   ed31510b3, 'a := 64), exported mechanically into `PanSem/` by DreggNet's
   p3-bridge exporter and re-checked there (constructors, every exported HOL
   defining equation re-proved in Lean, vectors computed in both kernels). The
-  statements below mention only the export's `evaluate`, its state, and the
-  syntactic embedding `liftProg` of the orb compiler's output into panLang.
-  Sem.lean appears only inside proofs.
+  serve rungs below mention only the export's `evaluate`, its state, `lower`, and
+  the syntactic embedding `liftProg` of the orb compiler's output into panLang.
+  The translator rung (`RefinesPan`) runs the export too, but its postcondition
+  is phrased through Sem.lean's state view (`ofPan`, `SR`), because the DSL's
+  stage denotations are functions on that state type.
 
   How the proofs go. Every rung was first proved about Sem.lean's `PancakeSem`
   (ProofProducing, ServeExportServes, unchanged). `PanSemAgree.evaluate_agree`
