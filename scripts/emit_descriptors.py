@@ -1433,8 +1433,11 @@ def verify_by_name_routing() -> list[str]:
             findings.append(
                 f"UNSTAMPED: circuit/descriptors/by-name/{n} is routed and checked in "
                 f"({source}) but has no PROVENANCE.json `by_name_sha256` row — it landed "
-                f"without re-stamping. Fix at the SOURCE (the emit/stamp ceremony, see "
-                f"docs/VK-REGEN-CONTROLS.md); do NOT hand-add rows."
+                f"without the automatic stamp. Remedy: the stamp lands from a clean clone at a "
+                f"committed revision (the canonical host is hbox), by the command in "
+                f"docs/automata/BUILD.md, section \"Emit and stamp (C2)\": "
+                f"`scripts/emit_descriptors.py --rev <sha>`, then commit PROVENANCE.json by "
+                f"name. Do NOT hand-add rows; a stamp not produced by the emit attests nothing."
             )
 
     print(

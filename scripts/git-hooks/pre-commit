@@ -271,6 +271,8 @@ if git diff --cached --name-only --diff-filter=ACMRD -- 'metatheory/EmitByName.l
      'circuit/descriptors/by-name/' | grep -q .; then
   python3 "$repo_root/scripts/emit_descriptors.py" --verify-by-name-routing || {
     echo "pre-commit: by-name routing round trip FAILED (see above); commit refused." >&2
+    echo "  An UNSTAMPED finding is fixed by the automatic stamp, which lands from a clean clone" >&2
+    echo "  on hbox: docs/automata/BUILD.md, section \"Emit and stamp (C2)\". Never hand-add rows." >&2
     exit 1
   }
 fi
