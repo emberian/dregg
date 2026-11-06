@@ -77,14 +77,19 @@ cost about 2 GB above the floor; splitting them per term would bring the module 
 |---|---|---|
 | `7c90a9b60` | `MinaBodyPreimageBitsAir` | identical |
 | `e4919780a` | `MinaWrapCommitStages` | identical (six descriptors) |
+| `5b89f003b` | `MinaWrapOpeningGate` (14.6 GiB → 7.9 GB) | no definition changed |
+| `f6c2e607e` | `PastaCurveScheduled` (11.9 GiB → 6.6 GB) | no definition changed |
 
-## Claimed next (same method: repair, then one single-module check)
+## The later two (one check after the fix; "before" is the iteration lane's cold profile)
 
-- `MinaWrapOpeningGate` (iteration lane profile: 14.6 GiB). Same shape: `opening_relation_holds`
-  runs 34 RCB ladders, and nine tamper theorems each re-run a variant of the same residual.
-- `PastaCurveScheduled` (11.9 GiB). Not a scalar-multiplication module: the cost is the
-  `mainRailOk`/`pinsTied`/`constraint_count` decides over the 1,864-leg scheduled AIR, the same
-  shape as `MinaBodyPreimageBitsAir` before its fix.
+- `MinaWrapOpeningGate`: `opening_relation_holds` (34 RCB ladders) and nine tamper theorems that
+  each re-run a variant of the residual, all by `decide`. Every `decide` is now `decide +kernel`.
+  7.9 GB, 3:27 on a loaded bb2.
+- `PastaCurveScheduled`: not scalar multiplication. One theorem, `scheduled_columns_fit`, decided
+  a column bound over all 1,864 legs in one declaration (3.8 GB before it, 11.6 GB after it).
+  `decide +kernel` alone and `Elab.async false` left it at 11.7 GB. Splitting it into one kernel
+  check per leg family and eleven three-op slices of the schedule brought the module to 6.6 GB. The
+  statement of `scheduled_columns_fit` is unchanged.
 
 ## Decisions only ember can make
 
