@@ -1,0 +1,11 @@
+# A spend budget over the derived facts: the sum of argument 1 of `spend` is at most 100.
+rule spend(1, 40).
+rule spend(2, 35).
+rule spend(3, 20).
+budget daily: sum(spend.1) <= 100;
+budget nospam: count(spam) <= 0;
+rule spam(X) :- spend(X, 1000).
+policy money {
+  require budget daily;
+  require budget nospam;
+}

@@ -1,0 +1,7 @@
+# Absence receipt: no API key and no template delimiter anywhere in the body.
+pattern apikey = "sk-" \w{20,32};
+pattern delim = "{{";
+policy clean {
+  forbid pattern apikey in body;
+  forbid pattern delim in body;
+}

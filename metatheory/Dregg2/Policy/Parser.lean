@@ -66,7 +66,8 @@ def startsUnary : Tok → Bool
 def atomExpected : List String :=
   ["a string literal", "a character class", "`\\d`", "`\\w`", "`\\s`", "`.`", "`(`", "`~`"]
 
-/-- Postfix operators after an atom: `*`, `+`, `?`, `{m,n}`. Structural on the tokens. -/
+/-- Postfix operators after an atom: `*`, `+`, `?`, `{m,n}`, and `{m}` (= `{m,m}`, printed as
+`{m, m}`). Structural on the tokens. -/
 def postfixLoop (acc : Re) : List PTok → Except ParseError (Re × List PTok)
   | [] => .ok (acc, [])
   | t :: ts =>
@@ -93,7 +94,8 @@ def postfixLoop (acc : Re) : List PTok → Except ParseError (Re × List PTok)
                   | [] => .error (errAt [] ["`}`"])
                 | _ => .error (errAt (c :: ts3) ["a natural number"])
               | [] => .error (errAt [] ["a natural number"])
-            else .error (errAt (b :: ts2) ["`,`"])
+            else if b.tok = .punct .rbrace then postfixLoop (.rep acc m m) ts2
+            else .error (errAt (b :: ts2) ["`,`", "`}`"])
           | [] => .error (errAt [] ["`,`"])
         | _ => .error (errAt (a :: ts1) ["a natural number"])
       | [] => .error (errAt [] ["a natural number"])

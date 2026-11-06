@@ -672,3 +672,14 @@ root = "DatalogCheck"
 [[lean_exe]]
 name = "dfa-run"
 root = "DfaRun"
+
+# policyc — the policy language's compiler, extracted from Lean (lane B, 2026-11-06):
+# `check` / `fmt` / `compile --pattern NAME [--absence]` / `rules`. The parser is the one
+# `Dregg2.Policy.Theorems.parse_print_roundtrip` is about; `compile` emits the byte table that
+# `Dregg2.Policy.Compile.compiled_decides` proves decides the pattern. NOT a default target.
+#
+#     lake build policyc
+#     ./.lake/build/bin/policyc compile Dregg2/Policy/examples/absence.policy --pattern delim --absence
+[[lean_exe]]
+name = "policyc"
+root = "Policyc"

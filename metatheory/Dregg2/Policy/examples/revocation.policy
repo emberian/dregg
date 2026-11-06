@@ -1,0 +1,13 @@
+# Revocation with negation: a key is usable iff it was issued and not revoked;
+# a use of an unusable key is a violation, and the policy forbids violations.
+rule issued(1).
+rule issued(2).
+rule revoked(2).
+rule used(10, 1).
+rule used(11, 2).
+rule usable(K) :- issued(K), !revoked(K).
+rule violation(U) :- used(U, K), !usable(K).
+policy keys {
+  forbid rule violation;
+  require rule usable;
+}
