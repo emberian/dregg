@@ -48,8 +48,8 @@ from pathlib import Path
 
 # The pinned rev lives in the lakefile's manifest; this is the fallback identity for
 # the message only.  A DIFFERENT rev is not a failure here — a MISSING tree is.
-EXPECTED_REV_PREFIX = "1c2b90b1"
-TOOLCHAIN = "v4.30.0"
+EXPECTED_REV_PREFIX = "56a00585"
+TOOLCHAIN = "v4.35.0"
 
 # 8105 oleans under .lake/build/lib at the pinned rev (measured 2026-08-10).  The band
 # is wide on purpose: a rev bump moves this legitimately, and a gate that fires on
