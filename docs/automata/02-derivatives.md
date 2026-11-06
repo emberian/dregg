@@ -75,7 +75,7 @@ The theorems that make it a semantics object, verbatim [READ]:
 | side | symbol | leaf | file |
 |---|---|---|---|
 | Lean tower | `Dregg2.Exec.Value` (a record frame) | `Pred` over record fields (`symEq f s`, `symMemberOf f set`, `digEq`, `fieldEqField`, ...), evaluated as `leaf φ a = φ.eval (symbolOld a) a` | `Deriv/Core.lean:118`; `Exec/PredAlgebra.lean:127` [READ census] |
-| Rust compiler | `u8` | `ByteClass { ranges: Vec<(u8, u8)> }` (sorted, disjoint, merged) | `dfa/src/derivative.rs:53`, `enum Re` at `:152` with an explicit `Empty` arm [READ] |
+| Rust compiler | `u8` | `ByteClass { ranges: Vec<(u8, u8)> }` (sorted, disjoint, merged) | `dfa/src/derivative.rs:53`, `enum Re` at `:189` with an explicit `Empty` arm [READ] |
 
 The Lean tower has no byte-class leaf. `InjectionGuardCircuit.lean`'s header calls the shipped byte
 guard a "RE-IMPLEMENTATION, not a call into Lean" [READ census]. So `determinizer_faithful` cannot even
@@ -301,10 +301,21 @@ half and the byte half is not done.
 | `tableDfa_faithful` (premise `hagree` = the obligation) | `Deriv/TableDfa.lean:133` | L1 |
 | `DerivDeterminizer`, `determinizer_faithful` | `Deriv/Powerset.lean:108, 150` | L1, Value alphabet only |
 | `guardDfa_decides` (minterm route) | `GuardToAutomatonCircuit.lean:282` | L1; `nodb_pipeline` (:440) is L2 at `hash0` |
-| Rust `Re::compile` | `dfa/src/derivative.rs:459` | L4 deployed, **unproved** |
+| Rust `Re::compile` | `dfa/src/derivative.rs:560` | L4 deployed, **unproved**; ACI canonical form since 2026-11-06 (below) |
 | `byteFrame`, `ByteDeterminizer`, compile-certificate checker | proposed | L0 |
 | `dfaAccepts_functional_eq_runTrace`, `derivCert_bound_sound`, `absent_iff_padded_complement` | proposed | L0 |
 | whole-word trap guards | proposed (Core.lean) | L0 → L2 when the four `#guard`s land |
+
+**Rust-side status (2026-11-06).** Until this date `Re::compile` did not terminate on padded
+complements: `~(any* · "AKIA" · any*)` ran 60 s without finishing [MEASURED, lane C], because `Re::or`
+normalized commutativity and idempotence of its top pair only, so derivatives that `der_finite` identifies up
+to ACI similarity stayed distinct. The smart constructors now keep an ACI canonical form (flattened, sorted,
+deduplicated `|` and `&` chains, right-associated `·`, `∅`/`any*` units and absorbers, `~~r = r`; invariant on
+`enum Re`, `dfa/src/derivative.rs:189`; Owens, Reppy and Turon 2009). Measured: `~(any*·AKIA·any*)` 5 states,
+its conjunction with `~(any*·-----BEGIN·any*)` 14, demo (a)'s two-pattern policy 4,577 states, 129 after
+`Dfa::minimize` (`dfa/src/compiler.rs:147`), the same table byte for byte as the demo's former interim compiler
+(`demo/absence-receipt/tests/differential.rs`). That is differential evidence; the normalizer is not proved
+to meet Lean's similarity, and the milestone below is still the first statement about a Rust table.
 
 **Milestone:** a Lean checker `checkByteTable : PredRE → FlatTable → (Nat → PredRE) → Bool` with
 `checkByteTable R tbl dec = true → ByteDeterminizer R`, run as `#guard` on the table the Rust

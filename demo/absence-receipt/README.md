@@ -24,7 +24,7 @@ The full body is `receipt.json`; its signature is `receipt.json.sig`; the signer
 |---|---|---|---|
 | corpus | the first 100,000 index files of `rust-lang/crates.io-index` at `681f94fc638e5a7639aa410c34b984a12bcd8dfe`, paths sorted bytewise (dot-entries and the root `config.json` skipped); one document = one file's bytes | a public, reproducible input | public data only |
 | commitment | `dregg-query`'s `Mmr<Blake3Mmr>` (`dregg-query/src/mmr.rs`, tags `dregg-query-mmr-v1:{leaf,node,bag,empty}`) over leaf values `blake3(document)` | `corpus_mmr_root`; the 100,000 hashes are checked in (`documents.tsv.gz`), so the root recomputes without the clone | Rust, the dregg-query mirror of `Dregg2.Lightclient.MMR` |
-| policy → table | `policy.txt` compiled by `absence-receipt compile`: `~(any* · (P1 \| P2) · any*)` by derivatives over ACI-normal forms, then Moore-minimized | `absence-table.json`, 129 states | **UNPROVED interim compiler.** It is replaced by the Lean-compiled table when lane B's `policyc compile --absence` lands; the receipt's `table_blake3` then names that table |
+| policy → table | `policy.txt` compiled by `absence-receipt compile`: `~(any* · (P1 \| P2) · any*)` through `dregg_dfa::Re::compile` (derivatives over the crate's ACI canonical form), then `dregg_dfa::Dfa::minimize` | `absence-table.json`, 129 states | the table is produced by `dregg_dfa::Re::compile`, which is differential-tested, not proved: `demo/absence-receipt/tests/differential.rs` checks it against the former interim compiler (frozen there) and a hand-written scanner for the two patterns, on the controls and 10,000 seeded random strings. No Lean decider is in that loop; the Lean runner only executes the table. The policy grammar is still a second grammar outside Lean; lane B's `policyc compile --absence` is meant to replace it |
 | verdicts | `lake exe dfa-run absence-table.json --corpus …` (Lean, compiled) | `count`, from re-executing the table on every byte of every document | the verdict function is `TableRun.acceptsBytes`; `metatheory/Dregg2/Automata/TableRunSpec.lean` proves it is `Deriv.PredRE.TableDfa.accepts` on the document's bytes (`accepts_iff`), and `rejectCount_eq_zero_iff` says what `count = 0` means |
 | cross-check | `absence-receipt count` (Rust `dregg_dfa::Dfa::matches`) | the same count from the runtime crate | must agree; `run.sh` stops if it does not |
 | served-path evidence | one record, document 1598 (`3/c/cxr`, 2048 bytes), its run emitted by Lean as a `DfaRoutingTableEmit.tableRoutingDesc` descriptor and proved by the v2 assembly | the served table-routing family proves and verifies a real record's run, and refuses a wrong final state | `circuit/tests/absence_receipt_record.rs` |
@@ -43,7 +43,7 @@ power-of-two trace height ("base trace height 1724 must be a power of two" for d
 | bytes | 1,770,996,081 |
 | MMR leaves / nodes / peaks | 100,000 / 199,994 / 6 |
 | policy patterns | 2 (`AKIA[0-9A-Z]{16}`, `-----BEGIN [A-Z ]*PRIVATE KEY-----`) |
-| absence DFA before / after minimization | 9,153 / 129 states (128 accepting; state 0 is the dead sink, entered on a match) |
+| absence DFA before / after minimization | 4,577 / 129 states (128 accepting; state 0 is the dead sink, entered on a match); the former interim compiler: 9,153 / 129, the identical minimized table |
 | table | 33,024 transitions, 71,179 bytes of JSON |
 | run rows, whole corpus (one per byte) | 1,770,996,081 |
 | documents rejected (`count`), Lean and Rust | 0 and 0 |
@@ -53,17 +53,22 @@ power-of-two trace height ("base trace height 1724 must be a power of two" for d
 
 ## Wall clocks [MEASURED, `run.sh`, Mac]
 
-| leg | seconds |
-|---|---:|
-| select (walk 371,277 files, sort, take 100,000) | 9.3 |
-| hash 100,000 documents (blake3) | 36.4 |
-| MMR root | 0.1 |
-| compile the interim table | 42.4 |
-| `dfa-run` over 1.77 GB (Lean, native) | 48.3 |
-| Rust cross-check count | 30.1 |
-| emit the record descriptor (`lake env lean --run`, interpreted) | 11.4 |
-| receipt, sign, verify | 0.3 |
-| the STARK (one record), prove + verify | 0.74 |
+Two runs: the first (2026-11-06, interim compiler) and the re-run after the table moved to the
+`dfa` crate (same day, other lanes running). The re-run reproduced every checked-in artifact byte
+for byte: table, `dfa-run.json`, `mmr.json`, record descriptor, receipt body, and signature
+(ed25519 signatures are deterministic).
+
+| leg | first run, s | re-run, s |
+|---|---:|---:|
+| select (walk 371,277 files, sort, take 100,000) | 9.3 | 14.3 |
+| hash 100,000 documents (blake3) | 36.4 | 46.6 |
+| MMR root | 0.1 | 0.2 |
+| compile the table (interim compiler, then `dregg_dfa`) | 42.4 | 2.7 |
+| `dfa-run` over 1.77 GB (Lean, native) | 48.3 | 57.8 |
+| Rust cross-check count | 30.1 | 41.9 |
+| emit the record descriptor (`lake env lean --run`, interpreted) | 11.4 | 27.5 |
+| receipt, sign, verify | 0.3 | 0.3 |
+| the STARK (one record), prove + verify | 0.74 | not re-run |
 
 Both scans look I/O-bound [INFERRED]: the user CPU of `dfa-run` was 10.7 s of its 45-48 s wall.
 
@@ -95,9 +100,9 @@ cargo test -p dregg-circuit --release --test absence_receipt_record -- --nocaptu
 - **No STARK over the corpus.** The 100,000 verdicts are native re-execution of the table by the
   Lean runner; verifying them means re-running it. One record is proved under the served family,
   as evidence that the served path accepts a real record, not as a proof about the corpus.
-- **The table is not proved to be the policy's absence automaton.** The interim compiler is Rust
-  and unproved. `TableRunSpec` proves the runner computes `TableDfa.accepts` for whatever table it
-  is given; that the table denotes "contains neither pattern" is the compiler's obligation
+- **The table is not proved to be the policy's absence automaton.** `dregg_dfa::Re::compile` is
+  Rust and unproved; its ACI normalizer is not proved to meet Lean's similarity. `TableRunSpec`
+  proves the runner computes `TableDfa.accepts` for whatever table it is given; that the table denotes "contains neither pattern" is the compiler's obligation
   (`tableDfa_faithful`'s agreement premise for a Lean-compiled table). The controls are evidence,
   not proof.
 - **No non-omission certificate beyond the root.** The MMR root commits to these 100,000 hashes in
@@ -110,15 +115,19 @@ cargo test -p dregg-circuit --release --test absence_receipt_record -- --nocaptu
   program's open milestone (SUBSTRATE-DECISION §5 item 2).
 - The signature names a demo key, not a person or an organization.
 
-## What the interim compiler found
+## What the interim compiler found, and the fix
 
 `dregg_dfa::Re::compile` did not finish on `~(any* · AKIA · any*)` within 60 s (one pattern, four
 literal bytes; a two-pattern run reached 4.5 GB of memory before it was stopped) [MEASURED]. Its
-smart constructor `Re::or` normalizes commutativity and idempotence of the top pair only, with no
-associativity, so the derivatives of `any* · w` grow as differently nested alternations and never
-repeat; Brzozowski's finiteness holds only up to ACI similarity (`metatheory/Dregg2/Crypto/Deriv/Similarity.lean`,
-`metatheory/Dregg2/Crypto/Deriv/Finiteness.lean`'s `der_finite`). The demo's compiler flattens, sorts and deduplicates
-alternations and intersections and right-associates concatenations before each lookup
-(`norm` in `demo/absence-receipt/src/main.rs`), which terminates (9,153 states) and minimizes to 129. The `dfa` crate
-itself is unchanged; the owner of `dfa/src/derivative.rs` should know a deny filter of the form
-"never contains w" does not compile there today.
+smart constructor `Re::or` normalized commutativity and idempotence of the top pair only, with no
+associativity, so the derivatives of `any* · w` grew as differently nested alternations and never
+repeated; Brzozowski's finiteness holds only up to ACI similarity (`metatheory/Dregg2/Crypto/Deriv/Similarity.lean`,
+`metatheory/Dregg2/Crypto/Deriv/Finiteness.lean`'s `der_finite`). The demo first worked around it with its own normalizer
+(9,153 states, 129 minimized, 42.4 s). The crate's smart constructors now keep an ACI canonical form
+(the invariant is documented on `enum Re` in `dfa/src/derivative.rs`), the crate gained `Dfa::minimize`,
+and the demo's workaround is gone: the crate reaches 4,577 states, minimizes to the same 129-state
+table byte for byte, and `demo/absence-receipt/tests/differential.rs` keeps the former compiler as its differential partner:
+
+```
+cargo test --manifest-path demo/absence-receipt/Cargo.toml --release --test differential
+```
