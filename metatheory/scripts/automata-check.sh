@@ -92,6 +92,10 @@ Dregg2/Circuit/Emit/DyckStackEmit.lean
 Dregg2/Circuit/Emit/DyckStackReplay.lean
 Dregg2/Circuit/Emit/AttestedAutomatonWeld8.lean
 Dregg2/Circuit/Emit/AttestedAutomatonLanes8.lean
+Dregg2/Circuit/Emit/AttestedAutomatonBound.lean
+Dregg2/Circuit/Emit/DfaRoutingChainBound.lean
+Dregg2/Circuit/Emit/DfaRoutingTableBound.lean
+Dregg2/Circuit/Emit/DyckStackBound.lean
 Dregg2/Circuit/Emit/TinyAutomataLanesK.lean
 Dregg2/Circuit/Emit/DerivationEmit.lean
 Dregg2/Datalog/FixpointCert.lean
