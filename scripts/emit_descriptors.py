@@ -24,38 +24,32 @@ Pipeline:
 Idempotent: on a freshly-emitted AND fully-stamped tree it is a NO-OP (nothing is
 written). "Byte-identical" alone is not enough for that — a descriptor whose bytes
 already equal the emission but which PROVENANCE.json does not COVER still gets
-stamped (ack-gated, mode=emit; see provenance_stamp_gap). Run
-`scripts/check-descriptor-drift.sh` to GATE on drift.
+stamped (see provenance_stamp_gap). Run `scripts/check-descriptor-drift.sh` to GATE
+on drift.
 
-MISUSE-RESISTANT REGEN GATE (docs/VK-REGEN-CONTROLS.md): regenerating a deployed
-descriptor set RE-KEYS the federation (the AIR fingerprint feeds the recursive
-VK hash — circuit-prove/src/recursive_witness_bundle.rs). A byte-CHANGING install
-therefore refuses to proceed unless explicitly authorized:
-
-  DREGG_VK_REGEN_ACK=<git rev-parse HEAD:metatheory/Dregg2>   (the exact source
-      tree the operator reviewed; compute it with that command)
-  DREGG_VK_REGEN_ALLOW_DIRTY=1   (additionally required when metatheory/Dregg2
-      has uncommitted/untracked edits — an unreviewable source tree)
-
-Authorized installs stamp circuit/descriptors/PROVENANCE.json (what source tree
-minted these bytes, per-file sha256) and append a row to docs/VK-REGEN-LOG.md
-(the audit trail). No-op runs (the common CI / drift-gate case) need no ack and
-touch nothing.
+AUTOMATIC PROVENANCE (2026-11-06, SUBSTRATE-DECISION §9 row 4 as amended by codex
+round 3): there is no human acknowledgement step. The emit REFUSES (exit 3, tree
+untouched) when any `.lean` file in the emitters' transitive in-tree import closure,
+or the lake configuration, has uncommitted or untracked edits — so every stamp is
+minted from committed source by construction, and `source_dirty` can no longer be
+true. Every byte-changing or stamp-short emission then writes
+circuit/descriptors/PROVENANCE.json (Lean source tree hash, repo HEAD, toolchain,
+emitter list, per-file sha256) with no environment variable and no operator. The
+ack env vars, the ALLOW_DIRTY override, `--stamp-existing` (a disk re-hash with no
+Lean witness) and `--strict` were deleted; see docs/VK-REGEN-CONTROLS.md.
 
 Modes:
-  (default)              emit from Lean, gate, install, stamp, log
-  --stamp-existing       stamp PROVENANCE.json from the CURRENT on-disk bytes
-                         (no Lean run; ack-gated + logged, for bootstrap/re-pin)
+  (default)              emit from Lean (committed closure only), install, stamp.
+                         `--rev <sha>` additionally requires the checkout to BE that
+                         commit (the canonical host is a clean clone; see
+                         docs/automata/BUILD.md "Emit and stamp (C2)")
   --verify-provenance    recompute hashes vs the stamp, and refuse a stamp that
                          records source_dirty=true. `--rev <rev>` grades that
                          REVISION in a detached, `git status`-clean worktree
                          instead of whatever is lying around (the churn-safe form;
-                         this is the one a shared tree can always answer).
-                         --strict additionally requires the stamp's tree hash to
-                         match the checkout's HEAD:metatheory/Dregg2 — a CEREMONY
-                         question, red on any unrelated metatheory commit, so it
-                         belongs at an epoch flip and not in a standing gate.
-                         No Lean needed.
+                         this is the one a shared tree can always answer). A stamp
+                         whose `mode` is not "emit" (a disk re-hash, not a Lean
+                         witness) is refused. No Lean needed.
   --self-test-provenance drive --verify-provenance RED and GREEN on scratch copies
                          (mutated byte, dropped stamp row, source_dirty stamp,
                          plus the clean control). Touches nothing shared.
@@ -85,7 +79,7 @@ Modes:
                          of transcribing it.
 
 Exit codes: 0 = ok/no-op · 1 = routing/verify failure · 2 = emitter failed ·
-3 = REGEN REFUSED (unauthorized byte-changing install; tree left untouched).
+3 = EMIT REFUSED (the emitters' source closure is not committed; tree left untouched).
 """
 from __future__ import annotations
 
@@ -127,8 +121,6 @@ COVERAGE_EXEMPT = frozenset({
     "regen-cert-qp.sh",
 })
 AUDIT_LOG_REL = Path("docs") / "VK-REGEN-LOG.md"   # git-tracked append-only regen log
-ACK_ENV = "DREGG_VK_REGEN_ACK"
-ALLOW_DIRTY_ENV = "DREGG_VK_REGEN_ALLOW_DIRTY"
 EXIT_REFUSED = 3
 
 # The Rust sources that carry `include_str!(...descriptors/<file>)` + a matching
@@ -697,51 +689,91 @@ def dregg2_source_dirty() -> bool:
     return bool(git_out("status", "--porcelain", "--", "metatheory/Dregg2"))
 
 
-def require_regen_ack(changed: list[str], what: str) -> dict:
-    """The CONFIRMATION GATE. A byte-changing descriptor install re-keys the
-    federation; require the operator to name the exact Dregg2 source tree they
-    reviewed. Returns the authorization record on success; exits EXIT_REFUSED
-    (tree untouched) otherwise."""
-    tree = dregg2_tree_hash()
-    dirty = dregg2_source_dirty()
-    ack = os.environ.get(ACK_ENV, "")
-    if ack != tree:
+def emitter_source_closure() -> set[Path]:
+    """Every in-tree `.lean` file the emitters import, TRANSITIVELY, plus the emitters themselves.
+
+    `emitter_modules` stops at direct imports because `lake build` follows the rest; the
+    cleanliness question cannot stop there, since a weakened lemma three imports down changes
+    the emitted bytes as surely as an edit to the emitter. Out-of-tree imports (Mathlib, the
+    toolchain) are pinned by `lake-manifest.json` / `lean-toolchain`, which `emit_source_dirt`
+    checks directly."""
+    seen: set[Path] = set()
+    stack = [META / e for e in EMITTERS]
+    while stack:
+        path = stack.pop()
+        if path in seen or not path.exists():
+            continue
+        seen.add(path)
+        for line in path.read_text(errors="replace").splitlines():
+            m = re.match(r"^import\s+([A-Za-z0-9_.]+)", line)
+            if m:
+                dep = META / (m.group(1).replace(".", "/") + ".lean")
+                if dep.exists():
+                    stack.append(dep)
+    return seen
+
+
+LAKE_CONFIG_FILES = ("lakefile.lean", "lakefile.toml", "lean-toolchain", "lake-manifest.json")
+
+
+def emit_source_dirt() -> list[str]:
+    """The uncommitted or untracked files that could change what the emitters print: members of
+    `emitter_source_closure()` and the lake configuration. Empty means the emission is a function
+    of committed source, which is the property the stamp claims."""
+    closure = {p.resolve() for p in emitter_source_closure()}
+    closure |= {(META / f).resolve() for f in LAKE_CONFIG_FILES}
+    out = run(["git", "status", "--porcelain", "--untracked-files=all", "--", "metatheory"],
+              cwd=ROOT).stdout
+    dirt: list[str] = []
+    for line in out.splitlines():
+        rel = line[3:].split(" -> ")[-1].strip().strip('"')
+        if (ROOT / rel).resolve() in closure:
+            dirt.append(rel)
+    return sorted(dirt)
+
+
+def require_committed_emit_source(what: str) -> dict:
+    """THE AUTOMATIC GATE: the emission must be a function of COMMITTED source.
+
+    Codex round 3 (finding 8) named the attack the deleted ack was standing in front of: emit from
+    an uncommitted, weakened Lean source, restore the source, commit only the generated bytes. Git
+    then records bytes no committed source produces. Refusing to emit while any file that can
+    reach the emitters is uncommitted closes that by construction, with no environment variable
+    and no human: the stamp's tree hash names the source that minted the bytes. Returns the stamp's
+    authorship record; exits EXIT_REFUSED (tree untouched) otherwise."""
+    dirt = emit_source_dirt()
+    if dirt:
         sys.stderr.write(
-            f"\nemit_descriptors: REGEN REFUSED — {what} would change "
-            f"{len(changed)} artifact(s) and NO valid authorization was given.\n"
-            "\n"
-            "  Regenerating deployed descriptors RE-KEYS the federation: the AIR\n"
-            "  fingerprint feeds the recursive VK hash (circuit-prove/src/\n"
-            "  recursive_witness_bundle.rs) and every verifier pins it. This must\n"
-            "  never happen as a silent side effect of a script run.\n"
-            "\n"
-            "  Would change:\n"
-            + "".join(f"    {c}\n" for c in changed[:20])
-            + (f"    … and {len(changed) - 20} more\n" if len(changed) > 20 else "")
-            + "\n"
-            "  To authorize (after reviewing the Lean source this mints from):\n"
-            f"    {ACK_ENV}=\"$(git rev-parse HEAD:metatheory/Dregg2)\" \\\n"
-            "        scripts/emit-descriptors.sh\n"
-            f"  (your {ACK_ENV} was "
-            + (f"set but does not match HEAD:metatheory/Dregg2 = {tree}"
-               if ack else "not set")
-            + ")\n"
-            "\n  The tree was left UNTOUCHED. See docs/VK-REGEN-CONTROLS.md.\n"
+            f"\nemit_descriptors: EMIT REFUSED — {what}: {len(dirt)} file(s) in the emitters' "
+            "source closure are uncommitted or untracked, so the emitted bytes would not be a "
+            "function of committed source and the PROVENANCE stamp could not name what minted "
+            "them:\n"
+            + "".join(f"    {d}\n" for d in dirt[:20])
+            + (f"    … and {len(dirt) - 20} more\n" if len(dirt) > 20 else "")
+            + "\n  Commit the Lean first. There is no override. The tree was left UNTOUCHED.\n"
         )
         sys.exit(EXIT_REFUSED)
-    if dirty and os.environ.get(ALLOW_DIRTY_ENV) != "1":
+    return {"tree": dregg2_tree_hash(), "dirty": False, "head": git_out("rev-parse", "HEAD"),
+            "closure_files": len(emitter_source_closure())}
+
+
+def require_checkout_at(rev: str) -> None:
+    """`--rev <rev>` on the EMIT path: the operator names the committed revision being stamped,
+    and the checkout must BE that revision. The canonical emit host is a clean clone at a
+    committed revision with its own warm `.lake` (docs/automata/BUILD.md, "Emit and stamp (C2)");
+    a detached worktree of a shared tree has no `.lake`, and pointing one at a sibling's would
+    rewrite oleans under it. So this does not create a tree; it refuses to stamp the wrong one."""
+    try:
+        want = git_out("rev-parse", "--verify", f"{rev}^{{commit}}")
+    except subprocess.CalledProcessError:
+        sys.exit(f"emit_descriptors: --rev '{rev}' does not resolve to a commit.")
+    have = git_out("rev-parse", "HEAD")
+    if want != have:
         sys.stderr.write(
-            "\nemit_descriptors: REGEN REFUSED — metatheory/Dregg2 has uncommitted\n"
-            "  or untracked edits, so these artifacts would be minted from an\n"
-            f"  UNREVIEWABLE source tree (the acked hash {tree} names the committed\n"
-            "  tree, not what is on disk). Commit the Lean first (preferred), or\n"
-            f"  set {ALLOW_DIRTY_ENV}=1 to proceed eyes-open (the provenance stamp\n"
-            "  will record source_dirty=true, which --verify-provenance --strict\n"
-            "  refuses).\n"
-            "\n  The tree was left UNTOUCHED. See docs/VK-REGEN-CONTROLS.md.\n"
-        )
+            f"\nemit_descriptors: EMIT REFUSED — --rev {rev} is {want[:12]} but this checkout's "
+            f"HEAD is {have[:12]}. Check out the revision you mean to stamp (a clean clone at "
+            "that commit) and re-run. The tree was left UNTOUCHED.\n")
         sys.exit(EXIT_REFUSED)
-    return {"tree": tree, "dirty": dirty, "head": git_out("rev-parse", "HEAD")}
 
 
 def subdir_hash_legs(desc_hashes: dict[str, str]) -> dict[str, dict[str, str]]:
@@ -790,10 +822,14 @@ def build_provenance(mode: str, auth: dict,
     toolchain_file = META / "lean-toolchain"
     return {
         "version": 1,
-        "mode": mode,  # "emit" (witnessed from the Lean emitters) | "stamp-existing"
+        "mode": mode,  # always "emit": the hashes come from the Lean emitters, never from disk
         "dregg2_tree_hash": auth["tree"],
         "repo_head": auth["head"],
         "source_dirty": auth["dirty"],
+        # The emitters' transitive in-tree Lean closure, checked clean before the emit and again
+        # at install (`require_committed_emit_source`); the count is how many files that covered.
+        "emitter_closure_clean": not auth["dirty"],
+        "emitter_closure_files": auth.get("closure_files"),
         "lean_toolchain": (
             toolchain_file.read_text().strip() if toolchain_file.exists() else None
         ),
@@ -829,9 +865,9 @@ def provenance_stamp_gap(written: dict[str, str]) -> list[str]:
     can be byte-for-byte the Lean emission and still have NO row attesting it, which is the whole
     state PROVENANCE.json exists to make impossible. `install_and_stamp`'s `changed` list compares
     emitted bytes against disk and is structurally blind to that — so a byte-identical emission
-    returned NO-OP and left the stamp short, permanently, with the ONLY escape being
-    `--stamp-existing` (which re-stamps every file as a DISK re-hash, demoting `mode` from a Lean
-    witness to a self-consistency check for the other 138 descriptors as the price of covering 5).
+    returned NO-OP and left the stamp short, permanently, with the ONLY escape being the
+    since-deleted `--stamp-existing` (which re-stamped every file as a DISK re-hash, demoting
+    `mode` from a Lean witness to a self-consistency check).
     MEASURED 2026-07-26: five tracked by-name descriptors — the four light-client verifiers and the
     DFA routing table, every one of them a live `include_str!` target in `descriptor_by_name.rs` —
     shipped unstamped while this driver printed NO-OP and exited 0.
@@ -945,48 +981,6 @@ def append_audit(mode: str, auth: dict, changed: list[str]) -> None:
         )
 
 
-def stamp_existing() -> None:
-    """--stamp-existing: record provenance for the CURRENT on-disk descriptor set
-    without running Lean. Bootstrap / re-pin path; ack-gated + logged so a
-    re-stamp is never silent."""
-    auth = require_regen_ack([f"{PROVENANCE_FILE} (stamp of the on-disk set)"],
-                             "--stamp-existing")
-    # RECURSES (relative-keyed) so the by-name/ subtree is stamped like everything else;
-    # `build_provenance` splits the `by-name/` keys back out into the `by_name_sha256` leg.
-    # (`stamp-existing` is explicitly a stamp of the ON-DISK set — unlike the emit path it makes
-    # no Lean claim, and `--verify-provenance --strict` is what refuses a stamp minted this way
-    # from an unreviewable tree.)
-    # ⚑ COVERAGE_EXEMPT IS HONOURED HERE TOO. It was not, and that made `--stamp-existing`
-    # SELF-DEFEATING: this function pinned every file on disk, while `verify_provenance` (just
-    # below) and the consumer gate
-    # (`effect_vm_descriptors.rs::provenance_json_pins_match_checked_in_descriptor_bytes`, which
-    # reads this very set out of this file so there is ONE authority) both SUBTRACT the exempt
-    # names. So running the documented re-pin ceremony produced a stamp naming two artifacts the
-    # gate calls "not part of the descriptor set", and the gate stayed red no matter how many times
-    # it was run. Measured 2026-07-29 on `dregg-cert-qp-portfolio6-s3-ir2.json` and
-    # `regen-cert-qp.sh` — both tracked, both exempt, both pinned by the old stamp.
-    #
-    # Two readers of one list, one of them not reading it, is the shape the `COVERAGE_EXEMPT`
-    # comment warned about; it just guarded the wrong pair.
-    desc_hashes = {
-        str(p.relative_to(DESC)): sha256_hex(p.read_bytes())
-        for p in sorted(DESC.rglob("*"))
-        if p.is_file() and p.name != PROVENANCE_FILE and p.name not in COVERAGE_EXEMPT
-    }
-    fp_hashes = {
-        str(p.relative_to(ROOT)): sha256_hex(p.read_bytes())
-        for p in RUST_FP_FILES if p.exists()
-    }
-    write_provenance(build_provenance("stamp-existing", auth, desc_hashes, fp_hashes))
-    append_audit("stamp-existing", auth, [])
-    print(
-        f"emit_descriptors: stamped {DESC / PROVENANCE_FILE} over "
-        f"{len(desc_hashes)} descriptors + {len(fp_hashes)} FP files "
-        f"(mode=stamp-existing, tree {auth['tree'][:12]}…, "
-        f"source_dirty={'true' if auth['dirty'] else 'false'})."
-    )
-
-
 @contextlib.contextmanager
 def rooted_at(new_root: Path):
     """Run a check body against a DIFFERENT checkout of this repo.
@@ -1059,26 +1053,26 @@ def detached_worktree(rev: str, label: str):
         shutil.rmtree(holder, ignore_errors=True)
 
 
-def verify_provenance(strict: bool, rev: str | None = None) -> None:
-    """--verify-provenance [--rev <rev>] [--strict]: the PROVENANCE check a consumer (CI, a
-    federation operator pre-epoch-flip) runs before trusting the descriptor set.
+def verify_provenance(rev: str | None = None) -> None:
+    """--verify-provenance [--rev <rev>]: the PROVENANCE check a consumer runs before trusting the
+    descriptor set.
 
     Recomputes every hash against the stamp and refuses a stamp minted from an uncommitted
-    source. `--rev` grades that revision in a clean detached worktree (see `detached_worktree`);
-    `--strict` adds the ceremony clause (does the stamp attest THIS checkout's Lean source)."""
+    source or not witnessed by the emitters. `--rev` grades that revision in a clean detached
+    worktree (see `detached_worktree`)."""
     if rev is None:
-        _verify_provenance_body(strict, where="the working tree")
+        _verify_provenance_body(where="the working tree")
         return
     with detached_worktree(rev, "verify-provenance") as (wt, sha):
         print(f"verify-provenance: grading {rev} ({sha[:12]}) in a detached worktree "
               f"(the shared working tree is NOT read)")
         with rooted_at(wt):
-            _verify_provenance_body(strict, where=f"{rev} ({sha[:12]})")
+            _verify_provenance_body(where=f"{rev} ({sha[:12]})")
 
 
-def _verify_provenance_body(strict: bool, where: str) -> None:
+def _verify_provenance_body(where: str) -> None:
     """Compute, report, and turn into an exit code."""
-    failures, checked = _verify_provenance_findings(strict)
+    failures, checked = _verify_provenance_findings()
     if failures:
         sys.stderr.write(f"verify-provenance: FAIL ({where})\n")
         for f in failures:
@@ -1088,8 +1082,7 @@ def _verify_provenance_body(strict: bool, where: str) -> None:
     print(
         f"verify-provenance: PASS — {sum(checked.values())} artifacts match the stamp "
         f"[{legs}] over {where} (mode={_LAST_MODE[0]}, "
-        f"tree {_LAST_TREE[0][:12]}…, source_dirty={_LAST_DIRTY[0]}"
-        + (", strict" if strict else "") + ")."
+        f"tree {_LAST_TREE[0][:12]}…, source_dirty={_LAST_DIRTY[0]})."
     )
 
 
@@ -1100,7 +1093,7 @@ _LAST_TREE: list = [""]
 _LAST_DIRTY: list = ["?"]
 
 
-def _verify_provenance_findings(strict: bool, doors: bool = True) -> tuple[list[str], dict[str, int]]:
+def _verify_provenance_findings(doors: bool = True) -> tuple[list[str], dict[str, int]]:
     """The whole check as DATA: (findings, per-leg counts). Empty findings == clean.
 
     Split out from the reporting so the red-proof can compare finding SETS rather than exit
@@ -1200,41 +1193,30 @@ def _verify_provenance_findings(strict: bool, doors: bool = True) -> tuple[list[
     if doors:
         failures.extend(verify_by_name_routing())
 
-    # ⚑ `source_dirty` IS NOT A STRICT-ONLY CLAUSE. It was, and that made it unreachable: the
-    # only runnable form of this gate is the non-strict one (see below), so the single check
-    # that catches a stamp taken with `DREGG_VK_REGEN_ALLOW_DIRTY=1` lived exclusively behind a
-    # flag nothing invokes. The failure loop that produced is exact and was hit by three lanes
-    # in one day: `--stamp-existing` refuses while `metatheory/` is dirty, `metatheory/` is
-    # never clean in a live swarm, forcing it records `source_dirty=true`, and the only checker
-    # that would notice never runs — a stamp that LOOKS taken and attests nothing.
-    #
-    # It belongs here because it is a property of the COMMITTED STAMP, not of anybody's working
-    # tree: always answerable, at any revision, by reading one boolean. And it is satisfiable —
-    # `f0a34748f` took this exact stamp from a detached clean worktree and got source_dirty=false
-    # while ten lanes churned the shared tree. A red here names a real defect with a real fix.
+    # ⚑ `source_dirty` is a property of the COMMITTED STAMP: always answerable, at any revision,
+    # by reading one boolean. The emit can no longer write `true` (it refuses an uncommitted
+    # closure, `require_committed_emit_source`), so a `true` here is a stamp from before
+    # 2026-11-06 or a hand edit, and either way it attests a source nobody can reconstruct.
     if prov.get("source_dirty"):
         failures.append(
             "the stamp records source_dirty=true — these artifacts were minted from an "
-            "unreviewable (uncommitted) Dregg2 tree, so the stamp attests a source nobody "
-            "can reconstruct. Re-take it from a detached clean worktree (`git worktree add "
-            "--detach`), which is what makes ALLOW_DIRTY unnecessary rather than routine."
+            "uncommitted Lean tree, so the stamp attests a source nobody can reconstruct. "
+            "Re-emit from a committed closure (`scripts/emit_descriptors.py` refuses otherwise)."
+        )
+    # ⚑ A stamp must be a LEAN WITNESS. `mode` other than "emit" was the deleted
+    # `--stamp-existing` path: a re-hash of whatever bytes were on disk, which attests only that
+    # the files match themselves. It is refused here so its deletion loses no detection.
+    if prov.get("mode") != "emit":
+        failures.append(
+            f"the stamp records mode={prov.get('mode')!r}, not 'emit' — its hashes were read off "
+            "disk rather than produced by the Lean emitters, so it attests nothing about Lean. "
+            "Re-emit (`scripts/emit_descriptors.py`)."
         )
 
-    # ⚠ THE CEREMONY CLAUSE, and it stays behind `--strict` DELIBERATELY. `HEAD:metatheory/Dregg2`
-    # moves on every commit to any of ~2300 Lean modules — a docstring, an unrelated proof — so as
-    # a standing gate this is red within minutes of any stamp and permanently thereafter, which is
-    # how a gate becomes furniture. Its honest question ("are the descriptors stale w.r.t. the Lean
-    # source?") is not answerable by comparing a tree hash anyway; it is answered by RE-DERIVING
-    # from Lean, which `scripts/check-descriptor-drift.sh --rev HEAD` does and which is already a
-    # local-gates row. So: this clause is for an operator at an epoch flip, and the standing gate
-    # is the non-strict form.
-    if strict:
-        current = dregg2_tree_hash()
-        if prov.get("dregg2_tree_hash") != current:
-            failures.append(
-                f"strict: stamp tree {prov.get('dregg2_tree_hash')} != this checkout's "
-                f"HEAD:metatheory/Dregg2 {current} (the stamp attests a DIFFERENT source)"
-            )
+    # The tree-hash ceremony clause (stamp tree == this checkout's HEAD:metatheory/Dregg2) was
+    # `--strict`-only and is deleted with `--strict` (2026-11-06): that tree hash moves on any
+    # commit to any Lean module, so it was never a standing gate. Staleness w.r.t. Lean is
+    # answered by RE-DERIVING (`scripts/check-descriptor-drift.sh`), not by comparing hashes.
 
     # ⚑ THE SNAPSHOT LEG IS A CEREMONY CLAUSE, not a standing one — and this is a CORRECTION of a
     # misclassification, not a relaxation. `fp_file_sha256` pins whole SOURCE files. The repo had
@@ -1257,13 +1239,10 @@ def _verify_provenance_findings(strict: bool, doors: bool = True) -> tuple[list[
     # `every_descriptor_fp_matches_its_json_bytes`, which runs on every `cargo test -p
     # dregg-circuit`, cannot rot, and is untouched. This leg answers a different question ("is the
     # stamp's snapshot of these five source files current?"), which is a RE-STAMP obligation and
-    # belongs exactly where the tree-hash clause already sits: at a ceremony, under `--strict`.
-    # It is never SILENT — non-strict runs print it by name.
-    if strict:
-        failures.extend(snapshot)
-    elif snapshot:
-        print("verify-provenance: fp-file SNAPSHOT is stale (a re-stamp obligation, NOT "
-              "descriptor drift; `--strict` fails on it, and the *_FP↔JSON invariant is gated by "
+    # is a re-stamp obligation (the next emit rewrites it automatically). It is never SILENT.
+    if snapshot:
+        print("verify-provenance: fp-file SNAPSHOT is stale (a re-stamp obligation the next emit "
+              "discharges, NOT descriptor drift; the *_FP↔JSON invariant is gated by "
               "`every_descriptor_fp_matches_its_json_bytes` on every cargo test):")
         for s in snapshot:
             print(f"  · {s}")
@@ -2325,35 +2304,14 @@ def verify_workflow_refs() -> list[str]:
     # and a reason-tagged bucket for every site that does not.
     findings: list[str] = []
 
-    # ── ⚑ A COVERAGE GAP IS A FINDING, NOT AN ABORT (changed 2026-08-08) ────────────────────
-    # This was `sys.exit(...)`, and `.github/actions/lean-seed/action.yml` landed on 2026-08-07 —
-    # so from that day `--verify-provenance` STOPPED REACHING ITS OWN SUBJECT. It is called from
-    # `verify_provenance` before the sha256-of-every-descriptor-against-PROVENANCE.json
-    # comparison, so the whole stamp check died here: the 2026-08-08 nightly's output is SIX
-    # LINES, four leg counters and this message, with no `verify-provenance: PASS/FAIL` line at
-    # all. A gate about descriptor bytes was reporting only on how well one of its side-legs
-    # covers the CI medium.
-    #
-    # This is the identical mask `scripts/check-descriptor-drift.sh:159-171` names and fixed two
-    # days earlier — "a 45-file descriptor drift went unreported because an unstamped-artifact
-    # preflight failure exited first; one gate's cheap leg hid the other leg's verdict, and the
-    # cheap leg is not the one the gate is named after." Same shape, one file over.
-    #
-    # NOTHING IS WEAKENED: this is still a FAILURE — `verify_workflow_refs`'s findings are
-    # `failures.extend`ed by `verify_provenance`, which exits nonzero on any. It simply no longer
-    # gets to be the ONLY thing you learn. The scope claim below is correspondingly narrowed to
-    # what this leg actually implements, out loud, rather than being asserted and then aborted on.
-    if composite:
-        findings.append(
-            "COVERAGE GAP (this leg, not the tree): a LOCAL COMPOSITE ACTION is tracked ("
-            + ", ".join(composite)
-            + ") and verify_workflow_refs does not scan it. Its `run:` steps invoke repo paths "
-            "exactly like a workflow's, so this leg's coverage claim is NOT exhaustive: an "
-            "uncommitted script invoked from a composite action is invisible here. EXTEND the "
-            "leg to composite actions (mind the resolution difference: `uses:` is relative to "
-            "the action directory, `run:` cwd is the workspace root) — do not silence this by "
-            "deleting the check."
-        )
+    # ── ⚑ COMPOSITE ACTIONS ARE SCANNED (2026-11-06) ──────────────────────────────────────
+    # From 2026-08-07 (`.github/actions/lean-seed/action.yml`) to 2026-11-06 this leg reported a
+    # standing "COVERAGE GAP" finding instead of scanning them, which kept every caller of this
+    # leg red for a reason unrelated to its subject. A composite action's `run:` steps execute
+    # with the WORKSPACE ROOT as cwd (exactly a workflow step's default), so they are scanned with
+    # the identical resolution model below. Its `uses: ./x` sites are NOT resolved here (their
+    # base directory differs from a workflow's); each one is DEFERRED with that reason, by name,
+    # rather than silently skipped or checked against the wrong base.
     inflight: list[str] = []
     notcheckable: dict[str, list[str]] = {}
     unlexable: list[str] = []
@@ -2363,7 +2321,8 @@ def verify_workflow_refs() -> list[str]:
     def defer(reason: str, where: str) -> None:
         notcheckable.setdefault(reason, []).append(where)
 
-    for wf in wfs:
+    for wf in wfs + composite:
+        is_composite = wf in composite
         p = ROOT / wf
         if not p.exists():   # tracked but deleted in the working tree
             continue
@@ -2377,7 +2336,10 @@ def verify_workflow_refs() -> list[str]:
             raw_sites: list[tuple[int, str, str, bool]] = []   # (line, what, token, cwd_static)
             if kind == "uses":
                 v = _wf_unquote(body[0][1])
-                if v.startswith("./"):
+                if v.startswith("./") and is_composite:
+                    defer("`uses: ./` inside a composite action (base directory not modelled)",
+                          f"{wf}:{lineno} ({v})")
+                elif v.startswith("./"):
                     # A LOCAL composite action: `uses: ./x` resolves `x/action.yml` OR
                     # `x/action.yaml` — either spelling satisfies it, so a site is raised only
                     # when NEITHER is tracked, and it names the `.yml` one. No instance in the
@@ -2499,6 +2461,7 @@ def verify_workflow_refs() -> list[str]:
     nc_total = sum(len(v) for v in notcheckable.values())
     print(
         f"verify-workflow-refs: {n_sites} invocation site(s) over {len(wfs)} tracked workflow(s) "
+        f"+ {len(composite)} composite action(s) "
         f"· {n_checked} checked exists+tracked · {nc_total} NOT-CHECKABLE"
         + ("".join(f"\n  NOT-CHECKABLE ({len(v)}) — {r}: {', '.join(sorted(v))}"
                    for r, v in sorted(notcheckable.items())) if notcheckable else "")
@@ -3180,8 +3143,8 @@ def install_and_stamp(written: dict[str, str]) -> None:
     # and therefore enters the ack-gated branch below.
     #
     # A stamp shortfall does NOT ride this branch: writing PROVENANCE.json is a provenance CLAIM
-    # about which reviewed Lean tree minted these bytes, so it goes through the ack gate like any
-    # other, even when not one descriptor byte moves.
+    # about which committed Lean tree minted these bytes, so it goes through the committed-source
+    # gate like any other, even when not one descriptor byte moves.
     if not changed_desc and not fp_changes and not stamp_gap:
         for p, content in changed_gen.items():
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -3192,7 +3155,8 @@ def install_and_stamp(written: dict[str, str]) -> None:
         )
         return
 
-    auth = require_regen_ack(reasons, "this emission")
+    # Re-checked at install: a sibling's edit landing mid-emit must not be stamped as committed.
+    auth = require_committed_emit_source("this emission")
 
     for name in changed_desc:
         (DESC / name).write_text(written[name])
@@ -3232,14 +3196,12 @@ def install_and_stamp(written: dict[str, str]) -> None:
 # transcribed beside it — the transcription had already lagged (`--strict` and, the moment it
 # landed, `--list-guarded-paths` were missing from the message that claims to enumerate them).
 ACCEPTED_FLAGS = (
-    "--stamp-existing",
     "--list-emitter-modules",
     "--list-guarded-paths",
     "--verify-by-name-routing",
     "--verify-provenance",
     "--self-test-workflow-scope",
     "--self-test-provenance",
-    "--strict",
     "--rev",  # takes a value: `--rev HEAD` or `--rev=HEAD`
 )
 
@@ -3378,10 +3340,10 @@ def self_test_workflow_scope() -> int:
 #   * a descriptor byte moved while the stamp did not      (STAMP MISMATCH — 8 of the 10)
 #   * a descriptor on disk with no row in the stamp        (MISSING ROW    — 2 of the 10)
 #   * a row in the stamp with no descriptor behind it      (the deleted/renamed direction)
-#   * a stamp minted with DREGG_VK_REGEN_ALLOW_DIRTY=1     (the "looks taken and isn't" stamp)
+#   * a stamp recording source_dirty=true                 (the "looks taken and isn't" stamp)
 # ...plus the CONTROL (unmutated HEAD must be green — otherwise every red below is free) and the
 # VACUITY FLOOR (a walk that finds nothing must refuse, not report PASS).
-def _findings_of(strict: bool = False, doors: bool = False) -> tuple[set[str], str]:
+def _findings_of(doors: bool = False) -> tuple[set[str], str]:
     """The finding SET against the currently-bound roots, plus any FATAL text.
 
     A FATAL (the vacuity floor, a missing stamp) raises SystemExit rather than returning a
@@ -3390,7 +3352,7 @@ def _findings_of(strict: bool = False, doors: bool = False) -> tuple[set[str], s
     out, err = io.StringIO(), io.StringIO()
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            findings, _ = _verify_provenance_findings(strict, doors=doors)
+            findings, _ = _verify_provenance_findings(doors=doors)
         return set(findings), ""
     except SystemExit as exc:
         return set(), str(exc.code) if exc.code and not isinstance(exc.code, int) else "FATAL"
@@ -3508,16 +3470,15 @@ def self_test_provenance() -> int:
                       "MISSING on disk")
                 victim.write_bytes(pristine_bytes)
 
-                # (4) the ALLOW_DIRTY stamp — the wound that kept the ten unstamped for two days.
-                # Must red WITHOUT `--strict`, because the strict form is not the one anything
-                # runs; that was the entire defect.
+                # (4) a source_dirty=true stamp (pre-2026-11-06, or hand-edited). The emit can no
+                # longer write one; the verify must still refuse one.
                 dirty = json.loads(pristine_stamp)
                 dirty["source_dirty"] = True
                 stamp_path.write_text(json.dumps(dirty, indent=2) + "\n")
-                got, ftl = _findings_of(strict=False)
+                got, ftl = _findings_of()
                 new = got - base
                 case(ftl == "" and any("source_dirty=true" in n for n in new) and not (base - got),
-                     "RED on a source_dirty=true stamp WITHOUT --strict",
+                     "RED on a source_dirty=true stamp",
                      f"new={sorted(new)[:1]}")
                 stamp_path.write_bytes(pristine_stamp)
 
@@ -3551,17 +3512,15 @@ SCOPE_ANSWERS_VERIFY = (
 SCOPE_DOES_NOT_ANSWER_VERIFY = (
     "whether the descriptors are STALE with respect to Lean. This is committed BYTES against "
     "the committed STAMP — a sha256 comparison, never a re-derivation; re-running the Lean "
-    "emitters and diffing is scripts/check-descriptor-drift.sh, a separate gate. And without "
-    "--strict, which the local-gates row deliberately omits because a Dregg2 tree hash moves on "
-    "any commit to any of ~2300 modules, the ceremony clause never runs: a stamp attesting a "
-    "DIFFERENT Lean source tree PASSES here, and a stale fp_file_sha256 snapshot is printed "
-    "rather than failed."
+    "emitters and diffing is scripts/check-descriptor-drift.sh, a separate gate. A stamp "
+    "attesting a DIFFERENT (committed) Lean source tree PASSES here, and a stale "
+    "fp_file_sha256 snapshot is printed rather than failed."
 )
 
 SCOPE_ANSWERS_SELFTEST_PROV = (
     "can the provenance checker still FIRE — on scratch copies inside a detached HEAD worktree, "
     "does each of four injected faults (a mutated descriptor byte, a dropped stamp row, a stamp "
-    "row whose artifact is gone, a source_dirty=true stamp read WITHOUT --strict) add a finding "
+    "row whose artifact is gone, a source_dirty=true stamp) add a finding "
     "that names that artifact and remove none, does restoring it return to EXACTLY the "
     "baseline, does an all-empty walk REFUSE instead of reporting PASS, and does the full "
     "doors-on path execute?"
@@ -3627,10 +3586,12 @@ def main():
             + ", ".join(ACCEPTED_FLAGS) + ")"
         )
     # ...and the same refusal for a value-taking flag attached to a mode that ignores it. A
-    # `--rev` silently dropped by `--stamp-existing` would read as "I stamped that revision".
-    if rev is not None and not ({"--verify-provenance"} & set(argv)):
+    # `--rev` silently dropped by another mode would read as "I graded that revision".
+    # `--rev` means: grade that revision (`--verify-provenance`), or stamp it (the bare emit,
+    # which requires the checkout to BE that revision). Any other mode would silently drop it.
+    if rev is not None and argv and not ({"--verify-provenance"} & set(argv)):
         sys.exit(f"emit_descriptors: --rev {rev!r} is only meaningful with --verify-provenance "
-                 f"(got {argv!r}); refusing to ignore it.")
+                 f"or the bare emit (got {argv!r}); refusing to ignore it.")
     if "--self-test-workflow-scope" in argv:
         _print_scope(SCOPE_ANSWERS_SELFTEST_WF, SCOPE_DOES_NOT_ANSWER_SELFTEST_WF)
         sys.exit(self_test_workflow_scope())
@@ -3639,7 +3600,7 @@ def main():
         sys.exit(self_test_provenance())
     if "--verify-provenance" in argv:
         _print_scope(SCOPE_ANSWERS_VERIFY, SCOPE_DOES_NOT_ANSWER_VERIFY)
-        verify_provenance(strict="--strict" in argv, rev=rev)
+        verify_provenance(rev=rev)
         return
     if "--verify-by-name-routing" in argv:
         # Static, seconds, no Lean and no cargo — usable while the emit is blocked.
@@ -3654,9 +3615,6 @@ def main():
               "literal include_str!/include_bytes! target, first-party Lean import, and "
               "path invoked by a tracked workflow exists and is tracked.")
         return
-    if "--stamp-existing" in argv:
-        stamp_existing()
-        return
     if "--list-guarded-paths" in argv:
         # The change-set `install_and_stamp` can rewrite (see guarded_paths). No Lean run, so
         # `scripts/check-descriptor-drift.sh` can SNAPSHOT exactly what this driver may touch
@@ -3669,14 +3627,19 @@ def main():
         print("\n".join(emitter_modules()))
         return
     if argv:
-        # Recognized, but no mode claimed it — today only a bare `--strict`, which is a MODIFIER
-        # of `--verify-provenance`, never a mode. Refuse rather than fall through to the emit.
+        # Recognized, but no mode claimed it. Refuse rather than fall through to the emit.
         sys.exit(f"emit_descriptors: {argv!r} names no mode (expected none, or one of: "
                  + ", ".join(ACCEPTED_FLAGS) + ")")
 
     if not (META / "lakefile.lean").exists() and not (META / "lakefile.toml").exists():
         sys.exit(f"emit_descriptors: not a lake project at {META}")
     written: dict[str, str] = {}
+
+    # Fail fast, before any `lake build`: an uncommitted closure can never be stamped, and a
+    # named revision must be the one checked out.
+    if rev is not None:
+        require_checkout_at(rev)
+    require_committed_emit_source("the emit")
 
     rs_evd = (ROOT / "circuit" / "src" / "effect_vm_descriptors.rs").read_text()
     c2f = const_to_file(rs_evd)

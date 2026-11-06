@@ -264,26 +264,18 @@ for p in "${GUARDED[@]}"; do
 done
 
 echo "check-descriptor-drift: regenerating from Lean (source of truth)..."
-# The emit script's regen gate (docs/VK-REGEN-CONTROLS.md) refuses a byte-CHANGING
-# install without an explicit DREGG_VK_REGEN_ACK — exit 3, tree untouched. For this
-# gate that refusal IS the drift verdict: the Lean emission and the checked-in
-# artifacts disagree. We deliberately do NOT pass an ack here: a CI/pre-commit
-# drift check must never silently install a re-keying descriptor set.
+# Since 2026-11-06 the emit has no ack (SUBSTRATE-DECISION §9 row 4): from a COMMITTED
+# emitter source closure it installs and stamps automatically, and the DIFF below
+# against the pre-emit snapshot is the drift verdict. Its only refusal (exit 3) is an
+# UNCOMMITTED closure, which a `--rev` worktree cannot have; on the working tree it
+# means the gate cannot attribute the emission to committed source.
 emit_rc=0
 "$ROOT/scripts/emit-descriptors.sh" || emit_rc=$?
 if [ "$emit_rc" -eq 3 ]; then
   echo "" >&2
-  echo "DESCRIPTOR DRIFT: the Lean emission and the checked-in artifacts disagree." >&2
-  echo "  (the regen gate refused the unauthorized install; the tree is UNTOUCHED)" >&2
-  echo "  READ THE DRIVER'S 'Would change:' LIST ABOVE for which disagreement it is." >&2
-  echo "  Two reach here: (a) a descriptor/FP byte differs from what Lean emits, or" >&2
-  echo "  (b) the bytes match but PROVENANCE.json does not COVER them — a descriptor" >&2
-  echo "  landed without the stamp ceremony, so nothing attests it. Same fix, same" >&2
-  echo "  ack; (b) changes only PROVENANCE.json + the audit row, no VK re-key." >&2
-  echo "  To apply, review the Lean change, then run:" >&2
-  echo "    DREGG_VK_REGEN_ACK=\"\$(git rev-parse HEAD:metatheory/Dregg2)\" scripts/emit-descriptors.sh" >&2
-  echo "  and commit the result. (Lean is the source of truth; the JSON + *_FP" >&2
-  echo "  constants are generated. See docs/VK-REGEN-CONTROLS.md.)" >&2
+  echo "EMIT REFUSED: the emitters' Lean source closure has uncommitted edits (listed" >&2
+  echo "  above), so no emission from it can be attributed to committed source. Commit" >&2
+  echo "  the Lean, or run this gate with --rev HEAD. The tree is UNTOUCHED." >&2
   exit 1
 elif [ "$emit_rc" -ne 0 ]; then
   exit "$emit_rc"

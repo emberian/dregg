@@ -348,6 +348,10 @@ GATES=(
   # get fixed; it gets routed around.
   # So this row asks the question that is ALWAYS ANSWERABLE: are the COMMITTED bytes what the
   # COMMITTED stamp pins? Detached clean worktree, HEAD-vs-HEAD, no Lean, no cargo, ~5s.
+  # (2026-11-06, SUBSTRATE-DECISION §9 row 4: `--stamp-existing`, the ack, ALLOW_DIRTY and
+  # `--strict` are DELETED; the emit stamps automatically from a committed closure, and this
+  # row additionally refuses a stamp whose `mode` is not `emit`. The history above is kept as
+  # the record of why.)
   # ⚠ `--strict` is deliberately NOT here. Its extra clause compares the stamp's tree hash against
   # `HEAD:metatheory/Dregg2`, which moves on any commit to any of 2300 Lean modules — red within
   # minutes of any stamp and permanently after, i.e. furniture. Its honest question ("are the

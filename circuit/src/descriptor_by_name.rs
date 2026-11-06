@@ -594,7 +594,7 @@ const AUTOMATAFL_STEP_MARKS_N11_JSON: &str =
 /// the eleven anchor columns shifted up by one. **The PI surface is UNCHANGED** — 11 slots, same
 /// meanings, so the gnark peer-wrap's pack over `PI[1..9]` is untouched. What re-emits:
 /// `descriptors/by-name/dregg-eth-lightclient-verify-v1.json` (done) and this descriptor's VK
-/// (operator ceremony — `scripts/emit-descriptors.sh` under `DREGG_VK_REGEN_ACK`). Nothing else
+/// (`scripts/emit-descriptors.sh` from a committed Lean closure). Nothing else
 /// moves; no other descriptor changes shape and nothing re-genesises.
 const ETH_LIGHTCLIENT_VERIFY_JSON: &str =
     include_str!("../descriptors/by-name/dregg-eth-lightclient-verify-v1.json");

@@ -256,6 +256,25 @@ if [ "${DREGG_ALLOW_DANGLING_IMPORT:-0}" != "1" ] \
   fi
 fi
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# BY-NAME ROUTING ROUND TRIP — when the routing table or the by-name set is staged.
+#
+# `emit_descriptors.py --verify-by-name-routing` reconciles `metatheory/EmitByName.lean`'s routing
+# table, the checked-in `circuit/descriptors/by-name/` set and `PROVENANCE.json` in both directions,
+# plus the committed-reference-to-uncommitted-target doors. Static: no Lean, no cargo, ~7-12 s.
+# It replaced the regen-ack ceremony (SUBSTRATE-DECISION §9 row 4, 2026-11-06): a by-name artifact
+# committed without the automatic stamp, or routed with no artifact, is refused here, at the commit
+# that introduces it. The fix for an UNSTAMPED finding is the emit (docs/automata/BUILD.md,
+# "Emit and stamp (C2)"), never a hand-added stamp row.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+if git diff --cached --name-only --diff-filter=ACMRD -- 'metatheory/EmitByName.lean' \
+     'circuit/descriptors/by-name/' | grep -q .; then
+  python3 "$repo_root/scripts/emit_descriptors.py" --verify-by-name-routing || {
+    echo "pre-commit: by-name routing round trip FAILED (see above); commit refused." >&2
+    exit 1
+  }
+fi
+
 command -v rustfmt >/dev/null 2>&1 || exit 0   # no rustfmt on PATH → don't block the commit
 
 # Workspace default edition (root [workspace.package] edition), used for crates that inherit it
