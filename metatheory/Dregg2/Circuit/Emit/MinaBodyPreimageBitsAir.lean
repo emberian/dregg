@@ -407,11 +407,13 @@ def bodyBitsAir : EffectAir :=
         ++ (fieldIdx.map fun p => fieldPin p.1 p.2)
         ++ (limbIdx.map fun p => limbPin p.1 p.2) }
 
-theorem bodyBitsAir_leg_count : bodyBitsAir.legs.length = 4239 := by rfl
+-- `decide +kernel` here and in §3: the kernel evaluates the 4 239-leg list once. `rfl` evaluated it
+-- in the elaborator's `whnf` first, which cost 3.1 GB of this module's peak (8.7 → 5.6 GB).
+theorem bodyBitsAir_leg_count : bodyBitsAir.legs.length = 4239 := by decide +kernel
 
-theorem bodyBitsAir_mainRailOk : bodyBitsAir.mainRailOk = true := by rfl
+theorem bodyBitsAir_mainRailOk : bodyBitsAir.mainRailOk = true := by decide +kernel
 
-theorem bodyBitsAir_pinsFit : bodyBitsAir.pinsFit BODY_BITS_PI_COUNT = true := by rfl
+theorem bodyBitsAir_pinsFit : bodyBitsAir.pinsFit BODY_BITS_PI_COUNT = true := by decide +kernel
 
 /-- ⚑⚑ **THE WHOLE LOOKUP BILL IS THE FELT GATE, AND NOTHING ELSE MOVED.** Decided on the source:
 the 819 chunks still cost ZERO range lookups (a booleanity assertion is a degree-2 window gate, not
@@ -425,28 +427,55 @@ theorem the_field_gates_are_the_whole_lookup_bill :
       ∧ bodyBitsAir.ranges = []
       ∧ bodyBitsAir.tables = [bodyLimbTable]
       ∧ bodyBitsAir.maxLimbedCapacityBits = SK * SB := by
-  refine ⟨?_, ?_, ?_, rfl, rfl, ?_⟩ <;> rfl
+  refine ⟨?_, ?_, ?_, rfl, rfl, ?_⟩ <;> decide +kernel
 
 /-- ⚑⚑ **THE TIE VERDICT, BY EXHIBITING THE READER — not by scanning for one.**
 
-`EffectAir.pinsTied` is `O(pins × legs)` in the kernel, and this is the widest block in the tree:
-**1 518 pins over 4 239 legs**. Deciding it means, for each pin, walking the leg list until a leg
-whose `readCols` contains the pinned column turns up — and `readCols` of a window leg walks that
-leg's expression. The `TiedAir` field below is an `autoParam` defaulting to `by decide`, so leaving
-it blank pays that scan inside the elaborator's `whnf`.
+`EffectAir.pinsTied` is `O(pins × legs)`, and this is the widest block in the tree: **1 518 pins
+over 4 239 legs**. Until 2026-11-06 it was closed by `decide`, which ran that scan inside the
+elaborator's `whnf`: 213 s, and the reason this module peaked at 25.9 GB (measured on dregg-build2,
+`docs/MINA-PICKLES-RESCUE.md`).
 
-⚑ Naming it is what stops the tree paying for it TWICE — once here and once in the `TiedAir`
-below — which is the whole of what this theorem buys, and it is worth saying that plainly rather
-than overselling it.
-
-⚠ **THE BETTER OBJECT IS NOT BUILT AND IS NAMED HERE.** The fact does not need a search: every
-pin's reader is known by construction. A field pin publishes `FLIMB f k`, and `fieldLimbsLeg f` —
-the `.limbs` leg whose `cols` IS `fieldCols f` — is the reader; a limb pin publishes `PLIMB e k`,
-and `limbLeg e k` reads it as the `loc` leaf of its own composition gate. A proof that EXHIBITS
-those two witnesses never scans the leg list at all, and would be strictly harder to satisfy than
-this `decide` (it cannot be closed by a pin read by nothing). It is the largest single elaboration
-win left in this cone and it is not done. -/
-theorem bodyBitsAir_pinsTied : bodyBitsAir.pinsTied = true := by decide
+The proof below never scans the leg list. Every pin's reader is known by construction: a field pin
+publishes `FLIMB f k`, and `fieldLimbsLeg f` (the `.limbs` leg whose `cols` IS `fieldCols f`) reads
+it; a limb pin publishes `PLIMB e k`, and `limbLeg e k` reads it as the `loc` leaf of its own
+composition gate. The three deriving families contain no `pin` leg at all. Membership of each reader
+in `bodyBitsAir.legs` comes from the index lists, so the argument is about `f < NFIELD`, `k < SK`
+and `(e, k) ∈ limbIdx`, not about 4 239 concrete legs. -/
+theorem bodyBitsAir_pinsTied : bodyBitsAir.pinsTied = true := by
+  unfold EffectAir.pinsTied
+  refine List.all_eq_true.mpr fun l hl => ?_
+  cases l with
+  | pin p =>
+    -- the pin is a field pin or a limb pin; the three deriving families carry no `pin` leg
+    simp only [bodyBitsAir, List.mem_append, List.mem_map] at hl
+    rcases hl with (((⟨f, -, h⟩ | ⟨q, -, h⟩) | ⟨j, -, h⟩) | ⟨q, hq, h⟩) | ⟨q, hq, h⟩
+    · simp [fieldLimbsLeg] at h
+    · simp [limbLeg] at h
+    · simp [bitBoolLeg] at h
+    · -- a field pin: its reader is `fieldLimbsLeg q.1`, whose `cols` IS `fieldCols q.1`
+      simp only [fieldPin, AirLeg.pin.injEq] at h
+      subst h
+      obtain ⟨f, hf, k, hk, rfl⟩ : ∃ f, f < NFIELD ∧ ∃ k, k < SK ∧ q = (f, k) := by
+        simpa [fieldIdx, List.mem_flatMap, List.mem_map, List.mem_range, eq_comm] using hq
+      refine List.any_eq_true.mpr ⟨fieldLimbsLeg f, ?_, ?_⟩
+      · simp only [bodyBitsAir, List.mem_append, List.mem_map, List.mem_range]
+        exact Or.inl (Or.inl (Or.inl (Or.inl ⟨f, hf, rfl⟩)))
+      · simp only [fieldLimbsLeg, AirLeg.readCols, fieldCols, decide_eq_true_eq]
+        exact List.mem_map.mpr ⟨k, List.mem_range.mpr hk, rfl⟩
+    · -- a limb pin: its reader is `limbLeg q.1 q.2`, whose body's first leaf is `loc (PLIMB …)`
+      simp only [limbPin, AirLeg.pin.injEq] at h
+      subst h
+      refine List.any_eq_true.mpr ⟨limbLeg q.1 q.2, ?_, ?_⟩
+      · simp only [bodyBitsAir, List.mem_append, List.mem_map]
+        exact Or.inl (Or.inl (Or.inl (Or.inr ⟨q, hq, rfl⟩)))
+      · simp [limbLeg, AirLeg.readCols, Dregg2.Circuit.EffectAirIR.windowCols]
+  | gate _ => rfl
+  | lookup _ => rfl
+  | window _ => rfl
+  | limbs _ => rfl
+  | chal _ => rfl
+  | bind _ => rfl
 
 /-- ⚑ **THE TIED SOURCE** — every published column is derived by another leg, carried in the type.
 Both verdicts are SUPPLIED: `mainRailOk` by `rfl` fifteen lines above, `pinsTied` by the
@@ -475,7 +504,8 @@ theorem bodyBitsDesc_piCount : bodyBitsDesc.piCount = 1518 := rfl
 theorem bodyBitsDesc_tables : bodyBitsDesc.tables = [bodyLimbTable] := rfl
 theorem bodyBitsDesc_ranges : bodyBitsDesc.ranges = [] := rfl
 theorem bodyBitsDesc_hashSites : bodyBitsDesc.hashSites = [] := rfl
-theorem bodyBitsDesc_constraint_count : bodyBitsDesc.constraints.length = 5417 := rfl
+theorem bodyBitsDesc_constraint_count : bodyBitsDesc.constraints.length = 5417 := by
+  decide +kernel
 
 /-- ⚑⚑ **THE COMMITTED WIDTH IS NO LONGER THE DECLARED WIDTH, AND HERE IS THE BILL.**
 `MainLayout::build` appends `decomp_cols(bits)` columns per RANGE lookup and `2 · SUBMASK_BITS` per
@@ -493,7 +523,7 @@ theorem the_lookup_bill_is_exactly_the_field_gate :
     ∧ bodyBitsDesc.tables = [bodyLimbTable]
     ∧ bodyBitsDesc.traceWidth = 3899 := by
   refine ⟨?_, rfl, rfl⟩
-  rfl
+  decide +kernel
 
 /-! ### §3b — decided on the emitted bytes. -/
 
@@ -531,7 +561,7 @@ the only columns under a product are the bit columns squaring themselves. A non-
 multiply would put two DIFFERENT indices in one gate; none does. -/
 theorem bodyBits_products_are_only_the_bits :
     (bodyBitsDesc.constraints.all fun c =>
-      (constraintProdCols c).eraseDups.length ≤ 1) = true := by rfl
+      (constraintProdCols c).eraseDups.length ≤ 1) = true := by decide +kernel
 
 /-! ## §4 — ⚑ THE ROW PREDICATE, AND IT IS THE THREE LEG FAMILIES. -/
 
