@@ -188,3 +188,49 @@ parser; [READ] ZKUNSAT (2022/206) arithmetizes a resolution checker; [CLAIM] min
 ("Lean-authored AIRs") is the house rule this generalizes. Not a first: "verify the certificate,
 not the solver" is the standard pattern; ours is the pairing of that with the L0 content commitment
 and the named-collision conclusion across every family.
+
+---
+
+## 9. Ceremonies on the Lean → descriptor → Rust path: what each protects, and a verdict
+
+Ember, 2026-11-06: "we maybe need to reevaluate how necessary some of these ceremonies are."
+One page. The path: a Lean emitter (`#guard`-pinned) → `scripts/emit_descriptors.py` →
+`circuit/descriptors/**/*.json` + `*_FP` sha256 constants in Rust → `include_str!` in the prover
+→ the recursive VK hash. Each row names the concrete failure the ceremony would catch, the
+evidence of whether it does, and keep / simplify / delete. "Script" below means: runs in under
+five minutes on a lane's machine, no environment variable, no human in the loop, red is a line
+in the commit it refuses.
+
+Evidence first [MEASURED, this session]: `circuit/descriptors/PROVENANCE.json` was last stamped
+2026-08-11; `docs/VK-REGEN-LOG.md` has no emit row since; `attested-automaton-map-committed-weld8-v1.json`
+(the predecessor's, `9208cc055`) and `dregg-cert-qp-portfolio6-s3-ir2.json` are checked in with no
+stamp row, so the standing `provenance --rev HEAD` gate is red at HEAD and has been for weeks with
+nothing refusing; the drift gate is a 330-minute CI job skipped on push (nightly only); `ci.yml` has
+zero successes in its last 40 runs; `local-gates.sh` has 147 rows and is run by hand; the pre-push
+hook blocks on two of them. The federation the re-key ceremony protects is `deploy/aws/SUPERSEDED`.
+
+| # | ceremony | protects against (concrete failure it catches) | evidence it does | verdict |
+|---|---|---|---|---|
+| 1 | Lean `#guard` pins and `#assert_all_clean` in every emitter; the five `emitVmJson2 … == "…"` string pins | a Lean edit that silently changes columns, constraints, PIs or axioms of a served object | runs at every `lake env lean`; it is what "Lean owns acceptance" means | **keep** (it is a build, not a ritual) |
+| 2 | `emit_descriptors.py` default mode: emit, route, install, **re-pin `*_FP` sha256 constants into Rust source** | a hand-edited JSON | the FP is sha256 of the file beside it: self-consistency, and `check-descriptor-drift.sh:6-10` says so itself; `provenance_json_pins_match_…` is the same tautology one altitude up | **simplify**: keep emit+route as the one script; **delete the `*_FP` re-pin** and the derived-coverage test; a descriptor's identity is its canonical-bytes fingerprint computed at load (`DescriptorCanonical`, Lean and Rust, with the standing differential) |
+| 3 | `check-descriptor-drift.sh --rev HEAD` (re-derive every descriptor from Lean, diff) | a Lean change committed without re-emitting; real: three lanes' stale fixtures on 2026-07-31 | the right check at the wrong cadence: 330 min, nightly, in a CI nobody receives | **keep as a script, change the trigger**: re-derive only emitters whose import closure moved since the last emit (`--list-emitter-modules` already computes the closure), run on hbox nightly under `swarm-build`, verdict written to a board file and to the next commit that touches `circuit/descriptors/` |
+| 4 | **`PROVENANCE.json` ack-gated stamp**: `DREGG_VK_REGEN_ACK=<tree hash>`, `ALLOW_DIRTY`, the detached-worktree emit protocol, `--verify-provenance`, `--strict` | a regen from an unreviewed or dirty Dregg2 tree re-keying a live federation; a descriptor byte differing from its stamped sha | not taken in three months; two served descriptors unstamped at HEAD; its own doc records "months at zero invocations" and three lanes stuck in the ALLOW_DIRTY loop; the federation is superseded | **delete** the ack, the stamp and `--strict`. "Which Lean tree minted these bytes" is the emit commit (git); "are the bytes what Lean says" is row 3; "is this the deployed program" is the deploy side's pinned fingerprint set (row 8's closure test). Keep **`--verify-by-name-routing`** (static `EmitByName.lean` ↔ `by-name/` ↔ disk reconciliation, seconds): make it a pre-commit check when either is staged |
+| 5 | `docs/VK-REGEN-LOG.md` (append-only regen log) + `check-schema-epoch-log.py` (event row per `CANONICAL_STATE_SCHEMA_EPOCH` bump) | reconstructing epoch history; a constant bumped with no record (real: `6441705e8`) | the log stopped at 2026-08-11; the epoch check is duplicated by the Rust test `dregg_persist::schema_epoch_log_row` | **simplify**: delete the markdown regen log (`git log -- circuit/descriptors` is the log); keep the epoch ledger as the Rust test only, delete the script twin |
+| 6 | By-name golden re-emit: the hand-kept `EMITTERS` list in `emit_descriptors.py`; `check-emitter-routing.sh` | an emitter absent from the list never re-runs on a flag day, so its artifact goes stale (real: 07-31, three lanes) | the list is the defect; the check polices the list | **simplify**: derive the emitter set from the tree (`Emit*.lean` glob plus a one-line `-- emits:` header), so there is no list to forget and the check is the emit |
+| 7 | Emit-gate weld: 22 `circuit-prove/tests/*_emit_gate.rs` tests carrying a `GOLDEN_JSON` literal, policed by `check-emit-gate-weld.py` against the Lean string pins | the Rust copy and the Lean copy of one JSON drifting while both stay green | a gate that compares two copies of one claim | **delete** the Rust golden copies: the Rust test `include_str!`s the emitted file (one copy), the Lean `#guard` pins the emission; the script goes with them |
+| 8 | VK pin literals: fourteen typed-in `*_VK_LANES` nine-lane fingerprints; `vk_pin_closure_over_the_served_tree`, `descriptor_pin_literals_are_not_transcriptions`, `CheckVkPinLiterals.lean`, the canonical-encoder differential | a pin naming a program the tree does not have, or stale after a re-emit (real: ten in one week) | the closure test is a real test; the literals are the defect | **keep** the closure test and the Lean-vs-Rust encoder differential (a wrong encoder fails silently); **simplify the literals away**: `DescriptorCanonical.canonicalBytes` exists in Lean, so a `vk_pin` is computed from the pinned descriptor term at emit time and never typed |
+| 9 | Descriptor-anchor inertness ratchet, chip-absorb-arity admission, PI-disposition census | a public input no gate mentions (real: Solana, eleven anchors); a chip arity the chip AIR cannot satisfy (real: arity 9 since day one) | semantic checks on the emitted object, done in Rust after the fact | **keep, move into Lean**: an emitter `#guard` that every PI column occurs in a gate or lookup tuple, and that every chip site's arity is admitted (the admitted set mirrored in Lean and covered by the differential); the Rust scripts remain as differentials, not gates |
+| 10 | `local-gates.sh` (147 rows, by hand) and the 87-minute CI | everything above, in principle | zero green CI runs in 40; "invoked BY HAND" | not this program's to delete wholesale; for the automata families the gate is **one script** (row 1 on the family files, axiom reports, row 4's routing check), under five minutes, run before each commit and named in the commit message; rows 4, 5 and 7 leave the table |
+
+Why the verdicts lean to delete: on the Tower256 leaf path there is no descriptor JSON at all.
+Acceptance is the compiled Lean checker (`check_iff`), the receipt codec is Lean, and the
+"VK" is the checker's own identity. Every ceremony in rows 2, 4, 5 and 7 exists to bridge a
+Lean object to a Rust copy of it; where Lean owns acceptance the copy does not exist and the
+ceremony has nothing to protect. What survives is exactly what still has two independent
+witnesses to reconcile: Lean's emission against a checked-in cache (row 3), Lean's canonical
+encoder against Rust's (row 8), and the static routing table against disk (row 4's keeper).
+
+Who executes: lane C deletes rows 4, 5, 7 and the `*_FP` re-pin in one commit per row with the
+removed gate's own self-test run red-then-gone as the control, re-derives the emitter set (row 6),
+and moves row 9's two checks into the automata emitters first; the pin-literal removal (row 8)
+is a flag day on the Mina modules and is proposed, not done, here.
