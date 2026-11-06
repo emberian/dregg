@@ -336,6 +336,7 @@ pub fn verify_gpu_evidence(
     };
     verify_gpu_report(&ev.report, &ev.chain_pem, expected_nonce, &probe, now)?;
     let device_chain = pem_chain(&ev.chain_pem)?;
+    check_fwid(&report, &device_chain[0])?;
     verify_chain_not_revoked(&device_chain, 1, &ev.ocsp, ocsp_policy, now)
         .map_err(|e| format!("device chain: {e}"))?;
     let vbios = verify_rim(&ev.vbios_rim, now).map_err(|e| format!("VBIOS RIM: {e}"))?;
@@ -353,6 +354,80 @@ pub fn verify_gpu_evidence(
         vbios_rim_signer: vbios.signer_fingerprint,
         gpu,
     })
+}
+
+/// Opaque TLV 20: the firmware ID the GPU reports.
+pub const OPAQUE_FWID: u16 = 20;
+const OID_TCG_DICE_FWID: &str = "2.23.133.5.4.1";
+const OID_TCG_DICE_FWID_1: &str = "2.23.133.5.4.1.1";
+
+/// The report's FWID must equal the FWID the attestation (leaf) certificate carries in its TCG
+/// DICE extension (Hopper: the extension value's last 48 bytes, as nvtrust `extract_fwid`).
+/// Stricter than nvtrust, which skips the check when the report has no FWID: here a missing
+/// FWID on either side is a refusal.
+pub fn check_fwid(report: &GpuReport, leaf_der: &[u8]) -> Result<(), String> {
+    let fwid = report
+        .opaque_field(OPAQUE_FWID)
+        .ok_or_else(|| "report carries no FWID".to_string())?;
+    if fwid.len() != 48 {
+        return Err(format!("report FWID is {} bytes, expected 48", fwid.len()));
+    }
+    let (_, leaf) = X509Certificate::from_der(leaf_der).map_err(|e| format!("leaf parse: {e}"))?;
+    let mut found = None;
+    for ext in leaf.extensions() {
+        let oid = ext.oid.to_id_string();
+        if oid == OID_TCG_DICE_FWID || oid == OID_TCG_DICE_FWID_1 {
+            if found.is_some() {
+                return Err("leaf carries more than one FWID extension".into());
+            }
+            found = Some(ext.value);
+        }
+    }
+    let v = found.ok_or_else(|| "leaf certificate carries no FWID extension".to_string())?;
+    if v.len() < 48 || &v[v.len() - 48..] != fwid {
+        return Err("report FWID differs from the attestation certificate's FWID".into());
+    }
+    Ok(())
+}
+
+/// Opaque TLVs naming the board, for the RIM service ids (nvtrust `get_*_rim_file_id`).
+pub const OPAQUE_CHIP_SKU: u16 = 15;
+pub const OPAQUE_PROJECT: u16 = 17;
+pub const OPAQUE_PROJECT_SKU: u16 = 18;
+
+fn opaque_ascii(r: &GpuReport, ty: u16, what: &str) -> Result<String, String> {
+    let v = r
+        .opaque_field(ty)
+        .ok_or_else(|| format!("report carries no {what}"))?;
+    let v = v.split(|&b| b == 0).next().unwrap_or(&[]);
+    let s = std::str::from_utf8(v)
+        .map_err(|_| format!("{what} is not ASCII"))?
+        .trim();
+    if s.is_empty() || !s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'.') {
+        return Err(format!(
+            "{what} {s:?} is empty or has unexpected characters"
+        ));
+    }
+    Ok(s.to_ascii_uppercase())
+}
+
+/// The NVIDIA RIM service ids (driver, VBIOS) for the versions and board a Hopper report names.
+/// These choose which manifests to fetch; they are not a trust step (the verifier re-binds the
+/// versions from the signed RIMs to the report).
+pub fn rim_ids(report: &GpuReport) -> Result<(String, String), String> {
+    let driver = crate::nvidia_rim::report_driver_version(report)?;
+    let vbios = crate::nvidia_rim::report_vbios_version(report)?
+        .replace('.', "")
+        .to_ascii_uppercase();
+    Ok((
+        format!("NV_GPU_DRIVER_{PRODUCT_GH100}_{driver}"),
+        format!(
+            "NV_GPU_VBIOS_{}_{}_{}_{vbios}",
+            opaque_ascii(report, OPAQUE_PROJECT, "project")?,
+            opaque_ascii(report, OPAQUE_PROJECT_SKU, "project SKU")?,
+            opaque_ascii(report, OPAQUE_CHIP_SKU, "chip SKU")?
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -450,6 +525,30 @@ mod tests {
         let mut g4 = g.clone();
         g4.values.insert(inactive, vec![vec![1u8; 48]]);
         assert!(verify_gpu_report(&bytes, CHAIN, &r.request_nonce, &g4, now()).is_err());
+    }
+
+    #[test]
+    fn nvidia_fwid_and_rim_ids() {
+        let r = parse_report(&report()).unwrap();
+        let chain = pem_chain(CHAIN).unwrap();
+        check_fwid(&r, &chain[0]).expect("sample FWID matches its leaf");
+        // a different FWID in the report: refused
+        let mut r2 = r.clone();
+        for (t, v) in r2.opaque.iter_mut() {
+            if *t == OPAQUE_FWID {
+                v[0] ^= 1;
+            }
+        }
+        assert!(check_fwid(&r2, &chain[0]).is_err());
+        // no FWID extension (a non-leaf certificate): refused
+        assert!(check_fwid(&r, &chain[1]).is_err());
+        assert_eq!(
+            rim_ids(&r).unwrap(),
+            (
+                "NV_GPU_DRIVER_GH100_550.90.07".to_string(),
+                "NV_GPU_VBIOS_1010_0200_882_96009F0001".to_string()
+            )
+        );
     }
 
     /// Both RIM signing chains are shown unrevoked by the captured responses.

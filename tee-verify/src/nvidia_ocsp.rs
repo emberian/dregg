@@ -403,6 +403,73 @@ pub fn verify_ocsp(
     Ok(this_update)
 }
 
+fn der(tag: u8, value: &[u8]) -> Vec<u8> {
+    let mut out = vec![tag];
+    let n = value.len();
+    if n < 0x80 {
+        out.push(n as u8);
+    } else {
+        let bytes: Vec<u8> = n
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|&b| b == 0)
+            .collect();
+        out.push(0x80 | bytes.len() as u8);
+        out.extend_from_slice(&bytes);
+    }
+    out.extend_from_slice(value);
+    out
+}
+
+/// The DER OCSP request nvtrust sends: one SHA-384 `CertID` for `cert` under `issuer`, and a
+/// critical nonce extension (RFC 8954 form). Building it is not a trust step; it is here so a
+/// fetcher and the verifier compute the same `CertID`.
+pub fn build_ocsp_request(
+    cert_der: &[u8],
+    issuer_der: &[u8],
+    nonce: &[u8],
+) -> Result<Vec<u8>, String> {
+    let (_, cert) =
+        X509Certificate::from_der(cert_der).map_err(|e| format!("ocsp: cert parse: {e}"))?;
+    let (_, issuer) =
+        X509Certificate::from_der(issuer_der).map_err(|e| format!("ocsp: issuer parse: {e}"))?;
+    if cert.issuer().as_raw() != issuer.subject().as_raw() {
+        return Err("ocsp: the named issuer did not issue this certificate".into());
+    }
+    let alg = der(0x30, &[der(0x06, OID_SHA384), vec![0x05, 0x00]].concat());
+    let serial = cert.raw_serial();
+    let serial = if serial.first().is_some_and(|&b| b & 0x80 != 0) {
+        [&[0u8][..], serial].concat()
+    } else {
+        serial.to_vec()
+    };
+    let cert_id = der(
+        0x30,
+        &[
+            alg,
+            der(0x04, &Sha384::digest(issuer.subject().as_raw())),
+            der(
+                0x04,
+                &Sha384::digest(&issuer.public_key().subject_public_key.data),
+            ),
+            der(0x02, &serial),
+        ]
+        .concat(),
+    );
+    let request_list = der(0x30, &der(0x30, &cert_id));
+    let nonce_ext = der(
+        0x30,
+        &[
+            der(0x06, OID_OCSP_NONCE),
+            vec![0x01, 0x01, 0xff],
+            der(0x04, &der(0x04, nonce)),
+        ]
+        .concat(),
+    );
+    let exts = der(0xa2, &der(0x30, &nonce_ext));
+    Ok(der(0x30, &der(0x30, &[request_list, exts].concat())))
+}
+
 /// Every certificate `chain[i]` for `start <= i < chain.len() - 1` (leaf first, root last;
 /// the root is the pinned anchor and is not checked) must be shown not revoked by one of
 /// `evidence`. The device chain uses `start = 1`: its leaf is generated on the GPU and is not
@@ -466,6 +533,17 @@ pub(crate) mod tests {
         x509_parser::pem::Pem::iter_from_buffer(pem)
             .map(|p| p.unwrap().contents)
             .collect()
+    }
+
+    /// The request builder is byte-identical to the request Python `cryptography` built for
+    /// the captured `device_1` response (same nonce).
+    #[test]
+    fn nvidia_ocsp_request_matches_reference() {
+        let chain = device_chain();
+        let ev = evidence("device_1");
+        let req = build_ocsp_request(&chain[1], &chain[2], ev.nonce.as_ref().unwrap()).unwrap();
+        let want = include_bytes!("../tests/data/nvidia_ocsp/device_1.req.der");
+        assert_eq!(req.as_slice(), want.as_slice());
     }
 
     #[test]
