@@ -2,7 +2,26 @@
 
 2026-11-06, Codex gpt-6-astra. Initiative register row **#1 — Parser/language excellence (policy language, demos, perf, Lean-first AIR generator, build)**.
 
-[READ] marks inspected source; [MEASURED] marks structural query results; [INFERRED] marks conclusions or proposed work. This is a bounded audit of the remaining constructors after the eight static-leaf migrations described in `AIR-GENERATOR-GROUNDING.md`, not a repository-wide declaration of C9 completion. Note-spend consolidation is owned by the generator lane and is intentionally not duplicated here. No builds, tests, remote jobs, or git mutations were performed for this audit.
+[READ] marks inspected source; [MEASURED] marks structural query results; [INFERRED] marks conclusions or proposed work. This is a bounded audit of the remaining constructors after the initial eight static-leaf migrations described in `AIR-GENERATOR-GROUNDING.md`, not a repository-wide declaration of C9 completion. Note-spend consolidation is owned by the generator lane and is intentionally not duplicated here. No builds, tests, remote jobs, or git mutations were performed for this audit.
+
+## Follow-through in this cycle
+
+[READ, MEASURED] The recommendations below now have three additional landings. `9773903d3`
+consolidates both note-spend consumers onto the existing fixed Lean artifact and adds a jointly
+inhabited semantic bridge. `000ce3b99` removes the discarded UMem descriptor from both cohort
+staging paths while preserving the arbitrary-domain compatibility producer. `247ebb4b9`
+generates the depth-uniform binary membership block, consumes it from Rust, and proves its
+actual-height binary path semantics with a full witness and final-row refusal control.
+Eleven production constructors have been removed; the UMem staging simplification is not
+counted as another removal because its compatibility constructor remains.
+
+The binary block preserves the existing ten constraints. Its seven-constraint comparator is
+an intentionally weakened control, not a newly discovered production bug. Its public digest
+remains scalar and its name's depth is not an admission check on proof height. The UMem
+consumers still include Rust-authored weld transformations downstream; removing the temporary
+metadata carrier does not discharge those. Native integration is recorded separately in the
+binary/UMem reports and the deputy report. The original audit rows below remain a precise map
+of the source before these follow-through changes, not a claim that they are still untouched.
 
 ## Count the right object
 

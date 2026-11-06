@@ -1,6 +1,6 @@
 # Initiative 1 — parser/language excellence
 
-Codex gpt-6-astra deputy, 2026-11-06. **In progress; integration checkpoint at 21:30 UTC.**
+Codex gpt-6-astra deputy, 2026-11-06. **In progress; integration checkpoint at 21:55 UTC.**
 The register is `/Users/ember/dev/whatember/INITIATIVES.md`; its row at takeover is:
 
 | # | Initiative | Owner lane | Repo | Rung | Bar | Next gate | Last report |
@@ -261,3 +261,51 @@ commit contains it. GitHub Pages build succeeded, but deployment remains queued.
 page is reported live until its actual HTTP content is checked. No old local microsite history
 was pushed. Another initiative's session-derived Tree demo is outside this deputy's publication
 scope; this initiative's demos and new fixtures use synthetic or independently public data.
+
+
+## Integration checkpoint, 21:55 UTC
+
+Register row remains **#1**. `9773903d3`, `000ce3b99`, `4b0146d52` and `247ebb4b9` are now
+confirmed ancestors of public main: certified compiler/audit/note-spend, UMem metadata staging,
+certified public-corpus demo, and generated binary membership respectively. The statement gate
+is now 27 reviews / 192 exact pins / 235 source identities. Eleven production constructors have
+been removed; generic compiler and weld debt remains in `AIR-REMAINING-DEBT.md`.
+
+[MEASURED] The final served harness passed all seven selected table/weld/Dyck/absence tests
+(21 filtered out). The actual 2,048-byte public absence record uses 20 columns, 32 constraints,
+two tables and three proof instances; 147,909 proof bytes, 12,371 ms prove, 26 ms verify.
+Changed actual record, final state, route and length are refused. The full-crate bootstrap is
+still a separate gate. Corpus replay and signed-tuple checks passed before the source landing.
+
+[READ, MEASURED] Root note `dcd045cd2` reports the whole-tree floor gate red on four declarations:
+`DfaRoutingRung2.collisionFree_of_injective`, `wtTrace_rung2_fires`,
+`DfaRoutingTableBound.trail_unique`, and `word_public_of_functional`. Exact diagnostics were
+recovered from `/home/build/stream/build.log`; this deputy owns their repair. No baseline
+increase is planned: generic algebra, actual reference premises and executable finite-table
+functionality validation supply more useful interfaces. The current controlled whole build is
+also diagnosing the full source; a final green follows the repair. No other lane's clone is built in.
+
+The std-only native AIR gate exposed three syntax-classification defects: nested tuple and
+trailing-comma patterns in the flat interpreter and Mina consumers were counted as authored
+constraints. The classifier repair is underway with positive-constructor counterexamples;
+production source and baseline limits will not be weakened to clear these rows. Actual native
+counts confirm the generated binary membership consumer authors zero constraint sites.
+
+[MEASURED] A separate sparse Mac clone at `bac75df74` uses verified read-only package key
+`856c40722ebb` and 21,824 independent cache files (no shared live inodes). Its meaningful
+`make check-fast FILES=Dregg2/Policy/Compositional.lean` run refused seven stale imports in
+14.50 s; an external wrapper prevented its automatic dependency build. This is a refusal,
+not the two-minute green bar. Refreshing from the current validated host artifacts and repeating
+that command is still required. No Mac whole-tree/native build ran.
+
+Microsites `cb912f51c021271a9f76fd7f1019700e8161beba` publishes the revised public absence
+page; it includes the prior synthetic governance page. GitHub Pages run `42298535049` is queued
+for an ubuntu-latest runner. Previous builds succeeded but their deploy jobs were cancelled by
+newer Pages requests. Neither page is called live yet; further content pushes restart that queue.
+The original local microsite history remains untouched and unpushed by this deputy.
+
+Publication now uses a clean separate clone, not a worktree, with the same pre-push hooks.
+A clean clone exposed a historical audit link to untracked Foundry output. `8ed9ce062` preserves
+the historical observation but correctly distinguishes it from checked-in deployment evidence;
+its tracked script reference replaces the dead artifact link. No hook bypass is used. Remote
+merges can now happen in that owned clone without touching the shared dirty tree.
