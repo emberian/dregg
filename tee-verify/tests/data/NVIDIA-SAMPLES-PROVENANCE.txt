@@ -1,0 +1,7 @@
+nvidia_hopper_attestation_report.hex and nvidia_hopper_cert_chain.pem are copied verbatim from
+NVIDIA nvtrust (https://github.com/NVIDIA/nvtrust, commit a8090b65872a15bf0fd1f69f3d9b754b1be431b5,
+2026-10-16), guest_tools/gpu_verifiers/local_gpu_verifier/src/verifier/samples/
+hopperAttestationReport.txt and hopperCertChain.txt, Apache License 2.0.
+They are the local GPU verifier's "test_no_gpu" sample: a real GH100 SPDM GET_MEASUREMENTS
+request+response (64 SHA-384 measurement blocks, 96-byte P-384 signature) and its five-certificate
+chain to "NVIDIA Device Identity CA".

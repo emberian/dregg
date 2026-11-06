@@ -52,6 +52,7 @@ use sha2::{Digest, Sha256};
 use x509_parser::prelude::*;
 
 pub mod attested_data;
+pub mod nvidia;
 pub mod oracle_mark;
 pub mod snp;
 pub mod tdx;

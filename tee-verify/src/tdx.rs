@@ -116,6 +116,30 @@ pub struct TdxVerifiedReport {
     pub advisory_ids: Vec<String>,
     /// Whether `status` is in the verifier's accepted set (the pinned TCB policy).
     pub tcb_ok: bool,
+    /// TD 1.5 only: `MR_SERVICETD`, the measurement of a service TD (e.g. a migration TD)
+    /// bound to this TD. `None` for a TD 1.0 report. Gated by [`TdxVerifier`]'s
+    /// accepted-service-TD set: the default accepts only all-zeroes (no service TD bound), so a
+    /// TD that could be migrated by an unpinned service TD is REFUSED, not silently passed.
+    pub mr_servicetd: Option<[u8; MR_LEN]>,
+    /// TD 1.5 only: `TEE_TCB_SVN_2`, the TDX module SVN after TD-preserving updates. Carried for
+    /// inspection and policy; `None` for a TD 1.0 report.
+    pub tee_tcb_svn2: Option<[u8; 16]>,
+}
+
+/// The all-zeroes `MR_SERVICETD`: no service TD is bound to the attested TD.
+pub const NO_SERVICE_TD: [u8; MR_LEN] = [0u8; MR_LEN];
+
+/// The service-TD gate, as a pure function so it is testable without a TD 1.5 quote: a TD 1.0
+/// report (`None`) has no service-TD binding and passes; a TD 1.5 report passes only if its
+/// `MR_SERVICETD` is in the accepted set.
+pub fn service_td_ok(
+    accepted: &BTreeSet<[u8; MR_LEN]>,
+    mr_servicetd: Option<&[u8; MR_LEN]>,
+) -> bool {
+    match mr_servicetd {
+        None => true,
+        Some(mr) => accepted.contains(mr),
+    }
 }
 
 impl TdxVerifiedReport {
@@ -353,6 +377,7 @@ pub const CHUTES_NONCE_HEX_LEN: usize = 64;
 pub struct TdxVerifier {
     collateral: QuoteCollateralV3,
     accepted_statuses: BTreeSet<String>,
+    accepted_service_tds: BTreeSet<[u8; MR_LEN]>,
 }
 
 impl TdxVerifier {
@@ -361,10 +386,23 @@ impl TdxVerifier {
     pub fn new(collateral: QuoteCollateralV3) -> TdxVerifier {
         let mut accepted = BTreeSet::new();
         accepted.insert(DEFAULT_ACCEPTED_STATUS.to_string());
+        let mut service = BTreeSet::new();
+        service.insert(NO_SERVICE_TD);
         TdxVerifier {
             collateral,
             accepted_statuses: accepted,
+            accepted_service_tds: service,
         }
+    }
+
+    /// Replace the accepted `MR_SERVICETD` set (STRICT default: only [`NO_SERVICE_TD`]). An
+    /// operator who runs a migration TD pins ITS measurement here; the widening is explicit.
+    pub fn with_accepted_service_tds<I>(mut self, mrs: I) -> TdxVerifier
+    where
+        I: IntoIterator<Item = [u8; MR_LEN]>,
+    {
+        self.accepted_service_tds = mrs.into_iter().collect();
+        self
     }
 
     /// Build from a JSON-serialized [`QuoteCollateralV3`] (the shape a PCCS / Chutes
@@ -443,6 +481,19 @@ impl TdxVerifier {
         let measurement = fold_tdx_measurement(&mr_td, &rt_mr0, &rt_mr1, &rt_mr2);
         let tcb_ok = self.accepted_statuses.contains(&verified.status);
 
+        // 5. TD 1.5 fields (previously dropped by reading only the TD10 base). A bound service
+        //    TD that is not pinned is a refusal: it can migrate this TD to a host the relying
+        //    party never attested.
+        let td15 = verified.report.as_td15();
+        let mr_servicetd = td15.map(|r| r.mr_service_td);
+        let tee_tcb_svn2 = td15.map(|r| r.tee_tcb_svn2);
+        if !service_td_ok(&self.accepted_service_tds, mr_servicetd.as_ref()) {
+            return Err(format!(
+                "TD 1.5 MR_SERVICETD {} is not in the accepted service-TD set",
+                hex::encode(mr_servicetd.unwrap_or(NO_SERVICE_TD))
+            ));
+        }
+
         Ok(TdxVerifiedReport {
             measurement,
             report_data: td.report_data,
@@ -454,6 +505,8 @@ impl TdxVerifier {
             status: verified.status,
             advisory_ids: verified.advisory_ids,
             tcb_ok,
+            mr_servicetd,
+            tee_tcb_svn2,
         })
     }
 
@@ -859,6 +912,8 @@ mod tests {
             status: "UpToDate".to_string(),
             advisory_ids: vec![],
             tcb_ok: true,
+            mr_servicetd: None,
+            tee_tcb_svn2: None,
         }
     }
 
@@ -1035,5 +1090,35 @@ mod tests {
         assert!(wide.accepted_statuses().contains("UpToDate"));
         assert!(wide.accepted_statuses().contains("SWHardeningNeeded"));
         assert!(!wide.accepted_statuses().contains("OutOfDate"));
+    }
+
+    /// TD 1.5 service-TD gate. A TD 1.0 report has no binding and passes; a TD 1.5 report
+    /// passes with the all-zero MR_SERVICETD under the strict default and is REFUSED with any
+    /// bound service TD until that measurement is pinned. This is the falsifier for the
+    /// earlier behaviour, which read only the TD10 base and passed every service TD.
+    #[test]
+    fn td15_service_td_gate_fail_closed() {
+        let mut strict = BTreeSet::new();
+        strict.insert(NO_SERVICE_TD);
+        let migration_td = [0x5au8; MR_LEN];
+        assert!(service_td_ok(&strict, None), "TD 1.0: no service-TD field");
+        assert!(
+            service_td_ok(&strict, Some(&NO_SERVICE_TD)),
+            "TD 1.5, no service TD bound"
+        );
+        assert!(
+            !service_td_ok(&strict, Some(&migration_td)),
+            "unpinned service TD must refuse"
+        );
+        let mut pinned = strict.clone();
+        pinned.insert(migration_td);
+        assert!(
+            service_td_ok(&pinned, Some(&migration_td)),
+            "pinned service TD accepted"
+        );
+        assert!(
+            !service_td_ok(&pinned, Some(&[0x11u8; MR_LEN])),
+            "other service TD still refused"
+        );
     }
 }
