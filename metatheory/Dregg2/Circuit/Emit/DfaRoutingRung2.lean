@@ -471,7 +471,7 @@ theorem wtTf_chipSound : ChipTableSound hash ((wtTrace hash).tf .poseidon2) := b
   rcases hr with rfl | rfl
   · exact ⟨[0, 1, 1, 0], List.replicate 7 0, by decide, by decide, rfl⟩
   · exact ⟨[0, hash [0, 1, 1, 0]], List.replicate 7 0,
-      by simp only [List.length_cons, List.length_nil, CHIP_RATE]; omega, by decide, rfl⟩
+      by simp only [List.length_cons, List.length_nil]; decide, by decide, rfl⟩
 
 /-- **The genuine witness wires the NARROW bus to the 18-prefix of its wide chip table** —
 definitional, exactly the deployed Rust `narrow_hist` serving (one physical chip, two buses). -/
