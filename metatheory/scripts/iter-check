@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+"""iter-check -- the lane loop's two Lean checks, one script for minidregg and breadstuffs/metatheory.
+
+    iter-check fast  [FILE.lean ...]   on this machine (the Mac): elaborate the changed files against warm oleans
+    iter-check full  [--box B] [--umbrella] [--wait|--no-wait] [FILE.lean ...]
+                                       on the least-loaded build box: build the changed modules AND every in-tree
+                                       module that imports them (per-file green hides a red umbrella), log fetched back
+    iter-check publish [STORE]        on a build box, in a tree whose tracked .lean files are clean at HEAD: snapshot .lake/build/lib
+                                       into STORE/<repo>/<commit>/{lib,ir} (default ~/olean-store), read-only,
+                                       hard-linked against the previous snapshot (never against a live tree)
+    iter-check fetch [--box B]         copy the snapshot of the nearest ancestor commit the box holds into this tree's
+                                       .lake/build/lib; Lake's hash traces then decide what is still current
+    iter-check boxes                   the box table `full` chooses from (load, memory, eligibility)
+    iter-check status|log [RUN]        a detached `full` run: state / its log
+
+With no FILE, the changed files are the .lean files that differ from the merge base with origin/main (committed or
+not) plus untracked .lean files. Run from anywhere inside the repo; the Lean root is found from lakefile.toml.
+
+fast: (1) `lake build --no-build` over the changed files' in-tree imports; if any is stale and the stale closure is
+  at most ITER_FAST_MAX_STALE (40) modules, `lake build` them here, else stop and say `full` (that is a box job);
+  (2) `lake lean FILE` for each changed file (its #guard and #assert lines run there), timed. Exit 1 on any red.
+  `lake lean`, not `lake env lean`: only the former passes the lakefile's leanOptions and moreLeanArgs
+  (minidregg's --load-dynlib), so `lake env lean` checks something other than what `lake build` checks.
+full: rsyncs the tracked + untracked-not-ignored files to a persistent warm clone on the chosen box, then runs
+  `lake build <changed modules + reverse dependents>` (or the umbrella with --umbrella, which only bb2 takes) detached,
+  under the box's memory containment, with a PID file, and copies the log back to .iter-check/<run>/build.log.
+
+Box policy (root's rebalance, 2026-11-06; see the repo's BUILD doc): umbrella and 32G jobs on bb2 only; a medium job
+(12G cap) goes to whichever of bb2/hbox/forge has the lowest score = load1/ncpu + used_rss/total_ram among boxes that
+answer, have the cap plus 40 GB headroom free (forge: the cap plus 4 GB; it is a 32 GB box), and are not in a pause
+window (forge pauses 10:00-11:00 UTC for fn2's nightly). One lake per lane per box: a box whose clone has a live run
+is skipped. LEAN_NUM_THREADS: 8 on bb2, 6 on hbox and forge.
+
+Stopping a run: `iter-check stop RUN` kills the PID in the run's PID file on its box (re-reading its command line
+first). Nothing else is ever killed.
+"""
+import json, os, re, shlex, subprocess, sys, time
+
+HERE = os.getcwd()
+
+def sh(cmd, **kw):
+    return subprocess.run(cmd, shell=isinstance(cmd, str), text=True, capture_output=True, **kw)
+
+def lean_root():
+    d = HERE
+    while d != '/':
+        if os.path.exists(os.path.join(d, 'lakefile.toml')) or os.path.exists(os.path.join(d, 'lakefile.lean')):
+            return d
+        d = os.path.dirname(d)
+    sys.exit('iter-check: no lakefile above ' + HERE)
+
+ROOT = lean_root()
+GIT_TOP = sh(['git', '-C', ROOT, 'rev-parse', '--show-toplevel']).stdout.strip()
+REPO = 'minidregg' if os.path.exists(os.path.join(ROOT, 'scripts/build-mini-kernels.sh')) else 'metatheory'
+STATE = os.path.join(ROOT, '.iter-check')
+
+# ---- the module graph (header imports only; Lean module system aware) -------------------------------------------
+def header_imports(text):
+    toks, i, n = [], 0, len(text)
+    while i < n and len(toks) < 4000:
+        if text.startswith('/-', i):
+            d, i = 1, i + 2
+            while i < n and d:
+                if text.startswith('/-', i): d, i = d + 1, i + 2
+                elif text.startswith('-/', i): d, i = d - 1, i + 2
+                else: i += 1
+            continue
+        if text.startswith('--', i):
+            j = text.find('\n', i); i = n if j < 0 else j; continue
+        if text[i].isspace(): i += 1; continue
+        j = i
+        while j < n and not text[j].isspace() and not text.startswith('--', j) and not text.startswith('/-', j): j += 1
+        toks.append(text[i:j]); i = j
+    out, want = [], False
+    for t in toks:
+        if t in ('module', 'prelude', 'public', 'meta', 'private', 'all'): continue
+        if t == 'import': want = True; continue
+        if want and re.match(r"^[A-Za-z_][\w.']*$", t): out.append(t); want = False; continue
+        break
+    return out
+
+def all_modules():
+    mods = {}
+    for dp, dn, fn in os.walk(ROOT):
+        dn[:] = [d for d in dn if not d.startswith('.') and d not in ('target', 'node_modules', 'scratch')]
+        for f in fn:
+            if f.endswith('.lean'):
+                rel = os.path.relpath(os.path.join(dp, f), ROOT)
+                mods[rel[:-5].replace('/', '.')] = rel
+    return mods
+
+def graph():
+    mods = all_modules(); imp = {}
+    for m, rel in mods.items():
+        try: imp[m] = [d for d in header_imports(open(os.path.join(ROOT, rel), errors='replace').read()) if d in mods]
+        except OSError: imp[m] = []
+    return mods, imp
+
+def closure(start, edges):
+    seen, todo = set(), list(start)
+    while todo:
+        m = todo.pop()
+        if m in seen: continue
+        seen.add(m); todo.extend(edges.get(m, []))
+    return seen
+
+def lean_libs():
+    """lean_lib name -> list of explicit globs (empty: the default, the name and its submodules)."""
+    libs, cur = {}, None
+    try: text = open(os.path.join(ROOT, 'lakefile.toml')).read()
+    except OSError: return libs
+    for block in re.split(r'\n(?=\[\[)', text):
+        if block.startswith('[[lean_lib]]'):
+            name = re.search(r'name\s*=\s*"([^"]+)"', block)
+            globs = re.search(r'globs\s*=\s*\[(.*?)\]', block, re.S)
+            if name:
+                libs[name.group(1)] = re.findall(r'"([^"]+)"', globs.group(1)) if globs else []
+    return libs
+
+def in_lib(m, libs):
+    for name, globs in libs.items():
+        if not globs and (m == name or m.startswith(name + '.')): return True
+        for g in globs:
+            if g.endswith('.+') and m.startswith(g[:-2] + '.'): return True
+            if g.endswith('.*') and (m == g[:-2] or m.startswith(g[:-2] + '.')): return True
+            if m == g: return True
+    return False
+
+def changed_files(args):
+    if args: return [os.path.relpath(os.path.abspath(a), ROOT) for a in args]
+    base = sh(['git', '-C', GIT_TOP, 'merge-base', 'HEAD', 'origin/main']).stdout.strip() or 'HEAD'
+    names = sh(['git', '-C', GIT_TOP, 'diff', '--name-only', base]).stdout.split()
+    names += sh(['git', '-C', GIT_TOP, 'ls-files', '--others', '--exclude-standard']).stdout.split()
+    out = []
+    for n in names:
+        p = os.path.join(GIT_TOP, n)
+        if n.endswith('.lean') and os.path.exists(p) and p.startswith(ROOT + '/'):
+            out.append(os.path.relpath(p, ROOT))
+    return sorted(set(out))
+
+# ---- fast ------------------------------------------------------------------------------------------------------
+def fast(args):
+    t0 = time.time()
+    files = changed_files(args)
+    if not files: print('iter-check fast: no changed .lean files'); return 0
+    mods, imp = graph()
+    fmods = [f[:-5].replace('/', '.') for f in files]
+    deps = sorted(set(d for m in fmods for d in imp.get(m, [])) - set(fmods))
+    os.chdir(ROOT)
+    if REPO == 'minidregg':
+        r = sh(['bash', 'scripts/build-mini-kernels.sh'])
+        if r.returncode: print(r.stdout[-2000:], r.stderr[-2000:]); return 1
+    if deps:
+        r = sh(['lake', 'build', '--no-build'] + deps)
+        if r.returncode:
+            stale = closure(deps, imp)
+            nst = len(re.findall(r'out-of-date|Building', r.stdout + r.stderr))
+            if 'incompatible header' in r.stdout + r.stderr:
+                print('iter-check fast: an olean has the wrong Lean header (the Mac mathlib problem): see BUILD doc'); return 2
+            lim = int(os.environ.get('ITER_FAST_MAX_STALE', '40'))
+            print(f'iter-check fast: imports out of date (closure {len(stale)} in-tree modules)')
+            if nst > lim and not os.environ.get('ITER_FAST_FORCE'):
+                print(f'iter-check fast: more than {lim} stale jobs: that is a box job, run `iter-check full` '
+                      '(or ITER_FAST_FORCE=1 to build here)'); return 2
+            r = subprocess.run(['lake', 'build'] + deps)
+            if r.returncode: print('iter-check fast: an import does not build'); return 1
+    red = 0
+    for f in files:
+        t = time.time()
+        r = sh(['lake', 'lean', f])  # lake lean: the lakefile's leanOptions and moreLeanArgs, unlike lake env lean
+        out = r.stdout + r.stderr
+        bad = r.returncode != 0 or re.search(r'(^|\n)\S*:\d+:\d+: error|declaration uses .sorry.', out)
+        red += bool(bad)
+        print(f"{'RED  ' if bad else 'green'} {time.time()-t:6.1f} s  {f}")
+        if bad: print('\n'.join(l for l in out.splitlines() if 'error' in l)[:4000])
+    print(f'iter-check fast: {len(files)} file(s), {red} red, {time.time()-t0:.1f} s wall')
+    return 1 if red else 0
+
+# ---- boxes -----------------------------------------------------------------------------------------------------
+BOXES = {
+  # alias: (ssh, base dir, containment prefix template, LEAN_NUM_THREADS, cap, headroom GB)
+  'bb2':   dict(ssh='bb2', base='/home/build/iter-check', store='/home/build/olean-store', threads=8, cap='32G', headroom=40,
+                wrap='SWARM_BUILD_TAG=iter-check-{repo} SWARM_MEM_MAX={cap} swarm-build', umbrella=True,
+                packages={'minidregg': '/srv/pool/packages-{key}'}),
+  'hbox':  dict(ssh='hbox', base='/home/hbox/iter-check', store='/home/hbox/olean-store', threads=6, cap='12G', headroom=40,
+                wrap='SWARM_BUILD_TAG=iter-check-{repo} SWARM_MEM_MAX={cap} swarm-build', umbrella=False,
+                packages={'minidregg': '/home/hbox/pool/packages-{key}'}),
+  'forge': dict(ssh='dregg-forge', base='/srv/lanes/iter-check', threads=6, cap='12G', headroom=4,
+                wrap='systemd-run --scope --quiet -p MemoryMax={cap} -p MemorySwapMax=0 nice -n 15', umbrella=False,
+                packages={}, elan='/srv/lanes/iter-check/elan', pause=(10, 11)),
+}
+
+def probe(name):
+    b = BOXES[name]
+    r = sh(['ssh', '-o', 'ConnectTimeout=8', '-o', 'BatchMode=yes', b['ssh'],
+            'nproc; cut -d" " -f1 /proc/loadavg; ps -eo rss= | awk "{s+=\\$1} END {print s}"; '
+            'awk "/MemTotal/ {print \\$2}" /proc/meminfo; date -u +%H; '
+            f'for p in {b["base"]}/*/run.pid; do [ -f "$p" ] && kill -0 $(cat "$p") 2>/dev/null && echo busy "$p"; done; true'],
+           timeout=30)
+    if r.returncode: return dict(box=name, ok=False, why='unreachable')
+    l = r.stdout.split('\n')
+    try: ncpu, load, rss, tot, hour = int(l[0]), float(l[1]), int(l[2]), int(l[3]), int(l[4])
+    except (ValueError, IndexError): return dict(box=name, ok=False, why='probe parse: ' + r.stdout[:80])
+    busy = [x for x in l[5:] if x.startswith('busy')]
+    free_gb = (tot - rss) / 1048576; cap = int(b['cap'][:-1])
+    d = dict(box=name, ok=True, ncpu=ncpu, load=load, rss_gb=round(rss / 1048576, 1), total_gb=round(tot / 1048576),
+             score=round(load / ncpu + rss / tot, 3), busy=busy)
+    if 'pause' in b and b['pause'][0] <= hour < b['pause'][1]: d.update(ok=False, why='pause window (UTC %d)' % hour)
+    elif free_gb < cap + b['headroom']: d.update(ok=False, why=f'{free_gb:.0f} GB free < cap {cap} + {b["headroom"]}')
+    return d
+
+def choose(umbrella, want=None):
+    names = [want] if want else (['bb2'] if umbrella else list(BOXES))
+    table = [probe(n) for n in names]
+    ok = [t for t in table if t['ok']]
+    return (min(ok, key=lambda t: t['score']) if ok else None), table
+
+# ---- full ------------------------------------------------------------------------------------------------------
+def manifest_key():
+    data = open(os.path.join(ROOT, 'lake-manifest.json'), 'rb').read() + open(os.path.join(ROOT, 'lean-toolchain'), 'rb').read()
+    import hashlib; return hashlib.sha256(data).hexdigest()[:12]
+
+def full(argv):
+    box = None; umbrella = False; wait = True; files = []
+    it = iter(argv)
+    for a in it:
+        if a == '--box': box = next(it)
+        elif a == '--umbrella': umbrella = True
+        elif a == '--no-wait': wait = False
+        elif a == '--wait': wait = True
+        else: files.append(a)
+    if umbrella and box and not BOXES[box].get('umbrella'): sys.exit('iter-check: umbrella builds run on bb2 only')
+    pick, table = choose(umbrella, box)
+    for t in table: print('  ' + json.dumps(t))
+    if not pick: sys.exit('iter-check full: no eligible box (table above)')
+    b = BOXES[pick['box']]
+    mods, imp = graph()
+    if umbrella:
+        targets = (sh(['bash', 'scripts/pipeline/umbrella-targets'], cwd=ROOT).stdout.split() if REPO == 'minidregg'
+                   else [])  # metatheory: lake's defaultTargets
+    else:
+        fl = changed_files(files)
+        if not fl: print('iter-check full: no changed .lean files'); return 0
+        ch = [f[:-5].replace('/', '.') for f in fl]
+        rev = {}
+        for m, ds in imp.items():
+            for d in ds: rev.setdefault(d, []).append(m)
+        libs = lean_libs()
+        allm = sorted(closure(ch, rev))
+        # Only modules of a lean_lib are build targets (scripts and probes are not), and a library's
+        # root module (the umbrella) is check-umbrella's job, not a medium check's.
+        targets = [m for m in allm if in_lib(m, libs) and m not in libs]
+        print(f'iter-check full: {len(ch)} changed module(s), {len(targets)} with in-library reverse dependents'
+              f' ({len(allm) - len(targets)} umbrella/non-library modules left to check-umbrella)')
+    run = time.strftime('%Y%m%dT%H%M%S') + '-' + pick['box']
+    lane = os.environ.get('ITER_LANE') or re.sub(r'[^A-Za-z0-9_.-]', '-', os.path.basename(GIT_TOP))
+    rdir = f"{b['base']}/{REPO}-{lane}"; rroot = rdir + ('/metatheory' if REPO == 'metatheory' else '')
+    rel_root = os.path.relpath(ROOT, GIT_TOP)
+    # sync: tracked + untracked-not-ignored files of the repo (sparse: metatheory/ and scripts/ for breadstuffs)
+    lst = sh(['git', '-C', GIT_TOP, 'ls-files', '-co', '--exclude-standard'] +
+             ([] if REPO == 'minidregg' else [rel_root, 'scripts'])).stdout
+    lst = '\n'.join(p for p in lst.split('\n') if p and os.path.exists(os.path.join(GIT_TOP, p)))
+    os.makedirs(os.path.join(STATE, run), exist_ok=True)
+    open(os.path.join(STATE, run, 'files.txt'), 'w').write(lst + '\n')
+    sh(['ssh', b['ssh'], f'mkdir -p {shlex.quote(rdir)}'])
+    t = time.time()
+    r = sh(['rsync', '-a', '--files-from', os.path.join(STATE, run, 'files.txt'), GIT_TOP + '/', f"{b['ssh']}:{rdir}/"])
+    if r.returncode: sys.exit('iter-check full: rsync failed: ' + r.stderr[-500:])
+    print(f'iter-check full: synced {lst.count(chr(10)) + 1} files to {pick["box"]}:{rdir} in {time.time()-t:.0f} s')
+    key = manifest_key(); pk = b['packages'].get(REPO, '').format(key=key)
+    elan = b.get('elan')
+    env = (f'export ELAN_HOME={elan} PATH={elan}/bin:$PATH; ' if elan else 'export PATH=$HOME/.elan/bin:$HOME/.cargo/bin:$PATH; ')
+    env += f'export LEAN_NUM_THREADS={b["threads"]}; '
+    prep = []
+    if elan:
+        prep.append(f'[ -x {elan}/bin/lake ] || (curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh '
+                    f'| ELAN_HOME={elan} sh -s -- -y --default-toolchain none --no-modify-path)')
+    if pk:
+        prep.append(f'if [ -d {pk} ] && [ ! -e .lake/packages ]; then mkdir -p .lake && ln -s {pk} .lake/packages; fi')
+    prep.append('[ -e .lake/packages/mathlib/.lake/build/lib/lean/Mathlib.olean ] || lake exe cache get')
+    if REPO == 'minidregg': prep.append('bash scripts/build-mini-kernels.sh')
+    wrap = b['wrap'].format(repo=REPO, cap=b['cap'])
+    body = (f'cd {shlex.quote(rroot)} && {env}' + ' && '.join(prep) +
+            f' && {wrap} lake build {" ".join(map(shlex.quote, targets))}')
+    script = (f'#!/usr/bin/env bash\n# iter-check full run {run}\ncd {shlex.quote(rroot)}\n'
+              f'( t=$(date +%s); {body}; rc=$?; echo "iter-check: rc=$rc wall $(( $(date +%s)-t )) s" ) '
+              f'> {rdir}/run-{run}.log 2>&1\necho done > {rdir}/run-{run}.done\n')
+    sh(['ssh', b['ssh'], f'cat > {rdir}/run-{run}.sh && chmod +x {rdir}/run-{run}.sh'], input=script)
+    # Detach on the box; some hosts keep the ssh channel open after a background child, so the launch
+    # call is bounded and the PID is read back by a second call.
+    try:
+        sh(['ssh', '-n', b['ssh'], f'cd {rdir} && (nohup setsid ./run-{run}.sh > /dev/null 2>&1 < /dev/null & '
+                                   f'echo $! > {rdir}/run.pid; cp {rdir}/run.pid {rdir}/run-{run}.pid)'], timeout=60)
+    except subprocess.TimeoutExpired:
+        pass
+    pid = sh(['ssh', '-n', b['ssh'], f'cat {rdir}/run-{run}.pid']).stdout.strip()
+    meta = dict(run=run, box=pick['box'], ssh=b['ssh'], dir=rdir, pid=pid, targets=len(targets),
+                umbrella=umbrella, started=time.time())
+    json.dump(meta, open(os.path.join(STATE, run, 'meta.json'), 'w'))
+    sh(['ln', '-sfn', run, os.path.join(STATE, 'last')])
+    print(f'iter-check full: run {run} on {pick["box"]} pid {meta["pid"]} ({len(targets)} targets)')
+    return wait_run(run) if wait else 0
+
+def load_meta(run):
+    run = run or os.readlink(os.path.join(STATE, 'last'))
+    return json.load(open(os.path.join(STATE, run, 'meta.json')))
+
+def fetch_log(m):
+    dst = os.path.join(STATE, m['run'], 'build.log')
+    sh(['rsync', '-a', f"{m['ssh']}:{m['dir']}/run-{m['run']}.log", dst])
+    return dst
+
+def wait_run(run):
+    m = load_meta(run)
+    while sh(['ssh', m['ssh'], f"test -f {m['dir']}/run-{m['run']}.done"]).returncode:
+        time.sleep(20)
+    log = fetch_log(m); tail = open(log, errors='replace').read().splitlines()
+    errs = [l for l in tail if re.search(r'error:|✖', l)]
+    print('\n'.join(errs[:40])); print(tail[-1] if tail else '(empty log)'); print('log: ' + log)
+    return 0 if tail and 'rc=0 ' in tail[-1] else 1
+
+def stop(run):
+    m = load_meta(run)
+    cmd = (f"p=$(cat {m['dir']}/run-{m['run']}.pid); tr '\\0' ' ' < /proc/$p/cmdline | grep -q 'run-{m['run']}.sh' "
+           f"&& kill -- -$p && echo stopped $p || echo 'not ours or gone'")
+    print(sh(['ssh', m['ssh'], cmd]).stdout.strip())
+
+def store_dir(box=None):
+    if box: return BOXES[box].get('store', BOXES[box]['base'].rsplit('/', 1)[0] + '/olean-store')
+    return os.path.expanduser('~/olean-store')
+
+def publish(rest):
+    store = rest[0] if rest else store_dir()
+    head = sh(['git', '-C', ROOT, 'rev-parse', 'HEAD']).stdout.strip()
+    dirty = sh(['git', '-C', GIT_TOP, 'status', '--porcelain', '--untracked-files=no', '--', '*.lean']).stdout.strip()
+    if dirty: sys.exit('iter-check publish: tracked .lean files differ from HEAD; publish only a clean, built tree')
+    os.chdir(ROOT)
+    # No green precondition: an .olean exists only for a module that compiled, every one is keyed by
+    # Lake's input hash, and a consumer's Lake rebuilds whatever its own hashes disagree with. A
+    # partial snapshot (a lane's closure) is as safe as a whole one, only less useful.
+    base = os.path.join(store, REPO); dst = os.path.join(base, head)
+    if os.path.exists(os.path.join(dst, 'READY')): print('already published: ' + dst); return 0
+    os.makedirs(dst, exist_ok=True)
+    prev = sorted((d for d in os.listdir(base) if os.path.exists(os.path.join(base, d, 'READY'))),
+                  key=lambda d: os.path.getmtime(os.path.join(base, d, 'READY')))
+    link = ['--link-dest', os.path.join(base, prev[-1], 'lib')] if prev else []
+    t = time.time()
+    # lib/ (oleans, ileans, IR, traces) and the generated C under ir/: a module's trace lists its .c as
+    # an output, and Lake rebuilds a module whose recorded outputs are missing. Objects (.o) stay out.
+    r = sh(['rsync', '-a', '--delete'] + link + ['.lake/build/lib/', os.path.join(dst, 'lib') + '/'])
+    if r.returncode: sys.exit('rsync: ' + r.stderr[-400:])
+    link_ir = ['--link-dest', os.path.join(base, prev[-1], 'ir')] if prev else []
+    r = sh(['rsync', '-a', '--delete', '--include=*/', '--include=*.c', '--include=*.c.hash', '--exclude=*',
+            '--prune-empty-dirs'] + link_ir + ['.lake/build/ir/', os.path.join(dst, 'ir') + '/'])
+    if r.returncode: sys.exit('rsync: ' + r.stderr[-400:])
+    sh(['chmod', '-R', 'a-w', os.path.join(dst, 'lib'), os.path.join(dst, 'ir')])
+    open(os.path.join(dst, 'MANIFEST'), 'w').write(f"{head}\n{manifest_key()}\n{open('lean-toolchain').read()}")
+    open(os.path.join(dst, 'READY'), 'w').write(time.strftime('%FT%TZ', time.gmtime()) + '\n')
+    print(f'published {dst} in {time.time()-t:.0f} s')
+    return 0
+
+def fetch(rest):
+    box = rest[rest.index('--box') + 1] if '--box' in rest else 'bb2'
+    b = BOXES[box]; store = os.path.join(store_dir(box), REPO)
+    have = set(sh(['ssh', b['ssh'], f'cd {store} 2>/dev/null && for d in */READY; do echo ${{d%/READY}}; done']).stdout.split())
+    pick = next((c for c in sh(['git', '-C', ROOT, 'rev-list', '--max-count=500', 'HEAD']).stdout.split() if c in have), None)
+    if not pick: sys.exit(f'iter-check fetch: {box} holds no snapshot of an ancestor of HEAD ({len(have)} snapshots)')
+    key = sh(['ssh', b['ssh'], f'sed -n 2p {store}/{pick}/MANIFEST']).stdout.strip()
+    if key != manifest_key(): sys.exit(f'iter-check fetch: snapshot {pick[:12]} has manifest key {key}, this tree {manifest_key()}')
+    t = time.time()
+    for sub in ('lib', 'ir'):
+        os.makedirs(os.path.join(ROOT, '.lake/build', sub), exist_ok=True)
+        r = subprocess.run(['rsync', '-a', '--chmod=u+w', f"{b['ssh']}:{store}/{pick}/{sub}/",
+                            os.path.join(ROOT, '.lake/build', sub) + '/'])
+        if r.returncode: return r.returncode
+    behind = sh(['git', '-C', ROOT, 'rev-list', '--count', f'{pick}..HEAD']).stdout.strip()
+    print(f'iter-check fetch: snapshot {pick[:12]} ({behind} commits behind HEAD) from {box} in {time.time()-t:.0f} s')
+    return 0
+
+def main():
+    a = sys.argv[1:]
+    if not a or a[0] in ('-h', '--help'): print(__doc__); return 0
+    c, rest = a[0], a[1:]
+    if c == 'fast': return fast(rest)
+    if c == 'full': return full(rest)
+    if c == 'publish': return publish(rest)
+    if c == 'fetch': return fetch(rest)
+    if c == 'boxes':
+        for n in BOXES: print(json.dumps(probe(n)))
+        return 0
+    if c == 'status':
+        m = load_meta(rest[0] if rest else None)
+        done = sh(['ssh', m['ssh'], f"test -f {m['dir']}/run-{m['run']}.done"]).returncode == 0
+        print(json.dumps(dict(m, done=done, elapsed=round(time.time() - m['started'])))); return 0
+    if c == 'log': print(fetch_log(load_meta(rest[0] if rest else None))); return 0
+    if c == 'wait': return wait_run(rest[0] if rest else None)
+    if c == 'stop': stop(rest[0] if rest else None); return 0
+    sys.exit('iter-check: unknown command ' + c)
+
+if __name__ == '__main__':
+    sys.exit(main())
