@@ -338,6 +338,7 @@ fn describe(e: InvokeError) -> String {
 /// | `DREGG_NARRATOR_ATTESTATION_TTL_SECS` | how long a verification is reused | `1800` (30 min) |
 /// | `DREGG_NARRATOR_TEMPERATURE` | sampling temperature | `0.7` |
 /// | `DREGG_NARRATOR_HTTP_TIMEOUT_SECS` | HTTP timeout | `120` |
+/// | `DREGG_NARRATOR_REQUIRE_GPU_ATTESTATION` | `1` = every GPU must verify (NVIDIA chain, RIM goldens, OCSP) | off: CPU TD only, logged loudly per attestation |
 ///
 /// PRICING: the model must also be priced, or the metered layer refuses it fail-closed. It no
 /// longer has to be priced BY HAND: Chutes' catalog publishes a machine-readable per-model rate
@@ -386,6 +387,18 @@ impl TeeNarratorEnv {
             verifier.models_base = base;
         } else {
             verifier.models_base = DEFAULT_MODELS_BASE.to_string();
+        }
+        // The GPU gate is OFF on the narrator path until a live run confirms chutes passes the
+        // user nonce through to GPU evidence collection (if it does not, an enforced gate would
+        // refuse every instance). Opt in explicitly; the default is announced, not silent.
+        verifier.gpu.required = narrator_requires_gpu(
+            non_empty_var("DREGG_NARRATOR_REQUIRE_GPU_ATTESTATION").as_deref(),
+        );
+        if !verifier.gpu.required {
+            eprintln!(
+                "WARNING chutes-tee narrator: GPU attestation is NOT enforced (CPU TD only). \
+                 Set DREGG_NARRATOR_REQUIRE_GPU_ATTESTATION=1 to require every GPU to verify."
+            );
         }
         if let Some(list) = non_empty_var("CHUTES_ACCEPTED_STATUSES") {
             verifier.accepted_statuses = parse_statuses(&list);
@@ -454,6 +467,11 @@ pub fn attested_narrator_from_env() -> Result<Option<Narrator>, String> {
     let backend = env.build_backend()?;
     let shared: Arc<dyn ConverseBackend + Send + Sync> = Arc::new(backend);
     Ok(Some(Narrator::with_hosted(vec![(shared, model)], false)))
+}
+
+/// Whether the narrator path enforces GPU attestation: only the exact value `1` opts in.
+pub fn narrator_requires_gpu(var: Option<&str>) -> bool {
+    var.map(str::trim) == Some("1")
 }
 
 /// Whether `DREGG_NARRATOR` selects the attested backend.
@@ -1123,6 +1141,16 @@ mod tests {
         assert!(read_key_file(&path).unwrap_err().contains("empty"));
         assert!(read_key_file(&dir.join("nope")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn narrator_gpu_gate_is_opt_in() {
+        assert!(!narrator_requires_gpu(None));
+        assert!(!narrator_requires_gpu(Some("0")));
+        assert!(!narrator_requires_gpu(Some("yes")));
+        assert!(narrator_requires_gpu(Some("1")));
+        // the library default stays enforcing
+        assert!(VerifierConfig::new("", "[]").gpu.required);
     }
 
     #[test]

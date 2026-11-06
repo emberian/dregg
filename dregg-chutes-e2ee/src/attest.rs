@@ -313,12 +313,23 @@ pub fn attest_chute(
             continue;
         }
 
-        // (5) the GPUs, against the same fresh nonce.
-        let gpus = match gate_instance(http, &ev.gpu_evidence, &nonce_hex, &cfg.gpu, now_secs()) {
-            Ok(g) => g,
-            Err(e) => {
-                reasons.push(format!("{instance_id}: GPU attestation: {e}"));
-                continue;
+        // (5) the GPUs, against the same fresh nonce, unless the operator turned the gate off.
+        let gpus = if !cfg.gpu.required {
+            eprintln!(
+                "WARNING chutes-e2ee: GPU ATTESTATION NOT ENFORCED for instance {instance_id} \
+                 ({} GPU evidence item(s) NOT verified): this session is attested as a CPU TD \
+                 only. Set DREGG_NARRATOR_REQUIRE_GPU_ATTESTATION=1 (narrator) or \
+                 VerifierConfig.gpu.required = true to enforce.",
+                ev.gpu_evidence.len()
+            );
+            Vec::new()
+        } else {
+            match gate_instance(http, &ev.gpu_evidence, &nonce_hex, &cfg.gpu, now_secs()) {
+                Ok(g) => g,
+                Err(e) => {
+                    reasons.push(format!("{instance_id}: GPU attestation: {e}"));
+                    continue;
+                }
             }
         };
 

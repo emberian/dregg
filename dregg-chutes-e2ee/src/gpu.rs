@@ -65,6 +65,12 @@ pub struct GpuGate {
     pub ocsp_policy: OcspPolicy,
     /// An instance must report at least this many GPUs (default 1: no GPU, no attestation).
     pub min_gpus: usize,
+    /// Whether an instance's GPUs must verify for it to attest. `true` by default. `false`
+    /// skips the GPU gate entirely (the pre-2026-11-06 behaviour, CPU TD only), logs a loud
+    /// line on every attestation, and leaves `gpus` empty in the record. It exists for the
+    /// narrator path until a live run confirms that chutes passes the user nonce to GPU
+    /// evidence collection; the verifier itself has no lenient mode.
+    pub required: bool,
 }
 
 impl Default for GpuGate {
@@ -78,6 +84,7 @@ impl Default for GpuGate {
                 max_age_secs: 24 * 3600,
             },
             min_gpus: 1,
+            required: true,
         }
     }
 }
