@@ -74,8 +74,8 @@ lifted, not repaired and not spread. `MinaWrapXiAggregateMsm` §4's third bullet
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`/`admit`/
-`native_decide`. Named theorems, not `#guard`s. NEW file; not imported by the `Dregg2` root, per
+General theorems are `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). Facts
+about concrete data are `native_decide`, pinned `#assert_compiled` (since 2026-11-06). No `sorry`/`admit`. Named theorems, not `#guard`s. NEW file; not imported by the `Dregg2` root, per
 house practice for gates. Import line:
 `import Dregg2.Circuit.Emit.MinaWrapXiEndoLift`
 -/
@@ -135,12 +135,12 @@ theorem the_polyscale_is_the_endo_lift_of_the_squeeze :
 /-- ⚑ **AND IT IS THE `v′` LANE, NOT THE `u′` ONE.** The same squeeze produces both; a verifier that
 read lane 1 for lane 0 would combine the openings at the evalscale. The data refutes it. -/
 theorem the_evalscale_prechallenge_lifts_elsewhere :
-    endoLiftQ lambdaPallas U_CHAL ≠ XI := by decide
+    endoLiftQ lambdaPallas U_CHAL ≠ XI := by native_decide
 
 /-- ⚑ **AND THE JOIN IS REFUTABLE AT THE SQUEEZE.** One added to `v′` — the smallest possible move
 in the sponge's output — misses the polyscale. -/
 theorem a_perturbed_squeeze_misses_the_polyscale :
-    endoLiftQ lambdaPallas (V_CHAL + 1) ≠ XI := by decide
+    endoLiftQ lambdaPallas (V_CHAL + 1) ≠ XI := by native_decide
 
 /-- ⚑ **AND THE LIFT IS IN `q`, NOT IN `p`.** The classic Pasta error, refuted rather than avoided
 by convention: the SAME fold over the SAME challenge read in the BASE field is a different scalar,
@@ -148,7 +148,7 @@ whose leading thirty digits agree with `ξ` — which is exactly how such a bug 
 `MinaWrapCommitStages.the_base_field_reduction_of_xi_squared_is_a_different_scalar` is the same
 refutation one level up. -/
 theorem the_base_field_lift_is_a_different_scalar :
-    (endoMap ((lambdaPallas : ZMod pN)) V_CHAL).val ≠ XI := by decide
+    (endoMap ((lambdaPallas : ZMod pN)) V_CHAL).val ≠ XI := by native_decide
 
 /-- ⚑ **AND THE ENDO SCALAR IS THE CURVE'S, NOT A NUMBER THIS FILE CHOSE.** `lambdaPallas` is
 `PastaCurve`'s cube root of unity in `ZMod qN` — the `endo_r` `to_field` multiplies by — and it is
@@ -189,7 +189,7 @@ def T1 : Nat := 9
 def SC : Nat := 10
 
 theorem the_allocation_fits_the_register_file :
-    VP < NREG ∧ OUT < NREG ∧ SC < NREG ∧ VP ≠ OUT ∧ NREG = 12 := by decide
+    VP < NREG ∧ OUT < NREG ∧ SC < NREG ∧ VP ≠ OUT ∧ NREG = 12 := by native_decide
 
 /-- ⚑ **ONE ROUND OF `to_field_with_length`, AS 18 INSTRUCTIONS.**
 
@@ -241,7 +241,7 @@ two, and that the padding is `add R0, #0 → ∅`, a real ALU operation with no 
 theorem the_program_is_eleven_hundred_and_sixty_instructions :
     (endoSteps V_CHAL).length = 1160 ∧ endoProg.length = ENDO_HEIGHT
       ∧ ENDO_HEIGHT = 2 ^ 11 ∧ 4 + 18 * 64 + 4 = 1160 := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §3 — WHAT THE EMITTED PROGRAM COMPUTES.
 
@@ -299,14 +299,14 @@ established is that the honest witness lands where it should. Whether a DIFFEREN
 also land there is not addressed here, and the sentence that said it was is deleted rather than
 softened. -/
 theorem the_scalar_fold_lands_on_the_challenge_at_the_honest_witness :
-    readVec endoRegs SC = V_CHAL := by decide
+    readVec endoRegs SC = V_CHAL := by native_decide
 
 /-- ⚑ **AND THE ZERO REGISTER IS FORCED, AND THE INPUT IS NEVER WRITTEN.** `VP` ends holding what
 the first-row pin put there — so the closing assertion compares the fold against the PUBLIC INPUT
 and not against something the program rewrote on the way. -/
 theorem the_input_register_survives_the_program :
     readVec endoRegs VP = V_CHAL ∧ readVec endoRegs ZERO = 0 := by
-  refine ⟨?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-! ## §4 — THE EMITTED OBJECT. -/
 
@@ -415,21 +415,21 @@ one-felt tie between two descriptors is `2^31` — below this repo's bar and exa
 theorem the_shared_block_is_a_full_field_element :
     endoOutputBlock.length = SK ∧ SK = 32 ∧ SB = 8 ∧ SK * SB = 256
       ∧ 2 ^ 252 < XI ∧ XI < qN := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND THE 32 LIMBS RECOMPOSE TO ξ.** Without this the shared block could be 32 felts of
 anything agreed on by two descriptors that both got it wrong; this says the boundary carries the
 polyscale itself, read back out of the emitted limbs by the inverse of the map that wrote them. -/
 theorem the_shared_block_recomposes_to_the_polyscale :
     ((List.range SK).foldr (fun i acc => acc * 256 + (endoOutputBlock.getD i 0)) 0) = (XI : ℤ) := by
-  decide
+  native_decide
 
 /-- ⚑ **AND THE WELD IS REFUTABLE, ONE FELT AT A TIME.** The most significant limb moved by one —
 the smallest change a forger could make to the shared boundary — and the equality is false. This is
 what makes the theorem a gate rather than a restatement of how both sides were built. -/
 theorem a_perturbed_output_limb_breaks_the_weld :
     endoOutputBlock.set (SK - 1) ((endoOutputBlock.getD (SK - 1) 0) + 1) ≠ chainInputBlock := by
-  decide
+  native_decide
 
 /-- ⚑ **AND THE TWO DESCRIPTORS ARE TWO DESCRIPTORS.** A weld between an artifact and itself is not
 a weld; these carry different names, so the batch cannot satisfy both halves with one proof. -/
@@ -450,7 +450,7 @@ theorem the_chain_output_half_is_the_forty_sixth_power :
     (MinaWrapCommitStages.xiPIs.drop SK).take SK
       = (List.range SK).map (limbAt (MinaWrapCommitStages.qpow XI 46))
       ∧ (MinaWrapCommitStages.xiPIs.drop SK).take SK ≠ chainInputBlock := by
-  refine ⟨?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-- ⚑⚑ **AND THE CHAIN NOW PUBLISHES THE SQUARING BASIS, WHOSE HEAD IS THE ξ THIS FILE DERIVES.**
 
@@ -464,7 +464,7 @@ theorem the_basis_tail_ends_on_this_files_polyscale :
     MinaWrapCommitStages.xiPIs.length = MinaWrapCommitStages.PI_XI
       ∧ MinaWrapCommitStages.PI_XI = 8 * SK
       ∧ MinaWrapCommitStages.xiPIs.drop (7 * SK) = endoOutputBlock := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-! ### §5b — ⚑ WHAT THE TIE IS WORTH, said out loud.
 
@@ -481,26 +481,26 @@ theorem the_basis_tail_ends_on_this_files_polyscale :
     repo has not closed. -/
 
 #assert_axioms the_polyscale_is_the_endo_lift_of_the_squeeze
-#assert_axioms the_evalscale_prechallenge_lifts_elsewhere
-#assert_axioms a_perturbed_squeeze_misses_the_polyscale
-#assert_axioms the_base_field_lift_is_a_different_scalar
+#assert_compiled the_evalscale_prechallenge_lifts_elsewhere
+#assert_compiled a_perturbed_squeeze_misses_the_polyscale
+#assert_compiled the_base_field_lift_is_a_different_scalar
 #assert_axioms the_endo_scalar_is_the_pallas_cube_root
 #assert_axioms the_prechallenges_are_below_the_truncation
-#assert_axioms the_allocation_fits_the_register_file
-#assert_axioms the_program_is_eleven_hundred_and_sixty_instructions
+#assert_compiled the_allocation_fits_the_register_file
+#assert_compiled the_program_is_eleven_hundred_and_sixty_instructions
 #assert_axioms runRegsVecAt_threads_the_trace_generator
 #assert_axioms the_machine_computes_the_endo_lift
-#assert_axioms the_scalar_fold_lands_on_the_challenge_at_the_honest_witness
-#assert_axioms the_input_register_survives_the_program
+#assert_compiled the_scalar_fold_lands_on_the_challenge_at_the_honest_witness
+#assert_compiled the_input_register_survives_the_program
 #assert_axioms endoAir_mainRailOk
 #assert_axioms endoTrace_is_the_closure_trace
 #assert_axioms the_emitted_pis_are_the_challenge_and_the_polyscale
 #assert_axioms the_endo_output_block_is_the_chain_input_block
-#assert_axioms the_shared_block_is_a_full_field_element
-#assert_axioms the_shared_block_recomposes_to_the_polyscale
-#assert_axioms a_perturbed_output_limb_breaks_the_weld
+#assert_compiled the_shared_block_is_a_full_field_element
+#assert_compiled the_shared_block_recomposes_to_the_polyscale
+#assert_compiled a_perturbed_output_limb_breaks_the_weld
 #assert_axioms the_welded_descriptors_are_distinct
-#assert_axioms the_chain_output_half_is_the_forty_sixth_power
-#assert_axioms the_basis_tail_ends_on_this_files_polyscale
+#assert_compiled the_chain_output_half_is_the_forty_sixth_power
+#assert_compiled the_basis_tail_ends_on_this_files_polyscale
 
 end Dregg2.Circuit.Emit.MinaWrapXiEndoLift
