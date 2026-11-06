@@ -443,12 +443,32 @@ theorem ladder_hypotheses_inhabited (f : ffi_state θ) :
     simp only [hsW, e]; simp
   · intro i j hi hj hne; simp at hi hj; omega
 
-/-- The 405 rung on the inhabited state: it returns 1 and lands the byte 7. -/
+/-- The 405 rung on the inhabited state: it returns 1 and lands the byte 7 at
+address 16, read back with panSem's `mem_load_byte`. -/
 theorem serve_405_panSem_witness (f : ffi_state θ) :
     (evaluate (liftProg (ServeExportServes.serveModel [] [7]), hsW f)).1 =
-      some (.Return (VW 1)) := by
+      some (.Return (VW 1)) ∧
+    mem_load_byte (evaluate (liftProg (ServeExportServes.serveModel [] [7]), hsW f)).2.memory
+        (hsW f).memaddrs (hsW f).be 16 = some 7 := by
   obtain ⟨hw, _, ho, hr, hb, ha, hi⟩ := ladder_hypotheses_inhabited f
-  exact (serveExport_serves_405_panSem (hsW f) hw [] [7] 16 8 ho hr hb ha hi).1
+  have h := serveExport_serves_405_panSem (hsW f) hw [] [7] 16 8 ho hr hb ha hi
+  exact ⟨h.1, by simpa using h.2 0 (by decide)⟩
+
+/-- **A limit of rung [2] as the orb compiler states it (Codex round 3).**
+`WF` asks every guard and assignment to evaluate in EVERY Sem.lean state, so a
+stage whose leaves read a local (`redirectStatusStage`, `httpStamp`,
+`crlfStamp` in ProofProducing) is certified only under a hypothesis no state
+family satisfies: here, the redirect stage's `∀ s, s.locals "code" = some …`
+fails on the state with no locals. `translateCertPan` inherits this; its
+instances are meaningful only for stages with closed leaves (`closedDemo`).
+Stages that read locals belong in the precondition form (`RefinesClk` /
+`RefinesClkPan`), whose `P` can say the local is bound. -/
+theorem wf_reading_local_uninhabited (codeVal : Pancake.PancakeState (ffi_state θ) → Pancake.Word)
+    (f : ffi_state θ) :
+    ¬ ∀ s : Pancake.PancakeState (ffi_state θ), s.locals "code" = some (codeVal s) := by
+  intro h
+  have := h (ss0 f)
+  simp [ss0] at this
 
 /-- DEMO A on the inhabited state. -/
 theorem closedDemo_panSem_witness (f : ffi_state θ) :
@@ -470,3 +490,4 @@ end Pancake.LadderPanSem
 #print axioms Pancake.LadderPanSem.serveExport_serves_405_real_panSem
 #print axioms Pancake.LadderPanSem.serve_405_panSem_witness
 #print axioms Pancake.LadderPanSem.closedDemo_panSem_witness
+#print axioms Pancake.LadderPanSem.wf_reading_local_uninhabited
