@@ -25,6 +25,11 @@ for `Aggregates.verifyBudget` (`verifyBudgetJ_verifyBudget`).
 The converse is not claimed: `verifyJ` additionally REFUSES unsafe rules (`safeB`), which `verifyS`
 accepts over the active domain. That is a refusal, never an extra acceptance.
 
+`safeB` means **range-restricted with DENSE variable numbering** (codex round 4, item 15): every
+index below `varBoundS r` must occur in a positive atom, so a range-restricted rule that uses only
+variable `1` is refused (`#guard` below). Variable ids are not normalized; write rules with
+variables `0..n-1`. This too is a refusal, never an acceptance.
+
 ## Proved (kernel-clean, §6)
 `bindArgs_complete`, `joinAll_complete`, `mem_candidates`, `closedJoinS_closedS`, `mem_domFast`,
 `replayS_congr`, `runStrataJ_runStrata`, `verifyJ_verifyS`, `verifyBudgetJ_verifyBudget`.
@@ -92,7 +97,8 @@ def joinAll (db : List Fact) : List Atom → List PSubst → List PSubst
 def candidates (db : List Fact) (r : SRule) : List Subst :=
   (joinAll db (posAtoms r) [List.replicate (varBoundS r) none]).filterMap fun ps => ps.mapM id
 
-/-- Safety: every variable below `varBoundS r` occurs in a positive body atom. -/
+/-- Safety: every variable below `varBoundS r` occurs in a positive body atom (range restriction
+WITH dense numbering: an unused index below the bound fails it). -/
 def safeB (r : SRule) : Bool :=
   (List.range (varBoundS r)).all fun i => decide (i ∈ (posAtoms r).flatMap atomVars)
 
@@ -485,12 +491,50 @@ def verifyJNoSafe (hash : List ℤ → ℤ) (st : SStatement) (c : SCertificate)
 #guard verifyS hash0 unsafeStmt unsafeCert = false
 #guard verifyJ hash0 unsafeStmt unsafeCert = false
 #guard domFast revProg revEdb = [1, 2]
+-- Dense numbering: `p(X₁) :- q(X₁)` is range-restricted but uses only index 1, so `safeB` refuses it.
+#guard safeB { head := ⟨2, [.var 1]⟩, body := [.pos ⟨3, [.var 1]⟩] } = false
+#guard safeB { head := ⟨2, [.var 0]⟩, body := [.pos ⟨3, [.var 0]⟩] } = true
+
+/-- `p(1)` IS in the (active-domain) stratified model of the unsafe program: the count 0 the weak
+checker accepted is false. -/
+theorem unsafe_p1_derivesS : DerivesS unsafeProg [[0]] unsafeEdb (2, [1]) := by
+  show DerivesAt unsafeProg (activeDomainS unsafeProg unsafeEdb) [0] (· ∈ unsafeEdb) (2, [1])
+  refine DerivesAt.fire (i := 0) (r := unsafeRule) (s := [1]) (by simp) rfl (by decide) ?_ ?_ ?_
+    (by decide)
+  · intro a ha
+    simp only [unsafeRule, List.mem_singleton, Lit.pos.injEq] at ha
+    subst ha; decide
+  · intro a ha f hf
+    simp only [unsafeRule, List.mem_singleton, Lit.pos.injEq] at ha
+    subst ha
+    have h' : applyAtom [1] (⟨3, []⟩ : Atom) = some (3, []) := by decide
+    rw [h'] at hf
+    simp only [Option.some.injEq] at hf
+    subst hf
+    exact DerivesAt.base (by decide)
+  · intro a ha
+    simp [unsafeRule] at ha
+
+/-- ⚑ JOIN SAFETY SEPARATION (codex round 4, item 8): the join closure without `safeB` accepts the
+open certificate at count 0; `verifyS` and `verifyJ` refuse it; and `p(1)` is in the model, so the
+accepted count is false. -/
+theorem join_safety_separation :
+    verifyJNoSafe hash0 unsafeStmt unsafeCert = true ∧
+    verifyS hash0 unsafeStmt unsafeCert = false ∧
+    verifyJ hash0 unsafeStmt unsafeCert = false ∧
+    DerivesS unsafeProg [[0]] unsafeEdb (2, [1]) := by
+  have hS : verifyS hash0 unsafeStmt unsafeCert = false := by decide
+  refine ⟨by decide, hS, ?_, unsafe_p1_derivesS⟩
+  cases hJ : verifyJ hash0 unsafeStmt unsafeCert with
+  | false => rfl
+  | true => rw [verifyJ_verifyS _ _ _ hJ] at hS; exact absurd hS (by simp)
 
 end Reference
 
 #assert_all_clean [mem_posAtoms, bindTerm_complete, bindArgs_complete, mem_atomVars,
   matchAtom_complete, joinAll_complete, mapM_id_of_total, mem_candidates, closedJoinS_closedS,
   mem_dedupSorted, mem_domFast, substOk_congr, applyFiringS_congr, applyFiringsS_congr,
-  replayS_congr, runStrataJ_runStrata, verifyJ_verifyS, verifyBudgetJ_verifyBudget]
+  replayS_congr, runStrataJ_runStrata, verifyJ_verifyS, verifyBudgetJ_verifyBudget,
+  Reference.unsafe_p1_derivesS, Reference.join_safety_separation]
 
 end Dregg2.Datalog.JoinClosure

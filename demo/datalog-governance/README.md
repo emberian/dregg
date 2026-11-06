@@ -47,10 +47,22 @@ Proved [READ `metatheory/Dregg2/Datalog/`]: when `datalog-check` accepts, `JoinC
 returned `true`. `verifyJ_verifyS` makes that `StratifiedCert.verifyS = true`. `verifyS_sound` then
 says the checked database is EXACTLY the stratified model of this program over this EDB, and its
 count of `violation` is the claimed count. `verifyS_strata_exact` says the same per stratum.
-`countS_unique_or_collides` says no other accepted certificate for this
-`(program, strata, root, pred)` can claim a different count unless SHAKE256 collides at the named pair.
+`SafeCoincidence.verifyJ_receipt` bundles it all for what the executable accepts: the root, the
+database being EXACTLY the standard (unrestricted) stratified model, the count, and that same
+database being a supported model. `verifyS_count_zero_absent` turns count 0 into "no `violation`
+fact is in the model". By `countS_unique_or_collides`, different accepted counts for one
+`(program, strata, root, pred)` require a collision of the instantiated list hash. Reducing that to
+a SHAKE256 collision additionally requires injectivity of the byte encoding (checked on examples,
+not proved). The same obligation holds for the program digest.
 
 Not proved, or not claimed:
+- **The scope of the zero.** Zero violations in the extracted REQUEST log, under lexical path
+  identity and resolved spawn relationships. This does not establish successful prior access,
+  filesystem-resolved forbidden-path exclusion, complete agent coverage, or authenticated
+  correspondence to the original session or export. Facts are tool requests, with no check that a
+  call succeeded. Paths are compared as strings, with no symlinks, `..` or case folding. The
+  sub-agent rules need a resolved `spawned` fact. The export sha256s in the projection's metadata
+  are not in the EDB.
 - **No proof system.** Verification is native re-execution of the extracted checker. There is no
   STARK and no succinctness.
 - **The extractor is trusted.** That covers `project_transcript.py` (which calls count as file tools
@@ -121,7 +133,11 @@ ssh-keygen -Y verify -f allowed_signers -I datalog-governance@dregg -n dregg-dat
   -s data/receipt.txt.sig < data/receipt.txt
 ```
 
-The receipt signs `(program_digest, root, pred, count)` as the checker printed them. The private key
+The receipt signs `(program_digest, root, pred, count)` as the checker printed them. Verifying the
+signature authenticates that body under the demo key only. It attests neither the checker binary
+nor the source data. To verify the computational claim, re-run `datalog-check` on the certificate
+and compare every field of its output (program digest, root, pred, count, verdict ACCEPT) with
+the signed body. The private key
 lives in `keys/`, which git ignores. Running `run.sh` without that directory makes a new key and
 rewrites `allowed_signers`.
 

@@ -814,6 +814,45 @@ theorem verifyS_supported_model (hash : List ℤ → ℤ) (st : SStatement) (c :
       · obtain ⟨i, hi, T, hT, hiT⟩ := stratifiedB_cover hst hr
         exact I2 T hT i hiT r hi s hs f hfire
 
+/-- ⚑ **`verifyS_receipt`** — the receipt-level export (codex round 4, item 17): root, exact
+model, count, and the supported-model property of THE SAME database, in one statement. -/
+theorem verifyS_receipt (hash : List ℤ → ℤ) (st : SStatement) (c : SCertificate)
+    (h : verifyS hash st c = true) :
+    stratifiedB st.program st.strata = true ∧ mroot hash (flatten c.edb) = st.root ∧
+    ∃ db : List Fact, db.Nodup ∧ (∀ f, f ∈ db ↔ DerivesS st.program st.strata c.edb f) ∧
+      countQ db st.pred = st.count ∧
+      ∀ f, f ∈ db ↔ (f ∈ c.edb ∨ ∃ r ∈ st.program,
+        ∃ s ∈ substs (activeDomainS st.program c.edb) (varBoundS r), ruleFiresS r s db db = some f) := by
+  obtain ⟨hst, hroot, db, hn, hm, hc⟩ := verifyS_sound hash st c h
+  obtain ⟨db', hm', hsup⟩ := verifyS_supported_model hash st c h
+  have hsame : ∀ f, f ∈ db ↔ f ∈ db' := fun f => (hm f).trans (hm' f).symm
+  refine ⟨hst, hroot, db, hn, hm, hc, fun f => ?_⟩
+  rw [hsame f, hsup f]
+  constructor
+  · rintro (h0 | ⟨r, hr, s, hs, hf⟩)
+    · exact Or.inl h0
+    · refine Or.inr ⟨r, hr, s, hs, ruleFiresS_transfer ?_ ?_ hf⟩
+      · intro _ _ g _ hg; exact (hsame g).mpr hg
+      · intro _ _ g _ hg; exact (hsame g).mp hg
+  · rintro (h0 | ⟨r, hr, s, hs, hf⟩)
+    · exact Or.inl h0
+    · refine Or.inr ⟨r, hr, s, hs, ruleFiresS_transfer ?_ ?_ hf⟩
+      · intro _ _ g _ hg; exact (hsame g).mp hg
+      · intro _ _ g _ hg; exact (hsame g).mpr hg
+
+/-- ⚑ **`verifyS_count_zero_absent`** — the absence statement: an accepted count of 0 means NO fact
+of `pred` is in the stratified model. -/
+theorem verifyS_count_zero_absent (hash : List ℤ → ℤ) (st : SStatement) (c : SCertificate)
+    (h : verifyS hash st c = true) (h0 : st.count = 0) :
+    ∀ f : Fact, f.1 = st.pred → ¬ DerivesS st.program st.strata c.edb f := by
+  intro f hp hd
+  obtain ⟨_, _, db, _, hm, hc⟩ := verifyS_sound hash st c h
+  have hf : f ∈ db := (hm f).mpr hd
+  have : 0 < countQ db st.pred := by
+    unfold countQ
+    exact List.length_pos_of_mem (List.mem_filter.mpr ⟨hf, by simp [hp]⟩)
+  omega
+
 /-! ## §7 — Non-vacuity and falsifiers: revocation. -/
 
 namespace Reference
@@ -1027,6 +1066,44 @@ theorem active2_not_derivesS : ¬ DerivesS revProg revStrata revEdb (ACTIVE, [2]
       subst hf
       exact hnot (by decide)
 
+/-! ### Named separations (codex round 4, item 8): weak accepts, strong refuses, and the claim the
+weak checker accepted is false in the semantics. The `#guard`s above are their mirrors. -/
+
+/-- ⚑ (b) FORGED ABSENCE: `FixpointCert.verify` on the positive projection accepts the trace that
+fires `active(2)`; `verifyS` refuses it; and `active(2)` is not in the stratified model. -/
+theorem forged_absence_separation :
+    verify hash0 revPosStmt ⟨revEdb, { rounds := [[⟨0, [1]⟩, ⟨0, [2]⟩]] }⟩ = true ∧
+    verifyS hash0 (revStmt 2) ⟨revEdb, revForged⟩ = false ∧
+    ¬ DerivesS revProg revStrata revEdb (ACTIVE, [2]) :=
+  ⟨by decide, by decide, active2_not_derivesS⟩
+
+/-- ⚑ (c′) OPEN LOWER STRATUM: `verifyNoLowerClosure` accepts the trace that never fires
+`revoked(1)` and claims `count active = 1`; `verifyS` refuses it; and `active(1)` is not in the
+stratified model (by the honest certificate's count 0 and `verifyS_count_zero_absent`). -/
+theorem open_lower_separation :
+    verifyNoLowerClosure hash0 (evStmt 1) ⟨evEdb, evOpen⟩ = true ∧
+    verifyS hash0 (evStmt 1) ⟨evEdb, evOpen⟩ = false ∧
+    ¬ DerivesS evProg evStrata evEdb (ACTIVE, [1]) :=
+  ⟨by decide, by decide,
+    verifyS_count_zero_absent hash0 (evStmt 0) ⟨evEdb, evHonest⟩ honest_count0_verifies rfl _ rfl⟩
+
+/-- ⚑ (c) DERIVABLE-LATER REVOCATION, bundled: the current-database checker accepts count 1, `verifyS`
+refuses it, and `active(1)` is not in the model. -/
+theorem current_db_separation :
+    verifyCurrentDbNegation hash0 (evStmt 1) ⟨evEdb, evForged⟩ = true ∧
+    verifyS hash0 (evStmt 1) ⟨evEdb, evForged⟩ = false ∧
+    ¬ DerivesS evProg evStrata evEdb (ACTIVE, [1]) :=
+  ⟨forged_accepted_by_currentDb, forged_refused_by_verifyS, open_lower_separation.2.2⟩
+
+/-- ⚑ (d) NON-STRATIFIED: `verifyNoStratCheck` accepts `p(1)` for `p(X) :- q(X), ¬p(X)`; `verifyS`
+refuses; and the accepted database is not a supported model (`p(1)`'s only support is `¬p(1)`). -/
+theorem nonstrat_separation :
+    verifyNoStratCheck hash0 nsStmt ⟨nsEdb, nsTrace⟩ = true ∧
+    verifyS hash0 nsStmt ⟨nsEdb, nsTrace⟩ = false ∧
+    runStrata nsProg (activeDomainS nsProg nsEdb) [[0]] nsTrace nsEdb = some [(NQ, [1]), (NP, [1])] ∧
+    supportedB nsProg (activeDomainS nsProg nsEdb) nsEdb [(NQ, [1]), (NP, [1])] = false :=
+  ⟨by decide, by decide, by decide, by decide⟩
+
 end Reference
 
 /-! ## §8 — axiom tripwires. -/
@@ -1039,6 +1116,8 @@ end Reference
   runStrata_supported_model, verifyS_supported_model, runStrata_dbs, verifyS_strata_exact,
   verifyS_intended_or_collides, Reference.forged_accepted_by_currentDb,
   Reference.forged_refused_by_verifyS, Reference.honest_count0_verifies, Reference.active1_derivesS,
-  Reference.active2_not_derivesS]
+  Reference.active2_not_derivesS, verifyS_receipt, verifyS_count_zero_absent,
+  Reference.forged_absence_separation, Reference.open_lower_separation,
+  Reference.current_db_separation, Reference.nonstrat_separation]
 
 end Dregg2.Datalog.StratifiedCert

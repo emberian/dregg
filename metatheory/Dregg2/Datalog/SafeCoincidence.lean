@@ -7,7 +7,9 @@ DOMAIN (the constants of the EDB and the program). The UNRESTRICTED semantics (`
 `DerivesAtU`, `DerivesSU`) lets a substitution be any list of integers of the right length, the
 Herbrand semantics over all of `ℤ`. For a SAFE (range-restricted) program, where every variable of
 a rule occurs in a positive body atom (`JoinClosure.safeB`, `safeRuleB` for positive rules), the two
-coincide:
+coincide. "Safe" here is range restriction WITH DENSE variable numbering (codex round 4,
+item 15): every index below the rule's variable bound occurs positively. A range-restricted rule
+that skips an index is outside the hypothesis (and `datalog-check` refuses it):
 
   * `derives_iff_unrestricted`: `Derives P edb f ↔ DerivesU P edb f` (positive Datalog);
   * `derivesAt_iff_unrestricted`: per stratum, given a lower database whose arguments lie in `dom`
@@ -320,6 +322,20 @@ theorem verifyJ_sound_unrestricted (hash : List ℤ → ℤ) (st : SStatement) (
       (∀ f, f ∈ db ↔ DerivesSU st.program st.strata c.edb f) ∧ countQ db st.pred = st.count :=
   verifyS_sound_unrestricted hash st c (verifyJ_safe h) (verifyJ_verifyS hash st c h)
 
+/-- ⚑ **`verifyJ_receipt`** — the receipt-level export for `lake exe datalog-check` (codex round 4,
+item 17): root, the database EXACTLY the standard (unrestricted) stratified model, the count, and the
+supported-model property of that same database, together. -/
+theorem verifyJ_receipt (hash : List ℤ → ℤ) (st : SStatement) (c : SCertificate)
+    (h : verifyJ hash st c = true) :
+    stratifiedB st.program st.strata = true ∧ mroot hash (flatten c.edb) = st.root ∧
+    ∃ db : List Fact, db.Nodup ∧ (∀ f, f ∈ db ↔ DerivesSU st.program st.strata c.edb f) ∧
+      countQ db st.pred = st.count ∧
+      ∀ f, f ∈ db ↔ (f ∈ c.edb ∨ ∃ r ∈ st.program,
+        ∃ s ∈ substs (activeDomainS st.program c.edb) (varBoundS r), ruleFiresS r s db db = some f) := by
+  obtain ⟨hst, hroot, db, hn, hm, hc, hsup⟩ := verifyS_receipt hash st c (verifyJ_verifyS hash st c h)
+  refine ⟨hst, hroot, db, hn, fun f => ?_, hc, hsup⟩
+  rw [hm f, derivesS_eq_unrestricted st.strata c.edb (verifyJ_safe h)]
+
 /-! ## §4 — Falsifier: an unsafe rule, where the two semantics differ. -/
 
 namespace Reference
@@ -371,6 +387,6 @@ end Reference
   derives_to_U, derivesU_to_active, derives_iff_unrestricted, verify_sound_unrestricted,
   derivesAt_to_U, derivesAtU_to_active, derivesAt_iff_unrestricted, stratDb_coincide,
   derivesS_eq_unrestricted, verifyS_sound_unrestricted, verifyJ_safe, verifyJ_sound_unrestricted,
-  Reference.unsafe_semantics_differ]
+  Reference.unsafe_semantics_differ, verifyJ_receipt]
 
 end Dregg2.Datalog.SafeCoincidence
