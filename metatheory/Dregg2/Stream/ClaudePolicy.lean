@@ -18,7 +18,8 @@ About `ClaudeCore.policyA` / `policyVC` / `classify`, the objects `lake exe stre
   "counter ≥ 1" says accepted, and the Büchi condition rejects).
 * `policyVC.good` is empty, so `verdict_sat_sound` is vacuous at this policy (a safety half that can
   still trip forbids `sat`); `sat` is exercised only by the general theorem.
-* `#guard`s on the classifier over hand-written transcript lines (both polarities).
+* `classify_cases`, `commandForbidden_cases`: the classifier on hand-written lines and commands, both
+  polarities, by compiled evaluation.
 -/
 import Dregg2.Stream.Window
 import Dregg2.Stream.ClaudeCore
@@ -160,31 +161,44 @@ theorem policy_windows_compose {E : Type} (hash : List Int → Int) (val : E →
 #assert_axioms reach_once_not_buchi
 #assert_axioms policy_windows_compose
 
-/-! ## The classifier, both polarities -/
+/-! ## The classifier, both polarities
 
-#guard classify "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi claude\"}}" == .prompt
-#guard classify "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"content\":\"hi\"}}" == .other
-#guard classify "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"ok\"}]}}" == .other
-#guard classify "{\"type\":\"user\",\"message\":{\"content\":\"<command-name>/clear</command-name>\"}}" == .other
-#guard classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}" == .reply
-#guard classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"hm\"}]}}" == .other
-#guard classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"cd /x && git stash\"}}]}}" == .forbidden
-#guard classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"grep -n 'git stash' RULES.md\"}}]}}" == .other
-#guard classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"git stashed-thing\"}}]}}" == .other
-#guard classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls; pkill -f cat\"}}]}}" == .forbidden
-#guard classify "not json" == .other
-#guard commandForbidden "sudo killall node"
-#guard commandForbidden "bash -c 'git stash pop'"
-#guard commandForbidden "git -C /x stash"
-#guard commandForbidden "pkill -9 -f worker"
-#guard commandForbidden "pkill -x cat"
-#guard commandForbidden "git add -Av"
-#guard commandForbidden "env git stash"
-#guard commandForbidden "timeout 120 ssh -o BatchMode=yes hbox 'pkill -f sample.sh; echo'"
-#guard !commandForbidden "git status && git add src/a.rs"
-#guard !commandForbidden "kill 1234"
-#guard !commandForbidden "pgrep -fl cat"
-#guard !commandForbidden "echo stash"
-#guard classify "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"image\"},{\"type\":\"text\",\"text\":\"look\"}]}}" == .prompt
+Concrete facts about the classifier on hand-written transcript lines and commands, checked by compiled
+evaluation (`native_decide`, pinned with `#assert_compiled`) under the standing policy. -/
+
+theorem classify_cases : (
+    (classify "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi claude\"}}" == .prompt) &&
+    (classify "{\"type\":\"user\",\"isMeta\":true,\"message\":{\"content\":\"hi\"}}" == .other) &&
+    (classify "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"ok\"}]}}" == .other) &&
+    (classify "{\"type\":\"user\",\"message\":{\"content\":\"<command-name>/clear</command-name>\"}}" == .other) &&
+    (classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}" == .reply) &&
+    (classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"thinking\",\"thinking\":\"hm\"}]}}" == .other) &&
+    (classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"cd /x && git stash\"}}]}}" == .forbidden) &&
+    (classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"grep -n 'git stash' RULES.md\"}}]}}" == .other) &&
+    (classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"git stashed-thing\"}}]}}" == .other) &&
+    (classify "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls; pkill -f cat\"}}]}}" == .forbidden) &&
+    (classify "not json" == .other) &&
+    (classify "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"image\"},{\"type\":\"text\",\"text\":\"look\"}]}}" == .prompt)) = true := by native_decide
+
+theorem commandForbidden_cases : (
+    (commandForbidden "sudo killall node") &&
+    (commandForbidden "bash -c 'git stash pop'") &&
+    (commandForbidden "git -C /x stash") &&
+    (commandForbidden "pkill -9 -f worker") &&
+    (commandForbidden "pkill -x cat") &&
+    (commandForbidden "git add -Av") &&
+    (commandForbidden "env git stash") &&
+    (commandForbidden "timeout 120 ssh -o BatchMode=yes hbox 'pkill -f sample.sh; echo'") &&
+    (!commandForbidden "git status && git add src/a.rs") &&
+    (!commandForbidden "kill 1234") &&
+    (!commandForbidden "pgrep -fl cat") &&
+    (!commandForbidden "echo stash") &&
+    (commandForbidden "env X=1 git stash") &&
+    (!commandForbidden "echo \"x; git stash\"") &&
+    (!commandForbidden "git commit -m 'never git stash'") &&
+    (commandForbidden "ssh -p 22 bb2 \"cd /x && git add --all\"")) = true := by native_decide
+
+#assert_compiled classify_cases
+#assert_compiled commandForbidden_cases
 
 end Dregg2.Stream.Claude

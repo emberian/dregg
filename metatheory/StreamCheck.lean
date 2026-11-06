@@ -2,7 +2,9 @@
 # `lake exe stream-check`: the streaming-receipt follower (initiative 11)
 
     stream-check produce <dir>            compute the next window's receipt (honest producer)
-    stream-check verify  <dir> [--anchor R]  check every receipt in <dir> once, from genesis; with
+    stream-check verify  <dir> [--anchor R]  check every receipt in <dir> once, from genesis: exit 0
+                                          only for a completed run (DONE names the window count, no
+                                          gaps), 3 for an accepted prefix, 1 refused, 2 bad input; with
                                           --anchor, also require the final root to be R, the root
                                           published for the source log (`anchored_is_genuine`)
     stream-check root    <file>           the MMR root of a log file (what a publisher publishes)
@@ -51,9 +53,15 @@ def natBytes (n : Nat) : List UInt8 :=
 termination_by n
 decreasing_by omega
 
-def be8 (n : Nat) : ByteArray := ByteArray.mk <| (List.range 8).reverse.toArray.map fun k => ((n / 256 ^ k) % 256).toUInt8
+/-- An unbounded self-delimiting length (LEB128): 7 bits per byte, high bit = more follows. -/
+def leb (n : Nat) : List UInt8 :=
+  if n < 128 then [n.toUInt8] else ((n % 128) + 128).toUInt8 :: leb (n / 128)
+termination_by n
+decreasing_by omega
 
-/-- A canonical framing of any integer: sign byte, 8-byte magnitude length, magnitude. -/
+def be8 (n : Nat) : ByteArray := ByteArray.mk (leb n).toArray
+
+/-- A canonical framing of any integer: sign byte, LEB128 magnitude length, magnitude. -/
 def encWide (x : Int) : ByteArray :=
   let mag := natBytes x.natAbs
   (ByteArray.mk #[if x < 0 then 1 else 0]) ++ be8 mag.length ++ ByteArray.mk mag.toArray
@@ -65,7 +73,7 @@ producer computes, and the only one an honest log ever reaches (every input is a
 Any other input (an integer outside `[0, 2^256)`, or more than 255 inputs) takes a separately tagged,
 canonically framed form. The two tags are the same length and differ in their last byte, so neither
 message is a prefix-shifted copy of the other; within each form the framing is fixed-width (narrow) or
-length-prefixed (wide). So two distinct inputs give distinct messages, and the instantiation is
+self-delimiting with unbounded LEB128 lengths (wide), so no length wraps. So two distinct inputs give distinct messages, and the instantiation is
 injective on all of `List ℤ` up to a blake3 collision (an `#guard` below checks the two forms of the
 same value differ; the injectivity is argued here, not proved). -/
 def streamHash (xs : List Int) : Int :=
@@ -154,16 +162,19 @@ def windowPath (dir : String) (k : Nat) : String :=
   let s := toString k
   s!"{dir}/windows/w{String.ofList (List.replicate (6 - s.length) '0')}{s}.jsonl"
 
-/-- Split a window file into its lines (each line one entry; a trailing newline ends the last). -/
-def splitLines (b : ByteArray) : List ByteArray := Id.run do
+/-- Split a byte file into its newline-TERMINATED lines (each one entry) and the byte length of any
+unterminated tail. The tail is never an entry: the Rust producer commits only complete lines, and the
+follower refuses a window file that has one (the producer always terminates every line). -/
+def splitTerminated (b : ByteArray) : List ByteArray × Nat := Id.run do
   let mut out : Array ByteArray := #[]
   let mut start := 0
   for i in [0:b.size] do
     if b.get! i == 10 then
       out := out.push (b.extract start i)
       start := i + 1
-  if start < b.size then out := out.push (b.extract start b.size)
-  return out.toList
+  return (out.toList, b.size - start)
+
+def splitLines (b : ByteArray) : List ByteArray := (splitTerminated b).1
 
 def pad6 (k : Nat) : String :=
   let s := toString k
@@ -219,8 +230,10 @@ def checkOne (dir : String) (acc : Acc (Bool × Bool)) (k : Nat) (line : String)
     IO (Option (Acc (Bool × Bool))) := do
   let t0 ← IO.monoNanosNow
   let raw ← IO.FS.readBinFile (windowPath dir k)
-  let ws ← IO.lazyPure fun _ => splitLines raw
+  let (ws, tail) ← IO.lazyPure fun _ => splitTerminated raw
   let t1 ← IO.monoNanosNow
+  if tail != 0 then
+    IO.println s!"REFUSE k={k}: window file ends in {tail} unterminated bytes (not an entry)"; return none
   match Json.parse line.trimAscii.toString >>= certOfJson with
   | .error e =>
     IO.println s!"REFUSE k={k}: unreadable receipt: {e}"; return none
@@ -242,7 +255,13 @@ def checkOne (dir : String) (acc : Acc (Bool × Bool)) (k : Nat) (line : String)
     (← IO.getStdout).flush
     return some (P.advance acc ws)
 
+/-- Follow (or, with `idle? = none`, verify) a receipt directory from genesis.
+Exit 0 only for a COMPLETED run: the producer's `DONE` marker is present, it names exactly the number
+of windows checked, and no receipt or window exists past that number. A run without `DONE` is reported
+as an accepted PREFIX (exit 3), never as ACCEPT. Missing directory: exit 2. -/
 def follow (dir : String) (idle? : Option Nat) (anchor? : Option String := none) : IO UInt32 := do
+  unless ← System.FilePath.isDir dir do
+    IO.println s!"REFUSE: {dir} is not a directory"; return 2
   let mut acc := P.genesis
   let mut k := 1
   let mut idleMs := 0
@@ -252,7 +271,7 @@ def follow (dir : String) (idle? : Option Nat) (anchor? : Option String := none)
       | some acc' => acc := acc'; k := k + 1; idleMs := 0
       | none => return 1
     else if ← System.FilePath.pathExists s!"{dir}/DONE" then
-      break  -- the producer has finished and every receipt it wrote has been checked
+      break
     else
       match idle? with
       | none => break
@@ -260,13 +279,28 @@ def follow (dir : String) (idle? : Option Nat) (anchor? : Option String := none)
         if idleMs ≥ s * 1000 then break
         IO.sleep 200
         idleMs := idleMs + 200
+  let checked := k - 1
+  -- nothing may exist past the last checked window (a gap would hide later files)
+  for j in [k:k + 64] do
+    if (← System.FilePath.pathExists (receiptPath dir j)) || (← System.FilePath.pathExists (windowPath dir j)) then
+      IO.println s!"REFUSE: window or receipt {j} exists past the first gap at {k} (receipt {k} or window {k} is missing)"
+      return 1
   -- `anchored_is_genuine`: the chain is about THE published log only if the final root is its root.
   if let some a := anchor? then
     if a != toHex acc.root then
       IO.println s!"REFUSE anchor: final root {toHex acc.root} != published root {a} (the windows are not the published log)"
       return 1
-  IO.println s!"ACCEPT {k - 1} windows, {acc.st.pos} entries, root {toHex acc.root}, verdict {verdictStr (verdictOf policyVC acc.st.q)}{if anchor?.isSome then " (anchored)" else ""}"
-  return 0
+  let summary := s!"{checked} windows, {acc.st.pos} entries, root {toHex acc.root}, verdict {verdictStr (verdictOf policyVC acc.st.q)}{if anchor?.isSome then " (anchored)" else ""}"
+  let donePath := s!"{dir}/DONE"
+  if ← System.FilePath.pathExists donePath then
+    let declared := (← IO.FS.readFile donePath).trimAscii.toString.toNat?
+    if declared != some checked then
+      IO.println s!"REFUSE: DONE declares {declared} windows, {checked} were present and checked"
+      return 1
+    IO.println s!"ACCEPT {summary}"
+    return 0
+  IO.println s!"PREFIX {summary} (no DONE marker: an accepted prefix, not a completed run)"
+  return 3
 
 def digest (file : String) : IO UInt32 := do
   for l in splitLines (← IO.FS.readBinFile file) do
@@ -284,9 +318,9 @@ def main (args : List String) : IO UInt32 := do
   | ["follow", dir, s] => StreamCheck.follow dir (some s.toNat!)
   | ["digest", f] => StreamCheck.digest f
   | ["root", f] =>
-    let ws := StreamCheck.splitLines (← IO.FS.readBinFile f)
+    let (ws, tail) := StreamCheck.splitTerminated (← IO.FS.readBinFile f)
     let acc := StreamCheck.P.advance StreamCheck.P.genesis ws
-    IO.println s!"{ws.length} {StreamCheck.toHex acc.root}"
+    IO.println s!"{ws.length} {StreamCheck.toHex acc.root}{if tail != 0 then s!" (ignored {tail} unterminated bytes)" else ""}"
     return 0
   | _ =>
     IO.eprintln "usage: stream-check produce <dir> | verify <dir> [--anchor R] | follow <dir> [idle_s] | digest <file> | root <file>"

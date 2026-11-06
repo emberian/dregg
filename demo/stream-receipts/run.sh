@@ -44,7 +44,7 @@ lo=$(( n / 2 )); hi=$(( lo + 2 ))
 # Tamper, three ways, on copies.
 t="$out/tamper"; rm -rf "$t"; mkdir -p "$t"
 refused() { if "$checker" verify "$@" > "$1.log"; then echo "NOT REFUSED (bug)"; else grep -m1 REFUSE "$1.log"; fi; }
-copy() { mkdir -p "$1"; cp -R "$out/windows" "$out/receipts" "$1/"; }
+copy() { mkdir -p "$1"; cp -R "$out/windows" "$out/receipts" "$out/DONE" "$1/"; }
 # (1) the server deletes an entry from window 1 and keeps the honest receipts
 copy "$t/drop"; sed -i.bak '2d' "$t/drop/windows/w000001.jsonl"; rm "$t/drop/windows/w000001.jsonl.bak"
 echo "dropped entry, honest receipts:     $(refused "$t/drop")"
@@ -60,5 +60,6 @@ echo "swapped windows:                    $(refused "$t/swap")"
 mkdir -p "$t/reproduce/windows"; cp "$out"/windows/*.jsonl "$t/reproduce/windows/"
 sed -i.bak '2d' "$t/reproduce/windows/w000001.jsonl"; rm "$t/reproduce/windows/w000001.jsonl.bak"
 k=1; while [ -e "$t/reproduce/windows/$(printf 'w%06d.jsonl' $k)" ]; do "$checker" produce "$t/reproduce" > /dev/null; k=$((k+1)); done
+echo $((k-1)) > "$t/reproduce/DONE"
 echo "producer-side drop, chain alone:    $("$checker" verify "$t/reproduce" | tail -1 | cut -c1-60)"
 echo "producer-side drop, anchored:       $(refused "$t/reproduce" --anchor "$anchor")"
