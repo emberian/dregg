@@ -139,6 +139,11 @@ fn with_mpc_tls_session<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// [`with_mpc_tls_session`] for sibling modules (the hop prover): the SAME process-wide lock.
+pub(crate) fn with_mpc_tls_session_pub<R>(f: impl FnOnce() -> R) -> R {
+    with_mpc_tls_session(f)
+}
+
 /// A canned endpoint exchange the test server answers. Endpoint-parameterized: the same
 /// live MPC-TLS machinery drives an Anthropic `POST /v1/messages`, a public GitHub
 /// `GET /repos/…/commits/…`, or a public Coinbase `GET /v2/prices/…/spot` — a new endpoint

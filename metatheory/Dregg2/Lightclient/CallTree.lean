@@ -18,6 +18,9 @@ proves what an accepting `verify V hash root t` buys a stranger who holds only `
   accepting `V` on a transport hop means the hop's attestation is genuine for its host, request and
   response — what `presentation.verify()` + the notary pin + the digests are trusted to give), every
   transport hop of `t₀` is `Attested`.
+* **`deployed_coll_is_blake3_coll`** (§5) — at the deployed `CallTreeDeploy.treeHash`, a collision
+  `treeFind` names is a genuine BLAKE3-256 collision of the two encodings (within the 4-byte length
+  prefixes' bounds).
 * Falsifiers (§4, by `decide`, at a toy hash): a dropped child, a swapped response, a reorder, an
   attestation for a different host, each refused; the honest tree accepted.
 
@@ -25,6 +28,7 @@ What this does NOT prove is listed in `calltree/GROUNDING.md` §6 (liveness, unr
 notary honesty, replay).
 -/
 import Dregg2.Lightclient.CallTreeCore
+import Dregg2.Lightclient.CallTreeDeploy
 import Dregg2.Lightclient.MMR
 
 namespace Dregg2.Lightclient.CallTree
@@ -350,6 +354,23 @@ theorem relabelled_local_refused :
 
 end Demo
 
+/-! ## §5 — At the deployed hash, a named collision is a BLAKE3 collision.
+
+`CallTreeDeploy.treeHash_coll_is_blake3_coll` (proved core-only, beside the definitions the checker
+runs), read at the `SpongeColl` the extractor `treeFind` names: within the encoding's bounds (list
+length and each element's magnitude byte-count below `2^32`), the pair's encodings are distinct
+BLAKE3 inputs with one BLAKE3 output. -/
+
+theorem deployed_coll_is_blake3_coll {p : List ℤ × List ℤ}
+    (h : SpongeColl CallTreeDeploy.treeHash p)
+    (h1l : p.1.length < 2 ^ 32) (h2l : p.2.length < 2 ^ 32)
+    (h1 : ∀ x ∈ p.1, (CallTreeDeploy.natBE x.natAbs).size < 2 ^ 32)
+    (h2 : ∀ y ∈ p.2, (CallTreeDeploy.natBE y.natAbs).size < 2 ^ 32) :
+    CallTreeDeploy.encList p.1 ≠ CallTreeDeploy.encList p.2 ∧
+      Dregg2.Crypto.Blake3.hash (CallTreeDeploy.encList p.1) =
+        Dregg2.Crypto.Blake3.hash (CallTreeDeploy.encList p.2) :=
+  CallTreeDeploy.treeHash_coll_is_blake3_coll h.1 h.2 h1l h2l h1 h2
+
 #assert_axioms mrootC_eq
 #assert_axioms commit_binds_or_collides
 #assert_axioms verify_sound
@@ -364,5 +385,11 @@ end Demo
 #assert_axioms Demo.other_host_refused
 #assert_axioms Demo.unlisted_host_refused
 #assert_axioms Demo.relabelled_local_refused
+#assert_axioms Dregg2.Crypto.Blake3.hash_size
+#assert_axioms CallTreeDeploy.ofBE_natBE
+#assert_axioms CallTreeDeploy.ofBE_injective_of_size
+#assert_axioms CallTreeDeploy.encList_injective
+#assert_axioms CallTreeDeploy.treeHash_coll_is_blake3_coll
+#assert_axioms deployed_coll_is_blake3_coll
 
 end Dregg2.Lightclient.CallTree

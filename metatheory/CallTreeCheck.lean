@@ -44,24 +44,42 @@ def parseEvidence (j : Json) : Except String Evidence := do
            serverName := ← getStr j "server_name",
            notaryKey := ← getStr j "notary_key",
            sent := ← hexBytes (← getStr j "sent"),
-           recv := ← hexBytes (← getStr j "recv") }
+           recv := ← hexBytes (← getStr j "recv"),
+           time := ← (← j.getObjVal? "time").getNat?,
+           session := ← getStr j "session" }
 
 def strList (j : Json) : Except String (List String) := do
   (← j.getArr?).toList.mapM (·.getStr?)
+
+def parseEdge (j : Json) : Except String Edge := do
+  return { kind := ← (← j.getObjVal? "kind").getNat?, src := ← hexInt (← getStr j "from"), dst := ← hexInt (← getStr j "to"),
+           bytes := ← hexBytes (← getStr j "bytes") }
+
+def parsePair (j : Json) : Except String (Nat × String × String) := do
+  let a ← j.getArr?
+  match a.toList with
+  | [k, x, y] => return (← k.getNat?, ← x.getStr?, ← y.getStr?)
+  | _ => .error "require_edges entries are [kind, from_host, to_host]"
 
 structure Bundle where
   root : Int
   pol : Policy
   tree : CallTree
   evs : List Evidence
+  edges : List Edge
 
 def parseBundle (j : Json) : Except String Bundle := do
   let p ← j.getObjVal? "policy"
   return { root := ← hexInt (← getStr j "root"),
            pol := { notaries := ← strList (← p.getObjVal? "notaries"),
-                    hosts := ← strList (← p.getObjVal? "hosts") },
+                    hosts := ← strList (← p.getObjVal? "hosts"),
+                    recorders := ← strList (← p.getObjVal? "recorders"),
+                    timeLo := ← (← p.getObjVal? "time_lo").getNat?,
+                    timeHi := ← (← p.getObjVal? "time_hi").getNat?,
+                    requireEdges := ← (← (← p.getObjVal? "require_edges").getArr?).toList.mapM parsePair },
            tree := ← parseTree (← j.getObjVal? "tree"),
-           evs := ← (← (← j.getObjVal? "evidence").getArr?).toList.mapM parseEvidence }
+           evs := ← (← (← j.getObjVal? "evidence").getArr?).toList.mapM parseEvidence,
+           edges := ← (← (← j.getObjVal? "edges").getArr?).toList.mapM parseEdge }
 
 mutual
 def countNodes : CallTree → Nat
@@ -74,19 +92,25 @@ end
 def main (args : List String) : IO UInt32 := do
   match args with
   | [path] =>
-      let s ← IO.FS.readFile path
+      -- `-` reads the bundle from stdin (the verifier CLI pipes it; no shared temp file).
+      let s ← if path == "-" then (← IO.getStdin).readToEnd else IO.FS.readFile path
       match Json.parse s >>= parseBundle with
       | .error e =>
           IO.eprintln s!"calltree-check: bad bundle: {e}"
           return 2
       | .ok b =>
-          let ok := deployedVerify b.evs b.pol b.root b.tree
+          let ok := deployedVerify b.evs b.pol b.root b.tree b.edges
           let out := Json.mkObj
             [ ("verdict", Json.str (if ok then "ACCEPT" else "REJECT"))
             , ("root", Json.str (hex64 b.root))
             , ("recomputed_root", Json.str (hex64 (commit treeHash b.tree)))
             , ("nodes", Lean.toJson (countNodes b.tree))
-            , ("presentations", Lean.toJson b.evs.length) ]
+            , ("presentations", Lean.toJson b.evs.length)
+            , ("edges", Lean.toJson b.edges.length)
+            , ("tree_and_hops", Lean.toJson (verify (deployedV (table b.evs) b.pol) treeHash b.root b.tree))
+            , ("presentations_unique", Lean.toJson (nodupB (atts b.tree)))
+            , ("sessions_unique", Lean.toJson (nodupB (sessions (table b.evs) b.tree)))
+            , ("edges_ok", Lean.toJson (edgesOk (table b.evs) b.pol b.tree b.edges)) ]
           IO.println out.compress
           return if ok then 0 else 1
   | _ =>

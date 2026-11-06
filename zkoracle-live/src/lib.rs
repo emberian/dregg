@@ -39,6 +39,7 @@
 pub mod endpoints;
 pub mod notary_server;
 pub mod tlsn_bedrock;
+pub mod tlsn_hop;
 pub mod tlsn_live;
 pub mod verify;
 
