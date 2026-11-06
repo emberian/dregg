@@ -191,3 +191,16 @@ git push origin HEAD:main
 The verify after the rebase is required: the stamp stays valid on main only if no stamped artifact
 changed between `$REV` and main.
 <!-- ===== end Emit and stamp (C2) ===== -->
+
+### hbox memory for the emitter closure (deputy, 2026-11-06, [MEASURED])
+
+The automatic stamp needs every emitter's Lean closure built. Under `swarm-build` at `SWARM_MEM_MAX=12G`
+the default `lake build` parallelism was OOM-killed three times (`run-u75145`, `u75156`, `u75280`), and
+building the modules ONE AT A TIME at 12G still died on single Mina modules: `lake` has no `--jobs`
+option in this toolchain (Lake 5.0.0 / Lean 4.30.0), and one `lean` process compiling
+`Dregg2.Circuit.Emit.MinaBodyPreimageBitsAir` reaches a **peak RSS of 24.7 GB** (sampled every 5 s; built
+in 5 min 8 s at a one-time `SWARM_MEM_MAX=32G`, granted by the root with the box checked first: summed
+process RSS, not `free`, and no tenant peaking). `Dregg2.Circuit.Emit.MinaWrapCommitStages` also exceeds 12G
+(killed at 12G, `run-u79764`; its peak is not yet measured). Everything else in the 174-module emitter
+closure builds under 12G. The clone lives at `/tank/dregg-build/automata/bs` (ZFS, 4.4 GB; a no-op
+`lake build` of the automata closure replays 3,034 jobs in 4 s after the move from `/home`).
