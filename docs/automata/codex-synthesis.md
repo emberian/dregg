@@ -85,3 +85,38 @@ stratified-negation theorem and its forged-absence falsifier. Output: `scratchpa
 
 Not adopted: nothing refused outright. Finding 3 was the round's payoff: a live verifier forgery in a
 crate the decision had labelled "legacy", which is the reason the review asked for counterexamples.
+
+---
+
+## Round 4 (2026-11-06): the landed Lean statements and the two demo READMEs
+
+Prompt: attack every keystone and falsifier in `Sat/LratCert.lean`, `Deriv/BisimCert.lean`,
+`Datalog/{StratifiedCert,JoinClosure,SafeCoincidence}.lean`, the four `Circuit/Emit/*Bound.lean`
+files, and both demo READMEs for vacuity, free hypotheses, the named-collision rule, the
+weak-accepts-beside-strong-refuses rule, docstring overreach, and what a receipt reader would assume.
+Output: `scratchpad/codex/round4.out` (17 KB). Codex did not run Lean. Routed the same hour: 8, 10,
+11, 13, 15, 17 to lane A; 6, 12, 13 to lane F; 1-5, 7-9, 14, 16 to lane E's distilled successor.
+
+| # | finding (Codex) | verdict | what changes |
+|---|---|---|---|
+| 1 | `DfaRoutingChainBound.lean:210`: `hsym : ∀ stmt, Injective stmt.encSym` quantifies over every statement, including constant encodings, so `Sy` must be a subsingleton: the model-level record theorem is unusable for a real alphabet. | ACCEPT (blocker) | quantify `stmt` first, require injectivity of ITS `encSym`; keep the unequal-length alternative explicit or add a public trace-length field |
+| 2 | `AttestedAutomatonBound.lean:204,227`: the whole-run collision residual `∃ i, … ∃ mRow, root mRow = pubRoot ∧ MapRootColl …` never uses `i` and omits the heap's size, sortedness and opening at the row's key: an unrelated colliding preimage of the public root discharges it. | ACCEPT (blocker) | carry the per-row opening heaps; conclude classification or `∃ i, badEdge i ∧ MapRootColl … (rowHeap i) m` |
+| 3 | `DfaRoutingChainBound.lean:180,336`, `DyckStackBound.lean:243`: `CollisionFree.compressN_inj` is global injectivity of digest lists, impossible for a finite carrier; the `ℤ` reference hash shows consistency of an ideal instance only. | ACCEPT | label these as ideal injective-hash lemmas, not deployed CR reductions, or export binding-or-collision forms with a deterministic extractor over the two chains |
+| 4 | `DyckStackBound.lean:379,446`: `dyck_bound` also needs supplied first-done rows, successors and `n < p`, undisclosed; the falsifier shows weak acceptance and unequal routes but no strong refusal under the full descriptor, and no jointly inhabited full-descriptor witness. | ACCEPT | residual list completed; a fully satisfying chain witness with only its route changed, weak-accepts beside full-descriptor refusal |
+| 5 | `DfaRoutingChainBound.lean:408,419`: `splice_route_mismatch` proves a commitment mismatch, not refusal by a defined bound verifier; the docstring says "REFUSES". | ACCEPT | define the bound acceptance check (record commitment + length) and state weak acceptance / bound rejection for one trace and record; otherwise say "the record-opening equality fails" |
+| 6 | `absence-receipt/README.md:113`: "the word is public" contradicts `DfaRoutingTableBound` (the exact-public table exposes the multiset of transitions, not their order). | ACCEPT | wording replaced; served-path sentence qualified |
+| 7 | `LratCert.lean:390,453`: the reused-ID falsifier also leaves a dangling reference, so a checker without the freshness check still refuses it: freshness is not isolated. | ACCEPT | `f = [[1],[-1]]`, `p = [.add 1 [] [1,2]]`; the no-freshness replay accepts, `checkLrat` refuses; the old case stays as a malformed-proof regression |
+| 8 | `StratifiedCert.lean:842`, `JoinClosure.lean:482`, `BisimCert.lean:307`: several advertised separations exist only as `#guard`s or lack the comparator's acceptance (root/derivative deletions refused without a root-omitting checker accepting; LRAT dropped hint without its comparator). | ACCEPT | named `weak = true ∧ strong = false` theorems with axiom accounting; root-removal examples chosen so the remaining closure passes |
+| 9 | `LratCert.lean:400`: `checkNoRup` requires every hint live, so it is not an acceptance superset of the strong checker (`[[]]` with `.add 2 [] [1, 999]`). | ACCEPT-DOC | wording: "a comparator omitting RUP but requiring all supplied hints to be live" |
+| 10 | `datalog-governance/README.md:50,66`: a collision of the abstract list hash is a SHAKE256 collision only given encoding injectivity, which is checked, not proved. | ACCEPT | wording replaced; same obligation for the program digest |
+| 11 | README:31,53: facts are tool REQUESTS without success checks, paths compared lexically, sub-agent rules need a resolved `spawned` fact, export hashes are not in the EDB. | ACCEPT | the "not claimed" list extended with the exact sentence |
+| 12 | `absence-receipt/README.md:1,98`: "zero secrets" exceeds a two-pattern scanner. | ACCEPT | retitled; "no claim about other secret formats, encoded secrets, credential validity, or semantic confidentiality" |
+| 13 | both READMEs: signature verification authenticates the body under the demo key; it does not attest the checker binary, its execution, or the scanned bytes' provenance; the verify instructions never compare the checked tuple to the signed tuple. | ACCEPT | wording in both |
+| 14 | `DfaRoutingTableBound.lean:130`: `tableRouting_trail` is a necessary characterization (no endpoint, no converse), not the complete one advertised. | ACCEPT-DOC | wording |
+| 15 | `JoinClosure.lean:95`, `SafeCoincidence.lean:107`: `safeB` requires dense variable numbering. | ACCEPT | normalize ids or state the stronger hypothesis (lane A says which) |
+| 16 | `BisimCert.lean:299,728`: the inclusion examples are trivial set laws; the spliced certificate distinguishes verifiers but the substituted statement stays true. | ACCEPT | commit the false inclusion `anyStar ⊆ noDoubleBraceRE`, splice the valid unrelated certificate, prove weak acceptance, strong refusal and an explicit violating word |
+| 17 | The central implications (LRAT soundness and binding; bisimulation coverage/closure/soundness/binding; Datalog exactness, per-stratum exactness, count uniqueness, intended-EDB binding; join refinement; safe coincidence) carry real content with no free conclusion. | — | `verifyS_supported_model` bundled with `verifyS_sound` for receipt-level export |
+
+Codex would refuse to merge: the model-level chain record theorem (1), the weld's whole-run collision
+export (2), the content-bound certification claims without 3-5, the demo wording (6, 10-13) and the
+reused-ID falsifier (7). All are open repairs, assigned; none of the landed cores is retracted.
