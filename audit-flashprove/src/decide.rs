@@ -1,5 +1,5 @@
-//! The compiled Lean decision (minidregg `Selvage/AuditFlashProveDecide.lean`), behind safe
-//! wrappers. This module holds no decision logic: each function marshals its arguments and returns
+//! The compiled Lean decision (minidregg `Selvage/AuditDecideCore.lean`,
+//! `Selvage/AuditFlashProveDecide.lean`, `Selvage/AuditExactDecide.lean`), behind safe wrappers. This module holds no decision logic: each function marshals its arguments and returns
 //! what the exported Lean function returned.
 
 use std::sync::{Mutex, Once};
@@ -21,6 +21,23 @@ unsafe extern "C" {
         r: u32,
         e: u32,
         accept_work: u8,
+    ) -> u8;
+    #[allow(clippy::too_many_arguments)]
+    fn fpaudit_exact_verdict(
+        open_ok: u8,
+        out: *const u8,
+        out_len: usize,
+        has_exit: u8,
+        exit_code: u32,
+        spec: *const u8,
+        spec_len: usize,
+        params: *const u8,
+        params_len: usize,
+        weights: *const u8,
+        weights_len: usize,
+        prompt_len: u32,
+        output: *const u8,
+        output_len: usize,
     ) -> u8;
     fn fpaudit_alarm(fired: u8, verdict: u8) -> u8;
     fn fpaudit_alarm_open(fired: u8, verdict: u8) -> u8;
@@ -121,6 +138,43 @@ pub fn verdict(open_ok: bool, stdout: &[u8], exit: Option<u32>, x: &Expect) -> V
             x.r,
             x.e,
             u8::from(x.accept_work),
+        )
+    };
+    Verdict::of_code(c)
+}
+
+/// What an exact-recompute auditor holds (Lean `AuditExact.Expect`): its three pins, and the
+/// committed prompt length and output tokens (`t1,t2,...`, as the committed output file holds them).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExactExpect {
+    pub spec: String,
+    pub params: String,
+    pub weights: String,
+    pub prompt_len: u32,
+    pub output: String,
+}
+
+/// Lean `AuditExact` C ABI `verdictC`: a failed opening is a rejection; otherwise `accept` iff the
+/// recompute reported exactly the committed output.
+pub fn exact_verdict(open_ok: bool, stdout: &[u8], exit: Option<u32>, x: &ExactExpect) -> Verdict {
+    init();
+    let _g = LEAN.lock().unwrap_or_else(|e| e.into_inner());
+    let c = unsafe {
+        fpaudit_exact_verdict(
+            u8::from(open_ok),
+            stdout.as_ptr(),
+            stdout.len(),
+            u8::from(exit.is_some()),
+            exit.unwrap_or(0),
+            x.spec.as_ptr(),
+            x.spec.len(),
+            x.params.as_ptr(),
+            x.params.len(),
+            x.weights.as_ptr(),
+            x.weights.len(),
+            x.prompt_len,
+            x.output.as_ptr(),
+            x.output.len(),
         )
     };
     Verdict::of_code(c)

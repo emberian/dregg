@@ -56,8 +56,7 @@ impl CallOutcome {
 /// The largest standard output the auditor reads. `cp_verify` prints about 140 lines.
 pub const OUTPUT_CAP: usize = 4 << 20;
 
-/// Run `cp_verify CONFIG IVK REQ Y PROOF -id ID` in its own process group with a wall-clock limit,
-/// an address-space limit and an output cap.
+/// Run `cp_verify CONFIG IVK REQ Y PROOF -id ID` under [`run_limited`].
 pub fn run_cp_verify(
     bin: &Path,
     f: &CallFiles,
@@ -65,15 +64,42 @@ pub fn run_cp_verify(
     limit: Duration,
     mem_bytes: u64,
 ) -> CallOutcome {
+    let argv: Vec<std::ffi::OsString> = vec![
+        bin.into(),
+        f.config.clone().into(),
+        f.ivk.clone().into(),
+        f.req.clone().into(),
+        f.y.clone().into(),
+        f.proof.clone().into(),
+        "-id".into(),
+        id.into(),
+    ];
+    run_limited(&argv, limit, mem_bytes)
+}
+
+/// Run an exact recompute: `argv` (the recompute command the policy pins) followed by the staged
+/// prompt file and the staged output file, under [`run_limited`].
+pub fn run_recompute(
+    argv: &[String],
+    f: &CallFiles,
+    limit: Duration,
+    mem_bytes: u64,
+) -> CallOutcome {
+    if argv.is_empty() {
+        return CallOutcome::not_made("empty recompute command".into());
+    }
+    let mut a: Vec<std::ffi::OsString> = argv.iter().map(Into::into).collect();
+    a.push(f.req.clone().into());
+    a.push(f.y.clone().into());
+    run_limited(&a, limit, mem_bytes)
+}
+
+/// Run `argv` in its own process group with a wall-clock limit, an address-space limit and an
+/// output cap.
+pub fn run_limited(argv: &[std::ffi::OsString], limit: Duration, mem_bytes: u64) -> CallOutcome {
     let start = Instant::now();
-    let mut cmd = Command::new(bin);
-    cmd.arg(&f.config)
-        .arg(&f.ivk)
-        .arg(&f.req)
-        .arg(&f.y)
-        .arg(&f.proof)
-        .arg("-id")
-        .arg(id)
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
