@@ -170,8 +170,13 @@ def ruleCoreInputs (r : BoundedRule) : List Int :=
   (List.ofFn r.lhs.slots).flatMap ruleSlotFields ++
     (List.ofFn r.rhs.slots).flatMap ruleSlotFields
 
+/-- The eight lanes of `H xs`. The hash is bound once, outside the lane function: a lane
+function that called `H xs` itself recomputes the hash at every lane read, and a digest whose
+inputs are other digests' lanes then costs 8^depth hash calls when evaluated (the `#guard`s of
+`HierarchicalGraphCommitment` spent 40 s there). The same term up to `let` (zeta). -/
 def digest8 (H : List Int → List Int) (xs : List Int) : Digest8 :=
-  fun i => (H xs).getD i.val 0
+  let out := H xs
+  fun i => out.getD i.val 0
 
 def graphRootInputs (core : Digest8) (blind : Blind4)
     (domain session version side : Int) : List Int :=
