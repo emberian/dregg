@@ -1,5 +1,5 @@
 name = "Dregg2"
-defaultTargets = ["Dregg2", "Metatheory", "Polis", "Market", "Bfv", "PicklesSynthesis", "MinaBridgeGuards", "CommitBindsGuards", "TurnAuthGuards", "PicklesEmitDrivers", "DivergenceToothGuards", "PathOfAngelsGuards", "GameFixtureGuards", "ZkmlSuiteGuards"]
+defaultTargets = ["Dregg2", "Metatheory", "Polis", "Market", "Bfv", "PicklesSynthesis", "MinaBridgeGuards", "CommitBindsGuards", "TurnAuthGuards", "PicklesEmitDrivers", "DivergenceToothGuards", "PathOfAngelsGuards", "GameFixtureGuards", "ZkmlSuiteGuards", "CallTreeGuards"]
 
 # Pin mathlib to the exact revision matching v4.30.0
 # (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). This is a PORTABLE `git`+`rev`
@@ -683,3 +683,19 @@ root = "DfaRun"
 [[lean_exe]]
 name = "policyc"
 root = "Policyc"
+
+# calltree-check — the call-tree certificate checker (initiative 9, 2026-11-06): reads a bundle
+# {root, policy, tree, evidence}, runs `CallTreeDeploy.deployedVerify` (= `CallTreeCore.verify` at
+# the deployed BLAKE3 hash and hop predicate; `CallTree.verify_sound` / `no_omission` /
+# `verify_attested` are about it), prints the verdict, exits 0/1 (2 = bad input). Lean core only.
+# NOT a default target.
+#
+#     lake build calltree-check
+#     ./.lake/build/bin/calltree-check ../calltree/fixtures/tree.bundle.json
+[[lean_lib]]
+name = "CallTreeGuards"
+globs = ["Dregg2.Lightclient.CallTree", "Dregg2.Lightclient.CallTreeDeploy"]
+
+[[lean_exe]]
+name = "calltree-check"
+root = "CallTreeCheck"
