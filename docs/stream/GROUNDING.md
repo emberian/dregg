@@ -125,3 +125,10 @@ transcript with receipts every 100 events, a follower, and a microsite with the 
   boundary, drops wrapper option operands and `--`, and re-reads `$( )` / backquote bodies; the hash
   moved to the core module `Stream.Hash` so its concrete fact is the pinned theorem
   `streamHash_forms_differ`.
+- Cross-model round 3 (gpt-6-astra, 2026-11-06, at 59563d6ca): **gate closed.** The MAJOR and the
+  EOF, publication and hash-pin repairs confirmed; the five headline statements (window_sound,
+  windows_compose, anchored_is_genuine, anchored_entries_genuine, verdict_monotone) byte-identical
+  since round 2. Two MINOR classifier gaps stay open and are stated, not fixed: substitution extraction
+  ignores double-quote/escape context (`echo "'$(git stash)'"` missed, `echo "\$(git stash)"` falsely
+  flagged), and `env -S 'git stash'` / `sudo --user root git stash` are missed. The classifier is a
+  syntactic reading of command text; the theorems are about it as defined.
