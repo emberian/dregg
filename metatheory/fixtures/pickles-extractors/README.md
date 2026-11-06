@@ -108,7 +108,7 @@ It also prints two measurements the plan in `docs/MINA-REAL-BLOCK-GATE.md` §6.1
 * **GT8 — the leg the Lean side defers.** `<b_poly_coefficients(chal), srs.g> == opening.sg`, the
   2^15-term SRS MSM of rung 5h. Cheap here. It used to be quoted at ~18 h and ~7 TB in-kernel and
   it is neither: **re-measured 2026-07-28 it is ~2.9 h and ~28 GB**, and 5h is now DISCHARGED in
-  the Lean kernel (`MinaWrapSgCore` + `MinaWrapSgChunk0..3`). This assertion is the reference value
+  the Lean kernel (`MinaWrapSgCore` + `MinaWrapSgChunk0..3`, the chunks since retired 2026-11-06, see metatheory/docs/MINA-PICKLES-RESCUE.md). This assertion is the reference value
   those theorems are checked against, not a substitute for them.
 
 * **GT9 — the generator FOLD recipe.** GT8's object is a 2^15-term MSM, which is not a shape a

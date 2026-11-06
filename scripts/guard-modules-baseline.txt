@@ -69,10 +69,6 @@ unrooted	Dregg2.Circuit.Emit.FoldRefine	10	# also-orphan-allow
 unrooted	Dregg2.Circuit.Emit.FoldRung2	9	# also-orphan-allow
 unrooted	Dregg2.Circuit.Emit.MembershipAuthRootEdge	2	# also-orphan-allow
 unrooted	Dregg2.Circuit.Emit.MerkleMembershipRung2	18	# also-orphan-allow
-unrooted	Dregg2.Circuit.Emit.MinaWrapSgChunk0	8	# also-orphan-allow
-unrooted	Dregg2.Circuit.Emit.MinaWrapSgChunk1	8	# also-orphan-allow
-unrooted	Dregg2.Circuit.Emit.MinaWrapSgChunk2	8	# also-orphan-allow
-unrooted	Dregg2.Circuit.Emit.MinaWrapSgChunk3	8	# also-orphan-allow
 unrooted	Dregg2.Circuit.Emit.MinaWrapSgCore	14	# also-orphan-allow
 unrooted	Dregg2.Circuit.Emit.MultiStepChainEmit	9	# also-orphan-allow
 unrooted	Dregg2.Circuit.Emit.MultiStepChainRefine	10	# also-orphan-allow

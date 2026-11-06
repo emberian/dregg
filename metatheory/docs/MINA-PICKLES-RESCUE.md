@@ -100,12 +100,18 @@ cost about 2 GB above the floor; splitting them per term would bring the module 
 
 ## Decisions only ember can make
 
-- `MinaWrapSgChunk0`..`3` (61 lines each, zero importers): rung 5h, the kernel `decide` of the
-  32,768-generator `<s, srs.g>` MSM in eight-chunk slices. The root `Dregg2.lean` no longer imports
-  them because each chunk peaked near 75 GB and one was killed by earlyoom; so they are built by
-  nothing and checked by nothing. The same fact is computed by `mina_sg_bench` (native) and pinned
-  by `MinaWrapSgWeld`. Options: retire them with that as the record, or keep them as the
-  unbuilt kernel statement. No Rust consumer.
+- `MinaWrapSgChunk0`..`3`: **retired 2026-11-06 on ember's word** ("lets retire that stuff").
+  Record: 61 lines each, zero Lean importers, no Rust consumer, not in the default build (excluded
+  from the root since 2026-07-29 because each chunk peaked near 75 GB and one was killed by
+  earlyoom), so nothing built or checked them. What they proved, `sg == <s, srs.g>` over the
+  32,768 generators of block 539508 by kernel `decide` in 32 slices, stays pinned by compiled
+  evaluation: the `mina_sg_bench` executable (self-checking in both polarities) and
+  `Dregg2.Bridge.MinaWrapSgWeld`. `MinaWrapSgCore` and `MinaWrapSgParts` stay (the weld and the
+  on-demand script `scripts/run-mina-sg-instance.sh` use them). Entries removed from
+  `scripts/lean-orphans-allow.txt`, `scripts/guard-modules-baseline.txt` and
+  `scripts/elab-cost-baseline.tsv`; Lean docstrings that mention the chunks by name
+  (`Bridge.MinaWrapSg`, `Bridge.MinaWrapSgWeld`, `MinaWrapSgCore`, `PastaMsmSliced`,
+  `Verify.FloorPole`) were left as they are so no rooted module rebuilds for a comment.
 - Nothing else in the census is a retirement candidate so far: the modules either feed
   `circuit/descriptors/by-name` (17 of them, through `EmitByName.lean`), the dedicated emitters, or
   Lean importers on the path to those.

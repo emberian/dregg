@@ -32,8 +32,8 @@ makes 5h tractable) and
 add to be POINTS of the Pallas curve; it closed a forgery the `5h-AIR-BOUND` descriptor PROVES AND
 VERIFIES — an all-`(0,0,0)` accumulator carrying the real generators — and its artifacts are
 re-derived by `scripts/regen-pasta-oncurve.sh`) and
-`metatheory/Dregg2/Circuit/Emit/MinaWrapSgCore.lean` + `MinaWrapSgChunk0..3.lean`
-(13 + 32 theorems, axiom-clean — **rung 5h, the `2^15`-term terminal MSM**), over the generated
+`metatheory/Dregg2/Circuit/Emit/MinaWrapSgCore.lean` and the four `MinaWrapSgChunk` modules
+(13 + 32 theorems, axiom-clean — **rung 5h, the `2^15`-term terminal MSM**; the chunks were retired 2026-11-06, see metatheory/docs/MINA-PICKLES-RESCUE.md), over the generated
 fixtures `MinaWrapSrsG.lean` (the 32768 SRS generators) and `MinaWrapSgParts.lean`.
 
 All seven are wired into `metatheory/Dregg2.lean` — the first four by `06de765e9` / `73853b50f`,

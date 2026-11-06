@@ -183,12 +183,9 @@ Dregg2.Crypto.MlKemKeygenRefine  # MEASURED 1882s (31 min) on one fresh `lake en
 # default-target closure imports it), so the entry had stopped recording an exclusion and started
 # hiding the next real orphan, which is what `stale_registered` fails on. The six siblings below are
 # still genuinely orphaned and keep their entries; only the row whose exclusion ended is gone.
+# The four `MinaWrapSgChunk*` rows are gone too: those modules were retired 2026-11-06, see metatheory/docs/MINA-PICKLES-RESCUE.md.
 Dregg2.Circuit.Emit.MinaWrapSgParts
 Dregg2.Circuit.Emit.MinaWrapSgCore
-Dregg2.Circuit.Emit.MinaWrapSgChunk0
-Dregg2.Circuit.Emit.MinaWrapSgChunk1
-Dregg2.Circuit.Emit.MinaWrapSgChunk2
-Dregg2.Circuit.Emit.MinaWrapSgChunk3
 # The COMPILED half of the same rung, added 2026-07-30. `Dregg2.Bridge.MinaWrapSg` — the checker,
 # parameterised over challenges/generators/`sg`, holding no fixture — IS rooted, at +0 closure
 # (it imports `PastaIpaFold` and nothing else). Only its INSTANCE differential is excluded, and for
