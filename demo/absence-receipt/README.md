@@ -1,4 +1,4 @@
-# Absence receipt: 100,000 public documents, zero secrets, one signed sentence
+# Absence receipt: zero rejections under a two-pattern scanner over 100,000 public documents
 
 Demo (a) of the automata program (`docs/automata/SUBSTRATE-DECISION.md` §5 item 1, §7 row D),
 2026-11-06. Tags: [MEASURED] a run on the Mac (Apple M2 Max, other lanes running) today; [READ]
@@ -27,7 +27,7 @@ The full body is `receipt.json`; its signature is `receipt.json.sig`; the signer
 | policy → table | `policy.txt` compiled by `absence-receipt compile`: `~(any* · (P1 \| P2) · any*)` through `dregg_dfa::Re::compile` (derivatives over the crate's ACI canonical form), then `dregg_dfa::Dfa::minimize` | `absence-table.json`, 129 states | the table is produced by `dregg_dfa::Re::compile`, which is differential-tested, not proved: `demo/absence-receipt/tests/differential.rs` checks it against the former interim compiler (frozen there) and a hand-written scanner for the two patterns, on the controls and 10,000 seeded random strings. No Lean decider is in that loop; the Lean runner only executes the table. The policy grammar is still a second grammar outside Lean; lane B's `policyc compile --absence` is meant to replace it |
 | verdicts | `lake exe dfa-run absence-table.json --corpus …` (Lean, compiled) | `count`, from re-executing the table on every byte of every document | the verdict function is `TableRun.acceptsBytes`; `metatheory/Dregg2/Automata/TableRunSpec.lean` proves it is `Deriv.PredRE.TableDfa.accepts` on the document's bytes (`accepts_iff`), and `rejectCount_eq_zero_iff` says what `count = 0` means |
 | cross-check | `absence-receipt count` (Rust `dregg_dfa::Dfa::matches`) | the same count from the runtime crate | must agree; `run.sh` stops if it does not |
-| served-path evidence | one record, document 1598 (`3/c/cxr`, 2048 bytes), its run emitted by Lean as a `DfaRoutingTableEmit.tableRoutingDesc` descriptor and proved by the v2 assembly | the served table-routing family proves and verifies a real record's run, and refuses a wrong final state | `circuit/tests/absence_receipt_record.rs` |
+| served-path evidence | one record, document 1598 (`3/c/cxr`, 2048 bytes), its run emitted by Lean as a `DfaRoutingTableEmit.tableRoutingDesc` descriptor and proved by the v2 assembly | evidence from a witness generated from that record: the served table-routing family proves and verifies the run, and refuses a wrong final state; what the proof binds is in "What is NOT claimed" | `circuit/tests/absence_receipt_record.rs` |
 | receipt | `absence-receipt receipt`, then `ssh-keygen -Y sign` (ed25519, namespace `absence-receipt`) | a signed body naming policy, table, corpus, `n`, `count` | the private key is under `keys/`, gitignored, never committed |
 
 Document 1598 is the first document whose length is a power of two: the v2 assembly requires a
@@ -85,6 +85,10 @@ INDEX=/path/to/idx demo/absence-receipt/run.sh
 
 # a stranger's check, no clone: signature, corpus root from the hash list, policy and table digests
 demo/absence-receipt/run.sh verify
+# Signature verification authenticates this body under the demo key. To verify the computational
+# claim, independently recompute the corpus root and re-run the table and compare every field with
+# the signed body. The signature does not attest the checker binary, its execution, or the
+# provenance of the scanned bytes.
 
 # the Lean pieces
 cd metatheory
@@ -102,17 +106,25 @@ cargo test -p dregg-circuit --release --test absence_receipt_record -- --nocaptu
   as evidence that the served path accepts a real record, not as a proof about the corpus.
 - **The table is not proved to be the policy's absence automaton.** `dregg_dfa::Re::compile` is
   Rust and unproved; its ACI normalizer is not proved to meet Lean's similarity. `TableRunSpec`
-  proves the runner computes `TableDfa.accepts` for whatever table it is given; that the table denotes "contains neither pattern" is the compiler's obligation
-  (`tableDfa_faithful`'s agreement premise for a Lean-compiled table). The controls are evidence,
+  proves the runner computes `TableDfa.accepts` for whatever table it is given; that the table
+  denotes "contains neither pattern" is the compiler's obligation (`tableDfa_faithful`'s agreement
+  premise for a Lean-compiled table). The controls are evidence,
   not proof.
 - **No non-omission certificate beyond the root.** The MMR root commits to these 100,000 hashes in
   this order. That they are the first 100,000 files of the pinned commit is checked by re-running
   `select` against a clone, not by a proof.
 - **`count` is the runner's count, not a Datalog `Count`.** Lane A's `datalog-check` is not wired
   in; feeding it a `match(i)` relation produced by this same runner would add nothing.
-- **The proved record's word is public** (an exact-public table carries the run); it says nothing
-  private and does not bind the record to the MMR leaf. The route-commitment conjunct is the
-  program's open milestone (SUBSTRATE-DECISION §5 item 2).
+- **The proved record: the transition multiset is public.** This proof does not establish a unique
+  ordered word or bind that word to the named document or MMR leaf (an exact-public table exposes
+  the multiset of transitions, not their order: `metatheory/Dregg2/Circuit/Emit/DfaRoutingTableBound.lean`
+  gives two satisfying traces with the same public inputs that read different words; its
+  `word_public_of_functional` does not apply here, since the record's 2,048 declared rows leave
+  state 1 with 47 distinct outgoing rows [MEASURED from `record-1598.descriptor.json`]). The
+  document's bytes are independently public. The route-commitment conjunct is the program's open
+  milestone (SUBSTRATE-DECISION §5 item 2).
+- **Zero rejections is not zero secrets.** The policy detects two byte-pattern families. No claim
+  about other secret formats, encoded secrets, credential validity, or semantic confidentiality.
 - The signature names a demo key, not a person or an organization.
 
 ## What the interim compiler found, and the fix
