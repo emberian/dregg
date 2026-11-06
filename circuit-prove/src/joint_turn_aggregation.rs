@@ -1433,28 +1433,71 @@ pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize,
 /// (`createCell`/`heapWrite`/`noteCreate`/`noteSpend`/`refusal`) have DIFFERENT wide display names,
 /// so their (wide-minted) legs were silently inadmissible through this gate.
 fn rotated_descriptor_selector(name: &str) -> Option<usize> {
-    use dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name;
+    use dregg_circuit::effect_vm::columns::sel;
+    use dregg_circuit::effect_vm::trace_rotated::{
+        rotated_descriptor_name, rotated_set_field_descriptor_name,
+    };
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+    // The DISPLAY name (field 1) of the registry row keyed by a WIRE name: the json-internal
+    // `name` the parsed descriptor carries.
+    let display_of = |wire: &str| {
+        WIDE_REGISTRY_STAGED_TSV.lines().find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(wire) {
+                it.next()
+            } else {
+                None
+            }
+        })
+    };
     for &s in dregg_circuit::proof_forest::CUTOVER_READY_SELECTORS {
+        // SetField is keyed PER SLOT (`setFieldVmDescriptor2-{k}R24`, the names the wide producer
+        // resolves through `rotated_set_field_descriptor_name`); the selector has no single wire
+        // name, so its rows are found slot by slot.
+        if s == sel::SET_FIELD {
+            if (0u32..8).any(|k| display_of(rotated_set_field_descriptor_name(k)) == Some(name)) {
+                return Some(s);
+            }
+            continue;
+        }
         let wire = match rotated_descriptor_name(s) {
             Some(w) => w,
             None => continue,
         };
-        // Find the registry row keyed by this selector's WIRE name; its DISPLAY name (field 1) is
-        // the json-internal `name` the parsed descriptor carries.
-        let display = WIDE_REGISTRY_STAGED_TSV.lines().find_map(|line| {
-            let mut it = line.splitn(3, '\t');
-            if it.next() == Some(wire) {
-                it.next() // the DISPLAY name (== desc.name)
-            } else {
-                None
-            }
-        });
-        if display == Some(name) {
+        if display_of(wire) == Some(name) {
             return Some(s);
         }
     }
     None
+}
+
+#[cfg(test)]
+mod set_field_selector_tests {
+    use super::rotated_descriptor_selector;
+    use dregg_circuit::effect_vm::columns::sel;
+    use dregg_circuit::effect_vm::trace_rotated::rotated_set_field_descriptor_name;
+    use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+
+    /// Every per-slot setField member's display name resolves to SET_FIELD, and nothing else does.
+    #[test]
+    fn every_setfield_slot_member_resolves_to_set_field() {
+        for k in 0u32..8 {
+            let wire = rotated_set_field_descriptor_name(k);
+            let display = WIDE_REGISTRY_STAGED_TSV
+                .lines()
+                .find_map(|line| {
+                    let mut it = line.splitn(3, '\t');
+                    (it.next() == Some(wire)).then(|| it.next()).flatten()
+                })
+                .unwrap_or_else(|| panic!("{wire} is in the WIDE registry"));
+            assert_eq!(
+                rotated_descriptor_selector(display),
+                Some(sel::SET_FIELD),
+                "{wire}"
+            );
+        }
+        assert_eq!(rotated_descriptor_selector("not-a-member"), None);
+    }
 }
 
 // ============================================================================

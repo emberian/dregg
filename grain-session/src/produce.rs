@@ -210,6 +210,13 @@ pub fn produce(
             .after_cell
             .clone(),
         model_nonce: session_model_nonce(minter.records())?,
+        model_balance: minter
+            .records()
+            .first()
+            .ok_or("no committed turn")?
+            .before_cell
+            .state
+            .balance(),
         executor_receipts: minter.receipt_log().iter().map(hex::encode).collect(),
     };
     Ok((bundle, stats))

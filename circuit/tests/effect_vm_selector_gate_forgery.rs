@@ -196,6 +196,47 @@ fn refused(
     }
 }
 
+/// THE GRADUATION EVIDENCE for SET_FIELD (2026-11-06): EVERY per-slot member
+/// `setFieldVmDescriptor2-{0..7}R24`, in BOTH the bare staged registry and the WIDE registry the
+/// leg producer mints from, carries exactly ONE appended `selectorGate SET_FIELD`. The forgery
+/// teeth below are measured on slot 0; this pins that the other seven slots carry the same gate,
+/// so the selector can be admitted for any slot (`proof_forest::CUTOVER_READY_SELECTORS`).
+#[test]
+fn every_setfield_slot_member_carries_exactly_one_selector_gate() {
+    let want = selector_gate_body(sel::SET_FIELD);
+    for (registry, tsv) in [
+        ("V3_STAGED", V3_STAGED_REGISTRY_TSV),
+        (
+            "WIDE",
+            dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV,
+        ),
+    ] {
+        for k in 0u32..8 {
+            let wire =
+                dregg_circuit::effect_vm::trace_rotated::rotated_set_field_descriptor_name(k);
+            let json = tsv
+                .lines()
+                .find_map(|l| {
+                    let mut it = l.splitn(3, '\t');
+                    (it.next() == Some(wire)).then(|| {
+                        let _ = it.next();
+                        it.next()
+                    })?
+                })
+                .unwrap_or_else(|| panic!("{wire} not in the {registry} registry"));
+            let desc = parse_vm_descriptor2(json).expect("the member parses");
+            let gates = desc
+                .constraints
+                .iter()
+                .filter(|c| {
+                    dregg_circuit::descriptor_ir2::row_local_body(c).as_deref() == Some(&want)
+                })
+                .count();
+            assert_eq!(gates, 1, "{registry} {wire}: selectorGate SET_FIELD count");
+        }
+    }
+}
+
 /// THE NEGATIVE TOOTH (setField LEAD): a `[SetField(slot0, v), Transfer]` trace under the setField-0
 /// LEAD descriptor — with the Transfer tail row carrying a FORGED free balance debit — is UNSAT.
 /// The appended `selectorGate SET_FIELD` rejects the foreign-selector (TRANSFER) tail row.

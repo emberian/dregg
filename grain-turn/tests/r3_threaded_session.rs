@@ -38,7 +38,7 @@ fn a_three_turn_session_folds_when_threaded_and_not_otherwise() {
             .expect("turn commits");
     }
     let t0 = std::time::Instant::now();
-    let naive = finalize_session(minter.records()).expect("naive finalize");
+    let naive = finalize_session(minter.records()).expect("naive finalize (per-turn sub-chains)");
     let threaded = finalize_session_threaded(minter.records()).expect("threaded finalize");
     let fin = t0.elapsed();
     let naive_breaks = seam_breaks(&naive);
@@ -53,9 +53,43 @@ fn a_three_turn_session_folds_when_threaded_and_not_otherwise() {
     );
     assert_eq!(threaded_breaks, 0, "the threaded chain is continuous");
 
+    // OPEN THE HEAD before folding: the last leg's committed AFTER anchor must be the last cell
+    // under the session context, as the EffectVM model carries it.
+    let turn_hashes: Vec<[u8; 32]> = minter.records().iter().map(|r| r.turn_hash).collect();
+    let last = &minter.records().last().unwrap().after_cell;
+    let model_nonce = session_model_nonce(minter.records()).unwrap();
+    let balance0 = minter.records()[0].before_cell.state.balance();
+    let (real, model) = session_head_openings(last, &turn_hashes, model_nonce, balance0).unwrap();
+    let leg_head: [u32; 8] = {
+        let w = threaded
+            .last()
+            .unwrap()
+            .participant
+            .rotated
+            .wide_new_root8()
+            .unwrap();
+        core::array::from_fn(|i| w[i].as_u32())
+    };
+    eprintln!(
+        "head opening vs last leg: ledger={} model={}",
+        real == leg_head,
+        model == leg_head
+    );
+    assert_eq!(
+        model, leg_head,
+        "the folded head opens to the last cell (model nonce/balance)"
+    );
+    assert_ne!(
+        real, leg_head,
+        "the ledger head is NOT the folded head (the named residual)"
+    );
+    if std::env::var("R3_SKIP_FOLD").is_ok() {
+        return;
+    }
+
     let selectors: Vec<usize> = threaded
         .iter()
-        .map(|t| verify_descriptor_participant(&t.participant).expect("leg verifies"))
+        .map(|t| verify_descriptor_participant(&t.participant).expect("leg admitted"))
         .collect();
     let t1 = std::time::Instant::now();
     let proof = prove_turn_chain_recursive_without_host_gate(&threaded, &selectors).expect("folds");
@@ -67,25 +101,30 @@ fn a_three_turn_session_folds_when_threaded_and_not_otherwise() {
         .expect("aggregate verifies against the setup anchor");
     let env =
         dregg_circuit_prove::ivc_turn_chain::WholeChainProofBytes::from_postcard(&bytes).unwrap();
-    let turn_hashes: Vec<[u8; 32]> = minter.records().iter().map(|r| r.turn_hash).collect();
-    let last = &minter.records().last().unwrap().after_cell;
-    let model_nonce = session_model_nonce(minter.records()).unwrap();
-    let (real, model) = session_head_openings(last, &turn_hashes, model_nonce).unwrap();
-    let mut frozen = last.clone();
-    frozen
-        .state
-        .set_balance(minter.records()[0].before_cell.state.balance());
-    let (_, model_frozen) = session_head_openings(&frozen, &turn_hashes, model_nonce).unwrap();
-    eprintln!(
-        "head opening (model nonce + turn-0 balance): {}",
-        model_frozen == env.final_root
+    assert_eq!(
+        env.final_root, model,
+        "the aggregate's committed head is the opened head"
     );
-    eprintln!(
-        "head opening: aggregate={:?} ledger-nonce={} model-nonce({model_nonce})={}",
-        env.final_root,
-        real == env.final_root,
-        model == env.final_root
-    );
+    // THE R3 DECISION, through the Lean-proven core (no Rust fallback): accept at the opened
+    // head; refuse a head one lane off, and refuse a foreign VK anchor.
+    let v = grain_verify::r3_verify_aggregate(&bytes, &model, &vk)
+        .expect("the Lean r3VerifyCore accepts the multi-turn session at its opened head");
+    assert_eq!(v.num_turns, threaded.len());
+    let mut off = model;
+    off[3] = off[3].wrapping_add(1);
+    assert!(matches!(
+        grain_verify::r3_verify_aggregate(&bytes, &off, &vk),
+        Err(grain_verify::R3Error::Rejected {
+            aggregate_verified: true,
+            ..
+        })
+    ));
+    let mut foreign = vk;
+    foreign.0[0] ^= 1;
+    assert!(matches!(
+        grain_verify::r3_verify_aggregate(&bytes, &model, &foreign),
+        Err(grain_verify::R3Error::Rejected { .. })
+    ));
     eprintln!(
         "fold={fold:?} verify={:?} bytes={} num_turns={}",
         t2.elapsed(),

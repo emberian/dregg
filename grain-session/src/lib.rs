@@ -488,6 +488,9 @@ pub struct Bundle {
     pub last_cell: dregg_cell::Cell,
     /// The EffectVM model nonce the folded head carries (see `grain_turn::session_model_nonce`).
     pub model_nonce: u64,
+    /// The EffectVM model balance the folded head carries (the first turn's pre-balance; the
+    /// per-slot setField members freeze the balance while each executor turn debits its fee).
+    pub model_balance: i64,
     /// The executor's receipt-hash log for the grain cell (hex), whose prefix root the last cell
     /// binds at `HISTORY_ROOT_SLOT`.
     pub executor_receipts: Vec<String>,
@@ -777,8 +780,9 @@ pub fn verify_bundle(
     if links != manifest || unique.len() != links.len() {
         return Err(Refusal::LinksNotManifest);
     }
-    let (_, model_head) = grain_turn::session_head_openings(&b.last_cell, &manifest, b.model_nonce)
-        .map_err(Refusal::Malformed)?;
+    let (_, model_head) =
+        grain_turn::session_head_openings(&b.last_cell, &manifest, b.model_nonce, b.model_balance)
+            .map_err(Refusal::Malformed)?;
     if model_head != env.final_root || model_head != st.r3_head {
         return Err(Refusal::HeadOpening(
             "the aggregate's head is not the last cell under these turns",
