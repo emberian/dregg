@@ -324,7 +324,14 @@ pub fn attest_chute(
             );
             Vec::new()
         } else {
-            match gate_instance(http, &ev.gpu_evidence, &nonce_hex, &cfg.gpu, now_secs()) {
+            match gate_instance(
+                http,
+                &ev.gpu_evidence,
+                &nonce_hex,
+                &e2e_pubkey_b64,
+                &cfg.gpu,
+                now_secs(),
+            ) {
                 Ok(g) => g,
                 Err(e) => {
                     reasons.push(format!("{instance_id}: GPU attestation: {e}"));

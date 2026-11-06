@@ -11,11 +11,12 @@
 //! `{"certificate": base64(PEM chain, leaf first), "evidence": base64(raw SPDM report),
 //! "arch": "HOPPER"}`.
 //!
-//! The GPU report's nonce must equal the 32 bytes of the attestation nonce the evidence was
-//! requested with (the same nonce bound into the TDX quote's `report_data`). That chutes passes
-//! the user nonce through to the GPU collection is INFERRED from chutes-api, which verifies GPU
-//! evidence with `chutes-nvattest --nonce <the same nonce>`; if it does not, every instance is
-//! refused here, which is the safe failure.
+//! The GPU report's nonce must equal the instance's binding
+//! `SHA-256(ascii(nonce_hex) ‖ ascii(e2e_pubkey_b64))`, the same 32 bytes the TDX quote carries
+//! in `report_data[0..32]`. MEASURED live 2026-11-06 (degg-research critique W4): on every
+//! instance whose key discovery returned, the GPU report's SPDM nonce equals that binding, and
+//! not the raw nonce. So the GPU report is bound to the fresh nonce AND to the ML-KEM key the
+//! request is encrypted to.
 //!
 //! Collateral (RIMs and OCSP responses) is an INPUT to the offline verifier. It is either
 //! pre-fetched, or fetched per GPU from NVIDIA's RIM and OCSP services (each OCSP request with
@@ -277,14 +278,12 @@ pub fn gate_instance(
     http: &reqwest::blocking::Client,
     items: &[GpuEvidenceItem],
     nonce_hex: &str,
+    e2e_pubkey_b64: &str,
     gate: &GpuGate,
     now_secs: u64,
 ) -> Result<Vec<GpuAttestation>, ClientError> {
-    let bytes = hex::decode(nonce_hex)
-        .map_err(|_| ClientError::Config("attestation nonce is not hex".into()))?;
-    let nonce: [u8; NONCE_LEN] = bytes
-        .try_into()
-        .map_err(|_| ClientError::Config("attestation nonce is not 32 bytes".into()))?;
+    let nonce: [u8; NONCE_LEN] =
+        dregg_tee_verify::tdx::chutes_report_data_binding(nonce_hex, e2e_pubkey_b64);
     let now = ASN1Time::from_timestamp(now_secs as i64)
         .map_err(|e| ClientError::Config(format!("clock: {e}")))?;
     let r = match &gate.collateral {
@@ -386,6 +385,43 @@ mod tests {
 
     /// 2026-11-06T06:31:44Z, one hour after the OCSP capture.
     const T2: i64 = 1_793_946_704;
+
+    /// The live capture (2026-11-06, one instance of a -TEE chute): the GPU report's SPDM nonce
+    /// is the instance's report_data binding SHA-256(nonce_hex || e2e_pubkey_b64), equal to the
+    /// TDX quote's report_data[0..32]; and the raw nonce is NOT what the GPU signed.
+    #[test]
+    fn chutes_live_gpu_nonce_is_the_report_data_binding() {
+        let j: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/data/chutes_live_evidence_2026-11-06.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let nonce_hex = j["nonce_hex"].as_str().unwrap();
+        let pk = j["e2e_pubkey_b64"].as_str().unwrap();
+        let want = dregg_tee_verify::tdx::chutes_report_data_binding(nonce_hex, pk);
+        let e = base64::engine::general_purpose::STANDARD;
+        let quote = e.decode(j["quote_b64"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            &quote[48 + 520..48 + 552],
+            &want[..],
+            "TDX report_data[0..32]"
+        );
+        let items: Vec<GpuEvidenceItem> =
+            serde_json::from_value(j["gpu_evidence"].clone()).unwrap();
+        assert!(!items.is_empty());
+        for item in &items {
+            let r = parse_report(&e.decode(&item.evidence).unwrap()).unwrap();
+            assert_eq!(r.request_nonce, want, "GPU nonce is the binding");
+            assert_ne!(
+                r.request_nonce.to_vec(),
+                hex::decode(nonce_hex).unwrap(),
+                "not the raw nonce"
+            );
+        }
+    }
 
     #[test]
     fn chutes_gpu_evidence_absent_refuses() {
