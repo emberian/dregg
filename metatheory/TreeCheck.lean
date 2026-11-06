@@ -24,10 +24,15 @@ open Dregg2.Tree.Instance
 def H : List UInt8 → Digest := shakeH
 def F : List UInt8 → Digest := flatF
 
-def pathStr (p : Path) : String :=
-  "/" ++ "/".intercalate (p.map fun
-    | .key k => (String.fromUTF8? (ByteArray.mk k.toArray)).getD (toHex k)
-    | .idx i => toString i)
+/-- A path, printed unambiguously: a JSON array of `{"key": <string>}` (or `{"key_hex": <hex>}` for
+a key that is not UTF-8) and `{"idx": n}` steps. (Independent review, round 2, finding 1: a
+"/"-joined rendering printed the one-step key `"input/command"` exactly like the two-step path.) -/
+def pathJson (p : Path) : Json :=
+  Json.arr (p.map fun
+    | .key k => match String.fromUTF8? (ByteArray.mk k.toArray) with
+      | some s => Json.mkObj [("key", Json.str s)]
+      | none => Json.mkObj [("key_hex", Json.str (toHex k))]
+    | .idx i => Json.mkObj [("idx", Lean.toJson i)]).toArray
 
 /-- What the checker did, in substrate-neutral units. -/
 structure Tally where
@@ -55,13 +60,19 @@ def tallyJson (t : Tally) : Json := Json.mkObj
   [ ("frames_hashed", Lean.toJson t.frames), ("frame_bytes", Lean.toJson t.frameBytes)
   , ("keccak_f", Lean.toJson t.keccakF), ("nodes_disclosed", Lean.toJson t.nodesDisclosed) ]
 
+/-- Statement digests are exactly 32 bytes (one spelling per root; review round 2, finding 8). -/
+def get32 (j : Json) (k : String) : Except String (List UInt8) := do
+  let b ← getHex j k
+  if b.length != 32 then throw s!"field {k}: want 32 bytes, got {b.length}"
+  pure b
+
 def verify (j : Json) : Except String (Bool × Json) := do
   let sj ← j.getObjVal? "statement"
   let rc ← j.getObjVal? "receipt"
   match ← getStr sj "kind" with
   | "schema" =>
-    let tr ← getHex sj "tree_root"
-    let sd ← getHex sj "schema_digest"
+    let tr ← get32 sj "tree_root"
+    let sd ← get32 sj "schema_digest"
     let vd ← (← sj.getObjVal? "verdict").getBool?
     let stmt : SchemaStmt := ⟨tr, sd, vd⟩
     let tree ← valueOfHex (← getStr rc "tree")
@@ -76,9 +87,9 @@ def verify (j : Json) : Except String (Bool × Json) := do
       ("leaves", Lean.toJson c.leaves), ("string_bytes", Lean.toJson c.strBytes),
       ("frame_bytes", Lean.toJson c.frameBytes), ("keccak_f", Lean.toJson c.keccakF)])
   | "field" =>
-    let tr ← getHex sj "tree_root"
+    let tr ← get32 sj "tree_root"
     let p ← pathOfJson (← sj.getObjVal? "path")
-    let td ← getHex sj "table_digest"
+    let td ← get32 sj "table_digest"
     let vd ← verdictOfStr (← getStr sj "verdict")
     let stmt : FieldStmt := ⟨tr, p, td, vd⟩
     let op ← openingOfJson (← rc.getObjVal? "opening")
@@ -86,15 +97,18 @@ def verify (j : Json) : Except String (Bool × Json) := do
     let r : FieldReceipt := ⟨op, tab⟩
     let ok := fieldCheck H F stmt r
     pure (ok, Json.mkObj [("kind", "field"), ("tree_root", toHex stmt.treeRoot),
-      ("path", pathStr stmt.path), ("table_digest", toHex stmt.tableDigest),
+      ("path", pathJson stmt.path), ("table_digest", toHex stmt.tableDigest),
       ("verdict", verdictStr stmt.verdict), ("accepted", Json.bool ok),
-      ("work", tallyJson (tallyOpening {} r.opening))])
+      ("work", tallyJson (tallyOpening {} r.opening)),
+      ("keccak_f_openings", Lean.toJson (tallyOpening {} r.opening).keccakF),
+      ("keccak_f_table", Lean.toJson (keccakFOf (19 + (encode r.table).length))),
+      ("keccak_f_total", Lean.toJson ((tallyOpening {} r.opening).keccakF + keccakFOf (19 + (encode r.table).length)))])
   | "corpus" =>
     let q ← (← getArr sj "query").toList.mapM fun c => do
       let p ← pathOfJson (← c.getObjVal? "path")
-      let td ← getHex c "table_digest"
+      let td ← get32 c "table_digest"
       pure (⟨p, td⟩ : Conjunct)
-    let rootBytes ← getHex sj "mmr_root"
+    let rootBytes ← get32 sj "mmr_root"
     let n ← getNat sj "n"
     let cnt ← getNat sj "count"
     let stmt : CorpusStmt := ⟨(Cbor.ofBE rootBytes : Int), n, q, cnt⟩
@@ -106,13 +120,20 @@ def verify (j : Json) : Except String (Bool × Json) := do
       | .refute _ _ op => tallyOpening t op
       | .full _ ops => ops.foldl tallyOpening t) {}
     let refuted := recs.filter fun | .refute .. => true | _ => false
+    -- the whole hash bill: openings, the tables' flat digests, and the MMR (each MMR input is the
+    -- CBOR of at most two integers below 2^256 behind an 18-byte prefix: under one 136-byte block,
+    -- so one Keccak-f per MMR hash; 2n + 1 hashes for n leaves)
+    let kfTables := tables.foldl (fun a t => a + keccakFOf (19 + (encode t).length)) 0
+    let kfMmr := 2 * recs.length + 1
     pure (ok, Json.mkObj [("kind", "corpus"), ("mmr_root", toHex rootBytes), ("n", Lean.toJson stmt.n),
-      ("query", Json.arr (q.map fun c => Json.mkObj [("path", pathStr c.path),
+      ("query", Json.arr (q.map fun c => Json.mkObj [("path", pathJson c.path),
         ("table_digest", toHex c.tableDigest)]).toArray),
       ("count", Lean.toJson stmt.count), ("accepted", Json.bool ok),
       ("records_refuted", Lean.toJson refuted.length),
       ("records_matching_disclosed", Lean.toJson (recs.length - refuted.length)),
-      ("mmr_hashes", Lean.toJson (2 * recs.length)), ("work", tallyJson work)])
+      ("mmr_hashes_by_formula_2n_plus_1", Lean.toJson (2 * recs.length + 1)), ("work", tallyJson work),
+      ("keccak_f_openings", Lean.toJson work.keccakF), ("keccak_f_tables", Lean.toJson kfTables),
+      ("keccak_f_mmr", Lean.toJson kfMmr), ("keccak_f_total", Lean.toJson (work.keccakF + kfTables + kfMmr))])
   | k => throw s!"statement kind {k}"
 
 def readJsonText (path : String) : IO (List UInt8) := do
@@ -121,6 +142,11 @@ def readJsonText (path : String) : IO (List UInt8) := do
 def main (args : List String) : IO UInt32 := do
   match args with
   | ["verify", path] =>
+    -- The envelope must also be strict JSON (no duplicate keys: review round 2, finding 9);
+    -- `Dregg2.Tree.Json.parse` refuses duplicates, `Lean.Json` would keep the last one.
+    if (Dregg2.Tree.Json.parse (← readJsonText path)).isNone then
+      IO.eprintln "tree-check: certificate envelope is not strict JSON (duplicate keys, bad escapes, or numbers out of range)"
+      return 2
     match Json.parse (← IO.FS.readFile path) with
     | .error e => IO.eprintln s!"tree-check: {e}"; return 2
     | .ok j => match verify j with

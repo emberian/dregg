@@ -102,16 +102,26 @@ def entriesOfJson (j : Json) : R (List (List UInt8 × Digest)) := do
     if a.size != 2 then throw "obj entry: want [key, digest]"
     pure (← hexOf a[0]!, ← hexOf a[1]!)
 
+/-- The object's keys are exactly `ks` (no unknown fields, no second constructor; review round 2). -/
+def keysExactly (j : Json) (ks : List String) : R Unit := do
+  let o ← j.getObj?
+  let got := o.toList.map (·.1)
+  unless got.length == ks.length && got.all (ks.contains ·) do
+    throw s!"object with keys {got}: want exactly {ks}"
+
 partial def openingOfJson (j : Json) : R Opening := do
-  if let .ok v := j.getObjVal? "here" then return .here (← valueOfHex (← v.getStr?))
+  if let .ok v := j.getObjVal? "here" then
+    keysExactly j ["here"]; return .here (← valueOfHex (← v.getStr?))
   if let .ok ds := j.getObjVal? "arr" then
+    keysExactly j ["arr", "rest"]
     return .arr (← (← ds.getArr?).toList.mapM hexOf) (← openingOfJson (← j.getObjVal? "rest"))
   if let .ok es := j.getObjVal? "obj" then
+    keysExactly j ["obj", "rest"]
     return .obj (← entriesOfJson es) (← openingOfJson (← j.getObjVal? "rest"))
   if let .ok ds := j.getObjVal? "absent_arr" then
-    return .absentArr (← (← ds.getArr?).toList.mapM hexOf)
+    keysExactly j ["absent_arr"]; return .absentArr (← (← ds.getArr?).toList.mapM hexOf)
   if let .ok es := j.getObjVal? "absent_obj" then
-    return .absentObj (← entriesOfJson es)
+    keysExactly j ["absent_obj"]; return .absentObj (← entriesOfJson es)
   throw "opening: want here/arr/obj/absent_arr/absent_obj"
 
 def bitsOfStr (s : String) : R (List Bool) :=
@@ -137,8 +147,10 @@ def verdictStr : FieldVerdict → String
 def evidenceOfJson (j : Json) : R RecEvidence := do
   let root ← getHex j "root"
   if let .ok rf := j.getObjVal? "refute" then
+    keysExactly j ["root", "refute"]; keysExactly rf ["j", "opening"]
     return .refute root (← getNat rf "j") (← openingOfJson (← rf.getObjVal? "opening"))
   if let .ok fl := j.getObjVal? "full" then
+    keysExactly j ["root", "full"]
     return .full root (← (← fl.getArr?).toList.mapM openingOfJson)
   throw "record: want refute or full"
 
