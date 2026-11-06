@@ -169,7 +169,8 @@ more than before and strictly less than `Ipa.Step.accumulator_check`.
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean; no `sorry`/`admit`/`native_decide`; zero `#guard`s.
+General theorems `#assert_axioms`-clean; facts about concrete data `native_decide`, pinned
+`#assert_compiled` (since 2026-11-06); no `sorry`/`admit`; zero `#guard`s.
 -/
 import Dregg2.Circuit.Emit.PastaLadderThread
 import Dregg2.Circuit.Emit.ExactPublicTableEmit
@@ -227,7 +228,7 @@ def outPinLegs : List AirLeg :=
     , AirLeg.pin ⟨.last, OUT_Z + i, ACC_OUT_PI (2 * SK + i)⟩ ])
 
 theorem pin_leg_counts : inPinLegs.length = 96 ∧ outPinLegs.length = 96 := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-! ## §2 — ⚑ THE DISCHARGE GATE.
 
@@ -257,7 +258,7 @@ theorem vanishLeg_eq (base i : Nat) :
 def dischargeLegs : List AirLeg :=
   (List.range SK).flatMap (fun i => [vanishLeg OUT_X i, vanishLeg OUT_Z i])
 
-theorem dischargeLegs_length : dischargeLegs.length = 64 := by decide
+theorem dischargeLegs_length : dischargeLegs.length = 64 := by native_decide
 
 /-! ## §3 — THE TWO AIRS AND THE TWO DESCRIPTORS. -/
 
@@ -284,9 +285,9 @@ theorem accFinalAir_extends_accSegAir : accSegAir.legs <+: accFinalAir.legs :=
 /-- ⚑ **THE COMPILER ACCEPTS BOTH BLOCKS.** The 96 threads are `.transition` (the only selector
 admitting a `nxt` read) and the 64 discharge gates are `.last` with no `nxt` read. A `.last` thread
 or an `.all` discharge would lower to `refuseConstraints` and this would be false. -/
-theorem accSegAir_mainRailOk : accSegAir.mainRailOk = true := by decide
+theorem accSegAir_mainRailOk : accSegAir.mainRailOk = true := by native_decide
 
-theorem accFinalAir_mainRailOk : accFinalAir.mainRailOk = true := by decide
+theorem accFinalAir_mainRailOk : accFinalAir.mainRailOk = true := by native_decide
 
 /-- ⚑ **THE SELECTOR CENSUS.** 96 `.transition` threads and 64 `.last` discharge gates, and NONE at
 `.all` or `.first`. The two families are byte-identical algebra under a different selector, so the
@@ -299,7 +300,7 @@ theorem the_discharge_is_sixty_four_last_row_gates :
     ∧ accFinalAir.windowCountSel RowSel.all = 0
     ∧ accFinalAir.windowCountSel RowSel.first = 0
     ∧ accSegAir.windowCountSel RowSel.last = 0 := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- The emitted SEGMENT descriptor. -/
 def accSegDesc : EffectVmDescriptor2 :=
@@ -312,11 +313,11 @@ def accFinalDesc : EffectVmDescriptor2 :=
     "dregg-mina-accumulator-final::v1" RCB_WIDTH ACC_PI_COUNT [] accFinalAir
 
 /-- `4 476` sound row-local constraints + `96` accumulator threads + `192` endpoint pins. -/
-theorem accSegDesc_constraint_count : accSegDesc.constraints.length = 4476 + 96 + 192 := by decide
+theorem accSegDesc_constraint_count : accSegDesc.constraints.length = 4476 + 96 + 192 := by native_decide
 
 /-- …and the final segment is that plus the `64` discharge gates. -/
 theorem accFinalDesc_constraint_count :
-    accFinalDesc.constraints.length = 4476 + 96 + 192 + 64 := by decide
+    accFinalDesc.constraints.length = 4476 + 96 + 192 + 64 := by native_decide
 
 theorem accSegDesc_width : accSegDesc.traceWidth = 3048 := rfl
 theorem accFinalDesc_width : accFinalDesc.traceWidth = 3048 := rfl
@@ -325,7 +326,7 @@ theorem accFinalDesc_piCount : accFinalDesc.piCount = 192 := rfl
 
 /-- ⚑ **A NAME IS A KEY.** The two descriptors are different objects and must not share one;
 `reference-a-display-name-is-not-a-key` records three wrong lookups in one day from exactly this. -/
-theorem the_two_descriptors_do_not_share_a_name : accSegDesc.name ≠ accFinalDesc.name := by decide
+theorem the_two_descriptors_do_not_share_a_name : accSegDesc.name ≠ accFinalDesc.name := by native_decide
 
 /-- ⚑ …and they differ in their CONSTRAINTS, not only in their names. A rename with no algebra
 behind it is the shape that makes a registry lookup resolve to a look-alike. -/
@@ -362,7 +363,7 @@ FOLD of segments, not one proof, and the recursion is load-bearing rather than a
 theorem the_full_width_sum_needs_the_fold :
     segCells 1474800 = 4495190400
     ∧ 1000 * DREGG_MAX_ROWS < segCells 1474800 := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-- ⚑ **THE ROUTING RESIDUAL — REFUSED AT HEAD, BUT THE CAP IS NOT A PRICE.**
 
@@ -402,7 +403,7 @@ theorem the_routing_tuple_used_to_not_fit_and_now_does :
     ∧ 1 + 3 * SK = 97
     ∧ 1 + 3 * SK ≤ MAX_EP_ARITY
     ∧ MAX_EP_ARITY = 1 + 3 * SK := by
-  refine ⟨by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 /-- The preprocessed width an exact-public table of arity `a` commits: the table id, `a` value
 columns, and the pinned multiplicity (`ExactPublicManifest::prep_width`, `descriptor_ir2.rs:3386`).
@@ -426,11 +427,11 @@ theorem the_split_remedy_costs_more_than_the_wide_table :
     ∧ 2 * (STEP_SRS * epPrepWidth (1 + (3 * SK) / 2)) = 6684672
     ∧ STEP_SRS * epPrepWidth (1 + 3 * SK)
         < 2 * (STEP_SRS * epPrepWidth (1 + (3 * SK) / 2)) := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-- The SRS the routing would have to cover, and the fact the fold's leaf count is set by the
 segment height rather than by the generator count. -/
-theorem the_step_srs_is_two_to_the_sixteen : STEP_SRS = 2 ^ 16 := by decide
+theorem the_step_srs_is_two_to_the_sixteen : STEP_SRS = 2 ^ 16 := by native_decide
 
 /-! ### ⚑⚑ §4.1 — WHERE THE 3 048 COLUMNS GO, AND WHICH OF THEM CROSS A ROW BOUNDARY.
 
@@ -464,7 +465,7 @@ theorem the_column_census :
     ∧ censusInputs + censusSSA + censusMul + censusSmul + censusAddSub = RCB_WIDTH
     ∧ accSegDesc.traceWidth = RCB_WIDTH
     ∧ accFinalDesc.traceWidth = RCB_WIDTH := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide, by decide, rfl, rfl⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide, by native_decide, by native_decide, rfl, rfl⟩
 
 /-- ⚑ **THE CARRIES ALONE ARE BETWEEN A FIFTH AND A QUARTER OF THE ROW.** `12 · (NG − 1) = 744`
 columns exist only to carry a 256-bit schoolbook product's partial sums. Said separately from
@@ -478,7 +479,7 @@ theorem the_multiply_carries_are_seven_hundred_forty_four :
     12 * (NG - 1) = 744
     ∧ 4 * (12 * (NG - 1)) < RCB_WIDTH
     ∧ 5 * (12 * (NG - 1)) > RCB_WIDTH := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-- ⚑⚑ **ONLY 288 OF THE 3 048 COLUMNS CROSS A ROW BOUNDARY — THE OTHER 2 760 ARE SCRATCH.**
 
@@ -497,7 +498,7 @@ theorem the_row_boundary_is_two_hundred_eighty_eight :
     censusInputs + 3 * SK = 288
     ∧ RCB_WIDTH - (censusInputs + 3 * SK) = 2760
     ∧ 10 * (censusInputs + 3 * SK) < RCB_WIDTH := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-- …and the three output blocks live INSIDE the scratch region rather than in a reserved band, so
 the `288` above counts distinct columns rather than a reserved prefix. `OUT_X/Y/Z` are `vBase`
@@ -505,7 +506,7 @@ slots 26 / 29 / 32 — the gadget's own SSA results, pinned where they land. -/
 theorem the_outputs_are_scratch_slots :
     OUT_X = vBase IN_BASE 26 ∧ OUT_Y = vBase IN_BASE 29 ∧ OUT_Z = vBase IN_BASE 32
     ∧ IN_BASE ≤ OUT_X ∧ OUT_Z + SK ≤ RCB_WIDTH := by
-  refine ⟨rfl, rfl, rfl, by decide, by decide⟩
+  refine ⟨rfl, rfl, rfl, by native_decide, by native_decide⟩
 
 /-! ## §5 — ⚑ THE VESTA TWIN OF THE THREADED INDUCTION.
 
@@ -748,7 +749,7 @@ def ROUTED_WIDTH : Nat := RCB_WIDTH + 1
 
 theorem the_routing_costs_one_column :
     ROUTED_WIDTH = 3049 ∧ RIDX = 3048 ∧ ROUTED_WIDTH = RCB_WIDTH + 1 := by
-  refine ⟨by decide, by decide, rfl⟩
+  refine ⟨by native_decide, by native_decide, rfl⟩
 
 /-- The row index starts at zero. `.first` lowers to a `VmConstraint.boundary`, whose body reads
 `env.loc` alone — which is why the body may not mention `nxt`. -/
@@ -767,7 +768,7 @@ rather than what it is blocked by. -/
 def ADDEND_TUP : Nat := 1 + 3 * SK
 
 theorem the_declared_tuple_is_the_priced_one : ADDEND_TUP = 97 ∧ ADDEND_TUP = 1 + 3 * SK := by
-  refine ⟨by decide, rfl⟩
+  refine ⟨by native_decide, rfl⟩
 
 /-- The addend manifest's wire id. ⚑ `.custom 128 ⇒ wireId 133`: clear of `main` and of the three
 `rangeTidW` tables this row already declares (`.custom (64 + bits)`, `bits ≤ 16 ⇒ at most
@@ -783,7 +784,7 @@ def addendTuple : List Dregg2.Circuit.Expr :=
   Dregg2.Circuit.Expr.add (.var RIDX) (.const 1)
     :: (List.range (3 * SK)).map (fun j => Dregg2.Circuit.Expr.var (ADD_X + j))
 
-theorem addendTuple_length : addendTuple.length = ADDEND_TUP := by decide
+theorem addendTuple_length : addendTuple.length = ADDEND_TUP := by native_decide
 
 /-- ⚑ **THE ONE LOOKUP.** `.query` at multiplicity 1 — the only shape `Ir2Air::Main` implements, and
 `LookupLeg.mainRailOk` REFUSES anything else rather than lowering a leg the deployed rail cannot
@@ -852,7 +853,7 @@ the index thread is `.transition`, and the lookup is a `.query` at multiplicity 
 a `.first` thread or a `.provide` lookup each lower to `refuseConstraints` and this would be false. -/
 theorem accRoutedAir_mainRailOk (As : List Pt3) : (accRoutedAirOn As).mainRailOk = true := by
   show accRoutedAir.mainRailOk = true
-  decide
+  native_decide
 
 /-- ⚑ **THE ROUTED BLOCK, EMITTED UNDER A GIVEN NAME.** The name is a parameter because §10 emits a
 SECOND descriptor over the SAME algebra and a DERIVED manifest, and `reference-a-display-name-is-not-
@@ -877,7 +878,7 @@ theorem accRoutedDesc_name (As : List Pt3) :
 /-- `4 476 + 96 + 192 + 64` from `-final`, plus the index origin, the index thread and the lookup. -/
 theorem accRoutedDesc_constraint_count (As : List Pt3) :
     (accRoutedDesc As).constraints.length = 4476 + 96 + 192 + 64 + 3 := by
-  rw [accRoutedDesc_constraints_eq]; decide
+  rw [accRoutedDesc_constraints_eq]; native_decide
 
 theorem accRoutedDesc_width (As : List Pt3) : (accRoutedDesc As).traceWidth = 3049 := rfl
 theorem accRoutedDesc_piCount (As : List Pt3) : (accRoutedDesc As).piCount = 192 := rfl
@@ -906,7 +907,7 @@ theorem the_routed_selector_census (As : List Pt3) :
     ∧ accRoutedAir.windowCountSel RowSel.first = 1
     ∧ accRoutedAir.windowCountSel RowSel.all = 0
     ∧ accRoutedAir.lookupCount = 1
-  refine ⟨by decide, by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 
 /-! ### §8a — THE DEMONSTRATION'S DECLARED ADDENDS.
@@ -1029,7 +1030,7 @@ of "there is one lookup leg": the row's six `AirLeg.limbs` legs lower to 192 `.l
 of their own, at the three `rangeTidW` tables. A second lookup reaching this table would make the
 log below a `flatMap` of PAIRS and every pointwise conclusion false. -/
 theorem only_the_routing_leg_targets_the_addend_table :
-    accFinalDesc.constraints.all notAddendLookup = true := by decide
+    accFinalDesc.constraints.all notAddendLookup = true := by native_decide
 
 /-- The routed descriptor's constraints are the final descriptor's, then the three routing ones. -/
 theorem routed_constraints_split (As : List Pt3) :
@@ -1388,7 +1389,7 @@ theorem the_cell_cap_counts_the_declared_multiset_and_not_the_allocation :
     ∧ epCommittedCells 131072 28 < EP_CELLS_CAP
     ∧ 10 * epCommittedCells 131072 28 ≤ epDeclaredCells 1474800 28
     ∧ epDeclaredCells 1474800 28 < 11 * epCommittedCells 131072 28 := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 /-- ⚑⚑ **NO CAP HAS TO MOVE FOR THE FULL-WIDTH SRS ROUTING.**
 
@@ -1410,7 +1411,7 @@ theorem the_full_srs_routing_needs_no_cap_to_move :
     ∧ epCommittedCells STEP_SRS ADDEND_TUP = 6488064
     ∧ epCommittedCells STEP_SRS ADDEND_TUP < EP_CELLS_CAP
     ∧ ADDEND_TUP ≤ MAX_EP_ARITY := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 /-- …and the demonstration's own manifest, measured against the same three caps. Stated separately
 so the eight-row instance is not read as evidence about the `2^16`-row one. -/
@@ -1418,7 +1419,7 @@ theorem the_demonstration_manifest_is_far_inside_every_cap :
     epDeclaredCells 8 ADDEND_TUP = 776
     ∧ epDeclaredCells 8 ADDEND_TUP < EP_CELLS_CAP
     ∧ 8 ≤ EP_ROWS_CAP := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-! ## §10 — ⚑⚑⚑ THE DECLARED ADDENDS ARE `−s_r · G_r`, DERIVED RATHER THAN DECLARED.
 
@@ -1731,7 +1732,7 @@ theorem the_challenge_order_is_the_o1labs_one :
     ∧ bPolyCoeff pN [3, 5] 2 = 3
     ∧ bPolyCoeff pN [3, 5] 3 = 15
     ∧ bPolyCoeff pN [3, 5] 1 ≠ bPolyCoeff pN [3, 5] 2 := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 /-- …and the coefficient vector is not constant in the challenges: one challenge changes and every
 odd index changes with it. This is the half that says the manifest is a function OF `u⃗` and not
@@ -1739,7 +1740,7 @@ merely a function that ignores it. -/
 theorem the_coefficients_are_not_constant_in_the_challenges :
     bPolyCoeff pN [3, 5] 1 ≠ bPolyCoeff pN [3, 7] 1
     ∧ bPolyCoeff pN [3, 5] 2 ≠ bPolyCoeff pN [11, 5] 2 := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-! ## §11 — ⚑⚑⚑ THE HEAD BIND: THE CLAIM STOPS BEING A NUMBER A CONSUMER REMEMBERS TO COMPARE.
 
@@ -1905,7 +1906,7 @@ def headOkOffLeg : AirLeg :=
 def headStatePinLegs : List AirLeg :=
   (List.range HEAD_LANES).map (fun i => AirLeg.pin ⟨.first, HEAD_STATE i, PI_HEAD i⟩)
 
-theorem headStatePinLegs_length : headStatePinLegs.length = 9 := by decide
+theorem headStatePinLegs_length : headStatePinLegs.length = 9 := by native_decide
 
 /-- ⚑⚑ **THE HEAD PROGRAM'S IDENTITY, AS NINE LANES — MEASURED, NEVER INVENTED.** The `Faithful9`
 key lanes of `effect_vm_descriptor2_semantic_fingerprint(dregg-mina-lightclient-verify::v1)` —
@@ -1935,7 +1936,7 @@ def MINA_HEAD_VK_LANES : List ℤ :=
   --   fp=2a431795898a925498fff71d753050c3303f83a4ce5fd0f09ba5db35787c2d32
   [353846058, 76829772, 503309845, 6351419, 334695477, 266818113, 376423233, 252099444, 3288444]
 
-theorem the_head_vk_pin_is_nine_lanes : MINA_HEAD_VK_LANES.length = HEAD_LANES := by decide
+theorem the_head_vk_pin_is_nine_lanes : MINA_HEAD_VK_LANES.length = HEAD_LANES := by native_decide
 
 /-- ⚑ **THE SENTENCE THE SUB-PROOF MUST EXPOSE** — the head, then the claim, as columns. 105 lanes:
 `commit` is the width of the STATEMENT, not of the program fingerprint, and the two have been
@@ -1945,7 +1946,7 @@ def headCommitLanes : List Dregg2.Circuit.Expr :=
   (List.range HEAD_LANES).map (fun i => Dregg2.Circuit.Expr.var (HEAD_STATE i))
     ++ (List.range (3 * SK)).map (fun j => Dregg2.Circuit.Expr.var (ACC_X + j))
 
-theorem headCommitLanes_length : headCommitLanes.length = 105 := by decide
+theorem headCommitLanes_length : headCommitLanes.length = 105 := by native_decide
 
 /-- ⚑ **THE DECLARED PAIR, AS LITERALS.** `H` is the head's nine lanes; `C` the claim, whose 96
 `coordLimb` digits are the SAME base-`2^8` decomposition the manifest rows and the trace's addend
@@ -1999,7 +2000,7 @@ and `headCommitLanes`/`headBoundLanes` are `List.range`-shaped, so the verdict d
 theorem accHeadAir_mainRailOk (As : List Pt3) (H : List ℤ) (C : Pt3) :
     (accHeadAir As H C).mainRailOk = true := by
   simp only [EffectAir.mainRailOk, accHeadAir, List.all_append, Bool.and_eq_true]
-  refine ⟨⟨⟨accRoutedAir_mainRailOk [], by decide⟩, by decide⟩, ?_⟩
+  refine ⟨⟨⟨accRoutedAir_mainRailOk [], by native_decide⟩, by native_decide⟩, ?_⟩
   simp only [List.all_cons, List.all_nil, Bool.and_true, AirLeg.mainRailOk, headBindLeg,
     Dregg2.Circuit.EffectAirIR.BindLeg.mainRailOk, headCommitLanes, headBoundLanes,
     Option.isNone, Dregg2.Circuit.DescriptorIR2.CommitBindingOf.isPort, List.length_append, List.length_map, List.length_range,
@@ -2220,23 +2221,23 @@ theorem the_head_seam_forces_the_declared_program (H : List ℤ) (C : Pt3)
   exact Int.modEq_iff_dvd.mpr (by simpa using Int.modEq_iff_dvd.mp h1)
 
 #assert_axioms acc_pi_layout
-#assert_axioms pin_leg_counts
-#assert_axioms dischargeLegs_length
+#assert_compiled pin_leg_counts
+#assert_compiled dischargeLegs_length
 #assert_axioms accFinalAir_extends_accSegAir
-#assert_axioms accSegAir_mainRailOk
-#assert_axioms accFinalAir_mainRailOk
-#assert_axioms the_discharge_is_sixty_four_last_row_gates
-#assert_axioms accSegDesc_constraint_count
-#assert_axioms accFinalDesc_constraint_count
-#assert_axioms the_two_descriptors_do_not_share_a_name
-#assert_axioms the_two_descriptors_differ
-#assert_axioms the_full_width_sum_needs_the_fold
-#assert_axioms the_routing_tuple_used_to_not_fit_and_now_does
-#assert_axioms the_split_remedy_costs_more_than_the_wide_table
-#assert_axioms the_column_census
-#assert_axioms the_multiply_carries_are_seven_hundred_forty_four
-#assert_axioms the_row_boundary_is_two_hundred_eighty_eight
-#assert_axioms the_outputs_are_scratch_slots
+#assert_compiled accSegAir_mainRailOk
+#assert_compiled accFinalAir_mainRailOk
+#assert_compiled the_discharge_is_sixty_four_last_row_gates
+#assert_compiled accSegDesc_constraint_count
+#assert_compiled accFinalDesc_constraint_count
+#assert_compiled the_two_descriptors_do_not_share_a_name
+#assert_compiled the_two_descriptors_differ
+#assert_compiled the_full_width_sum_needs_the_fold
+#assert_compiled the_routing_tuple_used_to_not_fit_and_now_does
+#assert_compiled the_split_remedy_costs_more_than_the_wide_table
+#assert_compiled the_column_census
+#assert_compiled the_multiply_carries_are_seven_hundred_forty_four
+#assert_compiled the_row_boundary_is_two_hundred_eighty_eight
+#assert_compiled the_outputs_are_scratch_slots
 #assert_axioms rowV_forces
 #assert_axioms threadedLadderV_forces
 #assert_axioms terminalAccumulator_forces
@@ -2255,36 +2256,36 @@ theorem the_head_seam_forces_the_declared_program (H : List ℤ) (C : Pt3)
 #assert_axioms flatMap_singleton_map
 #assert_axioms filterMap_of_noAddendLookup
 #assert_axioms sumL_congr
-#assert_axioms the_routing_costs_one_column
-#assert_axioms the_declared_tuple_is_the_priced_one
-#assert_axioms addendTuple_length
+#assert_compiled the_routing_costs_one_column
+#assert_compiled the_declared_tuple_is_the_priced_one
+#assert_compiled addendTuple_length
 #assert_axioms routedTables_ids_are_distinct
 #assert_axioms accRoutedAir_extends_accFinalAir
 #assert_axioms the_legs_do_not_depend_on_the_declared_addends
-#assert_axioms accRoutedAir_mainRailOk
-#assert_axioms accRoutedDesc_constraint_count
+#assert_compiled accRoutedAir_mainRailOk
+#assert_compiled accRoutedDesc_constraint_count
 #assert_axioms the_three_descriptors_do_not_share_a_name
-#assert_axioms the_routed_selector_census
+#assert_compiled the_routed_selector_census
 #assert_axioms ridx_is_the_row_index
 #assert_axioms addTupleOf_cons
 #assert_axioms addend_manifest_key_unique
-#assert_axioms only_the_routing_leg_targets_the_addend_table
+#assert_compiled only_the_routing_leg_targets_the_addend_table
 #assert_axioms routed_constraints_split
 #assert_axioms routing_leg_filterMap
-#assert_axioms addend_lookupLog_is_rowMap
-#assert_axioms addend_balance
-#assert_axioms the_balance_forces_the_row_count
-#assert_axioms addend_is_its_declared_addend
+#assert_compiled addend_lookupLog_is_rowMap
+#assert_compiled addend_balance
+#assert_compiled the_balance_forces_the_row_count
+#assert_compiled addend_is_its_declared_addend
 #assert_axioms range_map_pointwise
-#assert_axioms addend_limbs_are_declared
+#assert_compiled addend_limbs_are_declared
 #assert_axioms sVal_is_declVal
-#assert_axioms addend_value_is_declared
+#assert_compiled addend_value_is_declared
 #assert_axioms chain_is_the_declared_chain
-#assert_axioms accumulator_discharge_forced_on_declared_addends
+#assert_compiled accumulator_discharge_forced_on_declared_addends
 #assert_axioms the_routing_key_separates_rows
-#assert_axioms the_cell_cap_counts_the_declared_multiset_and_not_the_allocation
-#assert_axioms the_full_srs_routing_needs_no_cap_to_move
-#assert_axioms the_demonstration_manifest_is_far_inside_every_cap
+#assert_compiled the_cell_cap_counts_the_declared_multiset_and_not_the_allocation
+#assert_compiled the_full_srs_routing_needs_no_cap_to_move
+#assert_compiled the_demonstration_manifest_is_far_inside_every_cap
 #assert_axioms redPt_lt
 #assert_axioms srsScaledAddends_length
 #assert_axioms srs_declared_addend_is_the_negated_scalar_multiple
@@ -2297,20 +2298,20 @@ theorem the_head_seam_forces_the_declared_program (H : List ℤ) (C : Pt3)
 #assert_axioms the_four_descriptors_do_not_share_a_name
 #assert_axioms the_srs_descriptor_differs_from_the_routed_one_only_in_its_name_and_its_manifest
 #assert_axioms srs_balance_is_routed_balance
-#assert_axioms accumulator_discharge_forced_on_srs_scaled_addends
+#assert_compiled accumulator_discharge_forced_on_srs_scaled_addends
 #assert_axioms the_forced_chain_adds_the_scalar_multiples
 #assert_axioms smulV_at_zero
-#assert_axioms the_challenge_order_is_the_o1labs_one
-#assert_axioms the_coefficients_are_not_constant_in_the_challenges
+#assert_compiled the_challenge_order_is_the_o1labs_one
+#assert_compiled the_coefficients_are_not_constant_in_the_challenges
 #assert_axioms the_head_seam_costs_nineteen_columns
 #assert_axioms head_pi_layout
-#assert_axioms headStatePinLegs_length
-#assert_axioms the_head_vk_pin_is_nine_lanes
-#assert_axioms headCommitLanes_length
+#assert_compiled headStatePinLegs_length
+#assert_compiled the_head_vk_pin_is_nine_lanes
+#assert_compiled headCommitLanes_length
 #assert_axioms headBoundLanes_length
 #assert_axioms headedTables_ids_are_the_routed_ones
 #assert_axioms accHeadAir_extends_accRoutedAir
-#assert_axioms accHeadAir_mainRailOk
+#assert_compiled accHeadAir_mainRailOk
 #assert_axioms the_head_selector_census
 #assert_axioms accHeadDesc_name
 #assert_axioms the_five_descriptors_do_not_share_a_name
@@ -2323,4 +2324,5 @@ theorem the_head_seam_forces_the_declared_program (H : List ℤ) (C : Pt3)
 #assert_axioms the_head_seam_forces_the_declared_claim
 #assert_axioms the_head_seam_forces_the_declared_program
 
+#assert_compiled the_step_srs_is_two_to_the_sixteen
 end Dregg2.Circuit.Emit.MinaAccumulatorAir
