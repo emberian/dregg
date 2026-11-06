@@ -1,0 +1,32 @@
+{
+  "date": "2026-11-06",
+  "evidence": "MEASURED",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "shared_machine": true,
+  "checker_sha256": "77c2cc28e8206b4cda66963d0e2c84df2dd68233bd86270c2d0bb7e2a62be8c4",
+  "variants": {
+    "violating": {
+      "count": 2,
+      "edb_facts": 550,
+      "final_facts": 966,
+      "native_verifyJ_ms": 2948,
+      "signed_tuple_matches": true
+    },
+    "fixed": {
+      "count": 0,
+      "edb_facts": 557,
+      "final_facts": 973,
+      "native_verifyJ_ms": 3016,
+      "signed_tuple_matches": true
+    }
+  },
+  "falsifiers": {
+    "open-lower": "REFUSE: NOT CLOSED",
+    "wrong-count": "REFUSE: count differs",
+    "dropped-fact": "REFUSE: EDB root differs",
+    "weaker-open-lower": "ACCEPT",
+    "swapped-valid-receipt": "REFUSE: count, root differ"
+  },
+  "scope": "Synthetic public-only data. Native checker re-execution; no STARK."
+}

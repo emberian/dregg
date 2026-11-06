@@ -23,7 +23,7 @@ read, an edit after its own earlier write, and an edit of a file the parent read
 
 The real-session run below exists. Its artifacts (`data/transcript.json` and everything derived
 from it directly under `data/`) are session-derived and under ember's decision. `./run.sh --real`
-re-runs it from the local file without re-exporting; `REAL_OUT=<dir>` sends its outputs elsewhere.
+verifies the historical certificate and signed tuple without re-exporting or changing either.
 
 ## The question (the real-session run)
 
@@ -139,31 +139,26 @@ Falsifiers, run by `run.sh` on this data [MEASURED]:
 
 ## Commands
 
-```
-cd demo/datalog-governance
-./run.sh                       # synthetic: both variants, receipts, falsifiers (the default)
-./run.sh --real                # the real-session run from the local data/transcript.json
-REAL_OUT=/tmp/x ./run.sh --real  # the same, with its outputs written elsewhere
-```
-
-Check a checked-in certificate and receipt without running anything else (synthetic fixed shown;
-`data/synthetic/violating/` and `data/` work the same way):
-
-```
-cd metatheory && lake build datalog-check
-./.lake/build/bin/datalog-check ../demo/datalog-governance/data/synthetic/fixed/certificate.json
-cd ../demo/datalog-governance
-ssh-keygen -Y verify -f allowed_signers -I datalog-governance@dregg -n dregg-datalog-receipt \
-  -s data/synthetic/fixed/receipt.txt.sig < data/synthetic/fixed/receipt.txt
+```sh
+# From the repository root, with Python 3, OpenSSH (-Y), and the pinned Lean toolchain:
+demo/datalog-governance/run.sh         # regenerate both synthetic variants; verify; falsify
+demo/datalog-governance/run.sh verify  # verify the two original certificates and signatures
+WORK=/fresh/output demo/datalog-governance/run.sh # retain outputs in an empty directory
 ```
 
-The receipt signs `(program_digest, root, pred, count)` as the checker printed them. Verifying the
-signature authenticates that body under the demo key only. It attests neither the checker binary
-nor the source data. To verify the computational claim, re-run `datalog-check` on the certificate
-and compare every field of its output (program digest, root, pred, count, verdict ACCEPT) with
-the signed body. The private key
-lives in `keys/`, which git ignores. Running `run.sh` without that directory makes a new key and
-rewrites `allowed_signers`.
+The script bootstraps `datalog-check` if its executable is missing. Every synthetic rerun goes to
+an empty output directory (a new temporary directory by default). It compares the regenerated
+certificate's accepted `(program_digest, root, pred, count)` with the **original signed receipt**,
+including the checker identifier. A signature and an unrelated valid certificate do not suffice:
+`verify_receipt.py` requires every field to agree. The script also requires the three forged
+certificates to be refused as well-formed inputs, and the deliberately weaker checker to accept
+`open-lower`.
+
+Verification never generates keys, replaces `allowed_signers`, signs new receipts, or overwrites
+checked artifacts. The checked-in signer is a demo key, not an identity claim about a person or
+organization. Its signature does not attest the checker binary or the source data. The historical
+local run is opt-in: `demo/datalog-governance/run.sh --real` verifies its existing certificate and
+receipt without regeneration or export.
 
 Files: `program.json` (rules, strata, policy), `synth_transcript.py`, `project_transcript.py`, `extract_edb.py`,
 `prove.py`, `forge.py`, `run.sh`, `allowed_signers`. Under `data/`: `transcript.json`, `edb.json`,

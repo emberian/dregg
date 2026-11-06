@@ -1,76 +1,66 @@
 #!/usr/bin/env bash
-# Demo (b): a governance question over an agent session forest, answered by a stratified Datalog
-# certificate, checked by the extracted Lean checker, receipt signed with ssh-keygen.
-#
-#   ./run.sh          DEFAULT: the SYNTHETIC forest (synth_transcript.py, seeded), two variants:
-#                     data/synthetic/violating (count 2) and data/synthetic/fixed (count 0)
-#   ./run.sh --real   the real-session run from the local data/transcript.json, if present. It is
-#                     never re-exported. Its outputs go to $REAL_OUT (default data/), and those
-#                     session-derived artifacts are under ember's decision.
+# One-command synthetic demo. Default: reproduce both variants in a fresh directory, then
+# compare their checked tuples with the ORIGINAL signed receipts. No signing keys required.
+# ./run.sh verify skips generation and verifies the checked-in certificates.
+# WORK=/fresh/output ./run.sh keeps reproducible outputs there; never use a checked-in data dir.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 META="$HERE/../../metatheory"
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
-TIMEFORMAT='%R s'
-cd "$HERE"
-
-CHECK="$META/.lake/build/bin/datalog-check"
+CHECK="${CHECK:-$META/.lake/build/bin/datalog-check}"
 [[ -x "$CHECK" ]] || (cd "$META" && lake build datalog-check)
+MODE="${1:-reproduce}"
+case "$MODE" in verify|reproduce|--real) ;; *) echo 'usage: ./run.sh [verify|reproduce|--real]' >&2; exit 2 ;; esac
+WORK="${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/datalog-governance.XXXXXX")}"
+mkdir -p "$WORK"
+# Refuse existing output files instead of replacing a prior run or repository artifacts.
+[[ -z "$(ls -A "$WORK")" ]] || { echo "WORK must be an empty directory: $WORK" >&2; exit 2; }
+echo "output: $WORK"
 
-mkdir -p keys
-if [[ ! -f keys/receipt_ed25519 ]]; then
-  ssh-keygen -q -t ed25519 -N '' -C datalog-governance@dregg -f keys/receipt_ed25519
-  echo "datalog-governance@dregg namespaces=\"dregg-datalog-receipt\" $(cut -d' ' -f1,2 keys/receipt_ed25519.pub)" > allowed_signers
-fi
-
-# run_one <transcript.json> <out dir>: extract, prove, check, sign, verify.
-run_one() {
-  local tr="$1" out="$2"
-  mkdir -p "$out"
-  echo "== extract ($out)"; time python3 -I extract_edb.py "$tr" program.json "$out/edb.json"
-  echo "== prove";          time python3 -I prove.py program.json "$out/edb.json" "$out/certificate.json"
-  rm -f "$out/certificate.json.violations"
-  echo "== check"
-  time "$CHECK" "$out/certificate.json" | tee "$out/check.out"
-  grep -q '^verdict        : ACCEPT' "$out/check.out"
-  local digest root pred count
-  digest=$(awk '/^program digest/ {print $4}' "$out/check.out")
-  root=$(awk '/^  root/ {print $3}' "$out/check.out")
-  pred=$(awk '/^  pred/ {print $3}' "$out/check.out")
-  count=$(awk '/^  claimed count/ {print $3}' "$out/check.out")
-  [[ -n "$digest" && -n "$root" && -n "$pred" && -n "$count" ]] || { echo "receipt field missing"; exit 1; }
-  printf 'dregg datalog receipt v1\nprogram_digest=%s\nroot=%s\npred=%s\ncount=%s\nchecker=lake exe datalog-check (metatheory/DatalogCheck.lean)\n' \
-    "$digest" "$root" "$pred" "$count" > "$out/receipt.txt"
-  rm -f "$out/receipt.txt.sig"
-  ssh-keygen -q -Y sign -f keys/receipt_ed25519 -n dregg-datalog-receipt "$out/receipt.txt"
-  echo "== verify receipt signature"
-  time ssh-keygen -Y verify -f allowed_signers -I datalog-governance@dregg -n dregg-datalog-receipt \
-    -s "$out/receipt.txt.sig" < "$out/receipt.txt"
+verify_one() {
+  python3 -I "$HERE/verify_receipt.py" "$1" "$2" --checker "$CHECK"
 }
-
-# falsifiers <certificate.json>: each forgery must be REFUSED; the weaker checker must ACCEPT open-lower.
 falsifiers() {
-  echo "== falsifiers on $1 (each must be REFUSED)"
-  python3 -I forge.py program.json "$1" "$TMP"
+  local out="$WORK/falsifiers"
+  mkdir -p "$out"
+  python3 -I "$HERE/forge.py" "$HERE/program.json" "$1" "$out"
+  local f rc
   for f in open-lower wrong-count dropped-fact; do
-    if "$CHECK" "$TMP/$f.json" > "$TMP/$f.out"; then echo "FAIL: $f was accepted"; exit 1; fi
-    echo "$f: $(grep '^verdict' "$TMP/$f.out")"
+    rc=0
+    "$CHECK" "$out/$f.json" > "$out/$f.out" || rc=$?
+    [[ "$rc" = 1 ]] && grep -q '^verdict        : REFUSE (' "$out/$f.out" || {
+      echo "FAIL: $f must be REFUSED, not accepted or malformed (exit $rc)" >&2; exit 1;
+    }
+    echo "$f: $(grep '^verdict' "$out/$f.out")"
   done
-  echo "== the weaker checker on the open-lower forgery (must ACCEPT: that is the falsifier)"
-  "$CHECK" --weaker-no-lower-closure "$TMP/open-lower.json" | tail -1
+  "$CHECK" --weaker-no-lower-closure "$out/open-lower.json" > "$out/weak.out"
+  grep -q '^WEAKER checker (closure at the top stratum only, NOT the statement.s checker): ACCEPT$' "$out/weak.out" || { echo 'FAIL: weak checker did not ACCEPT' >&2; exit 1; }
+  echo 'weak checker: ACCEPT (open-lower separation)'
+  # Both inputs independently verify; their signed statement tuples must still agree.
+  if verify_one "$1" "$HERE/data/synthetic/violating/receipt.txt" > "$out/swapped-receipt.out" 2>&1; then
+    echo 'FAIL: a valid signature for a different tuple was accepted' >&2; exit 1
+  fi
+  grep -q 'signed receipt differs from checked certificate: count, root' "$out/swapped-receipt.out" || {
+    echo 'FAIL: swapped receipt did not reach tuple comparison' >&2; exit 1;
+  }
+  echo 'swapped valid receipt: REFUSE (count, root differ)'
 }
 
-if [[ "${1:-}" == "--real" ]]; then
-  [[ -f data/transcript.json ]] || { echo "no local data/transcript.json"; exit 2; }
-  out="${REAL_OUT:-data}"
-  run_one data/transcript.json "$out"
-  falsifiers "$out/certificate.json"
-else
-  for v in violating fixed; do
-    mkdir -p "data/synthetic/$v"
-    python3 -I synth_transcript.py "$v" "data/synthetic/$v/transcript.json"
-    run_one "data/synthetic/$v/transcript.json" "data/synthetic/$v"
-  done
-  falsifiers data/synthetic/fixed/certificate.json
+if [[ "$MODE" = --real ]]; then
+  # Local opt-in; no export, signing, or mutation of the historical artifacts.
+  verify_one "$HERE/data/certificate.json" "$HERE/data/receipt.txt"
+  exit 0
 fi
+for v in violating fixed; do
+  original="$HERE/data/synthetic/$v"
+  if [[ "$MODE" = verify ]]; then
+    verify_one "$original/certificate.json" "$original/receipt.txt"
+  else
+    out="$WORK/$v"
+    mkdir -p "$out"
+    python3 -I "$HERE/synth_transcript.py" "$v" "$out/transcript.json"
+    python3 -I "$HERE/extract_edb.py" "$out/transcript.json" "$HERE/program.json" "$out/edb.json"
+    python3 -I "$HERE/prove.py" "$HERE/program.json" "$out/edb.json" "$out/certificate.json"
+    verify_one "$out/certificate.json" "$original/receipt.txt" | tee "$out/check.out"
+  fi
+done
+if [[ "$MODE" = reproduce ]]; then falsifiers "$WORK/fixed/certificate.json"; fi
