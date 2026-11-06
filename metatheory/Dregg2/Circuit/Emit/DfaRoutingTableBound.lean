@@ -1,12 +1,12 @@
 /-
 # Dregg2.Circuit.Emit.DfaRoutingTableBound — what the table-routing family binds about its word,
-and the statement it cannot make without a new column (L2).
+and the statement its legacy shape cannot make (L2).
 
 Lane E, `docs/automata/SUBSTRATE-DECISION.md` §5.2. 2026-11-06.
 
 ## The family
 
-`DfaRoutingTableEmit.tableRoutingDesc name tbl` (served as `dregg-dfa-routing-table::exact-public-v1`):
+`DfaRoutingTableEmit.tableRoutingDesc name tbl` (legacy served name `dregg-dfa-routing-table::exact-public-v1`):
 three columns `(current, symbol, next)`, one lookup into the DECLARED exact-public transition table,
 a continuity window, and two PIs (`initial_state`, `final_state`). Its refinement
 `tableRouting_refines_classify` reads the word off the private symbol column.
@@ -22,10 +22,10 @@ permutation of the declared rows.
 ## What is proved
 
   * `lookupLog_eq` — the descriptor's lookup log is the trace's triple column.
-  * ⚑ `tableRouting_trail` — the complete public-data characterization: a satisfying trace's triples
+  * ⚑ `tableRouting_trail` — a necessary public-data characterization: a satisfying trace's triples
     (read as naturals) are a PERMUTATION of the declared table, form a TRAIL from the public initial
     state (each row starts where the previous ended), and the word is the trail's label column.
-    So the word is bound exactly as far as the public table admits one trail from `q₀`.
+    This is a forward implication, not a completeness theorem constructing a satisfying trace.
   * ⚑ `word_public_of_functional` — the trivial binding, where it holds: if every state has at most
     one declared row (`Functional tbl`), any two satisfying traces with the same initial state read
     the SAME word. The word is then a function of public data (`trail_unique`).
@@ -39,14 +39,14 @@ fires on each). `word_not_public`: no function of the public data `(tbl, initial
 the read word; `bound_shape_fails`: for an injective content scheme no single commitment `c` is
 opened by both, so a statement naming the record cannot be discharged by this descriptor.
 
-## What the AIR would need (stated, not built)
+## The additive ordered shape
 
-A public commitment to the word. The served chained family already has the shape: per row an
-entry hash `H(current, symbol, next, 0)` and a running hash `H(acc, entry)` by two arity-4 / arity-2
-chip lookups, `acc` copy-forward, seeded at a table PI and pinned at a route PI
-(`DfaRoutingEmit.dfaRoutingDesc`). Adding it here is +4 columns (`entry`, `running`, `acc`, zero
-lane), +2 chip lookups per row, +2 PIs; the bound statement would then be
-`DfaRoutingChainBound.dfaRouting_bound`'s. No column is added to the served descriptor.
+`DfaRoutingTableRoute8.tableRoutingBoundDesc` retains the certified table lowering and adds
+`RouteChain8`: eight predecessor lanes, eight output lanes, a one-based position, eight public
+route lanes and public length. One arity-16 lookup per row binds domain/position/edge/predecessor8;
+three literal zeros pad the meaningful 13 inputs to the admitted arity. This is +17 columns,
++9 PIs, +28 constraints, +1 wide permutation per row. `DfaRoutingTableRoute8Bound` supplies the
+bound statement. The legacy shape and its counterexample remain useful as the weak control.
 
 ## Axiom hygiene
 `#assert_all_clean` ⊆ {propext, Classical.choice, Quot.sound}. NEW file; imports read-only.

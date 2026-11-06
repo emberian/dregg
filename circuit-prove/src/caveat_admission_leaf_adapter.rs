@@ -69,12 +69,10 @@
 //! executor-trusted to in-circuit PROVED.
 
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, Ir2Air, LookupSpec, MemBoundaryWitness, TID_RANGE, TableDef2, TableSem,
-    UMemBoundaryWitness, VmConstraint2, WindowExpr, WindowGateSpec, ir2_airs_and_common_for_config,
-    prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness,
+    ir2_airs_and_common_for_config, parse_vm_descriptor2, prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 
 use p3_field::PrimeField32;
 use p3_recursion::{
@@ -293,151 +291,14 @@ impl CaveatAdmissionWitness {
     }
 }
 
-// ---- descriptor-building helpers ----------------------------------------------------------
-/// A signed-scaled variable term `k · Var(col)` (k an `i64`).
-fn scaled(k: i64, col: usize) -> LeanExpr {
-    LeanExpr::Mul(Box::new(LeanExpr::Const(k)), Box::new(LeanExpr::Var(col)))
-}
-/// Left-fold a list of `LeanExpr` terms with `Add` (empty ⇒ `Const 0`).
-fn sum_exprs(mut terms: Vec<LeanExpr>) -> LeanExpr {
-    match terms.len() {
-        0 => LeanExpr::Const(0),
-        1 => terms.pop().unwrap(),
-        _ => {
-            let last = terms.pop().unwrap();
-            LeanExpr::Add(Box::new(sum_exprs(terms)), Box::new(last))
-        }
-    }
-}
-/// The borrow term `br_k` of comparison `c`: a `Const` for the pinned endpoints
-/// (`br_0 = init_borrow`, `br_{NUM_LIMBS} = 0`), else a `Var` column.
-fn borrow_term(c: usize, k: usize, init: i64) -> LeanExpr {
-    if k == 0 {
-        LeanExpr::Const(init)
-    } else if k == NUM_LIMBS {
-        LeanExpr::Const(0)
-    } else {
-        LeanExpr::Var(borrow_col(c, k))
-    }
-}
-
-/// Adapt the bignum caveat-admission gadget into the IR-v2 [`EffectVmDescriptor2`]:
-///   * `NUM_OPERANDS·NUM_LIMBS` boundary PI pins on the operand limbs;
-///   * per comparison: `NUM_LIMBS` first-row subtraction relations
-///     `d_j − y_j + x_j + br_j − br_{j+1}·2^LIMB_BITS == 0`, and `NUM_LIMBS-1` boolean
-///     constraints `br·(br−1) == 0` on the internal borrows;
-///   * `NUM_LIMBS` first-row asset-equality relations (limbwise `trade_asset_j − cav_asset_j == 0`);
-///   * every column held constant across rows (`WindowGate`);
-///   * a `LIMB_BITS`-bit range table + range lookups on all operand limbs and all difference
-///     limbs (the `≤`/`<` teeth: a top-borrow underflow forces a difference limb out of range).
+/// Decode the Lean-authored five-limb caveat AIR. `BorrowChainEmit.bodies_sound`
+/// lifts its modular equations to exact integer comparisons; `CaveatAdmissionEmit`
+/// connects the actual descriptor to the public limb tuple and all four atoms.
 pub fn caveat_admission_to_descriptor2() -> EffectVmDescriptor2 {
-    let mut constraints: Vec<VmConstraint2> = Vec::new();
-
-    // Family 1 — operand-limb PI pins: `row0[col] == pi[col]` (identity layout).
-    for o in 0..NUM_OPERANDS {
-        for j in 0..NUM_LIMBS {
-            let col = op_limb_col(o, j);
-            constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-                row: VmRow::First,
-                col,
-                pi_index: col,
-            }));
-        }
-    }
-
-    // Family 2 — per-comparison borrow-subtraction relations + boolean borrows.
-    for (c, &(xo, yo, init)) in COMPARISONS.iter().enumerate() {
-        for j in 0..NUM_LIMBS {
-            // d_j − y_j + x_j + br_j − br_{j+1}·2^LIMB_BITS == 0
-            let body = sum_exprs(vec![
-                LeanExpr::Var(diff_limb_col(c, j)),
-                scaled(-1, op_limb_col(yo, j)),
-                LeanExpr::Var(op_limb_col(xo, j)),
-                borrow_term(c, j, init),
-                LeanExpr::Mul(
-                    Box::new(LeanExpr::Const(-LIMB_BASE)),
-                    Box::new(borrow_term(c, j + 1, init)),
-                ),
-            ]);
-            constraints.push(VmConstraint2::Base(VmConstraint::Boundary {
-                row: VmRow::First,
-                body,
-            }));
-        }
-        // Boolean constraint on each internal borrow: br·(br−1) == 0.
-        for k in 1..NUM_LIMBS {
-            let col = borrow_col(c, k);
-            constraints.push(VmConstraint2::Base(VmConstraint::Boundary {
-                row: VmRow::First,
-                body: LeanExpr::Mul(
-                    Box::new(LeanExpr::Var(col)),
-                    Box::new(LeanExpr::Add(
-                        Box::new(LeanExpr::Var(col)),
-                        Box::new(LeanExpr::Const(-1)),
-                    )),
-                ),
-            }));
-        }
-    }
-
-    // Family 3 — limbwise asset equality: `trade_asset_j − cav_asset_j == 0`.
-    for j in 0..NUM_LIMBS {
-        constraints.push(VmConstraint2::Base(VmConstraint::Boundary {
-            row: VmRow::First,
-            body: LeanExpr::Add(
-                Box::new(LeanExpr::Var(op_limb_col(OP_TRADE_ASSET, j))),
-                Box::new(scaled(-1, op_limb_col(OP_CAV_ASSET, j))),
-            ),
-        }));
-    }
-
-    // Family 4 — every column held constant across rows.
-    for col in 0..TRACE_WIDTH {
-        constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-            body: WindowExpr::Add(
-                Box::new(WindowExpr::Nxt(col)),
-                Box::new(WindowExpr::Mul(
-                    Box::new(WindowExpr::Const(-1)),
-                    Box::new(WindowExpr::Loc(col)),
-                )),
-            ),
-            on_transition: true,
-        }));
-    }
-
-    // Family 5 — range lookups on all operand limbs + all difference limbs (`[0, 2^LIMB_BITS)`).
-    for o in 0..NUM_OPERANDS {
-        for j in 0..NUM_LIMBS {
-            constraints.push(VmConstraint2::Lookup(LookupSpec {
-                table: TID_RANGE,
-                tuple: vec![LeanExpr::Var(op_limb_col(o, j))],
-            }));
-        }
-    }
-    for c in 0..NUM_COMPARISONS {
-        for j in 0..NUM_LIMBS {
-            constraints.push(VmConstraint2::Lookup(LookupSpec {
-                table: TID_RANGE,
-                tuple: vec![LeanExpr::Var(diff_limb_col(c, j))],
-            }));
-        }
-    }
-
-    EffectVmDescriptor2 {
-        name: "caveat-admission-leaf::bignum_decidable_atoms_v1".to_string(),
-        trace_width: TRACE_WIDTH,
-        public_input_count: CAVEAT_PI_COUNT,
-        challenges: 0,
-        tables: vec![TableDef2 {
-            id: TID_RANGE,
-            name: "range".to_string(),
-            arity: 1,
-            sem: TableSem::Range { bits: LIMB_BITS },
-        }],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    }
+    parse_vm_descriptor2(include_str!(
+        "../../circuit/descriptors/by-name/caveat-admission-leaf.json"
+    ))
+    .expect("Lean-emitted caveat admission descriptor decodes")
 }
 
 /// Prove a caveat admission as a RECURSION-FOLDABLE IR-v2 leaf. `public_inputs` is the
@@ -773,6 +634,8 @@ mod tests {
     use super::*;
     use crate::binding_tooth::{assert_node_refused_by_binding_connect, report_refusal};
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::descriptor_ir2::{LookupSpec, TID_RANGE, TableSem, VmConstraint2};
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
     use dregg_circuit::refusal::{
         assert_violated_constraint_not_bus, must_refuse, must_refuse_or_unsat_panic,
     };
@@ -806,6 +669,77 @@ mod tests {
             trade_asset: (1u128 << 96) | 12345,     // a 96-bit asset id
             cav_asset: (1u128 << 96) | 12345,
         }
+    }
+
+    /// The emitted arithmetic/range checks use the production expression evaluator.
+    /// These cases exercise witness layout, not a Rust-to-Lean refinement claim.
+    #[test]
+    fn caveat_emitted_admission_refuses_each_atom() {
+        use dregg_circuit::descriptor_ir2::eval_lean_expr;
+        let desc = caveat_admission_to_descriptor2();
+        let accepted = |w: &CaveatAdmissionWitness| {
+            let trace = w.generate_trace();
+            let row = &trace[0];
+            desc.constraints.iter().all(|c| match c {
+                VmConstraint2::Base(VmConstraint::Boundary {
+                    row: VmRow::First,
+                    body,
+                }) => eval_lean_expr(body, row) == BabyBear::ZERO,
+                VmConstraint2::Lookup(l) if l.table == TID_RANGE => {
+                    eval_lean_expr(&l.tuple[0], row).as_u32() < (1 << LIMB_BITS)
+                }
+                _ => true,
+            })
+        };
+        assert!(accepted(&within_caveat()));
+        assert!(accepted(&within_caveat_bignum()));
+        let maximum = CaveatAdmissionWitness {
+            req_time: u128::MAX,
+            cav_valid_until: u128::MAX,
+            req_height: u128::MAX - 1,
+            cav_height_lt: u128::MAX,
+            trade_value: u128::MAX,
+            cav_budget: u128::MAX,
+            trade_asset: u128::MAX,
+            cav_asset: u128::MAX,
+        };
+        assert!(accepted(&maximum), "all u128 bits remain usable");
+        let mut bad = within_caveat();
+        bad.req_time = bad.cav_valid_until + 1;
+        assert!(!accepted(&bad));
+        bad = within_caveat();
+        bad.req_height = bad.cav_height_lt;
+        assert!(!accepted(&bad), "strict height boundary");
+        bad = within_caveat();
+        bad.trade_value = bad.cav_budget + 1;
+        assert!(!accepted(&bad));
+        bad = within_caveat();
+        bad.trade_asset += 1;
+        assert!(!accepted(&bad));
+    }
+
+    #[test]
+    fn caveat_emitted_inner_roundtrip() {
+        use dregg_circuit::descriptor_ir2::verify_vm_descriptor2_with_config;
+        let witness = within_caveat_bignum();
+        let desc = caveat_admission_to_descriptor2();
+        let pis = witness.public_inputs();
+        let config = ir2_leaf_wrap_config();
+        let proof = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+            &desc,
+            &witness.generate_trace(),
+            &pis,
+            &MemBoundaryWitness::default(),
+            &[],
+            &UMemBoundaryWitness::default(),
+            &config,
+        )
+        .expect("honest bignum witness proves under Lean-emitted AIR");
+        verify_vm_descriptor2_with_config(&desc, &proof, &pis, &config)
+            .expect("honest bignum proof verifies");
+        let mut forged = pis;
+        forged[op_limb_col(OP_TRADE_ASSET, 0)] += BabyBear::ONE;
+        assert!(verify_vm_descriptor2_with_config(&desc, &proof, &forged, &config).is_err());
     }
 
     #[test]

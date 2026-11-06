@@ -374,6 +374,44 @@ fn emitted_dyck_brackets_proves_and_verifies() {
     let proof = prove_vm_descriptor2(&desc, &v2, &pis, &MemBoundaryWitness::default(), &[])
         .expect("the honest '[]' parse must prove through the emitted descriptor");
     verify_vm_descriptor2(&desc, &proof, &pis).expect("the honest proof must verify");
+    use dregg_circuit::dsl::dyck_stack::{SYM_OP, record_public_inputs, verify_record};
+    let record = [SYM_OP, SYM_CL];
+    let (height, computed_pis) = record_public_inputs(&record).expect("bracket alphabet");
+    assert_eq!(height, v2.len());
+    assert_eq!(computed_pis, pis);
+    verify_record(&proof, &record).expect("record-facing verifier accepts the honest word");
+    assert!(
+        verify_record(&proof, &[SYM_CL, SYM_OP]).is_err(),
+        "same-length record splice refuses"
+    );
+    use dregg_circuit::dsl::dyck_stack::{Action, RULE_BRACKET, build_witness};
+    let actions = [
+        Action::Rule(RULE_BRACKET),
+        Action::Term(SYM_OP),
+        Action::Rule(RULE_EMPTY),
+        Action::Term(SYM_CL),
+        Action::Done,
+        Action::Done,
+        Action::Done,
+        Action::Done,
+        Action::Done,
+    ];
+    let (padded_trace, padded_pis) = build_witness(&record, &actions);
+    let padded = lift_witness_to_v2(&padded_trace);
+    assert_eq!(padded.len(), 16);
+    let padded_proof = prove_vm_descriptor2(
+        &desc,
+        &padded,
+        &padded_pis,
+        &MemBoundaryWitness::default(),
+        &[],
+    )
+    .expect("raw descriptor permits extra done padding");
+    verify_vm_descriptor2(&desc, &padded_proof, &padded_pis)
+        .expect("weak raw verifier really accepts alternate padding");
+    let err =
+        verify_record(&padded_proof, &record).expect_err("record verifier pins canonical padding");
+    assert!(err.contains("main-trace height"));
 
     let mut forged = pis.clone();
     forged[pi::ROUTE_COMMITMENT] += BabyBear::ONE;
@@ -405,6 +443,16 @@ fn emitted_dyck_nested_proves_and_verifies() {
     let proof = prove_vm_descriptor2(&desc, &v2, &pis, &MemBoundaryWitness::default(), &[])
         .expect("the honest '[[]]' parse must prove through the emitted descriptor");
     verify_vm_descriptor2(&desc, &proof, &pis).expect("the honest nested proof must verify");
+    use dregg_circuit::dsl::dyck_stack::{SYM_OP, record_public_inputs, verify_record};
+    let record = [SYM_OP, SYM_OP, SYM_CL, SYM_CL];
+    let (height, computed_pis) = record_public_inputs(&record).expect("bracket alphabet");
+    assert_eq!(height, v2.len());
+    assert_eq!(
+        height, 16,
+        "the first done has a successor under canonical padding"
+    );
+    assert_eq!(computed_pis, pis);
+    verify_record(&proof, &record).expect("record-facing verifier accepts nested word");
 }
 
 /// The **nested** run's `route_commitment` binds too: the `"[[]]"` parse commits to its
@@ -887,4 +935,112 @@ fn tamper_initial_depth_rejects() {
         rejects(&desc, &v2, &pis),
         "a forged initial stack depth must REJECT"
     );
+}
+
+/// Rehash a mutated preimage so the new refusal cannot be credited to a stale
+/// route, accumulator, or chip output. This changes no shared descriptor on disk.
+fn rehash_route(trace: &mut [Vec<BabyBear>], pis: &mut [BabyBear]) {
+    use dregg_circuit::dsl::dyck_stack::V2_ACC;
+    use dregg_circuit::poseidon2::{hash_2_to_1, hash_4_to_1};
+    let mut acc = pis[pi::TABLE_COMMITMENT];
+    for row in trace {
+        row[V2_ACC] = acc;
+        row[col::ENTRY_HASH] = hash_4_to_1(&[
+            row[col::RULE_ID],
+            row[col::STACK0],
+            row[col::INPUT_TOKEN],
+            row[col::LANE_ZERO],
+        ]);
+        acc = hash_2_to_1(acc, row[col::ENTRY_HASH]);
+        row[col::RUNNING_HASH] = acc;
+    }
+    pis[pi::ROUTE_COMMITMENT] = acc;
+}
+
+#[test]
+fn tamper_route_preimage_canonicalization() {
+    let desc = emitted_desc();
+    let (trace, pis) = build_brackets_witness();
+    let honest = lift_witness_to_v2(&trace);
+    let last = honest.len() - 1;
+    for (row_index, column, selector) in [
+        (ROW_TERM_OPEN, col::RULE_ID, Some(col::IS_RULE)),
+        (ROW_RULE_BRACKET, col::INPUT_TOKEN, Some(col::IS_TERM)),
+        (last, col::RULE_ID, None),
+        (last, col::INPUT_TOKEN, None),
+        (last, col::LANE_ZERO, None),
+    ] {
+        let hits: Vec<usize> = desc
+            .constraints
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                let matches = match (selector, c) {
+                    (Some(sel), VmConstraint2::Base(VmConstraint::Gate(body))) => {
+                        gate_cols(body) == BTreeSet::from([sel, column])
+                            && deg_in(body, column) == 1
+                    }
+                    (
+                        None,
+                        VmConstraint2::Base(VmConstraint::Boundary {
+                            row: VmRow::Last,
+                            body,
+                        }),
+                    ) => gate_cols(body) == BTreeSet::from([column]),
+                    _ => false,
+                };
+                matches.then_some(i)
+            })
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "one canonicalization constraint for row {row_index}, col {column}"
+        );
+        let body = match &desc.constraints[hits[0]] {
+            VmConstraint2::Base(VmConstraint::Gate(body))
+            | VmConstraint2::Base(VmConstraint::Boundary { body, .. }) => body,
+            _ => unreachable!(),
+        };
+        assert_eq!(eval_lean_expr(body, &honest[row_index]), BabyBear::ZERO);
+        let mut forged = honest.clone();
+        let mut forged_pis = pis.clone();
+        forged[row_index][column] = BabyBear::ONE;
+        rehash_route(&mut forged, &mut forged_pis);
+        assert_ne!(eval_lean_expr(body, &forged[row_index]), BabyBear::ZERO);
+        assert!(
+            rejects(&desc, &forged, &forged_pis),
+            "canonical field must be enforced"
+        );
+        let mut weak = desc.clone();
+        weak.constraints.remove(hits[0]);
+        let proof = prove_vm_descriptor2(
+            &weak,
+            &forged,
+            &forged_pis,
+            &MemBoundaryWitness::default(),
+            &[],
+        )
+        .expect("omitting only this tooth admits the rehashed forgery");
+        verify_vm_descriptor2(&weak, &proof, &forged_pis)
+            .expect("weak comparator must really verify");
+    }
+    // The top pin is explicit even though stack threading also forces it on
+    // this multirow witness. Name and evaluate that exact final boundary.
+    let pins: Vec<_> = desc
+        .constraints
+        .iter()
+        .filter_map(|c| match c {
+            VmConstraint2::Base(VmConstraint::Boundary {
+                row: VmRow::Last,
+                body,
+            }) if gate_cols(body) == BTreeSet::from([col::STACK0]) => Some(body),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(pins.len(), 1);
+    assert_eq!(eval_lean_expr(pins[0], &honest[last]), BabyBear::ZERO);
+    let mut forged = honest[last].clone();
+    forged[col::STACK0] = BabyBear::ONE;
+    assert_ne!(eval_lean_expr(pins[0], &forged), BabyBear::ZERO);
 }

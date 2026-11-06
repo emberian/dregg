@@ -9,87 +9,15 @@ All arithmetic is first-row-boundary constrained, including at trace height one.
 The scalar fact-hash interface is unchanged; these arithmetic theorems assert no
 cryptographic binding or hiding guarantee.
 -/
-import Dregg2.Circuit.Emit.FieldDeltaRangeEmit
+import Dregg2.Circuit.Emit.BoundedFactEmit
 namespace Dregg2.Circuit.Emit.SolvencyLeafEmit
 open Dregg2.Circuit (Assignment)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow)
 open Dregg2.Circuit.DescriptorIR2
 open Dregg2.Circuit.Emit.FieldDeltaRangeEmit (Canon eq_of_modEq_canon)
+open BoundedFactEmit (sub boolean rangeBodies boolean_forces rangeBodies_sound)
 set_option autoImplicit false
-
-def sub (x y : EmittedExpr) : EmittedExpr := .add x (.mul (.const (-1)) y)
-def boolean (c : Nat) : EmittedExpr := .mul (.var c) (sub (.var c) (.const 1))
-def recompose (bits value base : Nat) : EmittedExpr :=
-  (List.range bits).foldl
-    (fun acc j => sub acc (.mul (.const ((2 : Int) ^ j)) (.var (base + j)))) (.var value)
-def rangeBodies (bits value base : Nat) : List EmittedExpr :=
-  (List.range bits).map (fun j => boolean (base + j)) ++ [recompose bits value base]
-
-theorem boolean_forces {a : Assignment} {c : Nat}
-    (h : (boolean c).eval a ≡ 0 [ZMOD 2013265921]) (hc : Canon (a c)) :
-    a c = 0 ∨ a c = 1 := by
-  have hd : (2013265921 : Int) ∣ a c * (a c - 1) := by
-    apply Int.modEq_zero_iff_dvd.mp
-    simpa [boolean, sub, EmittedExpr.eval, sub_eq_add_neg] using h
-  obtain ⟨h0, h1⟩ := hc
-  rcases Dregg2.Circuit.Emit.EffectVmEmitTransfer.pPrimeInt.dvd_mul.mp hd with hd | hd
-  · obtain ⟨k, hk⟩ := hd; left; omega
-  · obtain ⟨k, hk⟩ := hd; right; omega
-
-theorem recompose_fold_eval (a : Assignment) (base : Nat) :
-    ∀ (l : List Nat) (e : EmittedExpr),
-    (l.foldl (fun acc j => sub acc (.mul (.const ((2 : Int) ^ j))
-      (.var (base + j)))) e).eval a =
-      e.eval a - (l.map (fun j => (2 : Int) ^ j * a (base + j))).sum := by
-  intro l
-  induction l with
-  | nil => intro e; simp
-  | cons x xs ih =>
-    intro e
-    rw [List.foldl_cons, ih]
-    simp only [List.map_cons, List.sum_cons, sub, EmittedExpr.eval]
-    ring
-
-theorem bitSum_bounds (a : Assignment) (base : Nat) :
-    ∀ n, (∀ j < n, a (base + j) = 0 ∨ a (base + j) = 1) →
-      0 ≤ ((List.range n).map (fun j => (2 : Int) ^ j * a (base + j))).sum ∧
-      ((List.range n).map (fun j => (2 : Int) ^ j * a (base + j))).sum < 2 ^ n := by
-  intro n
-  induction n with
-  | zero => intro _; simp
-  | succ k ih =>
-    intro h
-    obtain ⟨h0, h1⟩ := ih (fun j hj => h j (Nat.lt_succ_of_lt hj))
-    rw [List.range_succ, List.map_append, List.sum_append]
-    simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, add_zero]
-    have hp : (0 : Int) ≤ 2 ^ k := by positivity
-    have he : (2 : Int) ^ k.succ = 2 ^ k + 2 ^ k := by rw [pow_succ]; ring
-    rcases h k (Nat.lt_succ_self k) with h | h <;> rw [h] <;> constructor <;> nlinarith
-
-/-- Generic, layout-independent soundness of the emitted range block. -/
-theorem rangeBodies_sound (a : Assignment) (bits value base : Nat)
-    (hfit : (2 : Int) ^ bits < 2013265921)
-    (hcanon : ∀ c, Canon (a c))
-    (h : ∀ e ∈ rangeBodies bits value base, e.eval a ≡ 0 [ZMOD 2013265921]) :
-    0 ≤ a value ∧ a value < 2 ^ bits := by
-  have hb : ∀ j < bits, a (base + j) = 0 ∨ a (base + j) = 1 := by
-    intro j hj
-    apply boolean_forces (h _ ?_) (hcanon _)
-    simp only [rangeBodies, List.mem_append, List.mem_map, List.mem_range]
-    exact Or.inl ⟨j, hj, rfl⟩
-  have hr := h (recompose bits value base) (by simp [rangeBodies])
-  have he := recompose_fold_eval a base (List.range bits) (.var value)
-  change (recompose bits value base).eval a = _ at he
-  rw [he] at hr
-  simp only [EmittedExpr.eval] at hr
-  obtain ⟨hs0, hs1⟩ := bitSum_bounds a base bits hb
-  have hm : a value ≡ ((List.range bits).map
-      (fun j => (2 : Int) ^ j * a (base + j))).sum [ZMOD 2013265921] := by
-    obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp hr
-    exact Int.modEq_iff_dvd.mpr ⟨-k, by linear_combination -hk⟩
-  have heq := eq_of_modEq_canon hm (hcanon value) ⟨hs0, lt_trans hs1 hfit⟩
-  exact ⟨by rw [heq]; exact hs0, by rw [heq]; exact hs1⟩
 
 -- First seven columns preserve the witness/commitment interface.
 def R : Nat := 0
@@ -121,9 +49,7 @@ def firstGate (e : EmittedExpr) : VmConstraint2 := .base (.boundary .first e)
 
 /-- One fact-hash opening, including the seven remaining permutation lanes. -/
 def factSite (value salt output lanes : Nat) : VmConstraint2 :=
-  .lookup ⟨.poseidon2, chipLookupTupleN
-    [.var value, .var salt, .const 0, .const 0, .const 0, .const 64207, .const 1]
-    (output :: (List.range 7).map (fun j => lanes + j))⟩
+  BoundedFactEmit.factSite ![.var value, .var salt, .const 0, .const 0, .const 0] output lanes
 
 def solvencyDescriptor : EffectVmDescriptor2 :=
   { name := "solvency-leaf::dregg-reserve-covers-liabilities-v2"
@@ -312,7 +238,7 @@ theorem honest_satisfies : Satisfied2 (fun _ => 0) solvencyDescriptor
       or_false, List.mem_map] at hc
     rcases hc with (hc | hc) | hc
     · rcases hc with rfl | rfl <;>
-        simp only [VmConstraint2.holdsAt, factSite, Lookup.holdsAt, honest_loc i hi'] <;>
+        simp only [VmConstraint2.holdsAt, factSite, BoundedFactEmit.factSite, Lookup.holdsAt, honest_loc i hi'] <;>
         decide
     · obtain ⟨e, he, rfl⟩ := hc
       simp only [firstGate, VmConstraint2.holdsAt, VmConstraint.holdsVm, honest_loc i hi']
@@ -325,25 +251,21 @@ theorem honest_satisfies : Satisfied2 (fun _ => 0) solvencyDescriptor
   · intro i hi r hr; cases hr
   · exact List.nodup_nil
   · intro op hop; simp [memLog, memOpsOf, solvencyDescriptor, arithmeticBodies,
-      firstGate, factSite, rangeBodies] at hop
-  · simp [memLog, memOpsOf, solvencyDescriptor, arithmeticBodies, firstGate, factSite,
+      firstGate, factSite, BoundedFactEmit.factSite, rangeBodies] at hop
+  · simp [memLog, memOpsOf, solvencyDescriptor, arithmeticBodies, firstGate, factSite, BoundedFactEmit.factSite,
       rangeBodies, honestTrace, Dregg2.Crypto.MemoryChecking.Disciplined,
       Dregg2.Crypto.MemoryChecking.DisciplinedFrom]
   · simp [Dregg2.Crypto.MemoryChecking.MemCheck, memLog, memOpsOf, solvencyDescriptor,
-      arithmeticBodies, firstGate, factSite, rangeBodies, honestTrace,
+      arithmeticBodies, firstGate, factSite, BoundedFactEmit.factSite, rangeBodies, honestTrace,
       Dregg2.Crypto.MemoryChecking.initSet, Dregg2.Crypto.MemoryChecking.finalSet]
   · simp [honestTrace, honestTable, memLog, memOpsOf, solvencyDescriptor,
-      arithmeticBodies, firstGate, factSite, rangeBodies]
+      arithmeticBodies, firstGate, factSite, BoundedFactEmit.factSite, rangeBodies]
   · simp [honestTrace, honestTable, mapLog, mapOpsOf, solvencyDescriptor,
-      arithmeticBodies, firstGate, factSite, rangeBodies]
+      arithmeticBodies, firstGate, factSite, BoundedFactEmit.factSite, rangeBodies]
 
-#assert_all_clean [boolean_forces, recompose_fold_eval, bitSum_bounds, rangeBodies_sound,
-  arithmetic_sound, solvency_emit_sound, factSite_sound, solvency_commitments_sound, old_modular_difference_accepts_insolvent,
+#assert_all_clean [arithmetic_sound, solvency_emit_sound, factSite_sound, solvency_commitments_sound, old_modular_difference_accepts_insolvent,
   old_modular_difference_accepts_30bit_insolvent, arithmetic_refuses_insolvent,
   honest_arithmetic_check, honest_arithmetic, honest_canonical, honest_chip_sound, honest_satisfies]
-/-- info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.rangeBodies_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
-#guard_msgs in
-#print axioms rangeBodies_sound
 /-- info: 'Dregg2.Circuit.Emit.SolvencyLeafEmit.solvency_emit_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms solvency_emit_sound

@@ -1,67 +1,42 @@
 /-
-# Dregg2.Circuit.Emit.DyckStackBound — binding the Dyck parse to its `table` / `route` public inputs
-(L2).
+# Dyck record binding, initiative 1 (2026-11-06)
 
-Lane E, `docs/automata/SUBSTRATE-DECISION.md` §5.2. 2026-11-06.
+The served `DyckStackEmit.dyckParseDesc` hashes each row's
+`[RULE_ID, STACK0, INPUT_TOKEN, LANE_ZERO]`, then folds those hashes from the table
+seed to the route public input. The descriptor now zeros unused rule/token fields
+and all four final-row preimage fields (ordinary gates skip the final row).
 
-## The family
+`recordCore` encodes a record as leading bracket-rule/terminal pairs, an empty
+rule, then terminal rows. `recordPre` adds a deterministic power-of-two padding
+with at least two done rows. `BoundAccepts` checks the computed route AND row
+count. `boundAccepts_sound` concludes that this one trace reads the supplied
+record and its reconstructed certificate replays it, OR `recordFind` names an
+actual hash collision on the trace/record chains. First-done and live-prefix
+facts are DERIVED from the committed encoding, not supplied by a reference trace.
 
-`DyckStackEmit.dyckParseDesc` (served as `dregg-dyck-parse-v1`): the leftmost pushdown replay of
-`S → [S] | ε`, with four PIs: `initial_symbol`, `input_len`, `table_commitment` (the running-hash
-seed) and `route_commitment` (the last row's running hash). Per row an arity-4 chip lookup binds
-`ENTRY_HASH = H(RULE_ID, STACK0, INPUT_TOKEN, LANE_ZERO)` and an arity-2 one binds
-`RUNNING_HASH = H(ACC, ENTRY_HASH)`, `ACC` copied forward and seeded at `pi[table]`.
-`DyckStackReplay.parse_sat_imp_replay_emit_unconditional` concludes that the word READ OFF THE TRACE
-(`decodedWord t n`) is accepted by the replay; it goes through the projection `dyckDesc`, which
-transcribes the chain out, so the `table`/`route` PIs appear in no theorem.
+The record-facing Rust consumer is `dyck_stack::verify_record`: it computes the
+same public inputs and checks the main proof degree before calling the served
+verifier. The native codec correspondence is differential-tested on honest
+words; a verified Lean-to-Rust extraction theorem is not asserted here.
 
-## What is proved
+Residuals: full descriptor satisfaction, chip-table soundness and narrow/wide
+wiring, canonical field cells and table/route PIs, initial symbol S, and
+`recordCore.length < p`. The record must have the deterministic row count;
+the verifier enforces it. This is soundness of the stronger record-facing
+relation, not a completeness/unique-parse theorem for every raw descriptor
+trace. `dyck_bound_or_collides` retains the two-trace form, explicitly requiring
+first-done rows with successors, equal row counts, and n < p. The old
+`dyck_bound` and `dyck_route_binds_rows` are ideal injective-hash compatibility
+lemmas, NOT finite-digest collision reductions.
 
-  * `dyck_route_eq_fold` — `pi[route] = chainFold pi[table] (entry-hash column)`: the two chip
-    lookups (sound chip table), the copy-forward window, the seed and route pins.
-  * `dyck_route_binds_rows` — two satisfying traces with the same `table` and `route` PIs and the
-    same length have the same entry preimage `(RULE_ID, STACK0, INPUT_TOKEN, LANE_ZERO)` on every
-    row (CR through the fold, then through each entry).
-  * ⚑ `dyck_route_binds_word` — and therefore the same halting row and the same PARSED WORD: on a
-    transition row the selectors are a function of `STACK0` (`S` ↔ rule, `op`/`cl` ↔ term,
-    `EMPTY` ↔ done), so the decoded word is a function of the bound column.
-  * ⚑ `dyck_bound` — the content-bound statement: the parsed word is accepted by the Dyck replay
-    AND any other satisfying trace with the same `(table, route, length)` parses the same word.
-    For an intended record `E` read by a reference trace with those publics, this trace reads `E`.
-
-## Finding: the route cannot be recomputed from the record [READ]
-
-`RULE_ID` is constrained only on rule rows and `INPUT_TOKEN` only on term rows (every tooth on them
-is gated by `IS_RULE` / `IS_TERM`), yet both enter every row's entry hash. So two honest parses of
-one word can publish different routes, and a verifier holding the record cannot compute the route
-it should expect: there is no function `record ↦ route` for this descriptor, and the bound
-statement above is in the two-trace (anchor) form, not the `commit w = c` form. What the AIR would
-need for the record form: two gates `(1 − IS_RULE)·RULE_ID` and `(1 − IS_TERM)·INPUT_TOKEN` (the
-free cells pinned to zero off their rows), plus a fixed padding rule after `done`; then
-`route = chainFold table (canonical entries of w)` is a function of `w`. Not added here.
-
-## Falsifier (§4, kernel-checked)
-
-The projection `dyckDesc` (the record-ignoring acceptance: same parse teeth, no chain) accepts the
-shipped `"[]"` parse with `pi[route] = 0` AND with `pi[route] = 1` (`proj_accepts_route0`,
-`proj_accepts_route1`), and the unbound replay theorem fires on both. Under the bound descriptor the
-route is a function of the rows (`route_function_of_rows`), so at most one of the two claims can be
-the route of that parse.
-
-## NOT claimed
-  * No satisfying witness of the FULL `dyckParseDesc` (with its chip table) is constructed here; the
-    binding theorems' chain hypotheses (`ChipTableSound`, `CollisionFree`, the PI canonicality) are
-    the ones `DfaRoutingRung2` inhabits for the routing chain, and the parse teeth are inhabited by
-    `DyckStackRefine.witTrace`. A full-descriptor witness is the named follow-up.
-  * The grammar is the single-nesting `S → [S] | ε` (one word per even length), so `input_len`
-    alone already determines an accepted word [INFERRED from the grammar; not proved here]; the
-    route binds the derivation (rules and junk cells), which is what a general grammar needs.
-
-## Axiom hygiene
-`#assert_all_clean` ⊆ {propext, Classical.choice, Quot.sound}. NEW file; imports read-only.
+Joint inhabitation: `fullWit_satisfies` supplies the full eight-row bracket
+trace and a sound chip table for zeroHash; `fullWit_record_fires` instantiates
+all one-trace theorem premises and excludes its exact collision branch.
+`fullForged_weak_accepts` / `fullForged_strong_refuses` change only the route PI
+of that same populated trace. Its chip/canonicality envelopes still hold.
 -/
 import Dregg2.Circuit.Emit.DyckStackReplay
-import Dregg2.Circuit.Emit.DfaRoutingRung2
+import Dregg2.Circuit.Emit.DfaRoutingChainBound
 
 namespace Dregg2.Circuit.Emit.DyckStackBound
 
@@ -238,7 +213,7 @@ theorem dyck_route_eq_fold {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin
 
 /-! ## §2 — Binding: the publics determine the entry preimages, hence the parsed word. -/
 
-/-- ⚑ **`dyck_route_binds_rows`** — two satisfying traces with the same `table` / `route` PIs and
+/-- Ideal injective-hash compatibility lemma: two satisfying traces with the same `table` / `route` PIs and
 the same length have the same entry preimage on every row. -/
 theorem dyck_route_binds_rows {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
     {maddrs : List ℤ} {t₁ t₂ : VmTrace}
@@ -282,6 +257,43 @@ theorem dyck_route_binds_rows {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {m
     | cons b bs =>
       simp only [List.map_cons, List.cons.injEq] at hE ⊢
       exact ⟨hinj _ _ hE.1, ih bs hE.2⟩
+
+/-- The collision extractor names the two actual route chains, including their seed. -/
+def routeFind (hash : List ℤ → ℤ) (t₁ t₂ : VmTrace) : List ℤ × List ℤ :=
+  DfaRoutingChainBound.chainFind hash (t₁.pub DyckStackEmit.PI_TABLE)
+    (t₁.rows.map pre) (t₂.rows.map pre)
+
+/-- Route binding with a local, named collision residual; no globally injective finite hash. -/
+theorem dyck_route_binds_rows_or_collides {hash : List ℤ → ℤ} {minit : ℤ → ℤ}
+    {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t₁ t₂ : VmTrace}
+    (h₁ : Satisfied2 hash DyckStackEmit.dyckParseDesc minit mfin maddrs t₁)
+    (h₂ : Satisfied2 hash DyckStackEmit.dyckParseDesc minit mfin maddrs t₂)
+    (hc₁ : ChipTableSound hash (t₁.tf .poseidon2)) (hc₂ : ChipTableSound hash (t₂.tf .poseidon2))
+    (hw₁ : t₁.tf poseidon2narrow = narrowTable (t₁.tf .poseidon2))
+    (hw₂ : t₂.tf poseidon2narrow = narrowTable (t₂.tf .poseidon2))
+    (hk₁ : DyckCanon t₁) (hk₂ : DyckCanon t₂) (hp₁ : ChainPiCanon t₁) (hp₂ : ChainPiCanon t₂)
+    (hne : t₁.rows ≠ []) (hlen : t₁.rows.length = t₂.rows.length)
+    (htab : t₁.pub DyckStackEmit.PI_TABLE = t₂.pub DyckStackEmit.PI_TABLE)
+    (hroute : t₁.pub DyckStackEmit.PI_ROUTE = t₂.pub DyckStackEmit.PI_ROUTE) :
+    t₁.rows.map pre = t₂.rows.map pre ∨
+      Dregg2.Circuit.Poseidon2Binding.SpongeColl hash (routeFind hash t₁ t₂) := by
+  have hne₂ : t₂.rows ≠ [] := by
+    intro h; rw [h] at hlen; exact hne (List.length_eq_zero_iff.mp hlen)
+  have f₁ := dyck_route_eq_fold h₁ hc₁ hw₁ hk₁ hp₁ hne
+  have f₂ := dyck_route_eq_fold h₂ hc₂ hw₂ hk₂ hp₂ hne₂
+  have entries : ∀ {t : VmTrace}, Satisfied2 hash DyckStackEmit.dyckParseDesc minit mfin maddrs t →
+      ChipTableSound hash (t.tf .poseidon2) → t.tf poseidon2narrow = narrowTable (t.tf .poseidon2) →
+      t.rows.map (· DyckStackEmit.ENTRY_HASH) = (t.rows.map pre).map hash := by
+    intro t hs hc hw
+    rw [List.map_map]
+    apply List.map_congr_left
+    intro a ha
+    obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp ha
+    exact entry_eq hs hc hw hi
+  rw [entries h₁ hc₁ hw₁, chainFold_eq_runningFold] at f₁
+  rw [entries h₂ hc₂ hw₂, chainFold_eq_runningFold] at f₂
+  exact DfaRoutingChainBound.chain_binds_or_collides hash _ _ _ (by simpa using hlen)
+    (by rw [← f₁, hroute, f₂, htab])
 
 /-- On a transition row the term selector is a function of the stack top. -/
 theorem term_iff_top {env : VmRowEnv} (rv : DyckRowValid env) :
@@ -376,7 +388,7 @@ theorem dyck_route_binds_word {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {m
   simp only [List.mem_range'] at hi
   exact htok i (by omega)
 
-/-- ⚑ **`dyck_bound` — THE CONTENT-BOUND STATEMENT for the Dyck parse.** A satisfying trace's
+/-- Ideal injective-hash compatibility lemma. A satisfying trace's
 parsed word is accepted by the Dyck replay, and it is the word of every other satisfying trace with
 the same `(table, route, length)` — in particular of a reference trace reading an intended record. -/
 theorem dyck_bound {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
@@ -401,6 +413,32 @@ theorem dyck_bound {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ �
   have hne : t.rows ≠ [] := by intro h; rw [h] at hn; simp at hn
   have hpre := dyck_route_binds_rows cf ht hg hct hcg hwt hwg hkt hkg hpt hpg hne hlen htab hroute
   exact (dyck_route_binds_word ht hg hkt hkg hpre n m hn hm hdn hln hdm hlm).2
+
+/-- The two-trace content statement with an actual chain collision residual. -/
+theorem dyck_bound_or_collides {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
+    {maddrs : List ℤ} {t g : VmTrace}
+    (ht : Satisfied2 hash DyckStackEmit.dyckParseDesc minit mfin maddrs t) (hg : Satisfied2 hash DyckStackEmit.dyckParseDesc minit mfin maddrs g)
+    (hct : ChipTableSound hash (t.tf .poseidon2)) (hcg : ChipTableSound hash (g.tf .poseidon2))
+    (hwt : t.tf poseidon2narrow = narrowTable (t.tf .poseidon2))
+    (hwg : g.tf poseidon2narrow = narrowTable (g.tf .poseidon2))
+    (hkt : DyckCanon t) (hkg : DyckCanon g) (hpt : ChainPiCanon t) (hpg : ChainPiCanon g)
+    (hlen : t.rows.length = g.rows.length)
+    (htab : t.pub DyckStackEmit.PI_TABLE = g.pub DyckStackEmit.PI_TABLE)
+    (hroute : t.pub DyckStackEmit.PI_ROUTE = g.pub DyckStackEmit.PI_ROUTE)
+    (hpi : t.pub PI_INITIAL = SYM_S)
+    (n m : Nat) (hn : n + 1 < t.rows.length) (hm : m + 1 < g.rows.length) (hnp : n < 2013265921)
+    (hdn : (envAt t n).loc IS_DONE = 1) (hln : ∀ i, i < n → (envAt t i).loc IS_DONE = 0)
+    (hdm : (envAt g m).loc IS_DONE = 1) (hlm : ∀ i, i < m → (envAt g i).loc IS_DONE = 0) :
+    Dregg2.Crypto.CfgCompact.ReplayAccepts Dregg2.Crypto.Cfg.Reference.dyck
+        (rulesOf (decodeRun (decodedWord t n) t (n + 1))) (decodedWord t n) ∧
+      (decodedWord t n = decodedWord g m ∨
+        Dregg2.Circuit.Poseidon2Binding.SpongeColl hash (routeFind hash t g)) := by
+  refine ⟨parse_sat_imp_replay_emit_unconditional ht hkt n hn hnp hpi hdn hln, ?_⟩
+  have hne : t.rows ≠ [] := by intro h; rw [h] at hn; simp at hn
+  rcases dyck_route_binds_rows_or_collides ht hg hct hcg hwt hwg hkt hkg hpt hpg hne hlen htab hroute
+      with hpre | hc
+  · exact Or.inl (dyck_route_binds_word ht hg hkt hkg hpre n m hn hm hdn hln hdm hlm).2
+  · exact Or.inr hc
 
 /-- Under the bound descriptor the route is a function of the rows and the table PI. -/
 theorem route_function_of_rows {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
@@ -431,8 +469,8 @@ theorem proj_accepts (c : ℤ)
     Satisfied2 (fun _ => (0 : ℤ)) dyckDesc (fun _ => 0) (fun _ => (0, 0)) [] (witRoute c) := by
   refine
     { rowConstraints := ?_, rowHashes := ?_, rowRanges := ?_, memAddrsNodup := ?_,
-      memClosed := ?_, memDisciplined := ?_, memBalanced := ?_, memTableFaithful := ?_,
-      mapTableFaithful := ?_ }
+        memClosed := ?_, memDisciplined := ?_, memBalanced := ?_, memTableFaithful := ?_,
+        mapTableFaithful := ?_ }
   · exact witRowConstraints hd
   · intro i _; exact True.intro
   · intro i _ r hr; exact absurd hr List.not_mem_nil
@@ -461,12 +499,416 @@ theorem witRoute_same_rows : (witRoute 0).rows = (witRoute 1).rows ∧
   refine ⟨rfl, rfl, ?_⟩
   decide
 
+/-! ## Record encoding: a fixed parse recipe and a fixed padding policy.
+
+The acceptance wrapper pins both the route and the padded row count computed from
+this record. It does not accept an existential reference trace. Malformed words
+still have an encoding; satisfaction then proves that the word is in the grammar.
+-/
+
+open Dregg2.Crypto.Cfg.Reference (Brk)
+open Dregg2.Crypto.Cfg.Reference.Brk (op cl)
+
+def termPre (x : Brk) : List ℤ := [0, symId x, symId x, 0]
+
+def recordCore : List Brk → List (List ℤ)
+  | [] => [[2,1,0,0]]
+  | op :: w => [1,1,0,0] :: termPre op :: recordCore w
+  | cl :: w => [2,1,0,0] :: (cl :: w).map termPre
+
+/-- At least two done rows: the accepting row has a successor, including when
+its unpadded action count is already a power of two. -/
+def recordRows (w : List Brk) : Nat :=
+  max ((recordCore w).length + 2) (2 ^ (Nat.log2 ((recordCore w).length + 1) + 1))
+
+def recordPre (w : List Brk) : List (List ℤ) :=
+  recordCore w ++ List.replicate (recordRows w - (recordCore w).length) [0,0,0,0]
+
+def routeOf (hash : List ℤ → ℤ) (seed : ℤ) (w : List Brk) : ℤ :=
+  chainFold hash seed ((recordPre w).map hash)
+
+def recordFind (hash : List ℤ → ℤ) (t : VmTrace) (w : List Brk) : List ℤ × List ℤ :=
+  DfaRoutingChainBound.chainFind hash (t.pub DyckStackEmit.PI_TABLE) (t.rows.map pre) (recordPre w)
+
+def preTok (p : List ℤ) : Option Brk :=
+  if p[1]? = some SYM_OP then some op else if p[1]? = some SYM_CL then some cl else none
+
+theorem preTok_termPre (x : Brk) : preTok (termPre x) = some x := by
+  cases x <;> decide
+
+theorem recordCore_decodes (w : List Brk) : (recordCore w).filterMap preTok = w := by
+  induction w with
+  | nil => rfl
+  | cons x w ih =>
+    cases x with
+    | op => simpa [recordCore, List.filterMap_cons, preTok, termPre, symId,
+        SYM_OP, SYM_CL] using congrArg (List.cons op) ih
+    | cl =>
+      simp only [recordCore, List.filterMap_cons, List.filterMap_map]
+      have hz : preTok [2,1,0,0] = none := by decide
+      rw [hz]
+      simp [preTok_termPre]
+
+theorem recordRows_room (w : List Brk) : (recordCore w).length + 2 ≤ recordRows w :=
+  Nat.le_max_left _ _
+
+theorem recordPre_length (w : List Brk) : (recordPre w).length = recordRows w := by
+  simp only [recordPre, List.length_append, List.length_replicate]
+  have := recordRows_room w
+  omega
+
+theorem recordPre_prefix (w : List Brk) : (recordPre w).take (recordCore w).length = recordCore w :=
+  List.take_left
+
+theorem rowTok_pre {t : VmTrace} {i : Nat} (rv : DyckRowValid (envAt t i)) :
+    rowTok t i = preTok (pre (envAt t i).loc) := by
+  by_cases ht : (envAt t i).loc IS_TERM = 1
+  · rcases rv.termTopTerminal ht with h | h
+    · simp [rowTok, ht, tokenBrk, preTok, pre, h, SYM_OP]
+    · simp [rowTok, ht, tokenBrk, preTok, pre, h, SYM_OP, SYM_CL]
+  · have hop : (envAt t i).loc (stk 0) ≠ SYM_OP := fun h => ht ((term_iff_top rv).mpr (.inl h))
+    have hcl : (envAt t i).loc (stk 0) ≠ SYM_CL := fun h => ht ((term_iff_top rv).mpr (.inr h))
+    simp [rowTok, ht, preTok, pre, hop, hcl]
+
+theorem rows_prefix {t : VmTrace} {n : Nat} (hn : n ≤ t.rows.length) :
+    (List.range' 0 n).map (fun i => (envAt t i).loc) = t.rows.take n := by
+  apply List.ext_getElem
+  · simp [hn]
+  · intro i hi hj
+    have hin : i < n := by simpa using hi
+    have hit : i < t.rows.length := by omega
+    simp only [List.getElem_map, List.getElem_range', Nat.one_mul, Nat.zero_add,
+      List.getElem_take, envAt, getD_eq hit]
+
+theorem decodedWord_pre {hash : List ℤ → ℤ} {minit : ℤ → ℤ}
+    {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hs : Satisfied2 hash DyckStackEmit.dyckParseDesc minit mfin maddrs t)
+    (hk : DyckCanon t) (n : Nat) (hn : n < t.rows.length) :
+    decodedWord t n = ((t.rows.map pre).take n).filterMap preTok := by
+  rw [← List.map_take, List.filterMap_map, ← rows_prefix (Nat.le_of_lt hn), List.filterMap_map]
+  unfold decodedWord decodeWordSeg
+  apply List.filterMap_congr
+  intro i hi
+  have hin : i < n := by simpa using hi
+  exact rowTok_pre (parse_dyck_sat_imp_row_valid hs hk i (by omega))
+
+/-- One trace opens the canonical record, or the extractor returns a collision
+on its actual chain and the record's chain. -/
+theorem record_pre_or_collides {hash : List ℤ → ℤ} {minit : ℤ → ℤ}
+    {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hs : Satisfied2 hash DyckStackEmit.dyckParseDesc minit mfin maddrs t)
+    (hc : ChipTableSound hash (t.tf .poseidon2))
+    (hw : t.tf poseidon2narrow = narrowTable (t.tf .poseidon2))
+    (hk : DyckCanon t) (hp : ChainPiCanon t) (w : List Brk)
+    (hlen : t.rows.length = recordRows w)
+    (hr : t.pub DyckStackEmit.PI_ROUTE = routeOf hash (t.pub DyckStackEmit.PI_TABLE) w) :
+    t.rows.map pre = recordPre w ∨
+      Dregg2.Circuit.Poseidon2Binding.SpongeColl hash (recordFind hash t w) := by
+  have hne : t.rows ≠ [] := by
+    intro h; have := recordRows_room w; rw [h] at hlen; simp at hlen; omega
+  have hf := dyck_route_eq_fold hs hc hw hk hp hne
+  have he : t.rows.map (· DyckStackEmit.ENTRY_HASH) = (t.rows.map pre).map hash := by
+    rw [List.map_map]
+    apply List.map_congr_left
+    intro a ha
+    obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp ha
+    exact entry_eq hs hc hw hi
+  rw [he, chainFold_eq_runningFold] at hf
+  apply DfaRoutingChainBound.chain_binds_or_collides
+  · simpa [recordPre_length] using hlen
+  · rw [← hf, hr, routeOf, chainFold_eq_runningFold]
+
+/-- The record-facing acceptance relation: fixed word-to-route and fixed row
+count. The first-done and length envelopes are explicit until derived below. -/
+def BoundAccepts (hash : List ℤ → ℤ) (t : VmTrace) (w : List Brk) : Prop :=
+  Satisfied2 hash DyckStackEmit.dyckParseDesc (fun _ => 0) (fun _ => (0,0)) [] t ∧
+  t.rows.length = recordRows w ∧
+  t.pub DyckStackEmit.PI_ROUTE = routeOf hash (t.pub DyckStackEmit.PI_TABLE) w
+
+/-- The stronger record relation makes the route a function of the word and
+public table seed, including padding; no injectivity assumption is involved. -/
+theorem one_word_one_route {hash : List ℤ → ℤ} {t₁ t₂ : VmTrace} {w : List Brk}
+    (h₁ : BoundAccepts hash t₁ w) (h₂ : BoundAccepts hash t₂ w)
+    (hseed : t₁.pub DyckStackEmit.PI_TABLE = t₂.pub DyckStackEmit.PI_TABLE) :
+    t₁.pub DyckStackEmit.PI_ROUTE = t₂.pub DyckStackEmit.PI_ROUTE := by
+  rw [h₁.2.2, h₂.2.2, hseed]
+
+
+theorem recordCore_nonzero (w : List Brk) :
+    ∀ p ∈ recordCore w, p[1]? ≠ some (0 : ℤ) := by
+  induction w with
+  | nil => simp [recordCore]
+  | cons x w ih =>
+    cases x with
+    | op =>
+      intro p hp
+      simp only [recordCore, List.mem_cons] at hp
+      rcases hp with rfl | rfl | hp
+      · decide
+      · decide
+      · exact ih p hp
+    | cl =>
+      intro p hp
+      simp only [recordCore, List.mem_cons] at hp
+      rcases hp with rfl | hp
+      · decide
+      · obtain ⟨x, _, rfl⟩ := List.mem_map.mp hp
+        cases x <;> decide
+
+theorem recordPre_done (w : List Brk) :
+    (recordPre w)[(recordCore w).length]? = some [0,0,0,0] := by
+  have hroom := recordRows_room w
+  simp [recordPre, show
+    0 < recordRows w - (recordCore w).length by omega]
+
+/-- One-trace record soundness. All premises refer to the actual proof trace;
+there is no supplied honest trace and no global collision-free hash assumption. -/
+theorem boundAccepts_sound {hash : List ℤ → ℤ} {t : VmTrace} {w : List Brk}
+    (h : BoundAccepts hash t w) (hc : ChipTableSound hash (t.tf .poseidon2))
+    (hw : t.tf poseidon2narrow = narrowTable (t.tf .poseidon2))
+    (hk : DyckCanon t) (hp : ChainPiCanon t)
+    (hpi : t.pub PI_INITIAL = SYM_S) (hnp : (recordCore w).length < 2013265921) :
+    (decodedWord t (recordCore w).length = w ∧
+      Dregg2.Crypto.CfgCompact.ReplayAccepts Dregg2.Crypto.Cfg.Reference.dyck
+        (rulesOf (decodeRun w t ((recordCore w).length + 1))) w) ∨
+      Dregg2.Circuit.Poseidon2Binding.SpongeColl hash (recordFind hash t w) := by
+  rcases record_pre_or_collides h.1 hc hw hk hp w h.2.1 h.2.2 with he | hcoll
+  · left
+    have hroom : (recordCore w).length + 1 < t.rows.length := by
+      have := recordRows_room w
+      have hlen := h.2.1
+      omega
+    have hread := decodedWord_pre h.1 hk (recordCore w).length (by omega)
+    rw [he, recordPre_prefix, recordCore_decodes] at hread
+    have rowPreAt : ∀ i, i < t.rows.length →
+        some (pre (envAt t i).loc) = (recordPre w)[i]? := by
+      intro i hi
+      have hq := congrArg (fun l : List (List ℤ) => l[i]?) he
+      simpa only [List.getElem?_map, List.getElem?_eq_getElem hi, Option.map_some,
+        envAt, getD_eq hi] using hq
+    have hd : (envAt t (recordCore w).length).loc IS_DONE = 1 := by
+      apply (done_iff_top (parse_dyck_sat_imp_row_valid h.1 hk _ hroom)).mpr
+      have hx := rowPreAt (recordCore w).length (by omega)
+      rw [recordPre_done] at hx
+      have heq := Option.some.inj hx
+      have := congrArg (fun p : List ℤ => p[1]?) heq
+      simpa [pre, SYM_EMPTY] using this
+    have hl : ∀ i, i < (recordCore w).length → (envAt t i).loc IS_DONE = 0 := by
+      intro i hi
+      have hit : i < t.rows.length := by omega
+      have rv := parse_dyck_sat_imp_row_valid h.1 hk i (by omega)
+      rcases rv.kindsBoolean.2.2 with hz | ho
+      · exact hz
+      · exfalso
+        have hx := rowPreAt i hit
+        have hcget : (recordPre w)[i]? = some ((recordCore w)[i]'hi) := by
+          simp [recordPre, List.getElem?_append, hi]
+        rw [hcget] at hx
+        have hpeq := Option.some.inj hx
+        have hnz := recordCore_nonzero w _ (List.getElem_mem hi)
+        rw [← hpeq] at hnz
+        exact hnz (by simp [pre, (rv.doneEmpty ho).1, SYM_EMPTY])
+    refine ⟨hread, ?_⟩
+    have hr := parse_sat_imp_replay_emit_unconditional h.1 hk (recordCore w).length hroom hnp hpi hd hl
+    rwa [hread] at hr
+  · exact Or.inr hcoll
+
+/-! ## Joint witness of the full served descriptor and its chain envelopes. -/
+
+/-- A deliberately collision-prone hash suffices for joint inhabitation: no global
+injectivity assumption is smuggled into the witness. -/
+def zeroHash (_ : List ℤ) : ℤ := 0
+
+def fullInputs : List (List ℤ) :=
+  [[1,1,0,0], [0,2,2,0], [2,1,0,0], [0,3,3,0], [0,0,0,0], [0,0]]
+
+def fullChip : Table := fullInputs.map (fun ins => chipRow zeroHash ins (List.replicate 7 0))
+
+def fullTf : TraceFamily := fun id => match id with
+  | .poseidon2 => fullChip
+  | .custom 3 => narrowTable fullChip
+  | _ => []
+
+def fullWit : VmTrace := { witTrace with tf := fullTf }
+
+theorem fullWit_chipSound : ChipTableSound zeroHash (fullWit.tf .poseidon2) := by
+  intro r hr
+  obtain ⟨ins, hi, rfl⟩ := List.mem_map.mp hr
+  refine ⟨ins, List.replicate 7 0, ?_, by decide, rfl⟩
+  simp only [fullInputs, List.mem_cons, List.not_mem_nil, or_false] at hi
+  rcases hi with rfl | rfl | rfl | rfl | rfl | rfl <;> decide
+
+theorem fullWit_wire : fullWit.tf poseidon2narrow = narrowTable (fullWit.tf .poseidon2) := rfl
+
+theorem fullWit_canon : DyckCanon fullWit := ⟨witTrace_canon.cells⟩
+
+theorem fullWit_piCanon : ChainPiCanon fullWit := by
+  constructor <;> decide
+
+set_option maxRecDepth 100000 in
+set_option maxHeartbeats 4000000 in
+theorem fullWit_satisfies :
+    Satisfied2 zeroHash DyckStackEmit.dyckParseDesc (fun _ => 0) (fun _ => (0,0)) [] fullWit := by
+  have hm := memLog_nil_of dyckParseDesc_memOps fullWit
+  have hp := mapLog_nil_of dyckParseDesc_mapOps fullWit
+  refine
+    { rowConstraints := ?_, rowHashes := ?_, rowRanges := ?_, memAddrsNodup := List.nodup_nil,
+      memClosed := ?_, memDisciplined := ?_, memBalanced := ?_, memTableFaithful := ?_,
+      mapTableFaithful := ?_ }
+  · have hd : Dregg2.Circuit.DecideSatisfied2.decideRowConstraints2
+        (fun _ _ => false) zeroHash DyckStackEmit.dyckParseDesc fullWit = true := by decide
+    rw [Dregg2.Circuit.DecideSatisfied2.decideRowConstraints2, List.all_eq_true] at hd
+    intro i hi c hc
+    have h2 := hd i (List.mem_range.mpr hi)
+    rw [List.all_eq_true] at h2
+    exact holdsAt_of_dc2 (h2 c hc)
+  · intro i _; trivial
+  · intro i _ r hr; exact absurd hr List.not_mem_nil
+  · intro op hop; rw [hm] at hop; exact absurd hop List.not_mem_nil
+  · rw [hm]; decide
+  · rw [hm]; decide
+  · rw [hm]; rfl
+  · rw [hp]; rfl
+
+/-- The exact extractor, on the exact satisfying trace, has no collision branch. -/
+theorem fullWit_no_collision :
+    ¬ Dregg2.Circuit.Poseidon2Binding.SpongeColl zeroHash (routeFind zeroHash fullWit fullWit) := by
+  intro h
+  exact h.1 (DfaRoutingChainBound.chainFind_self _ _ _)
+
+/-- The full descriptor's bound theorem fires on the nonempty bracket word,
+with its collision branch disproved for this exact pair of chains. -/
+theorem fullWit_binding_fires :
+    Dregg2.Crypto.CfgCompact.ReplayAccepts Dregg2.Crypto.Cfg.Reference.dyck
+      (rulesOf (decodeRun [Dregg2.Crypto.Cfg.Reference.Brk.op, Dregg2.Crypto.Cfg.Reference.Brk.cl]
+        fullWit 5)) [Dregg2.Crypto.Cfg.Reference.Brk.op, Dregg2.Crypto.Cfg.Reference.Brk.cl] := by
+  have h := dyck_bound_or_collides fullWit_satisfies fullWit_satisfies
+    fullWit_chipSound fullWit_chipSound fullWit_wire fullWit_wire fullWit_canon fullWit_canon
+    fullWit_piCanon fullWit_piCanon rfl rfl rfl rfl 4 4 (by decide) (by decide) (by decide)
+    (by decide) (by intro i hi; interval_cases i <;> decide)
+    (by decide) (by intro i hi; interval_cases i <;> decide)
+  exact h.1
+
+theorem fullWit_record : BoundAccepts zeroHash fullWit [op, cl] :=
+  ⟨fullWit_satisfies, by decide, by decide⟩
+
+theorem fullWit_record_no_collision :
+    ¬ Dregg2.Circuit.Poseidon2Binding.SpongeColl zeroHash (recordFind zeroHash fullWit [op,cl]) := by
+  have he : fullWit.rows.map pre = recordPre [op,cl] := by decide
+  intro hc
+  apply hc.1
+  simp only [recordFind, ← he]
+  exact DfaRoutingChainBound.chainFind_self _ _ _
+
+/-- The one-trace record theorem fires with every premise jointly instantiated. -/
+theorem fullWit_record_fires : decodedWord fullWit 4 = [op,cl] ∧
+    Dregg2.Crypto.CfgCompact.ReplayAccepts Dregg2.Crypto.Cfg.Reference.dyck
+      (rulesOf (decodeRun [op,cl] fullWit 5)) [op,cl] :=
+  (boundAccepts_sound fullWit_record fullWit_chipSound fullWit_wire fullWit_canon
+    fullWit_piCanon rfl (by decide)).resolve_right fullWit_record_no_collision
+
+/-- Alter only the route PI of the fully populated witness. -/
+def fullForged : VmTrace := { fullWit with pub := (witRoute 1).pub }
+
+/-- The hash-erasing projection really accepts the forged claim. -/
+theorem fullForged_weak_accepts :
+    Satisfied2 zeroHash dyckDesc (fun _ => 0) (fun _ => (0,0)) [] fullForged := by
+  have hm := memLog_nil_of dyckDesc_memOps fullForged
+  have hp := mapLog_nil_of dyckDesc_mapOps fullForged
+  refine
+    { rowConstraints := witRowConstraints (by decide), rowHashes := ?_, rowRanges := ?_,
+      memAddrsNodup := List.nodup_nil, memClosed := ?_, memDisciplined := ?_, memBalanced := ?_,
+      memTableFaithful := ?_, mapTableFaithful := ?_ }
+  · intro i _; trivial
+  · intro i _ r hr; exact absurd hr List.not_mem_nil
+  · intro op hop; rw [hm] at hop; exact absurd hop List.not_mem_nil
+  · rw [hm]; decide
+  · rw [hm]; decide
+  · rw [hm]; rfl
+  · rw [hp]; rfl
+
+/-- The same claim is refused by the full served descriptor's route boundary. -/
+theorem fullForged_strong_refuses :
+    ¬ Satisfied2 zeroHash DyckStackEmit.dyckParseDesc (fun _ => 0) (fun _ => (0,0)) [] fullForged := by
+  intro hs
+  have h := hs.rowConstraints 7 (by decide) _ mem_route
+  have hf : (7 + 1 == fullForged.rows.length) = true := by decide
+  have bad : (0 : ℤ) ≡ 1 [ZMOD 2013265921] := h hf
+  norm_num [Int.ModEq] at bad
+
+/-- The refusal does not escape through an unsatisfied chip/canonicality envelope. -/
+theorem fullForged_envelopes : ChipTableSound zeroHash (fullForged.tf .poseidon2) ∧
+    fullForged.tf poseidon2narrow = narrowTable (fullForged.tf .poseidon2) ∧
+    DyckCanon fullForged ∧ ChainPiCanon fullForged :=
+  ⟨fullWit_chipSound, fullWit_wire, ⟨fullWit_canon.cells⟩, by constructor <;> decide⟩
+
 /-! ## §5 — axiom tripwires. -/
+
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.dyck_route_binds_rows_or_collides' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in
+#print axioms dyck_route_binds_rows_or_collides
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.dyck_bound_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms dyck_bound_or_collides
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.boundAccepts_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms boundAccepts_sound
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.one_word_one_route' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms one_word_one_route
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.fullWit_satisfies' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms fullWit_satisfies
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.fullWit_record_fires' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms fullWit_record_fires
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.fullWit_record_no_collision' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms fullWit_record_no_collision
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.fullForged_weak_accepts' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms fullForged_weak_accepts
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.fullForged_strong_refuses' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms fullForged_strong_refuses
+/-- info: 'Dregg2.Circuit.Emit.DyckStackBound.fullForged_envelopes' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms fullForged_envelopes
+
 
 #assert_all_clean [chainFold_eq_runningFold, mem_entry, mem_running, mem_copy, mem_seed, mem_route,
   getD_eq, entry_eq, running_eq, eq_of_canon, last_running_fold, dyck_route_eq_fold,
   dyck_route_binds_rows, term_iff_top, done_iff_top, dyck_route_binds_word, dyck_bound,
   route_function_of_rows, witRoute_mem, witRoute_map, proj_accepts, proj_accepts_route0,
-  proj_accepts_route1, witRoute_same_rows]
+  proj_accepts_route1, witRoute_same_rows,
+  dyck_route_binds_rows_or_collides,
+  dyck_bound_or_collides,
+  recordCore_decodes,
+  recordRows_room,
+  recordPre_length,
+  recordPre_prefix,
+  rowTok_pre,
+  rows_prefix,
+  decodedWord_pre,
+  record_pre_or_collides,
+  one_word_one_route,
+  recordCore_nonzero,
+  recordPre_done,
+  boundAccepts_sound,
+  fullWit_chipSound,
+  fullWit_wire,
+  fullWit_canon,
+  fullWit_piCanon,
+  fullWit_satisfies,
+  fullWit_no_collision,
+  fullWit_binding_fires,
+  fullWit_record,
+  fullWit_record_no_collision,
+  fullWit_record_fires,
+  fullForged_weak_accepts,
+  fullForged_strong_refuses,
+  fullForged_envelopes]
 
 end Dregg2.Circuit.Emit.DyckStackBound

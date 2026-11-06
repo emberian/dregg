@@ -10,6 +10,39 @@ and it is a leftmost-derivation replay (a CFG certificate, `05`), not a VPA run.
 the grammar it targets is `{[ᵏ ]ᵏ}`, not the Dyck language. With the descriptor's depth bound, the
 circuit's language is finite.
 
+## 2026-11-06 record-binding repair (initiative 1)
+
+[READ] `DyckStackBound.boundAccepts_sound` now binds one proof trace to the caller's
+record. It recomputes canonical rule/terminal entry preimages and deterministic
+power-of-two padding, and checks the route and main-row count. Its conclusion is
+record equality plus grammar replay, or the named `recordFind` collision on those
+two actual chains. It needs no reference trace or globally injective hash. The
+first-done row and live prefix are derived from the record encoding. Residuals are
+chip soundness/wiring, field and PI canonicality, initial S and core length < p.
+The older globally injective `dyck_bound` remains an explicitly ideal lemma;
+`dyck_bound_or_collides` supplies its named-collision replacement.
+
+[READ] The served descriptor gains two inverse-selector gates and four last-row
+zero boundaries: ordinary gates skip the final row although the hash lookups do
+not. Width stays 24, public inputs stay four, constraints increase **79 → 85**,
+and hashes stay two per row. `DyckStackEmit.constraint_count` is a named kernel
+fact. `fullWit_satisfies`, `fullWit_record_fires` and the exact collision-exclusion
+lemma jointly instantiate the full statement; a route-only forgery has weak
+acceptance, full-descriptor refusal, and inhabited chip/canonicality envelopes.
+
+[READ] `circuit::dsl::dyck_stack::verify_record` computes public inputs from the
+record and checks the proof's main degree against its expected padded height.
+The Rust codec/Lean encoding correspondence is tested on shipped words, not yet
+an extraction theorem. Canonical padding requires a successor after the first
+done: `[ ]` stays eight rows (16 permutations); `[[ ]]` changes eight → sixteen
+rows (16 → 32 permutations). This is a deliberate cost for meeting the current
+replay theorem's successor envelope; removing that envelope would recover the
+old eight-row nested trace. The raw descriptor interface remains available;
+record-binding claims belong to the record-facing verifier.
+
+The sections below retain the original survey's broader VPA/design discussion;
+its projection-only milestone is superseded by the binding repair above.
+
 ## 1. Semantics object (Lean)
 
 General VPA, `M/Crypto/VpaAsCert.lean` [READ], verbatim (doc comments elided):
@@ -135,7 +168,7 @@ be swapped [INFERRED].
 ```
 #guard dyckParseDesc.traceWidth == DYCK_WIDTH          -- DYCK_WIDTH = 24
 #guard dyckParseDesc.piCount == 4
-#guard dyckParseDesc.constraints.length == 79
+theorem constraint_count : dyckParseDesc.constraints.length = 85 := rfl
 #guard DYCK_WIDTH + 2 * (CHIP_OUT_LANES - 1) == 38
 ```
 
@@ -307,9 +340,9 @@ Lean `decidable_template_equivalence` is a mechanization of Alur–Madhusudan.
 | Dyck replay descriptor (`{[ᵏ]ᵏ | k ≤ 3}` [INFERRED]) | `DyckStackEmit.lean`, served by `descriptor_by_name` | L4 deployed |
 | `parse_sat_imp_replay_emit_unconditional` | `DyckStackReplay.lean:934` | L1, violates L0 |
 | `VAlphabet`/`VpaOver`, memory-stack VPA run | proposed | L0 |
-| `parse_sat_imp_replay_routed`, `parse_sat_imp_replay_bound`, splice pair | proposed | L0 |
+| `boundAccepts_sound`, full-descriptor witness and weak/strong splice pair | `DyckStackBound.lean`; `dyck_stack::verify_record` | record-facing implementation, served tests pending |
 
 **Milestone:** prove `parse_sat_imp_replay_routed` (leg 1, no descriptor change) with the splice pair
 `dyck_splice_meets_unbound` / `dyck_splice_fails_bound`, and pin the depth finding with two Rust tests
-(`k = 3` proves, `k = 4` refused) next to the existing `#guard ... constraints.length == 79`. Rung L1
+(`k = 3` proves, `k = 4` refused) next to the named `constraint_count` fact. Rung L1
 for the theorem, L3 for the pinned bound. The number to report: the maximum accepted `k`, predicted 3.

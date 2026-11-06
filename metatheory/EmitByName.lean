@@ -49,6 +49,10 @@ import Dregg2.Circuit.Emit.DerivationEmit
 import Dregg2.Circuit.Emit.DfaRoutingEmit
 import Dregg2.Circuit.Emit.DfaRoutingGeneralEmit
 import Dregg2.Circuit.Emit.SolvencyLeafEmit
+import Dregg2.Circuit.Emit.DecoLeafEmit
+import Dregg2.Circuit.Emit.CaveatAdmissionEmit
+import Dregg2.Circuit.Emit.DfaRoutingTableRoute8
+import Dregg2.Circuit.Emit.AttestedAutomatonRoute8
 import Dregg2.Circuit.Emit.TupleBindingEmit
 import Dregg2.Circuit.Emit.DfaRoutingTableEmit
 import Dregg2.Circuit.Emit.DyckStackEmit
@@ -716,6 +720,14 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
     -- the test suite by hand-copy. `descriptor_by_name.rs` dispatches none of them — same standing
     -- as `dyck-parse.json` and `mina-fixture.json` above: the routing table is a SUPERSET of the
     -- dispatch table by design, and routing is what makes a byte-pin re-derivable.
+  , ("deco-commitment-leaf.json",
+      Dregg2.Circuit.Emit.DecoLeafEmit.decoDescriptor)
+  , ("caveat-admission-leaf.json",
+      Dregg2.Circuit.Emit.CaveatAdmissionEmit.descriptor)
+  , ("dfa-routing-table-route8-bound-v1.json",
+      Dregg2.Circuit.Emit.DfaRoutingTableRoute8.demoBoundDesc)
+  , ("attested-automaton-map-committed-weld8-bound-v1.json",
+      Dregg2.Circuit.Emit.AttestedAutomatonRoute8.weldBoundInstance)
   , ("solvency-leaf-v2.json",
       Dregg2.Circuit.Emit.SolvencyLeafEmit.solvencyDescriptor)
   , ("dfa-routing-injection.json",
@@ -823,7 +835,7 @@ Both directions are gated outside Lean:
 -- the same edit as the row, which is the discipline the six notes above were each paid for.
 -- ⚑ 133 = 132 + `attested-automaton-map-committed-weld8-v1.json`. Rows and pin are one atom.
 set_option maxRecDepth 8000 in
-theorem byNameDescriptors_length : byNameDescriptors.length = 140 := rfl
+theorem byNameDescriptors_length : byNameDescriptors.length = 144 := rfl
 
 def main : IO Unit := do
   for (file, d) in byNameDescriptors do

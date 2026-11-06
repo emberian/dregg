@@ -248,3 +248,130 @@ fn weld8_range_tooth_refuses_out_of_domain_state() {
     .expect("the in-range control must prove");
     verify_vm_descriptor2(&d, &proof, &ok_pis).expect("the in-range control must verify");
 }
+
+// The legacy descriptor above remains a useful weak control. The bound variant is authored by
+// the shared Lean RouteChain8 decorator; this code only supplies its witness columns.
+const BOUND_NAME: &str = "dregg-attested-automaton::map-committed-weld8-bound-v1";
+const ROUTE_DOMAIN: u32 = 1_464_159_288;
+const BOUND_WIDTH: usize = WIDTH + 17;
+const BOUND_PI_COUNT: usize = PI_COUNT + 9;
+
+fn route_config() -> dregg_circuit::route_chain8_witness::Route8Config {
+    dregg_circuit::route_chain8_witness::Route8Config {
+        base_width: WIDTH,
+        base_pi_count: PI_COUNT,
+        current: CURRENT,
+        symbol: SYMBOL,
+        next: NEXT,
+        domain: ROUTE_DOMAIN,
+    }
+}
+
+fn bound_trace_and_pis(
+    rows: &[(u32, u32, u32)],
+    root: &[BabyBear; 8],
+) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+    let mut trace = trace_of(rows, root);
+    let mut pis = pis_of(rows, root);
+    dregg_circuit::route_chain8_witness::extend_route8(&mut trace, &mut pis, route_config(), *root)
+        .expect("the record has canonical length and the base witness has the declared shape");
+    assert_eq!(pis.len(), BOUND_PI_COUNT);
+    (trace, pis)
+}
+
+#[test]
+fn weld8_bound_record_route_and_length_are_public() {
+    let d = descriptor_by_name(BOUND_NAME).expect("the content-bound weld must dispatch by name");
+    check_descriptor2_wellformed(&d).expect("full-width route decorator is admitted");
+    assert_eq!(
+        (d.trace_width, d.public_input_count),
+        (BOUND_WIDTH, BOUND_PI_COUNT)
+    );
+    let heap = heap_of(1, |_s, _y| 0);
+    let root = CanonicalHeapTree8::new(heap.clone(), HEAP_TREE_DEPTH)
+        .root8()
+        .limbs();
+    let rows = run(|_s, _y| 0, 0, &[0, 1]);
+    let swapped = run(|_s, _y| 0, 0, &[1, 0]);
+    // Weak accepts: the legacy public face erases this word substitution.
+    assert_eq!(pis_of(&rows, &root), pis_of(&swapped, &root));
+    let (trace, pis) = bound_trace_and_pis(&rows, &root);
+    let (other_trace, other_pis) = bound_trace_and_pis(&swapped, &root);
+    assert_ne!(
+        &pis[PI_COUNT..PI_COUNT + 8],
+        &other_pis[PI_COUNT..PI_COUNT + 8]
+    );
+    let proof = prove_vm_descriptor2(
+        &d,
+        &trace,
+        &pis,
+        &MemBoundaryWitness::default(),
+        std::slice::from_ref(&heap),
+    )
+    .expect("the root-seeded bound run proves");
+    // Actual record-aware verification holds the proof and public statement fixed. Omitting
+    // this record opening is the weak relation; supplying the wrong record must refuse.
+    dregg_circuit::route_chain8_witness::verify_route8_record(
+        &d,
+        &proof,
+        &pis,
+        route_config(),
+        root,
+        BabyBear::ZERO,
+        &[BabyBear::ZERO, BabyBear::ONE],
+        |_s, _y| Ok(BabyBear::ZERO),
+    )
+    .expect("the honest record opens this proof's published route and length");
+    assert!(
+        dregg_circuit::route_chain8_witness::verify_route8_record(
+            &d,
+            &proof,
+            &pis,
+            route_config(),
+            root,
+            BabyBear::ZERO,
+            &[BabyBear::ONE, BabyBear::ZERO],
+            |_s, _y| Ok(BabyBear::ZERO),
+        )
+        .is_err(),
+        "the same proof and public statement must refuse a substituted record"
+    );
+    dregg_circuit::route_chain8_witness::verify_route8(&d, &proof, &pis, route_config())
+        .expect("the bound run verifies");
+    for lane in 0..8 {
+        let mut wrong = pis.clone();
+        wrong[PI_COUNT + lane] += BabyBear::ONE;
+        assert!(
+            dregg_circuit::route_chain8_witness::verify_route8(&d, &proof, &wrong, route_config())
+                .is_err(),
+            "route lane {lane} is public"
+        );
+    }
+    let mut wrong_len = pis.clone();
+    wrong_len[PI_COUNT + 8] += BabyBear::ONE;
+    assert!(
+        dregg_circuit::route_chain8_witness::verify_route8(&d, &proof, &wrong_len, route_config())
+            .is_err()
+    );
+    // Strong refuses: both records have real proofs, but one cannot be substituted at the other's
+    // statement even though initial state, final state, automaton root and length are identical.
+    let other_proof = prove_vm_descriptor2(
+        &d,
+        &other_trace,
+        &other_pis,
+        &MemBoundaryWitness::default(),
+        &[heap],
+    )
+    .expect("the alternate record proves at its own commitment");
+    dregg_circuit::route_chain8_witness::verify_route8(
+        &d,
+        &other_proof,
+        &other_pis,
+        route_config(),
+    )
+    .expect("alternate record verifies");
+    assert!(
+        dregg_circuit::route_chain8_witness::verify_route8(&d, &other_proof, &pis, route_config())
+            .is_err()
+    );
+}

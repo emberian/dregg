@@ -708,3 +708,6 @@ pub use schnorr_sig::{
     SchnorrPublicKey, SchnorrSecretKey, SchnorrSignature, compress_public_key, schnorr_keygen,
     schnorr_sign, schnorr_verify,
 };
+
+/// Witness construction for the Lean-authored full-width ordered-route decorator.
+pub mod route_chain8_witness;

@@ -100,9 +100,14 @@ const STATIC_GOLDENS: &[(&str, &str)] = &[
     // words that re-use a transition, not soundness (the refinement consumes only the row
     // constraints + table faithfulness). The checked-in instance declares the single transition
     // `(0, 1, 1)`; a wider automaton needs its own emitted instance of the same Lean family.
+    // Legacy shape: binds an edge multiset and endpoints, but not the ordered word.
     (
         "dregg-dfa-routing-table::exact-public-v1",
         DFA_ROUTING_TABLE_EXACT_PUBLIC_JSON,
+    ),
+    (
+        "dregg-dfa-routing-table::route8-bound-v1",
+        DFA_ROUTING_TABLE_ROUTE8_JSON,
     ),
     (
         "dregg-temporal-predicate-gte::dsl-v1",
@@ -179,6 +184,10 @@ const STATIC_GOLDENS: &[(&str, &str)] = &[
     (
         "dregg-attested-automaton::map-committed-weld8-v1",
         ATTESTED_AUTOMATON_WELD8_JSON,
+    ),
+    (
+        "dregg-attested-automaton::map-committed-weld8-bound-v1",
+        ATTESTED_AUTOMATON_WELD8_BOUND_JSON,
     ),
     // The automatafl board-transition automaton-step (D1) descriptors — the Lean-emitted
     // `automataflStepDescN {2,11}` (`AutomataflStepEmit.lean`), packed-felt board commitment,
@@ -409,6 +418,8 @@ pub use crate::note_spend_witness::{NOTE_SPEND_LEAF_NAME, note_spend_leaf_descri
 // ---- The predicate-descriptor goldens: `include_str!` of the by-name files each Lean `#guard`
 // ---- emits and `scripts/emit-descriptors.sh` re-derives (see the module header). ----
 const DFA_ROUTING_JSON: &str = include_str!("../descriptors/by-name/dfa-routing.json");
+const DFA_ROUTING_TABLE_ROUTE8_JSON: &str =
+    include_str!("../descriptors/by-name/dfa-routing-table-route8-bound-v1.json");
 const DFA_ROUTING_TABLE_EXACT_PUBLIC_JSON: &str =
     include_str!("../descriptors/by-name/dfa-routing-table-exact-public-v1.json");
 const TEMPORAL_PREDICATE_JSON: &str =
@@ -535,6 +546,8 @@ const DYCK_PARSE_JSON: &str = include_str!("../descriptors/by-name/dyck-parse.js
 /// and re-derived onto `by-name/` by `EmitByName.lean`: one `map_op` read of the edge
 /// `2·current + symbol ↦ next` against an 8-column root group pinned to PIs 2..9, plus the two
 /// graduated range lookups.
+const ATTESTED_AUTOMATON_WELD8_BOUND_JSON: &str =
+    include_str!("../descriptors/by-name/attested-automaton-map-committed-weld8-bound-v1.json");
 const ATTESTED_AUTOMATON_WELD8_JSON: &str =
     include_str!("../descriptors/by-name/attested-automaton-map-committed-weld8-v1.json");
 /// The automatafl D1 automaton-step descriptors (Lean `automataflStepDescN {2,11}`), byte-pinned by

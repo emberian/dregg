@@ -16,7 +16,7 @@
 //!   * gate (3) — the transcript-commitment opening: `transcriptCommit =
 //!     hash_fact(payment_hash, [salt])` (a Poseidon2 `compress` of the disclosed-field
 //!     digest under the opening blinding);
-//!   * gate (5) — the amount range `1 ≤ amountCents < 2^30`, by bit-decomposition of
+//!   * gate (5) — the amount range `1 ≤ amountCents ≤ 2^30`, by bit-decomposition of
 //!     `amountCents − 1` (`Deco.lean::DecoRelation` conjunct 5, `range`).
 //!
 //! and exposes `payment_hash` at claim lane [`DECO_LEAF_PAYMENT_HASH_PI`]. A prover
@@ -31,7 +31,10 @@
 //! `encode` schema stay OFF-AIR, executor-verified — exactly what
 //! `Deco.lean::deco_binds_payment` already treats as `SK.unforgeable`/`MK.unforgeable`
 //! carriers, and exactly bridge's posture (its ed25519 / nullifier-set stay off-fold).
-//! This is the DEPLOYMENT of the trust factoring `Deco.lean` already proved.
+//! `transcriptCommit` is an unexposed witness column: this leaf proves an
+//! existential opening, not equality to a server-authenticated commitment. A
+//! commitment proof alone therefore does not establish `DecoRelation` or payment
+//! authentication. Those require the separate executor checks and their binding.
 //!
 //! ## The deployed connect (Step 5)
 //!
@@ -42,12 +45,10 @@
 //! commitment backs is a `connect` conflict, UNSAT (the fold tooth).
 
 use dregg_circuit::descriptor_ir2::{
-    CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, MemBoundaryWitness,
-    TID_P2, UMemBoundaryWitness, VmConstraint2, prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::dsl::deco_payment::deco_payment_hash_felt;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 use dregg_circuit::poseidon2::hash_fact;
 
 use p3_field::PrimeField32;
@@ -66,6 +67,7 @@ const D: usize = 4;
 /// The `hash_fact` domain-separation marker (`poseidon2::hash_fact` state[5]). Kept
 /// file-local; the note-spend adapter's KAT `fact_arity7_chip_absorb_matches_hash_fact`
 /// pins the arity-7 chip absorb against `hash_fact` (the same chip this leaf rides).
+#[cfg(test)]
 const DECO_FACT_MARK: u32 = 0xFACF;
 
 /// The amount-range bit-width (gate 5): `amountCents − 1 ∈ [0, 2^30)`, so
@@ -104,132 +106,14 @@ pub const DECO_CLAIM_LEN: usize = 5;
 /// The claim lane of the felt payment identity (the connect target — the last lane).
 pub const DECO_LEAF_PAYMENT_HASH_PI: usize = 4;
 
-/// `x − y` as a `LeanExpr` (no subtraction node: `x + (−1)·y`).
-fn sub(x: LeanExpr, y: LeanExpr) -> LeanExpr {
-    LeanExpr::add(x, LeanExpr::mul(LeanExpr::Const(-1), y))
-}
-
-/// Build an UNCONDITIONAL arity-7 `TID_P2` chip lookup carrying one `hash_fact` site:
-/// `input_cols[0]` the predicate, `input_cols[1..]` (≤ 4) the terms. The tuple IS the
-/// genuine fact absorb `[7, pred, t0..t3, 0xFACF, 1, 0…, out, lanes…]` — the same
-/// arity-7 chip the note-spend leaf's `gated_fact_site` rides, minus the row-gate mux
-/// (every row of this leaf is a firing row).
-fn fact_site(
-    output_col: usize,
-    input_cols: &[usize],
-    lane_base: usize,
-) -> Result<VmConstraint2, String> {
-    if input_cols.is_empty() || input_cols.len() > 5 {
-        return Err(format!(
-            "deco fact site expects 1..=5 input columns (pred + ≤4 terms), got {}",
-            input_cols.len()
-        ));
-    }
-    let mut tuple: Vec<LeanExpr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-    tuple.push(LeanExpr::Const(7));
-    for i in 0..CHIP_RATE {
-        let e = match i {
-            0..=4 => match input_cols.get(i) {
-                Some(&c) => LeanExpr::Var(c),
-                None => LeanExpr::Const(0),
-            },
-            5 => LeanExpr::Const(DECO_FACT_MARK as i64),
-            6 => LeanExpr::Const(1),
-            _ => LeanExpr::Const(0),
-        };
-        tuple.push(e);
-    }
-    // out0: the digest lane = the site's output column (this row always fires).
-    tuple.push(LeanExpr::Var(output_col));
-    // lanes 1..7: the genuine permutation lanes the chip AIR EQUALITY-binds.
-    for j in 0..(CHIP_OUT_LANES - 1) {
-        tuple.push(LeanExpr::Var(lane_base + j));
-    }
-    debug_assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
-    Ok(VmConstraint2::Lookup(LookupSpec {
-        table: TID_P2,
-        tuple,
-    }))
-}
-
-/// A vanishing `Base(Gate(body))` constraint.
-fn gate(body: LeanExpr) -> VmConstraint2 {
-    VmConstraint2::Base(VmConstraint::Gate(body))
-}
-
-/// A First-row `PiBinding` welding trace column `col` to descriptor PI `pi`.
-fn first_pin(col: usize, pi: usize) -> VmConstraint2 {
-    VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::First,
-        col,
-        pi_index: pi,
-    })
-}
-
-/// Build the DECO commitment leaf descriptor: recompute `m1`/`payment_hash`/
-/// `transcriptCommit` in-AIR (3 chip sites), enforce the amount range (gate 5), and pin
-/// the four facts + the identity to the `DECO_CLAIM_LEN`-slot claim tuple.
+/// Read the Lean-authored fact-opening/range descriptor. `BoundedFactEmit` owns
+/// the reusable range and chip-site generators; `DecoLeafEmit` proves this leaf's
+/// public identity and inclusive amount bound. The first-row arithmetic also
+/// constrains height-one traces.
 pub fn deco_to_descriptor2() -> Result<EffectVmDescriptor2, String> {
-    let mut constraints: Vec<VmConstraint2> = Vec::new();
-
-    // The four disclosed PaymentFacts, First-row PI-pinned.
-    constraints.push(first_pin(COL_AMOUNT, 0));
-    constraints.push(first_pin(COL_CURRENCY, 1));
-    constraints.push(first_pin(COL_RECIPIENT, 2));
-    constraints.push(first_pin(COL_PAYMENT_INTENT, 3));
-
-    // Chip sites: m1, payment_hash, transcriptCommit (7 chip lanes each, past BASE_WIDTH).
-    let m1_lane = BASE_WIDTH;
-    let ph_lane = BASE_WIDTH + (CHIP_OUT_LANES - 1);
-    let tc_lane = BASE_WIDTH + 2 * (CHIP_OUT_LANES - 1);
-    // gate (4): m1 = hash_fact(amountCents, [currency, recipient]).
-    constraints.push(fact_site(
-        COL_M1,
-        &[COL_AMOUNT, COL_CURRENCY, COL_RECIPIENT],
-        m1_lane,
-    )?);
-    // the identity: payment_hash = hash_fact(m1, [paymentIntentId]).
-    constraints.push(fact_site(
-        COL_PAYMENT_HASH,
-        &[COL_M1, COL_PAYMENT_INTENT],
-        ph_lane,
-    )?);
-    // gate (3): transcriptCommit = hash_fact(payment_hash, [salt]).
-    constraints.push(fact_site(
-        COL_TRANSCRIPT_COMMIT,
-        &[COL_PAYMENT_HASH, COL_SALT],
-        tc_lane,
-    )?);
-    // pin the identity to the claim lane (the connect target).
-    constraints.push(first_pin(COL_PAYMENT_HASH, DECO_LEAF_PAYMENT_HASH_PI));
-
-    // gate (5): the amount range 1 ≤ amountCents < 2^30 — bit-decompose amountCents − 1.
-    // Each bit is boolean; the recomposition ties Σ bit_i·2^i to amountCents − 1.
-    let mut recompose = sub(LeanExpr::Var(COL_AMOUNT), LeanExpr::Const(1));
-    for i in 0..AMOUNT_RANGE_BITS {
-        let bit = RANGE_BASE + i;
-        // boolean: bit·(bit − 1) = 0.
-        constraints.push(gate(LeanExpr::mul(
-            LeanExpr::Var(bit),
-            LeanExpr::add(LeanExpr::Var(bit), LeanExpr::Const(-1)),
-        )));
-        recompose = sub(
-            recompose,
-            LeanExpr::mul(LeanExpr::Const(1i64 << i), LeanExpr::Var(bit)),
-        );
-    }
-    constraints.push(gate(recompose));
-
-    Ok(EffectVmDescriptor2 {
-        name: "deco-commitment-leaf::dregg-deco-stripe-v1".to_string(),
-        trace_width: BASE_WIDTH + 3 * (CHIP_OUT_LANES - 1),
-        public_input_count: DECO_CLAIM_LEN,
-        challenges: 0,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    })
+    dregg_circuit::descriptor_ir2::parse_vm_descriptor2(include_str!(
+        "../../circuit/descriptors/by-name/deco-commitment-leaf.json"
+    ))
 }
 
 /// The felt-domain witness the DECO leaf proves over — the `PaymentFacts` decomposed to
@@ -237,7 +121,7 @@ pub fn deco_to_descriptor2() -> Result<EffectVmDescriptor2, String> {
 /// `salt`. Every field is the SAME felt the deployed producer writes to the mint row.
 #[derive(Clone, Copy, Debug)]
 pub struct DecoLeafWitness {
-    /// The disclosed amount in cents (`1 ≤ amountCents < 2^30`).
+    /// The disclosed amount in cents (`1 ≤ amountCents ≤ 2^30`).
     pub amount_cents: BabyBear,
     /// The ISO-4217 currency felt.
     pub currency: BabyBear,
@@ -637,7 +521,9 @@ mod tests {
     use super::*;
     use crate::binding_tooth::{assert_node_refused_by_binding_connect, report_refusal};
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
-    use dregg_circuit::descriptor_ir2::{VmConstraint2, chip_absorb_all_lanes};
+    use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
+    use dregg_circuit::descriptor_ir2::{CHIP_OUT_LANES, TID_P2, VmConstraint2};
+    use dregg_circuit::lean_descriptor_air::VmConstraint;
     use dregg_circuit::refusal::{assert_violated_constraint_not_bus, must_refuse};
 
     fn make_witness(tag: u32) -> DecoLeafWitness {
@@ -709,7 +595,7 @@ mod tests {
     }
 
     /// The descriptor lowers to the expected shape: 3 chip sites, DECO_CLAIM_LEN PIs,
-    /// 5 First-row pins (4 facts + payment_hash), 31 range gates + a recomposition gate.
+    /// 5 First-row pins (4 facts + payment_hash), 30 boolean gates + one recomposition gate.
     #[test]
     fn deco_descriptor_lowers() {
         let desc = deco_to_descriptor2().expect("the deco leaf descriptor builds");
@@ -727,6 +613,28 @@ mod tests {
             .count();
         assert_eq!(pins, 5, "4 fact pins + the payment_hash pin");
         assert_eq!(desc.trace_width, BASE_WIDTH + 3 * (CHIP_OUT_LANES - 1));
+    }
+
+    /// Real inner proofs pin the inclusive endpoint and refuse both adjacent outsiders.
+    /// No recursive wrapping is needed to exercise the emitted range AIR.
+    #[test]
+    fn deco_amount_range_endpoints() {
+        let config = ir2_leaf_wrap_config();
+        for amount in [1, 1 << AMOUNT_RANGE_BITS] {
+            let mut w = make_witness(0);
+            w.amount_cents = BabyBear::new(amount);
+            let pis = deco_leaf_public_inputs(&w);
+            prove_deco_inner(&w, &pis, &config).expect("inclusive amount endpoint must prove");
+        }
+        for amount in [0, (1 << AMOUNT_RANGE_BITS) + 1] {
+            let mut w = make_witness(0);
+            w.amount_cents = BabyBear::new(amount);
+            let pis = deco_leaf_public_inputs(&w);
+            let err = must_refuse("out-of-range DECO amount", || {
+                prove_deco_inner(&w, &pis, &config)
+            });
+            assert_violated_constraint_not_bus("out-of-range DECO amount", &err);
+        }
     }
 
     /// The host claim tuple matches the named composition (lane 4 = the anchor).

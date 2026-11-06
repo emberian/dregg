@@ -7,7 +7,7 @@
 //! through the IR-v2 batch prover (`descriptor_ir2::prove_vm_descriptor2`). This module
 //! carries **no AIR constraints**: it is the column/PI layout, the symbol/rule alphabet,
 //! the honest trace builders ([`build_witness`] and the two bundled words), the rule-table
-//! commitment, and the [`lift_witness_to_v2`] lift onto the emitted 38-wide shape.
+//! commitment, and the [`lift_witness_to_v2`] lift onto the emitted 24-wide shape.
 //!
 //! (History: the descriptor was first authored here in Rust IR-v1 — `dyck_parse_descriptor`
 //! plus the `dyck_satisfied` predicate — on the `dfa_routing` template. The loader flip
@@ -48,7 +48,7 @@
 //!
 //! Stack cells hold **symbol ids**; `0` is the reserved EMPTY cell. The `rBracket`
 //! spike pushes three symbols for one popped `S`, so bracket-nesting `k` bounds the
-//! stack at depth `2k + 1`. `D = 5` therefore covers `k ≤ 2` — enough for both
+//! stack at depth `k + 2` for nonempty words. `D = 5` therefore covers `k ≤ 3` — enough for both
 //! bundled witnesses: `"[]"` (peak 3) and `"[[]]"` (peak 4). A word needing more
 //! nesting than `D` allows is not mis-proved; it fails the overflow guard, and
 //! [`build_witness`] panics rather than emit such a truncated row.
@@ -83,7 +83,7 @@ pub const RULE_BRACKET: u32 = 1;
 pub const RULE_EMPTY: u32 = 2;
 
 /// Bounded stack depth carried in columns (top at `STACK0`). Bracket-nesting `k`
-/// needs `2k + 1`; `D = 5` covers `k ≤ 2` (`"[]"`, `"[[]]"`). Words that would exceed
+/// needs `k + 2` for nonempty words; `D = 5` covers `k ≤ 3`. Words that would exceed
 /// it fail the overflow guard rather than being mis-proved.
 pub const STACK_D: usize = 5;
 
@@ -208,6 +208,64 @@ pub enum Action {
     Done,
 }
 
+/// The record-facing statement of `DyckStackBound.recordPre`: canonical rule
+/// entries, terminal entries, and at least two done rows, padded to a power of
+/// two. Returns `(main_rows, public_inputs)` without constructing a witness.
+/// An arbitrary bracket word has a commitment; proving it still requires a
+/// valid parse. Out-of-alphabet input and arithmetic overflow are refused.
+pub fn record_public_inputs(input: &[u32]) -> Option<(usize, Vec<BabyBear>)> {
+    if input.iter().any(|&x| x != SYM_OP && x != SYM_CL) {
+        return None;
+    }
+    let opens = input.iter().take_while(|&&x| x == SYM_OP).count();
+    let core_len = input.len().checked_add(opens)?.checked_add(1)?;
+    let rows = 1usize.checked_shl(core_len.checked_add(1)?.ilog2() + 1)?;
+    let input_len = u32::try_from(input.len()).ok()?;
+    if core_len >= crate::field::BABYBEAR_P as usize || input_len >= crate::field::BABYBEAR_P {
+        return None;
+    }
+    let seed = dyck_rule_table_commitment();
+    let mut route = seed;
+    let mut absorb = |entry: [u32; 4]| {
+        route = hash_2_to_1(route, hash_4_to_1(&entry.map(BabyBear::new)));
+    };
+    for _ in 0..opens {
+        absorb([RULE_BRACKET, SYM_S, 0, 0]);
+        absorb([0, SYM_OP, SYM_OP, 0]);
+    }
+    absorb([RULE_EMPTY, SYM_S, 0, 0]);
+    for &token in &input[opens..] {
+        absorb([0, token, token, 0]);
+    }
+    for _ in core_len..rows {
+        absorb([0, 0, 0, 0]);
+    }
+    Some((
+        rows,
+        vec![BabyBear::new(SYM_S), BabyBear::new(input_len), seed, route],
+    ))
+}
+
+/// Verify a Dyck proof against the caller's record. Both the route public input
+/// and main-trace height are recomputed, so padding cannot be chosen by the prover.
+pub fn verify_record(
+    proof: &crate::descriptor_ir2::Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>,
+    input: &[u32],
+) -> Result<(), String> {
+    use p3_uni_stark::StarkGenericConfig;
+    let (rows, pis) = record_public_inputs(input).ok_or("invalid Dyck record encoding")?;
+    // The production v1/v2 configs have the same PCS type and hiding mode;
+    // FRI parameter differences do not affect the degree's ZK offset.
+    let zk = crate::plonky3_prover::create_config().is_zk();
+    let expected_degree = rows.ilog2() as usize + zk;
+    if proof.degree_bits.first().copied() != Some(expected_degree) {
+        return Err("Dyck proof main-trace height does not match record padding".into());
+    }
+    let desc = crate::descriptor_by_name::descriptor_by_name("dregg-dyck-parse-v1")
+        .ok_or("Dyck descriptor unavailable")?;
+    crate::descriptor_ir2::verify_vm_descriptor2(&desc, proof, &pis)
+}
+
 /// Build the accepting-parse trace + public inputs for the word `"[]"` (`[op, cl]`),
 /// the exact word `CfgCompact.Reference.brackets_replays` accepts.
 ///
@@ -233,7 +291,7 @@ pub fn build_brackets_witness() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
 ///
 /// `S ⟹ [S] ⟹ [[S]] ⟹ [[]]`, replayed as
 /// `rule rBracket · term '[' · rule rBracket · term '[' · rule rEmpty · term ']' ·
-/// term ']' · done` — exactly 8 rows, no padding.
+/// term ']' · done` — 8 action rows, padded to 16 so the accepting row has a successor.
 ///
 /// This is the word slice 1 could not verify: the SECOND `rBracket` (row 2) fires
 /// with the stack at `[S, cl]`, so the outer `cl` sits under the popped `S` and must
@@ -272,7 +330,8 @@ pub fn build_witness(input: &[u32], actions: &[Action]) -> (Vec<Vec<BabyBear>>, 
     let mut stack: Vec<u32> = vec![SYM_S]; // starts at [initial]
     let mut input_pos: u32 = 0;
 
-    let n_pad = actions.len().next_power_of_two().max(2);
+    // Keep a successor after the first done, including a power-of-two action count.
+    let n_pad = (actions.len() + 1).next_power_of_two().max(2);
     let mut rows: Vec<Vec<BabyBear>> = Vec::with_capacity(n_pad);
     let mut running = table_commitment;
 

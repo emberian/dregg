@@ -8,7 +8,7 @@
 
 [READ] `docs/CIRCUITS-FROM-PROOFS.md` already specifies the useful generator architecture: Lean constructs `EffectVmDescriptor2`; `emitVmJson2` serializes; `EmitByName.lean` routes; Rust parses and interprets. A new code-generation framework would duplicate it. The work here adds reusable proved generators within that architecture and connects their actual consumers.
 
-[MEASURED] The 2026-11-05 census's **111 matches in 51 files are textual occurrences**, including return types, comments, decoders and tests. Before these replacements, `sg -p 'EffectVmDescriptor2 { $$$ }' -l rust --json=compact <the 51 paths>` found **55 actual struct expressions in 26 files**. Repeating while this lane and the tuple lane had replaced their six production constructors found **49 expressions in 22 files**. These are bounded observations of that original path set, not a complete census of all constraint dialects.
+[MEASURED] The 2026-11-05 census's **111 matches in 51 files are textual occurrences**, including return types, comments, decoders and tests. Before these replacements, `sg -p 'EffectVmDescriptor2 { $$$ }' -l rust --json=compact <the 51 paths>` found **55 actual struct expressions in 26 files**. After the solvency, five tuple, DECO and caveat replacements, the same structural query found **47 expressions in 20 files** (eight production constructors removed). These are bounded observations of that original path set, not a complete census of all constraint dialects.
 
 [READ] Classification of those original 55 expressions:
 
@@ -16,7 +16,7 @@
 |---|---|
 | Deserializers | `descriptor_ir2.rs` and `descriptor_ir2_canonical.rs` each have one real decoder construction; parsing authored constraints is interpretation, not new constraint authorship. |
 | Tests and benchmark fixtures | Those same files carry 17 and 3 test literals respectively; `refusal.rs` has 2, `effect_vm_descriptors.rs` 1. `joint_turn_recursive.rs` has 4 stand-ins; private preference/graph files have one each; factory/hatchery each retain a stand-in; `carrier_pin_twin` has a test. `perf/src/lib.rs` has 3 benchmark fixtures. Test status is not a proof that the represented statement is faithful. |
-| Static production leaves | Solvency, factory, hatchery, sovereign, membership and delegate are replaced by the two Lean generators in this step. Remaining genuine producers include DECO, caveat admission and the zkOracle commitment leaf. |
+| Static production leaves | Solvency, factory, hatchery, sovereign, membership, delegate, DECO and caveat admission are replaced by Lean generators in this step. The zkOracle commitment leaf remains a parameterized producer. |
 | Parameterized producers / transformations | General membership, note-spend's duplicated lowering in `circuit` and `circuit-prove`, whole-image fold, custom-leaf lowering, direct-logic lowering, carrier pin insertion, private BFV fused descriptor and turn UMem boundary construction still synthesize constraints. They require generator/refinement work, not blind replacement with one fixed JSON. |
 | Other constraint dialects | `impl Air` and assertion-builder closures are separate debt; this struct-expression survey does not establish their elimination. Existing law1 ratchet covers three dialects and remains relevant. |
 
@@ -40,8 +40,14 @@ The reliable closure unit is a production constructor plus its theorem, consumer
 
 [MEASURED] A standalone Lean driver importing the existing `DfaRoutingGeneralEmit` emitted **2901 JSON bytes**, exactly matching the former Rust literal (plus the artifact newline). The stale comment claiming a missing `challenges` key was already false; the literal has `challenges:0`. The consumer now uses `include_str!` on `by-name/dfa-routing-injection.json`, and the same definition is routed by `EmitByName`. No injection descriptor semantics changed.
 
+## Shared generators and the next two consumed leaves
+
+[READ] `BoundedFactEmit` now owns the generic range generator, offset-range theorem and five-slot fact-opening generator. Solvency delegates to it; DECO uses three generated fact sites and the offset range. The DECO amount contract is inclusive at 2^30, matching the former construction; first-boundary constraints remove the former last-row bypass. Its transcript commitment is still an existential witness column, not a public authentication claim.
+
+[READ] `BorrowChainEmit` authors generic modular limb equations and proves exact subtraction for arbitrary limb count. `CaveatAdmissionEmit` connects its actual 194-constraint descriptor to all four public caveat atoms over 5×26-bit operands. Its full honest trace and faithful range-table witness inhabit the statement; its inclusive/strict-chain falsifier isolates the strict-height condition. See `CAVEAT-AIR-REPORT-2026-11-06.md` for the producer and test boundary.
+
 ## Remaining work and integration boundary
 
 The tuple generator lane owns factory/hatchery/sovereign/membership/delegate and its generic tuple theorem. This lane coordinates their emission rows with the solvency/injection rows; route-table and weld lanes have additional new route entries. Source/artifact updates require a fresh provenance stamp at the integrated revision, coordinated with the Mina rescue work. An old snapshot's stamp cannot certify new bytes. No whole emitter run was launched on the Mac.
 
-C9 is still open for the parameterized production producers and hand-authored Air/builder dialects above. The scalable next step is to move shared transformations (range blocks, tuple pins, copy constraints, hash openings, note-spend limb lowering) into Lean generators with a semantic preservation theorem, then consume the generated instances or extracted parameterized generator. A census reduction is a progress measure, not a substitute for those theorem and consumer connections.
+C9 is still open for the parameterized production producers and hand-authored Air/builder dialects above. These eight replacements do not close the full initiative bar. The scalable next step is to move shared transformations (range blocks, tuple pins, copy constraints, hash openings, note-spend limb lowering) into Lean generators with a semantic preservation theorem, then consume the generated instances or extracted parameterized generator. A census reduction is a progress measure, not a substitute for those theorem and consumer connections.
