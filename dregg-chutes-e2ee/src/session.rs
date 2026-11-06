@@ -434,6 +434,7 @@ mod tests {
                         quote_bytes: vec![n as u8; 16],
                         nonce_hex: format!("{n:064x}"),
                         e2e_pubkey_b64: format!("pubkey-{n}"),
+                        gpus: vec![],
                     },
                 },
                 self.batch(&format!("est{n}")),

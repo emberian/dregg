@@ -648,6 +648,39 @@ fn verify_rim_chain(ders: &[Vec<u8>], now: ASN1Time) -> Result<(VerifyingKey, [u
     Ok((key, Sha256::digest(&ders[0]).into()))
 }
 
+/// The certificates in a RIM's `KeyInfo`, leaf first, WITHOUT verifying anything: for a
+/// fetcher choosing which certificates to obtain OCSP responses for. [`verify_rim`] is the
+/// trust step.
+pub fn rim_key_info_chain(xml: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    let s = std::str::from_utf8(xml).map_err(|_| "RIM is not UTF-8".to_string())?;
+    let root = parse_document(s)?;
+    let rscope = extend_scope(&Scope::new(), &root);
+    for c in child_elems(&root) {
+        let cs = extend_scope(&rscope, c);
+        if elem_name(c, &cs)? != (NS_DSIG, "Signature") {
+            continue;
+        }
+        for k in child_elems(c) {
+            let ks = extend_scope(&cs, k);
+            if elem_name(k, &ks)? != (NS_DSIG, "KeyInfo") {
+                continue;
+            }
+            let mut out = Vec::new();
+            for xd in child_elems(k) {
+                let xs = extend_scope(&ks, xd);
+                for cert in child_elems(xd) {
+                    let ces = extend_scope(&xs, cert);
+                    if elem_name(cert, &ces)? == (NS_DSIG, "X509Certificate") {
+                        out.push(b64(&text_of(cert)?)?);
+                    }
+                }
+            }
+            return Ok(out);
+        }
+    }
+    Err("RIM has no KeyInfo".into())
+}
+
 /// Verify one RIM (steps 1–6 of the module doc) at `now`.
 pub fn verify_rim(xml: &[u8], now: ASN1Time) -> Result<VerifiedRim, String> {
     let s = std::str::from_utf8(xml).map_err(|_| "RIM is not UTF-8".to_string())?;

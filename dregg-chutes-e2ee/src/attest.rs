@@ -11,6 +11,10 @@
 //! `{evidence:[{quote (base64 TDX quote), gpu_evidence:[...], instance_id, certificate
 //! (base64 DER TLS cert)}], failed_instance_ids:[...]}`.
 //!
+//! Every GPU the instance reports must ALSO verify ([`crate::gpu`]): NVIDIA device chain,
+//! report signature over the same fresh nonce, FWID, goldens from NVIDIA's signed RIMs, OCSP.
+//! An instance with no GPU evidence, or any GPU that fails, is refused.
+//!
 //! The nonce/pubkey binding recomputed here is the FIXED string binding
 //! (`SHA-256(ascii(nonce_hex) ‖ ascii(e2e_pubkey_b64))`) from `dregg_tee_verify::tdx` — see
 //! that module for the byte-for-byte correspondence to chutes-api.
@@ -24,6 +28,7 @@ use dregg_tee_verify::{decode_quote_field, parse_chutes_measurements, QuoteColla
 
 use crate::discovery::Instances;
 use crate::error::ClientError;
+use crate::gpu::{gate_instance, GpuAttestation, GpuEvidenceItem, GpuGate};
 
 /// Where DCAP collateral (`QuoteCollateralV3`) comes from. Production supplies it pre-fetched
 /// so the verify path is network-free (the TCB stays offline); the live acceptance test can
@@ -55,6 +60,8 @@ pub struct VerifierConfig {
     /// Accepted DCAP TCB statuses. STRICT default `["UpToDate"]`; widen deliberately (e.g.
     /// add `"SWHardeningNeeded"`) with eyes open.
     pub accepted_statuses: Vec<String>,
+    /// The GPU gate. Default: at least one GPU, RIMs and OCSP fetched from NVIDIA per GPU.
+    pub gpu: GpuGate,
 }
 
 impl VerifierConfig {
@@ -66,6 +73,7 @@ impl VerifierConfig {
             collateral: CollateralSource::PrefetchedJson(collateral_json.into()),
             measurements_json: measurements_json.into(),
             accepted_statuses: vec!["UpToDate".to_string()],
+            gpu: GpuGate::default(),
         }
     }
 }
@@ -86,6 +94,8 @@ pub struct AttestedInstance {
     /// it an archived quote proves only that some enclave with these measurements signed
     /// something, at no particular time.
     pub nonce_hex: String,
+    /// The instance's GPUs, each verified against NVIDIA's PKI and signed RIMs.
+    pub gpus: Vec<GpuAttestation>,
 }
 
 /// The attestation record returned alongside a completion — a portable receipt of WHICH
@@ -107,6 +117,9 @@ pub struct AttestationRecord {
     /// The base64 ML-KEM-768 instance key bound into `report_data` — the key the request was
     /// encapsulated to.
     pub e2e_pubkey_b64: String,
+    /// The GPUs that verified: device identity (leaf fingerprint), driver and VBIOS versions,
+    /// RIM signers. A summary of the live check; the raw GPU evidence is not archived here.
+    pub gpus: Vec<GpuAttestation>,
 }
 
 impl From<&AttestedInstance> for AttestationRecord {
@@ -118,6 +131,7 @@ impl From<&AttestedInstance> for AttestationRecord {
             quote_bytes: a.quote_bytes.clone(),
             nonce_hex: a.nonce_hex.clone(),
             e2e_pubkey_b64: a.e2e_pubkey_b64.clone(),
+            gpus: a.gpus.clone(),
         }
     }
 }
@@ -137,6 +151,10 @@ struct TeeChuteEvidence {
 struct TeeInstanceEvidence {
     /// Base64-encoded TDX quote.
     quote: String,
+    /// Per-GPU evidence. Defaulted so that an absent field reaches the GPU gate and is refused
+    /// THERE, with a reason, rather than failing the whole response's parse.
+    #[serde(default)]
+    gpu_evidence: Vec<GpuEvidenceItem>,
     /// Instance ID (present when part of a chute's evidence list).
     #[serde(default)]
     instance_id: Option<String>,
@@ -194,7 +212,8 @@ fn load_collateral(
 /// An instance passes only if ALL of: (1) the DCAP crypto verifies against pinned collateral
 /// and roots at the pinned Intel SGX Root CA; (2) `report_data[0..32] ==
 /// SHA-256(ascii(nonce_hex) ‖ ascii(discovered e2e_pubkey_b64))`; (3) MRTD+RTMR0..2 match a
-/// registry entry; (4) the TCB status is in `accepted_statuses`.
+/// registry entry; (4) the TCB status is in `accepted_statuses`; (5) every reported GPU verifies
+/// under `cfg.gpu` with the same nonce, and there are at least `cfg.gpu.min_gpus` of them.
 pub fn attest_chute(
     http: &reqwest::blocking::Client,
     cfg: &VerifierConfig,
@@ -294,6 +313,15 @@ pub fn attest_chute(
             continue;
         }
 
+        // (5) the GPUs, against the same fresh nonce.
+        let gpus = match gate_instance(http, &ev.gpu_evidence, &nonce_hex, &cfg.gpu, now_secs()) {
+            Ok(g) => g,
+            Err(e) => {
+                reasons.push(format!("{instance_id}: GPU attestation: {e}"));
+                continue;
+            }
+        };
+
         attested.push(AttestedInstance {
             instance_id,
             e2e_pubkey_b64,
@@ -303,6 +331,7 @@ pub fn attest_chute(
             // The nonce this evidence request was made with — the one `apply_chutes_bindings`
             // just checked `report_data` against, so the pair travels with the quote.
             nonce_hex: nonce_hex.clone(),
+            gpus,
         });
     }
 

@@ -47,6 +47,7 @@ pub mod client;
 pub mod crypto;
 pub mod discovery;
 pub mod error;
+pub mod gpu;
 pub mod narrator_backend;
 pub mod session;
 
@@ -65,6 +66,7 @@ pub use discovery::{
     DEFAULT_API_BASE, DEFAULT_MODELS_BASE,
 };
 pub use error::ClientError;
+pub use gpu::{GpuAttestation, GpuCollateralSource, GpuEvidenceItem, GpuGate};
 pub use narrator_backend::{attested_narrator_from_env, ChutesTeeBackend, Invoker, TeeNarratorEnv};
 pub use session::{
     AttestedSession, Attestor, ChutesAttestor, Clock, Lease, SessionCache, DEFAULT_TTL_SECS,

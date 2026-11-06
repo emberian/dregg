@@ -36,6 +36,8 @@ use p384::ecdsa::signature::Verifier;
 use p384::ecdsa::{Signature, VerifyingKey};
 use x509_parser::pem::Pem;
 use x509_parser::prelude::*;
+/// Re-exported so callers can state the reference time without depending on x509-parser.
+pub use x509_parser::time::ASN1Time;
 
 /// The pinned trust anchor: NVIDIA Device Identity CA (self-signed, P-384).
 pub const NVIDIA_DEVICE_IDENTITY_CA_PEM: &[u8] = include_bytes!("nvidia_device_identity_ca.pem");
@@ -202,6 +204,11 @@ pub struct GpuVerified {
     pub leaf_fingerprint: [u8; 32],
     /// Measured indices that had no golden value (empty unless `allow_uncovered`).
     pub uncovered: Vec<u8>,
+}
+
+/// The DER certificates in a PEM bundle, in order.
+pub fn pem_iter(pem: &[u8]) -> impl Iterator<Item = Result<Vec<u8>, String>> + '_ {
+    Pem::iter_from_buffer(pem).map(|p| p.map(|p| p.contents).map_err(|e| format!("PEM: {e}")))
 }
 
 fn pem_chain(pem: &[u8]) -> Result<Vec<Vec<u8>>, String> {

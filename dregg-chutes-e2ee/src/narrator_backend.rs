@@ -616,6 +616,7 @@ mod tests {
                         quote_bytes: b"quote-bytes".to_vec(),
                         nonce_hex: "ab".repeat(32),
                         e2e_pubkey_b64: "QVRURVNURUQ=".to_string(),
+                        gpus: vec![],
                     },
                 },
                 (0..16).map(|i| format!("nonce-{i}")).collect(),
@@ -1133,6 +1134,7 @@ mod tests {
             quote_bytes: vec![9u8; 4096],
             nonce_hex: "cd".repeat(32),
             e2e_pubkey_b64: "QVRURVNURUQ=".to_string(),
+            gpus: vec![],
         };
         let s = summarize(&record);
         assert_eq!(s.quote_len, 4096);
