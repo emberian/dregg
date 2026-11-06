@@ -21,10 +21,14 @@
 //! version, code, param1, param2, number-of-blocks, 3-byte LE record length, record, 32-byte
 //! nonce, 2-byte LE opaque length, opaque TLVs, signature).
 //!
-//! NOT done here (named): deriving the golden values from NVIDIA's signed RIM files (driver and
-//! VBIOS SWID tags, with their own certificate chains); OCSP revocation of the device chain;
-//! binding the GPU report's nonce to the CPU TD quote (the caller passes the SAME fresh nonce
-//! to both, which is the binding); the meaning of individual measurement indices.
+//! [`verify_gpu_evidence`] composes this with the signed RIMs ([`crate::nvidia_rim`]: the golden
+//! values come from NVIDIA's driver and VBIOS manifests, not from the report) and OCSP
+//! revocation of the device chain and both RIM chains ([`crate::nvidia_ocsp`]), all at one
+//! reference time.
+//!
+//! NOT done here (named): binding the GPU report's nonce to the CPU TD quote (the caller passes
+//! the SAME fresh nonce to both, which is the binding); the meaning of individual measurement
+//! indices; fetching (RIMs and OCSP responses are inputs).
 
 use std::collections::BTreeMap;
 
@@ -285,6 +289,72 @@ pub fn verify_gpu_report(
     })
 }
 
+/// Everything a GPU attests with, as the relying party receives it.
+#[derive(Debug, Clone)]
+pub struct GpuEvidence {
+    /// The SPDM report (request ‖ response), raw bytes.
+    pub report: Vec<u8>,
+    /// The device certificate chain, PEM, leaf first.
+    pub chain_pem: Vec<u8>,
+    /// The driver and VBIOS RIMs (signed SWID tags) for the versions the report names.
+    pub driver_rim: Vec<u8>,
+    pub vbios_rim: Vec<u8>,
+    /// OCSP responses covering the device chain (all but its leaf) and both RIM chains.
+    pub ocsp: Vec<crate::nvidia_ocsp::OcspEvidence>,
+}
+
+/// What [`verify_gpu_evidence`] establishes.
+#[derive(Debug, Clone)]
+pub struct GpuEvidenceVerified {
+    pub gpu: GpuVerified,
+    pub driver_version: String,
+    pub vbios_version: String,
+    pub driver_rim_signer: [u8; 32],
+    pub vbios_rim_signer: [u8; 32],
+}
+
+/// The product whose RIMs this verifier accepts.
+pub const PRODUCT_GH100: &str = "GH100";
+
+/// Composed, fail-closed, at ONE reference time `now`:
+/// report chain + signature + nonce; device chain not revoked; VBIOS RIM signed, chained and
+/// not revoked; driver RIM likewise; RIM versions equal the report's; every measurement equals
+/// a RIM-derived golden value (inactive indices must be zero).
+pub fn verify_gpu_evidence(
+    ev: &GpuEvidence,
+    expected_nonce: &[u8; NONCE_LEN],
+    ocsp_policy: &crate::nvidia_ocsp::OcspPolicy,
+    now: ASN1Time,
+) -> Result<GpuEvidenceVerified, String> {
+    use crate::nvidia_ocsp::verify_chain_not_revoked;
+    use crate::nvidia_rim::{goldens_from_rims, verify_rim};
+    let report = parse_report(&ev.report)?;
+    // Chain, signature and nonce first (the goldens are checked last, below).
+    let probe = GoldenMeasurements {
+        values: BTreeMap::new(),
+        allow_uncovered: true,
+    };
+    verify_gpu_report(&ev.report, &ev.chain_pem, expected_nonce, &probe, now)?;
+    let device_chain = pem_chain(&ev.chain_pem)?;
+    verify_chain_not_revoked(&device_chain, 1, &ev.ocsp, ocsp_policy, now)
+        .map_err(|e| format!("device chain: {e}"))?;
+    let vbios = verify_rim(&ev.vbios_rim, now).map_err(|e| format!("VBIOS RIM: {e}"))?;
+    verify_chain_not_revoked(&vbios.chain_der, 0, &ev.ocsp, ocsp_policy, now)
+        .map_err(|e| format!("VBIOS RIM chain: {e}"))?;
+    let driver = verify_rim(&ev.driver_rim, now).map_err(|e| format!("driver RIM: {e}"))?;
+    verify_chain_not_revoked(&driver.chain_der, 0, &ev.ocsp, ocsp_policy, now)
+        .map_err(|e| format!("driver RIM chain: {e}"))?;
+    let golden = goldens_from_rims(&report, &driver, &vbios, PRODUCT_GH100)?;
+    let gpu = verify_gpu_report(&ev.report, &ev.chain_pem, expected_nonce, &golden, now)?;
+    Ok(GpuEvidenceVerified {
+        driver_version: driver.colloquial_version,
+        vbios_version: vbios.colloquial_version,
+        driver_rim_signer: driver.signer_fingerprint,
+        vbios_rim_signer: vbios.signer_fingerprint,
+        gpu,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,18 +365,19 @@ mod tests {
     fn report() -> Vec<u8> {
         hex::decode(REPORT_HEX.trim()).expect("sample hex")
     }
+    /// 2026-03-01T00:00:00Z: inside every device and RIM certificate's validity window.
     fn now() -> ASN1Time {
-        ASN1Time::from_timestamp(1_793_000_000).expect("time") // 2026-10-26
+        ASN1Time::from_timestamp(1_772_323_200).expect("time")
     }
-    fn self_golden(r: &GpuReport) -> GoldenMeasurements {
-        GoldenMeasurements {
-            values: r
-                .measurements
-                .iter()
-                .map(|(k, v)| (*k, vec![v.clone()]))
-                .collect(),
-            allow_uncovered: false,
-        }
+    const DRIVER_RIM: &[u8] =
+        include_bytes!("../tests/data/nvidia_rim_driver_GH100_550.90.07.swidtag");
+    const VBIOS_RIM: &[u8] =
+        include_bytes!("../tests/data/nvidia_rim_vbios_1010_0200_882_96009F0001.swidtag");
+    /// The goldens from NVIDIA's signed RIMs for the sample's driver and VBIOS.
+    fn rim_golden(r: &GpuReport) -> GoldenMeasurements {
+        let d = crate::nvidia_rim::verify_rim(DRIVER_RIM, now()).expect("driver RIM");
+        let v = crate::nvidia_rim::verify_rim(VBIOS_RIM, now()).expect("VBIOS RIM");
+        crate::nvidia_rim::goldens_from_rims(r, &d, &v, PRODUCT_GH100).expect("goldens")
     }
 
     #[test]
@@ -326,9 +397,10 @@ mod tests {
     fn nvidia_sample_verifies_end_to_end() {
         let bytes = report();
         let r = parse_report(&bytes).unwrap();
-        let v = verify_gpu_report(&bytes, CHAIN, &r.request_nonce, &self_golden(&r), now())
-            .expect("the public NVIDIA sample verifies against the pinned root");
+        let v = verify_gpu_report(&bytes, CHAIN, &r.request_nonce, &rim_golden(&r), now())
+            .expect("the public NVIDIA sample verifies against the pinned root and the RIMs");
         assert!(v.uncovered.is_empty());
+        assert_eq!(v.report.measurements.len(), 64);
     }
 
     /// Falsifiers: each one must REFUSE, so the accept above is not vacuous.
@@ -336,7 +408,7 @@ mod tests {
     fn nvidia_sample_refusals() {
         let bytes = report();
         let r = parse_report(&bytes).unwrap();
-        let g = self_golden(&r);
+        let g = rim_golden(&r);
         // 1. wrong nonce: replay refused
         let mut other = r.request_nonce;
         other[0] ^= 1;
@@ -364,5 +436,70 @@ mod tests {
         let mut long = bytes.clone();
         long.push(0);
         assert!(parse_report(&long).is_err());
+        // 7. RIMs swapped: the version binding refuses
+        let d = crate::nvidia_rim::verify_rim(DRIVER_RIM, now()).unwrap();
+        let v = crate::nvidia_rim::verify_rim(VBIOS_RIM, now()).unwrap();
+        assert!(crate::nvidia_rim::goldens_from_rims(&r, &v, &d, PRODUCT_GH100).is_err());
+        // 8. a non-zero value where neither RIM expects a measurement: refused
+        let inactive = *g
+            .values
+            .iter()
+            .find(|(_, a)| a == &&vec![vec![0u8; 48]])
+            .unwrap()
+            .0;
+        let mut g4 = g.clone();
+        g4.values.insert(inactive, vec![vec![1u8; 48]]);
+        assert!(verify_gpu_report(&bytes, CHAIN, &r.request_nonce, &g4, now()).is_err());
+    }
+
+    /// Both RIM signing chains are shown unrevoked by the captured responses.
+    #[test]
+    fn nvidia_rim_chains_not_revoked() {
+        use crate::nvidia_ocsp::tests::{evidence, t2, POLICY};
+        use crate::nvidia_ocsp::verify_chain_not_revoked;
+        for (rim, prefix) in [(DRIVER_RIM, "driver_svc"), (VBIOS_RIM, "vbios_svc")] {
+            let chain = crate::nvidia_rim::verify_rim(rim, now()).unwrap().chain_der;
+            let ev: Vec<_> = (0..3).map(|i| evidence(&format!("{prefix}_{i}"))).collect();
+            verify_chain_not_revoked(&chain, 0, &ev, &POLICY, t2()).expect(prefix);
+        }
+    }
+
+    /// The composed verifier at the OCSP capture time. The public sample cannot pass it at
+    /// ANY single instant: NVIDIA's RIM service still serves the driver 550.90.07 RIM signed
+    /// by a certificate that expired 2026-06-01, and the OCSP responses are from 2026-11-06.
+    /// So the composed check must refuse, and must refuse at the driver RIM, after the report,
+    /// the device-chain revocation, the VBIOS RIM and its revocation all passed.
+    #[test]
+    fn nvidia_evidence_composed_refuses_expired_driver_rim() {
+        use crate::nvidia_ocsp::tests::{evidence, t2, POLICY};
+        let names = [
+            "device_1",
+            "device_2",
+            "device_3",
+            "vbios_svc_0",
+            "vbios_svc_1",
+            "vbios_svc_2",
+            "driver_svc_0",
+            "driver_svc_1",
+            "driver_svc_2",
+        ];
+        let ev = GpuEvidence {
+            report: report(),
+            chain_pem: CHAIN.to_vec(),
+            driver_rim: DRIVER_RIM.to_vec(),
+            vbios_rim: VBIOS_RIM.to_vec(),
+            ocsp: names.map(evidence).into(),
+        };
+        let nonce = parse_report(&ev.report).unwrap().request_nonce;
+        let err = verify_gpu_evidence(&ev, &nonce, &POLICY, t2()).unwrap_err();
+        assert!(err.starts_with("driver RIM: RIM chain cert 0"), "{err}");
+        // without the VBIOS chain's responses it refuses earlier, at the VBIOS RIM chain
+        let mut ev2 = ev.clone();
+        ev2.ocsp.truncate(3);
+        let err = verify_gpu_evidence(&ev2, &nonce, &POLICY, t2()).unwrap_err();
+        assert!(err.starts_with("VBIOS RIM chain"), "{err}");
+        // and at the reference time where the RIMs are valid, the OCSP responses are not yet
+        let err = verify_gpu_evidence(&ev, &nonce, &POLICY, now()).unwrap_err();
+        assert!(err.starts_with("device chain"), "{err}");
     }
 }

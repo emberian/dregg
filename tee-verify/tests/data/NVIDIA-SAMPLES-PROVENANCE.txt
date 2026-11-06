@@ -5,3 +5,34 @@ hopperAttestationReport.txt and hopperCertChain.txt, Apache License 2.0.
 They are the local GPU verifier's "test_no_gpu" sample: a real GH100 SPDM GET_MEASUREMENTS
 request+response (64 SHA-384 measurement blocks, 96-byte P-384 signature) and its five-certificate
 chain to "NVIDIA Device Identity CA".
+
+RIMs (golden values), fetched 2026-11-06 ~05:30 UTC from NVIDIA's RIM service
+(https://rim.attestation.nvidia.com/v1/rim/<id>; the JSON "rim" field, base64-decoded):
+  nvidia_rim_driver_GH100_550.90.07.swidtag         id NV_GPU_DRIVER_GH100_550.90.07
+      sha256 d8febeb2d02b1a5882747daed804cce0131e887e34850216a373aaa1f24eea84 (equals the
+      service's own "sha256" field), service last_updated 2024-06-06T16:51:26.644Z
+  nvidia_rim_vbios_1010_0200_882_96009F0001.swidtag id NV_GPU_VBIOS_1010_0200_882_96009F0001
+      sha256 8883dfb88f92658f0359fae4185f263c0e00326dac230308a0f22586ac137099 (equals the
+      service's "sha256"), service last_updated 2026-01-07T18:59:43.35Z
+The ids are derived from the sample report as nvtrust does (driver version TLV 3 = 550.90.07;
+VBIOS TLV 6 = 96.00.9F.00.01; project 1010, project SKU 0200, chip SKU 882). nvtrust's own
+test_no_gpu RIMs (Driver_RIM_test_no_gpu.swidtag = 545.00, 1010_0200_882_96005E0001 =
+96.00.5E.00.01) do NOT match the sample report's versions or measurements, so they are not used.
+All 33 active RIM entries match the report (SPDM index = RIM index + 1); the 31 inactive
+indices are all-zero in the report.
+src/nvidia_corim_root_ca.pem is nvtrust verifier/certs/verifier_RIM_root.pem (same commit),
+"NVIDIA CoRIM signing Root CA", SHA-256 12977B5115ACB0381179279FFFEB5A8C4D264971EBB32298023A465FA41DF5D1;
+it is byte-identical to the last certificate in both RIMs' KeyInfo.
+Finding: the driver RIM's signer ("HCC RIM L4 Signer") expired 2026-06-01; the service still
+serves it. A verifier that checks validity at the present time (ours, and nvtrust) cannot accept
+this driver today.
+
+OCSP (revocation), captured 2026-11-06T05:31:44Z from https://ocsp.ndis.nvidia.com/ with
+requests built by Python cryptography 50.0.2 (SHA-384 CertID, 32-byte nonce, as nvtrust does):
+  nvidia_ocsp/device_{1,2,3}.der      device chain certs 1-3 (GSP BROM, Provisioner ICA 1,
+                                      GH100 Identity); the device-generated leaf is not covered
+  nvidia_ocsp/driver_svc_{0,1,2}.der  driver RIM chain certs 0-2
+  nvidia_ocsp/vbios_svc_{0,1,2}.der   VBIOS RIM chain certs 0-2
+  nvidia_ocsp/nonces.txt              the nonce sent with each request (hex)
+All nine say "good", thisUpdate 2026-11-06T05:31:4xZ, nextUpdate +24 h, signed by a delegated
+"NVIDIA OCSP Responder" certificate issued by the checked certificate's issuer.
