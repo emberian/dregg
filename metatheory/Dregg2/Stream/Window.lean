@@ -259,7 +259,10 @@ theorem window_range_persists (L M : List ℤ) {lo hi : ℕ} (hhi : hi < L.lengt
 
 `toyP`: entries are integers, committed as themselves; the automaton trips on `9` (a safety monitor:
 state `true` = tripped, absorbing, unmarked; Büchi over "not tripped"). The hash is a toy polynomial;
-the falsifiers do not need it to be collision-free, only to be computed. -/
+the falsifiers do not need it to be collision-free, only to be computed. Facts about these concrete
+streams and their hashes are checked by compiled evaluation (`native_decide`, pinned with
+`#assert_compiled`, so `Lean.ofReduceBool` is in their axiom set and nowhere else); the general
+theorems above stay kernel-proved. -/
 
 def toyHash (l : List ℤ) : ℤ := l.foldl (fun a x => a * 1000003 + x) (l.length + 17 : ℤ)
 
@@ -285,12 +288,12 @@ theorem toyP_valid : toyP.vc.Valid toyP.A .buchi := by
 def cHonest : WindowCert Bool := toyP.produce toyP.genesis [1, 2, 3]
 
 /-- **Dropped position, refused**: the server ships `[1, 3]` against the honest receipt. -/
-theorem falsifier_dropped_refused : toyP.checkWindow toyP.genesis [1, 3] cHonest = false := by decide
+theorem falsifier_dropped_refused : toyP.checkWindow toyP.genesis [1, 3] cHonest = false := by native_decide
 
 /-- **Dropped position, self-consistent receipt**: a receipt recomputed over `[1, 3]` is internally
 fine but ends at a different root, so a follower anchored to the published root refuses it. -/
 theorem falsifier_dropped_moves_root :
-    (toyP.produce toyP.genesis [1, 3]).rootOut ≠ cHonest.rootOut := by decide
+    (toyP.produce toyP.genesis [1, 3]).rootOut ≠ cHonest.rootOut := by native_decide
 
 /-- **Dropping the violating entry would flip the verdict**, which is exactly why the root must catch
 it: the honest window `[1, 9, 2]` is `viol`, the window without `9` is `unknown`, and their roots
@@ -299,7 +302,7 @@ theorem falsifier_dropped_violation :
     (toyP.produce toyP.genesis [1, 9, 2]).verdict = .viol ∧
     (toyP.produce toyP.genesis [1, 2]).verdict = .unknown ∧
     (toyP.produce toyP.genesis [1, 2]).rootOut ≠ (toyP.produce toyP.genesis [1, 9, 2]).rootOut := by
-  decide
+  native_decide
 
 def w1 : List ℤ := [1, 2]
 def w2 : List ℤ := [3]
@@ -308,23 +311,23 @@ def c2 : WindowCert Bool := toyP.produce (toyP.advance toyP.genesis w1) w2
 
 /-- The honest chain is accepted (non-vacuity of `windows_compose`'s hypothesis). -/
 theorem honest_chain_accepted : (toyP.checkChain toyP.genesis [(w1, c1), (w2, c2)]).isSome = true := by
-  decide
+  native_decide
 
 /-- **Swapped windows, refused.** -/
-theorem falsifier_swapped_refused : toyP.checkChain toyP.genesis [(w2, c2), (w1, c1)] = none := by decide
+theorem falsifier_swapped_refused : toyP.checkChain toyP.genesis [(w2, c2), (w1, c1)] = none := by native_decide
 
 /-- **Re-chunking is not a different log**: the same entries in other window boundaries end at the same
 root and state (the receipts are about the log, not about the chunking). -/
 theorem rechunk_same_root :
     (toyP.advance toyP.genesis [1, 2, 3]).root = (toyP.advance (toyP.advance toyP.genesis w1) w2).root := by
-  decide
+  native_decide
 
 #assert_axioms toyP_valid
-#assert_axioms falsifier_dropped_refused
-#assert_axioms falsifier_dropped_moves_root
-#assert_axioms falsifier_dropped_violation
-#assert_axioms honest_chain_accepted
-#assert_axioms falsifier_swapped_refused
-#assert_axioms rechunk_same_root
+#assert_compiled falsifier_dropped_refused
+#assert_compiled falsifier_dropped_moves_root
+#assert_compiled falsifier_dropped_violation
+#assert_compiled honest_chain_accepted
+#assert_compiled falsifier_swapped_refused
+#assert_compiled rechunk_same_root
 
 end Dregg2.Stream
