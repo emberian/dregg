@@ -2179,6 +2179,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "audit-flashprove"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "blst",
+ "dregg-query",
+ "ed25519-dalek",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "auditable-fund"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,28 @@
+# A commit-then-audit sampler over FlashProve's cp_verify. Its fire/verdict/alarm decision is the
+# compiled Lean of minidregg `Selvage/AuditFlashProveDecide.lean`, the functions
+# `Selvage/AuditFlashProve.lean` builds its `Round` from; build.rs compiles that file with the
+# Lean toolchain and links it. MINIDREGG_DIR must name a minidregg checkout.
+[package]
+name = "audit-flashprove"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Commit-then-audit over FlashProve cp_verify: MMR of request commitments, drand beacon after the commitment, fail-closed verdicts decided by compiled Lean, offline-checkable receipts."
+links = "minidregg_fp_audit"
+build = "build.rs"
+
+[dependencies]
+dregg-query = { path = "../dregg-query" }
+blake3 = "1"
+blst = "0.3.16"
+sha2 = { workspace = true }
+hex = "0.4"
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+libc = "0.2"
+
+[lints]
+workspace = true
