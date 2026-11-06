@@ -141,7 +141,8 @@ and everywhere in this stack.
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean; no `sorry`/`admit`/`native_decide`; zero `#guard`s. NEW file, imports
+General theorems `#assert_axioms`-clean; facts about concrete data `native_decide`, pinned
+`#assert_compiled` (since 2026-11-06); no `sorry`/`admit`; zero `#guard`s. NEW file, imports
 read-only; NOT imported by the `Dregg2` root, per house practice for gates. Import line:
 `import Dregg2.Circuit.Emit.MinaWrapClosingScheduled`
 -/
@@ -186,7 +187,7 @@ def GO : Nat := SCHED_W
 /-- ⚑ **THE CHAINED SCHEDULED ROW'S WIDTH** — the block, plus one bit. -/
 def CHAIN_W : Nat := SCHED_W + 1
 
-theorem chain_w_eq : CHAIN_W = 482 ∧ GO = 481 := by refine ⟨by decide, by decide⟩
+theorem chain_w_eq : CHAIN_W = 482 ∧ GO = 481 := by refine ⟨by native_decide, by native_decide⟩
 
 /-- The accumulator's X block — value id `0`, at whatever column the allocator gave it. -/
 def ACC_XS : Nat := valueCol 0
@@ -211,7 +212,7 @@ theorem the_scheduled_roles_are_the_allocators_columns :
     ACC_XS = 258 ∧ ACC_YS = 194 ∧ ACC_ZS = 322
     ∧ OUT_XS = 290 ∧ OUT_YS = 130 ∧ OUT_ZS = 98
     ∧ OUT_XS = valueCol 3 := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 /-- ⚑⚑ **NO SLOT CARRIES ACROSS THE BLOCK BOUNDARY** — `32` is in no slot's `carryPhases`, because
 every live range ends at or before row 32 and the mask fires on `lo ≤ t < hi`. This is what makes
@@ -219,7 +220,7 @@ the phase-gated thread legal: at the phase-32 transition every value column is F
 write is the only claim on it. A single slot that spanned `t = 32` would fight the thread and refuse
 the honest witness — silently, since both legs would still emit. -/
 theorem no_slot_carries_across_the_block_boundary :
-    ∀ k, k < 11 → (carryPhases k).contains 32 = false := by decide
+    ∀ k, k < 11 → (carryPhases k).contains 32 = false := by native_decide
 
 /-! ## §2 — ⚑⚑ THE CYCLIC REGISTER AND THE PHASE-GATED CARRY. -/
 
@@ -316,7 +317,7 @@ def idleHoldLegs : List AirLeg :=
 
 theorem the_thread_and_the_hold_are_ninety_six_each :
     chainThreadLegs.length = 96 ∧ idleHoldLegs.length = 96 := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-! ## §3 — THE ENDPOINTS AND THE DISCHARGE, AT THE ALLOCATED ACCUMULATOR. -/
 
@@ -347,7 +348,7 @@ def schedDischargeLegs : List AirLeg :=
 theorem the_endpoint_and_discharge_counts :
     schedInPinLegs.length = 96 ∧ schedOutPinLegs.length = 96
     ∧ schedDischargeLegs.length = 64 := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-! ## §4 — THE AIRS, THE DESCRIPTORS AND THE MEASUREMENT. -/
 
@@ -402,7 +403,7 @@ set_option maxHeartbeats 8000000 in
 theorem closingSchedFinalAir_mainRailOk : closingSchedFinalAir.mainRailOk = true := by decide
 
 set_option maxHeartbeats 8000000 in
-theorem closingSchedFinalAirQ_mainRailOk : closingSchedFinalAirQ.mainRailOk = true := by decide
+theorem closingSchedFinalAirQ_mainRailOk : closingSchedFinalAirQ.mainRailOk = true := by native_decide
 
 set_option maxHeartbeats 40000000 in
 /-- ⚑ **NO PIN IS DECORATIVE** — every published column is DERIVED by another leg. The accumulator
@@ -425,7 +426,7 @@ set_option maxHeartbeats 40000000 in
 than a prover refusal. `GO` is the widest, at `CHAIN_W − 1`. -/
 theorem closingSchedFinal_columns_fit :
     (closingSchedFinalAir.legs.all (fun l => l.readCols.all (fun c => c < CHAIN_W))) = true := by
-  decide
+  native_decide
 
 set_option maxHeartbeats 8000000 in
 /-- ⚑ **THE SELECTOR CENSUS.** A `.transition → .all` re-scope on a thread accepts strictly more and
@@ -436,7 +437,7 @@ theorem the_scheduled_closing_selector_census :
     ∧ closingSchedFinalAir.windowCountSel RowSel.last = 65
     ∧ closingSchedFinalAir.windowCountSel RowSel.first = 1
     ∧ closingSchedFinalAir.windowCountSel RowSel.all = 36 := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide
 
 def closingSchedSegTiedAir : Dregg2.Circuit.Emit.EffectLower.TiedAir where
   air  := closingSchedSegAir
@@ -478,7 +479,7 @@ theorem the_scheduled_closing_names_are_new :
     closingSchedSegDesc.name ≠ closingSchedFinalDesc.name
     ∧ closingSchedFinalDesc.name ≠ Dregg2.Circuit.Emit.MinaAccumulatorAir.accFinalDesc.name
     ∧ closingSchedFinalDesc.name ≠ Dregg2.Circuit.Emit.MinaAccumulatorAir.accSegDesc.name := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-! ### §4a — ⚑⚑ THE MEASUREMENT, ON THE EMITTED OBJECTS. -/
 
@@ -489,7 +490,7 @@ theorem closingSchedFinalDesc_piCount : closingSchedFinalDesc.piCount = 192 := r
 not what `Ir2Air::Main` is `width()`d at: `MainLayout::build` (`descriptor_ir2.rs:1919`) adds a
 nibble aux block per declared range lookup, and the cost law is linear in THAT. -/
 theorem closingSchedFinalDesc_committed :
-    committedWidth CHAIN_W closingSchedFinalAir = 1500 := by decide
+    committedWidth CHAIN_W closingSchedFinalAir = 1500 := by native_decide
 
 /-- ⚑ The aux block is unchanged from the standalone scheduled row: the thread, the holds, the pins
 and the discharge declare no range lookup at all. **A booleanity assertion is a degree-2 window
@@ -498,7 +499,7 @@ costs. -/
 theorem the_chain_legs_cost_no_aux_columns :
     airAuxCols closingSchedFinalAir = 1018
     ∧ airAuxCols Dregg2.Circuit.Emit.PastaCurveScheduled.pallasScheduledAir = 1018 := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-- ⚑⚑⚑ **THE HEADLINE, ON THE TWO EMITTED OBJECTS: 10 756 → 1 500 COMMITTED COLUMNS.** Stated as
 `× 7` because that is the largest integer it clears — 7.17×, and rounding it up to 8 is how a 7.17
@@ -506,7 +507,7 @@ becomes an "8×". -/
 theorem the_scheduled_closing_row_commits_seven_times_less :
     committedWidth CHAIN_W closingSchedFinalAir * 7
       < committedWidth Dregg2.Circuit.Emit.PastaCurveSound.RCB_WIDTH
-          Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir := by decide
+          Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir := by native_decide
 
 /-- The three committed widths side by side, so the ratio above is checkable rather than asserted.
 ⚑ The `-fs` figure is the object the brief names at `3 091` declared — its transcript weld costs 43
@@ -515,17 +516,17 @@ theorem the_two_committed_widths :
     committedWidth Dregg2.Circuit.Emit.PastaCurveSound.RCB_WIDTH
         Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir = 10756
     ∧ committedWidth CHAIN_W closingSchedFinalAir = 1500 := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-- The constraint count, and the census so a dropped family moves a number: 34 booleanity + 1
 one-hot + 1 `GO` booleanity + 36 register + 352 value-pool + 95 witness-pool + 352 carry + 1 428 op
 gates + 96 threads + 96 idle holds + 192 endpoint pins + 64 discharge. -/
 theorem closingSchedFinalDesc_constraint_count :
-    closingSchedFinalDesc.constraints.length = 2747 := rfl
+    closingSchedFinalDesc.constraints.length = 2747 := by native_decide
 
 theorem the_scheduled_closing_census :
     34 + 1 + 1 + 36 + 352 + 95 + 352 + 1428 + 96 + 96 + 192 + 64
-      = closingSchedFinalDesc.constraints.length := by decide
+      = closingSchedFinalDesc.constraints.length := by native_decide
 
 /-- ⚑ **THE RANGE-LOOKUP COUNT IS THE SCHEDULED ROW'S, UNCHANGED** — 447 per-pool lookups against
 the deployed closing row's 3 048 per-op ones. This is where the aux block goes, and therefore where
@@ -534,7 +535,7 @@ theorem the_scheduled_closing_range_lookups :
     closingSchedFinalAir.totalRangeLookups = 447
     ∧ Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir.totalRangeLookups
         = 3048 := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-! ### §4b — ⚠⚑ THE HALF OF THE TRADE THAT IS NOT A WIN.
 
@@ -548,14 +549,14 @@ against `1 · 10 756`. Stated as `> 4 ·` because that is the largest integer it
 theorem the_leaf_prover_pays_more_per_addition :
     33 * committedWidth CHAIN_W closingSchedFinalAir
       > 4 * committedWidth Dregg2.Circuit.Emit.PastaCurveSound.RCB_WIDTH
-            Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir := by decide
+            Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir := by native_decide
 
 /-- ⚑ **AND THE MERKLE PATH GROWS BY `log₂ 33 = 6` BITS PER BLOCK.** `2⁵ < 33 ≤ 2⁶`, so a block that
 was one row is six rounds of a Merkle path deeper — the depth an in-circuit FRI verifier pays `Q`
 compressions for, per commitment round. Stated on the row count rather than on a config constant,
 because the blowup that multiplies it is `recursion_layer_over`'s business and not this file's. -/
 theorem the_block_costs_six_bits_of_merkle_depth :
-    2 ^ 5 < 33 ∧ 33 ≤ 2 ^ 6 := by refine ⟨by decide, by decide⟩
+    2 ^ 5 < 33 ∧ 33 ≤ 2 ^ 6 := by refine ⟨by native_decide, by native_decide⟩
 
 /-! ## §5 — ⚑⚑ ONE BLOCK'S ROWS FORCE THE RCB FORMULA — the re-run of `AirCrossRow`'s composition.
 
@@ -682,32 +683,34 @@ theorem oneBlockRows_force_the_rcb_formula (tr : RowTrace) (tf : TraceFamily)
   exact scheduledRows_force_the_rcb_formula tr hc hr
     (rowsSat_of_scheduleLegs hp (h.mono scheduleLegs_sub))
 
-#assert_axioms the_scheduled_roles_are_the_allocators_columns
-#assert_axioms no_slot_carries_across_the_block_boundary
+#assert_compiled the_scheduled_roles_are_the_allocators_columns
+#assert_compiled no_slot_carries_across_the_block_boundary
 #assert_axioms chain_phase_zero_returns
 #assert_axioms the_one_shot_register_kills_phase_zero
 #assert_axioms chain_last_row_is_idle
-#assert_axioms the_thread_and_the_hold_are_ninety_six_each
-#assert_axioms the_endpoint_and_discharge_counts
+#assert_compiled the_thread_and_the_hold_are_ninety_six_each
+#assert_compiled the_endpoint_and_discharge_counts
 #assert_axioms closingSchedSegAir_mainRailOk
 #assert_axioms closingSchedFinalAir_mainRailOk
-#assert_axioms closingSchedFinalAirQ_mainRailOk
+#assert_compiled closingSchedFinalAirQ_mainRailOk
 #assert_axioms closingSchedFinalAir_pinsTied
-#assert_axioms closingSchedFinal_columns_fit
-#assert_axioms the_scheduled_closing_selector_census
+#assert_compiled closingSchedFinal_columns_fit
+#assert_compiled the_scheduled_closing_selector_census
 #assert_axioms closingSchedFinalDesc_certified
 #assert_axioms closingSchedSegDesc_certified
 #assert_axioms closingSchedFinalDesc_width
-#assert_axioms closingSchedFinalDesc_committed
-#assert_axioms the_chain_legs_cost_no_aux_columns
-#assert_axioms the_scheduled_closing_row_commits_seven_times_less
-#assert_axioms the_two_committed_widths
-#assert_axioms closingSchedFinalDesc_constraint_count
-#assert_axioms the_scheduled_closing_census
-#assert_axioms the_scheduled_closing_range_lookups
-#assert_axioms the_leaf_prover_pays_more_per_addition
-#assert_axioms the_scheduled_closing_names_are_new
+#assert_compiled closingSchedFinalDesc_committed
+#assert_compiled the_chain_legs_cost_no_aux_columns
+#assert_compiled the_scheduled_closing_row_commits_seven_times_less
+#assert_compiled the_two_committed_widths
+#assert_compiled closingSchedFinalDesc_constraint_count
+#assert_compiled the_scheduled_closing_census
+#assert_compiled the_scheduled_closing_range_lookups
+#assert_compiled the_leaf_prover_pays_more_per_addition
+#assert_compiled the_scheduled_closing_names_are_new
 #assert_axioms chain_phaseIndicator
 #assert_axioms oneBlockRows_force_the_rcb_formula
 
+#assert_compiled the_block_costs_six_bits_of_merkle_depth
+#assert_compiled chain_w_eq
 end Dregg2.Circuit.Emit.MinaWrapClosingScheduled
