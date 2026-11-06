@@ -114,3 +114,14 @@ transcript with receipts every 100 events, a follower, and a microsite with the 
   windows atomically; a quote-aware classifier that re-reads `bash -c` / `ssh` strings and peels
   `NAME=value`; LEB128 lengths in the wide form; `buchi_iff_count_unbounded_along`; wording fixed;
   classifier facts are named `native_decide` theorems under `#assert_compiled`.
+- Cross-model round 2 (gpt-6-astra, 2026-11-06, at 6cb710ba2): statements pass (anchoring binds a
+  named position; cofinality correct; windows_compose and verdict_monotone survive); 1 MAJOR open
+  (`verify` probed only 64 positions past a gap, so a distant stale window escaped) and 4 MINOR (Rust
+  audit kept the old EOF rule; classifier: positional args after `bash -c` re-read, `sudo -u`,
+  `env -u`, `$( )` missed, `git add -- -A` false positive; publication races; one `#guard` left).
+  Repairs: `verify` enumerates both directories and refuses any file that is not one of the checked
+  pairs; the audit refuses unterminated windows; `RUN.lock` (create-new) owns a run, windows are
+  published by hard link (never replacing), `DONE` by rename; the classifier keeps the `-c` string
+  boundary, drops wrapper option operands and `--`, and re-reads `$( )` / backquote bodies; the hash
+  moved to the core module `Stream.Hash` so its concrete fact is the pinned theorem
+  `streamHash_forms_differ`.

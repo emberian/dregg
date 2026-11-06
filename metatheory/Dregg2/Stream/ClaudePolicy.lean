@@ -23,6 +23,7 @@ About `ClaudeCore.policyA` / `policyVC` / `classify`, the objects `lake exe stre
 -/
 import Dregg2.Stream.Window
 import Dregg2.Stream.ClaudeCore
+import Dregg2.Stream.Hash
 
 namespace Dregg2.Stream.Claude
 
@@ -195,10 +196,26 @@ theorem commandForbidden_cases : (
     (!commandForbidden "echo stash") &&
     (commandForbidden "env X=1 git stash") &&
     (!commandForbidden "echo \"x; git stash\"") &&
+    (!commandForbidden "bash -c 'echo ok' '; git stash'") &&
+    (commandForbidden "sudo -u root git stash") &&
+    (commandForbidden "env -u X git stash") &&
+    (commandForbidden "echo \"$(git stash)\"") &&
+    (commandForbidden "echo `pkill -f x`") &&
+    (!commandForbidden "echo '$(git stash)'") &&
+    (!commandForbidden "git add -- -A") &&
     (!commandForbidden "git commit -m 'never git stash'") &&
     (commandForbidden "ssh -p 22 bb2 \"cd /x && git add --all\"")) = true := by native_decide
 
 #assert_compiled classify_cases
+
+open Dregg2.Stream.Hash in
+/-- The follower's hash: the narrow and the wide framing of the same input give different digests
+(the two tags are prefix-free). Compiled evaluation of pure-Lean BLAKE3. -/
+theorem streamHash_forms_differ :
+    streamHash [5] ≠ (Int.ofNat <| bytesToNat <| Dregg2.Crypto.Blake3.hash (wideTag ++ be8 1 ++ encWide 5)) := by
+  native_decide
+
+#assert_compiled streamHash_forms_differ
 #assert_compiled commandForbidden_cases
 
 end Dregg2.Stream.Claude

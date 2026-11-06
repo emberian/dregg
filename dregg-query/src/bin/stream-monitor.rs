@@ -60,15 +60,17 @@ impl Run {
         }
         // Publish the window atomically and never over an existing one.
         let p = window_path(&self.dir, self.k);
-        if p.exists() {
-            return Err(format!(
-                "{} exists; refusing to overwrite a published window",
-                p.display()
-            ));
-        }
+        // Written to a temp name, then hard-linked into place: the link fails if the name exists, so a
+        // published window is never replaced, and a reader never sees a partial one.
         let tmp = p.with_extension("jsonl.tmp");
         fs::write(&tmp, &body).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        fs::rename(&tmp, &p).map_err(|e| format!("{}: {e}", p.display()))?;
+        fs::hard_link(&tmp, &p).map_err(|e| {
+            format!(
+                "{}: refusing to replace a published window: {e}",
+                p.display()
+            )
+        })?;
+        fs::remove_file(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         let t = Instant::now();
         let out = Command::new(&self.checker)
             .arg("produce")
@@ -117,7 +119,7 @@ fn run(args: &[String]) -> Result<(), String> {
         .transpose()
         .map_err(|e| format!("--follow: {e}"))?;
     // A run owns its directory: refuse any earlier generation's state rather than overwrite it.
-    for stale in ["receipts", "windows", "DONE", "receipts.jsonl"] {
+    for stale in ["receipts", "windows", "DONE", "RUN.lock", "receipts.jsonl"] {
         if dir.join(stale).exists() {
             return Err(format!(
                 "{} already has {stale}; use a fresh dir",
@@ -125,6 +127,18 @@ fn run(args: &[String]) -> Result<(), String> {
             ));
         }
     }
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // Exclusive ownership of the directory for this run: a second producer fails here.
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join("RUN.lock"))
+        .map_err(|e| {
+            format!(
+                "{}: another producer owns this directory: {e}",
+                dir.display()
+            )
+        })?;
     fs::create_dir_all(dir.join("windows")).map_err(|e| e.to_string())?;
     let mut st = Run {
         dir,
@@ -172,7 +186,10 @@ fn run(args: &[String]) -> Result<(), String> {
         );
     }
     // Tell a following `stream-check follow` that no more windows will come.
-    fs::write(st.dir.join("DONE"), format!("{}\n", st.k)).map_err(|e| e.to_string())?;
+    // DONE appears atomically, already holding its count.
+    let done_tmp = st.dir.join("DONE.tmp");
+    fs::write(&done_tmp, format!("{}\n", st.k)).map_err(|e| e.to_string())?;
+    fs::rename(&done_tmp, st.dir.join("DONE")).map_err(|e| e.to_string())?;
     println!(
         "done: {} entries in {} windows, root {}",
         st.frontier.len(),
@@ -205,8 +222,16 @@ fn audit(args: &[String]) -> Result<(), String> {
         let body = fs::read(window_path(&dir, k)).map_err(|e| e.to_string())?;
         // The follower's split: every newline-terminated line is an entry, empty ones included.
         let mut parts: Vec<&[u8]> = body.split(|&b| b == b'\n').collect();
-        if parts.last().is_some_and(|l| l.is_empty()) {
-            parts.pop();
+        // The follower's framing: only newline-terminated lines are entries; a window with an
+        // unterminated tail is malformed and refused, as `stream-check` refuses it.
+        match parts.pop() {
+            Some([]) | None => {}
+            Some(last) => {
+                return Err(format!(
+                    "REFUSE: window {k} ends in {} unterminated bytes",
+                    last.len()
+                ));
+            }
         }
         for l in parts {
             m.push(entry_value(l));
