@@ -34,10 +34,9 @@
 //! Binding the field BYTES to the authenticated response is the attestation's span weld
 //! (`FieldSpan` within the committed body), not this leg — the leg proves the POLICY RUN.
 //!
-//! Soundness of the table itself: [`injection_dfa_table`] is differential-tested against
-//! the VERIFIED derivative matcher (`injection_free`, dregg-dfa's boolean-closed `Re` —
-//! the Rust twin of `ZkOracle.lean`'s `.neg injectionTemplate`) — two independent
-//! implementations, one truth.
+//! [`injection_dfa_table`] has differential regression tests against `injection_free`,
+//! the Rust derivative matcher corresponding to `ZkOracle.lean`'s `.neg injectionTemplate`.
+//! Those finite checks detect drift; they are not a proof of implementation refinement.
 
 use dregg_circuit::descriptor_ir2::{
     DreggStarkConfig, EffectVmDescriptor2, Ir2BatchProof, MemBoundaryWitness, parse_vm_descriptor2,
@@ -73,25 +72,10 @@ const ACC: usize = 7;
 /// `prove_vm_descriptor2`'s `trace_with_chip_lanes`).
 const DFA_WIDTH: usize = 22;
 
-/// The BYTE-IDENTICAL wire string Lean's `emitVmJson2 injectionRoutingDesc` emits (pinned by the
-/// `#guard` in `metatheory/Dregg2/Circuit/Emit/DfaRoutingGeneralEmit.lean`). If Lean's emitter
-/// drifts, that `#guard` fails; if this literal drifts, [`injection_descriptor`] decodes a different
-/// statement and the roundtrip tests (`injection_leg_descriptor_roundtrip`, the attestation
-/// roundtrip) stop proving/verifying.
-///
-/// ⚠ **DRIFTED — THIS LITERAL IS THE PRE-FLAG-DAY SHAPE (measured 2026-08-05).** It is 2886 bytes
-/// and carries `"ir":2` with NO `"challenges"` key. The challenge-leaf flag day made that key
-/// MANDATORY on v2: `circuit/src/descriptor_ir2.rs:1761` refuses such a descriptor with
-/// `ir:2 descriptor missing "challenges" (pre-2026-08-05 shape; re-emit it)` — deliberately, so the
-/// old shape cannot be silently reinterpreted as declaring zero challenges. Consequence:
-/// [`injection_descriptor`]'s `.expect(…)` PANICS, taking the STARK injection leg
-/// (`prove_injection_leg` / `verify_injection_leg`) with it.
-///
-/// THE FIX IS A RE-EMIT, NOT A HAND-PATCH: re-copy the string from Lean's
-/// `#guard` in `DfaRoutingGeneralEmit.lean`. Do not hand-insert `"challenges":0` here — this
-/// literal's whole purpose is that it is Lean's output verbatim, and hand-editing it would make
-/// the `#guard` and this constant disagree silently, which is the failure this pin exists to stop.
-const GOLDEN_JSON: &str = r#"{"name":"dfa-routing-injection-3state::poseidon2-v1","ir":2,"trace_width":22,"public_input_count":4,"challenges":0,"tables":[],"constraints":[{"t":"lookup","table":1,"tuple":[{"t":"const","v":4},{"t":"var","v":0},{"t":"var","v":1},{"t":"var","v":2},{"t":"var","v":6},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":3},{"t":"var","v":8},{"t":"var","v":9},{"t":"var","v":10},{"t":"var","v":11},{"t":"var","v":12},{"t":"var","v":13},{"t":"var","v":14}]},{"t":"lookup","table":1,"tuple":[{"t":"const","v":2},{"t":"var","v":7},{"t":"var","v":3},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":4},{"t":"var","v":15},{"t":"var","v":16},{"t":"var","v":17},{"t":"var","v":18},{"t":"var","v":19},{"t":"var","v":20},{"t":"var","v":21}]},{"t":"gate","body":{"t":"var","v":6}},{"t":"gate","body":{"t":"mul","l":{"t":"var","v":5},"r":{"t":"add","l":{"t":"var","v":5},"r":{"t":"const","v":-1}}}},{"t":"gate","body":{"t":"mul","l":{"t":"mul","l":{"t":"var","v":0},"r":{"t":"add","l":{"t":"var","v":0},"r":{"t":"const","v":-1}}},"r":{"t":"add","l":{"t":"var","v":0},"r":{"t":"const","v":-2}}}},{"t":"gate","body":{"t":"mul","l":{"t":"var","v":1},"r":{"t":"add","l":{"t":"var","v":1},"r":{"t":"const","v":-1}}}},{"t":"gate","body":{"t":"add","l":{"t":"mul","l":{"t":"const","v":2},"r":{"t":"var","v":2}},"r":{"t":"add","l":{"t":"mul","l":{"t":"const","v":-2},"r":{"t":"mul","l":{"t":"var","v":0},"r":{"t":"var","v":0}}},"r":{"t":"add","l":{"t":"mul","l":{"t":"const","v":2},"r":{"t":"var","v":0}},"r":{"t":"add","l":{"t":"mul","l":{"t":"const","v":3},"r":{"t":"mul","l":{"t":"mul","l":{"t":"var","v":0},"r":{"t":"var","v":0}},"r":{"t":"var","v":1}}},"r":{"t":"add","l":{"t":"mul","l":{"t":"const","v":-5},"r":{"t":"mul","l":{"t":"var","v":0},"r":{"t":"var","v":1}}},"r":{"t":"mul","l":{"t":"const","v":-2},"r":{"t":"var","v":1}}}}}}}},{"t":"window_gate","on_transition":true,"body":{"t":"add","l":{"t":"nxt","c":0},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"loc","c":2}}}},{"t":"window_gate","on_transition":true,"body":{"t":"add","l":{"t":"nxt","c":7},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"loc","c":4}}}},{"t":"pi_binding","row":"first","col":0,"pi_index":0},{"t":"boundary","row":"first","body":{"t":"add","l":{"t":"var","v":5},"r":{"t":"const","v":-1}}},{"t":"pi_binding","row":"first","col":7,"pi_index":2},{"t":"pi_binding","row":"last","col":2,"pi_index":1},{"t":"pi_binding","row":"last","col":4,"pi_index":3}],"hash_sites":[],"ranges":[]}"#;
+/// The shared Lean emission route owns these bytes. `EmitByName.lean` serializes
+/// `DfaRoutingGeneralEmit.injectionRoutingDesc`; Rust parses the checked artifact.
+const GOLDEN_JSON: &str =
+    include_str!("../../circuit/descriptors/by-name/dfa-routing-injection.json");
 
 /// The Lean-emitted injection-routing descriptor, decoded once from [`GOLDEN_JSON`]. `prove` and
 /// `verify` share this exact object (the descriptor IS the statement).

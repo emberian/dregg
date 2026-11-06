@@ -54,6 +54,8 @@ mod hexutil;
 pub mod mmr;
 pub mod query;
 pub mod receipt;
+/// Streaming receipts: the producer side of `lake exe stream-check` (initiative 11).
+pub mod stream;
 /// Paged whole-log MMR window tiling — the anti-truncation / hidden-revocation
 /// verifier over a range of the committed log.
 pub mod windows;

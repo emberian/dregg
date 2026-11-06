@@ -56,11 +56,10 @@
 //! follow-up.
 
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness, VmConstraint2,
-    WindowExpr, WindowGateSpec, ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness,
+    ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
 
 use p3_field::PrimeField32;
 use p3_recursion::{
@@ -132,44 +131,12 @@ impl FactoryBackingWitness {
 
 /// Adapt the factory backing tuple into the IR-v2 [`EffectVmDescriptor2`]: 24 boundary pins
 /// (`PiBinding{First}`, EXACT — `pi_index == col`) + 24 transition pins (`WindowGate{Nxt(c) −
-/// Loc(c)}`, EXACT — every column constant across rows). The mapping is total (no kind to refuse), so
-/// this always returns `Ok`.
+/// Loc(c)}`, EXACT — every column constant across rows). Authored by Lean `TupleBindingEmit.tupleDesc`; parsing
+/// fails closed if the generated artifact is invalid.
 pub fn factory_backing_to_descriptor2() -> Result<EffectVmDescriptor2, String> {
-    let mut constraints: Vec<VmConstraint2> = Vec::with_capacity(2 * FACTORY_TUPLE_WIDTH);
-
-    // Family 1 — the 24 boundary pins: `row0[col c] == pi[c]`.
-    for c in 0..FACTORY_TUPLE_WIDTH {
-        constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-            row: VmRow::First,
-            col: c,
-            pi_index: c,
-        }));
-    }
-
-    // Family 2 — the 24 transition pins: `next[c] − local[c] == 0` on rows 0..n−2.
-    for c in 0..FACTORY_TUPLE_WIDTH {
-        constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-            body: WindowExpr::Add(
-                Box::new(WindowExpr::Nxt(c)),
-                Box::new(WindowExpr::Mul(
-                    Box::new(WindowExpr::Const(-1)),
-                    Box::new(WindowExpr::Loc(c)),
-                )),
-            ),
-            on_transition: true,
-        }));
-    }
-
-    Ok(EffectVmDescriptor2 {
-        name: "factory-backing-leaf::factory_backing_v1".to_string(),
-        trace_width: FACTORY_TUPLE_WIDTH,
-        public_input_count: FACTORY_TUPLE_WIDTH,
-        challenges: 0,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    })
+    dregg_circuit::descriptor_ir2::parse_vm_descriptor2(include_str!(
+        "../../circuit/descriptors/by-name/factory-backing-leaf.json"
+    ))
 }
 
 /// Prove a factory backing tuple as a RECURSION-FOLDABLE IR-v2 leaf (the sovereign/bridge pattern).
@@ -428,6 +395,8 @@ mod tests {
         SEG_SPINE_WIDTH, SEG_VK_SPINE_FIRST, SEG_WIDTH, ir2_leaf_wrap_config, leaf_vk_spine_host,
         prove_descriptor_leaf_with_pi_slice_expose,
     };
+    use dregg_circuit::descriptor_ir2::VmConstraint2;
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
     use dregg_circuit::refusal::{assert_violated_constraint_not_bus, must_refuse};
 
     fn make_witness() -> FactoryBackingWitness {

@@ -699,3 +699,28 @@ globs = ["Dregg2.Lightclient.CallTree", "Dregg2.Lightclient.CallTreeDeploy"]
 [[lean_exe]]
 name = "calltree-check"
 root = "CallTreeCheck"
+
+# stream-check — the streaming-receipt follower (initiative 11, 2026-11-06): checks per-window
+# receipts over an MMR-committed Claude Code transcript stream. The acceptance decision is
+# `Dregg2.Stream.Policy.checkWindow` at the demo policy, which `Stream.Window.window_sound` /
+# `windows_compose` are about. Imports Lean core only (Stream.Core, Stream.ClaudeCore,
+# Crypto.Blake3Compute). NOT a default target. Demo: ../demo/stream-receipts/run.sh
+#
+#     lake build stream-check
+#     ./.lake/build/bin/stream-check follow <dir>
+[[lean_exe]]
+name = "stream-check"
+root = "StreamCheck"
+
+# tree-check — the extracted tree-certificate checker (initiative 12, 2026-11-06): verifies schema,
+# field (path ∘ pattern) and corpus-absence certificates over canonical-CBOR JSON trees; `project`
+# is the Lean JSON → canonical tree projection the Rust producer conforms to. Lean core only
+# (Dregg2.Tree.*, Keccak, TableRun). `Dregg2.Tree.Cert`'s `schema_sound` / `path_pattern_sound` /
+# `corpus_count_sound` and `Dregg2.Tree.Spec.corpus_absence` are about what it accepts. NOT a
+# default target. Notes: ../docs/automata/tree/
+#
+#     lake build tree-check
+#     ./.lake/build/bin/tree-check verify ../demo/tree-absence/cert.json
+[[lean_exe]]
+name = "tree-check"
+root = "TreeCheck"

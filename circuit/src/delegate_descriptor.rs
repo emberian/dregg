@@ -24,19 +24,16 @@
 //! bound in-circuit rather than by an executor-side field compare. A proof bound to scope `A` fails to
 //! verify against any forged wider scope `B` (the row-0 boundary `col_i == PI_i` is UNSAT).
 //!
-//! ## Lean-emit alignment (a NAMED residual)
+//! ## Lean-authored tuple binding
 //!
-//! Unlike the other by-name goldens, this descriptor is built directly in Rust — the Lean
-//! `EffectVmEmitDelegate.lean` family authors the cap-graph `cap_root`-MOVE `EffectVmDescriptor` (the
-//! *effect* of delegating), NOT an `emitVmJson2` IR-v2 golden for the *scope binding* the executor's
-//! `StarkDelegation` arm checks. Emitting this scope-binding descriptor from Lean (a byte-pinned
-//! `emitVmJson2` `#guard` + emit-gate, like `adjacency-membership.json`) is out of Rust scope and is
-//! carried as a residual; the Rust descriptor here captures precisely the `action.rs:672-685`
-//! constraints so consumers can flip off the StarkProof path today.
+//! `TupleBindingEmit.delegateDesc` authors this descriptor; its generic
+//! `tuple_semantics` theorem characterizes every emitted PI pin. The checked-in
+//! artifact is serialized by `EmitByName.lean` and interpreted here. Delegation
+//! binds only the first row, preserving the existing scope contract. It does not
+//! assert the cap-graph effect or authorize the scope off-chain.
 
-use crate::descriptor_ir2::{EffectVmDescriptor2, VmConstraint2};
+use crate::descriptor_ir2::EffectVmDescriptor2;
 use crate::field::BabyBear;
-use crate::lean_descriptor_air::{VmConstraint, VmRow};
 
 /// Field limbs per 32-byte scope value (`root_issuer_commitment` / `target` / `scope_hash`), matching
 /// `effect_vm::bytes32_to_8_limbs` (8 limbs each).
@@ -61,26 +58,10 @@ pub const DELEGATE_V2_NAME: &str = "dregg-delegate::v2";
 /// committed public inputs equal the caller's expected scope vector — the exact relay-forge check
 /// `action.rs:672-685` enforces, in the descriptor world.
 pub fn delegate_binding_descriptor() -> EffectVmDescriptor2 {
-    let constraints: Vec<VmConstraint2> = (0..DELEGATE_SCOPE_LIMBS)
-        .map(|i| {
-            VmConstraint2::Base(VmConstraint::PiBinding {
-                row: VmRow::First,
-                col: i,
-                pi_index: i,
-            })
-        })
-        .collect();
-
-    EffectVmDescriptor2 {
-        name: DELEGATE_V2_NAME.to_string(),
-        trace_width: DELEGATE_SCOPE_LIMBS,
-        public_input_count: DELEGATE_SCOPE_LIMBS,
-        challenges: 0,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    }
+    crate::descriptor_ir2::parse_vm_descriptor2(include_str!(
+        "../descriptors/by-name/delegate-binding-v2.json"
+    ))
+    .expect("Lean-emitted delegate binding descriptor must parse")
 }
 
 /// Build the delegation-binding base trace + public inputs for a scope vector.

@@ -59,11 +59,10 @@
 //! is the named follow-up (in-AIR `CellContract` re-proof).
 
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness, VmConstraint2,
-    WindowExpr, WindowGateSpec, ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness,
+    ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
 
 use p3_field::PrimeField32;
 use p3_recursion::{
@@ -132,44 +131,12 @@ impl HatcheryAttestationWitness {
 
 /// Adapt the contract-attestation tuple into the IR-v2 [`EffectVmDescriptor2`]: 16 boundary pins
 /// (`PiBinding{First}`, EXACT — `pi_index == col`) + 16 transition pins (`WindowGate{Nxt(c) −
-/// Loc(c)}`, EXACT — every column constant across rows). The mapping is total (no kind to refuse),
-/// so this always returns `Ok`.
+/// Loc(c)}`, EXACT — every column constant across rows). Authored by Lean `TupleBindingEmit.tupleDesc`;
+/// parsing fails closed if the generated artifact is invalid.
 pub fn hatchery_attestation_to_descriptor2() -> Result<EffectVmDescriptor2, String> {
-    let mut constraints: Vec<VmConstraint2> = Vec::with_capacity(2 * ATTESTATION_TUPLE_WIDTH);
-
-    // Family 1 — the 16 boundary pins: `row0[col c] == pi[c]`.
-    for c in 0..ATTESTATION_TUPLE_WIDTH {
-        constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-            row: VmRow::First,
-            col: c,
-            pi_index: c,
-        }));
-    }
-
-    // Family 2 — the 16 transition pins: `next[c] − local[c] == 0` on rows 0..n−2.
-    for c in 0..ATTESTATION_TUPLE_WIDTH {
-        constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-            body: WindowExpr::Add(
-                Box::new(WindowExpr::Nxt(c)),
-                Box::new(WindowExpr::Mul(
-                    Box::new(WindowExpr::Const(-1)),
-                    Box::new(WindowExpr::Loc(c)),
-                )),
-            ),
-            on_transition: true,
-        }));
-    }
-
-    Ok(EffectVmDescriptor2 {
-        name: "hatchery-attestation-leaf::hatchery_attestation_v1".to_string(),
-        trace_width: ATTESTATION_TUPLE_WIDTH,
-        public_input_count: ATTESTATION_TUPLE_WIDTH,
-        challenges: 0,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    })
+    dregg_circuit::descriptor_ir2::parse_vm_descriptor2(include_str!(
+        "../../circuit/descriptors/by-name/hatchery-attestation-leaf.json"
+    ))
 }
 
 /// Prove a hatchery attestation tuple as a RECURSION-FOLDABLE IR-v2 leaf (the bridge pattern).
@@ -437,7 +404,9 @@ mod tests {
         SEG_SPINE_WIDTH, SEG_VK_SPINE_FIRST, SEG_WIDTH, ir2_leaf_wrap_config, leaf_vk_spine_host,
         prove_descriptor_leaf_with_pi_slice_expose,
     };
+    use dregg_circuit::descriptor_ir2::VmConstraint2;
     use dregg_circuit::field::BABYBEAR_P;
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
     use dregg_circuit::refusal::{assert_violated_constraint_not_bus, must_refuse};
     use p3_field::PrimeField32;
 

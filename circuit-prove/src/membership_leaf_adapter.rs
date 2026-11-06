@@ -83,11 +83,10 @@
 //! `membership_binding_mechanism` tooth proves the fold MECHANISM bites today.
 
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness, VmConstraint2,
-    WindowExpr, WindowGateSpec, ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness,
+    ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
 
 use p3_field::PrimeField32;
 use p3_recursion::{
@@ -169,44 +168,12 @@ impl SenderMembershipWitness {
 
 /// Adapt the membership tuple into the IR-v2 [`EffectVmDescriptor2`]: 2 boundary pins
 /// (`PiBinding{First}`, EXACT — `pi_index == col`) + 2 transition pins
-/// (`WindowGate{Nxt(c) − Loc(c)}`, EXACT — every column constant across rows). The
-/// mapping is total (no kind to refuse), so this always returns `Ok`.
+/// (`WindowGate{Nxt(c) − Loc(c)}`, EXACT — every column constant across rows). Authored by Lean `TupleBindingEmit.tupleDesc`; parsing
+/// fails closed if the generated artifact is invalid.
 pub fn membership_tuple_to_descriptor2() -> Result<EffectVmDescriptor2, String> {
-    let mut constraints: Vec<VmConstraint2> = Vec::with_capacity(2 * MEMBERSHIP_TUPLE_WIDTH);
-
-    // Family 1 — the 2 boundary pins: `row0[col c] == pi[c]`.
-    for c in 0..MEMBERSHIP_TUPLE_WIDTH {
-        constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-            row: VmRow::First,
-            col: c,
-            pi_index: c,
-        }));
-    }
-
-    // Family 2 — the 2 transition pins: `next[c] − local[c] == 0` on rows 0..n−2.
-    for c in 0..MEMBERSHIP_TUPLE_WIDTH {
-        constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-            body: WindowExpr::Add(
-                Box::new(WindowExpr::Nxt(c)),
-                Box::new(WindowExpr::Mul(
-                    Box::new(WindowExpr::Const(-1)),
-                    Box::new(WindowExpr::Loc(c)),
-                )),
-            ),
-            on_transition: true,
-        }));
-    }
-
-    Ok(EffectVmDescriptor2 {
-        name: "membership-leaf::sender_membership_v1".to_string(),
-        trace_width: MEMBERSHIP_TUPLE_WIDTH,
-        public_input_count: MEMBERSHIP_TUPLE_WIDTH,
-        challenges: 0,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    })
+    dregg_circuit::descriptor_ir2::parse_vm_descriptor2(include_str!(
+        "../../circuit/descriptors/by-name/membership-leaf.json"
+    ))
 }
 
 /// Prove a membership tuple as a RECURSION-FOLDABLE IR-v2 leaf (the sovereign pattern).
@@ -546,6 +513,8 @@ mod tests {
     use super::*;
     use crate::binding_tooth::report_refusal;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::descriptor_ir2::VmConstraint2;
+    use dregg_circuit::lean_descriptor_air::VmConstraint;
     use dregg_circuit::refusal::{assert_violated_constraint_not_bus, must_refuse};
 
     fn make_witness() -> SenderMembershipWitness {

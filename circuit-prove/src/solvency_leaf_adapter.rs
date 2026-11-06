@@ -21,19 +21,15 @@
 //! composes with it by citation (the Lean theorem says the reserve state STAYS
 //! solvent; this leaf says a GIVEN state IS solvent, as a foldable proof).
 //!
-//! ## The range gadget (the ride) — the same `attest.rs` non-negativity carrier
+//! ## Integer comparison, emitted from Lean
 //!
-//! `R ≥ L` over a prime field is `diff = R − L ∈ [0, 2^RANGE_BITS)`, proven by
-//! witnessing `diff` and a bit decomposition `diff = Σ bit_i·2^i` over `RANGE_BITS`
-//! `Binary`-gated columns, with a `Polynomial` reconstruction pinning `Σ bit_i·2^i −
-//! diff == 0` and a link `R − L − diff == 0`. `RANGE_BITS = 30 < 31`, so the honest
-//! window `[0, 2^30)` lies strictly below BabyBear's negative reps (a "negative"
-//! `diff`, i.e. `R < L`, has field rep `p − (L−R) > 2^30`, no 30-bit decomposition):
-//! the gadget BITES on an insolvent reserve. This is exactly the
-//! `shielded/attest.rs` `Threshold`/`Positive` gadget (its `RANGE_BITS` non-vacuity
-//! argument, verbatim), lowered here into the recursion-foldable IR-v2 grammar so no
-//! new carrier is needed (the pre-req: a solvency leaf rides the 30-bit range gadget,
-//! EVM-cheap / BabyBear-native).
+//! `SolvencyLeafEmit.solvencyDescriptor` ranges reserve, liability and difference
+//! as two 15-bit limbs each, and enforces a borrow chain with no final borrow.
+//! Thus both amounts lie in `[0, 2^30)` and `reserve - liability = difference`
+//! holds over the integers, not merely modulo BabyBear. The earlier constructor
+//! ranged only the modular difference: even `(0, 2^30-1)` passed that check.
+//! Arithmetic constraints bind the first row, including a one-row trace.
+//! Rust parses the generated artifact and builds witnesses; it authors no gates.
 //!
 //! ## The claim tuple — `[reserve_commit, liability_commit]`, bound to the solvent R,L
 //!
@@ -42,17 +38,17 @@
 //! `note_spend_leaf_adapter` uses — KAT-pinned by `fact_arity7_chip_absorb_matches_hash_fact`)
 //! and pinned to PI 0 / PI 1. Because `reserve_commit` opens to the SAME `R` the range
 //! gadget compares (both read the row-0 `R` column) and likewise for `L`, the exposed
-//! tuple certifies "there exist `R, L` with these commitments and `R ≥ L`". A forged
-//! commitment that does not open to the compared value is UNSAT (the opening bites);
-//! an insolvent `R < L` is UNSAT (the range bites). Neither discloses `R`, `L`, or the
-//! salts — the privacy jewel (`DREGGFI-AMBITION` §B.2 #3, the shielded solvency face).
+//! tuple certifies "there exist `R, L` with these commitments and `R ≥ L`". The PI
+//! must equal the computed fact-hash head; an insolvent `R < L` is UNSAT.
+//! The public tuple omits `R`, `L`, and salts;
+//! no cryptographic hiding guarantee follows from that fact alone. Scalar fact hashes
+//! retain their existing collision and blinding-space limitations.
 
 use dregg_circuit::descriptor_ir2::{
-    CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, MemBoundaryWitness,
-    TID_P2, UMemBoundaryWitness, VmConstraint2, prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
+    prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 use dregg_circuit::poseidon2::hash_fact;
 
 use p3_recursion::{ProveNextLayerParams, RecursionOutput};
@@ -67,15 +63,7 @@ use crate::plonky3_recursion_impl::recursive::DreggRecursionConfig;
 /// Extension degree of the recursion config's PCS (the BabyBear-quartic stack).
 const D: usize = 4;
 
-/// The `hash_fact` domain-separation marker (`poseidon2::hash_fact` state[5]). The
-/// same constant `note_spend_leaf_adapter::NS_FACT_MARK` rides; the KAT test
-/// `fact_arity7_chip_absorb_matches_hash_fact` pins it against divergence.
-const SV_FACT_MARK: u32 = 0xFACF;
-
-/// The range window: `diff = R − L ∈ [0, 2^RANGE_BITS)`. **Must be < 31** so the
-/// honest window lies strictly below BabyBear's negative reps (see module docs +
-/// `shielded::attest::RANGE_BITS`). 30 bits covers honest reserves/liabilities
-/// (`< 2^30 ≈ 1.07e9` base units).
+/// Supported amount width; both reserve and liability are range-constrained in AIR.
 pub const RANGE_BITS: usize = 30;
 
 /// The exposed claim width: `[reserve_commit, liability_commit]`.
@@ -101,147 +89,29 @@ const RESERVE_COMMIT_COL: usize = 4;
 const LIABILITY_COMMIT_COL: usize = 5;
 /// `diff = R − L`, range-proven in `[0, 2^RANGE_BITS)`.
 const DIFF_COL: usize = 6;
-/// The first of `RANGE_BITS` binary decomposition columns.
-const BIT0_COL: usize = 7;
-/// Base width of the extended trace (before the per-site chip lane columns).
-const EXT_BASE_WIDTH: usize = BIT0_COL + RANGE_BITS;
+// The layout is emitted by SolvencyLeafEmit. Six little-endian 15-bit limbs
+// occupy 7..13; their bit witnesses occupy 13..103; one internal borrow at 103.
+const LIMB_BASE: usize = 7;
+const LIMB_BITS: usize = 15;
+const BIT_BASE: usize = 13;
+const BORROW_COL: usize = 103;
+const EXT_BASE_WIDTH: usize = 104;
 
 fn felt(v: u64) -> BabyBear {
     BabyBear::new((v % (BABYBEAR_P as u64)) as u32)
 }
 
-/// `x − y` as a `LeanExpr` (no subtraction node: `x + (−1)·y`).
-fn sub(x: LeanExpr, y: LeanExpr) -> LeanExpr {
-    LeanExpr::add(x, LeanExpr::mul(LeanExpr::Const(-1), y))
-}
-
-/// Build an UNCONDITIONAL arity-7 `TID_P2` chip lookup carrying one `hash_fact`
-/// opening: `input_cols[0]` is the predicate, `input_cols[1..]` (≤ 4) the terms; the
-/// tuple is the genuine fact absorb `[7, pred, t0..t3, 0xFACF, 1, 0…, out, lanes…]`.
-/// This is the `note_spend_leaf_adapter::gated_fact_site` with the selector fixed
-/// firing (no row-gating: the solvency openings hold on every row), so it is the same
-/// KAT-pinned fact-sponge carrier. `out` is the site's output (commitment) column;
-/// the `lane_base..` columns are witnessed lanes the chip AIR equality-binds (filled
-/// by the general prover's `fill_chip_lanes`).
-fn fact_site(
-    output_col: usize,
-    input_cols: &[usize],
-    lane_base: usize,
-) -> Result<VmConstraint2, String> {
-    if input_cols.is_empty() || input_cols.len() > 5 {
-        return Err(format!(
-            "fact site expects 1..=5 input columns (pred + ≤4 terms), got {}",
-            input_cols.len()
-        ));
-    }
-    let mut tuple: Vec<LeanExpr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-    tuple.push(LeanExpr::Const(7));
-    for i in 0..CHIP_RATE {
-        let e = match i {
-            0..=4 => match input_cols.get(i) {
-                Some(&c) => LeanExpr::Var(c),
-                None => LeanExpr::Const(0),
-            },
-            5 => LeanExpr::Const(SV_FACT_MARK as i64),
-            6 => LeanExpr::Const(1),
-            _ => LeanExpr::Const(0),
-        };
-        tuple.push(e);
-    }
-    // out0: the digest lane — the site's output (commitment) column.
-    tuple.push(LeanExpr::Var(output_col));
-    // lanes 1..7: the genuine permutation lanes (witnessed, chip-equality-bound).
-    for j in 0..(CHIP_OUT_LANES - 1) {
-        tuple.push(LeanExpr::Var(lane_base + j));
-    }
-    debug_assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
-    Ok(VmConstraint2::Lookup(LookupSpec {
-        table: TID_P2,
-        tuple,
-    }))
-}
-
-/// A pure-local vanishing gate over `body` (the same lowering discipline as the
-/// note-spend adapter's local gates).
-fn gate(body: LeanExpr) -> VmConstraint2 {
-    VmConstraint2::Base(VmConstraint::Gate(body))
-}
-
-/// Build the SOLVENCY leaf descriptor: two `hash_fact` openings, the `RANGE_BITS`
-/// range gadget over `diff = R − L`, and the two PI pins exposing `[reserve_commit,
-/// liability_commit]`.
+/// Parse the Lean-owned, bounded-integer solvency AIR. The v2 identity marks the
+/// added operand ranges and borrow constraints; old v1 proofs use a different VK.
 pub fn solvency_to_descriptor2() -> EffectVmDescriptor2 {
-    let p = BABYBEAR_P;
-    let mut constraints: Vec<VmConstraint2> = Vec::new();
-    // Chip lane columns are appended past the extended base width, 7 per site.
-    let mut width = EXT_BASE_WIDTH;
-    let mut alloc_lanes = || {
-        let base = width;
-        width += CHIP_OUT_LANES - 1;
-        base
-    };
-
-    // OPEN reserve_commit = hash_fact(R, [salt_r,0,0,0]) and liability_commit likewise.
-    // (fact_site cannot fail here: 2 input columns, always in 1..=5.)
-    constraints.push(fact_site(RESERVE_COMMIT_COL, &[R_COL, SALT_R_COL], alloc_lanes()).unwrap());
-    constraints.push(fact_site(LIABILITY_COMMIT_COL, &[L_COL, SALT_L_COL], alloc_lanes()).unwrap());
-
-    // Each decomposition bit is Binary: bit·(bit − 1) == 0.
-    for i in 0..RANGE_BITS {
-        let b = BIT0_COL + i;
-        constraints.push(gate(LeanExpr::mul(
-            LeanExpr::Var(b),
-            sub(LeanExpr::Var(b), LeanExpr::Const(1)),
-        )));
-    }
-
-    // DIFF link: R − L − diff == 0 (so the range-proven `diff` IS `R − L`, and the
-    // prover cannot substitute a small fake diff for a real deficit).
-    constraints.push(gate(LeanExpr::add(
-        sub(LeanExpr::Var(R_COL), LeanExpr::Var(L_COL)),
-        LeanExpr::mul(LeanExpr::Const(-1), LeanExpr::Var(DIFF_COL)),
-    )));
-
-    // RANGE reconstruction: Σ bit_i·2^i − diff == 0. On an insolvent R < L, `diff`
-    // has field rep `p − (L−R) > 2^30`, whose 30-bit reconstruction cannot equal it
-    // → UNSAT. (Coefficients 2^i, i < 30, stay below p as positive i64 constants.)
-    let mut recon = LeanExpr::mul(LeanExpr::Const(-1), LeanExpr::Var(DIFF_COL));
-    for i in 0..RANGE_BITS {
-        let coeff = 1i64 << i; // 2^i, i < 30 < 31, well below p.
-        debug_assert!((coeff as u64) < p as u64);
-        recon = LeanExpr::add(
-            recon,
-            LeanExpr::mul(LeanExpr::Const(coeff), LeanExpr::Var(BIT0_COL + i)),
-        );
-    }
-    constraints.push(gate(recon));
-
-    // Expose the two commitments as PI 0 / PI 1 (row-0 pins).
-    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::First,
-        col: RESERVE_COMMIT_COL,
-        pi_index: RESERVE_COMMIT_PI,
-    }));
-    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::First,
-        col: LIABILITY_COMMIT_COL,
-        pi_index: LIABILITY_COMMIT_PI,
-    }));
-
-    EffectVmDescriptor2 {
-        name: "solvency-leaf::dregg-reserve-covers-liabilities-v1".to_string(),
-        trace_width: width,
-        public_input_count: SOLVENCY_CLAIM_LEN,
-        challenges: 0,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    }
+    parse_vm_descriptor2(include_str!(
+        "../../circuit/descriptors/by-name/solvency-leaf-v2.json"
+    ))
+    .expect("Lean-emitted solvency descriptor decodes")
 }
 
 /// A solvency witness: the reserve `R`, liabilities `L`, and the two hidden
-/// commitment salts. Honest `R ≥ L` with `R − L < 2^RANGE_BITS`.
+/// commitment salts. Honest `0 ≤ L ≤ R < 2^RANGE_BITS`.
 #[derive(Clone, Debug)]
 pub struct SolvencyWitness {
     /// The reserve (real collateral backing the liabilities).
@@ -304,10 +174,19 @@ fn solvency_leaf_base_trace(witness: &SolvencyWitness) -> (Vec<Vec<BabyBear>>, V
     row[RESERVE_COMMIT_COL] = rc;
     row[LIABILITY_COMMIT_COL] = lc;
     row[DIFF_COL] = diff;
-    let diff_u = diff.as_u32();
-    for i in 0..RANGE_BITS {
-        row[BIT0_COL + i] = BabyBear::new((diff_u >> i) & 1);
+    let mask = (1u32 << LIMB_BITS) - 1;
+    let amounts = [r.as_u32(), l.as_u32(), diff.as_u32()];
+    for (pair, value) in amounts.into_iter().enumerate() {
+        for half in 0..2 {
+            let k = 2 * pair + half;
+            let limb = (value >> (half * LIMB_BITS)) & mask;
+            row[LIMB_BASE + k] = BabyBear::new(limb);
+            for bit in 0..LIMB_BITS {
+                row[BIT_BASE + k * LIMB_BITS + bit] = BabyBear::new((limb >> bit) & 1);
+            }
+        }
     }
+    row[BORROW_COL] = BabyBear::new(u32::from((r.as_u32() & mask) < (l.as_u32() & mask)));
 
     let trace = vec![row.clone(), row];
     (trace, vec![rc, lc])
@@ -331,6 +210,9 @@ fn prove_solvency_inner(
             "solvency leaf expects {SOLVENCY_CLAIM_LEN} PI slots, got {}",
             public_inputs.len()
         ));
+    }
+    if witness.reserve >= (1u64 << RANGE_BITS) || witness.liability >= (1u64 << RANGE_BITS) {
+        return Err("solvency amounts must be below 2^30; the AIR enforces this range".into());
     }
     let desc2 = solvency_to_descriptor2();
     let (base_trace, _honest_pis) = solvency_leaf_base_trace(witness);
@@ -575,7 +457,11 @@ mod tests {
     use super::*;
     use crate::binding_tooth::report_refusal;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
-    use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
+    use dregg_circuit::descriptor_ir2::{
+        CHIP_OUT_LANES, TID_P2, VmConstraint2, chip_absorb_all_lanes,
+    };
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+    const SV_FACT_MARK: u32 = 0xFACF;
     use dregg_circuit::note_spending_witness::{NoteSpendingWitness, test_spending_key};
     use dregg_circuit::poseidon2::hash_many;
     use dregg_circuit::refusal::{assert_violated_constraint_not_bus, must_refuse_or_unsat_panic};
@@ -604,7 +490,7 @@ mod tests {
     }
 
     /// The descriptor lowers to the expected shape: 2 chip sites (the two openings),
-    /// 30 Binary gates + 2 link/reconstruction gates, and 2 PI pins.
+    /// 90 Boolean limb gates, six reconstructions, six borrow/assembly gates, and 2 PI pins.
     #[test]
     fn solvency_descriptor_lowers() {
         let desc2 = solvency_to_descriptor2();
@@ -625,24 +511,81 @@ mod tests {
         assert_eq!(desc2.trace_width, EXT_BASE_WIDTH + 2 * (CHIP_OUT_LANES - 1));
     }
 
-    /// THE RANGE GADGET NON-VACUITY GUARD (soundness regression). `RANGE_BITS` must
-    /// carve a window strictly below the field's negative reps, else every diff
-    /// decomposes and the check is VACUOUS.
-    ///
-    /// ⚑ Both operands are constants. This was a `#[test]` wearing
-    /// `#[allow(clippy::assertions_on_constants)]`; the lint was right. A vacuous solvency range
-    /// gadget is a state no build should survive, so the guard refuses the BUILD.
-    const RANGE_GADGET_IS_NOT_VACUOUS: () = {
+    /// Evaluate the emitted boundary gates using the production IR interpreter.
+    /// The Lean theorem proves all canonical satisfying rows are solvent; these
+    /// cases check the Rust witness layout and expose the old modular-wrap hole.
+    #[test]
+    fn solvency_emitted_integer_comparison_refuses_modular_wrap() {
+        use dregg_circuit::descriptor_ir2::{check_descriptor2_wellformed, eval_lean_expr};
+        let desc = solvency_to_descriptor2();
+        check_descriptor2_wellformed(&desc).expect("generated AIR is executable");
+        let accepted = |w: SolvencyWitness| {
+            let (trace, _) = solvency_leaf_base_trace(&w);
+            let gates: Vec<_> = desc
+                .constraints
+                .iter()
+                .filter_map(|c| match c {
+                    VmConstraint2::Base(VmConstraint::Boundary {
+                        row: VmRow::First,
+                        body,
+                    }) => Some(body),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                gates.len(),
+                102,
+                "all generated arithmetic boundaries are exercised"
+            );
+            gates
+                .iter()
+                .all(|body| eval_lean_expr(body, &trace[0]) == BabyBear::ZERO)
+        };
+        for (r, l) in [
+            (0, 0),
+            (32768, 1),
+            ((1 << 30) - 1, 0),
+            ((1 << 30) - 1, (1 << 30) - 1),
+        ] {
+            assert!(accepted(solvent_witness(r, l)), "honest {r} >= {l}");
+        }
+        for (r, l) in [(0, (BABYBEAR_P - 1) as u64), (0, (1 << 30) - 1)] {
+            let old_diff = (felt(r) - felt(l)).as_u32();
+            assert!(
+                r < l && old_diff < (1 << RANGE_BITS),
+                "old checker admitted the attack"
+            );
+            assert!(
+                !accepted(solvent_witness(r, l)),
+                "emitted borrow chain refuses {r} < {l}"
+            );
+        }
         assert!(
-            RANGE_BITS < 31,
-            "RANGE_BITS >= 31 makes the solvency range proof VACUOUS"
+            !accepted(solvent_witness(1 << 30, 0)),
+            "operand range is enforced"
         );
-        assert!(
-            (1u64 << RANGE_BITS) < (BABYBEAR_P as u64) - 1,
-            "the honest window [0, 2^RANGE_BITS) must lie strictly below p-1"
-        );
-    };
-    const _: () = RANGE_GADGET_IS_NOT_VACUOUS;
+    }
+
+    /// Exercise the consumed artifact through the real inner STARK, without the
+    /// unrelated recursion wrapper. A valid proof must reject changed public PIs.
+    #[test]
+    fn solvency_emitted_inner_roundtrip_and_forged_pi_refused() {
+        use dregg_circuit::descriptor_ir2::verify_vm_descriptor2_with_config;
+        let witness = solvent_witness(32768, 1);
+        let pis = solvency_leaf_public_inputs(&witness);
+        let config = ir2_leaf_wrap_config();
+        let (desc, proof) = prove_solvency_inner(&witness, &pis, &config)
+            .expect("honest borrow witness proves under emitted AIR");
+        verify_vm_descriptor2_with_config(&desc, &proof, &pis, &config)
+            .expect("honest emitted AIR proof verifies");
+        let mut forged = pis;
+        forged[RESERVE_COMMIT_PI] += BabyBear::ONE;
+        assert!(verify_vm_descriptor2_with_config(&desc, &proof, &forged, &config).is_err());
+        let outside = solvent_witness(1 << RANGE_BITS, 0);
+        assert!(matches!(prove_solvency_inner(&outside,
+            &solvency_leaf_public_inputs(&outside), &config),
+            Err(e) if e.contains("amounts must be below")));
+    }
 
     fn solvent_witness(reserve: u64, liability: u64) -> SolvencyWitness {
         SolvencyWitness {
