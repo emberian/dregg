@@ -1438,3 +1438,131 @@ fn k16_wrap_proves_and_a_corrupted_trace_refuses() {
          forgery at the same geometry refuses."
     );
 }
+
+// ===========================================================================
+// §UD — THE UD-100 / BLOWUP-DROP GRID OVER THE LEAF WRAP (2026-11-05)
+// ===========================================================================
+
+/// One grid point: the child is MINTED at `(lb, q, pow)` and the leaf wrap VERIFIES it at the same
+/// knobs (`create_recursion_config_with_fri` sets both roles). Counts only:
+///
+/// * child Σcells (committed, pre-LDE) and Σcells·2^lb (the LDE the leaf prover hashes);
+/// * the wrap circuit's EXACT in-circuit Poseidon2 permutation count (op census);
+/// * the wrap's committed geometry at the deployed packing `p1/a4`, cells(main+prep), and its
+///   native leaf-sponge permutations at the deployed wrap mint blowup 3.
+///
+/// No wrap is proved; no clock is evidence. The decision rule this feeds
+/// (`docs/PROOF-SYSTEM-SPACE.md` U8): the blowup drop wins iff the per-turn total falls.
+fn ud_grid_point<
+    F: FnOnce() -> (
+        dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+        Vec<Vec<dregg_circuit::field::BabyBear>>,
+        Vec<dregg_circuit::field::BabyBear>,
+        Vec<Vec<dregg_circuit::heap_root::HeapLeaf>>,
+        MemBoundaryWitness,
+    ),
+>(
+    child_label: &str,
+    workload: F,
+    lb: usize,
+    q: usize,
+    pow: usize,
+) {
+    use dregg_circuit_prove::plonky3_recursion_impl::recursive::create_recursion_config_with_fri;
+    let (desc, trace, dpis, map_heaps, mem_boundary) = workload();
+    let config = create_recursion_config_with_fri(lb, 0, 1, q, 0, pow);
+    let inner = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+        &desc,
+        &trace,
+        &dpis,
+        &mem_boundary,
+        &map_heaps,
+        &UMemBoundaryWitness::default(),
+        &config,
+    )
+    .unwrap_or_else(|e| panic!("{child_label} proves at ({lb},{q},{pow}): {e}"));
+    let (airs, table_public_inputs, common) =
+        ir2_airs_and_common_for_config(&desc, &inner, &dpis, &config).expect("verify triple");
+    let mut child_cells = 0u64;
+    for (i, air) in airs.iter().enumerate() {
+        let w = BaseAir::<P3BabyBear>::width(air) as u64;
+        let dbits = inner.degree_bits.get(i).copied().unwrap_or(0);
+        child_cells += (1u64 << dbits) * w;
+    }
+    let input: RecursionInput<'_, DreggRecursionConfig, Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof: &inner,
+            common_data: &common,
+            table_public_inputs,
+        };
+    let backend = create_recursion_backend();
+    let (circuit, _vr) =
+        build_next_layer_circuit_with_expose::<DreggRecursionConfig, Ir2Air, _, D>(
+            &input, &config, &backend, None,
+        )
+        .expect("the leaf-wrap verification circuit builds");
+    let c = census(&circuit);
+    let shapes = shapes_recursion(&circuit, &TablePacking::new(1, 4));
+    let wrap_cells: u64 = shapes.iter().map(|s| s.cells_all()).sum();
+    let wrap_rows: u64 = shapes.iter().map(|s| s.rows()).sum();
+    let wrap_leaf_perms_lb3: u64 = shapes.iter().map(|s| s.leaf_perms(3)).sum();
+    println!(
+        "UDGRID\t{child_label}\tlb={lb}\tq={q}\tpow={pow}\tchild_cells={child_cells}\t\
+         child_lde_cells={}\tqueries_in_proof={}\twrap_incircuit_p2_perms={}\t\
+         wrap_alu_ops={}\twrap_cells_main_prep={wrap_cells}\twrap_rows={wrap_rows}\t\
+         wrap_native_leaf_perms_lb3={wrap_leaf_perms_lb3}",
+        child_cells << lb,
+        q,
+        c.in_circuit_perms(),
+        c.alu_total(),
+    );
+}
+
+/// A 2^16-row WIDE ARITHMETIC child: the sound Pasta field multiply (190 declared columns, 694
+/// committed), cycled. It is row-local (no transition leg), so cycling an honest block is a valid
+/// witness (`fri_blowup_global_knob_survey.rs::cycle_to`). Honest label: a stand-in for a large
+/// zkML leaf's SHAPE (tall, wide, arithmetic), not a zkML descriptor.
+fn wide_arith_child_2_16() -> (
+    dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    Vec<Vec<dregg_circuit::field::BabyBear>>,
+    Vec<dregg_circuit::field::BabyBear>,
+    Vec<Vec<dregg_circuit::heap_root::HeapLeaf>>,
+    MemBoundaryWitness,
+) {
+    const MUL_DESC_JSON: &str =
+        include_str!("../../circuit/descriptors/by-name/pasta-fpmul-sound.json");
+    const MUL_TRACE: &str =
+        include_str!("../../circuit/tests/fixtures/pasta-fpmul-sound-trace.txt");
+    let base: Vec<Vec<dregg_circuit::field::BabyBear>> = MUL_TRACE
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            l.split_whitespace()
+                .map(|t| dregg_circuit::field::BabyBear::new(t.parse::<u32>().expect("u32 cell")))
+                .collect()
+        })
+        .collect();
+    let desc = parse_vm_descriptor2(MUL_DESC_JSON).expect("fpmul parses");
+    let n = 1usize << 16;
+    let trace = (0..n).map(|i| base[i % base.len()].clone()).collect();
+    (desc, trace, vec![], vec![], MemBoundaryWitness::default())
+}
+
+const UD_GRID: [(usize, usize, usize); 4] = [(6, 19, 16), (6, 86, 16), (2, 57, 16), (2, 148, 0)];
+
+#[test]
+#[ignore = "MEASUREMENT (counts): 4 rotated-leaf proves + 4 wrap circuit builds. --ignored --nocapture --test-threads=1"]
+fn ud_grid_over_the_rotated_transfer_leaf() {
+    for (lb, q, pow) in UD_GRID {
+        ud_grid_point("rotated-transfer", rotated_transfer_workload, lb, q, pow);
+    }
+}
+
+#[test]
+#[ignore = "MEASUREMENT (counts): 4 proves of a 2^16-row x 694-wide child + 4 wrap circuit builds. --ignored --nocapture --test-threads=1"]
+fn ud_grid_over_a_2_16_row_wide_child() {
+    for (lb, q, pow) in UD_GRID {
+        ud_grid_point("wide-arith-2^16", wide_arith_child_2_16, lb, q, pow);
+    }
+}
