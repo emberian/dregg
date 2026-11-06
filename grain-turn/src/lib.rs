@@ -69,7 +69,10 @@ use dregg_sdk::{
 #[cfg(feature = "prover")]
 mod finalize;
 #[cfg(feature = "prover")]
-pub use finalize::{finalize_grain_turn, finalize_session};
+pub use finalize::{
+    finalize_grain_turn, finalize_session, finalize_session_threaded, session_head_openings,
+    session_model_nonce,
+};
 
 /// **A captured grain turn — the R3-adapter input.** Everything
 /// [`finalize_grain_turn`](crate::finalize_grain_turn) needs to mint the rotated

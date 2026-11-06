@@ -2628,6 +2628,15 @@ impl WholeChainProofBytes {
         Ok(env)
     }
 
+    /// The root-circuit VK fingerprint RECOMPUTED from the carried root proof — what a
+    /// verifier compares to its own anchor, and what it reports as the PRESENTED fingerprint.
+    /// Never the envelope's claimed `vk_fingerprint_hex`. Fail-closed on a root blob that does
+    /// not decode.
+    pub fn presented_vk_fingerprint(&self) -> Result<RecursionVk, TurnChainError> {
+        let (root, _) = self.decode_parts()?;
+        whole_chain_anchor(&root)
+    }
+
     /// Decode the two opaque blobs into the concrete recursion proof types.
     /// Fail-closed on a blob that does not deserialize into its target type.
     fn decode_parts(

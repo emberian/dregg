@@ -72,7 +72,37 @@ use crate::GrainTurnRecord;
 /// prove independently. The FOLD over them is the expensive recursive step (see
 /// [`grain_verify::r3_verify`]).
 pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn>, String> {
+    finalize_grain_turn_from(record, None, None, None).map(|(legs, _)| legs)
+}
+
+/// [`finalize_grain_turn`] with an optional EffectVM pre-state override, returning the legs AND
+/// the EffectVM state the last leg ends at. `None` seeds from the real pre-cell (the
+/// single-turn recipe); `Some(s)` continues an EffectVM chain a previous turn ended at — the
+/// seam [`finalize_session_threaded`] uses so a multi-turn session folds.
+fn finalize_grain_turn_from(
+    record: &GrainTurnRecord,
+    initial_override: Option<CellState>,
+    receipt_log_override: Option<&[[u8; 32]]>,
+    model_balance: Option<i64>,
+) -> Result<(Vec<FinalizedTurn>, CellState), String> {
     let actor = record.before_cell.id();
+    // A continued chain carries the EffectVM's model nonce AND model balance, which the rotated
+    // before-block must agree with on row 0 (measured on bb2: the real pre-cell fails constraints
+    // #87-#93, #118). So a continued turn is witnessed over the real pre-cell with its nonce and
+    // balance replaced by the carried model values; every other limb is the executor's committed
+    // pre-state.
+    let before_cell = match &initial_override {
+        Some(s) => {
+            let mut c = record.before_cell.clone();
+            c.state.set_nonce(u64::from(s.nonce));
+            // The per-slot setField members freeze the balance, while every executor grain turn
+            // debits its fee from the worker cell: the carried model balance is turn 0's.
+            c.state
+                .set_balance(model_balance.unwrap_or_else(|| record.before_cell.state.balance()));
+            c
+        }
+        None => record.before_cell.clone(),
+    };
 
     // (1) Project the committed effects onto the actor cell — the executor's own marshaller.
     //
@@ -96,7 +126,10 @@ pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn
     // frontier), holds no note commitments, and binds its iroot to the real turn hash.
     let nullifier_root = empty_heap_root_8();
     let commitments_root = dregg_circuit::heap_root::empty_heap_root_8();
-    let receipt_log = vec![record.turn_hash];
+    let receipt_log = match receipt_log_override {
+        Some(log) => log.to_vec(),
+        None => vec![record.turn_hash],
+    };
 
     // (2) Seed the EffectVM pre-state from the REAL pre-cell (balance/nonce/fields/cap
     // root/authority residue) via the canonical welded-limb decode. Both blocks are
@@ -104,11 +137,11 @@ pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn
     // sovereign path uses); the decode reads `before.pre_limbs` in the Lean-pinned order.
     let mut ledger = dregg_cell::Ledger::new();
     ledger
-        .insert_cell(record.before_cell.clone())
+        .insert_cell(before_cell.clone())
         .map_err(|e| format!("finalize_grain_turn: ledger seed failed: {e:?}"))?;
     let material = dregg_cell::commitment::RotationCarrierMaterial::default();
     let before_w = produce(
-        &record.before_cell,
+        &before_cell,
         &ledger,
         &nullifier_root,
         &commitments_root,
@@ -134,6 +167,7 @@ pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn
     let initial_state = RotationTurnWitness::for_effects(before_w, after_w, &vm_effects)
         .before_cell_state()
         .map_err(|e| format!("finalize_grain_turn: pre-state decode failed: {e}"))?;
+    let initial_state = initial_override.unwrap_or(initial_state);
 
     // (3) Split into homogeneous cohort runs — one rotated leg per run.
     let runs = split_into_cohort_runs(&vm_effects);
@@ -155,12 +189,12 @@ pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn
         let after_cell = if i + 1 == n_runs {
             &record.after_cell
         } else {
-            &record.before_cell
+            &before_cell
         };
         let leg = mint_rotated_participant_leg(
             &s_k,
             run_effects,
-            &record.before_cell,
+            &before_cell,
             after_cell,
             &nullifier_root,
             &commitments_root,
@@ -172,7 +206,7 @@ pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn
             .map_err(|e| format!("finalize_grain_turn: run {i} state threading: {e}"))?;
         legs.push(FinalizedTurn::new(DescriptorParticipant::rotated(leg)));
     }
-    Ok(legs)
+    Ok((legs, s_k))
 }
 
 /// Thread the EffectVM pre-state across a cohort run — apply each `SetField` exactly as
@@ -252,6 +286,106 @@ pub fn finalize_session(records: &[GrainTurnRecord]) -> Result<Vec<FinalizedTurn
         all.extend(legs);
     }
     Ok(all)
+}
+
+/// **Collect a MULTI-turn session as ONE continuous EffectVM chain** — the form
+/// [`finalize_session`] cannot produce (see its RESIDUAL GAP).
+///
+/// Turn 0 seeds from its real committed pre-cell, exactly as [`finalize_grain_turn`] does.
+/// Every later turn is seeded from the EffectVM state the previous turn's last leg ENDED at,
+/// instead of from its real pre-cell, so `leg_k.new_root == leg_{k+1}.old_root` holds across
+/// turn boundaries and the whole session folds.
+///
+/// ## What the folded head is, precisely
+///
+/// The EffectVM applies the projected `SetField` writes of every record, in commit order, to the
+/// carried `CellState`; nothing else moves (balance, capability root and record digest stay at
+/// turn 0's values, and fields no record writes stay as turn 0 found them). This function does NOT
+/// check that the records are adjacent ledger states (turn t+1's `before_cell` == turn t's
+/// `after_cell`); the minter produces them that way, a caller with other records gets no such
+/// guarantee. Each field lane 0 is the EffectVM value (`field_limbs9(v)[0]`); the other limbs
+/// come from the per-turn cell witnesses. The nonce is `pre_0 + (total field writes)`, while the
+/// executor committed `pre_0 + (turns)`. The head this chain binds is therefore the
+/// **EffectVM-model head** of the session, not the ledger head. Slot 8 (`ATTESTATION_SLOT`) has
+/// no AIR lane: a record that wrote it is refused (fail-closed), so an attested-brain session
+/// does not finalize here at all.
+///
+/// Every leg uses ONE receipt context, the ordered turn hashes of the whole session, so the
+/// wide anchors' `iroot` is the same across every turn boundary.
+/// The faithful fix is the single-nonce-tick multi-field grain descriptor named in
+/// [`finalize_session`] (a circuit + VK change, ember-gated); this function does not claim it.
+pub fn finalize_session_threaded(
+    records: &[GrainTurnRecord],
+) -> Result<Vec<FinalizedTurn>, String> {
+    // ONE receipt context for the whole session: the ordered committed turn hashes. The wide
+    // anchors absorb its root (`iroot`), so it must be the same on both sides of every turn
+    // boundary, and it is what joins the folded history to the R2 links: a verifier that
+    // recomputes the root over the receipts' `turn_receipt_hash`es recomputes the same `iroot`.
+    let session_log: Vec<[u8; 32]> = records.iter().map(|r| r.turn_hash).collect();
+    let balance0 = records
+        .first()
+        .map(|r| r.before_cell.state.balance())
+        .unwrap_or(0);
+    let mut all = Vec::new();
+    let mut carry: Option<CellState> = None;
+    for (i, rec) in records.iter().enumerate() {
+        let (legs, end) =
+            finalize_grain_turn_from(rec, carry.take(), Some(&session_log), Some(balance0))
+                .map_err(|e| {
+                    format!(
+                        "finalize_session_threaded: turn {i} ({}): {e}",
+                        hex_prefix(&rec.turn_hash)
+                    )
+                })?;
+        all.extend(legs);
+        carry = Some(end);
+    }
+    Ok(all)
+}
+
+/// **Open the folded head.** The 8-felt commitment of the session's LAST committed grain cell
+/// under the session receipt context [`finalize_session_threaded`] uses, as `u32` lanes, for two
+/// nonces: the ledger's (`.0`) and the EffectVM model's (`.1`: the first record's pre-nonce plus
+/// the total number of field writes). A verifier holding the published last cell and the ordered
+/// turn hashes recomputes these WITHOUT proving and compares them to the aggregate's committed
+/// head: equality joins the head to that cell's fields (the last action commit, the turn counter,
+/// the history root) and, through the context root, to the exact ordered list of turn hashes.
+pub fn session_head_openings(
+    last_after_cell: &dregg_cell::Cell,
+    turn_hashes: &[[u8; 32]],
+    model_nonce: u64,
+) -> Result<([u32; 8], [u32; 8]), String> {
+    let at = |cell: &dregg_cell::Cell| -> Result<[u32; 8], String> {
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger
+            .insert_cell(cell.clone())
+            .map_err(|e| format!("session_head_openings: ledger seed failed: {e:?}"))?;
+        let ctx = dregg_turn::rotation_witness::sovereign_turn_ctx(
+            &ledger,
+            turn_hashes,
+            dregg_cell::commitment::RotationCarrierMaterial::default(),
+        );
+        let f8 = ctx.commitment_felt8(cell);
+        let lanes: &[dregg_circuit::field::BabyBear; 8] = f8.as_ref();
+        Ok(core::array::from_fn(|i| lanes[i].as_u32()))
+    };
+    let real = at(last_after_cell)?;
+    let mut model = last_after_cell.clone();
+    model.state.set_nonce(model_nonce);
+    Ok((real, at(&model)?))
+}
+
+/// The EffectVM model nonce at the end of a session: the first record's pre-cell nonce plus the
+/// number of projected field writes across all records (one tick per effect).
+pub fn session_model_nonce(records: &[GrainTurnRecord]) -> Result<u64, String> {
+    let first = records.first().ok_or("empty session")?;
+    let mut n = first.before_cell.state.nonce();
+    for r in records {
+        let vm = AgentCipherclerk::try_convert_effects_to_vm(&r.before_cell.id(), &r.effects)
+            .map_err(|e| format!("session_model_nonce: {e}"))?;
+        n += vm.len() as u64;
+    }
+    Ok(n)
 }
 
 fn hex_prefix(h: &[u8; 32]) -> String {

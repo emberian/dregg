@@ -61,7 +61,7 @@ The gap is below it.
    - **Genesis.** Window 0's label carries the renter nonce, which forces the nonce into the chain genesis and closes R1's own stated caveat without a dregg-agent change.
    - **Why windows.** R3 costs about 5 leg proves per turn. 3,254 turns would be about 16k proves plus a fold. With windows, every call is bound to a committed kernel turn by MMR inclusion. Per-call receipts would make R0-R2 cheap but R3 infeasible. W is set from measurement (below).
 2. **R3 fold across turns.** This is a new `finalize_session_threaded` in grain-turn. It threads the EffectVM state across turns, so the chain closes at the EffectVM-model head, and it is tested against the real turn data.
-   - **Residual, stated in code and on the page.** The bound head is the model head. It equals the ledger state in every field and differs only in the nonce, which counts field writes instead of turns.
+   - **Residual, stated in code and on the page.** The bound head is the model head. Its nonce counts field writes instead of turns; precisely what else it carries (and does not check) is in `finalize_session_threaded`'s doc.
    - The faithful fix (the single-tick multi-field descriptor and a VK change) stays ember's decision. I do not build a new VK.
 3. **Verify-only R3.** This is a new `grain_verify::r3::r3_verify_aggregate(bytes, anchored_head, expected_vk)`. It takes the `WholeChainProofBytes` and does no proving. It reuses `r3_wire` and the same FFI call, so the decision is still the Lean core's `"1"`.
    - The anchored head comes from a renter-countersigned statement. That statement extends the R1 checkpoint with (genesis8, head8, vk, num_windows, calls root).
@@ -75,6 +75,26 @@ The gap is below it.
   - **What the stranger gets:** that this exact projected history was committed, kernel-turned, folded, and acknowledged by a key they hold, and that no call was dropped, reordered, rewritten or added after the fact.
   - **What the stranger cannot get:** that the transcript matches what happened. Only the live hook (6) moves the commit point to before the forward. Even then the hook is host code (an installation claim, as in W10).
   - **Better bar:** the stranger trusts exactly the transcript writer (or, live, the hook), plus `EngineSound`, plus their own key custody. The page says that sentence.
-- **"R3 one recursive aggregate" for 3,254 calls must be windowed.** Per-call R3 is about 16k proves and is not runnable as a stranger-reproducible artifact. Windowing does not weaken binding: inclusion is by an MMR whose `mroot_injective` is Lean-proved.
+- **"R3 one recursive aggregate" for 3,254 calls must be windowed.** Per-call R3 is about 16k proves and is not runnable as a stranger-reproducible artifact. Windowing does not weaken binding: inclusion is by a Blake3 MMR (the Lean model's `mroot_binds_or_collides`, MMR.lean:488: a different leaf list gives a different root unless there is a collision).
 - **The multi-turn head gap is upstream and named.** The microsite says "model head" until ember decides the descriptor.
 - **Split view is out of scope.** It needs witnesses (X-5).
+
+## Findings while building (appended 2026-11-06)
+
+- **Executor turns need the linked Lean archive.** `ToolGatewayMinter::mint_turn` is refused fail-closed
+  ("dregg_deleg_admit ... reached NO VERDICT: Lean static lib not linked") without it. dregg-lean-ffi's
+  provenance gate also refuses to link a seed that was not built from this checkout's Lean source.
+  The 2026-08-07 Mac seed is therefore unusable, and producing needs a current-source archive. That
+  archive is being bootstrapped on bb2 (`scripts/bootstrap.sh` under swarm-build, own clone
+  `/home/build/sessreceipt/bs`).
+- **R3 binds each 32-byte slot value at one limb.** The EffectVM state block carries a written field
+  as `field_limbs9(value)[0]` (`sdk/src/cipherclerk.rs` `field_element_to_bb`), which is one BabyBear
+  limb. The folded history therefore binds the window root in `ACTION_SLOT` at about 30 bits, not
+  256.
+  - **What binds the calls instead:** the full-width binding of calls to windows is the R0/R1 chain,
+    which is BLAKE3 receipts countersigned by the renter.
+  - **What R3 adds:** that a continuous executed history of grain turns, in this order and this
+    count, reaches the countersigned head. It does not add a 256-bit binding of each window's
+    content.
+  - The page states this. Widening it is the felt-width programme (`WOUND-felt-width-*`), not this
+    lane.

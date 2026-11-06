@@ -10721,6 +10721,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "grain-session"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-agent",
+ "dregg-cell",
+ "dregg-circuit-prove",
+ "dregg-query",
+ "getrandom 0.3.4",
+ "grain-turn",
+ "grain-verify",
+ "hex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "grain-turn"
 version = "0.1.0"
 dependencies = [

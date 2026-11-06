@@ -1,0 +1,43 @@
+# grain-session — initiative 10: a stranger verifies a real Claude Code session through the
+# R0-R3 receipt ladder. ADAPTER ONLY: the ladder is grain-verify (R0-R2, and the Lean-routed R3
+# decision), the kernel turns are grain-turn's ToolGatewayMinter, the fold is circuit-prove's.
+# This crate projects a cv export into hiding-committed calls, groups them into windows that
+# become real executor turns, and checks a bundle end to end. See GROUNDING.md.
+
+[package]
+name = "grain-session"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lib]
+name = "grain_session"
+path = "src/lib.rs"
+
+[[bin]]
+name = "grain-session"
+path = "src/bin/grain_session.rs"
+
+[features]
+default = ["prover"]
+# The producer side (replay through the real minter + the threaded fold).
+prover = []
+
+[dependencies]
+dregg-agent = { path = "../dregg-agent" }
+grain-verify = { path = "../grain-verify" }
+dregg-query = { path = "../dregg-query" }
+dregg-circuit-prove = { path = "../circuit-prove" }
+# The verifier opens the folded head with grain-turn's `session_head_openings` (no proving).
+grain-turn = { path = "../grain-turn", features = ["prover"] }
+dregg-cell = { path = "../cell" }
+blake3 = "1"
+hex = "0.4"
+getrandom = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

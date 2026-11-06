@@ -97,7 +97,7 @@
 //! strength of the 8-felt anchor is the already-carried Poseidon2 state-commit floor.
 
 use dregg_circuit_prove::ivc_turn_chain::{
-    FinalizedTurn, RecursionVk, SEG_ANCHOR_WIDTH, TurnChainError,
+    FinalizedTurn, RecursionVk, SEG_ANCHOR_WIDTH, TurnChainError, WholeChainProofBytes,
     prove_turn_chain_recursive_without_host_gate, verify_whole_chain_proof_bytes,
 };
 use dregg_circuit_prove::joint_turn_aggregation::verify_descriptor_participant;
@@ -387,6 +387,80 @@ fn r3_wire(
 /// Note the anchor is a function of the root circuit SHAPE, which varies with `num_turns`
 /// and the leaf trace heights: one anchor pins one accepted fold shape. A verifier
 /// accepting several shapes holds one anchor per shape.
+/// **R3 for a holder of the aggregate only — VERIFY, never prove.** [`r3_verify`] takes the
+/// finalized legs and re-runs the recursive fold inside the verifier, which hands a stranger the
+/// prover's cost. This takes the producer's [`WholeChainProofBytes`] envelope (the
+/// verify-sufficient subset, `WholeChainProof::to_bytes`), light-verifies it against the caller's
+/// OWN `expected_vk` with [`verify_whole_chain_proof_bytes`], reads the aggregate's committed
+/// 8-felt head off the decoded envelope, and puts the SAME 33-int wire [`r3_verify`] puts to the
+/// extracted Lean `r3VerifyCore`. The decision is the Lean core's `"1"`; there is no Rust
+/// fallback.
+///
+/// The presented-VK lanes are the fingerprint RECOMPUTED from the envelope's root proof (never
+/// the envelope's claimed `vk_fingerprint_hex`). A blob that does not decode carries no head and
+/// no root: it is sent as `verified = false` with a zero head and the expected VK in the
+/// presented slot, which the Lean core refuses on the verified-status conjunct alone.
+pub fn r3_verify_aggregate(
+    aggregate: &[u8],
+    anchored_head: &[u32; SEG_ANCHOR_WIDTH],
+    expected_vk: &RecursionVk,
+) -> Result<R3Verified, R3Error> {
+    let decoded = WholeChainProofBytes::from_postcard(aggregate)
+        .ok()
+        .and_then(|env| {
+            let presented = env.presented_vk_fingerprint().ok()?;
+            Some((env, presented))
+        });
+    let (verified, aggregate_head, presented_vk, num_turns) = match &decoded {
+        Some((env, presented)) => (
+            verify_whole_chain_proof_bytes(aggregate, expected_vk).is_ok(),
+            env.final_root,
+            Some(*presented),
+            env.num_turns as usize,
+        ),
+        None => (false, [0u32; SEG_ANCHOR_WIDTH], None, 0),
+    };
+    let expected_lanes = vk_lanes(expected_vk);
+    let presented_lanes = presented_vk
+        .as_ref()
+        .map(vk_lanes)
+        .unwrap_or(expected_lanes);
+    let wire = r3_wire(
+        verified,
+        &presented_lanes,
+        &expected_lanes,
+        &aggregate_head,
+        anchored_head,
+    );
+    let out =
+        dregg_lean_ffi::shadow_grain_r3_verify(&wire).map_err(R3Error::LeanCoreUnavailable)?;
+    let mut toks = out.split_whitespace();
+    match toks.next() {
+        Some("1") => Ok(R3Verified {
+            num_turns,
+            anchored_head: *anchored_head,
+            aggregate_head,
+            expected_vk: *expected_vk,
+        }),
+        Some("0") => Err(R3Error::Rejected {
+            aggregate_verified: verified,
+            aggregate_head,
+            anchored_head: *anchored_head,
+            presented_vk,
+            expected_vk: *expected_vk,
+        }),
+        Some("2") => Err(R3Error::WireMalformed {
+            stage: toks
+                .next()
+                .and_then(r3_wire_fault_name)
+                .unwrap_or(R3_WIRE_FAULT_UNNAMED),
+        }),
+        _ => Err(R3Error::WireMalformed {
+            stage: R3_WIRE_FAULT_UNNAMED,
+        }),
+    }
+}
+
 pub fn r3_setup_anchor(finalized: &[FinalizedTurn]) -> Result<RecursionVk, R3Error> {
     if finalized.is_empty() {
         return Err(R3Error::EmptyChain);

@@ -165,7 +165,7 @@ use serde::{Deserialize, Serialize};
 /// decision — the road to unfoolability (reduced to the named `EngineSound` STARK
 /// floor + the R1 head binding; see [`WHOLE_HISTORY_GAP`] and [`r3::r3_verify`]).
 pub mod r3;
-pub use r3::{R3Error, R3Verified, r3_setup_anchor, r3_verify};
+pub use r3::{R3Error, R3Verified, r3_setup_anchor, r3_verify, r3_verify_aggregate};
 
 /// The exact gap between what a hosted session supplies today and what the
 /// whole-history light client (`dregg_lightclient::verify_history`) needs — the
