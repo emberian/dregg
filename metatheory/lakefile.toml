@@ -649,3 +649,15 @@ globs = ["Dregg2.Circuit.ZkmlSuiteArtifact"]
 [[lean_exe]]
 name = "mina_wrap_opening_sched_emit"
 root = "MinaWrapOpeningSchedEmit"
+
+# datalog-check — the extracted stratified-Datalog checker (lane A, 2026-11-06): reads
+# {"statement", "certificate"} JSON, runs `JoinClosure.verifyJ` (+ `verifyBudgetJ` when the
+# statement carries a budget), prints the statement and the verdict, exits 0/1 (2 = bad input).
+# `verifyJ_verifyS` transfers `StratifiedCert.verifyS_sound` to what this accepts. NOT a default
+# target. Demo: ../demo/datalog-governance/run.sh
+#
+#     lake build datalog-check
+#     ./.lake/build/bin/datalog-check ../demo/datalog-governance/data/certificate.json
+[[lean_exe]]
+name = "datalog-check"
+root = "DatalogCheck"

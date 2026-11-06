@@ -159,4 +159,8 @@ root binding and the named-pair collision residual.
 | `Derives`, `verify`, `replay_sound`, `closed_complete`, `verify_sound`, `edb_bound_or_collides`, `count_unique_or_collides`, falsifiers | `M/Datalog/FixpointCert.lean` (28 kernel-clean keystones) | **L2** (statement + proof + executable certificate + counts) |
 | single-firing AIR | `M/Circuit/Emit/DerivationEmit.lean` | L3 (emitted; one firing) |
 | iterated firings under a fold + sorted-enumeration closure | proposed | L3; milestone: the 4-node transitive-closure instance as `6` firing descriptors plus `216 + 36` closure lookups, with pinned counts against `DerivationEmit`'s 386-column row |
-| safe-program coincidence theorem; stratified negation per stratum | proposed | L1 each; one file |
+| stratified negation: `verifyS`, `stratified_replay_sound`, `stratified_closed_complete`, `verifyS_sound`, `verifyS_strata_exact`, `countS_unique_or_collides`, `verifyS_intended_or_collides`, `verifyS_supported_model`; falsifiers (forged absence, derivable-later revocation, open lower stratum, non-stratified program) | `M/Datalog/StratifiedCert.lean` (34 kernel-clean keystones) | **L2** |
+| Sum/Min/Max over the exact database; `seq_acc_is_fold`, `accValid_iff`; budget statement `verifyBudget_sound`, `budget_final_unique_or_collides`; tampered-row falsifier | `M/Datalog/Aggregates.lean` (21 keystones) | **L2** |
+| closure by join for safe rules (`closedJoinS_closedS`), fast domain, `verifyJ_verifyS`, `verifyBudgetJ_verifyBudget` | `M/Datalog/JoinClosure.lean` (18 keystones) | **L2** (what the executable runs) |
+| extracted checker `lake exe datalog-check` + demo (b): governance over a 73-transcript Claude Code forest, 8,839 EDB facts, count 0, signed receipt | `metatheory/DatalogCheck.lean`, `demo/datalog-governance/` | L2 executable; native re-execution, no STARK |
+| safe-program coincidence theorem; independence of the count from the chosen stratification | proposed | L1 each; one file |

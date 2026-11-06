@@ -1804,6 +1804,7 @@ import Dregg2.Policy.Parser -- hand-written recursive descent, no `partial` (reg
 import Dregg2.Policy.ParseRoundTrip -- token-level half of the parser theorem: parseTokens_toks (every well-formed policy's printed tokens, at any positions, parse back), regex case by a three-claim induction (every level + postfix runs).
 import Dregg2.Policy.LexRoundTrip -- character-level half: lexChars_render (the lexer returns exactly the rendered tokens then eof for any Good rendering) and layout_good (the printer's layout is Good).
 import Dregg2.Policy.Theorems -- ⚑⚑ parse_print_roundtrip : ∀ p, p.wf → parse (print p) = .ok p, for the WHOLE language; print_injective; located-error falsifiers as #guards.
+import Dregg2.Datalog.JoinClosure -- ⚑ LANE A (2026-11-06): the closure leg by JOIN over the positive atoms (safe rules) instead of |dom|^vars enumeration, and the sorted deduplicated domain: closedJoinS_closedS, mem_candidates, verifyJ_verifyS and verifyBudgetJ_verifyBudget (what lake exe datalog-check accepts, the StratifiedCert/Aggregates theorems cover). Falsifier: the join closure without safeB accepts an unsafe rule's open trace; verifyS and verifyJ refuse.
 
 #floor_ratchet
 #teeth_wired

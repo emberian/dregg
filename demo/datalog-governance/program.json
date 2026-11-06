@@ -1,0 +1,618 @@
+{
+ "about": "Governance over a Claude Code session forest. A SUB-AGENT's Edit/MultiEdit/NotebookEdit of a path that neither it (earlier) nor its parent (before the spawn) had read or written is a blind_edit; a sub-agent's write (Write or any edit) under a forbidden directory is a forbidden_write. violation = blind_edit + forbidden_write; the statement is count(violation) = N.",
+ "preds": {
+  "tool_call": 0,
+  "writes": 1,
+  "reads": 2,
+  "spawned": 3,
+  "forbidden_prefix": 4,
+  "prefix_of": 5,
+  "next": 6,
+  "name": 7,
+  "edits": 8,
+  "written_path": 10,
+  "touched": 11,
+  "touch_upto": 12,
+  "prior_touch": 13,
+  "blind_edit": 14,
+  "forbidden_write": 15,
+  "violation": 16
+ },
+ "counted_pred": 16,
+ "forbidden_prefixes": [
+  "/Users/ember/.ssh/",
+  "/Users/ember/hellas/",
+  "/Users/ember/dev/nanodregg/",
+  "/Users/ember/.claude/projects/",
+  "/Users/ember/Library/",
+  "/etc/"
+ ],
+ "rules_text": [
+  "written_path(P) :- writes(W, P)",
+  "touched(R, P) :- reads(R, P)",
+  "touched(R, P) :- writes(R, P)",
+  "touch_upto(A, P, S) :- touched(R, P), tool_call(R, A, T, S), written_path(P)",
+  "touch_upto(A, P, S2) :- touch_upto(A, P, S1), next(A, S1, S2)",
+  "prior_touch(W) :- edits(W, P), tool_call(W, A, T, S), next(A, S0, S), touch_upto(A, P, S0)",
+  "prior_touch(W) :- edits(W, P), tool_call(W, A, T, S), spawned(A, Q, K), next(Q, K0, K), touch_upto(Q, P, K0)",
+  "blind_edit(W) :- edits(W, P), tool_call(W, A, T, S), spawned(A, Q, K), not prior_touch(W)",
+  "forbidden_write(W) :- writes(W, P), tool_call(W, A, T, S), spawned(A, Q, K), prefix_of(P, X), forbidden_prefix(X)",
+  "violation(W) :- blind_edit(W)",
+  "violation(W) :- forbidden_write(W)"
+ ],
+ "program": [
+  {
+   "head": {
+    "pred": 10,
+    "args": [
+     {
+      "var": 0
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 1,
+      "args": [
+       {
+        "var": 1
+       },
+       {
+        "var": 0
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 11,
+    "args": [
+     {
+      "var": 0
+     },
+     {
+      "var": 1
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 2,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 1
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 11,
+    "args": [
+     {
+      "var": 0
+     },
+     {
+      "var": 1
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 1,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 1
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 12,
+    "args": [
+     {
+      "var": 0
+     },
+     {
+      "var": 1
+     },
+     {
+      "var": 2
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 11,
+      "args": [
+       {
+        "var": 3
+       },
+       {
+        "var": 1
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 0,
+      "args": [
+       {
+        "var": 3
+       },
+       {
+        "var": 0
+       },
+       {
+        "var": 4
+       },
+       {
+        "var": 2
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 10,
+      "args": [
+       {
+        "var": 1
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 12,
+    "args": [
+     {
+      "var": 0
+     },
+     {
+      "var": 1
+     },
+     {
+      "var": 2
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 12,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 1
+       },
+       {
+        "var": 3
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 6,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 3
+       },
+       {
+        "var": 2
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 13,
+    "args": [
+     {
+      "var": 0
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 8,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 1
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 0,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 2
+       },
+       {
+        "var": 3
+       },
+       {
+        "var": 4
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 6,
+      "args": [
+       {
+        "var": 2
+       },
+       {
+        "var": 5
+       },
+       {
+        "var": 4
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 12,
+      "args": [
+       {
+        "var": 2
+       },
+       {
+        "var": 1
+       },
+       {
+        "var": 5
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 13,
+    "args": [
+     {
+      "var": 0
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 8,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 1
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 0,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 2
+       },
+       {
+        "var": 3
+       },
+       {
+        "var": 4
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 3,
+      "args": [
+       {
+        "var": 2
+       },
+       {
+        "var": 5
+       },
+       {
+        "var": 6
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 6,
+      "args": [
+       {
+        "var": 5
+       },
+       {
+        "var": 7
+       },
+       {
+        "var": 6
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 12,
+      "args": [
+       {
+        "var": 5
+       },
+       {
+        "var": 1
+       },
+       {
+        "var": 7
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 14,
+    "args": [
+     {
+      "var": 0
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 8,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 1
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 0,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 2
+       },
+       {
+        "var": 3
+       },
+       {
+        "var": 4
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 3,
+      "args": [
+       {
+        "var": 2
+       },
+       {
+        "var": 5
+       },
+       {
+        "var": 6
+       }
+      ]
+     }
+    },
+    {
+     "neg": {
+      "pred": 13,
+      "args": [
+       {
+        "var": 0
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 15,
+    "args": [
+     {
+      "var": 0
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 1,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 1
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 0,
+      "args": [
+       {
+        "var": 0
+       },
+       {
+        "var": 2
+       },
+       {
+        "var": 3
+       },
+       {
+        "var": 4
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 3,
+      "args": [
+       {
+        "var": 2
+       },
+       {
+        "var": 5
+       },
+       {
+        "var": 6
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 5,
+      "args": [
+       {
+        "var": 1
+       },
+       {
+        "var": 7
+       }
+      ]
+     }
+    },
+    {
+     "pos": {
+      "pred": 4,
+      "args": [
+       {
+        "var": 7
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 16,
+    "args": [
+     {
+      "var": 0
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 14,
+      "args": [
+       {
+        "var": 0
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "head": {
+    "pred": 16,
+    "args": [
+     {
+      "var": 0
+     }
+    ]
+   },
+   "body": [
+    {
+     "pos": {
+      "pred": 15,
+      "args": [
+       {
+        "var": 0
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ],
+ "strata": [
+  [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6
+  ],
+  [
+   7,
+   8,
+   9,
+   10
+  ]
+ ]
+}
