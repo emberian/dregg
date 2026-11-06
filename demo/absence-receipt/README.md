@@ -143,3 +143,10 @@ table byte for byte, and `demo/absence-receipt/tests/differential.rs` keeps the 
 ```
 cargo test --manifest-path demo/absence-receipt/Cargo.toml --release --test differential
 ```
+
+Lane B's `policyc compile --absence` (Lean, with `absence_decides`) is the third partner, per
+pattern: its tables for the two patterns alone (`demo/absence-receipt/policyc/`, sources in lane B's syntax)
+minimize byte for byte to the crate's (AWS 21 states, compiled in 42.2 s; PEM 28 states, 37.0 s
+[MEASURED]), and their product minimizes to this demo's 129-state table. The union of both
+patterns in one `policyc` pattern had not finished after 12 minutes (63 MB resident), so the receipt's table is
+still the crate's.

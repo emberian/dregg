@@ -1,0 +1,2 @@
+pattern pem = "-----BEGIN " [A-Z ]* "PRIVATE KEY-----";
+policy p { forbid pattern pem in body; }

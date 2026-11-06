@@ -1,0 +1,2 @@
+pattern aws = "AKIA" [0-9A-Z]{16};
+policy p { forbid pattern aws in body; }

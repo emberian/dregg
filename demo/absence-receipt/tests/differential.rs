@@ -482,3 +482,96 @@ fn crate_compiler_agrees_with_the_interim_compiler_and_the_scanner() {
         "both verdicts exercised: {rejected}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The third partner: lane B's `policyc compile --absence` (Lean, `absence_decides`), on the
+// pattern it compiles in reasonable time. Its tables are checked in under `policyc/`.
+// ---------------------------------------------------------------------------------------------
+
+fn policyc_table(name: &str) -> Dfa {
+    let path = format!("{}/policyc/{name}", env!("CARGO_MANIFEST_DIR"));
+    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+/// The crate's minimized absence table for one interim-syntax pattern.
+fn crate_absence(pattern: &[u8]) -> Dfa {
+    let p = absence_receipt::parse_pattern(pattern).unwrap();
+    Re::top().then(p).then(Re::top()).not().compile().minimize()
+}
+
+/// Product automaton accepting the intersection (test-only; both tables have dead state 0).
+fn product(a: &Dfa, b: &Dfa) -> Dfa {
+    let mut ids: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut order = vec![(0u32, 0u32), (a.start, b.start)];
+    ids.insert((0, 0), 0);
+    ids.entry((a.start, b.start)).or_insert(1);
+    let mut transitions = Vec::new();
+    let mut accepting = BTreeSet::new();
+    let mut i = 0;
+    while i < order.len() {
+        let (p, q) = order[i];
+        if a.accepting.contains(&p) && b.accepting.contains(&q) {
+            accepting.insert(i as u32);
+        }
+        for byte in 0..256 {
+            let mut t = (
+                a.transitions[p as usize * 256 + byte],
+                b.transitions[q as usize * 256 + byte],
+            );
+            if t.0 == 0 || t.1 == 0 {
+                t = (0, 0);
+            }
+            let next = order.len() as u32;
+            let id = *ids.entry(t).or_insert_with(|| {
+                order.push(t);
+                next
+            });
+            transitions.push(id);
+        }
+        i += 1;
+    }
+    Dfa {
+        num_states: order.len() as u32,
+        transitions,
+        start: 1,
+        accepting,
+    }
+}
+
+#[test]
+fn policyc_tables_minimize_to_the_crate_tables() {
+    let pem = policyc_table("pem-absence.json");
+    let aws = policyc_table("aws-absence.json");
+    let crate_pem = crate_absence(b"-----BEGIN [A-Z ]*PRIVATE KEY-----");
+    let crate_aws = crate_absence(b"AKIA[0-9A-Z]{16}");
+    for (name, lean, ours) in [("PEM", &pem, &crate_pem), ("AWS", &aws, &crate_aws)] {
+        let min = lean.minimize();
+        eprintln!(
+            "{name} absence: policyc {} states ({} minimized), crate {} minimized",
+            lean.num_states, min.num_states, ours.num_states
+        );
+        assert_eq!(min.transitions, ours.transitions, "{name}");
+        assert_eq!(min.accepting, ours.accepting, "{name}");
+    }
+    // The two Lean tables jointly are the policy: their product minimizes to the demo's table.
+    let joint = product(&aws, &pem).minimize();
+    let table = absence_table(POLICY).unwrap();
+    assert_eq!(joint.num_states, 129);
+    assert_eq!(joint.transitions, table.transitions);
+    assert_eq!(joint.accepting, table.accepting);
+    for w in random_words()
+        .iter()
+        .chain(controls().iter().map(|(w, _)| w))
+    {
+        assert_eq!(
+            pem.matches(w),
+            !contains_pem_header(w),
+            "policyc PEM vs scanner on {w:?}"
+        );
+        assert_eq!(
+            aws.matches(w),
+            !contains_aws_key(w),
+            "policyc AWS vs scanner on {w:?}"
+        );
+    }
+}
