@@ -434,7 +434,7 @@ theorem the_field_gates_are_the_whole_lookup_bill :
 `EffectAir.pinsTied` is `O(pins × legs)`, and this is the widest block in the tree: **1 518 pins
 over 4 239 legs**. Until 2026-11-06 it was closed by `decide`, which ran that scan inside the
 elaborator's `whnf`: 213 s, and the reason this module peaked at 25.9 GB (measured on dregg-build2,
-`docs/MINA-PICKLES-RESCUE.md`).
+`metatheory/docs/MINA-PICKLES-RESCUE.md`).
 
 The proof below never scans the leg list. Every pin's reader is known by construction: a field pin
 publishes `FLIMB f k`, and `fieldLimbsLeg f` (the `.limbs` leg whose `cols` IS `fieldCols f`) reads
