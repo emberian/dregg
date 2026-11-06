@@ -14,7 +14,8 @@ horizontal state of size `O(k)` instead of the `2^k` an unordered reading needs 
 node-locally (one horizontal pass over the children's LABELS per node, never recursing into a
 child's evaluation), which is the shape an AIR checks: one transition lookup per child edge, one
 `hfinal` per node. `checkRun_sound`: an accepted run's root label is `eval`'s answer.
-`checkRun_annotate`: the honest run (`annotate`) is always accepted.
+Completeness (the honest run `annotate` is accepted whenever `eval` succeeds) is NOT proved here;
+it is exercised by the producer's certificates, which `tree-check` accepts (codex round 1, finding 12).
 
 **Counts** (`Counts`, `counts`): nodes, child edges (= horizontal transitions = transition
 lookups), scalar leaves, string-leaf bytes (the byte DFA's lookups when the leaf automaton is a

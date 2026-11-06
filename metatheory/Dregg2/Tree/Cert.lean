@@ -91,8 +91,14 @@ def defOfJVal : JVal → Option Def
       match get k with
       | none => some none
       | some v => (f v).map some
-    let types ← (opt "type" asTypes)
-    let enumStr ← opt "enum" (asList asStr)
+    -- an explicit empty `type`, `enum`, `allOf` or `anyOf` is refused, never read as "absent"
+    -- (codex round 1, finding 2)
+    let nonEmpty {α : Type} (f : JVal → Option (List α)) (v : JVal) : Option (List α) :=
+      match f v with
+      | some (x :: xs) => some (x :: xs)
+      | _ => none
+    let types ← opt "type" (nonEmpty asTypes)
+    let enumStr ← opt "enum" (nonEmpty (asList asStr))
     let pattern ← opt "pattern" asNat
     let minimum ← opt "minimum" asInt
     let maximum ← opt "maximum" asInt
@@ -107,8 +113,8 @@ def defOfJVal : JVal → Option Def
     let items ← opt "items" asNat
     let minItems ← opt "minItems" asNat
     let maxItems ← opt "maxItems" asNat
-    let allOf ← opt "allOf" (asList asNat)
-    let anyOf ← opt "anyOf" (asList asNat)
+    let allOf ← opt "allOf" (nonEmpty (asList asNat))
+    let anyOf ← opt "anyOf" (nonEmpty (asList asNat))
     pure { types := types.getD [], enumStr, pattern, minimum, maximum, props := props.getD [],
            required := required.getD [], additional := additional.getD .any, items,
            minItems := minItems.getD 0, maxItems, allOf := allOf.getD [], anyOf := anyOf.getD [] }
@@ -117,6 +123,7 @@ def defOfJVal : JVal → Option Def
 /-- A byte table in the `dfa` crate's shape: `num_states`, `transitions`, `start`, `accepting`. -/
 def tableOfJVal : JVal → Option FlatTable
   | .obj kvs => do
+    if !(kvs.all fun e => (["accepting", "num_states", "start", "transitions"].map key).contains e.1) then none
     let n ← (findKey (key "num_states") kvs).bind asNat
     let tr ← (findKey (key "transitions") kvs).bind (asList asNat)
     let st ← (findKey (key "start") kvs).bind asNat
@@ -128,6 +135,7 @@ def tableOfJVal : JVal → Option FlatTable
 /-- `{"defs": [...], "root": n, "tables": [...]}`. -/
 def schemaOfJVal : JVal → Option Schema
   | .obj kvs => do
+    if !(kvs.all fun e => (["defs", "root", "tables"].map key).contains e.1) then none
     let defs ← (findKey (key "defs") kvs).bind (asList defOfJVal)
     let root ← (findKey (key "root") kvs).bind asNat
     let tables ← match findKey (key "tables") kvs with
@@ -366,7 +374,7 @@ def corpusCheck (hash : List Int → Int) (st : CorpusStmt) (r : CorpusReceipt) 
   match optMap tableOfJVal r.tables with
   | none => false
   | some Ts =>
-    r.records.length == st.n &&
+    r.records.length == st.n && r.records.all (fun ev => ev.root.length == 32) &&
     mrootC hash (r.records.map (leafOf ·.root)) == st.mmrRoot &&
     match optMap (judge H st.query Ts) r.records with
     | none => false
@@ -531,7 +539,7 @@ theorem corpus_count_sound (hH : HashFits H) (hash : List Int → Int) (st : Cor
     · cases hm
     · rename_i Ts hTs
       simp only [Bool.and_eq_true, beq_iff_eq] at hm
-      obtain ⟨⟨_, _⟩, hm⟩ := hm
+      obtain ⟨⟨⟨_, _⟩, _⟩, hm⟩ := hm
       split at hm
       · cases hm
       · rename_i vs hvs

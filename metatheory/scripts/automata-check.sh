@@ -16,7 +16,7 @@
 #
 # The family list: the gate list from the automata program brief, plus every `.lean` file under
 # `Dregg2/Datalog/`, `Dregg2/Policy/` (lanes A and B add files there), `Dregg2/Sat/` (lane E) and
-# `Dregg2/Automata/` (the `dfa-run` table runner). `--files` replaces it.
+# `Dregg2/Automata/` (the `dfa-run` table runner) and `Dregg2/Tree/` (initiative 12, `tree-check`). `--files` replaces it.
 #
 # Usage (from anywhere; the script cds to metatheory/):
 #   scripts/automata-check.sh                  # Mac: -j 4, deps then check, table on stdout
@@ -106,7 +106,7 @@ Dregg2/Datalog/FixpointCert.lean
 if [ -n "$FILES_OVERRIDE" ]; then
   FILES=$(printf '%s\n' "$FILES_OVERRIDE" | tr ', ' '\n\n' | sed '/^$/d')
 else
-  FILES=$( { printf '%s\n' $GATE_FILES; find Dregg2/Datalog Dregg2/Policy Dregg2/Automata Dregg2/Sat -name '*.lean' 2>/dev/null | sort; } | awk 'NF && !seen[$0]++')
+  FILES=$( { printf '%s\n' $GATE_FILES; find Dregg2/Datalog Dregg2/Policy Dregg2/Automata Dregg2/Sat Dregg2/Tree -name '*.lean' 2>/dev/null | sort; } | awk 'NF && !seen[$0]++')
 fi
 
 MISSING=0

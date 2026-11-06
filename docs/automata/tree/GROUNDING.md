@@ -68,8 +68,9 @@ corpus whose per-record evidence discloses only the opened path.
    all. The model's numbers are exact decimals `m·10^e` normalized
    (`m` not divisible by 10, zero is `0·10^0`); integers encode as CBOR major types 0/1 in shortest
    form, non-integers as tag 4 (decimal fraction, RFC 8949 §3.4.4). `-0` and `0` are one value.
-   Admitted domain: integer magnitudes and mantissas below `2^64`, exponents in `[-2^63, 2^63)`;
-   outside it the projection refuses the record (counted, never silently rounded).
+   Integers of any size (bignums beyond 64 bits, tags 2/3, minimal bytes); decimal exponents in
+   `[-2^64, 0)` (RFC 8949 §3.4.4 forbids a bignum exponent; codex round 1, finding 3); the JSON
+   projection refuses written exponents beyond `±4096` (counted, never silently rounded).
 2. **Unicode is not normalized.** NFC `é` and NFD `e◌́` are two trees (JCS and CBOR agree). A
    byte pattern over the decoded leaf is evaded by a homoglyph; that is the pattern's meaning, not a
    soundness gap, and the demo says so. Escapes **are** decoded: `"pkill -f"` is the leaf
@@ -94,10 +95,12 @@ corpus whose per-record evidence discloses only the opened path.
 
 ### 3.2 Schema scope (regular core)
 
-Compiled: `type`, `const`/`enum` (strings, finite), string `pattern` as a byte DFA, integer and
-decimal bounds, `properties`/`required`/`additionalProperties` (false or a schema), `items` (one
+Compiled: `type`, `enum` (strings only; a one-element `enum` is `const`), string `pattern` as a
+byte DFA deciding the WHOLE string (search semantics is the table `any* · P · any*`), integer
+bounds (applied to integers and decimals), `properties`/`required`/`additionalProperties` (false or a schema), `items` (one
 schema for all), `minItems`/`maxItems` (bounded counter states), `anyOf`/`allOf` over the same
-node (acyclic), `$ref` recursion across levels. Refused with a named error: `uniqueItems`,
+node (acyclic: lower indices), recursion across levels by naming sub-schemas with indices (the
+flattened form of `$defs`/`$ref`; no `$ref` keyword is read). Every other keyword is refused, among them `uniqueItems`,
 `dependentSchemas`, `unevaluatedProperties`, `patternProperties`, `oneOf`, `multipleOf`.
 
 ## 4. Trust boundary, stated once

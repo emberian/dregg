@@ -85,12 +85,18 @@ namespace Schema
 
 variable (S : Schema)
 
-/-- Same-node references point to lower indices; table indices exist; the root exists. -/
+/-- Same-node references point to lower indices; every child reference (`properties`,
+`additionalProperties`, `items`) and table index exists; the root exists (codex round 1,
+finding 2: a dangling `items: 999` used to read as "no array may be non-empty"). -/
 def ok : Bool :=
-  S.root < S.defs.length &&
-  (List.range S.defs.length).all fun d =>
+  let m := S.defs.length
+  S.root < m &&
+  (List.range m).all fun d =>
     let D := S.defs.getD d {}
     D.allOf.all (· < d) && D.anyOf.all (· < d) &&
+      D.props.all (·.2 < m) &&
+      (match D.additional with | .sch j => j < m | _ => true) &&
+      (match D.items with | some j => j < m | none => true) &&
       (match D.pattern with | some p => p < S.tables.length | none => true)
 
 end Schema
@@ -116,7 +122,9 @@ def decLe (m e b : Int) : Bool := m ≤ b * 10 ^ (-e).toNat
 
 def tableAccepts (t : FlatTable) (s : List UInt8) : Bool := t.isAccepting (runFrom t t.start s)
 
-/-- The scalar keywords on a node (true on containers). -/
+/-- The node-local keywords other than `type`: `enum` (string-only enumerations, so it refuses every
+non-string, codex round 1 finding 1), `pattern` and the numeric bounds (which apply only to their
+own types, as in JSON Schema). -/
 def scalarOk (S : Schema) (D : Def) : JVal → Bool
   | .str s =>
     (match D.enumStr with | some l => l.contains s | none => true) &&
@@ -126,12 +134,14 @@ def scalarOk (S : Schema) (D : Def) : JVal → Bool
        | none => false
      | none => true)
   | .int n =>
+    D.enumStr.isNone &&
     (match D.minimum with | some b => b ≤ n | none => true) &&
     (match D.maximum with | some b => n ≤ b | none => true)
   | .dec m e =>
+    D.enumStr.isNone &&
     (match D.minimum with | some b => decGe m e b | none => true) &&
     (match D.maximum with | some b => decLe m e b | none => true)
-  | _ => true
+  | _ => D.enumStr.isNone
 
 def getBit (bits : List Bool) (j : Nat) : Bool := bits.getD j false
 
@@ -233,8 +243,8 @@ def compile (S : Schema) : TreeAut (List Bool) (Nat → HS) where
   hfinal k h := some (close S ((List.range S.defs.length).map fun d =>
     let D := defAt S d
     match k with
-    | .arr => typeOk D (.arr []) && (h d).ok && decide (D.minItems ≤ (h d).count) && maxOk D (h d).count
-    | .obj => typeOk D (.obj []) && (h d).ok && (h d).rem.isEmpty))
+    | .arr => typeOk D (.arr []) && D.enumStr.isNone && (h d).ok && decide (D.minItems ≤ (h d).count) && maxOk D (h d).count
+    | .obj => typeOk D (.obj []) && D.enumStr.isNone && (h d).ok && (h d).rem.isEmpty))
 
 /-! ## `compile_correct` -/
 
@@ -415,7 +425,7 @@ theorem compile_correct : ∀ v : JVal, (compile S).eval v = some (bitsOf S v)
     apply close_spec
     intro d hd
     simp only [List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_range hd, Option.map_some,
-      Option.getD_some, localOk, scalarOk, Bool.and_true]
+      Option.getD_some, localOk, scalarOk]
     rw [foldl_ok_arr, foldl_count _ _ _ _ (by simp [cap])]
     simp only [getBit_bitsOf_fun]
     have hty : typeOk (defAt S d) (.arr []) = typeOk (defAt S d) (.arr xs) := typeOk_tyOf _ rfl
@@ -435,7 +445,7 @@ theorem compile_correct : ∀ v : JVal, (compile S).eval v = some (bitsOf S v)
     apply close_spec
     intro d hd
     simp only [List.getD_eq_getElem?_getD, List.getElem?_map, List.getElem?_range hd, Option.map_some,
-      Option.getD_some, localOk, scalarOk, Bool.and_true]
+      Option.getD_some, localOk, scalarOk]
     rw [foldl_ok_obj, foldl_rem_obj]
     simp only [getBit_bitsOf_fun]
     have hty : typeOk (defAt S d) (.obj []) = typeOk (defAt S d) (.obj kvs) := typeOk_tyOf _ rfl

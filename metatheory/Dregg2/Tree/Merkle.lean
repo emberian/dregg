@@ -622,16 +622,33 @@ The deployed leaf hashes with cSHAKE256 (minidregg `Tower256CshakeMerkle*`); SHA
 domain-separation prefix stands in for it here, as in `DatalogCheck`. Every theorem above is
 abstract in `H`; only these pins and the executable fix it. -/
 
+/-- Exactly 32 bytes: the identity on SHAKE256's 32-byte output (pinned below), stated so the
+length is a theorem rather than a property of the sponge's loop. -/
+def fix32 (l : List UInt8) : List UInt8 := (l ++ List.replicate 32 0).take 32
+
+theorem fix32_length (l : List UInt8) : (fix32 l).length = 32 := by
+  simp [fix32]
+
 /-- The node hash: `SHAKE256("dregg.tree.node.v1" ‖ 0x00 ‖ frame, 32)`. -/
 def shakeH (x : List UInt8) : Digest :=
-  Dregg2.Crypto.Keccak.shake256 ("dregg.tree.node.v1".toUTF8.toList ++ [0] ++ x) 32
+  fix32 (Dregg2.Crypto.Keccak.shake256 ("dregg.tree.node.v1".toUTF8.toList ++ [0] ++ x) 32)
+
+theorem shakeH_len (x : List UInt8) : (shakeH x).length = 32 := fix32_length _
 
 theorem shakeH_fits : HashFits shakeH := by
-  intro x
-  have : (shakeH x).length ≤ 32 := by
-    simp only [shakeH, Dregg2.Crypto.Keccak.shake256, Dregg2.Crypto.Keccak.squeeze]
-    exact List.length_take_le _ _
-  omega
+  intro x; rw [shakeH_len]; decide
+
+/-- A collision of `shakeH` at distinct frames is a collision of the (truncated) SHAKE256 at two
+distinct, equally prefixed inputs. -/
+theorem shakeH_coll {x y : List UInt8} (h : Coll shakeH (x, y)) :
+    "dregg.tree.node.v1".toUTF8.toList ++ [0] ++ x ≠ "dregg.tree.node.v1".toUTF8.toList ++ [0] ++ y ∧
+    fix32 (Dregg2.Crypto.Keccak.shake256 ("dregg.tree.node.v1".toUTF8.toList ++ [0] ++ x) 32) =
+      fix32 (Dregg2.Crypto.Keccak.shake256 ("dregg.tree.node.v1".toUTF8.toList ++ [0] ++ y) 32) :=
+  ⟨fun e => h.1 (List.append_cancel_left e), h.2⟩
+
+-- `fix32` is the identity on the sponge's output
+#guard (Dregg2.Crypto.Keccak.shake256 [1, 2, 3] 32).length == 32
+#guard fix32 (Dregg2.Crypto.Keccak.shake256 [1, 2, 3] 32) == Dregg2.Crypto.Keccak.shake256 [1, 2, 3] 32
 
 /-! ## Falsifiers -/
 

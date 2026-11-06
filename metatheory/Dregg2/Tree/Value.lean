@@ -6,7 +6,7 @@ bytes (escapes resolved, so `"p"` and `"p"` are one leaf), numbers are exact dec
 one representative per value, and objects are lists of `(key, value)` entries.
 
 **Numbers.** `int n` is an integer value; `dec m e` is the non-integer `m · 10^e` with `e < 0` and
-`10 ∤ m` (`DecCanon`). Every finite decimal has exactly one such form: integers (including `1.0`,
+`10 ∤ m` (`decCanon`; the exponent is also at least `-2^64`, `expOk`). Every finite decimal has exactly one such form: integers (including `1.0`,
 `10e-1`, `1e400`, `-0`) are `int`, the rest are `dec` (`Json.mkNum`). There are no floats: RFC 8785
 (JCS) canonicalizes IEEE doubles and so aliases `9007199254740993` with `9007199254740992` (pinned
 in `Json`); this model does not.
@@ -208,10 +208,14 @@ def keysSorted : List (List UInt8 × JVal) → Bool
 /-- A canonical decimal: a non-integer value. -/
 def decCanon (m e : Int) : Bool := e < 0 && m % 10 != 0
 
+/-- RFC 8949 §3.4.4: a decimal fraction's exponent is major type 0/1, never a bignum, so a
+canonical exponent lies in `[-2^64, 0)` (codex round 1, finding 3). -/
+def expOk (e : Int) : Bool := decide (-(2 ^ 64 : Int) ≤ e)
+
 mutual
 /-- **`WF`**, the canonical form, decidable. -/
 def wf : JVal → Bool
-  | .dec m e => decCanon m e
+  | .dec m e => decCanon m e && expOk e
   | .str s => utf8Valid s
   | .arr xs => wfList xs
   | .obj kvs => keysSorted kvs && wfKVs kvs
@@ -305,9 +309,12 @@ instance (v : JVal) : Decidable (Admitted v) := by
   unfold Admitted; rw [← adm_iff]; infer_instance
 
 /-- ⚑ **`canon_injective`** — canonical encoding is injective on the model: two admitted values
-with one encoding are the same value. Holds without `WF`; `WF` is what makes each JSON value have
-exactly one representative (`Spec.wf_unique`), this is what makes each representative have exactly
-one byte string and each byte string at most one representative. -/
+with one encoding are the same value. Holds without `WF`. What is proved, and what is not (codex
+round 1, finding 5): each tree has one byte string and each byte string at most one tree (this
+theorem, `ofCanonicalBytes_sound`); two `WF` objects whose entry lists are permutations of each
+other are equal (`Spec.wf_unique_obj`, one level, identical entries). That `Json.parse` maps two
+spellings of one JSON value to one tree (recursive key-order and number-spelling equivalence) is
+NOT a theorem; it is pinned by `#guard`s in `Json.lean`. -/
 theorem canon_injective {a b : JVal} (ha : Admitted a) (hb : Admitted b)
     (h : encode a = encode b) : a = b :=
   toItem_injective (enc_injective ha hb h)
@@ -385,6 +392,9 @@ def lookup : JVal → Path → Option JVal
 #guard ofCanonicalBytes (encode (.dec 27315 (-2))) |>.isSome
 -- a non-shortest head is refused by the reader (the decoder alone would accept it)
 #guard (ofCanonicalBytes [0x18, 0x05]).isNone && (ofCanonicalBytes [0x05]).isSome
+-- a decimal whose exponent would need a bignum is refused (RFC 8949 §3.4.4)
+#guard (ofCanonicalBytes (encode (.dec 1 (-18446744073709551617)))).isNone
+#guard (ofCanonicalBytes (encode (.dec 1 (-18446744073709551616)))).isSome
 -- a non-canonical decimal (an integer written as tag 4) is refused
 #guard (ofCanonicalBytes (encode (.dec 10 (-1)))).isNone
 -- duplicate keys are refused, and so are unsorted keys

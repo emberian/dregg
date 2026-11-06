@@ -9,7 +9,8 @@ Fixes the three hashes every theorem in `Dregg2.Tree` leaves abstract:
 
 The MMR hash frames its integer list with the same canonical CBOR (`intItem`, `Cbor.enc`), which
 `canon_injective` makes injective, so a collision of `h` at distinct lists is a SHAKE256 collision
-at distinct inputs (`mmrHash_coll`). The deployed leaf hash is cSHAKE256 (minidregg); the
+at distinct inputs (`Spec.mmrHash_coll`, for lists of 256-bit naturals: the MMR hashes only
+digests and leaves). The deployed leaf hash is cSHAKE256 (minidregg); the
 statements do not change when these do.
 
 Wire formats (JSON envelope; every value inside is canonical CBOR in hex, read by the proved
@@ -24,11 +25,14 @@ open Lean (Json)
 open Cbor
 
 def flatF (x : List UInt8) : Digest :=
-  Dregg2.Crypto.Keccak.shake256 ("dregg.tree.flat.v1".toUTF8.toList ++ [0] ++ x) 32
+  fix32 (Dregg2.Crypto.Keccak.shake256 ("dregg.tree.flat.v1".toUTF8.toList ++ [0] ++ x) 32)
+
+/-- The MMR's input framing: canonical CBOR of the integer list. -/
+def mmrInput (l : List Int) : List UInt8 :=
+  "dregg.tree.mmr.v1".toUTF8.toList ++ [0] ++ enc (.arr (l.map intItem))
 
 def mmrHash (l : List Int) : Int :=
-  (ofBE (Dregg2.Crypto.Keccak.shake256
-    ("dregg.tree.mmr.v1".toUTF8.toList ++ [0] ++ enc (.arr (l.map intItem))) 32) : Int)
+  (ofBE (fix32 (Dregg2.Crypto.Keccak.shake256 (mmrInput l) 32)) : Int)
 
 /-! ## Hex -/
 

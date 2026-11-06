@@ -225,18 +225,20 @@ validation tree automata" (PRIOR-ART §7). That is a "no hit".
 
 ## 8. Built vs proposed
 
+Updated 2026-11-06 by the tree lane (initiative 12; `tree/GROUNDING.md`). Route (ii) is built at
+L2 for single-path statements, with a whole-tree schema check at full disclosure; route (i) (the
+VPA over bytes) is still proposed. The model fixes key order by canonicalization (deterministic
+CBOR, RFC 8949 §4.2.1), so `TreeAut` objects are ordered hedges without the `2^|keys|` cost of §1.
+
 | object | where | rung |
 |---|---|---|
-| `JTree`, `TreeAut`, `eval`, `Accepts`, `ser` | proposed | L0 |
-| `toVpa`, `toVpa_correct` | proposed; depends on `04`'s `VAlphabet`/`VpaOver` | L0 |
-| `treeCert_bound_sound` | proposed | L0 |
-| label-blind falsifier | proposed | L0 → L2 with the three `#guard`s |
-| route (i) AIR | proposed; the `04` memory-stack VPA row plus the `05` lexer | L0 |
-| route (ii) AIR | proposed | L0 |
-| CBOR header walker | proposed | L0 |
-
-**Milestone:** `toVpa_correct` proved for one concrete schema in the regular core, "an object whose
-key `"role"` maps to one of three strings", encoded as a `TreeAut` with `|H| ≤ 8` horizontal states.
-Land it with the three label-blind `#guard`s and a `#guard` that the computable run accepts the event
-stream of `{"role":"admin"}` and rejects `{"role":7}`. Pin the event count (`(ser t).length = 2 · nodes t`, which is 6 for that document's three nodes) beside
-the route (ii) count of 2 permutations per node. Rung L2.
+| JSON model, exact decimals, deterministic CBOR, `canon_injective`, `ofCanonicalBytes_sound`, `wf_unique_obj` | `metatheory/Dregg2/Tree/{Cbor,Value}.lean`, `Spec.lean` | L2 |
+| strict JSON text → tree projection (escapes decoded, duplicates refused, JCS and flat-scan falsifiers) | `Tree/Json.lean` | executable, `parse_wf` |
+| kind-tagged Merkle frames, `rootFind_sound`, single-path `walk_sound`, honest `openAt` + `walk_openAt` | `Tree/Merkle.lean` | L2 |
+| deterministic bottom-up hedge automaton, run certificates `checkRun_sound`, per-node counts | `Tree/Automaton.lean` | L2 |
+| regular core of JSON Schema, top-down `valid`, `compile` to a bitset automaton, `compile_correct` | `Tree/Schema.lean` | L2 |
+| `schema_sound`, `path_pattern_sound`, `corpus_count_sound` | `Tree/Cert.lean` | L2 |
+| `corpus_absence` (with `MMR.mroot_binds_or_collides`), `field_accept_bound` (Layer B′ shape) | `Tree/Spec.lean` | L2 |
+| `lake exe tree-check` (verify / project / flat) | `metatheory/TreeCheck.lean`, format `tree/FORMAT.md` | L2 → L3 with the demo |
+| `toVpa`, `toVpa_correct`, route (i) AIR, CBOR header walker | proposed | L0 |
+| label-blind falsifier | superseded on route (ii) by the tagless-frame falsifier (`Merkle.Falsifier`) | L2 |
