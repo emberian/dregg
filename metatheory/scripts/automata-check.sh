@@ -15,7 +15,8 @@
 #   3. table: file, status, seconds, guards, keystones (or JSON with --json); exit 1 on any failure.
 #
 # The family list: the gate list from the automata program brief, plus every `.lean` file under
-# `Dregg2/Datalog/` and `Dregg2/Policy/` (lanes A and B add files there). `--files` replaces it.
+# `Dregg2/Datalog/`, `Dregg2/Policy/` (lanes A and B add files there) and `Dregg2/Sat/` (lane E).
+# `--files` replaces it.
 #
 # Usage (from anywhere; the script cds to metatheory/):
 #   scripts/automata-check.sh                  # Mac: -j 4, deps then check, table on stdout
@@ -82,6 +83,7 @@ Dregg2/Crypto/Deriv/Correctness.lean
 Dregg2/Crypto/Deriv/Finiteness.lean
 Dregg2/Crypto/Deriv/Thompson.lean
 Dregg2/Crypto/Deriv/SymbolicEquivalence.lean
+Dregg2/Crypto/Deriv/BisimCert.lean
 Dregg2/Crypto/Cfg.lean
 Dregg2/Crypto/CfgCompact.lean
 Dregg2/Circuit/Emit/DfaRoutingTableEmit.lean
@@ -98,7 +100,7 @@ Dregg2/Datalog/FixpointCert.lean
 if [ -n "$FILES_OVERRIDE" ]; then
   FILES=$(printf '%s\n' "$FILES_OVERRIDE" | tr ', ' '\n\n' | sed '/^$/d')
 else
-  FILES=$( { printf '%s\n' $GATE_FILES; find Dregg2/Datalog Dregg2/Policy -name '*.lean' 2>/dev/null | sort; } | awk 'NF && !seen[$0]++')
+  FILES=$( { printf '%s\n' $GATE_FILES; find Dregg2/Datalog Dregg2/Policy Dregg2/Sat -name '*.lean' 2>/dev/null | sort; } | awk 'NF && !seen[$0]++')
 fi
 
 MISSING=0

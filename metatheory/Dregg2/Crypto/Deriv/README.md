@@ -71,6 +71,7 @@ Keystone column: **yes** marks the five files on the program gate list and the t
 | `SymbolicEquivalence.lean` | `symDiff`, `langEq_iff_symDiff_empty`: language equivalence via emptiness of the symmetric difference | **yes** | 2 | 7 |
 | `SymbolicFixpoint.lean` | the runnable worklist fixpoint (`reachFix`, `emptyFix`) over `simDecide`; rigidity is root-only |  | 13 | 15 |
 | `EquivalenceFixpoint.lean` | the `≅`-fixpoint composed onto `symDiff`: runnable equivalence (`role3_not_equiv_role4`) |  | 12 | 5 |
+| `BisimCert.lean` | derivative-bisimulation CERTIFICATES (lane E, 2026-11-06): `bisimOk`/`bisimCheck` over a pair list with classes from `atomCands`; `closed_under_symbols`, `bisimCheck_sound` (⊆) and `bisimEqCheck_sound` (≡); `noDoubleBraceRE ⊆ star any` as a term; the untrusted emitter `emitPairs` |  | 16 | 26 |
 
 ## Real-guard audits
 
