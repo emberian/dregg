@@ -80,8 +80,11 @@ emitting: `[gt6]` is `residual.is_zero()`, and `[gt7]` re-runs it at `z1 + 1` an
 
 ## Axiom hygiene — ⚠ CORRECTED 2026-08-05, because the old line was FALSE-BY-OMISSION
 
-`#assert_namespace_axioms` pins **26 theorems kernel-clean**, and **9 are `except`ed** as
-`native_decide` + `#assert_compiled`: the IPA-transcript replay and its non-vacuity controls.
+`#assert_namespace_axioms` pins the rest kernel-clean and **33 are `except`ed** as `native_decide` +
+`#assert_compiled`: the IPA-transcript replay and its non-vacuity controls (since 2026-08-05), and
+24 further block-data facts (since 2026-11-06, ember's policy; see the note above the pin).
+`opening_relation_holds` and `b0_is_the_b_polynomial` stay kernel `decide`s: downstream kernel
+proofs cite them.
 
 ⚠ This header used to read *"Axiom-clean: `by decide` and `#guard`; no `sorry`, no `native_decide`"*.
 Every clause was literally true and the sentence was misleading, because the nine `#guard`s ran the
@@ -191,23 +194,23 @@ theorem the_split_absorb_of_absorb_fr_is_load_bearing :
 
 /-- **`derived_ipa_challenges`** — the 15 prechallenges endo-lift to the `chal` the relation
 scales `L` and `R` by. -/
-theorem derived_ipa_challenges : IPA_PRECHALS.map (endoMap ENDO_R) = CHAL_F := by decide +kernel
+theorem derived_ipa_challenges : IPA_PRECHALS.map (endoMap ENDO_R) = CHAL_F := by native_decide
 
 /-- **`derived_c`** — and `c′` lifts to `c`, the scalar the whole of `Q` is multiplied by. -/
-theorem derived_c : endoMap ENDO_R C_PRE = (C : Fq) := by decide +kernel
+theorem derived_c : endoMap ENDO_R C_PRE = (C : Fq) := by native_decide
 
 /-- **`derived_endo_discriminates_here`** — the lift is not true for free at these values. -/
 theorem derived_endo_discriminates_here :
     endoMap ENDO_R (C_PRE + 1) ≠ (C : Fq)
     ∧ endoMap ENDO_R (IPA_PRECHALS.getD 0 0) ≠ (CHAL.getD 1 0 : Fq) := by
-  refine ⟨?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-! ## §3b — the remaining scalars, derived from the derived challenges -/
 
 /-- **`chal_inv_are_inverses`** — `chal_inv` really is `batch_inversion(chal)`; the `L` scalars
 are the inverses of the `R` scalars, which is the whole shape of the IPA fold. -/
 theorem chal_inv_are_inverses :
-    (CHAL_F.zip CHAL_INV_F).all (fun p => decide (p.1 * p.2 = 1)) = true := by decide +kernel
+    (CHAL_F.zip CHAL_INV_F).all (fun p => decide (p.1 * p.2 = 1)) = true := by native_decide
 
 /-- ⚑ **`b0_is_the_b_polynomial`** — `b0` is `b_poly(chal, ζ) + r·b_poly(chal, ζω)` at the gate's
 OWN ζ and evalscale `r`, both of which `MinaRealBlockTranscript` derives. So the `u_base`
@@ -221,16 +224,16 @@ theorem b0_reads_every_challenge :
         + UU * bPoly (CHAL_F.set 0 (CHAL_F.getD 0 0 + 1)) ZETAW ≠ (B0 : Fq)
     ∧ bPoly (CHAL_F.set 14 (CHAL_F.getD 14 0 + 1)) ZETA
         + UU * bPoly (CHAL_F.set 14 (CHAL_F.getD 14 0 + 1)) ZETAW ≠ (B0 : Fq) := by
-  refine ⟨?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-- **`cip_is_the_gates_cip`** — the `combined_inner_product` this relation folds is the one
 `MinaRealBlockGate`'s C8 proved is the `(ξ, r)`-fold of the block's claimed evaluations. Without
 this the relation would be about an unrelated number. -/
-theorem cip_is_the_gates_cip : (CIP_N : Fq) = CIP := by decide +kernel
+theorem cip_is_the_gates_cip : (CIP_N : Fq) = CIP := by native_decide
 
 /-- **`cip_shifted_is_shift_scalar`** — and what the sponge absorbed is that value minus `2^255`,
 `shift_scalar`'s `q > p` branch. -/
-theorem cip_shifted_is_shift_scalar : (CIP_SHIFTED : Fq) + (2 : Fq) ^ 255 = CIP := by decide +kernel
+theorem cip_shifted_is_shift_scalar : (CIP_SHIFTED : Fq) + (2 : Fq) ^ 255 = CIP := by native_decide
 
 /-! ## §4 — `u_base`, through the group map
 
@@ -247,12 +250,12 @@ theorem group_map_params_are_what_setup_builds :
     ∧ GM_SQRT3 * GM_SQRT3 = -(3 * GM_U * GM_U)
     ∧ GM_SQRT3_MU2 * 2 = GM_SQRT3 - GM_U
     ∧ GM_INV3U2 * (3 * GM_U * GM_U) = 1 := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- **`gm_alpha_is_the_inverse`** — `alpha` is the inverse `potential_xs` computes, at the `t`
 the sponge produced. -/
 theorem gm_alpha_is_the_inverse :
-    GM_ALPHA * ((T_FP * T_FP + GM_FU) * (T_FP * T_FP)) = 1 := by decide +kernel
+    GM_ALPHA * ((T_FP * T_FP + GM_FU) * (T_FP * T_FP)) = 1 := by native_decide
 
 /-- **`group_map_selects_the_third_candidate`** — the first two candidates' `x³ + 5` are
 NON-RESIDUES, so `get_xy`'s search really does fall through to the third. Without this the choice
@@ -260,7 +263,7 @@ of branch would be transcribed rather than derived. -/
 theorem group_map_selects_the_third_candidate :
     (isNonResidue (ZMod.val ((potentialXs (T_FP * T_FP) GM_ALPHA).1 ^ 3 + 5))
       && isNonResidue (ZMod.val ((potentialXs (T_FP * T_FP) GM_ALPHA).2.1 ^ 3 + 5))) = true := by
-  decide +kernel
+  native_decide
 
 /-- **`nonresidue_test_discriminates`** — and the test is not true for free. The SELECTED
 candidate's `x³ + 5` is NOT a non-residue by the same certificate, and neither are `1` or `4`.
@@ -268,20 +271,20 @@ Without this, `group_map_selects_the_third_candidate` would be consistent with a
 that says yes to everything, and the branch derivation would be theatre. -/
 theorem nonresidue_test_discriminates :
     (isNonResidue (ZMod.val ((potentialXs (T_FP * T_FP) GM_ALPHA).2.2 ^ 3 + 5))
-      || isNonResidue 1 || isNonResidue 4) = false := by decide +kernel
+      || isNonResidue 1 || isNonResidue 4) = false := by native_decide
 
 /-- **`group_map_y_is_a_square_root`** — and the third candidate's `x³ + 5` IS a square, with
 `GM_Y` a root of it. -/
 theorem group_map_y_is_a_square_root :
-    GM_Y * GM_Y = (potentialXs (T_FP * T_FP) GM_ALPHA).2.2 ^ 3 + 5 := by decide +kernel
+    GM_Y * GM_Y = (potentialXs (T_FP * T_FP) GM_ALPHA).2.2 ^ 3 + 5 := by native_decide
 
 /-- ⚑ **`u_base_is_o1labs_u_base`** — and the point that construction lands on IS the `u_base`
 o1-labs' `SRS::verify` computes on this block. -/
 theorem u_base_is_o1labs_u_base :
-    projEqM pN U_BASE (7847223366405709834624373952445684657634586309849412081950229810208103281928, 25813443087253962394072244031100642980583105487873972469944046669628245627812, 1) = true := by decide +kernel
+    projEqM pN U_BASE (7847223366405709834624373952445684657634586309849412081950229810208103281928, 25813443087253962394072244031100642980583105487873972469944046669628245627812, 1) = true := by native_decide
 
 /-- **`u_base_is_on_pallas`**. -/
-theorem u_base_is_on_pallas : projOnCurveM pN curveB U_BASE = true := by decide +kernel
+theorem u_base_is_on_pallas : projOnCurveM pN curveB U_BASE = true := by native_decide
 
 /-! **Residual, named**: which of the two roots `sqrt()` returns is arkworks' Tonelli-Shanks
 convention, and `GM_Y` is transcribed from it rather than derived. `tamper_u_base_sign` below is
@@ -297,7 +300,7 @@ theorem opening_inputs_are_real_pallas_points :
     (LR_L.all (projOnCurveM pN curveB) && LR_R.all (projOnCurveM pN curveB)
       && projOnCurveM pN curveB SG && projOnCurveM pN curveB DELTA
       && projOnCurveM pN curveB SRS_H && projOnCurveM pN curveB COMBINED_GOLD
-      && !isInfM pN SG && !isInfM pN DELTA && !projEqM pN SG DELTA) = true := by decide +kernel
+      && !isInfM pN SG && !isInfM pN DELTA && !projEqM pN SG DELTA) = true := by native_decide
 
 /-- ⚑⚑ **`opening_relation_holds`** — **the IPA opening relation of a REAL Mina devnet block
 holds in the Lean kernel.** 34 × 255-bit RCB ladders and 35 complete adds over the block's own
@@ -318,54 +321,83 @@ Each moves exactly one input of the relation and the residual stops being `O`. W
 /-- **`tamper_z1`** — one added to the prover's `z1`. It appears in three terms at once. -/
 theorem tamper_z1 :
     isInfM pN (openingResidual C (Z1 + 1) Z2 CHAL CHAL_INV COMBINED_GOLD U_BASE SG DELTA)
-      = false := by decide +kernel
+      = false := by native_decide
 
 /-- **`tamper_z2`** — one added to `z2`, the `srs.h` blinding-balance scalar. -/
 theorem tamper_z2 :
     isInfM pN (openingResidual C Z1 (Z2 + 1) CHAL CHAL_INV COMBINED_GOLD U_BASE SG DELTA)
-      = false := by decide +kernel
+      = false := by native_decide
 
 /-- **`tamper_c`** — one added to the challenge `c` that scales the whole of `Q`. -/
 theorem tamper_c :
     isInfM pN (openingResidual (C + 1) Z1 Z2 CHAL CHAL_INV COMBINED_GOLD U_BASE SG DELTA)
-      = false := by decide +kernel
+      = false := by native_decide
 
 /-- **`tamper_first_ipa_challenge`** — one added to `chal[0]`, which scales `R[0]`. -/
 theorem tamper_first_ipa_challenge :
     isInfM pN (openingResidual C Z1 Z2 (CHAL.set 0 (CHAL.getD 0 0 + 1)) CHAL_INV
-      COMBINED_GOLD U_BASE SG DELTA) = false := by decide +kernel
+      COMBINED_GOLD U_BASE SG DELTA) = false := by native_decide
 
 /-- **`tamper_last_ipa_challenge_inverse`** — and one added to `chal_inv[14]`, which scales
 `L[14]`. So both ends of the 15-round chain and both sides of each round are read. -/
 theorem tamper_last_ipa_challenge_inverse :
     isInfM pN (openingResidual C Z1 Z2 CHAL (CHAL_INV.set 14 (CHAL_INV.getD 14 0 + 1))
-      COMBINED_GOLD U_BASE SG DELTA) = false := by decide +kernel
+      COMBINED_GOLD U_BASE SG DELTA) = false := by native_decide
 
 /-- ⚑ **`tamper_aggregate`** — the 47-term aggregate replaced by a DIFFERENT real Pallas point of
 the same block (`ft_comm`, which is one of its 47 summands). This is the pole that says the
 commitments are what is being opened: change what was committed and the opening fails. -/
 theorem tamper_aggregate :
     isInfM pN (openingResidual C Z1 Z2 CHAL CHAL_INV
-      Dregg2.Circuit.Emit.MinaWrapGroupGate.FT_COMM_GOLD U_BASE SG DELTA) = false := by decide +kernel
+      Dregg2.Circuit.Emit.MinaWrapGroupGate.FT_COMM_GOLD U_BASE SG DELTA) = false := by native_decide
 
 /-- **`tamper_sg`** — `sg` replaced by `delta`. `sg` is the IPA's final `G`; the relation is a
 statement about it, and rung 5h is what would say it is `<s, srs.g>`. -/
 theorem tamper_sg :
     isInfM pN (openingResidual C Z1 Z2 CHAL CHAL_INV COMBINED_GOLD U_BASE DELTA DELTA)
-      = false := by decide +kernel
+      = false := by native_decide
 
 /-- **`tamper_delta_dropped`** — the `+delta` term omitted (the identity in its place). -/
 theorem tamper_delta_dropped :
     isInfM pN (openingResidual C Z1 Z2 CHAL CHAL_INV COMBINED_GOLD U_BASE SG Oproj)
-      = false := by decide +kernel
+      = false := by native_decide
 
 /-- ⚑ **`tamper_u_base_sign`** — `u_base` negated, i.e. the OTHER square root of §4's `x³ + 5`.
 This is what bounds the residual §4 names: the sign arkworks' `sqrt()` chooses is load-bearing,
 so it is pinned by o1-labs' own output rather than free. -/
 theorem tamper_u_base_sign :
     isInfM pN (openingResidual C Z1 Z2 CHAL CHAL_INV COMBINED_GOLD
-      (U_BASE.1, (pN - U_BASE.2.1 % pN) % pN, U_BASE.2.2) SG DELTA) = false := by decide +kernel
+      (U_BASE.1, (pN - U_BASE.2.1 % pN) % pN, U_BASE.2.2) SG DELTA) = false := by native_decide
 
+-- ⚑ 2026-11-06 (ember: facts about concrete data are checked by compiled evaluation): the 24
+-- block-data theorems from §3 on, the transcript-derived scalars, the group map, the on-curve checks
+-- and the nine tamper refutations, are `native_decide` too, pinned here and `except`ed below.
+-- `opening_relation_holds` and `b0_is_the_b_polynomial` stay kernel `decide`s because
+-- `MinaOpeningCheckWeld` and `MinaSeams` build kernel-clean proofs on them.
+#assert_compiled derived_ipa_challenges
+#assert_compiled derived_c
+#assert_compiled derived_endo_discriminates_here
+#assert_compiled chal_inv_are_inverses
+#assert_compiled b0_reads_every_challenge
+#assert_compiled cip_is_the_gates_cip
+#assert_compiled cip_shifted_is_shift_scalar
+#assert_compiled group_map_params_are_what_setup_builds
+#assert_compiled gm_alpha_is_the_inverse
+#assert_compiled group_map_selects_the_third_candidate
+#assert_compiled nonresidue_test_discriminates
+#assert_compiled group_map_y_is_a_square_root
+#assert_compiled u_base_is_o1labs_u_base
+#assert_compiled u_base_is_on_pallas
+#assert_compiled opening_inputs_are_real_pallas_points
+#assert_compiled tamper_z1
+#assert_compiled tamper_z2
+#assert_compiled tamper_c
+#assert_compiled tamper_first_ipa_challenge
+#assert_compiled tamper_last_ipa_challenge_inverse
+#assert_compiled tamper_aggregate
+#assert_compiled tamper_sg
+#assert_compiled tamper_delta_dropped
+#assert_compiled tamper_u_base_sign
 -- ⚑ The nine `except`ed theorems are the IPA-transcript replay and its non-vacuity controls. They
 -- were `#guard`s until 2026-08-05, which ran the SAME unsafe compiled evaluator with the name, the
 -- term and the axiom record DELETED — invisible to this very assertion. As `native_decide` +
@@ -380,5 +412,12 @@ theorem tamper_u_base_sign :
     a_round_point_moves_the_prechallenges the_last_ipa_round_is_absorbed
     delta_leaves_the_prechallenges_alone delta_moves_c_prime
     the_split_absorb_of_absorb_fr_is_load_bearing
+    derived_ipa_challenges derived_c derived_endo_discriminates_here chal_inv_are_inverses
+    b0_reads_every_challenge cip_is_the_gates_cip cip_shifted_is_shift_scalar
+    group_map_params_are_what_setup_builds gm_alpha_is_the_inverse
+    group_map_selects_the_third_candidate nonresidue_test_discriminates group_map_y_is_a_square_root
+    u_base_is_o1labs_u_base u_base_is_on_pallas opening_inputs_are_real_pallas_points tamper_z1
+    tamper_z2 tamper_c tamper_first_ipa_challenge tamper_last_ipa_challenge_inverse tamper_aggregate
+    tamper_sg tamper_delta_dropped tamper_u_base_sign
 
 end Dregg2.Circuit.Emit.MinaWrapOpeningGate
