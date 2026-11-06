@@ -164,6 +164,48 @@ theorem contract_word_ext :
     ∀ a : BitVec 64, ∀ b : BitVec 64, ((∀ i : Nat, ((i < 64) → ((BitVec.getLsbD a i = true) = (BitVec.getLsbD b i = true)))) → (a = b)) :=
   fun a b h => BitVec.eq_of_getLsbD_eq (fun i hi => by simpa using h i hi)
 
+/-- HOL4 kernel theorem `contract_word_slice` (exporter), printed by the row printer. -/
+theorem contract_word_slice :
+    ∀ h : Nat, ∀ l : Nat, ∀ i : Nat, ∀ w : BitVec 64, ((BitVec.getLsbD (P3.Pan.word_slice h l w) i = true) = ((l ≤ i) ∧ ((i ≤ h) ∧ (BitVec.getLsbD w i = true)))) :=
+  fun h l i w => by
+    apply propext
+    rw [P3.Pan.word_slice, BitVec.getLsbD_ofNat]
+    simp only [Nat.testBit_shiftLeft, Nat.testBit_mod_two_pow, Nat.testBit_shiftRight, Bool.and_eq_true, decide_eq_true_eq, ge_iff_le]
+    rw [BitVec.getLsbD]
+    constructor
+    · rintro ⟨_, hli, hlt, hb⟩
+      exact ⟨hli, by omega, by rwa [Nat.add_sub_cancel' hli] at hb⟩
+    · rintro ⟨hli, hih, hb⟩
+      refine ⟨?_, hli, by omega, by rwa [Nat.add_sub_cancel' hli]⟩
+      apply Classical.byContradiction; intro hn
+      have : w.toNat < 2 ^ i := Nat.lt_of_lt_of_le w.isLt (Nat.pow_le_pow_right (by decide) (by omega))
+      rw [Nat.testBit_lt_two_pow this] at hb; simp at hb
+
+/-- HOL4 kernel theorem `contract_word_slice_alt` (exporter), printed by the row printer. -/
+theorem contract_word_slice_alt :
+    ∀ h : Nat, ∀ l : Nat, ∀ i : Nat, ∀ w : BitVec 64, ((BitVec.getLsbD (P3.Pan.word_slice_alt h l w) i = true) = ((l ≤ i) ∧ ((i < h) ∧ (BitVec.getLsbD w i = true)))) :=
+  fun h l i w => by
+    apply propext
+    rw [P3.Pan.word_slice_alt, BitVec.getLsbD_ofNat]
+    simp only [Nat.testBit_shiftLeft, Nat.testBit_mod_two_pow, Nat.testBit_shiftRight, Bool.and_eq_true, decide_eq_true_eq, ge_iff_le]
+    rw [BitVec.getLsbD]
+    constructor
+    · rintro ⟨_, hli, hlt, hb⟩
+      exact ⟨hli, by omega, by rwa [Nat.add_sub_cancel' hli] at hb⟩
+    · rintro ⟨hli, hih, hb⟩
+      refine ⟨?_, hli, by omega, by rwa [Nat.add_sub_cancel' hli]⟩
+      apply Classical.byContradiction; intro hn
+      have : w.toNat < 2 ^ i := Nat.lt_of_lt_of_le w.isLt (Nat.pow_le_pow_right (by decide) (by omega))
+      rw [Nat.testBit_lt_two_pow this] at hb; simp at hb
+
+/-- HOL4 kernel theorem `contract_list_opt_mmap` (exporter), printed by the row printer. -/
+theorem contract_list_opt_mmap {β α : Type} :
+    ∀ f : α → Option β, ∀ h : α, ∀ t : List α, (((List.mapM f ([] : List α)) = (Option.some ([] : List β))) ∧ ((List.mapM f (h :: t)) = (Option.bind (f h) (fun x => (Option.bind (List.mapM f t) (fun xs => (Option.some (x :: xs)))))))) :=
+  fun f h t => by
+    refine ⟨rfl, ?_⟩
+    simp only [List.mapM_cons]
+    cases f h <;> simp
+
 /-- HOL4 kernel theorem `contract_update` (exporter), printed by the row printer. -/
 theorem contract_update {β α : Type} :
     ∀ a : α, ∀ b : β, ∀ f : α → β, ∀ c : α, (((P3.Pan.UPDATE a b f a) = b) ∧ ((¬ (a = c)) → ((P3.Pan.UPDATE a b f c) = (f c)))) :=
