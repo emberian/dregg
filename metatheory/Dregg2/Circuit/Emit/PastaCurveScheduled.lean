@@ -128,11 +128,11 @@ def W16_BASE : Nat := W8_BASE + 32
 /-- ⚑ **THE SCHEDULED ROW'S WIDTH.** -/
 def SCHED_W : Nat := W16_BASE + (NG - 1)
 
-theorem sched_w_eq : SCHED_W = 481 := by decide
+theorem sched_w_eq : SCHED_W = 481 := by decide +kernel
 
 /-- Agreement with the width `AirColumnAlloc` derives from the pool sizes alone — two independent
 routes to the same number, which is what makes it a pin rather than a restatement. -/
-theorem sched_w_agrees_with_the_pool_arithmetic : SCHED_W = SCHED_WIDTH := by decide
+theorem sched_w_agrees_with_the_pool_arithmetic : SCHED_W = SCHED_WIDTH := by decide +kernel
 
 /-! ### The three witness bases, one per op kind, each landing in its own range class.
 
@@ -148,7 +148,7 @@ def SMUL_WIT : Nat := W8_BASE + 31
 theorem witness_bases_land_in_their_pools :
     MUL_WIT = W8_BASE ∧ MUL_WIT + SK = W16_BASE ∧ ADDSUB_WIT + 1 = W8_BASE
       ∧ SMUL_WIT + 1 = W16_BASE := by
-  refine ⟨rfl, by decide, by decide, by decide⟩
+  refine ⟨rfl, by decide +kernel, by decide +kernel, by decide +kernel⟩
 
 /-! ## §2 — ⚑ THE SCHEDULE, as data. Kind, destination, two operands. -/
 
@@ -194,7 +194,7 @@ def rcbSchedule : List (OpKind × Nat × Nat × Nat) :=
   , (.mul,  V 31, V 21,  V 12)
   , (.add,  V 32, V 31,  V 30) ]
 
-theorem rcbSchedule_length : rcbSchedule.length = 33 := by decide
+theorem rcbSchedule_length : rcbSchedule.length = 33 := by decide +kernel
 
 /-- ⚑ **THE SCHEDULE IS THE DAG.** Kind-erasing `rcbSchedule` gives back `rcbOpsScheduled` exactly
 — same destinations, same operands, same order. A transcription slip here would be a DIFFERENT
@@ -202,7 +202,7 @@ CIRCUIT that still emitted and still proved, so it is pinned rather than trusted
 theorem rcbSchedule_is_the_scheduled_dag :
     rcbSchedule.map (fun t => (⟨t.2.1, [t.2.2.1, t.2.2.2]⟩ : SsaOp))
       = rcbOpsScheduled.map (fun o => (⟨o.dst, [o.srcs.headD 0, o.srcs.getD 1 0]⟩ : SsaOp)) := by
-  decide
+  decide +kernel
 
 /-- The op-kind census: 12 multiplies, 14 adds, 5 subtractions, 2 constant multiplies — the
 gadget's own `12 mul + 2 smul + 14 add + 5 sub`. -/
@@ -210,7 +210,7 @@ theorem rcbSchedule_kind_census :
     (rcbSchedule.filter (fun t => t.1 == OpKind.mul)).length = 12
     ∧ (rcbSchedule.filter (fun t => t.1 == OpKind.add)).length = 14
     ∧ (rcbSchedule.filter (fun t => t.1 == OpKind.sub)).length = 5
-    ∧ (rcbSchedule.filter (fun t => t.1 == OpKind.smul)).length = 2 := by decide
+    ∧ (rcbSchedule.filter (fun t => t.1 == OpKind.smul)).length = 2 := by decide +kernel
 
 /-! ## §3 — ⚑ THE LEGS. -/
 
@@ -353,17 +353,17 @@ def vestaScheduledAir : EffectAir :=
 which for the `limbs` legs is the `0 < bits ≤ 29` verdict, and for the `.all` windows is that they
 do not read `nxt`. A selector gate scoped `.all` that read the next row would emit
 `refuseConstraints` and this would be false. -/
-theorem pallasScheduledAir_mainRailOk : pallasScheduledAir.mainRailOk = true := by decide
+theorem pallasScheduledAir_mainRailOk : pallasScheduledAir.mainRailOk = true := by decide +kernel
 
-theorem vestaScheduledAir_mainRailOk : vestaScheduledAir.mainRailOk = true := by decide
+theorem vestaScheduledAir_mainRailOk : vestaScheduledAir.mainRailOk = true := by decide +kernel
 
 /-- ⚑ **THE TIE VERDICT, NAMED RATHER THAN RE-DERIVED.** This block publishes no PI at all, so
 every leg lands in the non-`pin` arm of `EffectAir.pinsTied`. The `TiedAir` fields below are
 `autoParam`s defaulting to `by decide`; a blank field decides the same block a second time inside
 the elaborator's `whnf`, which is what these two theorems exist to stop. -/
-theorem pallasScheduledAir_pinsTied : pallasScheduledAir.pinsTied = true := by decide
+theorem pallasScheduledAir_pinsTied : pallasScheduledAir.pinsTied = true := by decide +kernel
 
-theorem vestaScheduledAir_pinsTied : vestaScheduledAir.pinsTied = true := by decide
+theorem vestaScheduledAir_pinsTied : vestaScheduledAir.pinsTied = true := by decide +kernel
 
 /-- ⚑ **THE TIED SOURCE.** Same `TiedAir` discipline as the one-row block: a decorative pin is
 unrepresentable. (This block publishes no PI at all, so `pinsTied` is vacuously true — recorded
@@ -406,39 +406,117 @@ theorem vestaScheduledDesc_certified :
 theorem pallasScheduledDesc_width : pallasScheduledDesc.traceWidth = 481 := rfl
 theorem vestaScheduledDesc_width : vestaScheduledDesc.traceWidth = 481 := rfl
 
-set_option maxHeartbeats 4000000 in
+/-! One kernel check per leg family, and the 33 scheduled ops in slices of three, so no single declaration walks
+all 1 864 legs: the single `decide` over the whole list was 7.7 GB of this module's 11.7 GB peak. -/
+theorem scheduled_columns_fit_sel_boolean :
+    (selBooleanLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_sel_one_hot :
+    ([selOneHotLeg].all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_sel_shift :
+    (selShiftLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_value_pool :
+    (valuePoolLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_witness_pool :
+    (witnessPoolLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_carry :
+    (carryLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_0 :
+    (((List.range' 0 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_3 :
+    (((List.range' 3 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_6 :
+    (((List.range' 6 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_9 :
+    (((List.range' 9 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_12 :
+    (((List.range' 12 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_15 :
+    (((List.range' 15 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_18 :
+    (((List.range' 18 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_21 :
+    (((List.range' 21 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_24 :
+    (((List.range' 24 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_27 :
+    (((List.range' 27 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_ops_30 :
+    (((List.range' 30 3).flatMap
+      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
+      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
+theorem scheduled_columns_fit_schedule :
+    ((scheduleLegs pLimb).all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by
+  have hr : List.range rcbSchedule.length
+      = List.range' 0 3 ++ List.range' 3 3 ++ List.range' 6 3 ++ List.range' 9 3
+        ++ List.range' 12 3 ++ List.range' 15 3 ++ List.range' 18 3 ++ List.range' 21 3
+        ++ List.range' 24 3 ++ List.range' 27 3 ++ List.range' 30 3 := by
+    decide +kernel
+  unfold scheduleLegs
+  rw [hr]
+  simp only [List.flatMap_append, List.all_append,
+    scheduled_columns_fit_ops_0, scheduled_columns_fit_ops_3, scheduled_columns_fit_ops_6,
+    scheduled_columns_fit_ops_9, scheduled_columns_fit_ops_12, scheduled_columns_fit_ops_15,
+    scheduled_columns_fit_ops_18, scheduled_columns_fit_ops_21, scheduled_columns_fit_ops_24,
+    scheduled_columns_fit_ops_27, scheduled_columns_fit_ops_30,
+    Bool.and_self]
+
 /-- Every column the emitted constraints address is inside the declared width — the check
 `circuit/src/descriptor_ir2.rs:2171` performs, done on the source side so a layout slip is a Lean
 error and not a prover refusal. -/
 theorem scheduled_columns_fit :
     (pallasScheduledAir.legs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by
-  decide
+  show (selBooleanLegs ++ [selOneHotLeg] ++ selShiftLegs ++ valuePoolLegs ++ witnessPoolLegs
+      ++ carryLegs ++ scheduleLegs pLimb).all (fun l => l.readCols.all (fun c => c < SCHED_W)) = true
+  simp only [List.all_append, scheduled_columns_fit_sel_boolean, scheduled_columns_fit_sel_one_hot,
+    scheduled_columns_fit_sel_shift, scheduled_columns_fit_value_pool,
+    scheduled_columns_fit_witness_pool, scheduled_columns_fit_carry, scheduled_columns_fit_schedule,
+    Bool.and_self]
 
 /-- ⚑⚑ **2 297 CONSTRAINTS**, against `PastaCurveSound.pallasCompleteAddSoundDesc_constraint_count`'s
 **4 476** — and the reason it went DOWN rather than up is that one op per row means the per-op range
 lookups become per-POOL range lookups: 3 048 lookups collapse to 447. -/
-theorem pallasScheduledDesc_constraint_count : pallasScheduledDesc.constraints.length = 2297 := rfl
-theorem vestaScheduledDesc_constraint_count : vestaScheduledDesc.constraints.length = 2297 := rfl
+theorem pallasScheduledDesc_constraint_count : pallasScheduledDesc.constraints.length = 2297 := by decide +kernel
+theorem vestaScheduledDesc_constraint_count : vestaScheduledDesc.constraints.length = 2297 := by decide +kernel
 
 /-- The census, so a dropped block moves a number: 34 booleanity + 1 one-hot + 35 shift-register
 + 352 value-pool lookups + 95 witness-pool lookups + 352 carry gates + 1 428 op gates. -/
 theorem scheduled_constraint_census :
-    34 + 1 + 35 + 352 + 95 + 352 + 1428 = pallasScheduledDesc.constraints.length := by decide
+    34 + 1 + 35 + 352 + 95 + 352 + 1428 = pallasScheduledDesc.constraints.length := by decide +kernel
 
 /-- ⚑ **THE 1 428 ALGEBRAIC GATES ARE THE SAME ONES.** 12 multiplies at 63 coefficient gates,
 14 adds and 5 subtractions at 32, 2 constant multiplies at 32 — the identical algebra
 `PastaCurveSound` emits, moved to rows and multiplied by a selector. The arithmetic did not change;
 only where it is asserted did. -/
 theorem scheduled_gate_count_is_the_sound_algebra :
-    12 * 63 + 14 * 32 + 5 * 32 + 2 * 32 = 1428 := by decide
+    12 * 63 + 14 * 32 + 5 * 32 + 2 * 32 = 1428 := by decide +kernel
 
 /-- ⚑ **THE RANGE-LOOKUP COUNT**, which is where the constraint saving is: the one-row block
 declares one `limbs` leg per op per operand block (3 048 lookups); this declares one per POOL,
 fired on every row (447). Strictly more coverage per column, far fewer declarations. -/
-theorem pallasScheduledAir_range_lookups : pallasScheduledAir.totalRangeLookups = 447 := by decide
+theorem pallasScheduledAir_range_lookups : pallasScheduledAir.totalRangeLookups = 447 := by decide +kernel
 
 /-- The leg count, for the same reason a constraint count is pinned. -/
-theorem pallasScheduledAir_leg_count : pallasScheduledAir.legs.length = 1864 := by decide
+theorem pallasScheduledAir_leg_count : pallasScheduledAir.legs.length = 1864 := by decide +kernel
 
 /-! ### §5a — the comparison, stated rather than described. -/
 
@@ -450,7 +528,7 @@ theorem the_scheduled_row_is_narrower_and_shorter :
     pallasScheduledDesc.traceWidth * 6 < Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundDesc.traceWidth
     ∧ pallasScheduledDesc.constraints.length
         < Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundDesc.constraints.length := by
-  refine ⟨?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_⟩ <;> decide +kernel
 
 /-- The two widths, side by side, on the two EMITTED objects. -/
 theorem the_two_widths :
@@ -473,11 +551,11 @@ number.** (The naive `⌈bits/4⌉` model gives 10 737: the 19-column gap is the
 making each one-bit add/sub carry cost 2 aux columns, not 1.) -/
 theorem the_sound_row_commits_10756 :
     committedWidth Dregg2.Circuit.Emit.PastaCurveSound.RCB_WIDTH
-      Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir = 10756 := by decide
+      Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir = 10756 := by decide +kernel
 
 /-- ⚑⚑ **AND THE SCHEDULED ROW COMMITS 1 499.** -/
 theorem the_scheduled_row_commits_1499 :
-    committedWidth SCHED_W pallasScheduledAir = 1499 := by decide
+    committedWidth SCHED_W pallasScheduledAir = 1499 := by decide +kernel
 
 /-- ⚑ **7.17× IN THE WIDTH THAT COSTS** — better than the declared-width ratio of 6.34×, because
 one op per row is what lets the 3 048 per-op range lookups become 447 per-pool ones, and the aux
@@ -486,19 +564,19 @@ half of this win**: 7 708 → 1 018 aux columns, against 2 567 declared columns 
 theorem the_committed_width_ratio_clears_seven :
     committedWidth SCHED_W pallasScheduledAir * 7
       < committedWidth Dregg2.Circuit.Emit.PastaCurveSound.RCB_WIDTH
-          Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir := by decide
+          Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir := by decide +kernel
 
 /-- The two aux blocks, so the claim above is checkable rather than asserted. -/
 theorem the_two_aux_blocks :
     airAuxCols Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir = 7708
     ∧ airAuxCols pallasScheduledAir = 1018 := by
-  refine ⟨?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_⟩ <;> decide +kernel
 
 /-- ⚠ **AND THE RANGE BLOCK IS STILL THE MAJORITY OF WHAT IS COMMITTED** — 67.9% here against
 71.7% there. Register allocation does not touch it; `LIMB_BITS` does. Recorded so this cone's win
 is not credited for a radix change it did not make. -/
 theorem the_aux_block_is_still_the_majority :
-    2 * airAuxCols pallasScheduledAir > committedWidth SCHED_W pallasScheduledAir := by decide
+    2 * airAuxCols pallasScheduledAir > committedWidth SCHED_W pallasScheduledAir := by decide +kernel
 
 #assert_axioms the_sound_row_commits_10756
 #assert_axioms the_scheduled_row_commits_1499
