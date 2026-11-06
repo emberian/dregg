@@ -15,8 +15,8 @@
 #   3. table: file, status, seconds, guards, keystones (or JSON with --json); exit 1 on any failure.
 #
 # The family list: the gate list from the automata program brief, plus every `.lean` file under
-# `Dregg2/Datalog/`, `Dregg2/Policy/` (lanes A and B add files there) and `Dregg2/Sat/` (lane E).
-# `--files` replaces it.
+# `Dregg2/Datalog/`, `Dregg2/Policy/` (lanes A and B add files there), `Dregg2/Sat/` (lane E) and
+# `Dregg2/Automata/` (the `dfa-run` table runner). `--files` replaces it.
 #
 # Usage (from anywhere; the script cds to metatheory/):
 #   scripts/automata-check.sh                  # Mac: -j 4, deps then check, table on stdout
@@ -100,7 +100,7 @@ Dregg2/Datalog/FixpointCert.lean
 if [ -n "$FILES_OVERRIDE" ]; then
   FILES=$(printf '%s\n' "$FILES_OVERRIDE" | tr ', ' '\n\n' | sed '/^$/d')
 else
-  FILES=$( { printf '%s\n' $GATE_FILES; find Dregg2/Datalog Dregg2/Policy Dregg2/Sat -name '*.lean' 2>/dev/null | sort; } | awk 'NF && !seen[$0]++')
+  FILES=$( { printf '%s\n' $GATE_FILES; find Dregg2/Datalog Dregg2/Policy Dregg2/Automata Dregg2/Sat -name '*.lean' 2>/dev/null | sort; } | awk 'NF && !seen[$0]++')
 fi
 
 MISSING=0
@@ -122,7 +122,9 @@ T0=$(now)
 DEPS_RC=0
 DEPS_SECS=0
 if [ "$DEPS" = 1 ]; then
-  MODS=$(for f in $FILES; do sed -n 's/^\(public \)\{0,1\}import \([A-Z][A-Za-z0-9_.]*\).*/\2/p' "$f"; done | sort -u)
+  # Toolchain modules (Init, Std, Lean, Lake) ship with Lean and are not lake targets.
+  MODS=$(for f in $FILES; do sed -n 's/^\(public \)\{0,1\}import \([A-Z][A-Za-z0-9_.]*\).*/\2/p' "$f"; done \
+    | grep -Ev '^(Init|Std|Lean|Lake)(\.|$)' | sort -u)
   if [ -n "$MODS" ]; then
     say "automata-check: deps: lake build of $(printf '%s\n' $MODS | wc -l | tr -d ' ') imported modules (log $LOGDIR/deps.log)"
     D0=$(now)
