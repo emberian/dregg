@@ -1,0 +1,2 @@
+{"name":"Bash","input":{"command":"\u0070kill -f node"}}
+{"name":"Bash","input":{"command":"pkill -f node"}}

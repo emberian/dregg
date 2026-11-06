@@ -1,0 +1,7 @@
+# Tool inputs (exports, records, certificates that open them) stay local: publishing them is
+# ember's open decision. Only digests, roots, counts and the chosen field certificate are committed.
+corpus/
+cert-full.json
+cert-invocation-full.json
+target/
+cert-invocation-nobacktick-full.json

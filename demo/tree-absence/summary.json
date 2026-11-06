@@ -1,0 +1,542 @@
+{
+ "session": "e3ba49ed-a526-4ecd-8807-58b73757aaca",
+ "exported_with": "cv export <id> --format json --redact --frozen (root and each agent-<id>)",
+ "export_sha256": {
+  "root": "feb919096c40174fbed36fceb841fad84e47dfc0ce8b00f63e2b69c14789de65",
+  "a06c737001d593f1e": "94e2e576939e1834955cd1e0b538fb2d77ef0ec0ced71405867ae70661dd612b",
+  "a0793f44b689350e6": "bfbe369c89185fe18831e05b3625ddde5c805cc958770f51bb19d46cbcb08035",
+  "a0adbe14f57a84dd3": "3800a35b004b410461ecd468e7f64cdb23c5dc38485551e2a55911934b206eb4",
+  "a0be94d8f84c9ccf0": "e9300062d01813170884cabcee703f49124c73792bc048bfa271c750d3993e31",
+  "a151ab4c697604d2c": "b71f03bb2346d06d98d187c05c434c36a6c36fdbb3fb9682a6f3999c0d8170fc",
+  "a151bd4cc1c98c668": "e23b45293ebd70cf2b927b286b44aa7ce9fa9d45b690dbc439c42875d3a9fce3",
+  "a220cb783dacd8788": "dfed1bae60925641797ec955c5cf71c6aa594f48d76d43aa3882cd671e52f387",
+  "a266e40d050344c95": "5237137dc18485c9b38afe757f47921c6f9cbd8b30146ad89ab0f7b553a7cba1",
+  "a2f52f19ca79d93c8": "186448b08fa366bd4ca406198287f730b9f45bf94269af8a3d29901ba0b37d5b",
+  "a31756fc8fb1ca7e7": "a537a97d5bfea09b1e2a6f4b0850187c0ad9a8e020b5f1a8a653371944782469",
+  "a33941b464581446a": "c5a485d06dbebe85fb99fb331d5438332b98eee81c13ed2d1d712261be283eff",
+  "a3ad0cd6a90f29296": "b7a67f7398993bc7782ffd6438d9f3f4d2af35ecd5072af4346c39cdf58f7e24",
+  "a42616d15b0397462": "dafe15c6a1a898378117211d112ebfa984a73721801eaa0b5cdfcfe419cb419d",
+  "a4582376616596598": "3426ce9c04cdfd72077d1ccd5bef48b9d297e49b926124994c8e1d282203cbe9",
+  "a49966326d4db22fa": "79734a3b1501e55b1572f739811422bb843ae721bca892006481ba7dcbe2de44",
+  "a4b12abd6fd1a1734": "3bd38ff3678a7ed9d095af8e0f96390a461c528f0f94cffa7560ee6cdbdc5765",
+  "a51d1760f1df047b5": "dbaa092ba290a5699520124fb220e266348ad5daec501f33367a390b726c5ebb",
+  "a5235c9690ee8cd19": "72d9c43d12f531fc2d86425cb1afa000545607f0e72fb93718601a5055ee61d4",
+  "a590bf4abeebeff40": "05c0110540326b27eb6341a3d9e4b13e1e14da5875404837642c838619844883",
+  "a5d56a51cc386f814": "39d95fd96a7cbb72c20cb91d61f3c9eab87ee7bfdce8cbf78bab37850043fabc",
+  "a5eeea4084684187c": "37100b1d8c37019b900ee223f48b16a8a85b4d5639304e59af12f71327bb877a",
+  "a6029635cab618e86": "9ee898252e6fc75f9c9f6eb320a9754debdae41547e8448713ae3c581a2d0663",
+  "a634da6a10ce2b968": "c85783589d7a5fe4c2dc8236efc9c315148e0024ab4857b04665c29743d36fbd",
+  "a6576ce7aefc9dc86": "4105fdd5848b12bce75605ecfe3e449b7268ea73afb52dc24fecdd049db2ca54",
+  "a6e5314da9112e566": "afbb78c8e549ee2eb7d5e0af1274aa9abdb17f0bbc07d0d94e4634c5e2b8e79f",
+  "a70bc892fd7a15dc1": "3b6b13c7ff5dc0d4b9101ef480d03ecf25cd01f3171563c40830fcde03777c49",
+  "a716027073c14e365": "27934223ffb028d611001f7d72fde284dde603c9f0f63411b145bd2c51ce56d8",
+  "a77eaaaa2b40a1301": "7e6b1affffbc6c92d34bb47feea8b8307e3bdbd312ff4eb3654477ad47ee2ffa",
+  "a7a7a42552f32d917": "8369bdfc08a08e3f938f6c2fe8ce2c87c7dc09dce966a0bd057f299978be08ba",
+  "a804a847e1a34f1bb": "11e87c296876a6cd0ddc10ca3e731084b48845edb7ba799874d54f13ecfda150",
+  "a8398dafc2bdbc2c7": "58b8cf2ada8f9bc8d3e9bc708c2a6f8db18cfbf55126e59703e98112fe3041cf",
+  "a871df82d87d23c44": "1214703c7621b42560e434f6863846ebae5ebf5e355d024425984e6cf9a98b65",
+  "a89814cb13ded5da0": "296c1e55c431f7414224cb1dddc242567668e91c9695fc0b55d9b29f159859db",
+  "a89f16766e23f0346": "3b4e0306f32025a6ca793eee5aa51f23a7d54016c824581be43ce639e39b6319",
+  "a8f275121a42c414e": "72e6f9f5b0b44f130dd095223ac8b76c434b459aedef7d68b343983d78769b8a",
+  "a90fabd1d927c1891": "bb70dc570c33b98612afbd1d9894667fdb83df70093c1f1b3b60a888e6503505",
+  "a993604c5a6e5c7e2": "1322776d8689bfeb8d7b8fcef4ae08cbb807222b006defd90347464c2d6fe00c",
+  "a9c6aa5140dac5582": "b70f332ab2f222b2deef9e334af17564d515befc92275733c8301a29e961ed88",
+  "a9ec7bb60760472a0": "aca153cde44455afec1ba6ab120348f94e5bd1ed5ab14dbd7f2e272516b3c4f2",
+  "aa15231986ccb047c": "36017a417e3d43f76cca9ca91ec4912d8e80fa31232b715c95d36046f550f5cc",
+  "aa22911e9f5387017": "7e618cf27a4257e3f24d0fd8a9fe76f669e2ff09df084c21db5557d81324701b",
+  "aa4c2b72d5edaa99d": "68d1e1e2c5cb103c94c4417f39180137aaf855d27c6ea973ecaf7facbe1742cd",
+  "aa51eecc0dc7dc51e": "c84f61aacd6c5fc33ea21476c58ac1b551618a1d5a512eca336b896173bebb29",
+  "aad7c26871562b8b1": "345d8ec0ee601d7f7e00fcd6f05ca989c5da57e51cf0207e06e7fc3ed88d291c",
+  "ab65741b647fb37d7": "5ab3bd8e84d616ebd327b69fadffcc367953ec04673df56cab05af044f2e9f88",
+  "ab6b5a7a21bc51d7b": "5114de359efd3c7343c8346bb6a3dabae738d19d4efdd001829290523fbbb47f",
+  "ab7f9116e86698e26": "06a4853a5f5fe6aadf1be7aafc2d3c2021b766a705cdf61dc6c568803ea1680c",
+  "ab870729750f4bf52": "56e02577ddd0a07df149a69454297a4ac043fee4c442aac73b31aa19e4442609",
+  "abbd32d84fe0da9ed": "cc425fb61026b19b0389bccfd1defa58646b7fb544dd711461b9f351452db037",
+  "abc59d8076ef6e1bd": "13d00f7c5f97a247e4ee367f6a06c9ac0b5cd19ef05d8fd9f58f1d98d47f268c",
+  "ac01c2cec42789b5f": "1b3b21e29c225041e0da5591d990d79b7fbf1e9d475e2e17b9d0d2e9252e8fca",
+  "ac0558c06a70ffcb7": "0f87b3f3d772cf0c579633ca10b4197227db368132b6676921f0c611edb1d843",
+  "ac136f3bca45080db": "4ba779872a073160d0095dc4dd021638c7cd9b305e6b3d8a5c2ce6c3cc936560",
+  "ac83baee4c5a0f510": "2893077bb0277ac64773dc4bc4fa8d7fdf857311761d69454e9fc19d4837d72b",
+  "ace35765c0f83f706": "4a6488f6e1eba2074c107cdcd78ba4dc258ca1fd40226b00ed7e551f833c2fdf",
+  "ad12949cd324f2e59": "6af3373ff8c9006b34534e1f4fa263a7b110a84c3609bb04bccbcfda33ef305f",
+  "ad70ef6eeb03bfb3a": "a69b3ade5ecdabc1e125f2cb3925cfe7c972da9f99d0fd3650b9de2614bf3efc",
+  "ad7ab989444d4cc30": "dc0c73e4fe362bf1d979ce085786ecd60686209b4626b94e857859ef91c2689b",
+  "ade6897a37bf1d735": "7565db615dd3cbe7757f2cbb6e3bb225d4ab808fffd18257010ba75fbec53693",
+  "ae501bd4d165d17e7": "0c9701deebdc5fb7c74c0f154413bb17f4260f0b5f7eacaeb402bb99b59f887c",
+  "ae5476fec4e45a051": "28b2ca1e6aa041efc06865bf34a9e7e029bf46ab55cd7009e2f028481bc55930",
+  "ae73b2f6f5bf65d01": "ea8b89ed11cf80e9184621f55f9bd9cd104941340ba8e65ab26271ecd5a15dd7",
+  "ae97b58de926ba3d0": "8da2f1a284c40c8a7168d4959229b1b6a93f2773475fa09ca7ec24d009db4ee1",
+  "aecc3d197df9e5fd0": "8eaa421a004311eba29a54c21ba2cd17ea6e82aa762bba5c2afbc2c52811641b",
+  "aecfff04783f7966d": "1709290c684f732e875fa705c009125cf3ea8c4d9d0b68657774b13391425616",
+  "aefaa8609029904bd": "4dbdd617d84b8b117e8735d0bc68ad38a0633d01416e2a0f077342fb719682f4",
+  "af344a6893d3366fc": "8c4e1bc6e907756703f9e6d6ab5169354931b4f1d36791756b242a1f6cfb8849",
+  "af4106d8f258dd4fa": "a17823d8af546a19cca4d519a344c162778e9579fcf5e4be041978dab8c297cd",
+  "af429ef2abf6ecb4c": "3e06df82e6e64589297d986702b9284c6f160449ab0b5bc4a09d43f55c9a579d",
+  "af6e33247b4756dc9": "49a7919aecd289ce7b62715925df4d9cc13b3aaf9b5c94994afd87605145aa6b",
+  "af90d5bfadda4f221": "7b02e7d30d58be6cfe3ac93ee3b7b221fcea121181f0779f9a4c30ac42350093",
+  "afb3284d9e0e2f9b5": "ac3014c64baac3292f5f58ef792e037a494ba0179370b60a21c4015bf429156b"
+ },
+ "records_real": 3382,
+ "projection_input": {
+  "duplicate_keys_refused": 0,
+  "numbers_in_inputs": 599,
+  "non_integer_numbers_in_inputs": 0,
+  "lone_surrogate_records": 0
+ },
+ "records_by_tool": {
+  "Bash": 2376,
+  "Read": 783,
+  "Agent": 93,
+  "Write": 76,
+  "SendMessage": 27,
+  "Edit": 12,
+  "ToolSearch": 7,
+  "Skill": 2,
+  "TaskStop": 2,
+  "Monitor": 2,
+  "Artifact": 1,
+  "WebFetch": 1
+ },
+ "controls": [
+  "Bash command \\u0070kill -f node (escaped)",
+  "Bash command pkill -f node (plain)"
+ ],
+ "mention": {
+  "query": "name = `Bash` AND input.command contains `pkill -f` (query.json)",
+  "real": {
+   "n": 3382,
+   "count": 13,
+   "mmr_root": "219ace22c5645939bf6b35f510969248b0d5447ba06330e0384f91023d8e4a61",
+   "refuted_at_conjunct": [
+    1006,
+    2363
+   ],
+   "matching_records": [
+    123,
+    139,
+    402,
+    411,
+    1086,
+    1303,
+    1337,
+    2536,
+    2544,
+    2608,
+    2609,
+    2633,
+    2650
+   ]
+  },
+  "full": {
+   "n": 3384,
+   "count": 15,
+   "mmr_root": "f5a8ab301819aef57f998760b4c7e418a6fd3053cc3c1291671604b08df32298",
+   "refuted_at_conjunct": [
+    1006,
+    2363
+   ],
+   "matching_records": [
+    123,
+    139,
+    402,
+    411,
+    1086,
+    1303,
+    1337,
+    2536,
+    2544,
+    2608,
+    2609,
+    2633,
+    2650,
+    3382,
+    3383
+   ]
+  },
+  "flat_scan": {
+   "word": "pkill -f",
+   "real": {
+    "lines": 3382,
+    "lines_hit": 47,
+    "hits_by_tool": {
+     "Agent": 32,
+     "Bash": 13,
+     "Write": 2
+    },
+    "non_bash_hits": 34
+   },
+   "with_controls": {
+    "lines": 3384,
+    "lines_hit": 48,
+    "escaped_control_hit": false,
+    "plain_control_hit": true
+   }
+  }
+ },
+ "invocation": {
+  "query": "name = `Bash` AND input.command has `pkill -f` at command position (query-invocation.json, query-invocation.policy)",
+  "real": {
+   "n": 3382,
+   "count": 7,
+   "mmr_root": "219ace22c5645939bf6b35f510969248b0d5447ba06330e0384f91023d8e4a61",
+   "refuted_at_conjunct": [
+    1006,
+    2369
+   ],
+   "matching_records": [
+    123,
+    139,
+    1086,
+    1337,
+    2544,
+    2633,
+    2650
+   ]
+  },
+  "full": {
+   "n": 3384,
+   "count": 9,
+   "mmr_root": "f5a8ab301819aef57f998760b4c7e418a6fd3053cc3c1291671604b08df32298",
+   "refuted_at_conjunct": [
+    1006,
+    2369
+   ],
+   "matching_records": [
+    123,
+    139,
+    1086,
+    1337,
+    2544,
+    2633,
+    2650,
+    3382,
+    3383
+   ]
+  },
+  "differential": {
+   "bash_commands": 2378,
+   "cases": 36,
+   "cases_wrong": 0,
+   "disagree": 0,
+   "table_accepts": 9
+  }
+ },
+ "invocation_nobacktick": {
+  "query": "(B) with the backtick removed from BOUNDARY: the absence receipt (query-invocation-nobacktick.json)",
+  "scope": "(B)'s limits plus: `pkill -f x` inside backtick command substitution is missed",
+  "real": {
+   "n": 3382,
+   "count": 0,
+   "mmr_root": "219ace22c5645939bf6b35f510969248b0d5447ba06330e0384f91023d8e4a61",
+   "refuted_at_conjunct": [
+    1006,
+    2376
+   ],
+   "matching_records": []
+  },
+  "full": {
+   "n": 3384,
+   "count": 2,
+   "mmr_root": "f5a8ab301819aef57f998760b4c7e418a6fd3053cc3c1291671604b08df32298",
+   "refuted_at_conjunct": [
+    1006,
+    2376
+   ],
+   "matching_records": [
+    3382,
+    3383
+   ]
+  },
+  "differential": {
+   "bash_commands": 2378,
+   "cases": 36,
+   "cases_wrong": 0,
+   "disagree": 0,
+   "table_accepts": 2
+  }
+ },
+ "single_record_c": {
+  "record": 2580,
+  "certificate": "field-cert-2580-c.json",
+  "kind": "field",
+  "path": "/input/command",
+  "verdict": "reject",
+  "tree_root": "d309c9ed7950cde295815e21f5145bc69facdbdaf9f8a041f31633c286931e22",
+  "table_digest": "23cd7276617172202e566d9fec86ae0295aaf9b285da4c4bd699085f98add95c"
+ },
+ "single_record": {
+  "record": 2580,
+  "certificate": "field-cert-2580.json",
+  "kind": "field",
+  "path": "/input/command",
+  "verdict": "reject",
+  "tree_root": "d309c9ed7950cde295815e21f5145bc69facdbdaf9f8a041f31633c286931e22",
+  "table_digest": "badfb286dca4b6766964c2fff876884e87e8ea73dd63dce818dd6740c4543e2c"
+ },
+ "conformance": {
+  "edges": {
+   "agree_accept": 28,
+   "agree_refuse": 32,
+   "mismatch": 0,
+   "texts": 60
+  },
+  "records": {
+   "agree_accept": 3382,
+   "agree_refuse": 0,
+   "mismatch": 0,
+   "texts": 3382
+  }
+ },
+ "verify": {
+  "real": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 11.09,
+   "work": {
+    "records_refuted": 3369,
+    "records_matching_disclosed": 13,
+    "mmr_hashes_by_formula_2n_plus_1": 6765,
+    "keccak_f_total": 44651,
+    "keccak_f_tables": 32,
+    "keccak_f_openings": 37854,
+    "keccak_f_mmr": 6765,
+    "openings": {
+     "nodes_disclosed": 3395,
+     "keccak_f": 37854,
+     "frames_hashed": 9166,
+     "frame_bytes": 4488614
+    }
+   }
+  },
+  "full": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 11.68,
+   "work": {
+    "records_refuted": 3369,
+    "records_matching_disclosed": 15,
+    "mmr_hashes_by_formula_2n_plus_1": 6769,
+    "keccak_f_total": 44665,
+    "keccak_f_tables": 32,
+    "keccak_f_openings": 37864,
+    "keccak_f_mmr": 6769,
+    "openings": {
+     "nodes_disclosed": 3399,
+     "keccak_f": 37864,
+     "frames_hashed": 9176,
+     "frame_bytes": 4489078
+    }
+   }
+  },
+  "invocation-real": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 12.19,
+   "work": {
+    "records_refuted": 3375,
+    "records_matching_disclosed": 7,
+    "mmr_hashes_by_formula_2n_plus_1": 6765,
+    "keccak_f_total": 44704,
+    "keccak_f_tables": 97,
+    "keccak_f_openings": 37842,
+    "keccak_f_mmr": 6765,
+    "openings": {
+     "nodes_disclosed": 3389,
+     "keccak_f": 37842,
+     "frames_hashed": 9154,
+     "frame_bytes": 4488080
+    }
+   }
+  },
+  "invocation-full": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 12.96,
+   "work": {
+    "records_refuted": 3375,
+    "records_matching_disclosed": 9,
+    "mmr_hashes_by_formula_2n_plus_1": 6769,
+    "keccak_f_total": 44718,
+    "keccak_f_tables": 97,
+    "keccak_f_openings": 37852,
+    "keccak_f_mmr": 6769,
+    "openings": {
+     "nodes_disclosed": 3393,
+     "keccak_f": 37852,
+     "frames_hashed": 9164,
+     "frame_bytes": 4488544
+    }
+   }
+  },
+  "invocation-nobacktick-real": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 12.76,
+   "work": {
+    "records_refuted": 3382,
+    "records_matching_disclosed": 0,
+    "mmr_hashes_by_formula_2n_plus_1": 6765,
+    "keccak_f_total": 44690,
+    "keccak_f_tables": 97,
+    "keccak_f_openings": 37828,
+    "keccak_f_mmr": 6765,
+    "openings": {
+     "nodes_disclosed": 3382,
+     "keccak_f": 37828,
+     "frames_hashed": 9140,
+     "frame_bytes": 4487457
+    }
+   }
+  },
+  "invocation-nobacktick-full": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 15.19,
+   "work": {
+    "records_refuted": 3382,
+    "records_matching_disclosed": 2,
+    "mmr_hashes_by_formula_2n_plus_1": 6769,
+    "keccak_f_total": 44704,
+    "keccak_f_tables": 97,
+    "keccak_f_openings": 37838,
+    "keccak_f_mmr": 6769,
+    "openings": {
+     "nodes_disclosed": 3386,
+     "keccak_f": 37838,
+     "frames_hashed": 9150,
+     "frame_bytes": 4487921
+    }
+   }
+  },
+  "tampered-full-count+1": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 16.68
+  },
+  "tampered-full-count-1": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 20.45
+  },
+  "tampered-full-swap-records": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 6.05
+  },
+  "tampered-full-refute-wrong-path": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 5.22
+  },
+  "tampered-full-swap-table-digests": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 3.87
+  },
+  "tampered-full-drop-record": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 5.89
+  },
+  "tampered-invocation-full-count+1": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 12.13
+  },
+  "tampered-invocation-full-count-1": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 10.39
+  },
+  "tampered-invocation-full-swap-records": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 4.44
+  },
+  "tampered-invocation-full-refute-wrong-path": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 5.47
+  },
+  "tampered-invocation-full-swap-table-digests": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 2.82
+  },
+  "tampered-invocation-full-drop-record": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 4.74
+  },
+  "tampered-invocation-nobacktick-full-count+1": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 10.6
+  },
+  "tampered-invocation-nobacktick-full-count-1": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 15.62
+  },
+  "tampered-invocation-nobacktick-full-swap-records": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 7.64
+  },
+  "tampered-invocation-nobacktick-full-refute-wrong-path": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 5.82
+  },
+  "tampered-invocation-nobacktick-full-swap-table-digests": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 3.13
+  },
+  "tampered-invocation-nobacktick-full-drop-record": {
+   "exit": 1,
+   "verdict": "REFUSE",
+   "wall_s": 5.28
+  },
+  "field-2580": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 0.08,
+   "work": {
+    "keccak_f_total": 88,
+    "keccak_f_table": 85,
+    "keccak_f_openings": 3,
+    "openings": {
+     "nodes_disclosed": 1,
+     "keccak_f": 3,
+     "frames_hashed": 3,
+     "frame_bytes": 184
+    }
+   }
+  },
+  "field-2580-c": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 0.08,
+   "work": {
+    "keccak_f_total": 88,
+    "keccak_f_table": 85,
+    "keccak_f_openings": 3,
+    "openings": {
+     "nodes_disclosed": 1,
+     "keccak_f": 3,
+     "frames_hashed": 3,
+     "frame_bytes": 184
+    }
+   }
+  },
+  "schema-2580": {
+   "exit": 0,
+   "verdict": "ACCEPT",
+   "wall_s": 0.08,
+   "work": {
+    "keccak_f": 4
+   }
+  }
+ }
+}

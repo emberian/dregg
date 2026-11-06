@@ -1,0 +1,4 @@
+{"conjuncts": [
+  {"path": ["name"], "table": "tables/bash.policyc.json"},
+  {"path": ["input", "command"], "table": "tables/invocation.json"}
+]}
