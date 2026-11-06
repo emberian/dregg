@@ -1,0 +1,123 @@
+{
+  "schema": "policy-compile-benchmark-v1",
+  "cases": [
+    {
+      "pattern": "\"sk-\" \\w{4,4}",
+      "min_repeat": 4,
+      "max_repeat": 4,
+      "baseline": {
+        "status": "ok",
+        "states": 9,
+        "transitions": 2304,
+        "table_sha256": "1cdc9b2fd931249ee5a837cc42d34f4f2e37567a6e853b51b79a6e7ec285caae",
+        "seconds": 0.52027,
+        "semantic_checks": 9
+      },
+      "cached": {
+        "status": "ok",
+        "states": 9,
+        "transitions": 2304,
+        "table_sha256": "1cdc9b2fd931249ee5a837cc42d34f4f2e37567a6e853b51b79a6e7ec285caae",
+        "seconds": 0.068249,
+        "semantic_checks": 9
+      }
+    },
+    {
+      "pattern": "\"sk-\" \\w{8,8}",
+      "min_repeat": 8,
+      "max_repeat": 8,
+      "baseline": {
+        "status": "ok",
+        "states": 13,
+        "transitions": 3328,
+        "table_sha256": "46ee41e8318fcb973f29a2bfd28962872dc6c4277cc66df3a76a2cc4cd0f37a9",
+        "seconds": 0.16442,
+        "semantic_checks": 9
+      },
+      "cached": {
+        "status": "ok",
+        "states": 13,
+        "transitions": 3328,
+        "table_sha256": "46ee41e8318fcb973f29a2bfd28962872dc6c4277cc66df3a76a2cc4cd0f37a9",
+        "seconds": 0.116749,
+        "semantic_checks": 9
+      }
+    },
+    {
+      "pattern": "\"sk-\" \\w{16,16}",
+      "min_repeat": 16,
+      "max_repeat": 16,
+      "baseline": {
+        "status": "ok",
+        "states": 21,
+        "transitions": 5376,
+        "table_sha256": "69968284ccf9c5cc788c240eb61da3de847621e3c57b0703af1f6db637c5f5df",
+        "seconds": 1.175694,
+        "semantic_checks": 9
+      },
+      "cached": {
+        "status": "ok",
+        "states": 21,
+        "transitions": 5376,
+        "table_sha256": "69968284ccf9c5cc788c240eb61da3de847621e3c57b0703af1f6db637c5f5df",
+        "seconds": 0.164333,
+        "semantic_checks": 9
+      }
+    },
+    {
+      "pattern": "\"sk-\" \\w{32,32}",
+      "min_repeat": 32,
+      "max_repeat": 32,
+      "baseline": {
+        "status": "ok",
+        "states": 37,
+        "transitions": 9472,
+        "table_sha256": "20bb7e4eaa3f24252e3827b69385f5029f5d3c3a032574eccc9eb9a16a53589c",
+        "seconds": 24.359384,
+        "semantic_checks": 9
+      },
+      "cached": {
+        "status": "ok",
+        "states": 37,
+        "transitions": 9472,
+        "table_sha256": "20bb7e4eaa3f24252e3827b69385f5029f5d3c3a032574eccc9eb9a16a53589c",
+        "seconds": 0.781393,
+        "semantic_checks": 9
+      }
+    },
+    {
+      "pattern": "\"sk-\" \\w{64,64}",
+      "min_repeat": 64,
+      "max_repeat": 64,
+      "baseline": {
+        "status": "timeout",
+        "limit_seconds": 180
+      },
+      "cached": {
+        "status": "ok",
+        "states": 69,
+        "transitions": 17664,
+        "table_sha256": "061be437580cab4905de01b4403d42d2dce11ba45f770c3e6b6ecff3c8c91d7c",
+        "seconds": 8.739905,
+        "semantic_checks": 9
+      }
+    },
+    {
+      "pattern": "\"sk-\" \\w{20,64}",
+      "min_repeat": 20,
+      "max_repeat": 64,
+      "baseline": {
+        "status": "timeout",
+        "limit_seconds": 180
+      },
+      "cached": {
+        "status": "ok",
+        "states": 69,
+        "transitions": 17664,
+        "table_sha256": "22e9ebcbee465285789cd02855a6bad35c261f74f4b8d861c1edaa42e6bbd6ae",
+        "seconds": 3.101391,
+        "semantic_checks": 10
+      }
+    }
+  ]
+}

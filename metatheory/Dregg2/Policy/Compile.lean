@@ -130,6 +130,60 @@ def dedupCover {L : List Pred} (C : MintermCover L) : MintermCover L where
     obtain ⟨d, hd, hd'⟩ := sigRepsAux_covers L C.cands [] c (by simpa using hc)
     exact ⟨d, hd, hd'.trans hs⟩
 
+/-! ## Cached similarity.
+
+Cache `nrm` beside each state, retaining the original state and its ordering. The theorem
+`reachCached_eq` identifies the entire result with the established worklist, including fuel
+exhaustion. No alternate language relation or unchecked table is introduced. -/
+
+structure CachedRe where
+  val : PredRE
+  normal : PredRE
+  normal_eq : normal = nrm val
+
+def CachedRe.make (r : PredRE) : CachedRe := ⟨r, nrm r, rfl⟩
+
+def cachedSeen (seen : List CachedRe) (normal : PredRE) : Bool :=
+  seen.any (fun s => reEq s.normal normal)
+
+theorem cachedSeen_eq (seen : List CachedRe) (s : PredRE) :
+    cachedSeen seen (nrm s) = seenSim (seen.map CachedRe.val) s := by
+  simp only [cachedSeen, seenSim, List.any_map, Function.comp_def, simDecide]
+  congr 1
+  funext u
+  rw [u.normal_eq]
+
+def reachCached (V : List Value) : Nat → List CachedRe → List PredRE → Option (List CachedRe)
+  | 0, _, _ => none
+  | _ + 1, seen, [] => some seen
+  | fuel + 1, seen, s :: pending =>
+      let c := CachedRe.make s
+      if cachedSeen seen c.normal then reachCached V fuel seen pending
+      else reachCached V fuel (seen ++ [c]) (pending ++ satStepG V s)
+
+theorem reachCached_eq (V : List Value) : ∀ fuel seen pending,
+    (reachCached V fuel seen pending).map (List.map CachedRe.val) =
+      reachFixAux V fuel (seen.map CachedRe.val) pending := by
+  intro fuel
+  induction fuel with
+  | zero => intros; rfl
+  | succ fuel ih =>
+    intro seen pending
+    cases pending with
+    | nil => rfl
+    | cons s pending =>
+      simp only [reachCached, CachedRe.make, cachedSeen_eq, reachFixAux]
+      split <;> simp_all [List.map_append]
+
+/-- Pre-normalized lookup has exactly the original first-match behavior. -/
+def cachedIdx (normals : List PredRE) (t : PredRE) : Nat :=
+  let nt := nrm t
+  normals.findIdx (fun u => reEq u nt)
+
+theorem cachedIdx_eq (states : List PredRE) (t : PredRE) :
+    cachedIdx (states.map nrm) t = states.findIdx (fun u => simDecide u t) := by
+  simp [cachedIdx, List.findIdx_map, simDecide, Function.comp_def]
+
 /-- **`compile R`** — run the determinizer on the deduplicated cover. `fuel` bounds worklist pops. -/
 def compile (R : PredRE) (fuel : Nat := 1000000) : Except String (Compiled R) :=
   match hA : atomsOfLeaves? (leavesOf R) with
@@ -137,10 +191,11 @@ def compile (R : PredRE) (fuel : Nat := 1000000) : Except String (Compiled R) :=
   | some _ =>
     let C := dedupCover (coverOfSymbolic hA)
     if hr : rigidRE R = true then
-      match hf : reachFixAux C.cands fuel [] [R] with
+      match hf : reachCached C.cands fuel [] [R] with
       | none => .error s!"determinizer fuel {fuel} exhausted"
       | some seen =>
-        .ok ⟨_, C, GuardAut.ofFix C R fuel seen (symbolicOver_leavesOf R) hr hf, rfl⟩
+        .ok ⟨_, C, GuardAut.ofFix C R fuel (seen.map CachedRe.val) (symbolicOver_leavesOf R) hr
+          (by have h := reachCached_eq C.cands fuel [] [R]; simpa [hf] using h.symm), rfl⟩
     else .error "pattern is not rigid"
 
 /-! ## Tables, simulations, minimization.
@@ -160,7 +215,14 @@ def Table.run (t : Table) (s : Nat) (w : List Nat) : Nat := w.foldl t.step s
 /-- The transition table at the cover symbols, computed once (each `G.step` runs `simDecide`
 against every state, so the byte table must not recompute it per byte). -/
 def Compiled.memo {R : PredRE} (c : Compiled R) : Array (Array Nat) :=
-  (Array.range c.size).map fun s => (Array.range c.C.cands.length).map fun y => c.G.step s y
+  let normals := c.G.states.map nrm
+  (Array.range c.size).map fun s => (Array.range c.C.cands.length).map fun y =>
+    cachedIdx normals (der (Dregg2.Crypto.GuardToAutomatonCircuit.coverSym c.C y) (c.G.stateAt s))
+
+theorem Compiled.memo_eq {R : PredRE} (c : Compiled R) :
+    c.memo = (Array.range c.size).map (fun s =>
+      (Array.range c.C.cands.length).map (fun y => c.G.step s y)) := by
+  simp only [Compiled.memo, cachedIdx_eq, GuardAut.step, GuardAut.idxOf]
 
 def Compiled.encs {R : PredRE} (c : Compiled R) : Array Nat :=
   (Array.range 256).map fun b => enc c.C (byteFrame b)
@@ -188,7 +250,8 @@ theorem Compiled.fstep_eq {R : PredRE} (c : Compiled R) (s b : Nat) : c.fstep s 
       simp [Compiled.encs, Array.getD, h.2]
     have hlt := GuardAut.enc_lt c.C (byteFrame b)
     rw [he]
-    simp [Compiled.memo, Array.getD, h.1, hlt, Compiled.step]
+    rw [Compiled.memo_eq]
+    simp [Array.getD, h.1, hlt, Compiled.step]
   · rfl
 
 theorem Compiled.facc_eq {R : PredRE} (c : Compiled R) (s : Nat) : c.facc s = c.accepting s := by
@@ -319,7 +382,29 @@ def Certified.accepting {R : PredRE} (c : Certified R) : List Nat :=
 /-! ## Measured (compiled evaluation): the small absence automaton. Larger tables are measured by
 `policyc` (the interpreter is minutes-slow on `\w{20,64}`); see the note. -/
 
-#assert_all_clean [Compiled.run_eq, Compiled.compiled_decides, Compiled.compiled_decides_surface,
+/-- A cached match distinguishes one-byte languages; it is not an always-true shortcut. -/
+theorem cachedIdx_distinguishes :
+    cachedIdx (([.sym (.symEq "byte" 7), .sym (.symEq "byte" 9)] : List PredRE).map nrm)
+      (.sym (.symEq "byte" 9)) = 1 ∧
+    cachedIdx (([.sym (.symEq "byte" 7)] : List PredRE).map nrm)
+      (.sym (.symEq "byte" 7)) = 0 ∧
+    cachedIdx (([.sym (.symEq "byte" 7)] : List PredRE).map nrm)
+      (.sym (.symEq "byte" 9)) = 1 := by decide
+
+/-- Fuel exhaustion remains observable, rather than manufacturing a certified empty table. -/
+theorem cached_zero_fuel (V : List Value) (R : PredRE) :
+    reachCached V 0 [] [R] = none := rfl
+
+/-- info: 'Dregg2.Policy.reachCached_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms reachCached_eq
+
+/-- info: 'Dregg2.Policy.cachedIdx_eq' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms cachedIdx_eq
+
+#assert_all_clean [cachedSeen_eq, reachCached_eq, cachedIdx_eq, Compiled.memo_eq,
+  cachedIdx_distinguishes, cached_zero_fuel, Compiled.run_eq, Compiled.compiled_decides, Compiled.compiled_decides_surface,
   Compiled.compiled_decides_absence, sigRepsAux_covers, simCheck_run, simCheck_verdict, Compiled.fstep_eq, Compiled.facc_eq]
 
 end Dregg2.Policy
