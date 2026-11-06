@@ -33,38 +33,42 @@ inductive Ev
 
 def isSep (c : Char) : Bool := c == ';' || c == '&' || c == '|' || c == '\n' || c == '(' || c == ')'
 
-/-- Wrappers that run their argument as a command: `sudo`, `env`, `nohup`, `exec`, `command`,
-`time`, `bash -c`, `sh -c`, `zsh -c`, `timeout D`, `ssh [opts] host`. Each is peeled before the
-command word is read. -/
-partial def peel : List String → List String
-  | [] => []
-  | t :: rest =>
-    if t ∈ ["sudo", "env", "nohup", "exec", "command", "time", "xargs"] then peel (rest.dropWhile (·.startsWith "-"))
-    else if t ∈ ["bash", "sh", "zsh"] then
-      match rest with
-      | "-c" :: r => peel r
-      | "-lc" :: r => peel r
-      | _ => t :: rest
-    else if t = "timeout" then
-      match rest.dropWhile (·.startsWith "-") with
-      | _ :: r => peel r
-      | [] => []
-    else if t = "ssh" then
-      -- options (with their argument for the ones that take one), then the host, then the command
-      let rec skip : List String → List String
-        | o :: a :: r => if o ∈ ["-o", "-p", "-i", "-l", "-J", "-F"] then skip r
-            else if o.startsWith "-" then skip (a :: r) else o :: a :: r
-        | [o] => if o.startsWith "-" then [] else [o]
-        | [] => []
-      match skip rest with
-      | _host :: r => peel r
-      | [] => []
-    else t :: rest
+/-- Quote-aware split of a shell command into segments of words. Separators and blanks inside `'…'`
+or `"…"` are part of the word; the quote characters themselves are dropped. A backslash outside single
+quotes escapes the next character. -/
+def shellSegments (cmd : String) : List (List String) := Id.run do
+  let mut segs : Array (List String) := #[]
+  let mut words : Array String := #[]
+  let mut cur : String := ""
+  let mut inWord := false
+  let mut q : Option Char := none
+  let mut esc := false
+  for c in cmd.toList do
+    if esc then
+      cur := cur.push c; inWord := true; esc := false
+    else match q with
+      | some qc =>
+        if c == qc then q := none
+        else if c == '\\' && qc == '"' then esc := true
+        else cur := cur.push c
+      | none =>
+        if c == '\'' || c == '"' then q := some c; inWord := true
+        else if c == '\\' then esc := true
+        else if c == ' ' || c == '\t' then
+          if inWord then words := words.push cur; cur := ""; inWord := false
+        else if isSep c then
+          if inWord then words := words.push cur; cur := ""; inWord := false
+          if !words.isEmpty then segs := segs.push words.toList
+          words := #[]
+        else cur := cur.push c; inWord := true
+  if inWord then words := words.push cur
+  if !words.isEmpty then segs := segs.push words.toList
+  return segs.toList
 
 /-- A short-option cluster (`-Av`, `-9f`) containing `c`. -/
 def shortHas (t : String) (c : Char) : Bool := t.startsWith "-" && !t.startsWith "--" && t.contains c
 
-/-- One command (already peeled): ember's forbidden set. `git [-C p] [-c k=v] stash …`,
+/-- One command word list (already peeled): ember's forbidden set. `git [-C p] [-c k=v] stash …`,
 `git add` with `-A` / `--all` (or a short cluster containing `A`), `pkill` with `-f` or `-x` (or a
 cluster containing either), `killall`, `kill -u`. -/
 def wordsForbidden : List String → Bool
@@ -81,15 +85,40 @@ def wordsForbidden : List String → Bool
   | "kill" :: args => args.any (· = "-u")
   | _ => false
 
-/-- A shell command runs a forbidden command iff one of its segments (split at `;`, `&`, `|`,
-newline, `(`, `)`, quotes removed), after peeling wrappers, is a forbidden command. A syntactic
-reading of the command text, not of what the shell would execute: `eval`, variables and scripts are
-not followed. -/
-def commandForbidden (cmd : String) : Bool :=
-  let unq := String.ofList (cmd.toList.filter fun c => c != '\'' && c != '"' && c != '`')
-  (unq.split isSep).any fun seg =>
-    let words := (seg.toString.split (fun c => c == ' ' || c == '\t')).toList.map (·.toString) |>.filter (· ≠ "")
-    wordsForbidden (peel words)
+mutual
+/-- A shell command runs a forbidden command iff one of its quote-aware segments does, after wrappers
+are peeled: `sudo`, `env` (with its `NAME=value` and option words), `nohup`, `exec`, `command`,
+`time`, `xargs`, `timeout D`, `bash|sh|zsh -c STRING` and `ssh [opts] host STRING…` (whose STRING is
+re-read as a command), and leading `NAME=value` assignments. A syntactic reading of the command text,
+not of what the shell would execute: `eval`, variables, aliases and scripts are not followed. -/
+partial def commandForbidden (cmd : String) : Bool :=
+  (shellSegments cmd).any segForbidden
+
+partial def segForbidden : List String → Bool
+  | [] => false
+  | t :: rest =>
+    if t.contains '=' && !t.startsWith "-" then segForbidden rest
+    else if t ∈ ["sudo", "env", "nohup", "exec", "command", "time", "xargs"] then
+      segForbidden (rest.dropWhile fun w => w.startsWith "-" || (t == "env" && w.contains '='))
+    else if t ∈ ["bash", "sh", "zsh"] then
+      match rest with
+      | o :: r => if o = "-c" || o = "-lc" || o = "-ec" then commandForbidden (" ".intercalate r) else wordsForbidden (t :: rest)
+      | [] => false
+    else if t = "timeout" then
+      match rest.dropWhile (·.startsWith "-") with
+      | _ :: r => segForbidden r
+      | [] => false
+    else if t = "ssh" then
+      let rec skip : List String → List String
+        | o :: a :: r => if o ∈ ["-o", "-p", "-i", "-l", "-J", "-F"] then skip r
+            else if o.startsWith "-" then skip (a :: r) else o :: a :: r
+        | [o] => if o.startsWith "-" then [] else [o]
+        | [] => []
+      match skip rest with
+      | _host :: r => commandForbidden (" ".intercalate r)
+      | [] => false
+    else wordsForbidden (t :: rest)
+end
 
 def strField (j : Json) (k : String) : Option String := (j.getObjValAs? String k).toOption
 

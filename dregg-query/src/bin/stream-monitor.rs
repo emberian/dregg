@@ -58,8 +58,17 @@ impl Run {
             body.extend_from_slice(l);
             body.push(b'\n');
         }
+        // Publish the window atomically and never over an existing one.
         let p = window_path(&self.dir, self.k);
-        fs::write(&p, &body).map_err(|e| format!("{}: {e}", p.display()))?;
+        if p.exists() {
+            return Err(format!(
+                "{} exists; refusing to overwrite a published window",
+                p.display()
+            ));
+        }
+        let tmp = p.with_extension("jsonl.tmp");
+        fs::write(&tmp, &body).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        fs::rename(&tmp, &p).map_err(|e| format!("{}: {e}", p.display()))?;
         let t = Instant::now();
         let out = Command::new(&self.checker)
             .arg("produce")
@@ -107,11 +116,14 @@ fn run(args: &[String]) -> Result<(), String> {
         .map(|s| s.parse())
         .transpose()
         .map_err(|e| format!("--follow: {e}"))?;
-    if dir.join("receipts.jsonl").exists() {
-        return Err(format!(
-            "{} already has receipts; use a fresh dir",
-            dir.display()
-        ));
+    // A run owns its directory: refuse any earlier generation's state rather than overwrite it.
+    for stale in ["receipts", "windows", "DONE", "receipts.jsonl"] {
+        if dir.join(stale).exists() {
+            return Err(format!(
+                "{} already has {stale}; use a fresh dir",
+                dir.display()
+            ));
+        }
     }
     fs::create_dir_all(dir.join("windows")).map_err(|e| e.to_string())?;
     let mut st = Run {
@@ -152,6 +164,13 @@ fn run(args: &[String]) -> Result<(), String> {
         }
     }
     st.flush()?;
+    if !carry.is_empty() {
+        // Same EOF policy as the Lean follower: an unterminated tail is not an entry.
+        eprintln!(
+            "stream-monitor: {} unterminated bytes at end of input were not committed",
+            carry.len()
+        );
+    }
     // Tell a following `stream-check follow` that no more windows will come.
     fs::write(st.dir.join("DONE"), format!("{}\n", st.k)).map_err(|e| e.to_string())?;
     println!(
