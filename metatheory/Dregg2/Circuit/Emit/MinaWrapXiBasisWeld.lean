@@ -63,8 +63,8 @@ would make the digits an in-circuit image rather than a checked-once-per-(block,
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`/`admit`/
-`native_decide`. Named theorems, not `#guard`s. NEW file; not imported by the `Dregg2` root, per
+General theorems are `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). Facts
+about concrete data are `native_decide`, pinned `#assert_compiled` (since 2026-11-06). No `sorry`/`admit`. Named theorems, not `#guard`s. NEW file; not imported by the `Dregg2` root, per
 house practice for gates. Import line:
 `import Dregg2.Circuit.Emit.MinaWrapXiBasisWeld`
 -/
@@ -178,7 +178,7 @@ theorem the_shared_block_is_six_whole_field_elements :
     aggBasisBlock.length = NC ∧ NC = 6 * SK ∧ NC = 192
       ∧ BASIS.eraseDups.length = NCHAL
       ∧ BASIS.all (fun v => decide (v < qN)) = true := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- One published value, decoded from its 32 felts by the inverse of the map that wrote them. -/
 def decodeBlock (b : List ℤ) : Nat :=
@@ -198,14 +198,14 @@ theorem the_moved_felt_is_a_nonzero_byte_and_moving_it_moves_the_value :
       ∧ aggBasisBlock.length = 192
       ∧ decodeBlock ((aggBasisBlock.set (SK - 1) (aggBasisBlock.getD (SK - 1) 0 + 1)).take SK)
           ≠ decodeBlock (aggBasisBlock.take SK) := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND THE WELD IS REFUTABLE, ONE FELT AT A TIME.** The felt above raised by one — the smallest
 change a forger could make to the shared boundary — and the equality is false. This is what makes
 the weld a gate rather than a restatement of how both sides were built. -/
 theorem a_perturbed_wire_felt_breaks_the_weld :
     aggBasisBlock.set (SK - 1) (aggBasisBlock.getD (SK - 1) 0 + 1) ≠ chainBasisBlock := by
-  decide
+  native_decide
 
 /-- ⚑ **AND THE THREE ARTIFACTS ARE THREE ARTIFACTS.** A weld between an object and itself is not a
 weld; a batch cannot satisfy two halves of this with one proof. -/
@@ -216,7 +216,7 @@ theorem the_welded_descriptors_are_distinct :
       ∧ Dregg2.Circuit.Emit.MinaWrapXiEndoLift.endoDesc.name = "dregg-mina-xi-endo-lift::v1"
       ∧ xiAggMsmDesc.piCount = 219
       ∧ Dregg2.Circuit.Emit.MinaWrapCommitStages.xiDesc.piCount = 256 := by
-  refine ⟨rfl, rfl, rfl, ?_, ?_⟩ <;> decide
+  refine ⟨rfl, rfl, rfl, ?_, ?_⟩ <;> native_decide
 
 /-! ## §3 — ⚑⚑ THE DIGIT WELD: `T_COVER`'s ROWS ARE THE TENSOR IMAGE OF THE WIRE BLOCK. -/
 
@@ -236,7 +236,7 @@ out of a sponge**, and not six numbers a descriptor named. -/
 theorem the_wire_basis_is_the_squaring_orbit_of_the_lifted_polyscale :
     wireBasis = [qpow xiOnTheWire 32, qpow xiOnTheWire 16, qpow xiOnTheWire 8,
                  qpow xiOnTheWire 4, qpow xiOnTheWire 2, xiOnTheWire] := by
-  decide
+  native_decide
 
 /-- ⚑ …and it is FIVE SQUARINGS, so the six are one value's orbit rather than six free scalars. -/
 theorem the_wire_basis_is_five_squarings :
@@ -245,7 +245,7 @@ theorem the_wire_basis_is_five_squarings :
                   = qmul (wireBasis.getD (j + 1) 0) (wireBasis.getD (j + 1) 0)))) = true
       ∧ wireBasis.getD (NCHAL - 1) 0 = xiOnTheWire
       ∧ wireBasis.eraseDups.length = NCHAL := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **THE SCALAR VECTOR THE WIRE BLOCK GENERATES.** The tensor over the 47 real terms; the 12
 padding terms carry `0`, which is what makes them inert (`the_padding_contributes_nothing`).
@@ -291,7 +291,7 @@ theorem the_tensor_image_fills_the_whole_grid :
       ∧ termRows N_PAD NBITS C = windowsOf NBITS C * N_PAD
       ∧ windowsOf NBITS C * N_PAD = 7552
       ∧ derivedScalars.length = N_PAD := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-! ### §3b — ⚠ THE FALSIFIERS, AND THEY MOVE VALUES THAT ARE READ FIRST. -/
 
@@ -307,7 +307,7 @@ theorem a_perturbed_wire_felt_leaves_the_digits :
               (j * SK)).take SK))) i
         else 0))
       ≠ SCAL := by
-  decide
+  native_decide
 
 /-- ⚑ **AND A TRANSPOSED BASIS LEAVES THEM TOO** — the same six values, `ξ³²` and `ξ¹⁶` exchanged.
 The head pairs with the HIGH index bit, so the order is load-bearing and this is the refutation that
@@ -318,7 +318,7 @@ theorem a_transposed_basis_leaves_the_digits :
         if i < N_REAL then tensorQ ((wireBasis.set 0 (wireBasis.getD 1 0)).set 1
           (wireBasis.getD 0 0)) i else 0))
       ≠ SCAL := by
-  decide
+  native_decide
 
 /-- ⚑ **AND THE TWO TAMPERS REALLY DO MOVE A VALUE.** Both refutations above are stated against
 lists; this says the thing each one perturbs actually changes, so neither is a tamper that changed
@@ -327,7 +327,7 @@ theorem the_tampers_move_a_value :
     aggBasisBlock.set (SK - 1) (aggBasisBlock.getD (SK - 1) 0 + 1) ≠ aggBasisBlock
       ∧ (wireBasis.set 0 (wireBasis.getD 1 0)).set 1 (wireBasis.getD 0 0) ≠ wireBasis
       ∧ wireBasis.getD 0 0 ≠ wireBasis.getD 1 0 := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §4 — ⚑ WHAT IS COMPUTED NOW, AND WHAT IS STILL DECLARED.
 
@@ -374,18 +374,18 @@ theorem the_path_is_one_chain :
 
 #assert_axioms tensorQ_is_sNat
 #assert_axioms the_aggregate_wire_block_is_the_chain_wire_block
-#assert_axioms the_shared_block_is_six_whole_field_elements
-#assert_axioms the_moved_felt_is_a_nonzero_byte_and_moving_it_moves_the_value
-#assert_axioms a_perturbed_wire_felt_breaks_the_weld
-#assert_axioms the_welded_descriptors_are_distinct
-#assert_axioms the_wire_basis_is_the_squaring_orbit_of_the_lifted_polyscale
-#assert_axioms the_wire_basis_is_five_squarings
+#assert_compiled the_shared_block_is_six_whole_field_elements
+#assert_compiled the_moved_felt_is_a_nonzero_byte_and_moving_it_moves_the_value
+#assert_compiled a_perturbed_wire_felt_breaks_the_weld
+#assert_compiled the_welded_descriptors_are_distinct
+#assert_compiled the_wire_basis_is_the_squaring_orbit_of_the_lifted_polyscale
+#assert_compiled the_wire_basis_is_five_squarings
 #assert_axioms the_declared_scalars_are_the_tensor_of_the_wire_block
 #assert_axioms the_emitted_cover_table_is_the_tensor_image_of_the_wire_block
-#assert_axioms the_tensor_image_fills_the_whole_grid
-#assert_axioms a_perturbed_wire_felt_leaves_the_digits
-#assert_axioms a_transposed_basis_leaves_the_digits
-#assert_axioms the_tampers_move_a_value
+#assert_compiled the_tensor_image_fills_the_whole_grid
+#assert_compiled a_perturbed_wire_felt_leaves_the_digits
+#assert_compiled a_transposed_basis_leaves_the_digits
+#assert_compiled the_tampers_move_a_value
 #assert_axioms the_path_is_one_chain
 
 end Dregg2.Circuit.Emit.MinaWrapXiBasisWeld
