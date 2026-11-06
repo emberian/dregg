@@ -36,7 +36,7 @@ column. Three deployed shapes:
 | shape | file | how the transition is enforced |
 |---|---|---|
 | table routing | `M/Circuit/Emit/DfaRoutingTableEmit.lean` | one lookup per row into an `exactPublicRows` table whose rows ARE the descriptor bytes (`(s, y, step s y)`) |
-| hash-chained routing | `M/Circuit/Emit/DfaRoutingGeneralEmit.lean` (3-state injection DFA), modelled by `DfaAcceptanceAir.lean` | a bivariate interpolant gate for the transition, plus a per-row entry hash and a running hash seeded at the table commitment and pinned at `routeCommitment` |
+| hash-chained routing | served: `M/Circuit/Emit/DfaRoutingEmit.lean` (2-state toggle, `dfa-routing-toggle-2state::poseidon2-v1`, narrow chip); also `M/Circuit/Emit/DfaRoutingGeneralEmit.lean` (3-state injection, `dfa-routing-injection-3state::poseidon2-v1`, wide chip, not routed by name [READ `circuit/src/descriptor_by_name.rs:83`]); both modelled by `DfaAcceptanceAir.lean` | a bivariate interpolant gate for the transition, plus a per-row entry hash and a running hash seeded at the table commitment and pinned at `routeCommitment` |
 | attested (committed automaton) | `M/Circuit/Emit/AttestedAutomatonWeld8.lean` + `AttestedAutomatonLanes8.lean` | one map-op READ per row against the automaton's root: key `2·current + symbol ↦ next` |
 
 ## 3. Arithmetization and counts
@@ -44,7 +44,8 @@ column. Three deployed shapes:
 | shape | columns | PIs | constraints | per symbol: rows / lookups / perms | degree | wire bytes | source |
 |---|---|---|---|---|---|---|---|
 | table routing | 3 | 2 | 4 | 1 / 1 table / 0 | 2 | golden pinned (`:536`) | [MEASURED `DfaRoutingTableEmit.lean:540-543`] |
-| hash-chained routing | 22 (8 base + 2×7 chip lanes) | 4 | 14 | 1 / 2 chip / 2 (×352 cells wide) | 7 (S-box) | byte-pinned `:225` | [MEASURED `DfaRoutingGeneralEmit.lean:272-278`] |
+| hash-chained routing, toggle (served) | 8 | 4 | 14 | 1 / 2 chip (narrow) / 2 (×141 cells) | 7 (S-box) | byte-pinned | [MEASURED `DfaRoutingEmit.lean:275-277`] |
+| hash-chained routing, injection (emitted, not routed) | 22 (8 base + 2×7 chip lanes) | 4 | 14 | 1 / 2 chip / 2 (×352 cells wide) | 7 (S-box) | byte-pinned `:225` | [MEASURED `DfaRoutingGeneralEmit.lean:272-278`] |
 | attested, scalar root | 4 | 3 | 6 | 1 / 1 map-op (5 felts) / 16 chip rows + 1 leaf digest | 2 | 1205 | [MEASURED `AttestedAutomatonEmit.lean:1171-1212`] |
 | attested, 8-felt weld, graduated (served) | 11 | 10 | 22 | 1 / 1 map-op (19 felts deployed) + 2 range lookups / 16 chip rows + 1 leaf digest | 2 | 2803 | [MEASURED `AttestedAutomatonWeld8.lean:943-957`] |
 
@@ -158,7 +159,8 @@ for this family specifically: two DFA proofs over one `c` without `b` (the `zkOr
 shape) and the hash-chained shape's `CollisionFree` carrier, which is an injectivity floor of the
 kind `HashFloorHonesty` refutes at BabyBear [READ census §0]; the chain binds at the chip's
 collision resistance, 8 lanes at `~2^123.6` only if all eight are carried (the toggle descriptor
-carries `ENTRY_HASH`/`RUNNING_HASH` as 1 + 7 lanes [READ `DfaRoutingGeneralEmit` pins]).
+carries `ENTRY_HASH`/`RUNNING_HASH` as single narrow-chip lanes, 8 columns in all [READ `DfaRoutingEmit.lean:241` golden]; the
+injection object `DfaRoutingGeneralEmit` carries them as 1 + 7 lanes [READ its pins]).
 
 ## 7. Prior art
 
@@ -175,7 +177,7 @@ and the per-byte cost law (hash dominates).
 |---|---|---|
 | `DfaAccepts`, `dfa_bridge`, `dfa_bound_verify_sound`, `dfa_bound_identifies_record_or_collides`, splice falsifiers | `Dfa.lean` | L1 (statement + proof; kernel OPEN) |
 | table routing descriptor + `tableRouting_refines_classify` | `DfaRoutingTableEmit.lean` | L3 (emitted, witness, refinement) — word unbound |
-| hash-chained routing + `dfaAir_verify_sound` | `DfaRoutingGeneralEmit.lean`, `DfaAcceptanceAir.lean` | L4 (deployed as `dfa-routing-toggle-2state::poseidon2-v1`) — word bound by chain, not stated |
+| hash-chained routing + `dfaAir_verify_sound` | `DfaRoutingEmit.lean` (served toggle), `DfaRoutingGeneralEmit.lean` (injection, not routed), `DfaAcceptanceAir.lean` | L4 for the toggle (deployed as `dfa-routing-toggle-2state::poseidon2-v1`) — word bound by chain, not stated |
 | attested weld, 8 lanes: `Satisfied2Lanes8`, `weld8_forged_edge_refused`, graduated range lookups, served | `AttestedAutomatonWeld8.lean`, `AttestedAutomatonLanes8.lean`, `descriptor_by_name.rs`, `circuit/tests/weld8_served.rs` | L4 (emitted + witness + binding, proved and verified by the v2 assembly); dense model, sentinel residual |
 | `route_commits_word` for the routing AIR | proposed | L1, one afternoon |
 | route column for table routing / attested | proposed | L3; milestone: `#guard` the wire delta (+1 chip lookup tuple per row = +25 wire felts per row [INFERRED from `CHIP_TUPLE_LEN = 25`]) and restate `tableRouting_refines_classify` with a `c` conjunct and the splice falsifier |
