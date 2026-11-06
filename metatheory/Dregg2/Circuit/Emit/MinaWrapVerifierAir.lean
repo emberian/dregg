@@ -62,8 +62,8 @@ proof of coverage.
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`/`admit`/
-`native_decide`. Facts are NAMED THEOREMS — this file adds zero `#guard`s.
+General theorems are `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). Facts
+about concrete data are `native_decide`, pinned `#assert_compiled` (since 2026-11-06). No `sorry`/`admit`. Facts are NAMED THEOREMS — this file adds zero `#guard`s.
 -/
 import Dregg2.Circuit.Emit.PastaAddSubSound
 import Dregg2.Circuit.Emit.EffectLowerCertified
@@ -583,7 +583,7 @@ any.
 
 ⚠ This theorem read `1 598 396` and the docblock claimed "within 5.9%" until 2026-08-08, both
 inherited from the 21-instruction round. -/
-theorem verifier_rows_eq : VERIFIER_ROWS = 1671656 := by decide
+theorem verifier_rows_eq : VERIFIER_ROWS = 1671656 := by native_decide
 
 /-- ⚑ **AND THE STAGE IT IS DOMINATED BY IS THE ξ-AGGREGATE, NOT THE TRANSCRIPT.** 47 bases is the
 largest MSM in the verifier, and at `256 · 48` complete adds it is 30.1% of the whole. The transcript
@@ -591,7 +591,7 @@ largest MSM in the verifier, and at `256 · 48` complete adds it is 30.1% of the
 when the round was re-counted (it was 31.5% against 10.7%); the ORDER did not change. -/
 theorem xi_aggregate_dominates :
     STAGE_XI_AGGREGATE = 503808 ∧ STAGE_TRANSCRIPT = 244200
-      ∧ STAGE_TRANSCRIPT < STAGE_XI_AGGREGATE := by decide
+      ∧ STAGE_TRANSCRIPT < STAGE_XI_AGGREGATE := by native_decide
 
 /-- The 32 768 SRS bases, priced in the SAME units — the leg this construction excludes. -/
 def SRS_BASE_ROWS : Nat := msmRows 32768
@@ -606,7 +606,7 @@ it. The figure is `256 · 32 769 · 41`, and a hand-carried digit is exactly the
 campaign has been wrong about forty-seven times; that is the argument for a `theorem` over a
 caption. -/
 theorem srs_leg_dwarfs_the_rest :
-    SRS_BASE_ROWS = 343943424 ∧ 205 * VERIFIER_ROWS < SRS_BASE_ROWS := by decide
+    SRS_BASE_ROWS = 343943424 ∧ 205 * VERIFIER_ROWS < SRS_BASE_ROWS := by native_decide
 
 /-! ## §5b — ⚑⚑ THE PRICE RE-DERIVED IN THE GEOMETRY THAT NOW EXISTS (2026-08-06)
 
@@ -656,19 +656,19 @@ def RCB_ROW_COLS : Nat := 3048
 OR an add OR a sub under a selector. `ALU_WIDTH` is the same number from this file's own layout. -/
 def ALU_ROW_COLS : Nat := 226
 
-theorem the_atom_widths_are_this_files_own : ALU_ROW_COLS = ALU_WIDTH := by decide
+theorem the_atom_widths_are_this_files_own : ALU_ROW_COLS = ALU_WIDTH := by native_decide
 
 /-- The complete additions §5's MSM census implies: `msmRows n / ROWS_PER_COMPLETE_ADD`, summed. -/
 def COMPLETE_ADDS : Nat := 256 * 41 + 256 * 2 + 256 * 10 + 256 * 48 + 256 * 35
 
-theorem complete_adds_eq : COMPLETE_ADDS = 34816 := by decide
+theorem complete_adds_eq : COMPLETE_ADDS = 34816 := by native_decide
 
 /-- ⚑ **AND IT IS §5's OWN CENSUS, NOT A SECOND ONE.** The five MSM stages' rows are exactly
 `ROWS_PER_COMPLETE_ADD` times this count, so the two prices are about one object. -/
 theorem the_adds_are_the_censuss_msm_rows :
     ROWS_PER_COMPLETE_ADD * COMPLETE_ADDS
       = STAGE_PUBLIC_COMM + STAGE_F_COMM + STAGE_FT_COMM + STAGE_XI_AGGREGATE + STAGE_OPENING := by
-  decide
+  native_decide
 
 /-- ⚑ **THE COMMITTED-CELL PRICE OF ONE WRAP VERIFICATION**, excluding the SRS-base leg: the curve
 work at the threaded sound row's width plus the transcript at the ALU row's. -/
@@ -681,7 +681,7 @@ theorem wrap_cells_eq :
     WRAP_CELLS = 161308368
     ∧ COMPLETE_ADDS * RCB_ROW_COLS = 106119168
     ∧ STAGE_TRANSCRIPT * ALU_ROW_COLS = 55189200 := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-- The total ROW count in the two sound geometries. -/
 def WRAP_ROWS_SOUND : Nat := COMPLETE_ADDS + STAGE_TRANSCRIPT
@@ -698,7 +698,7 @@ theorem the_row_count_was_never_the_wall :
     ∧ WRAP_ROWS_SOUND < 2 ^ 19
     ∧ WRAP_ROWS_SOUND < 2 ^ 25
     ∧ 35 * WRAP_ROWS_SOUND < 10000000 := by
-  refine ⟨by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 /-- The multiply / add-sub split of the same census — the figure §1b's *"1.06 M multiplications"*
 conflated. `RCB` is 12 multiplies and 29 add/subs (`ROWS_PER_COMPLETE_ADD = 41`), and the transcript
@@ -717,7 +717,7 @@ def WRAP_ADDSUBS : Nat := COMPLETE_ADDS * 29 + TRANSCRIPT_ADDS
 
 /-- The transcript split is a PARTITION of the transcript stage — no row is counted twice or lost. -/
 theorem the_transcript_split_is_the_stage :
-    TRANSCRIPT_MULS + TRANSCRIPT_ADDS = STAGE_TRANSCRIPT := by decide
+    TRANSCRIPT_MULS + TRANSCRIPT_ADDS = STAGE_TRANSCRIPT := by native_decide
 
 theorem the_atom_census_splits :
     WRAP_MULS = 588732
@@ -725,7 +725,7 @@ theorem the_atom_census_splits :
     ∧ TRANSCRIPT_MULS = 170940
     ∧ TRANSCRIPT_ADDS = 73260
     ∧ WRAP_MULS + WRAP_ADDSUBS = VERIFIER_ROWS := by
-  refine ⟨by decide, by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 /-- ⚑ **THE EXCLUDED SRS LEG, RE-PRICED IN THE SAME UNITS** — and it is worse in cells than in rows.
 `SRS_BASE_ROWS / 41` complete additions at `3 048` columns is `2.56 × 10¹⁰` cells, **158× the rest**,
@@ -735,7 +735,7 @@ def SRS_BASE_CELLS : Nat := (SRS_BASE_ROWS / ROWS_PER_COMPLETE_ADD) * RCB_ROW_CO
 
 theorem the_srs_leg_dwarfs_it_in_cells_too :
     SRS_BASE_CELLS = 25569257472 ∧ 158 * WRAP_CELLS < SRS_BASE_CELLS := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-! ## §6 — THE OPENING IS VACUOUS UNTIL THE SRS-BASE LEG IS DISCHARGED.
 
@@ -870,9 +870,9 @@ def aluSubRow : List ℤ := (List.range ALU_WIDTH).map aluSubRowAsg
 
 /-- ⚑ Every emitted cell is a CANONICAL BabyBear felt (`0 ≤ v < P`), so the Rust fixture parses as
 `u32` and no cell is silently folded on the way in. -/
-theorem aluMulRow_canonical : (aluMulRow.all fun v => decide (0 ≤ v ∧ v < P)) = true := by decide
-theorem aluAddRow_canonical : (aluAddRow.all fun v => decide (0 ≤ v ∧ v < P)) = true := by decide
-theorem aluSubRow_canonical : (aluSubRow.all fun v => decide (0 ≤ v ∧ v < P)) = true := by decide
+theorem aluMulRow_canonical : (aluMulRow.all fun v => decide (0 ≤ v ∧ v < P)) = true := by native_decide
+theorem aluAddRow_canonical : (aluAddRow.all fun v => decide (0 ≤ v ∧ v < P)) = true := by native_decide
+theorem aluSubRow_canonical : (aluSubRow.all fun v => decide (0 ≤ v ∧ v < P)) = true := by native_decide
 
 /-- ⚑ **EXACTLY ONE OPERATION SELECTOR IS SET ON EACH ROW, AND THE CHAIN SELECTOR IS OFF.** The
 selector-sum gate reads `1` on all three, so all three are gate-legal, and the chain leg is
@@ -884,7 +884,7 @@ theorem alu_rows_carry_one_selector_each :
       ∧ (aluAddRowAsg SEL_MUL, aluAddRowAsg SEL_ADD, aluAddRowAsg SEL_SUB, aluAddRowAsg SEL_CHAIN)
         = (0, 1, 0, 0)
       ∧ (aluSubRowAsg SEL_MUL, aluSubRowAsg SEL_ADD, aluSubRowAsg SEL_SUB, aluSubRowAsg SEL_CHAIN)
-        = (0, 0, 1, 0) := by decide
+        = (0, 0, 1, 0) := by native_decide
 
 theorem aluMulRow_length : aluMulRow.length = 226 := by
   unfold aluMulRow; simp [ALU_WIDTH_eq]
@@ -923,29 +923,29 @@ genuinely equals row 0's `z` limb. This is the honest polarity `chain_forces_lim
 quantifies over. -/
 theorem alu_chain_pair_satisfies_the_chain :
     ((List.range SK).all fun i => decide (chainBody aluChainRow0Asg aluChainRow1Asg i = 0))
-      = true := by decide
+      = true := by native_decide
 
 /-- …and the selector really is ON, so the theorem above is not the vacuous case in disguise. -/
-theorem alu_chain_pair_selector_is_on : aluChainRow0Asg SEL_CHAIN = 1 := by decide
+theorem alu_chain_pair_selector_is_on : aluChainRow0Asg SEL_CHAIN = 1 := by native_decide
 
 theorem aluChainRow0_canonical :
-    (aluChainRow0.all fun v => decide (0 ≤ v ∧ v < P)) = true := by decide
+    (aluChainRow0.all fun v => decide (0 ≤ v ∧ v < P)) = true := by native_decide
 theorem aluChainRow1_canonical :
-    (aluChainRow1.all fun v => decide (0 ≤ v ∧ v < P)) = true := by decide
+    (aluChainRow1.all fun v => decide (0 ≤ v ∧ v < P)) = true := by native_decide
 
-#assert_axioms alu_chain_pair_satisfies_the_chain
-#assert_axioms alu_chain_pair_selector_is_on
-#assert_axioms aluChainRow0_canonical
-#assert_axioms aluChainRow1_canonical
+#assert_compiled alu_chain_pair_satisfies_the_chain
+#assert_compiled alu_chain_pair_selector_is_on
+#assert_compiled aluChainRow0_canonical
+#assert_compiled aluChainRow1_canonical
 
 #assert_axioms aluMulRow_agrees_with_fpHonest
 #assert_axioms aluAddRow_agrees_on_operands
 #assert_axioms aluAddRow_carry_bit
 #assert_axioms aluAddRow_carry_at
-#assert_axioms aluMulRow_canonical
-#assert_axioms aluAddRow_canonical
-#assert_axioms aluSubRow_canonical
-#assert_axioms alu_rows_carry_one_selector_each
+#assert_compiled aluMulRow_canonical
+#assert_compiled aluAddRow_canonical
+#assert_compiled aluSubRow_canonical
+#assert_compiled alu_rows_carry_one_selector_each
 #assert_axioms aluMulRow_length
 
 #assert_axioms pastaAluAir_mainRailOk
@@ -966,18 +966,18 @@ theorem aluChainRow1_canonical :
 -- `MinaWrapVerifierSponge` §8 so the census and the program cannot disagree again.
 #assert_axioms rows_per_poseidon_round_eq
 #assert_axioms rows_per_poseidon_perm_eq
-#assert_axioms the_transcript_split_is_the_stage
-#assert_axioms verifier_rows_eq
-#assert_axioms xi_aggregate_dominates
-#assert_axioms srs_leg_dwarfs_the_rest
+#assert_compiled the_transcript_split_is_the_stage
+#assert_compiled verifier_rows_eq
+#assert_compiled xi_aggregate_dominates
+#assert_compiled srs_leg_dwarfs_the_rest
 -- ⚑ 2026-08-06, §5b: the price re-derived on the emitted sound rows.
-#assert_axioms complete_adds_eq
-#assert_axioms the_adds_are_the_censuss_msm_rows
-#assert_axioms wrap_cells_eq
-#assert_axioms the_row_count_was_never_the_wall
-#assert_axioms the_atom_census_splits
-#assert_axioms the_srs_leg_dwarfs_it_in_cells_too
-#assert_axioms the_atom_widths_are_this_files_own
+#assert_compiled complete_adds_eq
+#assert_compiled the_adds_are_the_censuss_msm_rows
+#assert_compiled wrap_cells_eq
+#assert_compiled the_row_count_was_never_the_wall
+#assert_compiled the_atom_census_splits
+#assert_compiled the_srs_leg_dwarfs_it_in_cells_too
+#assert_compiled the_atom_widths_are_this_files_own
 #assert_axioms opening_is_vacuous_when_sg_is_free
 #assert_axioms sg_side_is_surjective
 #assert_axioms opening_accepts_everything_while_sg_is_free
@@ -1287,7 +1287,7 @@ theorem the_wrap_multiply_arithmetic_collapse :
       ∧ WRAP_MULS * (2206 - 442) = 1038523248
       ∧ WRAP_CELLS = 161308368
       ∧ WRAP_ROWS_SOUND = 279016 := by
-  refine ⟨by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 8000000 in
 /-- ⚑ **THE INDEPENDENCE LICENCE, DISCHARGED ON THE EMITTED ALU ROW** at `(CHAL_Z, CHAL_Z2) =
@@ -1316,7 +1316,7 @@ end SzAlu
 #assert_axioms alu_sz_mul_forces_fq
 #assert_axioms alu_sz_selector_off_asserts_nothing
 #assert_axioms alu_sz_arithmetic_collapse
-#assert_axioms the_wrap_multiply_arithmetic_collapse
+#assert_compiled the_wrap_multiply_arithmetic_collapse
 #assert_axioms fpAluSzDesc_chal_indices_distinct
 #assert_axioms fqAluSzDesc_chal_indices_distinct
 
