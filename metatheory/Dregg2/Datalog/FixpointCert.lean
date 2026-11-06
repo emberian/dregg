@@ -635,6 +635,15 @@ def verifyNoClosure (hash : List ℤ → ℤ) (st : Statement) (c : Certificate)
 #guard verifyNoClosure hash0 (stmt 5) ⟨edb, open2⟩ = true
 #guard verify hash0 (stmt 5) ⟨edb, open2⟩ = false
 
+/-- The exact-count soundness premise is inhabited by the complete three-round trace. -/
+theorem honest_verifies : verify hash0 (stmt 6) ⟨edb, honest⟩ = true := by decide
+
+/-- Removing only closure accepts an incomplete database at its own count. The strong checker
+rejects the SAME statement and certificate: checking the claimed count cannot replace closure. -/
+theorem open_trace_separation :
+    verifyNoClosure hash0 (stmt 5) ⟨edb, open2⟩ = true ∧
+    verify hash0 (stmt 5) ⟨edb, open2⟩ = false := by decide
+
 -- ⚑ FALSIFIER 5: a wrong root is refused (the EDB is bound, not just the trace).
 #guard verify hash0 { stmt 6 with root := 0 } ⟨edb, honest⟩ = false
 
@@ -702,6 +711,7 @@ end Reference
   applyFiring_superset, applyRound_superset, replay_superset,
   applyFiring_nodup, applyRound_nodup, replay_nodup, closed_complete,
   flatten_injective, verify_sound, edb_bound_or_collides, countQ_eq_of_same_members,
-  count_unique_or_collides, Reference.path14_derives]
+  count_unique_or_collides, Reference.path14_derives, Reference.honest_verifies,
+  Reference.open_trace_separation]
 
 end Dregg2.Datalog.FixpointCert

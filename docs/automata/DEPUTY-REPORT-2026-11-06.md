@@ -1,6 +1,6 @@
 # Initiative 1 — parser/language excellence
 
-Codex gpt-6-astra deputy, 2026-11-06. **In progress; this is the takeover checkpoint.**
+Codex gpt-6-astra deputy, 2026-11-06. **In progress; integration checkpoint at 20:18 UTC.**
 The register is `/Users/ember/dev/whatember/INITIATIVES.md`; its row at takeover is:
 
 | # | Initiative | Owner lane | Repo | Rung | Bar | Next gate | Last report |
@@ -98,3 +98,68 @@ remaining continuation.
 Only ember can decide the disposition of the already-committed real-session governance files,
 and deletion of the predecessor's hbox data or shared caches. None blocks the synthetic demos
 or current implementation work. No new request for permission is needed for the authorized work.
+
+## Landings and integration checkpoint (20:18 UTC)
+
+[MEASURED] `fbfe63c51` fixes the weld row-residual blocker with indexed opening heaps, and
+repairs LRAT freshness/hint and bisimulation root/closure/false-inclusion falsifiers. Warm
+single-file checks passed 21 + 28 + 46 clean keystones and exact axiom pins.
+`4afe19bef` makes governance reproduction preserve original signatures and compare all signed
+fields with the checked certificate; both synthetic counts (2 and 0), three forged certificates,
+the weak-closure separation and swapped-valid-receipt refusal pass.
+
+[MEASURED] The counted-repeat cache passes exact algorithm-equality proofs and native tests:
+repeat 32 improves 24.359 s to 0.781 s; repeat 64 exceeds 180 s before and takes 8.740 s after;
+`\w{20,64}` exceeds 180 s before and takes 3.101 s after (69 states, 17,664 transitions).
+Completed baseline cases produce identical tables. The combined demo policy still exceeds
+180 s: its two branches separately take 0.276 s and 1.283 s. A kernel-proved table-union
+constructor is ready; the compiler lane is integrating it through the certified pipeline.
+
+[READ, MEASURED] Microsites commit `3702f886013582cb837a293a1e71b3fc3bb1551e` has been pushed
+from `/Users/ember/dev/astra-microsites-publish-20261106`, a fresh checkout of public main.
+The inherited local history contains session-derived data in intermediate unpushed commits;
+pushing its final synthetic tree would still publish that history. The old checkout is untouched.
+Only the final synthetic page and public homepage links were copied into the fresh checkout.
+GitHub Pages deployment is queued; live verification is still pending. Future page edits must
+use this publication checkout or similarly preserve the privacy boundary.
+
+[MEASURED] The initial generator closure has 16 clean solvency keystones and a fully inhabited
+borrow witness, plus one generic tuple generator replacing five production constructors.
+New solvency: 118 columns, 106 constraints; old shape: 51 columns, 36 constraints. Native
+Rust integration remains pending. DECO and caveat admission are the next grounded static
+producers, sharing range/fact-opening and bounded-borrow generators. Parameterized producers
+and other AIR dialects remain explicit C9 work; no whole-repository closure is claimed.
+
+### Coordination needed from the root's other initiatives
+
+[MEASURED] `/home/build/astra-integration` is prepared with independent 8.9 GiB Lean and
+1.8 GiB Rust caches, without a build. At 20:14 UTC bb2 RSS was 54.2 GiB, but twelve live
+scopes reserve approximately 496 GiB in caps against the 100 GiB shared slice. Three old
+48 GiB integration scopes hold less than 1 GiB each. The machine rules require summed caps
+within budget; this prevents any new deputy allocation until owning lanes release or rebudget
+them. No other lane is stopped. The iteration build is near completion (10,374/10,616 tasks),
+and session-receipt bootstrap is generating the missing Lean FFI archive. Their completed
+artifacts can avoid duplicate work. Persvati timed out both directly and via workhorse.
+
+Initiative 14 currently owns unrelated uncommitted edits in `space.py`; our automata counts
+update will preserve those and needs a serialized file landing. The requested iteration-speed
+note remains absent. The Mina rescue note has arrived and is read: body preimage is down to
+5.6 GB / 50 s; wrap stages rescue continues. A fresh full-tree build and provenance stamp must
+use the integrated source after those changes.
+
+### Answers for downstream consumers
+
+[READ] Streaming's `docs/stream/GROUNDING.md` correctly treats a finite liveness counter as
+an approximant, with unbounded counters characterizing infinite acceptance. Its same-raw-bytes
+classification and leaf hashing is the essential content binding. The new routed weld retains
+all eight map-root lanes and adds a full-width route plus exact length; the legacy weld remains
+unbound to the word. At 4 KiB its binary representation costs 32,768 rows, 524,288 map-path
+permutations and 32,768 additional route permutations: 557,056 total before other proof costs.
+The initial executable route wrapper requires power-of-two row counts and rejects other heights;
+canonical inactive padding is further work, not implicit support for arbitrary record lengths.
+
+For streaming/tree public demos, new publication should use synthetic or independently public
+data, as this initiative does. No session content or derived artifact is authorized for new
+public publication by this parser task. These notes do not change another initiative's source
+ownership. The theorem's exact codec, row-length and root-opening premises must travel with
+any consumer; an unrelated valid table or certificate is not enough.
