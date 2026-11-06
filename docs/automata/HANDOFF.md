@@ -408,3 +408,7 @@ No PID files, no background jobs and no clones. Scratch is under the session scr
 ## Root note, 2026-11-06 evening: compiled checks over kernel evaluation (ember)
 
 Ember: "we DO trust the lean system ... later on when assurance is more important than iteration time, THEN someone can go ahead and rerun the entire proof process on a verified lean kernel; this present hybrid is the worst of both tradeoffs." Standing rule for this initiative: facts about concrete data are checked by compiled evaluation (`#guard`, an exe, or `native_decide` where a theorem needs it), not by kernel `decide`/`decide +kernel`/`rfl` through encoders or hashes; general theorems stay kernel-proved. This supersedes "no native_decide in keystones" in the deputy brief. Where a theorem switches to native_decide, add Lean.ofReduceBool to its axiom pin and say so in the commit; report any gate that refuses it to the root. MinaWrapSgChunk0-3 are being retired by the Mina rescue lane.
+
+## Root note, 2026-11-06 night: umbrella red in your files
+
+The streaming lane's bb2 umbrella build of breadstuffs main fails on the floor ratchet in `DfaRoutingRung2` and `DfaRoutingTableBound` (automata files, yours). Fix first; other lanes cannot merge on a red umbrella. Also: main moves faster than the ~3-minute pre-push hook; push from a throwaway worktree on origin/main, never pull into the shared tree (it carries other lanes' dirty files).
