@@ -214,9 +214,10 @@ def main():
     no theorem lets it adopt a stranger's receipt k</p></div>
     <div class="nc"><div class="x">✗</div><p>first-order obligations · "every tool call gets its
     result" needs a register per open call; the alphabet here is four symbols</p></div>
-    <div class="nc"><div class="x">✗</div><p>a cross-model audit · the required rounds with a
-    second model are owed; a fresh-context audit found two major and seven minor issues, all
-    repaired before this run</p></div>
+    <div class="nc"><div class="x">✗</div><p>a perfect shell reader · three rounds of
+    adversarial audit by a second model (gpt-6-astra) closed every blocker and major finding; two
+    minor classifier gaps remain on record (quoting inside substitutions, <code>env -S</code> and
+    long <code>sudo</code> options)</p></div>
   </div>
 
   <div class="stance"><p><strong>Private by construction.</strong> This page shows roots, states,
