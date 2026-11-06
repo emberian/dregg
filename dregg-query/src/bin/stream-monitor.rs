@@ -152,6 +152,8 @@ fn run(args: &[String]) -> Result<(), String> {
         }
     }
     st.flush()?;
+    // Tell a following `stream-check follow` that no more windows will come.
+    fs::write(st.dir.join("DONE"), format!("{}\n", st.k)).map_err(|e| e.to_string())?;
     println!(
         "done: {} entries in {} windows, root {}",
         st.frontier.len(),

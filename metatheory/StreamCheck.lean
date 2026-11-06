@@ -6,7 +6,8 @@
                                           --anchor, also require the final root to be R, the root
                                           published for the source log (`anchored_is_genuine`)
     stream-check root    <file>           the MMR root of a log file (what a publisher publishes)
-    stream-check follow  <dir> [idle_s]   follow <dir> as it grows; exit after idle_s seconds idle
+    stream-check follow  <dir> [idle_s]   follow <dir> as it grows; exit when the producer's DONE marker is
+                                          present and checked through, or after idle_s seconds idle
     stream-check digest  <file>           print each line's entry value and symbol (debug)
 
 `<dir>` holds `windows/w000001.jsonl, ...` (window k's raw transcript lines) and
@@ -250,6 +251,8 @@ def follow (dir : String) (idle? : Option Nat) (anchor? : Option String := none)
       match ← checkOne dir acc k (← IO.FS.readFile (receiptPath dir k)) with
       | some acc' => acc := acc'; k := k + 1; idleMs := 0
       | none => return 1
+    else if ← System.FilePath.pathExists s!"{dir}/DONE" then
+      break  -- the producer has finished and every receipt it wrote has been checked
     else
       match idle? with
       | none => break

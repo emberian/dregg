@@ -22,7 +22,7 @@ mkdir -p "$out"
 nohup "$monitor" run --input "$input" --dir "$out" --checker "$checker" --every "$every" \
   --follow "$follow" > "$out/monitor.log" 2>&1 &
 echo $! > "$out/monitor.pid"
-nohup "$checker" follow "$out" $((follow + 30)) > "$out/follow.log" 2>&1 &
+nohup "$checker" follow "$out" $((4 * follow + 60)) > "$out/follow.log" 2>&1 &
 echo $! > "$out/follow.pid"
 echo "producer pid $(cat "$out/monitor.pid"), follower pid $(cat "$out/follow.pid"); logs in $out"
 
