@@ -596,12 +596,13 @@ impl FederationLiveness {
         // `quorum_threshold > 1 && ...`, on the argument that a threshold-1 node
         // "has no cross-node quorum to lose" and that some solo paths never
         // route a vote through the collector. Both halves were wrong:
-        //  * every block the finality loop acknowledges — turn, membership,
-        //    inert heartbeat — emits this node's own vote through
-        //    `record_finalization_vote`, which calls `note_quorum` on the vote
-        //    that crosses the threshold; at threshold 1 that is the self-vote.
+        //  * every batch the finality loop acknowledges emits this node's own
+        //    vote through `record_finalization_vote`, which calls `note_quorum`
+        //    on the vote that crosses the threshold; at threshold 1 that is the
+        //    self-vote. (At threshold 1 an inert heartbeat inside a batch is not
+        //    voted on, but the batch tail always is: `votes_on_finalized_block`.)
         //    A solo node whose finality loop runs therefore notes a quorum on
-        //    every finalized block, and one whose loop has stopped does not.
+        //    every finalized batch, and one whose loop has stopped does not.
         //    (Heartbeats reach that loop at n=1 only since the solo arm of
         //    `poll_finalized_blocks` stopped dropping `Ack` payloads; before,
         //    an idle solo node read stalled one window after its last turn.)
@@ -7631,6 +7632,36 @@ fn spawn_catchup_driver(handle: BlocklaceHandle, interval_ms: u64) {
 
 // ─── Finalized Turn Executor ────────────────────────────────────────────────
 
+/// Whether the finality executor signs its own finalization vote for `block`.
+///
+/// Every block is voted on, except at quorum threshold 1 an `Inert` block (`Ack`/`Data`) that is
+/// not the last block of its batch. At threshold 1 the self-vote on an inert block only resets the
+/// liveness clock (`note_quorum`): it binds no attested root, no receipt and no peer needs it. One
+/// vote at the batch tail resets that clock exactly as a vote per block does. A turn is always
+/// voted on, because its vote is the persisted `finalization_quorum` of its attested root.
+/// `quorum_threshold` is the collector's LIVE threshold at this block, not a batch snapshot: a
+/// membership block earlier in the same batch can install a larger committee (a solo `Join` passes
+/// in the statement that registers it), and every block after it is then voted on as before.
+///
+/// ⚑ THE BACK CATALOGUE (measured 2026-10-07). Since `7d6e1f9a5` the solo arm of
+/// `poll_finalized_blocks` finalizes heartbeats. Before that it dropped them, so a solo chain that
+/// ran an older binary holds every heartbeat it ever produced as un-executed: 1859 of 39637 blocks
+/// on a solo chat node at height 37724. The first poll on the new binary returns all of them,
+/// ordered by seq, AHEAD of any new turn. Each vote costs one verified-Lean ML-DSA sign and one
+/// verify inline on the executor, about 1.3 s, so a new turn waited about 40 minutes behind
+/// heartbeats that no one needed votes on. `latest_height` did not move, and every client send
+/// timed out. Executed ids persist only after the batch, so a node restarted inside that window
+/// starts again from the beginning. With this rule that batch signs one vote per turn plus one.
+/// An idle heartbeat batch of one is its own tail and is still voted on, so the idle-stall leg
+/// stays satisfied.
+fn votes_on_finalized_block(
+    block: &FinalizedBlock,
+    is_batch_tail: bool,
+    quorum_threshold: usize,
+) -> bool {
+    is_batch_tail || quorum_threshold > 1 || !matches!(block, FinalizedBlock::Inert { .. })
+}
+
 /// Spawn a background task that waits for finalized blocks and executes their turns.
 ///
 /// This task is QUIESCENT: it uses `Notify` to sleep until new blocks arrive.
@@ -7680,7 +7711,8 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
 
             let mut acknowledged_blocks = Vec::new();
             let mut retry_prefix = false;
-            for block in &finalized_blocks {
+            let batch_tail = finalized_blocks.len().saturating_sub(1);
+            for (index, block) in finalized_blocks.iter().enumerate() {
                 let block_id = block.block_id();
                 let outcome = match block {
                     FinalizedBlock::Turn {
@@ -7819,7 +7851,13 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
                 // emit exactly once per block (n members ⇒ n votes, no storm).
                 // Solo (n=1) is a committee of one: quorum=1, so a single self
                 // vote is already consensus-attested — correct and inert.
-                {
+                //
+                // At threshold 1 an `Inert` block that is not the batch tail is
+                // NOT voted on: see `votes_on_finalized_block`. The threshold is
+                // read per block, because a membership block earlier in this
+                // batch may have installed a larger committee.
+                let quorum_threshold = handle.votes.read().await.quorum_threshold();
+                if votes_on_finalized_block(block, index == batch_tail, quorum_threshold) {
                     let already = {
                         let col = handle.votes.read().await;
                         col.has_voted(&block_id, &handle.self_key)
@@ -18076,6 +18114,141 @@ mod tests {
         assert!(
             handle.cursor.read().await.is_executed(&hb),
             "the heartbeat must be in the executed set: it was FINALIZED, not merely produced"
+        );
+    }
+
+    #[test]
+    fn only_a_solo_inert_block_inside_its_batch_goes_unvoted() {
+        let inert = FinalizedBlock::Inert {
+            block_id: BlockId([1; 32]),
+        };
+        let turn = FinalizedBlock::Turn {
+            block_id: BlockId([2; 32]),
+            data: vec![9],
+            artifacts: None,
+            consensus_time: None,
+        };
+        assert!(!votes_on_finalized_block(&inert, false, 1));
+        assert!(votes_on_finalized_block(&inert, true, 1));
+        assert!(votes_on_finalized_block(&inert, false, 2));
+        assert!(votes_on_finalized_block(&turn, false, 1));
+        assert!(votes_on_finalized_block(&turn, true, 1));
+    }
+
+    /// ⚑ THE BACK CATALOGUE. A solo chain that ran a binary whose solo arm dropped
+    /// heartbeats holds all of them as un-executed. The first poll on this binary finalizes the
+    /// whole catalogue in one batch. Every block must be executed, and the liveness clock must
+    /// reset, but only the batch tail is signed: a vote per heartbeat cost 1.3 s each live and
+    /// kept a new turn waiting behind them for about 40 minutes.
+    #[tokio::test]
+    async fn a_solo_heartbeat_back_catalogue_finalizes_with_one_vote() {
+        let (handle, _state, _tmp) =
+            solo_node_with_finality_executor(0x5D, Duration::from_secs(60)).await;
+        let catalogue: Vec<BlockId> = {
+            let mut lace = handle.lace.write().await;
+            (0..12).map(|_| lace.add_block(Payload::Ack).id()).collect()
+        };
+        handle.finality_notify.notify_one();
+        assert!(
+            await_quorum_after(&handle, None).await.is_some(),
+            "the catalogue batch must still reset the liveness clock"
+        );
+        let tail = *catalogue.last().expect("catalogue");
+        let deadline = std::time::Instant::now() + Duration::from_secs(600);
+        while !handle.votes.read().await.has_voted(&tail, &handle.self_key)
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let cursor = handle.cursor.read().await;
+        assert!(
+            catalogue.iter().all(|id| cursor.is_executed(id)),
+            "every heartbeat of the catalogue must be finalized"
+        );
+        drop(cursor);
+        let votes = handle.votes.read().await;
+        let voted: Vec<bool> = catalogue
+            .iter()
+            .map(|id| votes.has_voted(id, &handle.self_key))
+            .collect();
+        assert_eq!(
+            voted.iter().filter(|v| **v).count(),
+            1,
+            "exactly one vote for the batch, got {voted:?}"
+        );
+        assert!(voted[catalogue.len() - 1], "the one vote is the batch tail");
+    }
+
+    /// The solo rule must not outlive the solo committee inside one batch. At n=1 a `Join` passes in
+    /// the statement that registers it, so a batch [heartbeats, Join, heartbeats] installs a
+    /// two-member committee half-way through. The heartbeats before the install go unvoted under the
+    /// solo rule; every heartbeat after it must be voted on, as at any threshold above 1. A
+    /// threshold read once per batch would leave them unvoted, so they could never reach the new
+    /// committee's quorum.
+    #[tokio::test]
+    async fn a_committee_installed_inside_a_batch_votes_on_every_later_heartbeat() {
+        let (handle, _state, _tmp) =
+            solo_node_with_finality_executor(0x5E, Duration::from_secs(60)).await;
+        let joiner = ed25519_dalek::SigningKey::from_bytes(&[0x6E; 32])
+            .verifying_key()
+            .to_bytes();
+        let (before, join, after) = {
+            let mut lace = handle.lace.write().await;
+            let before: Vec<BlockId> = (0..3).map(|_| lace.add_block(Payload::Ack).id()).collect();
+            let join = lace
+                .add_block(Payload::MembershipVote {
+                    action: MembershipAction::Join {
+                        node_id: joiner,
+                        ml_dsa_pubkey: dregg_blocklace::pq::MlDsaPublicKey(
+                            [0u8; dregg_blocklace::pq::PK_LEN],
+                        ),
+                    },
+                })
+                .id();
+            let after: Vec<BlockId> = (0..3).map(|_| lace.add_block(Payload::Ack).id()).collect();
+            (before, join, after)
+        };
+        handle.finality_notify.notify_one();
+        let tail = *after.last().expect("after");
+        let deadline = std::time::Instant::now() + Duration::from_secs(600);
+        while !handle.votes.read().await.has_voted(&tail, &handle.self_key)
+            && std::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            handle.votes.read().await.quorum_threshold() > 1,
+            "precondition: the Join must have installed a committee above threshold 1 in this batch"
+        );
+        let cursor = handle.cursor.read().await;
+        assert!(
+            before
+                .iter()
+                .chain(std::iter::once(&join))
+                .chain(after.iter())
+                .all(|id| cursor.is_executed(id)),
+            "the whole batch must be finalized"
+        );
+        drop(cursor);
+        let votes = handle.votes.read().await;
+        let voted = |ids: &[BlockId]| -> Vec<bool> {
+            ids.iter()
+                .map(|id| votes.has_voted(id, &handle.self_key))
+                .collect()
+        };
+        assert_eq!(
+            voted(&before),
+            vec![false; before.len()],
+            "heartbeats before the install fall under the solo rule"
+        );
+        assert!(
+            votes.has_voted(&join, &handle.self_key),
+            "a membership block is always voted on"
+        );
+        assert_eq!(
+            voted(&after),
+            vec![true; after.len()],
+            "every heartbeat after the install must carry this node's vote"
         );
     }
 
