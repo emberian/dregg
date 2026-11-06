@@ -344,13 +344,10 @@ pub fn configure_turn_executor(
     // Receipt-chain continuity is consensus state too. Node executors are
     // short-lived, so restoring only the one agent an ingress happens to name
     // leaves every other author at a false genesis head. Rebuild all per-agent
-    // heads from the already recovered durable log before any execution. The
-    // helper validates the complete interleaved log before mutating the fresh
-    // executor, so a malformed suffix cannot yield a partially seeded view.
-    crate::executor_state_admission::restore_executor_receipt_heads(
-        executor,
-        s.cclerk.receipt_log(),
-    )
+    // heads before any execution. The cipherclerk maintains each agent's head
+    // hash at append (refusing any receipt that does not extend its agent's
+    // head), so this is O(agents), not a walk of the whole receipt log.
+    crate::executor_state_admission::seed_executor_receipt_heads(executor, &s.cclerk)
     .unwrap_or_else(|error| {
         panic!(
             "STORE INTEGRITY EVENT: durable receipt log cannot seed a turn executor; refusing construction: {error}"

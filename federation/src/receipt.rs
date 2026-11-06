@@ -149,6 +149,8 @@ pub enum ReceiptQc {
 /// `known_keys` is the ed25519 committee and `ml_dsa_committee` is the ENROLLED
 /// ML-DSA-65 roster, aligned INDEX-FOR-INDEX (element `i` of one is the same
 /// member as element `i` of the other, exactly as genesis publishes them).
+/// The enrolled ML-DSA keys must also be pairwise distinct: one PQ authority
+/// cannot occupy multiple classical committee slots.
 ///
 /// Accepts iff at least `threshold` DISTINCT signers each satisfy ALL of:
 /// * committee membership — `pubkey ∈ known_keys` (at some index `i`);
@@ -168,7 +170,8 @@ pub enum ReceiptQc {
 ///
 /// FAIL-CLOSED: a roster misaligned in length (`ml_dsa_committee.len() !=
 /// known_keys.len()`, which includes an EMPTY roster — hybrid not configured),
-/// any signer outside `known_keys`, any signature that does not verify, a
+/// duplicate enrolled ML-DSA keys, any signer outside `known_keys`, any
+/// signature that does not verify, a
 /// self-carried ML-DSA key that differs from the enrolled one, or a missing PQ
 /// half rejects the WHOLE quorum — never a silent ed25519-only downgrade.
 /// `threshold == 0` (a vacuous quorum) is refused outright.
@@ -190,7 +193,14 @@ pub fn verify_hybrid_quorum_sigs(
     // committee — otherwise there is no well-defined "enrolled key for member
     // P" to pin against. A misaligned length (an EMPTY roster included) cannot
     // pin any signer, so fail closed rather than fall back to ed25519 only.
-    if ml_dsa_committee.len() != known_keys.len() {
+    // Distinct Ed signers cannot share one enrolled PQ authority. Check the
+    // whole roster, including slots absent from this certificate's subset.
+    if ml_dsa_committee.len() != known_keys.len()
+        || ml_dsa_committee
+            .iter()
+            .enumerate()
+            .any(|(i, key)| ml_dsa_committee[..i].contains(key))
+    {
         return false;
     }
     // Map each committee member to its enrolled index (for the PQ-key pin).
@@ -619,6 +629,60 @@ mod tests {
             !receipt.verify(None, &known_keys, &[], 2, 0),
             "duplicate-signer replay must not satisfy threshold"
         );
+    }
+
+    #[test]
+    fn hybrid_quorum_rejects_duplicate_enrolled_pq_keys() {
+        use crate::frost::MlDsaSigningKey;
+
+        dregg_pq_testkit::install_or_panic();
+        let ed = [
+            dregg_types::SigningKey::from_bytes(&[0xA1; 32]),
+            dregg_types::SigningKey::from_bytes(&[0xA2; 32]),
+        ];
+        let committee = [ed[0].public_key(), ed[1].public_key()];
+        let pq = [
+            MlDsaSigningKey::from_seed(&[0xA3; 32]),
+            MlDsaSigningKey::from_seed(&[0xA4; 32]),
+        ];
+        let enrolled = [pq[0].0.clone(), pq[1].0.clone()];
+        assert_ne!(committee[0], committee[1]);
+        assert_ne!(enrolled[0], enrolled[1]);
+        let message = sample_body(0xA5).body_hash();
+        let honest: Vec<HybridQuorumSig> = (0..2)
+            .map(|i| HybridQuorumSig {
+                pubkey: committee[i],
+                signature: sign(&ed[i], &message),
+                ml_dsa_pubkey: enrolled[i].0.to_vec(),
+                pq_signature: pq[i].1.sign(&message).expect("ML-DSA signs"),
+            })
+            .collect();
+        assert!(verify_hybrid_quorum_sigs(
+            &honest, &message, &committee, &enrolled, 2,
+        ));
+
+        // This is not a corrupted/missing PQ half: one actual, valid PQ
+        // signature is reused under two distinct, valid classical signatures.
+        let duplicated = [enrolled[0].clone(), enrolled[0].clone()];
+        let reused_pq = pq[0].1.sign(&message).expect("ML-DSA signs");
+        let mut aliased = honest.clone();
+        for qs in &mut aliased {
+            qs.ml_dsa_pubkey = duplicated[0].0.to_vec();
+            qs.pq_signature = reused_pq.clone();
+        }
+        assert_eq!(aliased[0].pq_signature, aliased[1].pq_signature);
+        for (qs, enrolled_key) in aliased.iter().zip(&duplicated) {
+            assert!(qs.pubkey.verify(&message, &qs.signature));
+            assert_eq!(qs.ml_dsa_pubkey.as_slice(), enrolled_key.0.as_slice());
+            assert!(enrolled_key.verify(&message, &qs.pq_signature));
+        }
+        assert!(!verify_hybrid_quorum_sigs(
+            &aliased, &message, &committee, &duplicated, 2,
+        ));
+        // Even a one-signer subset cannot make a duplicate enrollment valid.
+        assert!(!verify_hybrid_quorum_sigs(
+            &aliased[..1], &message, &committee, &duplicated, 1,
+        ));
     }
 
     #[test]

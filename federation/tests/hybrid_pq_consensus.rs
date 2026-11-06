@@ -290,3 +290,63 @@ fn misaligned_or_incomplete_pq_key_table_fails_closed() {
         committee.threshold,
     ));
 }
+
+// =============================================================================
+// DISTINCT ENROLLED ROSTER — a duplicated ML-DSA roster cannot inflate a quorum
+// =============================================================================
+
+/// A roster that ENROLS THE SAME ML-DSA KEY at two positions cannot inflate the
+/// LIVE-consensus hybrid quorum: the shared PQ-half verifier refuses a roster
+/// that repeats a key, even when the reused signature sits at two DISTINCT
+/// positions under two distinct, valid classical halves. Mirrors the
+/// distinct-roster contract `receipt::verify_hybrid_quorum_sigs` enforces
+/// (task/4721) at the `frost::verify_pq_quorum_half` seam this path routes
+/// through. Without it, one holder of that PQ key fills a 2-of-2 PQ half.
+#[test]
+fn duplicate_enrolled_pq_roster_is_refused() {
+    let committee = hybrid_committee(2);
+    let message = QuorumCertificate::vote_message(&[5u8; 32], 1, 1);
+    // One REAL ML-DSA signature (member 0's key), reused under BOTH members.
+    let reused = committee.pq_keys[0].sign(&message).expect("ML-DSA signs");
+    let hqc = HybridQuorumCertificate {
+        qc: QuorumCertificate {
+            block_hash: [5u8; 32],
+            height: 1,
+            view: 1,
+            aggregate_qc: None,
+            votes: vec![
+                (0, sign(&committee.ed_keys[0], &message)),
+                (1, sign(&committee.ed_keys[1], &message)),
+            ],
+            threshold: 2,
+        },
+        pq_sigs: vec![(0, reused.clone()), (1, reused)],
+    };
+    // The classical half is genuine and passes on its own…
+    assert!(hqc.qc.verify_with_keys(&committee.members));
+    // …and the PQ half, with the honest distinct roster, verifies.
+    let honest_pq = vec![
+        (0, committee.pq_keys[0].sign(&message).unwrap()),
+        (1, committee.pq_keys[1].sign(&message).unwrap()),
+    ];
+    let honest = HybridQuorumCertificate {
+        pq_sigs: honest_pq,
+        ..hqc.clone()
+    };
+    assert!(honest.verify_with_keys(&committee.members, &committee.pq_members));
+
+    // A roster that enrols member 0's key at BOTH positions.
+    let mut dup_roster = committee.pq_members.clone();
+    dup_roster[1] = dup_roster[0].clone();
+
+    // The hybrid certificate must REFUSE: one enrolled PQ authority is not two.
+    assert!(!hqc.verify_with_keys(&committee.members, &dup_roster));
+    // …and via the opaque-bytes LIVE-consensus seam.
+    let scheme = QuorumScheme::HybridVotes {
+        members: &committee.members,
+        ml_dsa_pubkeys: &dup_roster,
+    };
+    assert!(!scheme.verify_opaque_qc(&hqc.to_bytes(), &message));
+    // The factored PQ-half verifier is where the refusal lives.
+    assert!(!verify_pq_quorum_half(&dup_roster, &message, &hqc.pq_sigs, 2));
+}

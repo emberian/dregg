@@ -579,10 +579,11 @@ impl HybridQC {
 ///
 /// Accepts iff BOTH:
 /// * (classical) [`verify_frost_quorum`] accepts `qc.frost` under `group_key`;
-/// * (post-quantum) `qc.pq_sigs` carries at least `threshold` entries, EVERY
-///   entry names a distinct in-range committee position, and EVERY entry's
-///   signature ML-DSA-65-verifies over `message` (with [`HYBRID_PQ_CTX`])
-///   against that position's key in `ml_dsa_pubkeys`.
+/// * (post-quantum) `ml_dsa_pubkeys` is pairwise DISTINCT (one PQ authority
+///   cannot occupy two committee slots), `qc.pq_sigs` carries at least
+///   `threshold` entries, EVERY entry names a distinct in-range committee
+///   position, and EVERY entry's signature ML-DSA-65-verifies over `message`
+///   (with [`HYBRID_PQ_CTX`]) against that position's key in `ml_dsa_pubkeys`.
 ///
 /// STRICT on the PQ half: any invalid, duplicate, or out-of-range entry
 /// rejects the WHOLE certificate (not merely "doesn't count") — a valid
@@ -609,12 +610,20 @@ pub fn verify_hybrid_quorum(
 /// position, and EVERY entry's signature ML-DSA-65-verifying over `message`
 /// (with [`HYBRID_PQ_CTX`]) against that position's key.
 ///
+/// The enrolled roster `ml_dsa_pubkeys` must ALSO be pairwise DISTINCT: one
+/// PQ authority cannot occupy multiple committee slots. Checked over the WHOLE
+/// roster — including slots absent from this certificate's subset — so a
+/// threshold-1 subset cannot make a duplicate enrollment valid. The same
+/// distinct-roster contract [`crate::receipt::verify_hybrid_quorum_sigs`]
+/// enforces for the receipt / checkpoint / cross-fed carrier.
+///
 /// This is the exact PQ leg of [`verify_hybrid_quorum`], factored so BOTH
 /// classical carriers can share it: the FROST aggregate ([`HybridQC`]) and
 /// the ed25519 per-member votes quorum
 /// ([`crate::types::HybridQuorumCertificate`], the live-consensus wiring).
 /// Same strictness: any invalid, duplicate, or out-of-range entry rejects
-/// the WHOLE set, and `threshold == 0` (a vacuous PQ half) is refused.
+/// the WHOLE set, a duplicate enrolled roster is refused outright, and
+/// `threshold == 0` (a vacuous PQ half) is refused.
 pub fn verify_pq_quorum_half(
     ml_dsa_pubkeys: &[MlDsaPublicKey],
     message: &[u8],
@@ -622,6 +631,18 @@ pub fn verify_pq_quorum_half(
     threshold: usize,
 ) -> bool {
     if threshold == 0 {
+        return false;
+    }
+    // The enrolled ML-DSA roster must be pairwise DISTINCT: distinct classical
+    // slots cannot share ONE enrolled PQ authority. Check the WHOLE roster
+    // (not merely the subset this certificate names), so a threshold-1 subset
+    // cannot make a duplicate enrollment valid — the same distinct-roster
+    // contract `receipt::verify_hybrid_quorum_sigs` enforces.
+    if ml_dsa_pubkeys
+        .iter()
+        .enumerate()
+        .any(|(i, key)| ml_dsa_pubkeys[..i].contains(key))
+    {
         return false;
     }
     let mut seen = std::collections::HashSet::new();
@@ -1321,6 +1342,76 @@ mod tests {
             message,
             &qc,
             0
+        ));
+    }
+
+    /// The enrolled ML-DSA roster must be pairwise DISTINCT: one PQ authority
+    /// cannot occupy multiple committee slots. This is the distinct-roster
+    /// contract `receipt::verify_hybrid_quorum_sigs` enforces, applied at the
+    /// SHARED PQ-half seam BOTH hybrid carriers route through (the FROST
+    /// `verify_hybrid_quorum` and the ed25519 `HybridQuorumCertificate`). The
+    /// check covers the WHOLE roster — not just this certificate's subset — so
+    /// a threshold-1 subset cannot make a duplicate enrollment valid.
+    #[test]
+    fn hybrid_duplicate_enrolled_pq_roster_is_refused() {
+        let (p0, sk0) = MlDsaSigningKey::from_seed(&[0xA3; 32]);
+        let (p1, sk1) = MlDsaSigningKey::from_seed(&[0xA4; 32]);
+        let message = b"duplicate enrolled PQ roster";
+        let sig0 = sk0.sign(message).expect("ML-DSA signs");
+
+        // Control: an honest DISTINCT roster verifies at threshold 2.
+        let distinct = vec![p0.clone(), p1.clone()];
+        let honest = vec![(0usize, sig0.clone()), (1usize, sk1.sign(message).unwrap())];
+        assert!(verify_pq_quorum_half(&distinct, message, &honest, 2));
+
+        // A DUPLICATE enrolled roster refuses at threshold 2 even though the
+        // reused signature sits at two DISTINCT positions under two distinct
+        // (here, one) classical halves…
+        let dup = vec![p0.clone(), p0.clone()];
+        let reused = vec![(0usize, sig0.clone()), (1usize, sig0.clone())];
+        assert!(
+            !verify_pq_quorum_half(&dup, message, &reused, 2),
+            "a duplicate enrolled ML-DSA key must not fill two PQ positions (t=2)"
+        );
+        // …and at threshold 1: the WHOLE roster is checked, so a one-entry
+        // subset cannot make the duplicate enrollment valid.
+        assert!(
+            !verify_pq_quorum_half(&dup, message, &reused[..1], 1),
+            "a duplicate enrolled roster refuses even at threshold 1"
+        );
+    }
+
+    /// The FROST-carried hybrid verifier routes its PQ half through the same
+    /// shared seam: a GENUINE classical aggregate cannot rescue a duplicated
+    /// enrolled roster.
+    #[test]
+    fn hybrid_frost_carrier_refuses_duplicate_enrolled_roster() {
+        let d = hybrid_dealer_4_of_3();
+        let message = b"frost carrier, duplicate roster";
+        let qc = hybrid_sign(&d, &[0, 1, 2], &seeds(3, 29), message).unwrap();
+        // The classical half is genuine.
+        assert!(verify_frost_quorum(&d.frost.group_key, message, &qc.frost));
+        // One ML-DSA key (member 0's), signing once, placed at THREE positions.
+        let one = d.ml_dsa_keys[0].sign(message).expect("ML-DSA signs");
+        let aliased = HybridQC {
+            frost: qc.frost.clone(),
+            pq_sigs: vec![(0, one.clone()), (1, one.clone()), (2, one)],
+        };
+        // A roster that enrols that ONE key at all three of those positions.
+        let mut dup_roster = d.ml_dsa_pubkeys.clone();
+        dup_roster[1] = dup_roster[0].clone();
+        dup_roster[2] = dup_roster[0].clone();
+        assert!(
+            !verify_hybrid_quorum(&d.frost.group_key, &dup_roster, message, &aliased, 3),
+            "a duplicated enrolled roster must refuse the hybrid quorum"
+        );
+        // The honest distinct roster still verifies the honest certificate.
+        assert!(verify_hybrid_quorum(
+            &d.frost.group_key,
+            &d.ml_dsa_pubkeys,
+            message,
+            &qc,
+            3
         ));
     }
 

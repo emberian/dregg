@@ -578,6 +578,19 @@ impl FinalityCert {
         if ml_dsa_committee.len() != committee.len() {
             return 0;
         }
+        // The enrolled ML-DSA keys must also be PAIRWISE DISTINCT: one PQ
+        // authority cannot occupy multiple classical committee slots — the same
+        // distinct-roster contract the federation receipt verifier and the
+        // persist faithful-root append enforce. The whole roster is checked, so
+        // a quorum whose signer subset never touches the duplicated slot still
+        // counts NOTHING.
+        if ml_dsa_committee
+            .iter()
+            .enumerate()
+            .any(|(i, key)| ml_dsa_committee[..i].contains(key))
+        {
+            return 0;
+        }
         let msg = self.signing_message();
         // Map each trusted committee member to its ENROLLED index once per call
         // (the per-vote membership + roster lookup is then O(1)).
@@ -1245,6 +1258,48 @@ mod tests {
         // signer even for the honest quorum.
         assert_eq!(honest.distinct_committee_signers(&trusted, &[]), 0);
         assert!(!honest.has_committee_quorum(&trusted, &[]));
+    }
+
+    /// **THE DISTINCT-ROSTER TOOTH (fold-free unit).** The enrolled ML-DSA roster must be PAIRWISE
+    /// DISTINCT — two distinct committee members cannot share one enrolled PQ authority (the same
+    /// contract the federation receipt verifier and the persist faithful-root append enforce). A
+    /// duplicated tail slot poisons the WHOLE roster, so even an honest quorum whose votes pin only
+    /// distinct, honestly-enrolled keys counts ZERO — never a quorum.
+    #[test]
+    fn committee_quorum_rejects_duplicate_enrolled_pq_keys() {
+        let root = wide_root(0xD0_D0_D0);
+        let n = 4usize; // committee supermajority = 2*4/3 + 1 = 3
+        let trusted = committee(n);
+
+        // Positive control: the same honest 3-of-4 quorum under the DISTINCT
+        // enrolled roster is a genuine quorum.
+        let honest = FinalityCert {
+            votes: (0..3u8).map(|i| signed_vote(i, root, n)).collect(),
+            participant_count: n,
+            finalized_root: root,
+        };
+        assert_eq!(
+            honest.distinct_committee_signers(&trusted, &committee_ml_dsa(n)),
+            3
+        );
+        assert!(honest.has_committee_quorum(&trusted, &committee_ml_dsa(n)));
+
+        // THE DUPLICATED ROSTER: the tail slot re-enrolls member n-2's ML-DSA
+        // key, so members n-2 and n-1 share one PQ authority. Every classical
+        // slot is still distinct, and the quorum's votes (members 0..=n-2) pin
+        // only distinct, honestly-enrolled keys — yet the roster itself is
+        // invalid, so the whole-roster check counts NOTHING.
+        let mut duplicated = committee_ml_dsa(n);
+        duplicated[n - 1] = duplicated[n - 2].clone();
+        assert_eq!(
+            honest.distinct_committee_signers(&trusted, &duplicated),
+            0,
+            "a duplicated enrolled key counts NO signer — even a quorum that never touches the duplicated slot"
+        );
+        assert!(
+            !honest.has_committee_quorum(&trusted, &duplicated),
+            "a duplicated enrolled roster cannot ratify a supermajority"
+        );
     }
 
     /// OPEN permissions so the rotated producer-witness path admits the actor cell without auth

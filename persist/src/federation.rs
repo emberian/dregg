@@ -311,14 +311,21 @@ impl StoredAttestedRoot {
     ///     which the stored (unsigned) `threshold` can raise but never lower
     ///     (an equivocating/duplicated voter counts at most once, so a single
     ///     member cannot inflate the quorum).
+    ///   * the enrolled ML-DSA roster is pairwise **DISTINCT** — no two committee
+    ///     slots share ONE enrolled PQ authority (see the roster paragraph below).
     ///
     /// `ml_dsa_committee` is the genesis-ENROLLED ML-DSA-65 roster, aligned
     /// index-for-index with `committee`. A misaligned/empty roster
     /// (`ml_dsa_committee.len() != committee.len()`) cannot pin any signer's PQ
     /// half, so the whole re-verify REFUSES — never a silent ed25519-only
-    /// downgrade. This is what defeats a quantum adversary who breaks ed25519
-    /// alone: the PQ half must verify under the enrolled key it does not hold,
-    /// mirroring the FROST positional pin.
+    /// downgrade. The roster must ALSO be pairwise DISTINCT: a duplicate
+    /// enrollment (the same ML-DSA key at two positions — the genesis/enrollment
+    /// path checks only length alignment) would let ONE holder of that key fill
+    /// two PQ slots, so a quantum adversary who breaks ed25519 alone could reuse
+    /// the ONE enrolled key's PQ signature at both positions and collapse a
+    /// 2-of-2 quantum bar to 1-of-1. This is what defeats a quantum adversary who
+    /// breaks ed25519 alone: the PQ half must verify under the enrolled key it
+    /// does not hold, mirroring the FROST positional pin.
     ///
     /// This never accepts a root without a genuine >=threshold committee quorum
     /// over the exact finalized state — it closes the liveness fail-close
@@ -346,6 +353,25 @@ impl StoredAttestedRoot {
         // committee, or there is no enrolled key to pin each signer against —
         // fail closed (an EMPTY roster is included here: no silent downgrade).
         if ml_dsa_committee.len() != committee.len() {
+            return false;
+        }
+        // The enrolled ML-DSA roster must ALSO be pairwise DISTINCT: distinct
+        // classical committee slots cannot share ONE enrolled PQ authority.
+        // Without this, a roster that enrols the same ML-DSA key at two positions
+        // lets ONE holder of that key fill two PQ slots — a quantum adversary who
+        // breaks ed25519 forges both classical halves, reuses the ONE enrolled
+        // key's PQ signature at both positions, and a 2-of-2 quantum bar collapses
+        // to 1-of-1. The same distinct-roster contract as the sibling hybrid
+        // carriers `federation::frost::verify_pq_quorum_half` (task/4847) and
+        // `federation::receipt::verify_hybrid_quorum_sigs` (task/4721). Checked
+        // over the WHOLE roster — including positions absent from this root's
+        // quorum — so a quorum drawn only from distinct slots cannot launder a
+        // duplicate enrollment elsewhere in the roster.
+        if ml_dsa_committee
+            .iter()
+            .enumerate()
+            .any(|(i, key)| ml_dsa_committee[..i].contains(key))
+        {
             return false;
         }
         // v4: the vote preimage absorbs THIS root's `receipt_stream_root`, so a
@@ -686,6 +712,24 @@ impl PersistentStore {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(tables::ATTESTED_ROOTS)?;
         Ok(table.len()?)
+    }
+
+    /// The highest-height attested root and the number of stored roots, read
+    /// in ONE transaction without decoding any other row.
+    ///
+    /// Equal to `(all_attested_roots().max_by_key(height), all_attested_roots().len())`
+    /// but O(log n): redb orders the `u64` keys, so the last entry is the
+    /// highest height. Reads the table itself rather than
+    /// `META_LATEST_ROOT_HEIGHT`, so a pruned or legacy store cannot make the
+    /// two disagree.
+    pub fn attested_root_summary(&self) -> Result<(Option<StoredAttestedRoot>, u64)> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::ATTESTED_ROOTS)?;
+        let latest = match table.last()? {
+            Some((_, value)) => Some(postcard::from_bytes(value.value())?),
+            None => None,
+        };
+        Ok((latest, table.len()?))
     }
 
     /// Load all attested roots in height order.

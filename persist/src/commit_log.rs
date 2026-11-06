@@ -3375,6 +3375,8 @@ impl PersistentStore {
     ///
     /// Returns the number of records replayed.
     pub fn rebuild_index_from_log(&self) -> Result<u64> {
+        // Rewrites the commit log / per-cell head tables beyond an append.
+        let _rewrite = self.per_cell_head_cache.begin_rewrite();
         let write_txn = self.db.begin_write()?;
         let mut replayed = 0u64;
         {
@@ -3565,6 +3567,8 @@ impl PersistentStore {
         height: u64,
         anchor: crate::poa_compact_authority::StoredPoaCompactCheckpointAnchorV1,
     ) -> Result<u64> {
+        // Rewrites the commit log / per-cell head tables beyond an append.
+        let _rewrite = self.per_cell_head_cache.begin_rewrite();
         // ── Refuse without a covering checkpoint (the safety guard) ─────────
         // Compaction is sound only when a finalized ledger checkpoint at/above
         // `height` captures the state the to-be-removed records reconstruct.
@@ -3990,6 +3994,8 @@ impl PersistentStore {
         new_cursor: u64,
         publication_guard: Option<(Option<[u8; 32]>, &str, &[u8])>,
     ) -> Result<u64> {
+        // Rewrites the commit log / per-cell head tables beyond an append.
+        let _rewrite = self.per_cell_head_cache.begin_rewrite();
         // ── TRUNCATE the divergent tail `(new_cursor, cursor)` in ONE txn ──────
         let write_txn = self.db.begin_write()?;
         let floor;

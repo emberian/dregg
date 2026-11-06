@@ -442,6 +442,103 @@ fn bind_admission(submitted: &str, local_hash: &str, verdict: &serde_json::Value
     }
 }
 
+/// The refusal that earns the one retry in [`submit_turn`]. A node that keeps
+/// a head per agent says exactly this; a solo node built on 737a69fa4 says
+/// `receipt chain mismatch: <the cipherclerk's reason>`.
+const CHAIN_MISMATCH: &str = "receipt chain mismatch";
+
+/// POST one serialized `SignedTurn` to the client-signed ingress and read the
+/// answer. `Err` is every failure after the bytes left this process — the
+/// connection, an HTTP status, a body that is not JSON — so the bytes may have
+/// arrived and the ANSWER been lost. Each verb says what that means for it.
+async fn post_turn(
+    http: &reqwest::Client,
+    node_url: &str,
+    bearer: &str,
+    bytes: Vec<u8>,
+) -> std::result::Result<serde_json::Value, String> {
+    let resp = http
+        .post(format!("{node_url}/turns/submit"))
+        .header("Content-Type", "application/octet-stream")
+        .header("Authorization", format!("Bearer {bearer}"))
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|e| format!("POST /turns/submit: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("/turns/submit returned {status}"));
+    }
+    resp.json()
+        .await
+        .map_err(|e| format!("cannot parse the submit response: {e}"))
+}
+
+/// What a verb's submission ended as: the hash of the turn this process
+/// signed LAST, and the node's answer about exactly that turn. `Err` in
+/// `answer` is a failure after the POST left this process, which is UNKNOWN.
+struct SubmitOutcome {
+    turn_hash: String,
+    answer: std::result::Result<Admission, String>,
+}
+
+/// Sign `turn`, submit it, and bind the answer to the turn signed.
+///
+/// THE AGENT'S OWN HEAD FIRST, THE NODE-WIDE HEAD ONCE. `turn` arrives
+/// threaded on the agent's own receipt head, which a node that keeps a head per
+/// agent requires. A solo node built on 737a69fa4 keeps ONE chain for the whole
+/// node and appends every client receipt to it, so it refuses the agent's own
+/// head with "receipt chain mismatch" whenever another agent committed since
+/// this agent's last receipt, and for this agent's first turn on a non-empty
+/// chain. That node rolls its ledger back before it answers, so the refused
+/// turn appended nothing and moved nothing. The same turn, re-threaded on the
+/// node-wide head and signed again, can therefore be submitted once more. Only
+/// the envelope is re-signed: the action signature binds the nonce and the
+/// federation, not the head. The new head changes `Turn::hash`, so the retry
+/// is a different turn and its answer is bound to its own hash.
+///
+/// EXACTLY ONCE, AND ONLY ON THAT REFUSAL. Every other refusal, every UNKNOWN,
+/// and the retry's own answer, whatever it is, go back to the caller as they
+/// came. A second retry would only chase a head that every seat moves.
+async fn submit_turn(
+    http: &reqwest::Client,
+    node: &NodeHttpClient,
+    node_url: &str,
+    bearer: &str,
+    clerk: &AgentCipherclerk,
+    turn: &mut Turn,
+    submitted: &str,
+) -> Result<SubmitOutcome> {
+    let mut retried = false;
+    loop {
+        let signed = clerk.sign_turn(turn);
+        let bytes =
+            postcard::to_stdvec(&signed).map_err(|e| err(format!("serialize SignedTurn: {e}")))?;
+        let turn_hash = hex::encode(signed.turn.hash());
+        let answer = post_turn(http, node_url, bearer, bytes)
+            .await
+            .map(|verdict| bind_admission(submitted, &turn_hash, &verdict));
+        match answer {
+            Ok(Admission::Refused(why)) if !retried && why.starts_with(CHAIN_MISMATCH) => {
+                // A decided refusal: nothing moved, so failing to read the
+                // head for the retry is an ordinary error, not UNKNOWN.
+                turn.previous_receipt_hash = node.fetch_chain_head().await.map_err(|e| {
+                    err(format!(
+                        "node refused the {submitted}: {why}; reading the node-wide \
+                         receipt head for the one retry failed: {e}"
+                    ))
+                })?;
+                eprintln!(
+                    "[client-sign] retry: the node refused {submitted} {turn_hash} on the \
+                     agent's own receipt head ({why}); resubmitting once on the node-wide head"
+                );
+                retried = true;
+            }
+            answer => return Ok(SubmitOutcome { turn_hash, answer }),
+        }
+    }
+}
+
 fn json_kind(v: &serde_json::Value) -> &'static str {
     match v {
         serde_json::Value::Null => "null",
@@ -1080,24 +1177,22 @@ async fn cmd_send(f: Flags) -> Result<()> {
             turn.fee, funding.balance
         )));
     }
-    // THE AGENT'S OWN RECEIPT HEAD, not the node-wide tip. The node admits a
-    // signed turn only when `previous_receipt_hash` equals the head of THIS
-    // agent's chain, and the node-wide tip is another seat's receipt whenever
-    // another seat committed since, so threading it is refused with "receipt
-    // chain mismatch" (see `NodeHttpClient::fetch_agent_receipt_head`).
+    // THE AGENT'S OWN RECEIPT HEAD, not the node-wide tip. A node that keeps
+    // a head per agent admits a signed turn only when `previous_receipt_hash`
+    // equals the head of THIS agent's chain, and the node-wide tip is another
+    // seat's receipt whenever another seat committed since, so threading it is
+    // refused with "receipt chain mismatch" (see
+    // `NodeHttpClient::fetch_agent_receipt_head`). An older solo node wants the
+    // node-wide tip instead; `submit_turn` retries once on it.
     turn.previous_receipt_hash = node
         .fetch_agent_receipt_head(&cell)
         .await
         .map_err(|e| err(format!("fetch own-cell receipt head after funding: {e}")))?;
     let bearer = ensure_token(&http, &f.node_url, f.token_file.as_deref()).await?;
 
-    let signed = clerk.sign_turn(&turn);
-    let bytes =
-        postcard::to_stdvec(&signed).map_err(|e| err(format!("serialize SignedTurn: {e}")))?;
-
-    // THE OPERATION'S IDENTITY IS COMPUTED HERE, FROM THE TURN THIS PROCESS
-    // SIGNED, and never taken from the answer — the same rule the transfer
-    // verb follows, applied to its sibling.
+    // THE OPERATION'S IDENTITY IS COMPUTED FROM THE TURN THIS PROCESS SIGNED,
+    // inside `submit_turn`, and never taken from the answer — the same rule the
+    // transfer verb follows, applied to its sibling.
     //
     // WIDENING THE LOOKUP IS WHAT MADE THIS URGENT. Binding to the hash the
     // SERVER reported was always a trust defect, and the old fifty-receipt
@@ -1107,7 +1202,16 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // prints `sent: true` beside THIS turn's topic and payload. A cure for one
     // defect made another reachable, which is the cost of fixing an instance
     // and leaving its sibling.
-    let turn_hash = hex::encode(signed.turn.hash());
+    let SubmitOutcome { turn_hash, answer } = submit_turn(
+        &http,
+        &node,
+        &f.node_url,
+        &bearer,
+        &clerk,
+        &mut turn,
+        "send",
+    )
+    .await?;
     let confirm_url = format!(
         "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
         f.node_url
@@ -1116,41 +1220,13 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // EVERY EXIT FROM HERE ON IS UNKNOWN except a refusal that names this turn,
     // as in `cmd_transfer`. A send moves no value, but it pays a fee, so a blind
     // resend pays twice.
-    let resp = http
-        .post(format!("{}/turns/submit", f.node_url))
-        .header("Content-Type", "application/octet-stream")
-        .header("Authorization", format!("Bearer {bearer}"))
-        .body(bytes)
-        .send()
-        .await
-        .map_err(|e| {
-            unknown_after_submit(
-                format!("POST /turns/submit: {e}"),
-                Submitted::Send,
-                &confirm_url,
-            )
-        })?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(unknown_after_submit(
-            format!("/turns/submit returned {status}"),
-            Submitted::Send,
-            &confirm_url,
-        ));
-    }
-    let verdict: serde_json::Value = resp.json().await.map_err(|e| {
-        unknown_after_submit(
-            format!("cannot parse the submit response: {e}"),
-            Submitted::Send,
-            &confirm_url,
-        )
-    })?;
-    match bind_admission("send", &turn_hash, &verdict) {
-        Admission::Took => {}
-        Admission::Refused(why) => {
+    match answer {
+        Err(why) => return Err(unknown_after_submit(why, Submitted::Send, &confirm_url)),
+        Ok(Admission::Took) => {}
+        Ok(Admission::Refused(why)) => {
             return Err(err(format!("node refused the turn: {why}")));
         }
-        Admission::Unknown(why) => {
+        Ok(Admission::Unknown(why)) => {
             return Err(unknown_after_submit(why, Submitted::Send, &confirm_url));
         }
     }
@@ -1307,74 +1383,46 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
             turn.fee, funding.balance
         )));
     }
-    // The source's OWN receipt head, for the reason `cmd_send` gives.
+    // The source's OWN receipt head, and the one retry on the node-wide head,
+    // for the reasons `cmd_send` and `submit_turn` give.
     turn.previous_receipt_hash = node
         .fetch_agent_receipt_head(&from)
         .await
         .map_err(|e| err(format!("fetch source-cell receipt head after funding: {e}")))?;
     let bearer = ensure_token(&http, &f.node_url, f.token_file.as_deref()).await?;
 
-    let signed = clerk.sign_turn(&turn);
-    let bytes =
-        postcard::to_stdvec(&signed).map_err(|e| err(format!("serialize SignedTurn: {e}")))?;
-
-    // THE OPERATION'S IDENTITY IS COMPUTED HERE, FROM THE TURN THIS PROCESS
-    // SIGNED, and never taken from the answer. `Turn::hash` absorbs the call
-    // forest, which absorbs this Transfer's from, to and amount, so this hex
-    // IS this transfer. Confirming against a hash the SERVER chose would let a
-    // faulty or hostile answer point the confirmation at some other committed
-    // turn and have its receipt printed beside THIS transfer's recipient and
-    // amount — a wrong-operation success, which is the one outcome a value
-    // mover must never produce.
-    let turn_hash = hex::encode(signed.turn.hash());
+    // THE OPERATION'S IDENTITY IS COMPUTED FROM THE TURN THIS PROCESS SIGNED,
+    // inside `submit_turn`, and never taken from the answer. `Turn::hash`
+    // absorbs the call forest, which absorbs this Transfer's from, to and
+    // amount, so this hex IS this transfer. Confirming against a hash the
+    // SERVER chose would let a faulty or hostile answer point the confirmation
+    // at some other committed turn and have its receipt printed beside THIS
+    // transfer's recipient and amount — a wrong-operation success, which is the
+    // one outcome a value mover must never produce. After a retry it is the
+    // RETRIED turn's hash: the first was refused, so it moved nothing.
+    let SubmitOutcome { turn_hash, answer } = submit_turn(
+        &http,
+        &node,
+        &f.node_url,
+        &bearer,
+        &clerk,
+        &mut turn,
+        "transfer",
+    )
+    .await?;
     let confirm_url = format!(
         "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
         f.node_url
     );
-
-    let resp = http
-        .post(format!("{}/turns/submit", f.node_url))
-        .header("Content-Type", "application/octet-stream")
-        .header("Authorization", format!("Bearer {bearer}"))
-        .body(bytes)
-        .send()
-        .await
-        .map_err(|e| {
-            // The bytes may have arrived and the ANSWER been lost. Ambiguous.
-            unknown_after_submit(
-                format!("POST /turns/submit: {e}"),
-                Submitted::Transfer { amount },
-                &confirm_url,
-            )
-        })?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(unknown_after_submit(
-            format!("/turns/submit returned {status}"),
-            Submitted::Transfer { amount },
-            &confirm_url,
-        ));
-    }
-    let verdict: serde_json::Value = resp.json().await.map_err(|e| {
-        unknown_after_submit(
-            format!("cannot parse the submit response: {e}"),
-            Submitted::Transfer { amount },
-            &confirm_url,
-        )
-    })?;
     // THE LOCAL HASH IS WHAT THE RESPONSE IS CHECKED AGAINST, never the other
-    // way round. This is the only place the submit answer is read.
-    match bind_admission("transfer", &turn_hash, &verdict) {
-        Admission::Took => {}
-        Admission::Refused(why) => {
+    // way round. `submit_turn` is the only place the submit answer is read.
+    match answer {
+        Ok(Admission::Took) => {}
+        Ok(Admission::Refused(why)) => {
             return Err(err(format!("node refused the transfer: {why}")));
         }
-        Admission::Unknown(why) => {
-            return Err(unknown_after_submit(
-                why,
-                Submitted::Transfer { amount },
-                &confirm_url,
-            ));
+        Ok(Admission::Unknown(why)) | Err(why) => {
+            return Err(unknown_after_submit(why, Submitted::Transfer { amount }, &confirm_url));
         }
     }
     eprintln!("[client-sign] transfer admitted: {turn_hash}; confirming commitment...");
@@ -1511,8 +1559,13 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use dregg_cell::CellId;
     use dregg_turn::{Action, Authorization, CallForest, DelegationMode, turn::Turn};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::Mutex;
 
     use super::*;
 
@@ -2405,6 +2458,328 @@ mod tests {
         );
     }
 
+    // ── the composed transfer path, against a node that answers ─────────────
+    //
+    // The two roots below live in cmd_transfer's COMPOSITION and no helper
+    // test can reach them: one is which hash the confirmation binds to, the
+    // other is how an exit after the POST is reported. Both need a submission
+    // and a poll, so this mock serves the whole path — /status, the cell, the
+    // chain head, the faucet, /turns/submit and the exact-hash receipt query —
+    // and DREGG_HOME points the profile loader at a temp identity so no real
+    // key is touched and nothing is signed against a live node.
+    //
+    // The cell's own receipt head and the node-wide tip are DIFFERENT here, and
+    // /turns/submit refuses any turn that does not thread the cell's own head,
+    // as a node built after 7ea63fe5d does. So every arm that reaches the POST
+    // also checks which head the signer threaded; the real admission check is
+    // driven in the node crate's `client_threads_the_agent_scoped_receipt_head`.
+    // `Submit::OldSoloNode` is the exception: it admits only the node-wide tip,
+    // as a solo node built on 737a69fa4 does.
+
+    /// The source cell's own receipt head, served on `GET /api/cell/{id}`.
+    const AGENT_HEAD: [u8; 32] = [0xa5; 32];
+    /// The node-wide tip, served on `GET /api/receipts`: another agent's receipt.
+    const NODE_TIP: [u8; 32] = [0xc3; 32];
+
+    fn submitted(body: &[u8]) -> dregg_sdk::SignedTurn {
+        postcard::from_bytes(body).expect("the client must send a postcard SignedTurn")
+    }
+
+    #[derive(Clone)]
+    enum Submit {
+        /// Behave like the node: decode the postcard turn and echo ITS hash.
+        Honest,
+        /// Accept, and report a DIFFERENT turn's hash.
+        ReportsAnotherTurn,
+        /// Accept, and report no hash at all.
+        ReportsNoHash,
+        /// Answer with an HTTP status rather than a verdict.
+        HttpError,
+        /// Refuse explicitly, NAMING THIS TURN — the one post-submit answer
+        /// that is not UNKNOWN.
+        Refuses,
+        /// Take the turn honestly, then fail the receipt query. The submission
+        /// landed and the poll cannot say what became of it.
+        HonestThenPollFails,
+        /// A solo node built on 737a69fa4: ONE receipt chain for the whole
+        /// node, so it commits a turn threading the node-wide tip and refuses
+        /// the agent's own head with its "receipt chain mismatch: ..." text.
+        OldSoloNode,
+        /// Refuse every turn with "receipt chain mismatch", whatever it
+        /// threads, as a node whose head moves between every read would.
+        MismatchEveryTime,
+    }
+
+    struct TransferNode {
+        submit: Submit,
+        /// The receipts the exact-hash query serves, by turn hash.
+        receipted: Mutex<Vec<String>>,
+        /// The `previous_receipt_hash` of every submitted turn, in POST order.
+        posted: Mutex<Vec<Option<[u8; 32]>>>,
+    }
+
+    async fn transfer_connection(
+        mut socket: tokio::net::TcpStream,
+        node: Arc<TransferNode>,
+    ) {
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let header_end = loop {
+            let Ok(n) = socket.read(&mut chunk).await else { return };
+            if n == 0 {
+                return;
+            }
+            request.extend_from_slice(&chunk[..n]);
+            if let Some(i) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]).to_string();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                    .and_then(|n| n.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let Ok(n) = socket.read(&mut chunk).await else { return };
+            if n == 0 {
+                return;
+            }
+            request.extend_from_slice(&chunk[..n]);
+        }
+        let line = headers.lines().next().unwrap_or_default().to_string();
+        let body = request[header_end..header_end + content_length].to_vec();
+
+        let mut code = 200;
+        let response = if line.starts_with("GET /status") {
+            serde_json::json!({"federation_mode": "solo", "public_key": "11".repeat(32)})
+        } else if line.starts_with("GET /api/cell/") {
+            serde_json::json!({
+                "found": true, "balance": 1_000_000, "nonce": 0,
+                "last_receipt_hash": hex::encode(AGENT_HEAD),
+            })
+        } else if line.starts_with("GET /api/receipts") {
+            serde_json::json!([{
+                "chain_index": 9, "chain_head": true,
+                "receipt_hash": hex::encode(NODE_TIP), "turn_hash": "77".repeat(32),
+            }])
+        } else if line.starts_with("POST /api/faucet") {
+            serde_json::json!({"success": true, "turn_hash": "22".repeat(32)})
+        } else if line.starts_with("POST /turns/submit") {
+            let turn = submitted(&body).turn;
+            let prev = turn.previous_receipt_hash;
+            // Every refusal below names the turn it refused, which is what the
+            // node's own reject path does.
+            let hash = hex::encode(turn.hash());
+            node.posted.lock().await.push(prev);
+            // The one head this node admits, if any.
+            let admits = match node.submit {
+                Submit::OldSoloNode => Some(NODE_TIP),
+                Submit::MismatchEveryTime => None,
+                _ => Some(AGENT_HEAD),
+            };
+            if admits.is_none() || prev != admits {
+                let error = if matches!(node.submit, Submit::OldSoloNode) {
+                    // The old node's text: its own prefix around the cipherclerk's.
+                    format!(
+                        "receipt chain mismatch: receipt chain mismatch: cipherclerk head = \
+                         {admits:?}, receipt's prev = {prev:?}"
+                    )
+                } else {
+                    "receipt chain mismatch".to_string()
+                };
+                serde_json::json!({"accepted": false, "turn_hash": hash, "error": error})
+            } else {
+                match node.submit.clone() {
+                    Submit::HttpError => {
+                        code = 503;
+                        serde_json::json!({"error": "upstream unavailable"})
+                    }
+                    Submit::Refuses => serde_json::json!({
+                        "accepted": false, "turn_hash": hash, "error": "insufficient balance"
+                    }),
+                    Submit::ReportsNoHash => serde_json::json!({"accepted": true}),
+                    Submit::ReportsAnotherTurn => {
+                        let other = "33".repeat(32);
+                        node.receipted.lock().await.push(other.clone());
+                        serde_json::json!({"accepted": true, "turn_hash": other})
+                    }
+                    Submit::Honest | Submit::HonestThenPollFails | Submit::OldSoloNode => {
+                        node.receipted.lock().await.push(hash.clone());
+                        serde_json::json!({"accepted": true, "turn_hash": hash})
+                    }
+                    Submit::MismatchEveryTime => unreachable!("it admits no head"),
+                }
+            }
+        } else if line.starts_with("GET /api/starbridge/receipts")
+            && matches!(node.submit, Submit::HonestThenPollFails)
+        {
+            code = 500;
+            serde_json::json!({"error": "receipt index unavailable"})
+        } else if line.starts_with("GET /api/starbridge/receipts") {
+            let want = line
+                .split("turn_hash=")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or_default()
+                .to_string();
+            let held = node.receipted.lock().await.clone();
+            if held.iter().any(|h| h.eq_ignore_ascii_case(&want)) {
+                serde_json::json!([{
+                    "chain_index": 3, "chain_head": true,
+                    "receipt_hash": "44".repeat(32),
+                    "turn_hash": want, "finality": "tentative",
+                }])
+            } else {
+                serde_json::json!([])
+            }
+        } else {
+            code = 404;
+            serde_json::json!({"error": "not found"})
+        };
+        let bytes = serde_json::to_vec(&response).unwrap();
+        let head = format!(
+            "HTTP/1.1 {code} OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            bytes.len()
+        );
+        let _ = socket.write_all(head.as_bytes()).await;
+        let _ = socket.write_all(&bytes).await;
+    }
+
+    /// A temp DREGG_HOME with one profile, and a node speaking the whole path.
+    async fn transfer_fixture(
+        submit: Submit,
+    ) -> Option<(
+        String,
+        String,
+        tokio::task::JoinHandle<()>,
+        Arc<TransferNode>,
+    )> {
+        // The same install `main` performs, keygen included: creating the
+        // temp identity below IS a keygen.
+        //
+        // MEASURED ON THIS BUILD: all three come back ExportAbsent, so the
+        // linked archive exports no verified core and dregg-pq ABORTS the
+        // process the moment a key is generated or a turn is signed. These
+        // arms therefore cannot run here, and they say so rather than being
+        // deleted or quietly passing: the composition they cover is the one a
+        // helper cannot reach, so a skipped arm is a known gap and a removed
+        // one is an invisible gap. They run unchanged wherever the archive
+        // exports the cores. Forcing them through by accepting the unaudited
+        // primitive is NOT done: a test is not a reason to turn off an audit
+        // gate, and the gate is reporting a real degradation of this build.
+        let sign = dregg_sdk::install_verified_mldsa_sign_core_real();
+        let keygen = dregg_sdk::install_verified_mldsa_keygen_core_real();
+        dregg_sdk::install_verified_mldsa_verify_core();
+        if !cores_are_healthy(sign, keygen) {
+            return None;
+        }
+        let node = Arc::new(TransferNode {
+            submit,
+            receipted: Mutex::new(Vec::new()),
+            posted: Mutex::new(Vec::new()),
+        });
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let shared = node.clone();
+        let handle = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                tokio::spawn(transfer_connection(socket, shared.clone()));
+            }
+        });
+        let home = std::env::temp_dir().join(format!(
+            "dregg-client-sign-test-{}",
+            listener_port(&url)
+        ));
+        let _ = std::fs::create_dir_all(home.join("profiles"));
+        Some((url, home.to_string_lossy().into_owned(), handle, node))
+    }
+
+    fn listener_port(url: &str) -> String {
+        url.rsplit(':').next().unwrap_or("0").to_string()
+    }
+
+    /// The bearer is read from a FILE, never argv, so the fixture writes the
+    /// one the mock node accepts and hands the client its path.
+    fn transfer_flags(url: &str, to: &str) -> Flags {
+        let bearer = std::env::temp_dir().join(format!(
+            "dregg-client-sign-test-bearer-{}",
+            listener_port(url)
+        ));
+        std::fs::write(&bearer, "test-bearer").expect("write the fixture's bearer file");
+        Flags {
+            node_url: url.trim_end_matches('/').to_string(),
+            profile: Some("hc2-transfer-test".to_string()),
+            token_file: Some(bearer.to_string_lossy().into_owned()),
+            topic: "client-sign".to_string(),
+            to: Some(to.to_string()),
+            fund: 5000,
+            amount: Some(100),
+            accept_tentative: true,
+            rest: Vec::new(),
+        }
+    }
+
+    /// Which verb a composed run drives.
+    #[derive(Clone, Copy)]
+    enum Verb {
+        Transfer,
+        Send,
+    }
+
+    /// The whole composed run, with the process-global env seams held for the
+    /// duration. `DREGG_HOME` is what keeps this off any real identity.
+    /// Returns the verb's result and the head each POST threaded, in order.
+    /// `None` when this build cannot run the composed path at all — see
+    /// `transfer_fixture`. Every arm below reports the skip rather than
+    /// passing on it, so a gap stays visible.
+    async fn run_verb(submit: Submit, verb: Verb) -> Option<(Result<()>, Vec<Option<[u8; 32]>>)> {
+        // DREGG_HOME AND DREGG_PROFILE ARE PROCESS-GLOBAL, so these arms are
+        // serialized: cargo runs tests on threads, and two of them setting the
+        // same variables would make each one read the other's identity.
+        static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _held = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (url, home, handle, node) = transfer_fixture(submit).await?;
+        unsafe {
+            std::env::set_var("DREGG_HOME", &home);
+            std::env::set_var("DREGG_PROFILE", "hc2-transfer-test");
+        }
+        let _ = dregg_sdk::profiles::create("hc2-transfer-test");
+        let to = "55".repeat(32);
+        let out = match verb {
+            Verb::Transfer => cmd_transfer(transfer_flags(&url, &to)).await,
+            Verb::Send => {
+                cmd_send(Flags {
+                    to: None,
+                    amount: None,
+                    rest: vec!["retry probe".to_string()],
+                    ..transfer_flags(&url, &to)
+                })
+                .await
+            }
+        };
+        handle.abort();
+        let posted = node.posted.lock().await.clone();
+        Some((out, posted))
+    }
+
+    async fn run_transfer(submit: Submit) -> Option<Result<()>> {
+        run_verb(submit, Verb::Transfer).await.map(|(out, _)| out)
+    }
+
+    /// The one place the skip is announced, so a reader of the output sees
+    /// WHICH property went unexercised and why.
+    fn skipped(what: &str) {
+        eprintln!(
+            "SKIPPED {what}: this build's linked archive exports no verified \
+             ML-DSA core, so signing a turn would abort the process. The arm \
+             is unchanged and runs wherever the cores are exported."
+        );
+    }
+
     #[test]
     fn the_bearer_file_is_read_trimmed_and_an_empty_one_is_an_error() {
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -2673,6 +3048,106 @@ mod tests {
             assert!(
                 !text.contains("UNKNOWN"),
                 "a decided refusal is not UNKNOWN: {text}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_poll_that_fails_after_the_turn_landed_is_UNKNOWN() {
+        // THE POLE THE REVIEW ASKED FOR: the submission reached the node and
+        // the receipt query then failed, so this process cannot say whether
+        // the transfer committed. Exiting on it without the warning is what
+        // invites the caller to send again.
+        let Some(out) = run_transfer(Submit::HonestThenPollFails).await else {
+            return skipped("the uncertain-poll pole");
+        };
+        let e = out.expect_err("a failed poll must not report success");
+        let text = e.to_string();
+        assert!(text.contains("UNKNOWN, not a refusal"), "{text}");
+        assert!(text.contains("Do NOT resubmit"), "{text}");
+        assert!(text.contains("starbridge/receipts"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn an_explicit_refusal_is_the_one_post_submit_answer_that_is_not_unknown() {
+        // MUST-MISS beside the arm above: the node executed and rejected, so
+        // nothing moved and there is nothing to re-read. Telling the caller
+        // this might have committed would be its own false alarm.
+        let Some(out) = run_transfer(Submit::Refuses).await else {
+            return skipped("the decided-refusal must-miss");
+        };
+        let e = out.expect_err("a refused transfer must not succeed");
+        let text = e.to_string();
+        assert!(text.contains("node refused the transfer"), "{text}");
+        assert!(!text.contains("UNKNOWN"), "a decided refusal is not UNKNOWN: {text}");
+    }
+
+    // ── the one retry on the node-wide head, through both verbs ─────────────
+
+    #[tokio::test]
+    async fn an_old_solo_node_commits_the_one_retry_on_the_node_wide_head() {
+        // THE OLD DEPLOYED NODE refuses the agent's own head and commits the
+        // node-wide tip. Each verb threads its own head first, then retries
+        // exactly once on the tip, and confirms the RETRIED turn: the mock
+        // receipts only the turn it admitted, so a confirmation bound to the
+        // first, refused turn would time out instead of succeeding.
+        for verb in [Verb::Transfer, Verb::Send] {
+            let Some((out, posted)) = run_verb(Submit::OldSoloNode, verb).await else {
+                return skipped("the old-solo-node retry");
+            };
+            out.expect("the retry on the node-wide head must commit");
+            assert_eq!(posted, vec![Some(AGENT_HEAD), Some(NODE_TIP)]);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_own_head_that_commits_and_any_other_refusal_are_never_retried() {
+        // MUST-MISS beside the arm above. A node that keeps a head per agent
+        // commits the first attempt, and a refusal for any other reason is
+        // final: either way there is exactly one POST, on the agent's own head.
+        for verb in [Verb::Transfer, Verb::Send] {
+            let Some((out, posted)) = run_verb(Submit::Honest, verb).await else {
+                return skipped("the no-retry must-miss");
+            };
+            out.expect("a node that admits the own head commits the first attempt");
+            assert_eq!(posted, vec![Some(AGENT_HEAD)]);
+
+            let Some((out, posted)) = run_verb(Submit::Refuses, verb).await else {
+                return skipped("the no-retry must-miss");
+            };
+            let text = out
+                .expect_err("a refused turn must not succeed")
+                .to_string();
+            assert!(text.contains("insufficient balance"), "{text}");
+            assert_eq!(
+                posted,
+                vec![Some(AGENT_HEAD)],
+                "another refusal is never retried"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_second_chain_mismatch_is_surfaced_and_not_retried_again() {
+        // EXACTLY ONCE. The retry's own mismatch goes back to the caller as the
+        // decided refusal it is: nothing moved, so it is not UNKNOWN.
+        for verb in [Verb::Transfer, Verb::Send] {
+            let Some((out, posted)) = run_verb(Submit::MismatchEveryTime, verb).await else {
+                return skipped("the one-retry bound");
+            };
+            let text = out
+                .expect_err("a refused retry must not succeed")
+                .to_string();
+            assert!(text.contains("node refused the"), "{text}");
+            assert!(text.contains("receipt chain mismatch"), "{text}");
+            assert!(
+                !text.contains("UNKNOWN"),
+                "a decided refusal is not UNKNOWN: {text}"
+            );
+            assert_eq!(
+                posted,
+                vec![Some(AGENT_HEAD), Some(NODE_TIP)],
+                "exactly one retry"
             );
         }
     }
