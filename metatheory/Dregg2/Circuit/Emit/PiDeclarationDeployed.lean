@@ -40,13 +40,16 @@ leaving the slot silent. The conversion is a caveat-region flag day and is writt
 ## Cost note (why one member and not 57)
 
 `manifestAdmitted` recomputes `forcedCols` — a `flatMap refs2` over all 302 constraints — once per
-declaration. On this member that is affordable in the kernel. Routing the whole registry through
-it is a `native_decide`-scale job and belongs with the emit that regenerates the registry, not
-here.
+declaration. The facts about this member's concrete descriptor are checked by compiled evaluation
+(`native_decide`; ember, 2026-11-06: concrete data by the compiler, general theorems by the kernel);
+elaborator `decide` over them peaked this module at 14.6 GB. Routing the whole registry through
+the gate belongs with the emit that regenerates the registry, not here.
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}.
+The concrete facts rest on their own `<theorem>._native.native_decide.ax_1_1`, and
+`turn_hash_slot_admits_any_value` inherits `burnDecl_admitted`'s; all are pinned with
+`#assert_compiled`.
 -/
 import Dregg2.Circuit.Emit.PiDeclaration
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
@@ -74,7 +77,7 @@ def burnM : EffectVmDescriptor2 :=
 /-- Non-vacuity: the lookup RESOLVED. Without this the manifest below could be admitted against
 the empty fallback (`piCount = 0` makes `piSlotsCovered` trivially true), which is the shape a
 registry rename would silently produce. -/
-theorem burnM_resolved : burnM.piCount = 43 ∧ burnM.constraints.length = 302 := by decide
+theorem burnM_resolved : burnM.piCount = 43 ∧ burnM.constraints.length = 302 := by native_decide
 
 /-! ### The reasons, in one place.
 
@@ -186,7 +189,7 @@ def burnDecl : PiManifest :=
 /-- ⚑ **THE ADOPTION.** The gate accepts the deployed member under this declaration — so the
 mechanism is applied to a real emitted object, not only to a fixture. Every `.bound` entry below
 was CHECKED against the descriptor's own constraint list and against `forcedCols`. -/
-theorem burnDecl_admitted : manifestAdmitted burnM burnDecl = true := by decide
+theorem burnDecl_admitted : manifestAdmitted burnM burnDecl = true := by native_decide
 
 /-- The descriptor, routed through the gate. `withPiManifest_eq` makes this `rfl`-equal to the
 member the registry already carries: adopting the gate moves no emitted byte. -/
@@ -200,21 +203,21 @@ theorem burnMDeclared_eq : burnMDeclared = burnM := rfl
 /-- The producer's obligations, DERIVED — 15 `(slot, row, column)` triples. This is the fourth
 source of the four-source problem replaced by a projection of the first. -/
 theorem burnDecl_producer_obligations_count :
-    (producerObligations burnDecl).length = 15 := by decide
+    (producerObligations burnDecl).length = 15 := by native_decide
 
 /-- The transcript-only class, counted and REPORTED rather than silently permitted. -/
 theorem burnDecl_transcript_only_count :
-    (transcriptOnlySlots burnDecl).length = 28 := by decide
+    (transcriptOnlySlots burnDecl).length = 28 := by native_decide
 
 /-- Every transcript-only entry carries a non-empty reason. (`declAdmitted` already forces this;
 stated separately so the count above cannot be met by 28 empty strings.) -/
 theorem burnDecl_reasons_are_written :
-    (transcriptOnlySlots burnDecl).all (fun e => !e.2.2.isEmpty) = true := by decide
+    (transcriptOnlySlots burnDecl).all (fun e => !e.2.2.isEmpty) = true := by native_decide
 
 /-- 15 + 28 = 43: the two classes PARTITION what this member publishes, with no residual. -/
 theorem burnDecl_partitions :
     (producerObligations burnDecl).length + (transcriptOnlySlots burnDecl).length
-      = burnM.piCount := by decide
+      = burnM.piCount := by native_decide
 
 /-- ⚑ **`TURN_HASH` is in the transcript-only class, by name.** The one fact this whole lane is
 about, stated where it cannot be lost: on the deployed burn member, the four felts a stranger
@@ -222,7 +225,7 @@ would read to learn WHICH TURN THIS IS are read by no constraint. -/
 theorem turn_hash_is_transcript_only :
     ((transcriptOnlySlots burnDecl).map (fun e => e.1)).filter
         (fun k => k == 26 || k == 27 || k == 28 || k == 29)
-      = [26, 27, 28, 29] := by decide
+      = [26, 27, 28, 29] := by native_decide
 
 /-- …and therefore the AIR admits ANY value in `PI[26]` — the machine-checked cost of the class,
 instantiated on a deployed member. -/
@@ -233,13 +236,13 @@ theorem turn_hash_slot_admits_any_value (hash : List ℤ → ℤ) (v : ℤ)
   transcriptOnly_admits_any_value (slot := "TURN_HASH[0]") (reason := rTurnHash) hash v
     burnDecl_admitted (by decide) h
 
-#assert_axioms burnM_resolved
-#assert_axioms burnDecl_admitted
-#assert_axioms burnDecl_producer_obligations_count
-#assert_axioms burnDecl_transcript_only_count
-#assert_axioms burnDecl_reasons_are_written
-#assert_axioms burnDecl_partitions
-#assert_axioms turn_hash_is_transcript_only
-#assert_axioms turn_hash_slot_admits_any_value
+#assert_compiled burnM_resolved
+#assert_compiled burnDecl_admitted
+#assert_compiled burnDecl_producer_obligations_count
+#assert_compiled burnDecl_transcript_only_count
+#assert_compiled burnDecl_reasons_are_written
+#assert_compiled burnDecl_partitions
+#assert_compiled turn_hash_is_transcript_only
+#assert_compiled turn_hash_slot_admits_any_value
 
 end Dregg2.Circuit.Emit.PiDeclarationDeployed
