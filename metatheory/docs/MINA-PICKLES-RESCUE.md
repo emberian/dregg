@@ -31,8 +31,15 @@ descriptors emitted through `EmitByName.lean` into `circuit/descriptors/by-name/
 came from; they stay.
 
 Nothing in the two modules measured so far is a retirement candidate: both emit descriptors that
-shipped Rust code includes by path. The per-module table (lines, emitted descriptors, Lean importers,
-Rust consumers split src/test, last touched) will be added here when the census script finishes.
+shipped Rust code includes by path. The full table is in the appendix at the end.
+
+How to read the census columns: `E.` is `Dregg2.Circuit.Emit.`, `B.` is `Dregg2.Bridge.`. "In default
+build" means reachable by imports from the lakefile's `defaultTargets` roots (166 of 179). "Rust
+consumers" lists crates whose sources include one of the module's `EmitByName` descriptor files
+(`src:` or `test:`); "named in" means the module name appears in that crate's comments or strings
+only. 17 modules emit through `EmitByName.lean`; the rest feed the dedicated emitters
+(`MinaBodyBitsEmit.lean`, `EmitCommitStages.lean`, `MinaChainEmit.lean` and the others at the
+`metatheory/` root) or are imported on the path to them. Taken 2026-11-06 from the working tree.
 
 ## Measured: the two modules over 12 GB
 
@@ -113,3 +120,187 @@ rescues, in order of preference:
 2. Where evaluation is the honest proof, let the kernel do it: `decide +kernel`.
 3. Where several theorems re-evaluate the same expensive value, evaluate it once into a named
    equation with a literal and rewrite the others with it.
+
+## Appendix: census, 2026-11-06
+
+| module | lines | Lean importers | in default build | last touched | descriptors via `EmitByName` | Rust consumers |
+|---|---|---|---|---|---|---|
+| `B.MinaAccountOpening` | 563 | 2 | yes | 2026-07-31 |  | named in src:dregg-lean-ffi |
+| `B.MinaAccountOpeningRealBlock` | 114 | 1 | yes | 2026-07-30 |  | named in src:dregg-lean-ffi |
+| `B.MinaBinprot` | 924 | 3 | yes | 2026-07-30 |  | named in src:bridge, src:dregg-lean-ffi, src:metatheory, src:turn |
+| `B.MinaBinprotRealBlock` | 464 | 2 | yes | 2026-07-30 |  | named in src:bridge, src:dregg-lean-ffi |
+| `B.MinaChainSelection` | 1038 | 5 | yes | 2026-07-29 |  | named in src:bridge, src:dregg-lean-ffi, src:metatheory |
+| `B.MinaChainSelectionDifferential` | 140 | 1 | yes | 2026-07-29 |  | named in src:metatheory |
+| `B.MinaCheckpoint` | 605 | 1 | yes | 2026-07-30 |  | named in src:bridge, src:dregg-lean-ffi |
+| `B.MinaForkChoiceGate` | 384 | 4 | yes | 2026-07-30 |  | named in src:bridge, src:dregg-lean-ffi, src:turn |
+| `B.MinaMultiBlockConformance` | 656 | 3 | yes | 2026-08-02 |  |  |
+| `B.MinaPackInjective` | 482 | 2 | yes | 2026-08-08 |  | named in test:circuit |
+| `B.MinaSelectionVectors` | 287 | 2 | yes | 2026-07-29 |  | named in src:metatheory |
+| `B.MinaSlidingWindow` | 1557 | 2 | yes | 2026-07-29 |  | named in src:bridge, src:dregg-lean-ffi |
+| `B.MinaStateHashDerive` | 537 | 7 | yes | 2026-07-30 |  | named in src:bridge, src:circuit, src:dregg-lean-ffi, src:turn, test:circuit, test:circuit-prove |
+| `B.MinaStateHashPackPrice` | 234 | 3 | yes | 2026-08-09 |  | named in test:circuit-prove |
+| `B.MinaStateHashRealBlock` | 263 | 2 | yes | 2026-07-30 |  | named in test:circuit-prove |
+| `B.MinaStateHashWordGate` | 1116 | 2 | yes | 2026-08-02 |  | named in src:bridge, src:dregg-lean-ffi |
+| `B.MinaStepPrevCommitments` | 327 | 2 | yes | 2026-08-10 |  | named in src:metatheory |
+| `B.MinaVrfThreshold` | 418 | 1 | yes | 2026-07-29 |  |  |
+| `B.MinaWrapChallenges` | 438 | 3 | yes | 2026-07-30 |  | named in src:bridge, src:dregg-lean-ffi |
+| `B.MinaWrapChallengesWeld` | 237 | 2 | yes | 2026-08-10 |  | named in src:bridge |
+| `B.MinaWrapDeferred` | 465 | 4 | yes | 2026-07-30 |  | named in src:metatheory |
+| `B.MinaWrapDeferredWeld` | 633 | 2 | yes | 2026-08-02 |  | named in src:metatheory |
+| `B.MinaWrapFtEval0` | 599 | 8 | yes | 2026-07-30 |  | named in src:dregg-lean-ffi, src:metatheory |
+| `B.MinaWrapFtEval0Weld` | 778 | 2 | yes | 2026-08-10 |  | named in src:bridge |
+| `B.MinaWrapPublicInput` | 424 | 2 | yes | 2026-07-30 |  | named in src:bridge |
+| `B.MinaWrapSg` | 263 | 2 | yes | 2026-07-30 |  | named in src:metatheory |
+| `B.MinaWrapSgWeld` | 248 | 1 | no | 2026-07-30 |  | named in src:metatheory |
+| `B.PicklesProofChainGate` | 489 | 3 | yes | 2026-07-29 |  | named in src:bridge, src:dregg-lean-ffi |
+| `B.PicklesR3BranchDataDiff` | 133 | 1 | yes | 2026-07-31 |  |  |
+| `B.PicklesStatementDiff` | 346 | 1 | yes | 2026-08-01 |  |  |
+| `B.PicklesStepStatementDiff` | 242 | 1 | yes | 2026-08-01 |  |  |
+| `B.PicklesWrapShapeGate` | 481 | 2 | yes | 2026-08-08 |  | named in src:bridge, src:dregg-lean-ffi |
+| `E.KimchiArena` | 375 | 3 | yes | 2026-08-05 |  |  |
+| `E.KimchiAssertEqual` | 753 | 4 | yes | 2026-08-05 |  | named in src:metatheory |
+| `E.KimchiCellCommit` | 709 | 3 | yes | 2026-07-30 |  |  |
+| `E.KimchiCircuitJson` | 261 | 12 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.KimchiComposeMSM` | 229 | 2 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.KimchiComposeStepFragment` | 712 | 4 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.KimchiConditionalCircuit` | 418 | 1 | yes | 2026-08-05 |  |  |
+| `E.KimchiCustomGates` | 175 | 8 | yes | 2026-08-01 |  |  |
+| `E.KimchiDag` | 2448 | 1 | yes | 2026-07-28 |  | named in test:circuit-prove |
+| `E.KimchiEffectIncNonce` | 699 | 3 | yes | 2026-07-30 |  |  |
+| `E.KimchiGadgets` | 455 | 3 | yes | 2026-08-05 |  |  |
+| `E.KimchiLower` | 631 | 5 | yes | 2026-07-28 |  | named in test:circuit-prove |
+| `E.KimchiPartition` | 248 | 1 | yes | 2026-07-28 |  |  |
+| `E.KimchiPlacement` | 679 | 21 | yes | 2026-08-05 |  | named in src:metatheory, src:tools |
+| `E.KimchiPoseidon2` | 939 | 3 | yes | 2026-07-31 |  |  |
+| `E.KimchiPoseidonGate` | 378 | 1 | yes | 2026-07-27 |  | named in src:bridge, src:metatheory |
+| `E.KimchiPreimageCircuit` | 541 | 3 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.KimchiRealProofGate` | 410 | 1 | yes | 2026-08-02 |  | named in src:metatheory |
+| `E.KimchiRecursionGate` | 356 | 1 | yes | 2026-07-28 |  |  |
+| `E.KimchiRender` | 128 | 1 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.KimchiRenderCompleteAdd` | 208 | 7 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.KimchiRenderEndoMul` | 202 | 5 | yes | 2026-08-06 |  |  |
+| `E.KimchiRenderEndoMulScalar` | 157 | 4 | yes | 2026-08-06 |  |  |
+| `E.KimchiRenderPoseidon` | 160 | 5 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.KimchiRenderPublicInput` | 343 | 4 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.KimchiRenderVarBaseMul` | 196 | 6 | yes | 2026-08-06 |  |  |
+| `E.KimchiRootAirEval` | 592 | 1 | yes | 2026-07-28 |  |  |
+| `E.KimchiStepMain` | 1188 | 2 | yes | 2026-08-09 |  | named in src:metatheory |
+| `E.KimchiStepMainCore` | 6879 | 5 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiStepMainField` | 166 | 2 | yes | 2026-08-02 |  |  |
+| `E.KimchiStepMainFixture` | 1065 | 26 | yes | 2026-08-09 |  | named in src:metatheory |
+| `E.KimchiStepMainPins01` | 413 | 1 | yes | 2026-08-09 |  | named in src:metatheory |
+| `E.KimchiStepMainPins02` | 269 | 1 | yes | 2026-08-03 |  |  |
+| `E.KimchiStepMainPins03` | 280 | 1 | yes | 2026-08-09 |  |  |
+| `E.KimchiStepMainPins04` | 271 | 1 | yes | 2026-08-07 |  |  |
+| `E.KimchiStepMainPins05` | 228 | 1 | yes | 2026-08-09 |  |  |
+| `E.KimchiStepMainPins06` | 285 | 1 | yes | 2026-08-09 |  |  |
+| `E.KimchiStepMainPins07` | 289 | 1 | yes | 2026-08-03 |  |  |
+| `E.KimchiStepMainPins08` | 236 | 1 | yes | 2026-08-11 |  |  |
+| `E.KimchiStepMainPins09` | 271 | 1 | yes | 2026-08-06 |  |  |
+| `E.KimchiStepMainPins10` | 296 | 1 | yes | 2026-08-07 |  |  |
+| `E.KimchiStepMainPins11` | 250 | 1 | yes | 2026-08-06 |  |  |
+| `E.KimchiStepMainPins12` | 310 | 1 | yes | 2026-08-11 |  |  |
+| `E.KimchiStepMainPins13` | 633 | 1 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiStepMainPins14` | 272 | 1 | yes | 2026-08-07 |  |  |
+| `E.KimchiStepMainPins15` | 188 | 1 | yes | 2026-08-03 |  |  |
+| `E.KimchiStepMainPins16` | 280 | 1 | yes | 2026-08-03 |  |  |
+| `E.KimchiStepMainPins17` | 272 | 1 | yes | 2026-08-07 |  |  |
+| `E.KimchiStepMainPins18` | 307 | 1 | yes | 2026-08-03 |  |  |
+| `E.KimchiStepMainPins19` | 397 | 2 | yes | 2026-08-11 |  |  |
+| `E.KimchiStepMainPins19d` | 328 | 1 | yes | 2026-08-11 |  |  |
+| `E.KimchiStepProverChoice` | 567 | 1 | yes | 2026-08-06 |  |  |
+| `E.KimchiStepStatementPins` | 381 | 1 | yes | 2026-08-10 |  | named in src:metatheory |
+| `E.KimchiStepWrapChain` | 1402 | 3 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiStepWrapChainFixture` | 279 | 7 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiStepWrapChainKey` | 64 | 1 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiTarget` | 487 | 4 | yes | 2026-07-28 |  |  |
+| `E.KimchiTyp` | 1214 | 2 | yes | 2026-08-06 |  |  |
+| `E.KimchiVerify` | 1516 | 23 | yes | 2026-08-08 |  | named in src:bridge, src:dregg-lean-ffi, src:metatheory |
+| `E.KimchiWrapFinalizeSpongeGate` | 395 | 1 | yes | 2026-08-07 |  | named in src:metatheory |
+| `E.KimchiWrapHackDigest` | 333 | 2 | yes | 2026-08-07 |  | named in src:metatheory |
+| `E.KimchiWrapMain` | 843 | 6 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiWrapMainCore` | 6302 | 5 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiWrapMainField` | 1735 | 1 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiWrapMainFixture` | 219 | 13 | yes | 2026-08-06 |  |  |
+| `E.KimchiWrapMainPins01` | 342 | 1 | yes | 2026-08-07 |  |  |
+| `E.KimchiWrapMainPins02` | 65 | 1 | yes | 2026-08-05 |  |  |
+| `E.KimchiWrapMainPins03` | 227 | 1 | yes | 2026-08-05 |  |  |
+| `E.KimchiWrapMainPins04` | 270 | 1 | yes | 2026-08-06 |  |  |
+| `E.KimchiWrapMainPins05` | 173 | 1 | yes | 2026-08-06 |  |  |
+| `E.KimchiWrapMainPins06` | 122 | 1 | yes | 2026-08-05 |  |  |
+| `E.KimchiWrapMainPins07` | 154 | 1 | yes | 2026-08-06 |  |  |
+| `E.KimchiWrapMainPins08` | 221 | 1 | yes | 2026-08-07 |  |  |
+| `E.KimchiWrapMainPins09` | 489 | 1 | yes | 2026-08-07 |  |  |
+| `E.KimchiWrapMainPins10` | 299 | 1 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiWrapMainPins11` | 391 | 1 | yes | 2026-08-07 |  |  |
+| `E.KimchiWrapMainPins12` | 862 | 1 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.KimchiWrapProverChoice` | 269 | 1 | yes | 2026-08-08 |  |  |
+| `E.MinaAccumulatorAir` | 2326 | 7 | yes | 2026-08-11 | `mina-accumulator-seg.json`, `mina-accumulator-final.json`, `mina-accumulator-routed.json` | src:circuit-prove, test:circuit · named in src:bridge, src:circuit, src:recursion-verify, test:circuit-prove |
+| `E.MinaAccumulatorSrsDemo` | 189 | 2 | no | 2026-08-07 | `mina-accumulator-srs.json`, `mina-accumulator-head.json`, `mina-accumulator-head-genesis.json` | test:circuit |
+| `E.MinaBlockFqTranscript` | 562 | 5 | yes | 2026-08-10 | `pasta-fq-wraplink.json` | src:turn, test:circuit, test:circuit-prove · named in src:circuit-prove, test:recursion-verify |
+| `E.MinaBodyHashRelimbAir` | 1037 | 4 | yes | 2026-08-11 | `dregg-mina-bodyhash-relimb-v1.json` | test:circuit, test:circuit-prove |
+| `E.MinaBodyHashRelimbSeams` | 665 | 3 | yes | 2026-08-11 |  | named in src:circuit-prove, test:circuit, test:circuit-prove |
+| `E.MinaBodyPreimageBitsAir` | 911 | 4 | yes | 2026-11-06 | `dregg-mina-body-preimage-bits-v1.json` | src:circuit-prove, test:circuit · named in src:turn |
+| `E.MinaBodyPreimageSeams` | 658 | 3 | yes | 2026-08-11 |  | named in src:circuit-prove, src:turn, test:circuit-prove |
+| `E.MinaFinalizeScalars` | 506 | 2 | yes | 2026-08-09 |  | named in test:circuit |
+| `E.MinaFinalizeScalarsProg` | 896 | 2 | yes | 2026-08-09 |  | named in test:circuit |
+| `E.MinaFinalizeScalarsWeld` | 257 | 2 | yes | 2026-08-09 |  |  |
+| `E.MinaFixtureEmit` | 239 | 2 | yes | 2026-08-05 | `mina-fixture.json` | src:circuit, test:circuit |
+| `E.MinaOpeningCheckWeld` | 314 | 1 | yes | 2026-08-03 |  |  |
+| `E.MinaPhase1Chain` | 611 | 6 | yes | 2026-08-10 | `pasta-fp-chainlink.json` | src:circuit, src:circuit-prove, test:circuit, test:circuit-prove |
+| `E.MinaPhase1TapeBinding` | 458 | 2 | yes | 2026-08-06 |  | named in test:circuit |
+| `E.MinaPhase2Chain` | 393 | 6 | yes | 2026-08-10 | `pasta-fq-chainlink.json` | src:circuit, src:circuit-prove, test:circuit, test:circuit-prove · named in src:turn, test:recursion-verify |
+| `E.MinaPreambleLegsAir` | 643 | 3 | yes | 2026-08-10 | `dregg-mina-preamble-legs-v1.json` | test:circuit |
+| `E.MinaRealBlockGate` | 299 | 7 | yes | 2026-07-28 |  | named in src:bridge, src:dregg-lean-ffi, src:metatheory, test:circuit, test:circuit-prove, test:turn |
+| `E.MinaRealBlockTranscript` | 489 | 9 | yes | 2026-07-28 |  | named in src:bridge, src:dregg-lean-ffi, src:metatheory, test:circuit |
+| `E.MinaSeams` | 1442 | 4 | yes | 2026-08-11 |  | named in src:circuit-prove, src:turn, test:circuit, test:circuit-prove |
+| `E.MinaStateBodyHashChain` | 629 | 4 | yes | 2026-08-07 |  | named in src:circuit-prove, src:turn, test:circuit, test:circuit-prove |
+| `E.MinaStateQuery` | 795 | 2 | yes | 2026-07-28 |  |  |
+| `E.MinaStepOwnAccumulator` | 47 | 1 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.MinaStepSrsG` | 65688 | 2 | no | 2026-08-05 |  |  |
+| `E.MinaStepSrsLagrange` | 175 | 2 | yes | 2026-08-04 |  | named in src:metatheory |
+| `E.MinaStepSrsLagrangePin` | 88 | 1 | yes | 2026-08-03 |  |  |
+| `E.MinaWrapAggregationData` | 147 | 5 | yes | 2026-08-09 |  |  |
+| `E.MinaWrapAggregationGate` | 80 | 3 | yes | 2026-08-09 |  | named in test:circuit |
+| `E.MinaWrapClosingAir` | 1264 | 3 | yes | 2026-08-11 |  | named in src:circuit-prove, test:circuit, test:circuit-prove |
+| `E.MinaWrapClosingScheduled` | 713 | 2 | yes | 2026-08-10 |  |  |
+| `E.MinaWrapCommitMachine` | 1077 | 2 | yes | 2026-08-06 |  | named in test:circuit |
+| `E.MinaWrapCommitStages` | 1111 | 4 | yes | 2026-08-10 | `mina-commit-pub.json`, `mina-commit-f.json`, `mina-commit-ft.json`, `mina-commit-agg.json`, `mina-commit-ladder.json`, `mina-commit-xi.json` | test:circuit |
+| `E.MinaWrapConjunctionAir` | 1594 | 7 | yes | 2026-08-10 | `mina-wrap-conjunction.json`, `mina-wrap-conjunction-unthreaded.json` | src:circuit, src:circuit-prove, test:circuit · named in src:turn, test:circuit-prove |
+| `E.MinaWrapDeferredWords` | 404 | 2 | yes | 2026-08-11 |  | named in src:metatheory |
+| `E.MinaWrapGroupData` | 145 | 3 | yes | 2026-08-09 |  |  |
+| `E.MinaWrapGroupGate` | 177 | 4 | yes | 2026-08-09 |  | named in src:bridge, src:metatheory, test:circuit |
+| `E.MinaWrapHackDummySg` | 124 | 3 | yes | 2026-08-10 |  | named in src:metatheory |
+| `E.MinaWrapOpeningGate` | 384 | 3 | yes | 2026-08-10 |  | named in src:bridge, src:circuit, src:circuit-prove, src:turn, test:circuit, test:circuit-prove |
+| `E.MinaWrapOpeningGateData` | 366 | 10 | yes | 2026-08-10 |  |  |
+| `E.MinaWrapOpeningSched` | 757 | 1 | no | 2026-08-10 |  | named in src:circuit-prove, test:circuit, test:circuit-prove |
+| `E.MinaWrapOpeningWeld` | 44 | 1 | yes | 2026-08-10 |  |  |
+| `E.MinaWrapOwnVerifierKey` | 93 | 2 | yes | 2026-08-10 |  | named in src:metatheory |
+| `E.MinaWrapProofDeferredWords` | 176 | 2 | yes | 2026-08-07 |  | named in src:metatheory |
+| `E.MinaWrapPublicCommData` | 186 | 6 | yes | 2026-08-09 |  |  |
+| `E.MinaWrapPublicCommGate` | 169 | 3 | yes | 2026-08-09 |  | named in src:bridge, src:metatheory, test:circuit |
+| `E.MinaWrapPublicInputFromHeader` | 104 | 2 | yes | 2026-07-29 |  | named in src:bridge, src:dregg-lean-ffi |
+| `E.MinaWrapSgChunk0` | 61 | 0 | no | 2026-07-28 |  |  |
+| `E.MinaWrapSgChunk1` | 61 | 0 | no | 2026-07-28 |  |  |
+| `E.MinaWrapSgChunk2` | 61 | 0 | no | 2026-07-28 |  |  |
+| `E.MinaWrapSgChunk3` | 61 | 0 | no | 2026-07-28 |  |  |
+| `E.MinaWrapSgCore` | 205 | 4 | no | 2026-08-10 |  | named in src:bridge |
+| `E.MinaWrapSgParts` | 40 | 2 | no | 2026-07-28 |  | named in src:metatheory |
+| `E.MinaWrapSrsG` | 32838 | 8 | yes | 2026-07-28 |  | named in src:bridge, src:circuit, src:metatheory, test:bridge, test:circuit |
+| `E.MinaWrapVerifierAir` | 1323 | 6 | yes | 2026-08-10 | `pasta-alu-sound.json`, `pasta-alu-fq-sound.json`, `pasta-alu-sz.json`, `pasta-alu-fq-sz.json` | test:circuit, test:circuit-prove · named in src:circuit-prove, src:turn |
+| `E.MinaWrapVerifierProgram` | 1270 | 4 | yes | 2026-08-10 | `pasta-sbox-prog.json`, `pasta-sbox-prog-1k.json` | test:circuit |
+| `E.MinaWrapVerifierSponge` | 1240 | 6 | yes | 2026-08-10 | `pasta-fq-round.json`, `pasta-fq-absorb.json` | test:circuit · named in test:circuit-prove |
+| `E.MinaWrapVerifierSpongeFp` | 688 | 4 | yes | 2026-08-10 | `pasta-fp-round.json`, `pasta-fp-absorb.json` | src:circuit, src:turn, test:circuit, test:circuit-prove · named in src:circuit-prove |
+| `E.MinaWrapVkDigestChain` | 755 | 2 | yes | 2026-08-06 |  | named in src:bridge, src:circuit-prove, test:circuit |
+| `E.MinaWrapXiAggregateMsm` | 448 | 3 | no | 2026-08-09 | `mina-xi-aggregate-msm.json` | test:circuit |
+| `E.MinaWrapXiBasisWeld` | 391 | 0 | no | 2026-08-05 |  | named in test:circuit |
+| `E.MinaWrapXiEndoLift` | 506 | 5 | yes | 2026-08-10 | `mina-xi-endo-lift.json` | src:circuit-prove, test:circuit · named in test:circuit-prove |
+| `E.MinaWrapXiScalarWeld` | 276 | 1 | no | 2026-08-05 |  | named in test:circuit |
+| `E.PicklesDerivePlonkRealGate` | 164 | 1 | yes | 2026-07-28 |  |  |
+| `E.PicklesFinalize` | 915 | 5 | yes | 2026-07-28 |  | named in src:metatheory |
+| `E.PicklesRecursion` | 1298 | 7 | yes | 2026-07-28 |  | named in src:bridge, src:metatheory |
+| `E.PicklesStepStatement` | 424 | 1 | yes | 2026-08-06 |  | named in src:metatheory |
+| `E.PicklesTranscriptBinding` | 808 | 2 | yes | 2026-07-28 |  | named in test:circuit-prove |
+| `E.PicklesVerifyPreamble` | 763 | 3 | yes | 2026-08-08 |  | named in src:bridge |
+| `Dregg2.MinaBridgeGuards` | 109 | 0 | yes | 2026-08-08 |  |  |
+| `Dregg2.PicklesSynthesis` | 185 | 0 | yes | 2026-08-06 |  |  |
