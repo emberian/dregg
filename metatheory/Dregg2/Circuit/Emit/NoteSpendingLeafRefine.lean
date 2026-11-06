@@ -415,7 +415,7 @@ theorem noteSpend_satisfied2_spec
     have hw := H (VmConstraint2.windowGate ⟨contBodyW, true⟩) (by in_constraints)
     have hg : contBodyW.eval env ≡ 0 [ZMOD 2013265921] := hw rfl
     have hb : contBodyW.eval env = env.nxt 0 - env.loc 5 := by
-      simp only [contBodyW, WindowExpr.eval]; ring
+      simp only [contBodyW, GateExpr.gThread_window, WindowExpr.eval]; ring
     rw [hb, Int.modEq_zero_iff_dvd] at hg
     obtain ⟨k, hk⟩ := hg
     obtain ⟨_, _⟩ := hcanon.cnxt0; obtain ⟨_, _⟩ := hcanon.c5; omega
