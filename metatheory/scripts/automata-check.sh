@@ -113,6 +113,9 @@ Dregg2/Circuit/Emit/BorrowChainEmit.lean
 Dregg2/Circuit/Emit/CaveatAdmissionEmit.lean
 Dregg2/Circuit/Emit/DecoLeafEmit.lean
 Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean
+Dregg2/Circuit/Emit/BinaryMembershipEmit.lean
+Dregg2/Circuit/Emit/BinaryMembershipRefine.lean
+Dregg2/Circuit/Emit/BinaryMembershipWitness.lean
 Dregg2/Circuit/Emit/TinyAutomataLanesK.lean
 Dregg2/Circuit/Emit/DerivationEmit.lean
 Dregg2/Datalog/FixpointCert.lean

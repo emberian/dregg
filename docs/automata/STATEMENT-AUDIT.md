@@ -9,7 +9,7 @@ the whole initiative complete.
 [READ] The manifest covers the Datalog exact-count/stratified/join/safe/budget statements, generic
 content-bound DFA kernel, table interpretation boundaries, committed LRAT and bisimulation,
 full-width route binding, the **actual table/weld/Dyck record consumers**, cached compilation,
-certified union, the actual whole-word/absence compiler wrappers, and generated range, borrow, tuple, solvency, caveat and payment AIR, plus the served note-spend wrapper. Each scoped review names its
+certified union, the actual whole-word/absence compiler wrappers, and generated range, borrow, tuple, solvency, caveat and payment AIR, plus the served note-spend wrapper and binary membership. Each scoped review names its
 statement, witness, falsifier and limitations. All local module roots participate in dependency
 identity checks, including `Metatheory`; a dependency hash does **not** claim a semantic review of
 every theorem in that file.
@@ -93,6 +93,16 @@ owning-family pin after refreshing the copy's digest. The final injected-axiom c
   witness invoking its member theorem. The same one-row forge accepts under the old descriptor
   and is refused by the consumed fixed descriptor. Its positive path has depth zero; the abstract
   permutation and scalar Merkle fold are not a deployed Faithful8-tree security claim.
+
+- Binary membership review covers the actual ten-constraint descriptor and its complete
+  SAT-to-path refinement: Boolean directions, ordered children and the hash lookup hold on every
+  row, including the final row. Continuity and the two public pins yield the fold over exactly the
+  trace's path. A nonconstant reference hash supplies a full-premise mixed-direction two-level
+  witness (leaf 3, root 33). The same canonical attack with sound chip rows passes a deliberately
+  weakened seven-constraint control, advertises root 27 for that unchanged path, and fails the
+  full descriptor. The migrated Rust already enforced all ten constraints; this preserves semantics,
+  rather than repairing a newly discovered runtime omission. A named depth-eight/two-row witness preserves the distinction between the
+  descriptor label and actual path length; neither depth admission nor full-width security follows.
 
 ## Boundaries retained
 

@@ -940,17 +940,17 @@ pub fn descriptor_names_for_kind(kind: PredicateKind) -> &'static [&'static str]
 /// decodes, so a `None` here always means an unknown predicate.
 ///
 /// The depth-GENERAL Merkle-membership family is dispatched by the `merkle-membership::poseidon2-
-/// binary-general-depth{N}` name form (parsed to a depth and built by
-/// [`membership_descriptor_of_depth`]); every other name maps to a byte-pinned emitted golden.
+/// binary-general-depth{N}` name form. [`membership_descriptor_of_depth`] parses a Lean-emitted
+/// template and changes only its name; the label does not enforce actual proof height.
 pub fn descriptor_by_name(name: &str) -> Option<EffectVmDescriptor2> {
-    // The depth-general BINARY membership family (built, not parsed).
+    // The depth-general BINARY family: parsed Lean template with a depth-qualified name.
     if let Some(depth_str) = name.strip_prefix(MEMBERSHIP_GENERAL_NAME_PREFIX) {
         return depth_str
             .parse::<usize>()
             .ok()
             .map(membership_descriptor_of_depth);
     }
-    // The depth-general 4-ARY membership family (built, not parsed) — byte-faithful to the deployed
+    // The depth-general 4-ARY membership family (parsed Lean template) — byte-faithful to the deployed
     // `hash_4_to_1`-chained root (`MEMBERSHIP_GENERAL_NAME_PREFIX` is `…-binary-…`, disjoint).
     if let Some(depth_str) = name.strip_prefix(MEMBERSHIP_4ARY_NAME_PREFIX) {
         return depth_str

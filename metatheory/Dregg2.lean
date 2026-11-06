@@ -1840,6 +1840,9 @@ import Dregg2.Automata.DfaBoundReference -- executable presentation of the gener
 import Dregg2.Automata.CertificateStatementAudit -- exact LRAT and bisimulation audit evidence
 import Dregg2.Automata.EmitterStatementAudit -- actual generated-constraint witnesses and falsifiers
 import Dregg2.Circuit.Emit.NoteSpendingLeafServed -- consumed fixed note-spend descriptor and inhabited member theorem
+import Dregg2.Circuit.Emit.BinaryMembershipEmit -- generated depth-uniform binary membership block
+import Dregg2.Circuit.Emit.BinaryMembershipRefine -- actual-height SAT-to-path theorem
+import Dregg2.Circuit.Emit.BinaryMembershipWitness -- jointly inhabited premises and last-row control
 #floor_ratchet
 #teeth_wired
 

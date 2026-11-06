@@ -64,6 +64,7 @@ import Dregg2.Circuit.Emit.FieldDeltaRangeEmit
 import Dregg2.Circuit.Emit.MerkleMembership4aryEmit
 import Dregg2.Circuit.Emit.MerkleMembership4aryWideEmit
 import Dregg2.Circuit.Emit.MerkleMembershipEmit
+import Dregg2.Circuit.Emit.BinaryMembershipEmit
 import Dregg2.Circuit.Emit.MinaFixtureEmit
 import Dregg2.Circuit.Emit.LightClientMinaAir
 import Dregg2.Circuit.Emit.LightClientMinaLinkAir
@@ -282,6 +283,8 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
       Dregg2.Circuit.Emit.MerkleMembership4aryWideEmit.merkleMembership4aryWideDesc)
   , ("merkle-membership-depth2.json",
       Dregg2.Circuit.Emit.MerkleMembershipEmit.merkleMembershipDesc)
+  , ("merkle-membership-binary-general.json",
+      Dregg2.Circuit.Emit.BinaryMembershipEmit.templateDesc)
   , ("mina-fixture.json",
       Dregg2.Circuit.Emit.MinaFixtureEmit.minaFixtureDesc)
   , ("note-spend-leaf.json",
@@ -836,7 +839,7 @@ Both directions are gated outside Lean:
 -- the same edit as the row, which is the discipline the six notes above were each paid for.
 -- ⚑ 133 = 132 + `attested-automaton-map-committed-weld8-v1.json`. Rows and pin are one atom.
 set_option maxRecDepth 8000 in
-theorem byNameDescriptors_length : byNameDescriptors.length = 144 := rfl
+theorem byNameDescriptors_length : byNameDescriptors.length = 145 := rfl
 
 def main : IO Unit := do
   for (file, d) in byNameDescriptors do

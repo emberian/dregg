@@ -336,6 +336,22 @@
         "Dregg2.Circuit.Emit.NoteSpendingLeafServed.fixed_implies_base",
         "Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_spend_spec"
       ]
+    },
+    {
+      "id": "generated-binary-membership",
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipRefine.lean",
+      "statement": "Dregg2.Circuit.Emit.BinaryMembershipRefine.membership_sat_refines",
+      "witness": "Dregg2.Circuit.Emit.BinaryMembershipWitness.witness_refines",
+      "falsifier": "Dregg2.Circuit.Emit.BinaryMembershipWitness.last_row_separation",
+      "witness_scope": "checker-premise",
+      "supporting_evidence": [
+        "Dregg2.Circuit.Emit.BinaryMembershipWitness.jointly_inhabited",
+        "Dregg2.Circuit.Emit.BinaryMembershipWitness.referenceHash_nonconstant",
+        "Dregg2.Circuit.Emit.BinaryMembershipWitness.depth_label_does_not_bind_height",
+        "Dregg2.Circuit.Emit.BinaryMembershipEmit.constraints_depth_uniform",
+        "Dregg2.Circuit.Emit.BinaryMembershipEmit.shape"
+      ],
+      "scope": "The ten-constraint descriptor binds the public leaf and root through every row of the actual binary path, under nonempty trace, canonical row/public values and scalar ChipTableSound. Every direction is Boolean; transition plus last-row boundaries enforce ordered children even on the final row. A nonconstant reference compression and mixed-direction two-row trace jointly inhabit all premises and invoke the main theorem. The identical canonical attack has a sound chip table, passes a deliberately weakened seven-constraint control and advertises the wrong root; the full ten-constraint descriptor refuses it. The migrated Rust already enforced these three final-row boundaries: this is a semantics-preserving generator cutover, not a newly repaired runtime omission. Depth changes only the descriptor name: the same two rows satisfy depth eight. The public commitment remains one felt despite seven auxiliary chip lanes; no depth-admission, cryptographic collision resistance, leaf uniqueness or full-eight-lane claim follows. The Rust parser consumer and generated JSON are identity-bound artifacts, not a proved codec or STARK extraction bridge."
     }
   ],
   "axiom_pins": {
@@ -1238,9 +1254,71 @@
       "source": "metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean",
       "report": "info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.repair_separates_same_trace' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
       "command": "repair_separates_same_trace"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipEmit.shape": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipEmit.shape' depends on axioms: [propext, Quot.sound]",
+      "command": "shape"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipEmit.constraints_depth_uniform": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipEmit.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipEmit.constraints_depth_uniform' depends on axioms: [propext, Quot.sound]",
+      "command": "constraints_depth_uniform"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipRefine.row_combine": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipRefine.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipRefine.row_combine' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "row_combine"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipRefine.membership_sat_refines": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipRefine.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipRefine.membership_sat_refines' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "membership_sat_refines"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipWitness.referenceHash_nonconstant": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipWitness.referenceHash_nonconstant' depends on axioms: [propext]",
+      "command": "referenceHash_nonconstant"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipWitness.last_row_separation": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipWitness.last_row_separation' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "last_row_separation"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipWitness.jointly_inhabited": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipWitness.jointly_inhabited' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "jointly_inhabited"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipWitness.witness_refines": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipWitness.witness_refines' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "witness_refines"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipWitness.witness_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipWitness.witness_satisfies' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "witness_satisfies"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipWitness.weak_attack_satisfies": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipWitness.weak_attack_satisfies' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "weak_attack_satisfies"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipWitness.strong_attack_refused": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipWitness.strong_attack_refused' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "strong_attack_refused"
+    },
+    "Dregg2.Circuit.Emit.BinaryMembershipWitness.depth_label_does_not_bind_height": {
+      "source": "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean",
+      "report": "info: 'Dregg2.Circuit.Emit.BinaryMembershipWitness.depth_label_does_not_bind_height' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "depth_label_does_not_bind_height"
     }
   },
   "source_sha256": {
+    "circuit/descriptors/by-name/merkle-membership-binary-general.json": "9a18890aa8d4516cb3f32f1422c573e4c8dfb920d0083aee143d3e47966b6c49",
+    "circuit/src/membership_descriptor_general.rs": "1554b6e94922cefd5540c61ce817bd30773fcc7a28557bb05a2f96e0780729cb",
     "docs/automata/compiler-wrapper-smoke.json": "a2f895d00ea04a8e4054fb76fdb665fed0880dafe2f7d69394c234e4f73992c6",
     "metatheory/Dregg2/Authority/Blocklace.lean": "29a163262d54c6dde7b784cfceaad9f3d34126275805692a1eca82040318cbf2",
     "metatheory/Dregg2/Authority/CDT.lean": "c726884d1541b337a94ba86f6d804784bc1f57c1435a2196f0781315fa4b49e7",
@@ -1272,6 +1350,8 @@
     "metatheory/Dregg2/Circuit/DeployedMapDenotation.lean": "bb2933b39f5b91234605d2a9f591a76f6bd0612f5dc94342d0f9918bec139ef0",
     "metatheory/Dregg2/Circuit/DescriptorIR2.lean": "df58b2f0755982cbaa5859dbe1bd1d558e3c1c728ebe2467927ec3c265191b4d",
     "metatheory/Dregg2/Circuit/EffectAirIR.lean": "e56f6971d8a5fad3b3653cdad92099044bcd7143a2d21879a7d0158d5adca9fc",
+    "metatheory/Dregg2/Circuit/Emit/AdjacencyMembershipEmit.lean": "25912968092cb71177dded0345b559dbee524e0b904e3c916d6d19813af27b40",
+    "metatheory/Dregg2/Circuit/Emit/AdjacencyMembershipRefine.lean": "e566c91c92c188df188e6c41a4ecb28c3dbdedda72fca88397fe2b15ca561bdc",
     "metatheory/Dregg2/Circuit/Emit/AirBuilder.lean": "6107c8127e5988210d4d94be260707e1b3ec2edfa7506b9b5a422fdab1ea52a7",
     "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonBound.lean": "cf2c22562be0011d9a5b5dd9c2cf361796b3488f1f4187cc973dde06dcfd1d33",
     "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonEmit.lean": "524e8f4008e224e0f00b2197dc50669038cb15781ac47a8f2fe46ecd384af45e",
@@ -1279,6 +1359,9 @@
     "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8.lean": "169467132dbba98f9473cd52bdbc7572af7a90710aa89b9ff47bcab17547f0d4",
     "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonRoute8Witness.lean": "f7df53de5c7879acb0a1f30073056385d63a98662462e572882b8d0cde68907e",
     "metatheory/Dregg2/Circuit/Emit/AttestedAutomatonWeld8.lean": "4f0fcb9b577b940f89b38c796ad8370e817a0784c3a97cb8e9bb71ed5dc3403c",
+    "metatheory/Dregg2/Circuit/Emit/BinaryMembershipEmit.lean": "00ab68d46f9232110491b44e926001fcc2037f2f536b0c6bc83f5ffdfd8e0e8d",
+    "metatheory/Dregg2/Circuit/Emit/BinaryMembershipRefine.lean": "ee6265cc69fb2c9b81f35f1a3d4813ca7ab00000077da9c2cafe111311908879",
+    "metatheory/Dregg2/Circuit/Emit/BinaryMembershipWitness.lean": "3405de64aaeae4f62c014febbb0d029f325711c2ee77ac2f5b10b50166deed76",
     "metatheory/Dregg2/Circuit/Emit/BorrowChainEmit.lean": "8e0eb56009544ca36b4d5e95ebc45f526c80a1a1ee7be70851922d51e728384e",
     "metatheory/Dregg2/Circuit/Emit/BoundedFactEmit.lean": "dab114eeae739d55f46cf90b62d70eae794f06801fca4c36dc066384242289a5",
     "metatheory/Dregg2/Circuit/Emit/CaveatAdmissionEmit.lean": "a3c3e4524006d421cbc7c085ebf6e832b74ce4ae422846d87b036c95d7bbf08e",
@@ -1473,6 +1556,8 @@
   "supporting_sources": [
     "metatheory/Policyc.lean",
     "metatheory/scripts/automata-compiler-smoke.lean",
-    "docs/automata/compiler-wrapper-smoke.json"
+    "docs/automata/compiler-wrapper-smoke.json",
+    "circuit/src/membership_descriptor_general.rs",
+    "circuit/descriptors/by-name/merkle-membership-binary-general.json"
   ]
 }
