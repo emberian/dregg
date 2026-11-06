@@ -5,6 +5,22 @@
   This is the first stone of the compiler-scale pivot (PANCAKE-IN-LEAN-DESIGN.md):
   model Pancake in Lean, prove the emitter, one named faithfulness assumption A1.
 
+  STATUS (2026-11-06): this file is no longer what the ladder's theorems are
+  stated against, and A1 is no longer assumed. CakeML's panSem `evaluate` is
+  exported mechanically from HOL4 into `PanSem/` (DreggNet p3-bridge), and
+  `Pancake/LadderPanSem.lean` states the rungs about that export. This file is
+  retained as a PROVED LAYER: `Pancake/PanSemAgree.lean` proves `evaluate_agree`
+  (this semantics and the export agree on every SCOPED program), and records as
+  theorems the two places where this transcription is not panSem:
+   * `assign` to an unbound local continues here; panSem returns `Error`
+     (`sem_lean_assign_unscoped_disagrees`; the "vacuous" valid-value check
+     below is vacuous for the shape, not for the binding);
+   * `writeByteArray` with an unmapped head byte keeps the tail writes here;
+     panSem's `write_bytearray` discards them (`sem_lean_write_unmapped_disagrees`;
+     unreachable from `ExtCall`).
+  The transcription notes below are kept as written; where they say "faithful",
+  read "agrees with the export on scoped programs, by theorem".
+
   EVERY clause below is transcribed CLAUSE-FOR-CLAUSE from the CakeML sources on
   hbox (`~/src/cakeml/pancake/...`) at CakeML `ed31510b3`. Each word / signed /
   endianness / byte choice is annotated with its panSem source. This annotation
@@ -374,7 +390,8 @@ def PancakeSem (oracle : Oracle σ) : PancakeProg → PancakeState σ →
       (r.1, { r.2 with locals := resVar r.2.locals v (s.locals v) })
     | none => (some .error, s)
   | .assign v e, s =>
-    -- `Assign Local v src`: valid-value check is vacuous (`One`); write `set_var`.
+    -- `Assign Local v src`: valid-value check vacuous for the shape (`One`) but NOT
+    -- for the binding: panSem errors on an unbound `v` (PanSemAgree). Write `set_var`.
     match eval s e with
     | some val => (none, { s with locals := setLocal s.locals v val })
     | none => (some .error, s)
