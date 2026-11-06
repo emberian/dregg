@@ -19,12 +19,9 @@ serde_json = "1"
 hex = "0.4"
 anyhow = "1"
 
-# ── [patch] sections copied VERBATIM from the root Cargo.toml (paths re-rooted to ../);
+# ── [patch] sections copied from the root Cargo.toml, keeping only the patches this crate's graph uses (cargo reported the others unused; their paths need not exist in a sparse checkout) (paths re-rooted to ../);
 # [patch] applies only from the workspace root, and this crate is its own workspace.
 [patch."https://github.com/o1-labs/proof-systems"]
-poly-commitment = { git = "https://github.com/emberian/proof-systems", rev = "c5305e63df5474c8cca81f7951264ea6aafe81db" }
-mina-poseidon = { git = "https://github.com/emberian/proof-systems", rev = "c5305e63df5474c8cca81f7951264ea6aafe81db" }
-mina-curves = { git = "https://github.com/emberian/proof-systems", rev = "c5305e63df5474c8cca81f7951264ea6aafe81db" }
 # ─────────────────────────────────────────────────────────────────────────────
 [patch."https://github.com/Plonky3/Plonky3"]
 # Exact 82cfad73 `p3-fri` source with one additive backend-injection seam.  All
@@ -61,33 +58,25 @@ p3-challenger = { path = "../../vendor/plonky3-challenger-82cfad73" }
 # `fhe_math::rq::Poly`'s own public exact round-trip codec and the rebuilt share
 # is the struct the in-process path already builds. All BFV/mbfv protocol code is
 # byte-identical to 0.1.1. See vendor/fhe-dregg/Cargo.toml for the full delta.
-fhe = { path = "../../vendor/fhe-dregg" }
 # Exact curve25519-dalek 4.1.3 source with one additive, feature-gated
 # qualification API for canonical extended-coordinate GPU parity. All normal
 # dalek arithmetic and encodings remain upstream-identical.
 curve25519-dalek = { path = "../../vendor/curve25519-dalek-dregg" }
 # ark-serialize fork — the `serde_with` feature `dregg-hints` needs (emberian/algebra).
-ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
-ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
 # The two zed-forked async-* crates the gpui dep tree's `[patch.crates-io]` pins
 # (gpui's vendored `util` calls `smol::process::Child::adopt_raw_pid`, present only
 # on these forks). Inert when the gpui-bearing crates are not in the build graph.
-async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 # Vendored pathfinder_simd 0.5.6 (gpui → font-kit → pathfinder): scalar-path build
 # (the nightly portable-SIMD intrinsics were removed from current toolchains). The
 # one canonical vendored copy lives under starbridge-v2.
-pathfinder_simd = { path = "../../starbridge-v2/vendor/pathfinder_simd" }
 # stylo `ToCss`-derive fork (emberian/stylo@ember-nightly-fix) — pins the `?`
 # residual error type to `core::fmt::Error`, defeating the serde_fmt ambiguity in
 # the full cockpit graph (web-shell → servo → stylo). Inert outside that graph.
-stylo_derive = { git = "https://github.com/emberian/stylo", rev = "abc53ac61" }
 # servo-paint SWGL fork (servo-render's libservo path): WebRenderOptions
 # `clear_caches_with_quads: false` so SWGL's DepthFunc assert does not SIGABRT.
-servo-paint = { path = "../../servo-render/vendor/servo-paint" }
 # servo-net forbidden-schemes fork (servo-render's libservo path): allow an
 # embedder ProtocolHandler for http/https (the cap-gated byte socket).
-servo-net = { path = "../../servo-render/vendor/servo-net" }
 
 # The gpui fork (emberian/zed) resolves directly from git at the rev pinned in
 # starbridge-v2/Cargo.toml (the offscreen/headless wgpu renderer the render-capture
