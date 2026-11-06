@@ -132,6 +132,102 @@ impl Dfa {
     pub fn table_size_bytes(&self) -> usize {
         self.transitions.len() * std::mem::size_of::<StateId>()
     }
+
+    /// The minimal DFA for the same language, in a canonical numbering.
+    ///
+    /// Moore partition refinement (start from {accepting, rejecting}; split
+    /// classes by the classes of their 256 successors until stable), then the
+    /// quotient restricted to classes reachable from the start. Numbering: the
+    /// class of state 0 (the dead state, by the crate convention, which this
+    /// requires) is 0, the start class is 1, and the rest follow in
+    /// breadth-first order from the start over bytes `0..=255`. Two DFAs for the
+    /// same language therefore minimize to the identical table. An empty
+    /// language gives the two-state table every compiler here emits for it
+    /// (dead 0, non-accepting start 1).
+    pub fn minimize(&self) -> Dfa {
+        let n = self.num_states as usize;
+        let dead_row = &self.transitions[..256];
+        assert!(
+            dead_row.iter().all(|&t| t == DEAD_STATE) && !self.accepting.contains(&DEAD_STATE),
+            "Dfa::minimize: state 0 must be the dead state"
+        );
+        let mut class: Vec<u32> = (0..n)
+            .map(|s| u32::from(self.accepting.contains(&(s as StateId))))
+            .collect();
+        let mut classes = class.iter().collect::<BTreeSet<_>>().len();
+        loop {
+            let mut sig: HashMap<Vec<u32>, u32> = HashMap::new();
+            let mut next = vec![0u32; n];
+            for (s, slot) in next.iter_mut().enumerate() {
+                let mut key = Vec::with_capacity(257);
+                key.push(class[s]);
+                key.extend(
+                    self.transitions[s * 256..(s + 1) * 256]
+                        .iter()
+                        .map(|&t| class[t as usize]),
+                );
+                let len = sig.len() as u32;
+                *slot = *sig.entry(key).or_insert(len);
+            }
+            class = next;
+            if sig.len() == classes {
+                break;
+            }
+            classes = sig.len();
+        }
+
+        let dead_class = class[DEAD_STATE as usize];
+        let start_class = class[self.start as usize];
+        if start_class == dead_class {
+            return Dfa {
+                num_states: 2,
+                transitions: vec![DEAD_STATE; 512],
+                start: 1,
+                accepting: BTreeSet::new(),
+            };
+        }
+        // One representative state per class, and the canonical numbering by
+        // BFS over the quotient.
+        let mut rep: HashMap<u32, usize> = HashMap::new();
+        for (s, &c) in class.iter().enumerate().rev() {
+            rep.insert(c, s);
+        }
+        let mut id: HashMap<u32, StateId> = HashMap::new();
+        id.insert(dead_class, DEAD_STATE);
+        id.insert(start_class, 1);
+        let mut order: Vec<u32> = vec![dead_class, start_class];
+        let mut queue: VecDeque<u32> = VecDeque::from([start_class]);
+        while let Some(c) = queue.pop_front() {
+            let s = rep[&c];
+            for &t in &self.transitions[s * 256..(s + 1) * 256] {
+                let tc = class[t as usize];
+                if let std::collections::hash_map::Entry::Vacant(e) = id.entry(tc) {
+                    e.insert(order.len() as StateId);
+                    order.push(tc);
+                    queue.push_back(tc);
+                }
+            }
+        }
+        let mut transitions = Vec::with_capacity(order.len() * 256);
+        let mut accepting = BTreeSet::new();
+        for (new, c) in order.iter().enumerate() {
+            let s = rep[c];
+            transitions.extend(
+                self.transitions[s * 256..(s + 1) * 256]
+                    .iter()
+                    .map(|&t| id[&class[t as usize]]),
+            );
+            if self.accepting.contains(&(s as StateId)) {
+                accepting.insert(new as StateId);
+            }
+        }
+        Dfa {
+            num_states: order.len() as u32,
+            transitions,
+            start: 1,
+            accepting,
+        }
+    }
 }
 
 /// A single state transition emitted by [`Dfa::trace`].
@@ -817,6 +913,42 @@ pub fn dfa_intersection(a: &Dfa, b: &Dfa) -> Dfa {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minimize_merges_equivalent_states_and_numbers_canonically() {
+        // Language {"x", "ax"}: states 3 and 4 are both "accept, then dead" and
+        // merge; 5 states, 4 after minimization.
+        let mut transitions = vec![DEAD_STATE; 5 * 256];
+        transitions[256 + b'a' as usize] = 2;
+        transitions[256 + b'x' as usize] = 3;
+        transitions[2 * 256 + b'x' as usize] = 4;
+        let dfa = Dfa {
+            num_states: 5,
+            transitions,
+            start: 1,
+            accepting: [3, 4].into_iter().collect(),
+        };
+        let min = dfa.minimize();
+        assert_eq!(min.num_states, 4); // dead, start, after-'a', accept
+        for w in [&b"x"[..], b"ax", b"a", b"", b"xx", b"aax"] {
+            assert_eq!(min.matches(w), dfa.matches(w), "{w:?}");
+        }
+        // The eager NFA path and the derivative path give the same minimal table.
+        let p = Pattern::any(vec![
+            Pattern::word(b"ab"),
+            Pattern::word(b"ac"),
+            Pattern::word(b"ab"),
+        ]);
+        let eager = p.compile().minimize();
+        let re = Re::word(b"ab").or(Re::word(b"ac")).compile().minimize();
+        assert_eq!(eager.transitions, re.transitions);
+        assert_eq!(eager.accepting, re.accepting);
+        // Idempotent, and the empty language is the two-state table.
+        assert_eq!(re.minimize().transitions, re.transitions);
+        let empty = Re::empty().compile().minimize();
+        assert_eq!((empty.num_states, empty.start), (2, 1));
+        assert!(empty.accepting.is_empty());
+    }
 
     #[test]
     fn literal_word_match() {

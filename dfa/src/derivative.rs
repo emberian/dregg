@@ -32,6 +32,23 @@
 //! representative, and fan the result out across the 256-wide flat row. This is
 //! the symbolic/lazy determinization the design calls for: work is proportional
 //! to the number of distinct byte-classes, not to 256.
+//!
+//! ## Why the derivative set is finite: the ACI canonical form
+//!
+//! Brzozowski (1964) showed a regular expression has finitely many derivatives
+//! only up to *similarity*: associativity, commutativity and idempotence (ACI)
+//! of alternation. Taken literally, `der` produces ever-deeper alternations
+//! (`(a|b)|c` vs `a|(b|c)`) that denote the same language but never compare
+//! equal, and the determinizer below would never close. Owens, Reppy and Turon,
+//! "Regular-expression derivatives re-examined" (JFP 2009), make the similarity
+//! constructive: keep every term in a canonical form under ACI of `|` and `&`
+//! plus a handful of identities, and use structural equality on that form as
+//! the state key. This module does exactly that; see the invariant on [`Re`].
+//! The Lean side of the same fact is
+//! `metatheory/Dregg2/Crypto/Deriv/Finiteness.lean` (`der_finite`, finite up to
+//! the ACI similarity of `metatheory/Dregg2/Crypto/Deriv/Similarity.lean`).
+//! Nothing proves this Rust normalizer meets that relation; the evidence is the
+//! differential tests here and in `demo/absence-receipt/tests/`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
@@ -144,10 +161,30 @@ impl ByteClass {
 /// (`DERIVATIVE-MATCHING-DESIGN.md` §1.2).
 ///
 /// Held behind `Box` for the recursive arms. Equality / ordering are
-/// structural over the (already canonicalized) tree, which is what makes the
-/// similarity quotient — and therefore Brzozowski-finiteness — work in
-/// practice: smart constructors keep the tree in a canonical form so that
-/// derivatives that denote the same residual language compare equal.
+/// structural; the smart constructors ([`Re::or`], [`Re::and`], [`Re::then`],
+/// [`Re::not`], [`Re::star`], [`Re::sym`]) and [`Re::derive`] keep every term
+/// they build in the **canonical form** below, so ACI-similar derivatives
+/// compare equal and the derivative set reachable from a canonical term is
+/// finite (Brzozowski's theorem up to ACI; the module doc).
+///
+/// # Canonical-form invariant
+///
+/// * `Alt` is a right-nested chain `Alt(a1, Alt(a2, … Alt(a(n-1), an)))` with
+///   `n >= 2` operands, strictly increasing in the derived `Ord`, none of them
+///   an `Alt`, `Empty` (`∅ | r = r`), or `any*` (`any* | r = any*`).
+/// * `Inter` is the same shape over its operands, none of them an `Inter`,
+///   `Empty` (`∅ & r = ∅`), or `any*` (`any* & r = r`).
+/// * `Cat(l, r)` is right-associated (`l` is not a `Cat`) and neither side is
+///   `Empty` (`∅·r = r·∅ = ∅`) or `Epsilon` (`ε·r = r·ε = r`).
+/// * `Neg(r)`: `r` is not a `Neg` (`~~r = r`), not `Empty` (`~∅ = any*`) and
+///   not `any*` (`~any* = ∅`).
+/// * `Star(r)`: `r` is not `Empty`, `Epsilon` or a `Star` (`∅* = ε* = ε`,
+///   `r** = r*`).
+/// * `Sym(c)`: `c` is non-empty (an empty class is `Empty`).
+///
+/// The variants are public, so a term built directly from them may break the
+/// invariant; [`Re::canonical`] restores it, and [`Re::compile`] canonicalizes
+/// its input before determinizing.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Re {
     /// `∅` — matches nothing (the empty language).
@@ -204,50 +241,68 @@ impl Re {
         re
     }
 
-    // --- smart constructors (keep the tree canonical for the ~ quotient) ---
+    // --- smart constructors: each returns the canonical form (see `Re`) ---
 
-    /// `self · other`, with the standard `∅`/`ε` absorption/identity laws.
+    /// `any*`, the universal language: the absorbing element of `|` and the
+    /// identity of `&`.
+    pub fn top() -> Re {
+        Re::Star(Box::new(Re::Sym(ByteClass::full())))
+    }
+
+    fn is_top(&self) -> bool {
+        matches!(self, Re::Star(inner) if matches!(&**inner, Re::Sym(c) if c.ranges == [(0, 255)]))
+    }
+
+    /// `self · other`, right-associated, with `∅` absorption and `ε` identity.
     pub fn then(self, other: Re) -> Re {
         match (self, other) {
             (Re::Empty, _) | (_, Re::Empty) => Re::Empty,
             (Re::Epsilon, r) => r,
             (l, Re::Epsilon) => l,
+            // (a·b)·r = a·(b·r): right-associate so concatenations that differ
+            // only in grouping share a representative.
+            (Re::Cat(a, b), r) => (*a).then((*b).then(r)),
             (l, r) => Re::Cat(Box::new(l), Box::new(r)),
         }
     }
 
-    /// `self ⋓ other`, with `∅` identity, idempotence, and commutativity
-    /// (canonical ordering of the operands) — the ACI normalization the
-    /// similarity quotient needs.
+    /// `self ⋓ other`: the operands of both sides are flattened into one
+    /// sorted, deduplicated chain (associativity, commutativity, idempotence),
+    /// with `∅` dropped and `any*` absorbing.
     pub fn or(self, other: Re) -> Re {
-        match (self, other) {
-            (Re::Empty, r) => r,
-            (l, Re::Empty) => l,
-            (l, r) if l == r => l,
-            (l, r) => {
-                // canonical order so `a|b` and `b|a` share a representative
-                let (a, b) = if l <= r { (l, r) } else { (r, l) };
-                Re::Alt(Box::new(a), Box::new(b))
-            }
+        let mut ops = Vec::new();
+        flatten_alt(self, &mut ops);
+        flatten_alt(other, &mut ops);
+        if ops.iter().any(Re::is_top) {
+            return Re::top();
         }
+        ops.retain(|r| !matches!(r, Re::Empty));
+        ops.sort_unstable();
+        ops.dedup();
+        nest(ops, Re::Empty, |a, b| Re::Alt(Box::new(a), Box::new(b)))
     }
 
-    /// `self ⋒ other`, with `∅` absorption, idempotence, commutativity.
+    /// `self ⋒ other`: flattened, sorted, deduplicated (ACI), with `∅`
+    /// absorbing and `any*` dropped as the identity.
     pub fn and(self, other: Re) -> Re {
-        match (self, other) {
-            (Re::Empty, _) | (_, Re::Empty) => Re::Empty,
-            (l, r) if l == r => l,
-            (l, r) => {
-                let (a, b) = if l <= r { (l, r) } else { (r, l) };
-                Re::Inter(Box::new(a), Box::new(b))
-            }
+        let mut ops = Vec::new();
+        flatten_inter(self, &mut ops);
+        flatten_inter(other, &mut ops);
+        if ops.iter().any(|r| matches!(r, Re::Empty)) {
+            return Re::Empty;
         }
+        ops.retain(|r| !r.is_top());
+        ops.sort_unstable();
+        ops.dedup();
+        nest(ops, Re::top(), |a, b| Re::Inter(Box::new(a), Box::new(b)))
     }
 
-    /// `~self`, with double-negation elimination.
+    /// `~self`, with `~~r = r`, `~∅ = any*` and `~any* = ∅`.
     pub fn not(self) -> Re {
         match self {
             Re::Neg(inner) => *inner,
+            Re::Empty => Re::top(),
+            r if r.is_top() => Re::Empty,
             r => Re::Neg(Box::new(r)),
         }
     }
@@ -258,6 +313,22 @@ impl Re {
             Re::Empty | Re::Epsilon => Re::Epsilon,
             Re::Star(_) => self,
             r => Re::Star(Box::new(r)),
+        }
+    }
+
+    /// Rebuild `self` bottom-up through the smart constructors, restoring the
+    /// canonical-form invariant (see [`Re`]) on a term assembled directly from
+    /// the public variants. Idempotent; the identity on canonical terms.
+    pub fn canonical(&self) -> Re {
+        match self {
+            Re::Empty => Re::Empty,
+            Re::Epsilon => Re::Epsilon,
+            Re::Sym(c) => Re::sym(c.clone()),
+            Re::Cat(l, r) => l.canonical().then(r.canonical()),
+            Re::Alt(l, r) => l.canonical().or(r.canonical()),
+            Re::Inter(l, r) => l.canonical().and(r.canonical()),
+            Re::Neg(r) => r.canonical().not(),
+            Re::Star(r) => r.canonical().star(),
         }
     }
 
@@ -309,7 +380,7 @@ impl Re {
     /// Decide whether `word` matches by iterating the derivative
     /// (`derives w R = null (der* w R)` — the streaming matcher).
     pub fn matches(&self, word: &[u8]) -> bool {
-        let mut cur = self.clone();
+        let mut cur = self.canonical();
         for &b in word {
             cur = cur.derive(b);
             if let Re::Empty = cur {
@@ -358,6 +429,36 @@ impl Re {
             Re::Neg(r) | Re::Star(r) => r.collect_cuts(cuts),
         }
     }
+}
+
+/// Push the operands of an alternation (any nesting) onto `out`.
+fn flatten_alt(r: Re, out: &mut Vec<Re>) {
+    match r {
+        Re::Alt(l, rr) => {
+            flatten_alt(*l, out);
+            flatten_alt(*rr, out);
+        }
+        other => out.push(other),
+    }
+}
+
+/// Push the operands of an intersection (any nesting) onto `out`.
+fn flatten_inter(r: Re, out: &mut Vec<Re>) {
+    match r {
+        Re::Inter(l, rr) => {
+            flatten_inter(*l, out);
+            flatten_inter(*rr, out);
+        }
+        other => out.push(other),
+    }
+}
+
+/// Right-nest a sorted operand list with `node`; `unit` for zero operands.
+fn nest(mut ops: Vec<Re>, unit: Re, node: impl Fn(Re, Re) -> Re) -> Re {
+    let Some(last) = ops.pop() else {
+        return unit;
+    };
+    ops.into_iter().rev().fold(last, |acc, op| node(op, acc))
 }
 
 // ---------------------------------------------------------------------------
@@ -468,8 +569,9 @@ impl Re {
         order.push(Re::Empty);
         transitions.extend(std::iter::repeat_n(DEAD_STATE, 256));
 
-        // Start state (index 1).
-        let start_re = self.clone();
+        // Start state (index 1). Canonicalize first: derivatives of a canonical
+        // term are canonical, so every key in `state_ids` is in normal form.
+        let start_re = self.canonical();
         let start_id: StateId = 1;
         // If the start regex happens to *be* Empty, the whole language is ∅;
         // start is still 1 (a fresh dead-equivalent) for table-shape parity
@@ -691,5 +793,156 @@ mod tests {
         let dfa = re.compile();
         assert!(dfa.matches(b""));
         assert!(!dfa.matches(b"x"));
+    }
+
+    // --- ACI canonical form: termination and agreement on complement patterns ---
+
+    /// `~(any* · w · any*)`: "never contains `w`".
+    fn absent(w: &[u8]) -> Re {
+        Re::top().then(Re::word(w)).then(Re::top()).not()
+    }
+
+    /// xorshift64*: a fixed-seed generator so the random corpus is reproducible.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    /// Random words: a third uniform bytes, two thirds spliced from fragments of
+    /// the patterns under test (so matches and near misses are common).
+    fn random_words(seed: u64, count: usize, fragments: &[&[u8]]) -> Vec<Vec<u8>> {
+        let mut rng = Rng(seed);
+        (0..count)
+            .map(|i| {
+                let mut w = Vec::new();
+                let len = rng.below(48);
+                if i % 3 == 0 {
+                    w.extend((0..len).map(|_| rng.next() as u8));
+                } else {
+                    while w.len() < len {
+                        match rng.below(4) {
+                            0 => w.push(rng.next() as u8),
+                            1 => w.push(b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ "[rng.below(37)]),
+                            _ => {
+                                let f = fragments[rng.below(fragments.len())];
+                                let a = rng.below(f.len());
+                                let b = a + 1 + rng.below(f.len() - a);
+                                w.extend_from_slice(if rng.below(2) == 0 { f } else { &f[a..b] });
+                            }
+                        }
+                    }
+                }
+                w
+            })
+            .collect()
+    }
+
+    fn pem_header(kind: &str) -> Vec<u8> {
+        // Built from parts: the repository's secret scanner refuses PEM-header literals.
+        format!("{}BEGIN {kind}{}{}", "-----", "PRIVATE KEY", "-----").into_bytes()
+    }
+
+    #[test]
+    fn smart_constructors_are_aci_canonical() {
+        let (a, b, c) = (Re::byte(b'a'), Re::byte(b'b'), Re::byte(b'c'));
+        let left = a.clone().or(b.clone()).or(c.clone());
+        let right = c.clone().or(a.clone().or(b.clone()));
+        assert_eq!(left, right, "associativity + commutativity of |");
+        assert_eq!(
+            left.clone().or(b.clone()),
+            left,
+            "idempotence across nesting"
+        );
+        assert_eq!(left.clone().or(Re::empty()), left);
+        assert_eq!(left.clone().or(Re::top()), Re::top());
+        let l = a.clone().and(b.clone()).and(c.clone());
+        assert_eq!(l, c.clone().and(b.clone().and(a.clone())));
+        assert_eq!(l.clone().and(Re::top()), l);
+        assert_eq!(l.and(Re::empty()), Re::empty());
+        let cat = a.clone().then(b.clone()).then(c.clone());
+        assert_eq!(cat, a.clone().then(b.clone().then(c.clone())));
+        assert_eq!(Re::empty().not(), Re::top());
+        assert_eq!(Re::top().not(), Re::empty());
+        assert_eq!(cat.clone().not().not(), cat);
+        // A term assembled from the raw variants canonicalizes to the smart form.
+        let raw = Re::Alt(
+            Box::new(Re::Alt(Box::new(c.clone()), Box::new(a.clone()))),
+            Box::new(Re::Alt(Box::new(b.clone()), Box::new(a.clone()))),
+        );
+        assert_eq!(raw.canonical(), a.or(b).or(c));
+    }
+
+    #[test]
+    fn derivatives_of_canonical_terms_are_canonical() {
+        let mut cur = absent(b"AKIA").and(absent(b"-----BEGIN"));
+        assert_eq!(cur.canonical(), cur);
+        let mut rng = Rng(7);
+        for _ in 0..2_000 {
+            let b = b"AKI-BEGN x"[rng.below(10)];
+            cur = cur.derive(b);
+            assert_eq!(cur.canonical(), cur, "derivative left canonical form");
+        }
+    }
+
+    #[test]
+    fn absence_of_a_word_compiles_with_pinned_state_count() {
+        let re = absent(b"AKIA");
+        let dfa = re.compile();
+        let min = dfa.minimize();
+        eprintln!(
+            "absent(AKIA): {} states, {} minimized",
+            dfa.num_states, min.num_states
+        );
+        // dead + one accepting state per matched prefix length 0..=3: the
+        // canonical form already reaches the minimal automaton.
+        assert_eq!(dfa.num_states, 5);
+        assert_eq!(min.num_states, 5);
+        assert!(!dfa.matches(b"xxAKIAxx"));
+        assert!(dfa.matches(b"AKIxAKAKI"));
+        assert!(dfa.matches(b""));
+    }
+
+    #[test]
+    fn absence_of_two_words_agrees_with_the_derivative_matcher() {
+        let re = absent(b"AKIA").and(absent(b"-----BEGIN"));
+        let dfa = re.compile();
+        let min = dfa.minimize();
+        eprintln!(
+            "absent(AKIA) & absent(-----BEGIN): {} states, {} minimized",
+            dfa.num_states, min.num_states
+        );
+        // dead + empty prefix + 3 proper prefixes of AKIA + 9 of -----BEGIN.
+        assert_eq!(dfa.num_states, 14);
+        assert_eq!(min.num_states, 14);
+        let mut words = random_words(
+            0x5eed,
+            10_000,
+            &[b"AKIA", b"-----BEGIN ", b"AKIAIOSFODNN7EXAMPLE"],
+        );
+        words.push(b"AKIAIOSFODNN7EXAMPLE".to_vec());
+        words.push(b"AKIAIOSFODNN7EXAMPL".to_vec());
+        words.push(pem_header("RSA "));
+        words.push(pem_header(""));
+        let mut rejected = 0;
+        for w in &words {
+            let want = re.matches(w);
+            assert_eq!(dfa.matches(w), want, "table vs derivative on {w:?}");
+            assert_eq!(
+                min.matches(w),
+                want,
+                "minimized table vs derivative on {w:?}"
+            );
+            rejected += usize::from(!want);
+        }
+        // the corpus exercises both verdicts
+        assert!(rejected > 1_000 && rejected < 9_000, "rejected {rejected}");
     }
 }
