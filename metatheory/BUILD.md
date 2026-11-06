@@ -132,6 +132,11 @@ A box is skipped when it:
 | hbox (`ssh hbox`) | medium (12G, < ~10 min) | 12G | 6 | `swarm-build` | `/home/hbox/iter-check/...` (nvme root, never `/tank`) |
 | dregg-forge | medium | 12G | 6 | `systemd-run --scope -p MemoryMax=12G nice -n 15` | `/srv/lanes/iter-check/...` (own elan) |
 
+Each box keeps ONE packages directory per manifest key (`<base>/packages-<key>`, or the pool's
+`packages-<key>` for minidregg), symlinked from every check-full clone: never a 7.5 GB Mathlib
+per clone. A clone is persistent and incremental; a cold one is seeded from the box's snapshot
+store before its first build.
+
 Umbrella builds and 32G jobs go to bb2 only. Never touch forge's `demo`, `nano` or `composed`
 containers, fn2's `/build`, or its certify lock.
 

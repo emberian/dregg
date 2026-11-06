@@ -289,9 +289,12 @@ def full(argv):
     if elan:
         prep.append(f'[ -x {elan}/bin/lake ] || (curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh '
                     f'| ELAN_HOME={elan} sh -s -- -y --default-toolchain none --no-modify-path)')
-    if pk:
-        prep.append(f'if [ -d {pk} ] && [ ! -e .lake/packages ]; then mkdir -p .lake && ln -s {pk} .lake/packages; fi')
-    prep.append('[ -e .lake/packages/mathlib/.lake/build/lib/lean/Mathlib.olean ] || lake exe cache get')
+    # Packages: one shared directory per (manifest, toolchain) key on each box, never one per clone
+    # (a Mathlib is ~7.5 GB). minidregg uses the pool's read-only packages-<key> where the box has
+    # one; otherwise <base>/packages-<key> is filled once by `lake exe cache get` and then shared.
+    shared = pk if pk else f"{b['base']}/packages-{key}"
+    prep.append(f'mkdir -p .lake; if [ -d {shared} ]; then [ -L .lake/packages ] || ln -s {shared} .lake/packages; '
+                f'else lake exe cache get && mv .lake/packages {shared} && ln -s {shared} .lake/packages; fi')
     # A cold clone starts from the box's own snapshot store (iter-check publish): the newest READY
     # snapshot with this manifest key is copied in (never linked) before the first build.
     store = os.path.join(store_dir(pick['box']), REPO)
