@@ -78,7 +78,11 @@ honestly.** It is still not emitted by name and no VK is rotated for it.
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean; no `sorry`/`admit`/`native_decide`; zero `#guard`s.
+General theorems and the two certificates are `#assert_axioms`-clean. Counts and bounds about the
+concrete 1 864-leg AIR and its emitted descriptor (column fit, constraint and lookup counts,
+committed widths) are `native_decide` and pinned `#assert_compiled` (since 2026-11-06, ember's
+policy: concrete data by compiled evaluation); `scheduled_columns_fit` alone took this module from
+3.8 to 11.6 GB as a kernel `decide`. No `sorry`/`admit`; zero `#guard`s.
 -/
 import Dregg2.Circuit.Emit.AirColumnAlloc
 import Dregg2.Circuit.Emit.PastaCurveSound
@@ -406,117 +410,38 @@ theorem vestaScheduledDesc_certified :
 theorem pallasScheduledDesc_width : pallasScheduledDesc.traceWidth = 481 := rfl
 theorem vestaScheduledDesc_width : vestaScheduledDesc.traceWidth = 481 := rfl
 
-/-! One kernel check per leg family, and the 33 scheduled ops in slices of three, so no single declaration walks
-all 1 864 legs: the single `decide` over the whole list was 7.7 GB of this module's 11.7 GB peak. -/
-theorem scheduled_columns_fit_sel_boolean :
-    (selBooleanLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_sel_one_hot :
-    ([selOneHotLeg].all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_sel_shift :
-    (selShiftLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_value_pool :
-    (valuePoolLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_witness_pool :
-    (witnessPoolLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_carry :
-    (carryLegs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_0 :
-    (((List.range' 0 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_3 :
-    (((List.range' 3 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_6 :
-    (((List.range' 6 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_9 :
-    (((List.range' 9 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_12 :
-    (((List.range' 12 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_15 :
-    (((List.range' 15 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_18 :
-    (((List.range' 18 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_21 :
-    (((List.range' 21 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_24 :
-    (((List.range' 24 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_27 :
-    (((List.range' 27 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_ops_30 :
-    (((List.range' 30 3).flatMap
-      (fun i => match rcbSchedule[i]? with | some t => opLegs pLimb i t | none => [])).all
-      (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by decide +kernel
-theorem scheduled_columns_fit_schedule :
-    ((scheduleLegs pLimb).all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by
-  have hr : List.range rcbSchedule.length
-      = List.range' 0 3 ++ List.range' 3 3 ++ List.range' 6 3 ++ List.range' 9 3
-        ++ List.range' 12 3 ++ List.range' 15 3 ++ List.range' 18 3 ++ List.range' 21 3
-        ++ List.range' 24 3 ++ List.range' 27 3 ++ List.range' 30 3 := by
-    decide +kernel
-  unfold scheduleLegs
-  rw [hr]
-  simp only [List.flatMap_append, List.all_append,
-    scheduled_columns_fit_ops_0, scheduled_columns_fit_ops_3, scheduled_columns_fit_ops_6,
-    scheduled_columns_fit_ops_9, scheduled_columns_fit_ops_12, scheduled_columns_fit_ops_15,
-    scheduled_columns_fit_ops_18, scheduled_columns_fit_ops_21, scheduled_columns_fit_ops_24,
-    scheduled_columns_fit_ops_27, scheduled_columns_fit_ops_30,
-    Bool.and_self]
-
 /-- Every column the emitted constraints address is inside the declared width — the check
 `circuit/src/descriptor_ir2.rs:2171` performs, done on the source side so a layout slip is a Lean
 error and not a prover refusal. -/
 theorem scheduled_columns_fit :
     (pallasScheduledAir.legs.all (fun l => l.readCols.all (fun c => c < SCHED_W))) = true := by
-  show (selBooleanLegs ++ [selOneHotLeg] ++ selShiftLegs ++ valuePoolLegs ++ witnessPoolLegs
-      ++ carryLegs ++ scheduleLegs pLimb).all (fun l => l.readCols.all (fun c => c < SCHED_W)) = true
-  simp only [List.all_append, scheduled_columns_fit_sel_boolean, scheduled_columns_fit_sel_one_hot,
-    scheduled_columns_fit_sel_shift, scheduled_columns_fit_value_pool,
-    scheduled_columns_fit_witness_pool, scheduled_columns_fit_carry, scheduled_columns_fit_schedule,
-    Bool.and_self]
+  native_decide
 
 /-- ⚑⚑ **2 297 CONSTRAINTS**, against `PastaCurveSound.pallasCompleteAddSoundDesc_constraint_count`'s
 **4 476** — and the reason it went DOWN rather than up is that one op per row means the per-op range
 lookups become per-POOL range lookups: 3 048 lookups collapse to 447. -/
-theorem pallasScheduledDesc_constraint_count : pallasScheduledDesc.constraints.length = 2297 := by decide +kernel
-theorem vestaScheduledDesc_constraint_count : vestaScheduledDesc.constraints.length = 2297 := by decide +kernel
+theorem pallasScheduledDesc_constraint_count : pallasScheduledDesc.constraints.length = 2297 := by native_decide
+theorem vestaScheduledDesc_constraint_count : vestaScheduledDesc.constraints.length = 2297 := by native_decide
 
 /-- The census, so a dropped block moves a number: 34 booleanity + 1 one-hot + 35 shift-register
 + 352 value-pool lookups + 95 witness-pool lookups + 352 carry gates + 1 428 op gates. -/
 theorem scheduled_constraint_census :
-    34 + 1 + 35 + 352 + 95 + 352 + 1428 = pallasScheduledDesc.constraints.length := by decide +kernel
+    34 + 1 + 35 + 352 + 95 + 352 + 1428 = pallasScheduledDesc.constraints.length := by native_decide
 
 /-- ⚑ **THE 1 428 ALGEBRAIC GATES ARE THE SAME ONES.** 12 multiplies at 63 coefficient gates,
 14 adds and 5 subtractions at 32, 2 constant multiplies at 32 — the identical algebra
 `PastaCurveSound` emits, moved to rows and multiplied by a selector. The arithmetic did not change;
 only where it is asserted did. -/
 theorem scheduled_gate_count_is_the_sound_algebra :
-    12 * 63 + 14 * 32 + 5 * 32 + 2 * 32 = 1428 := by decide +kernel
+    12 * 63 + 14 * 32 + 5 * 32 + 2 * 32 = 1428 := by native_decide
 
 /-- ⚑ **THE RANGE-LOOKUP COUNT**, which is where the constraint saving is: the one-row block
 declares one `limbs` leg per op per operand block (3 048 lookups); this declares one per POOL,
 fired on every row (447). Strictly more coverage per column, far fewer declarations. -/
-theorem pallasScheduledAir_range_lookups : pallasScheduledAir.totalRangeLookups = 447 := by decide +kernel
+theorem pallasScheduledAir_range_lookups : pallasScheduledAir.totalRangeLookups = 447 := by native_decide
 
 /-- The leg count, for the same reason a constraint count is pinned. -/
-theorem pallasScheduledAir_leg_count : pallasScheduledAir.legs.length = 1864 := by decide +kernel
+theorem pallasScheduledAir_leg_count : pallasScheduledAir.legs.length = 1864 := by native_decide
 
 /-! ### §5a — the comparison, stated rather than described. -/
 
@@ -528,7 +453,7 @@ theorem the_scheduled_row_is_narrower_and_shorter :
     pallasScheduledDesc.traceWidth * 6 < Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundDesc.traceWidth
     ∧ pallasScheduledDesc.constraints.length
         < Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundDesc.constraints.length := by
-  refine ⟨?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-- The two widths, side by side, on the two EMITTED objects. -/
 theorem the_two_widths :
@@ -551,11 +476,11 @@ number.** (The naive `⌈bits/4⌉` model gives 10 737: the 19-column gap is the
 making each one-bit add/sub carry cost 2 aux columns, not 1.) -/
 theorem the_sound_row_commits_10756 :
     committedWidth Dregg2.Circuit.Emit.PastaCurveSound.RCB_WIDTH
-      Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir = 10756 := by decide +kernel
+      Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir = 10756 := by native_decide
 
 /-- ⚑⚑ **AND THE SCHEDULED ROW COMMITS 1 499.** -/
 theorem the_scheduled_row_commits_1499 :
-    committedWidth SCHED_W pallasScheduledAir = 1499 := by decide +kernel
+    committedWidth SCHED_W pallasScheduledAir = 1499 := by native_decide
 
 /-- ⚑ **7.17× IN THE WIDTH THAT COSTS** — better than the declared-width ratio of 6.34×, because
 one op per row is what lets the 3 048 per-op range lookups become 447 per-pool ones, and the aux
@@ -564,34 +489,40 @@ half of this win**: 7 708 → 1 018 aux columns, against 2 567 declared columns 
 theorem the_committed_width_ratio_clears_seven :
     committedWidth SCHED_W pallasScheduledAir * 7
       < committedWidth Dregg2.Circuit.Emit.PastaCurveSound.RCB_WIDTH
-          Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir := by decide +kernel
+          Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir := by native_decide
 
 /-- The two aux blocks, so the claim above is checkable rather than asserted. -/
 theorem the_two_aux_blocks :
     airAuxCols Dregg2.Circuit.Emit.PastaCurveSound.pallasCompleteAddSoundAir = 7708
     ∧ airAuxCols pallasScheduledAir = 1018 := by
-  refine ⟨?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-- ⚠ **AND THE RANGE BLOCK IS STILL THE MAJORITY OF WHAT IS COMMITTED** — 67.9% here against
 71.7% there. Register allocation does not touch it; `LIMB_BITS` does. Recorded so this cone's win
 is not credited for a radix change it did not make. -/
 theorem the_aux_block_is_still_the_majority :
-    2 * airAuxCols pallasScheduledAir > committedWidth SCHED_W pallasScheduledAir := by decide +kernel
+    2 * airAuxCols pallasScheduledAir > committedWidth SCHED_W pallasScheduledAir := by native_decide
 
-#assert_axioms the_sound_row_commits_10756
-#assert_axioms the_scheduled_row_commits_1499
-#assert_axioms the_committed_width_ratio_clears_seven
-#assert_axioms the_two_aux_blocks
+#assert_compiled the_sound_row_commits_10756
+#assert_compiled the_scheduled_row_commits_1499
+#assert_compiled the_committed_width_ratio_clears_seven
+#assert_compiled the_two_aux_blocks
 #assert_axioms pallasScheduledAir_mainRailOk
 #assert_axioms vestaScheduledAir_mainRailOk
 #assert_axioms pallasScheduledDesc_certified
 #assert_axioms vestaScheduledDesc_certified
 #assert_axioms pallasScheduledDesc_width
-#assert_axioms pallasScheduledDesc_constraint_count
-#assert_axioms scheduled_columns_fit
+#assert_compiled pallasScheduledDesc_constraint_count
+#assert_compiled scheduled_columns_fit
 #assert_axioms rcbSchedule_is_the_scheduled_dag
 #assert_axioms rcbSchedule_kind_census
 #assert_axioms the_two_widths
-#assert_axioms the_scheduled_row_is_narrower_and_shorter
+#assert_compiled the_scheduled_row_is_narrower_and_shorter
 
+#assert_compiled vestaScheduledDesc_constraint_count
+#assert_compiled scheduled_constraint_census
+#assert_compiled scheduled_gate_count_is_the_sound_algebra
+#assert_compiled pallasScheduledAir_range_lookups
+#assert_compiled pallasScheduledAir_leg_count
+#assert_compiled the_aux_block_is_still_the_majority
 end Dregg2.Circuit.Emit.PastaCurveScheduled
