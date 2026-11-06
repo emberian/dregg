@@ -146,7 +146,7 @@ serde = { version = "1", features = ["derive"] }
 # would reorder keys and stop the served bytes from being Lean's bytes. Std-only
 # feature; it adds no crate to the graph.
 serde_json = { version = "1", features = ["raw_value"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 # Pulled only by the `deos-host` feature (the playable `mud-client` reads world cells off
 # the node over HTTP via `GET /api/cell/{id}`). Already in the graph via `dregg-sdk-net`, so
 # this adds no new crate — just names it directly for the deos-host module.

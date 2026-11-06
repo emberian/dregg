@@ -5,6 +5,7 @@
 //! participant maintains a local view that grows monotonically via CRDT union-merge.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -1016,7 +1017,7 @@ impl CreatorTips {
 #[derive(Clone)]
 pub struct Blocklace {
     /// All known blocks.
-    pub(crate) blocks: HashMap<BlockId, Block>,
+    pub(crate) blocks: HashMap<BlockId, Arc<Block>>,
     /// Per-creator tip tracking: the creator's maximal block, or — for a
     /// detected equivocator — the pinned evidence pair (see [`CreatorTips`]).
     tips: HashMap<[u8; 32], CreatorTips>,
@@ -1153,7 +1154,7 @@ impl Blocklace {
         candidate.consensus_time_v1 = Some(policy);
         candidate.consensus_time_frontier_v1.clear();
 
-        let blocks: Vec<Block> = candidate.blocks.values().cloned().collect();
+        let blocks: Vec<Block> = candidate.blocks.values().map(|b| Block::clone(b)).collect();
         let sorted = topological_sort(&blocks, &HashMap::new())
             .map_err(|_| BlockError::ConsensusTimeRestoreNotCausallyClosed)?;
         if sorted.len() != blocks.len() {
@@ -1219,7 +1220,7 @@ impl Blocklace {
 
     /// Get a block by ID.
     pub fn get(&self, id: &BlockId) -> Option<&Block> {
-        self.blocks.get(id)
+        self.blocks.get(id).map(|b| &**b)
     }
 
     /// Check if a block is known.
@@ -1324,7 +1325,7 @@ impl Blocklace {
         let frontier = self.validated_consensus_time_frontier_v1(&block)?;
         self.self_seq = next_seq;
         let id = block.id();
-        self.blocks.insert(id, block.clone());
+        self.blocks.insert(id, Arc::new(block.clone()));
         if let Some(frontier) = frontier {
             self.consensus_time_frontier_v1.insert(id, frontier);
         }
@@ -1390,7 +1391,7 @@ impl Blocklace {
             .blocks
             .values()
             .find(|b| b.creator == self_creator && b.seq + 1 == seq)
-            .map(Block::id);
+            .map(|b| b.id());
         match prev_self_tip {
             Some(prev) => {
                 self.tips.insert(self_creator, CreatorTips::One(prev));
@@ -1650,7 +1651,7 @@ impl Blocklace {
                     .insert(block.creator, CreatorTips::pair(proof.block_a.id(), id));
             }
             // Still insert the block (we keep evidence) but report the equivocation.
-            self.blocks.insert(id, block);
+            self.blocks.insert(id, Arc::new(block));
             if let Some(frontier) = frontier {
                 self.consensus_time_frontier_v1.insert(id, frontier);
             }
@@ -1684,7 +1685,7 @@ impl Blocklace {
             }
         }
 
-        self.blocks.insert(id, block);
+        self.blocks.insert(id, Arc::new(block));
         if let Some(frontier) = frontier {
             self.consensus_time_frontier_v1.insert(id, frontier);
         }
@@ -1738,7 +1739,7 @@ impl Blocklace {
                     self.tips
                         .insert(block.creator, CreatorTips::pair(proof.block_a.id(), id));
                 }
-                self.blocks.insert(id, block);
+                self.blocks.insert(id, Arc::new(block));
                 if let Some(frontier) = frontier {
                     self.consensus_time_frontier_v1.insert(id, frontier);
                 }
@@ -1760,7 +1761,7 @@ impl Blocklace {
                 }
             }
 
-            self.blocks.insert(id, block);
+            self.blocks.insert(id, Arc::new(block));
             if let Some(frontier) = frontier {
                 self.consensus_time_frontier_v1.insert(id, frontier);
             }
@@ -1875,7 +1876,7 @@ impl Blocklace {
                 // ⇒ equivocation (the EquivocationProof witness pair).
                 return Some(EquivocationProof {
                     creator: block.creator,
-                    block_a: existing.clone(),
+                    block_a: Block::clone(existing),
                     block_b: block.clone(),
                 });
             }
@@ -1915,6 +1916,7 @@ impl Blocklace {
             .blocks
             .values()
             .filter(|b| &b.creator == creator)
+            .map(|b| &**b)
             .collect();
         chain.sort_by_key(|b| b.seq);
         chain
@@ -2096,7 +2098,7 @@ impl Blocklace {
 
     /// Export all blocks (for delta-merge to a peer).
     pub fn all_blocks(&self) -> Vec<Block> {
-        self.blocks.values().cloned().collect()
+        self.blocks.values().map(|b| Block::clone(b)).collect()
     }
 
     /// Export blocks not known to a peer (given a set of known IDs).
@@ -2104,13 +2106,13 @@ impl Blocklace {
         self.blocks
             .iter()
             .filter(|(id, _)| !known.contains(id))
-            .map(|(_, b)| b.clone())
+            .map(|(_, b)| Block::clone(b))
             .collect()
     }
 
     /// Iterate over all blocks.
     pub fn iter(&self) -> impl Iterator<Item = (&BlockId, &Block)> {
-        self.blocks.iter()
+        self.blocks.iter().map(|(id, b)| (id, &**b))
     }
 
     /// Create a checkpoint of the current blocklace state.
@@ -2167,15 +2169,30 @@ impl Blocklace {
         self_key: SigningKey,
         quorum_threshold: usize,
     ) -> Result<Self, String> {
-        let mut lace = Self::new(self_key, quorum_threshold);
+        let pending = decode_checkpoint_blocks(&checkpoint.blocks)?;
+        Self::from_decoded_checkpoint(pending, checkpoint, self_key, quorum_threshold)
+    }
 
-        // Deserialize all blocks up front (so we can topo-sort by closure).
-        let mut pending: Vec<Block> = Vec::with_capacity(checkpoint.blocks.len());
-        for block_bytes in &checkpoint.blocks {
-            let block = Block::from_bytes(block_bytes)
-                .ok_or_else(|| "failed to deserialize block from checkpoint".to_string())?;
-            pending.push(block);
-        }
+    /// [`Self::from_checkpoint`] for a caller that owns the checkpoint: each
+    /// block's bytes are freed as soon as they are decoded, so a restore holds
+    /// one encoded copy of the lace only until it is decoded, not for the whole
+    /// authentication. The checks are exactly those of [`Self::from_checkpoint`].
+    pub fn from_checkpoint_owned(
+        mut checkpoint: CheckpointData,
+        self_key: SigningKey,
+        quorum_threshold: usize,
+    ) -> Result<Self, String> {
+        let pending = decode_checkpoint_blocks(std::mem::take(&mut checkpoint.blocks))?;
+        Self::from_decoded_checkpoint(pending, &checkpoint, self_key, quorum_threshold)
+    }
+
+    fn from_decoded_checkpoint(
+        pending: Vec<Block>,
+        checkpoint: &CheckpointData,
+        self_key: SigningKey,
+        quorum_threshold: usize,
+    ) -> Result<Self, String> {
+        let mut lace = Self::new(self_key, quorum_threshold);
 
         // (1) Authenticate every block's signature BEFORE it can enter the DAG.
         // A forged/unsigned block claiming a victim creator is rejected here,
@@ -2228,7 +2245,7 @@ impl Blocklace {
                         lace.tips
                             .insert(block.creator, CreatorTips::pair(proof.block_a.id(), id));
                     }
-                    lace.blocks.insert(id, block);
+                    lace.blocks.insert(id, Arc::new(block));
                 } else {
                     if !lace.equivocators.contains(&block.creator) {
                         let should_update_tip = match lace.tips.get(&block.creator) {
@@ -2244,7 +2261,7 @@ impl Blocklace {
                             lace.finality.record_ack(*pred, block.creator);
                         }
                     }
-                    lace.blocks.insert(id, block);
+                    lace.blocks.insert(id, Arc::new(block));
                 }
                 progressed = true;
             }
@@ -2336,7 +2353,7 @@ impl Blocklace {
             let block = Block::from_bytes(block_bytes)
                 .ok_or_else(|| "failed to deserialize block from checkpoint".to_string())?;
             let id = block.id();
-            lace.blocks.insert(id, block);
+            lace.blocks.insert(id, Arc::new(block));
         }
 
         lace.tips = checkpoint.tips.clone();
@@ -2381,9 +2398,23 @@ pub struct CheckpointData {
 
 /// Topological sort of blocks, ensuring predecessors come before dependents.
 /// Blocks whose predecessors are already in `existing` are considered satisfied.
+/// Decode checkpoint block bytes up front (so the restore can topo-sort by
+/// closure). An owned input frees each block's bytes once it is decoded.
+fn decode_checkpoint_blocks<B: AsRef<[u8]>>(
+    blocks: impl IntoIterator<Item = B>,
+) -> Result<Vec<Block>, String> {
+    blocks
+        .into_iter()
+        .map(|bytes| {
+            Block::from_bytes(bytes.as_ref())
+                .ok_or_else(|| "failed to deserialize block from checkpoint".to_string())
+        })
+        .collect()
+}
+
 fn topological_sort(
     blocks: &[Block],
-    existing: &HashMap<BlockId, Block>,
+    existing: &HashMap<BlockId, Arc<Block>>,
 ) -> Result<Vec<Block>, MergeError> {
     let block_map: HashMap<BlockId, &Block> = blocks.iter().map(|b| (b.id(), b)).collect();
     let mut in_degree: HashMap<BlockId, usize> = HashMap::new();

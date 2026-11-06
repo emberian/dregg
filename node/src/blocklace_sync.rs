@@ -20175,8 +20175,14 @@ async fn persist_blocklace_state(state: &NodeState, handle: &BlocklaceHandle) {
 async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
     let executed_count = { handle.cursor.read().await.executed_count() as u64 };
 
-    // Only produce checkpoints at interval boundaries. (uses the configured value for this run)
-    if executed_count == 0 || executed_count % handle.checkpoint_interval != 0 {
+    // Only produce checkpoints at interval boundaries (the configured value for
+    // this run). Interval 0 turns production off: each checkpoint serializes and
+    // stores the WHOLE lace, so its cost grows with history, and every block it
+    // holds is already stored on its own in `blocklace_blocks`.
+    if handle.checkpoint_interval == 0
+        || executed_count == 0
+        || executed_count % handle.checkpoint_interval != 0
+    {
         return;
     }
 

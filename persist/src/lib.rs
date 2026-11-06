@@ -372,6 +372,31 @@ pub struct PersistentStore {
     fail_config_io: std::sync::atomic::AtomicBool,
 }
 
+/// The env setting that bounds the store's in-process page cache, in MiB.
+pub const STORE_CACHE_MB_ENV: &str = "DREGG_STORE_CACHE_MB";
+
+/// redb's own default (1 GiB). The cache is anonymous process memory and fills
+/// to this size as the store is read, so on a host short of RAM it competes with
+/// everything else; the kernel page cache still serves reads below it.
+pub const DEFAULT_STORE_CACHE_MB: usize = 1024;
+
+/// The store cache size in bytes: [`STORE_CACHE_MB_ENV`] when it parses, else
+/// [`DEFAULT_STORE_CACHE_MB`].
+pub fn store_cache_bytes() -> usize {
+    std::env::var(STORE_CACHE_MB_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_STORE_CACHE_MB)
+        .saturating_mul(1024 * 1024)
+}
+
+fn open_file_database(path: &Path) -> Result<Database> {
+    Database::builder()
+        .set_cache_size(store_cache_bytes())
+        .create(path)
+        .map_err(|e| StoreError::Database(e.to_string()))
+}
+
 impl PersistentStore {
     /// Canonical-state re-genesis epoch installed in [`tables::METADATA`].
     /// Epoch 11 pairs the exact fields-root leaf with ledger-root v3.
@@ -961,7 +986,7 @@ impl PersistentStore {
     ///
     /// Creates the file and all necessary tables if they don't exist.
     pub fn open(path: &Path) -> Result<Self> {
-        let db = Database::create(path).map_err(|e| StoreError::Database(e.to_string()))?;
+        let db = open_file_database(path)?;
         let store = Self {
             db,
             fail_persist_block: std::sync::atomic::AtomicBool::new(false),
@@ -1003,7 +1028,7 @@ impl PersistentStore {
         path: &Path,
         trust_policy: &PoaCompactTrustPolicyV1,
     ) -> Result<Self> {
-        let db = Database::create(path).map_err(|e| StoreError::Database(e.to_string()))?;
+        let db = open_file_database(path)?;
         let store = Self {
             db,
             fail_persist_block: std::sync::atomic::AtomicBool::new(false),
@@ -1257,6 +1282,26 @@ impl PersistentStore {
     }
 
     /// Load every persisted witness artifact vector in key order.
+    /// One receipt's stored witness bytes, if any.
+    pub fn load_witnessed_receipt_raw(&self, receipt_hash: &[u8; 32]) -> Result<Option<Vec<u8>>> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::WITNESSED_RECEIPTS)?;
+        Ok(table.get(receipt_hash)?.map(|value| value.value().to_vec()))
+    }
+
+    /// Visit every stored witness entry in key order, one at a time, so a caller
+    /// that only needs a summary never holds the whole table in memory.
+    pub fn for_each_witnessed_receipt_raw(&self, mut visit: impl FnMut([u8; 32], &[u8])) -> Result<()> {
+        let read_txn = self.db.begin_read()?;
+        let table = read_txn.open_table(tables::WITNESSED_RECEIPTS)?;
+        for entry in table.iter()? {
+            let (key, value) =
+                entry.map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))?;
+            visit(*key.value(), value.value());
+        }
+        Ok(())
+    }
+
     pub fn load_witnessed_receipts_raw(&self) -> Result<Vec<([u8; 32], Vec<u8>)>> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(tables::WITNESSED_RECEIPTS)?;
