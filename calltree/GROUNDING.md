@@ -1,6 +1,6 @@
 # Initiative 9 — attested transport composed with receipts (call-tree certificates)
 
-Register row (2026-11-06): `| 9 | Attested transport + receipts (MPC-TLS call-tree certificates) | lane 9 (Opus 5.5) | breadstuffs | L1 | one real HTTPS call tree certified end to end, a receipt per hop, dataflow edges checked, offline one-command verify | L2: Rust recorder + extract-only tlsn verifier feeding `calltree-check`; root anchored in a grain turn; encoding injectivity | 2026-11-06 |`
+Register row (2026-11-06): `| 9 | Attested transport + receipts (MPC-TLS call-tree certificates) | lane 9 (Opus 5.5) | breadstuffs | L3 | one real HTTPS call tree certified end to end, a receipt per hop, dataflow edges checked, offline one-command verify | typed JSON-field edges keyed by call id; verifier challenge; independent notary; renter-anchored root | 2026-11-06 |`
 
 Ember's target: "combine with tlsnotary and you can certify entire distributed api call trees."
 
@@ -134,3 +134,5 @@ Edges in the GLM tree: kind 0 `https://example.com/` (GLM response → tool requ
 Falsifiers run against both real recordings (`run/falsify.py` on bb2): honest ACCEPT; dropped child, reordered children, tool relabelled 2→1, tool subtree dropped, a flipped presentation byte, a trailing presentation byte, a header-boilerplate edge span, a masked (`0x00`) edge span, a missing required edge, a wrong trusted root: each REJECT, with the failing component named (`tree_and_hops` / `edges_ok`).
 
 Stranger path: `calltree/verify/run.sh` (the light `dregg-calltree-verify` crate links only the tlsn extraction, not the grain executor; the Lean checker is core-only). Policy says facts about concrete data are compiled evaluations: the demo falsifiers are `native_decide` + `#assert_compiled`; the general theorems stay kernel-proved.
+
+Stranger rehearsal (bb2, 2026-11-06): a fresh `--sparse --filter=blob:none` clone of github.com/emberian/dregg (19 s; only metatheory, calltree, zkoracle-live, zkoracle-prove, circuit, dfa, dregg-codec, dregg-dsl, vendor), the Mathlib package store symlinked from an existing clone (the checker is core-only and builds no Mathlib module), then `calltree/verify/run.sh`: 57 s wall, 1.58 GB peak RSS, ACCEPT on `fixtures/glm.recording.json` (extract 7 ms, Lean check 92 ms). Page: dregg-microsites `call-tree/` (local commit; publication is a separate step).
