@@ -41,7 +41,8 @@ renderer) on the real block's environment and pins:
 
 ## Axiom hygiene
 
-Kernel `decide` throughout — no `native_decide`, no `#guard`, `#assert_axioms` per theorem.
+Facts about concrete data are `native_decide`, pinned `#assert_compiled` (since 2026-11-06);
+no `#guard`.
 Rooted in `MinaBridgeGuards` (CI), per the 2026-08-08 orphan burn-down.
 -/
 import Dregg2.Circuit.Emit.MinaFinalizeScalars
@@ -126,7 +127,7 @@ DERIVED `2^14`-th root of unity — carried nowhere, checked both ways. -/
 theorem the_domain_generator_is_derived_and_the_fixtures :
     ((OMEGA_Q : Nat) : Fq) = Dregg2.Circuit.Emit.MinaRealBlockGate.OMEGA
     ∧ ((OMEGA_Q : Nat) : Fq) = rootOfUnity qN LOG2N := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 1000000000 in
 /-- The three `zkPolyR` roots are the generator's `n−3`, `n−2`, `n−1` powers. -/
@@ -134,7 +135,7 @@ theorem the_zk_roots_are_the_generators_powers :
     ((OM3_C : Nat) : Fq) = powFast ((OMEGA_Q : Nat) : Fq) (DOMN - 3)
     ∧ ((OM2_C : Nat) : Fq) = powFast ((OMEGA_Q : Nat) : Fq) (DOMN - 2)
     ∧ ((OM1_C : Nat) : Fq) = powFast ((OMEGA_Q : Nat) : Fq) (DOMN - 1) := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 1000000000 in
 /-- The seven shifts are the Wrap fixture's own list — for EVERY wrap block the conformance
@@ -144,7 +145,7 @@ theorem the_shifts_are_the_wrap_fixtures :
     (Dregg2.Bridge.MinaMultiBlockConformance.WRAP_BLOCKS.map (fun b => b.shift)).all
         (fun s => s == SHIFTS_Q) = true
     ∧ Dregg2.Bridge.MinaMultiBlockConformance.WRAP_BLOCKS.isEmpty = false := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 1000000000 in
 /-- The witnessed inverse inverts the block's own C5 denominator — the check the AIR performs
@@ -152,7 +153,7 @@ in-trace (`den·DINV = 1`), performed here on the fixture. -/
 theorem the_witnessed_inverse_inverts :
     ((Dregg2.Circuit.Emit.MinaRealBlockGate.ZETA - ((OM3_C : Nat) : Fq))
         * (Dregg2.Circuit.Emit.MinaRealBlockGate.ZETA - 1)) * env0Real vDINV = 1 := by
-  decide
+  native_decide
 
 /-! ## §2 — ⚑⚑ THE DIFFERENTIAL: the program reproduces upstream's three numbers. -/
 
@@ -161,7 +162,7 @@ set_option maxHeartbeats 1000000000 in
 the middle from the same wire, landing on `proof.oracles(…)`'s own number. -/
 theorem the_program_reproduces_the_blocks_cip :
     progEval env0Real cipResultV = Dregg2.Circuit.Emit.MinaRealBlockGate.CIP := by
-  decide
+  native_decide
 
 set_option maxHeartbeats 1000000000 in
 /-- ⚑⚑ **THE PROGRAM'S PERMUTATION SCALAR IS o1-labs' OWN `perm_scalars` VALUE** — conjunct 4's
@@ -169,7 +170,7 @@ number, reached through the shared σ-factor chain. -/
 theorem the_program_reproduces_perm_scalars :
     progEval env0Real permResultV
       = ((Dregg2.Circuit.Emit.MinaWrapGroupGate.PERM_SCALAR : Nat) : Fq) := by
-  decide
+  native_decide
 
 set_option maxHeartbeats 1000000000 in
 /-- ⚑⚑ **THE PROGRAM'S STAGE-11 DERIVATION IS THE BLOCK'S OWN LINEARIZATION CONSTANT TERM** —
@@ -178,7 +179,7 @@ and `Bridge/MinaWrapFtEval0Weld` §2b-head tied to `gateLinConst`. This is the v
 eq gate forces the `LCT` claim block to be. -/
 theorem the_program_derives_the_blocks_lct :
     progEval env0Real lctResultV = Dregg2.Circuit.Emit.MinaRealBlockGate.LCT := by
-  decide
+  native_decide
 
 set_option maxHeartbeats 1000000000 in
 /-- The reference composition (the Prog file's §5 `cipRef`/`permRef`/`lctRef`) meets the same
@@ -188,7 +189,7 @@ theorem the_reference_meets_the_same_numbers :
     ∧ permRef env0Real ((OMEGA_Q : Nat) : Fq)
         = ((Dregg2.Circuit.Emit.MinaWrapGroupGate.PERM_SCALAR : Nat) : Fq)
     ∧ lctRef env0Real = Dregg2.Circuit.Emit.MinaRealBlockGate.LCT := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 4000000000 in
 /-- ⚑ **EACH GATE BODY'S VALUE, ISOLATED.** Bump each of the six selector evals by 1 and the
@@ -201,7 +202,7 @@ theorem every_selector_isolates_its_body :
     (List.range 6).all (fun k =>
       progEval (bump env0Real (selCol k) 1) lctResultV
         == lctRef (bump env0Real (selCol k) 1)) = true := by
-  decide
+  native_decide
 
 /-! ## §3 — the discriminations: each equality above can go red. -/
 
@@ -210,7 +211,7 @@ set_option maxHeartbeats 1000000000 in
 theorem a_bumped_eval_moves_the_cip :
     progEval (bump env0Real (vEZ 5) 1) cipResultV
       ≠ Dregg2.Circuit.Emit.MinaRealBlockGate.CIP := by
-  decide
+  native_decide
 
 set_option maxHeartbeats 1000000000 in
 /-- ⚑⚑ **THE `lct-shift` FAMILY'S REFUSAL CONTENT, AT THE FIXTURE.** Bumping the `LCT` CLAIM
@@ -223,14 +224,14 @@ the denotation. -/
 theorem a_bumped_lct_claim_diverges_from_its_derivation :
     progEval (bump env0Real vLCT 1) lctResultV = Dregg2.Circuit.Emit.MinaRealBlockGate.LCT
     ∧ bump env0Real vLCT 1 vLCT ≠ Dregg2.Circuit.Emit.MinaRealBlockGate.LCT := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 1000000000 in
 /-- A bumped σ eval moves the perm — conjunct 4 genuinely reads the permutation columns. -/
 theorem a_bumped_sigma_moves_the_perm :
     progEval (bump env0Real (sCol 2) 1) permResultV
       ≠ ((Dregg2.Circuit.Emit.MinaWrapGroupGate.PERM_SCALAR : Nat) : Fq) := by
-  decide
+  native_decide
 
 set_option maxHeartbeats 1000000000 in
 /-- A bumped witness eval moves the derived lct — the bodies genuinely read the wire (w₆ is
@@ -238,20 +239,20 @@ Poseidon's s1 group head, endomul's `n` and `EndomulScalar`'s x₀ — three bod
 theorem a_bumped_witness_eval_moves_the_derived_lct :
     progEval (bump env0Real (wCol 6) 1) lctResultV
       ≠ Dregg2.Circuit.Emit.MinaRealBlockGate.LCT := by
-  decide
+  native_decide
 
-#assert_axioms the_domain_generator_is_derived_and_the_fixtures
-#assert_axioms the_zk_roots_are_the_generators_powers
-#assert_axioms the_shifts_are_the_wrap_fixtures
-#assert_axioms the_witnessed_inverse_inverts
-#assert_axioms the_program_reproduces_the_blocks_cip
-#assert_axioms the_program_reproduces_perm_scalars
-#assert_axioms the_program_derives_the_blocks_lct
-#assert_axioms the_reference_meets_the_same_numbers
-#assert_axioms every_selector_isolates_its_body
-#assert_axioms a_bumped_eval_moves_the_cip
-#assert_axioms a_bumped_lct_claim_diverges_from_its_derivation
-#assert_axioms a_bumped_sigma_moves_the_perm
-#assert_axioms a_bumped_witness_eval_moves_the_derived_lct
+#assert_compiled the_domain_generator_is_derived_and_the_fixtures
+#assert_compiled the_zk_roots_are_the_generators_powers
+#assert_compiled the_shifts_are_the_wrap_fixtures
+#assert_compiled the_witnessed_inverse_inverts
+#assert_compiled the_program_reproduces_the_blocks_cip
+#assert_compiled the_program_reproduces_perm_scalars
+#assert_compiled the_program_derives_the_blocks_lct
+#assert_compiled the_reference_meets_the_same_numbers
+#assert_compiled every_selector_isolates_its_body
+#assert_compiled a_bumped_eval_moves_the_cip
+#assert_compiled a_bumped_lct_claim_diverges_from_its_derivation
+#assert_compiled a_bumped_sigma_moves_the_perm
+#assert_compiled a_bumped_witness_eval_moves_the_derived_lct
 
 end Dregg2.Circuit.Emit.MinaFinalizeScalarsWeld

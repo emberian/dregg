@@ -334,9 +334,8 @@ uses). So "3%" is right *as a feeling about the arithmetic layer* and wrong as a
 6. **A missing multi-limb hash — NOT a blocker.** `imtLeafHash8` (arity 17) and
    `wireCommitR8`/`Poseidon2Width8` exist and are the designated reuse.
 
-⚠ `Dregg2/Bignum/LedgerBalance.lean:453 biasedLimbs_valid` carries this path's one live `sorry`
-(deliberately excluded from its `#assert_axioms` block). Its soundness twin
-`biasedLimbs_unique:466` is proved.
+`Dregg2/Bignum/LedgerBalance.lean` `biasedLimbs_valid` (completeness) and its soundness twin
+`biasedLimbs_unique` are both proved and pinned with `#assert_axioms`.
 
 **And the four deployed byte→felt encoders are non-injective by construction — all four, not
 three** (`docs/WOUND-felt-width-boundaries-2026-07-19.md:1630-1633`): one is a linear form, two

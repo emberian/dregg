@@ -100,7 +100,8 @@ transition legs. The sound cores are `PastaCurveSound.mulCore/addSubCore` at `qL
 
 `#assert_axioms` on every named theorem; no `sorry`/`admit`; zero `#guard`s. ⚠ TWO theorems are
 compiler-trusted and say so at their statements (`finalizeAir_mainRailOk`, `finalizeAir_pinsTied`
-— `native_decide` + `#assert_compiled`, the `SeamSpec` §4 wall); everything else is kernel.
+— `native_decide` + `#assert_compiled`, the `SeamSpec` §4 wall). Since 2026-11-06 the facts about
+concrete data are `native_decide` + `#assert_compiled` too; the general theorems are kernel.
 -/
 import Dregg2.Circuit.Emit.MinaFinalizeScalarsProg
 import Dregg2.Circuit.Emit.PastaCurveScheduled
@@ -160,7 +161,7 @@ set_option maxHeartbeats 40000000 in
 theorem the_tables_cover_the_values :
     slotTable.length = NVALS ∧ loTable.length = NVALS ∧ hiTable.length = NVALS
     ∧ slotTable.all (· < NSLOTS) = true := by
-  refine ⟨by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 400000000 in
 /-- ⚑ **EVERY READ IS INSIDE ITS SOURCE'S LIVE WINDOW, AND EVERY DEFINITION IS AT ITS OWN ROW.**
@@ -173,7 +174,7 @@ theorem the_ranges_cover_the_reads :
           loOfF o.x ≤ i && i ≤ hiOfF o.x && o.x < NVALS
           && (loOfF o.y ≤ i && i ≤ hiOfF o.y && o.y < NVALS)
           && loOfF (NIN_VALS + i) == i && i ≤ hiOfF (NIN_VALS + i)
-      | none => false) = true := by decide
+      | none => false) = true := by native_decide
 
 /-- The zipped `(slot, lo, hi)` table — what the pairwise disjointness walk consumes
 element-wise. -/
@@ -193,13 +194,13 @@ set_option maxHeartbeats 400000000 in
 ~692K list cells once instead of `getD`-indexing each of them through 1177-entry literals — the
 O(n³) form stopped being kernel-affordable at this op count. Stated over ALL pairs; the
 same-slot filter is the `!=` disjunct. -/
-theorem same_slot_ranges_are_disjoint : sameSlotDisjoint slotRanges = true := by decide
+theorem same_slot_ranges_are_disjoint : sameSlotDisjoint slotRanges = true := by native_decide
 
 set_option maxHeartbeats 40000000 in
 /-- Inputs and constants are live from row 0 — which is what makes a `.first` pin a pin on the
 value every consuming gate reads. -/
 theorem inputs_are_live_from_the_top :
-    (List.range NIN_VALS).all (fun v => loOfF v == 0) = true := by decide
+    (List.range NIN_VALS).all (fun v => loOfF v == 0) = true := by native_decide
 
 /-! ## §6 — THE COLUMN LAYOUT. -/
 
@@ -376,7 +377,7 @@ theorem the_quotient_constants_check_in_the_ring :
     6 * ((CA_Q : Nat) : ZMod qN) = 11
     ∧ 2 * ((CB_Q : Nat) : ZMod qN) = -5
     ∧ 3 * ((CC_Q : Nat) : ZMod qN) = 2 := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 400000000 in
 /-- The endo literal is a NONTRIVIAL cube root of unity (the base endomorphism eigenvalue), and
@@ -385,7 +386,7 @@ theorem the_endo_is_the_base_eigenvalue :
     ((ENDO_Q : Nat) : ZMod qN) ^ 3 = 1
     ∧ ((ENDO_Q : Nat) : ZMod qN) ≠ 1
     ∧ ENDO_Q = 2942865608506852014473558576493638302197734138389222805617480874486368177743 := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 def constLegsF : List AirLeg :=
   constFirstBlock (valueColF vONE) 1
@@ -420,7 +421,7 @@ def piPinsF : List AirLeg :=
 
 def FS_PI_COUNT : Nat := NPI_BLOCKS * SK
 
-theorem fs_pi_count_eq : FS_PI_COUNT = 3296 := by decide
+theorem fs_pi_count_eq : FS_PI_COUNT = 3296 := by native_decide
 
 /-! ## §8 — THE AIR AND THE DESCRIPTOR. -/
 
@@ -457,19 +458,19 @@ time the under-count was the constraint bodies' multiplies, not the pin surface;
 modes are now on record, price BOTH. -/
 
 set_option maxHeartbeats 400000000 in
-theorem fs_width_eq : FS_WIDTH = 5750 := by decide
+theorem fs_width_eq : FS_WIDTH = 5750 := by native_decide
 
 set_option maxHeartbeats 1000000000 in
 theorem fs_layout_eq :
     NPHASE = 1046 ∧ VAL_BASE = 1047 ∧ W1_COL = 5655 ∧ NSLOTS = 144 := by
-  refine ⟨by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 set_option maxHeartbeats 4000000000 in
 theorem fs_committed_width :
-    Dregg2.Circuit.Emit.AirColumnAlloc.committedWidth FS_WIDTH finalizeAir = 15280 := by decide
+    Dregg2.Circuit.Emit.AirColumnAlloc.committedWidth FS_WIDTH finalizeAir = 15280 := by native_decide
 
 set_option maxHeartbeats 4000000000 in
-theorem fs_constraint_count : finalizeDesc.constraints.length = 64324 := by decide
+theorem fs_constraint_count : finalizeDesc.constraints.length = 64324 := by native_decide
 
 /-- ⚑ **THE COMPILER ACCEPTS EVERY LEG.** Window legs read `nxt` only under `.transition`, every
 pool is `0 < bits ≤ 29`, and no leg is refused — the verdict `lowerAir` gates on.
@@ -488,17 +489,17 @@ inner `legs.any` rescan per pin is quadratic in exactly the terms the kernel can
 theorem finalizeAir_pinsTied :
     Dregg2.Circuit.EffectAirIR.EffectAir.pinsTied finalizeAir = true := by native_decide
 
-#assert_axioms the_tables_cover_the_values
-#assert_axioms the_ranges_cover_the_reads
-#assert_axioms same_slot_ranges_are_disjoint
-#assert_axioms inputs_are_live_from_the_top
-#assert_axioms fs_pi_count_eq
-#assert_axioms the_quotient_constants_check_in_the_ring
-#assert_axioms the_endo_is_the_base_eigenvalue
-#assert_axioms fs_width_eq
-#assert_axioms fs_layout_eq
-#assert_axioms fs_committed_width
-#assert_axioms fs_constraint_count
+#assert_compiled the_tables_cover_the_values
+#assert_compiled the_ranges_cover_the_reads
+#assert_compiled same_slot_ranges_are_disjoint
+#assert_compiled inputs_are_live_from_the_top
+#assert_compiled fs_pi_count_eq
+#assert_compiled the_quotient_constants_check_in_the_ring
+#assert_compiled the_endo_is_the_base_eigenvalue
+#assert_compiled fs_width_eq
+#assert_compiled fs_layout_eq
+#assert_compiled fs_committed_width
+#assert_compiled fs_constraint_count
 -- ⚑ COMPILER-TRUSTED, and said out loud: the two leg-walk verdicts.
 #assert_compiled finalizeAir_mainRailOk
 #assert_compiled finalizeAir_pinsTied

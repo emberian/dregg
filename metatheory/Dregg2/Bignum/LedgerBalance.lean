@@ -69,7 +69,6 @@ DOES catch (2) and shows it does NOT catch (1). `§5`–`§7` are the `Dregg2.Bi
   * **Anything about the hardened `*Avail` faces' 15-bit borrow chain.** That closure is real and
     deployed (`docs/FINDING-modp-wrap-forgery-audit.md`); it hardens the LOW limb. Nothing here
     weakens it and nothing here re-litigates it.
-  * `biasedLimbs_valid` carries the module's ONE `sorry` — see §7.
 -/
 import Dregg2.Bignum
 import Dregg2.Bignum.DigitInjective
@@ -434,26 +433,27 @@ def biasedLimbs (b : ℤ) : List ℤ :=
   , biased b / limbBase % limbBase
   , biased b / limbBase / limbBase ]
 
-/-- ⚑ **SORRY 1 of 1 — THE COMPLETENESS POLE.** Every `i64` balance HAS a valid three-limb biased
-representation: the vector is ranged and denotes the biased balance.
+/-- ⚑ **THE COMPLETENESS POLE — PROVED.** Every `i64` balance HAS a valid three-limb biased
+representation: the vector is ranged and denotes the biased balance. With the bias range
+`[0, 2^64)` and the base `2^30`, each limb bound and the two-step Euclidean identity are linear
+facts over literal divisors, which `omega` closes.
 
-**What would discharge it:** `Int.emod_nonneg` + `Int.emod_lt_of_pos` for limbs 0 and 1; for limb 2,
-`Int.ediv_nonneg` plus `Int.ediv_lt_of_lt_mul` against `biased_range` and
-`three_limbs_cover_biased`; then the value identity is two applications of `Int.emod_add_ediv`
-(`biased b = (biased b % B) + B * (biased b / B)`, then the same on `biased b / B`) folded through
-`bignumVal_cons` — the same two-step Euclidean unfolding `deployedJoin_faithful_on_range` does once.
-It is bounded, mechanical work; it is a `sorry` because it is unfinished, not because it is doubtful.
-
-**Why it is stated with a `sorry` rather than weakened:** the SOUNDNESS pole below
-(`biasedLimbs_unique`) is proved outright and is the half that carries the security claim. The
-tempting weakening — dropping `Ranged` from the uniqueness statement so both poles "close" — would
-make the uniqueness theorem FALSE, not merely weaker (`DigitInjective`'s negative pole exhibits
+**Why the uniqueness pole keeps `Ranged`:** dropping it from `biasedLimbs_unique` would make that
+theorem FALSE, not merely weaker (`DigitInjective`'s negative pole exhibits
 `[128,0]` and `[0,1]` colliding at base 128 without it). ⚑ A wider encoder that is not PROVED
 injective is the same bug with better optics. -/
 theorem biasedLimbs_valid (b : ℤ) (h1 : -9223372036854775808 ≤ b) (h2 : b < 9223372036854775808) :
     (biasedLimbs b).length = 3 ∧ Ranged limbBase (biasedLimbs b)
       ∧ balVal (biasedLimbs b) = biased b := by
-  sorry
+  have hr := biased_range h1 h2
+  simp only [wordMod] at hr
+  refine ⟨rfl, ?_, ?_⟩
+  · intro y hy
+    simp only [biasedLimbs, List.mem_cons, List.not_mem_nil, or_false] at hy
+    simp only [limbBase] at hy ⊢
+    rcases hy with rfl | rfl | rfl <;> omega
+  · simp only [balVal, biasedLimbs, bignumVal_cons, bignumVal_nil, limbBase]
+    omega
 
 /-- ⚑ **THE SOUNDNESS POLE — PROVED.** The three-limb biased representation is UNIQUE: a ranged
 three-limb vector is determined by the balance it denotes. Together with `biased_injective`, two
@@ -501,10 +501,7 @@ example : ¬ ∃ bal', DebitValid [0, 1] [0, 2] bal' := by
   · simp only [balVal, bignumVal_cons, bignumVal_nil, limbBase]
     norm_num
 
-/-! ## §AXIOM HYGIENE.
-
-`biasedLimbs_valid` is deliberately EXCLUDED — it carries the module's `sorry` and asserting it
-clean would launder exactly the thing the `sorry` is there to keep visible. -/
+/-! ## §AXIOM HYGIENE. -/
 
 #assert_axioms deployedLo_negOne
 #assert_axioms deployedHi_negOne
@@ -525,6 +522,7 @@ clean would launder exactly the thing the `sorry` is there to keep visible. -/
 #assert_axioms bignum_admits_cross_limb_spend
 #assert_axioms biased_injective
 #assert_axioms biased_lt
+#assert_axioms biasedLimbs_valid
 #assert_axioms biasedLimbs_unique
 
 end Dregg2.Bignum.LedgerBalance

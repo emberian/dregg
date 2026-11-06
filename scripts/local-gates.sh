@@ -99,8 +99,8 @@ GATES=(
   # the linearization constant term") with a GAMMA_CHAL `sorry` FROM ITS BIRTH COMMIT, in NO
   # lake target, so the guard NEVER RAN and the headline was never machine-checked — and the
   # guard also sat below a real gateLinConst defect. Two silences stacked.
-  # ⚑ Census at HEAD: 77 unrooted + 1 sorry (Dregg2.Bignum.LedgerBalance's named completeness
-  # pole) = 78, recorded in scripts/guard-modules-baseline.txt as a BURNDOWN LEDGER (not an
+  # ⚑ Census at birth: 77 unrooted + 1 sorry (Dregg2.Bignum.LedgerBalance's completeness pole,
+  # since discharged) = 78, recorded in scripts/guard-modules-baseline.txt as a BURNDOWN LEDGER (not an
   # acceptance list). The gate reds on any (kind, module) NOT in the baseline (the next silent
   # claim stands out against green) and on a STALE row (a rooted/discharged module must retire
   # its own row — the census only ratchets DOWN). It PRINTS the full census every run. Pure text,

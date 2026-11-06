@@ -134,7 +134,7 @@ theorem the_tape_is_a_digest_and_twenty_six_points :
     ∧ flatTape.getD 37 0 = 0
     ∧ ((List.range (2 * NPTS)).all
         (fun m => decide (flatTape.getD (flatIx m) 0 = tapeCoords.getD m 0))) = true := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- …and the padding zero is the ONLY slot of the stream that is not a coordinate or the digest, so
 `flatIx` is injective onto everything else. Without this the census above would be consistent with a
@@ -143,7 +143,7 @@ theorem the_pad_is_the_only_non_coordinate_slot :
     ((List.range 54).all (fun m =>
       decide (m = 0 ∨ m = 37
         ∨ ((List.range (2 * NPTS)).any (fun k => decide (flatIx k = m)) = true)))) = true := by
-  decide
+  native_decide
 
 /-! ## §2 — THE WIRE, KERNEL-CLEAN AND GENERAL IN THE LINK.
 
@@ -196,13 +196,13 @@ predicate `PastaMsmOnCurve.onCurve_forces` forces in the emitted 98-constraint r
 
 /-- ⚑ **26/26 ON THE CURVE.** -/
 theorem every_tape_point_is_on_pallas :
-    ((List.range NPTS).all (fun i => projOnCurveM pN curveB (tapePt i))) = true := by decide
+    ((List.range NPTS).all (fun i => projOnCurveM pN curveB (tapePt i))) = true := by native_decide
 
 /-- …and none of them is the point at infinity, so the curve equation is not being satisfied by a
 degenerate triple. `projOnCurveM` is HOMOGENEOUS of degree 3 and `(0,0,0)` satisfies it — the
 absorbing state `PastaMsmOnCurve` exists to refuse. -/
 theorem no_tape_point_is_the_identity :
-    ((List.range NPTS).all (fun i => !isInfM pN (tapePt i))) = true := by decide
+    ((List.range NPTS).all (fun i => !isInfM pN (tapePt i))) = true := by native_decide
 
 /-! ## §4 — ⚑⚑ THE BLIND SPOT, AS A THEOREM.
 
@@ -222,7 +222,7 @@ theorem the_on_curve_check_cannot_see_provenance :
     ∧ projEqM pN FORGED_PUBCOMM (tapePt 2) = false
     ∧ ((List.range NPTS).all
         (fun i => projOnCurveM pN curveB (if i = 2 then FORGED_PUBCOMM else tapePt i))) = true := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND THE FALSIFIER FALSIFIES.** Both coordinates of the forgery are non-zero and differ from
 the honest ones — checked, not assumed, because a control that moved a zero into a zero is exactly
@@ -231,7 +231,7 @@ theorem the_forgery_is_a_real_displacement :
     FORGED_PUBCOMM.1 ≠ 0 ∧ FORGED_PUBCOMM.2.1 ≠ 0
     ∧ FORGED_PUBCOMM.1 ≠ (tapePt 2).1 ∧ FORGED_PUBCOMM.2.1 ≠ (tapePt 2).2.1
     ∧ FORGED_PUBCOMM = (WCOMM_XY.getD 0 0, WCOMM_XY.getD 1 0, 1) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §5 — ⚑⚑ THE BINDING THAT FORCES IDENTITY: `public_comm` IS THE MSM OF THE PUBLIC INPUT.
 
@@ -293,18 +293,18 @@ def aggSlot (i : Nat) : Nat :=
 def SHARED : List Nat := [0, 1, 2] ++ (List.range 15).map (fun k => 3 + k) ++ [18]
 
 theorem shared_is_nineteen_points : SHARED.length = 19 ∧ SHARED.eraseDups.length = 19 := by
-  constructor <;> decide
+  constructor <;> native_decide
 
 /-- ⚑⚑ **`the_tape_points_are_the_aggregated_commitments`** — 19/19, elementwise. The transcript's
 commitments and the aggregation's are ONE object, so a prover cannot present one set to the sponge
 that samples its challenges and another to the argument that opens them. -/
 theorem the_tape_points_are_the_aggregated_commitments :
     (SHARED.all (fun i => projEqM pN (tapePt i) (COMBINE_POINTS.getD (aggSlot i) Oproj))) = true := by
-  decide
+  native_decide
 
 /-- …and the map is INJECTIVE, so the previous theorem is not 19 points all matching one slot. -/
 theorem the_aggregate_slots_are_distinct :
-    (SHARED.map aggSlot).eraseDups.length = 19 := by decide
+    (SHARED.map aggSlot).eraseDups.length = 19 := by native_decide
 
 /-- ⚑ **AND THE TIE IS TO THE ARGUMENT, NOT TO A NAME.** Replacing tape point 2 with the
 on-curve-and-wrong forgery inside the 47-term aggregate stops it being o1-labs' own
@@ -312,7 +312,7 @@ on-curve-and-wrong forgery inside the 47-term aggregate stops it being o1-labs' 
 proved invisible to the curve check is refused a second time, by the block's own opening. -/
 theorem the_forged_public_comm_breaks_the_aggregate :
     projEqM pN (chunkedComm XI (COMBINE_POINTS.set 2 FORGED_PUBCOMM)) COMBINED_GOLD = false := by
-  decide
+  native_decide
 
 /-! ## §6b — ⚑ AND THE SEVEN `t_comm` CHUNKS ARE THE ONES `ft_comm` CONSUMED.
 
@@ -333,13 +333,13 @@ inheriting the IPA `msm == 0` floor (P10), which is unmoved. -/
 /-- Tape points 19-25 are the transcript's 7 `t_comm` chunks. -/
 theorem the_tape_t_comm_chunks_are_the_ftComm_chunks :
     ((List.range 7).all (fun k =>
-      projEqM pN (tapePt (19 + k)) (MinaWrapGroupGate.TCHUNKS.getD k Oproj))) = true := by decide
+      projEqM pN (tapePt (19 + k)) (MinaWrapGroupGate.TCHUNKS.getD k Oproj))) = true := by native_decide
 
 /-- …and the 7 are 7 DIFFERENT points, so the census above is not seven slots matching one chunk. -/
 theorem the_seven_t_comm_chunks_are_distinct :
     ((List.range 7).all (fun k =>
       (List.range 7).all (fun l =>
-        decide (k = l) || !projEqM pN (tapePt (19 + k)) (tapePt (19 + l))))) = true := by decide
+        decide (k = l) || !projEqM pN (tapePt (19 + k)) (tapePt (19 + l))))) = true := by native_decide
 
 /-- ⚑ **AND THE TIE IS TO THE ARGUMENT, NOT TO A NAME.** Substituting the on-curve-and-wrong forgery
 for the first `t_comm` chunk stops the Maller assembly being the `ft_comm` o1-labs' own `SRS::verify`
@@ -350,7 +350,7 @@ theorem the_forged_t_comm_chunk_breaks_the_ft_comm :
         (MinaWrapGroupGate.ftCommOf MinaWrapGroupGate.ZETA_SRS MinaWrapGroupGate.ZETA_DOM_M1
           MinaWrapGroupGate.F_TERMS (MinaWrapGroupGate.TCHUNKS.set 0 FORGED_PUBCOMM))
         MinaWrapGroupGate.FT_COMM_GOLD = false := by
-  decide
+  native_decide
 
 /-- ⚑ **AND THAT FALSIFIER FALSIFIES.** The substituted chunk is on the curve, is not the chunk it
 replaces, and both its coordinates are non-zero — so the refusal above is not a swap of a value for
@@ -360,7 +360,7 @@ theorem the_t_comm_forgery_is_a_real_on_curve_displacement :
     ∧ projEqM pN FORGED_PUBCOMM (tapePt 19) = false
     ∧ FORGED_PUBCOMM.1 ≠ (tapePt 19).1 ∧ FORGED_PUBCOMM.2.1 ≠ (tapePt 19).2.1
     ∧ (tapePt 19).1 ≠ 0 ∧ (tapePt 19).2.1 ≠ 0 := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §7 — ⚑ AND IT MOVES `fq_digest`, HENCE THE PHASE-1 ↔ PHASE-2 WELD.
 
@@ -385,7 +385,7 @@ theorem the_digest_tamper_target_is_the_public_comm :
     (MinaPhase1Chain.linkX 2).2 = (tapePt 2).1
     ∧ (MinaPhase1Chain.linkX 2).2 ≠ 0
     ∧ (MinaPhase1Chain.linkX 2).2 ≠ FORGED_PUBCOMM.1 := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §8 — RESIDUALS, NAMED WITH NUMBERS.
 
@@ -430,23 +430,23 @@ circuit-side public-comm MSM would look like; it does not exist for the Lagrange
 #assert_axioms the_wire_lane0
 #assert_axioms the_wire_lane1
 #assert_axioms the_wire_slot_is_the_elements_limbs
-#assert_axioms the_tape_is_a_digest_and_twenty_six_points
-#assert_axioms the_pad_is_the_only_non_coordinate_slot
-#assert_axioms every_tape_point_is_on_pallas
-#assert_axioms no_tape_point_is_the_identity
-#assert_axioms the_on_curve_check_cannot_see_provenance
-#assert_axioms the_forgery_is_a_real_displacement
+#assert_compiled the_tape_is_a_digest_and_twenty_six_points
+#assert_compiled the_pad_is_the_only_non_coordinate_slot
+#assert_compiled every_tape_point_is_on_pallas
+#assert_compiled no_tape_point_is_the_identity
+#assert_compiled the_on_curve_check_cannot_see_provenance
+#assert_compiled the_forgery_is_a_real_displacement
 #assert_axioms tapePt_two_is_the_transcript_public_comm
 #assert_axioms the_tape_public_comm_is_the_msm_of_the_public_input
-#assert_axioms shared_is_nineteen_points
-#assert_axioms the_tape_points_are_the_aggregated_commitments
-#assert_axioms the_aggregate_slots_are_distinct
-#assert_axioms the_forged_public_comm_breaks_the_aggregate
-#assert_axioms the_tape_t_comm_chunks_are_the_ftComm_chunks
-#assert_axioms the_seven_t_comm_chunks_are_distinct
-#assert_axioms the_forged_t_comm_chunk_breaks_the_ft_comm
-#assert_axioms the_t_comm_forgery_is_a_real_on_curve_displacement
-#assert_axioms the_digest_tamper_target_is_the_public_comm
+#assert_compiled shared_is_nineteen_points
+#assert_compiled the_tape_points_are_the_aggregated_commitments
+#assert_compiled the_aggregate_slots_are_distinct
+#assert_compiled the_forged_public_comm_breaks_the_aggregate
+#assert_compiled the_tape_t_comm_chunks_are_the_ftComm_chunks
+#assert_compiled the_seven_t_comm_chunks_are_distinct
+#assert_compiled the_forged_t_comm_chunk_breaks_the_ft_comm
+#assert_compiled the_t_comm_forgery_is_a_real_on_curve_displacement
+#assert_compiled the_digest_tamper_target_is_the_public_comm
 
 -- ⚑ COMPILER-TRUSTED, and said out loud: the pairing census, the two wire evaluations and the
 -- 27-permutation forgery pole, where the `decide` proof-term path overflows on a 255-bit state.

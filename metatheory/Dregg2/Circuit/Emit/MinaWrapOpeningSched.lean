@@ -82,7 +82,8 @@ named residual, not a footnote.
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean; no `sorry`/`admit`/`native_decide`; zero `#guard`s. NEW file, NOT imported
+General theorems `#assert_axioms`-clean; facts about concrete data `native_decide`, pinned
+`#assert_compiled` (since 2026-11-06); no `sorry`/`admit`; zero `#guard`s. NEW file, NOT imported
 by the `Dregg2` root, per house practice for gates. Import line:
 `import Dregg2.Circuit.Emit.MinaWrapOpeningSched`
 -/
@@ -139,7 +140,7 @@ this line. -/
 theorem the_terms_are_the_gates_own :
     residualTerms C Z1 Z2 CHAL CHAL_INV
         Dregg2.Circuit.Emit.MinaWrapAggregationGate.COMBINED_GOLD U_BASE SG
-      = nonSgTerms.take 32 ++ [sgTerm] ++ nonSgTerms.drop 32 := by decide
+      = nonSgTerms.take 32 ++ [sgTerm] ++ nonSgTerms.drop 32 := by native_decide
 
 /-! ## §2 — ⚑ THE LITERAL MANIFEST, machine-spliced, and its derivation theorem.
 
@@ -270,7 +271,7 @@ def openingAddends : List Pt :=
 /-- The number of chain blocks — one per addend. -/
 def NBLOCKS : Nat := 35
 
-theorem openingAddends_length : openingAddends.length = NBLOCKS := by decide
+theorem openingAddends_length : openingAddends.length = NBLOCKS := by native_decide
 
 /-- ⚑⚑⚑ **THE MANIFEST IS THE DERIVATION** — the literal table equals `[k]·P` over the Gate's own
 term list (slot 0 the `sg` term), plus `delta` at coefficient 1, every coordinate reduced at
@@ -278,18 +279,18 @@ term list (slot 0 the `sg` term), plus `delta` at coefficient 1, every coordinat
 this file reads the literals. -/
 theorem the_manifest_is_the_derivation :
     openingAddends
-      = (sgTerm :: nonSgTerms).map (fun t => redPt (smul t.1 t.2)) ++ [redPt DELTA] := by decide
+      = (sgTerm :: nonSgTerms).map (fun t => redPt (smul t.1 t.2)) ++ [redPt DELTA] := by native_decide
 
 /-- ⚑ **SLOT 0 IS THE `sg` TERM** — `[qN − z₁]·SG = −z₁·SG`, reduced. The un-eliminated relation's
 fourth non-SRS addend, PRESENT and DECLARED, where `MinaWrapClosingAir`'s manifest proved it
 ABSENT (`the_closing_manifest_carries_no_sg_slot`). The two files are the two ways to retire the
 vacuity, and each states its slot inventory. -/
 theorem the_opening_manifest_carries_the_sg_slot_at_zero :
-    openingAddends.getD 0 Oproj = redPt (smul ((qN - Z1 % qN) % qN) SG) := by decide
+    openingAddends.getD 0 Oproj = redPt (smul ((qN - Z1 % qN) % qN) SG) := by native_decide
 
 /-- …and slot 34 is `delta`, the only coefficient-1 term. -/
 theorem the_opening_manifest_ends_with_delta :
-    openingAddends.getD 34 Oproj = redPt DELTA := by decide
+    openingAddends.getD 34 Oproj = redPt DELTA := by native_decide
 
 /-! ## §3 — ⚑⚑ THE CHAIN CLOSES AT THE BLOCK'S OWN VALUES — and at no proper prefix. -/
 
@@ -300,14 +301,14 @@ def chainFold (As : List Pt) : Pt := As.foldl padd Oproj
 infinity — `isInfM` is `X ≡ 0 ∧ Z ≡ 0`, exactly the shape the 64 `.last` discharge gates force.
 This is `MinaWrapOpeningGate.opening_relation_holds`' physical statement, recomputed through THIS
 file's own fold order and literal manifest — two independent computations, one vanishing. -/
-theorem the_opening_chain_closes : isInfM pN (chainFold openingAddends) = true := by decide
+theorem the_opening_chain_closes : isInfM pN (chainFold openingAddends) = true := by native_decide
 
 /-- ⚑ **AND AT NO PROPER NON-EMPTY PREFIX.** The `.last` `BLK 34` gate forces a full 35-block run;
 this is the algebraic half of that tooth: no early `GO`-drop lands on an accepting terminal, so
 "the chain closed" cannot be a statement about a prefix. -/
 theorem the_chain_has_no_accepting_proper_prefix :
     ((List.range 34).all
-      (fun k => !(isInfM pN (chainFold (openingAddends.take (k + 1)))))) = true := by decide
+      (fun k => !(isInfM pN (chainFold (openingAddends.take (k + 1)))))) = true := by native_decide
 
 /-! ## §4 — ⚑⚑ THE FORGERY, AT THE BLOCK'S OWN NUMBERS: it closes the equation, and the pin is
 what says no.
@@ -330,7 +331,7 @@ def solvedAddend : Pt := redPt (pneg (chainFold forgedTail))
 /-- ⚑⚑ **THE FORGED CHAIN CLOSES.** The forgery is not refused by the group equation — that is
 the whole content of the vacuity theorems, exhibited at the real block. -/
 theorem the_solved_addend_closes_the_forged_chain :
-    isInfM pN (chainFold (solvedAddend :: forgedTail)) = true := by decide
+    isInfM pN (chainFold (solvedAddend :: forgedTail)) = true := by native_decide
 
 /-- ⚑⚑ **AND IT IS NOT THE PINNED SLOT** — the solved addend differs from manifest slot 0 in at
 least one 8-bit limb, so at least one of the 96 block-0 phase-0 window gates evaluates non-zero
@@ -340,13 +341,13 @@ theorem the_solved_addend_differs_from_the_pinned_slot :
     (solvedAddend != openingAddends.getD 0 Oproj
       && (List.range (3 * SK)).any
            (fun j => coordLimb solvedAddend j != coordLimb (openingAddends.getD 0 Oproj) j))
-      = true := by decide
+      = true := by native_decide
 
 /-- ⚑ **THE OTHER POLE: a moved aggregate WITHOUT the solve is refused by the chain itself** —
 the terminal is not the identity, so the discharge gates refuse before any pin is consulted. The
 falsifier pair brackets the check: solve-and-move hits the pin, move-alone hits the discharge. -/
 theorem a_moved_aggregate_alone_is_refused_by_the_chain :
-    isInfM pN (chainFold (openingAddends.set 31 ccForged)) = false := by decide
+    isInfM pN (chainFold (openingAddends.set 31 ccForged)) = false := by native_decide
 
 /-! ## §5 — THE LEGS: the block register, the manifest pins, the `O` seed, and the published `sg`.
 
@@ -370,7 +371,7 @@ def OPEN_W : Nat := CHAIN_W + NBLOCKS + 2 * SK
 def OPEN_PI : Nat := ACC_PI_COUNT + 2 * SK
 
 theorem open_w_eq : OPEN_W = 581 ∧ CHAIN_W = 482 ∧ OPEN_PI = 256 := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-- Booleanity of each block indicator, on every row. -/
 def blockBooleanLegs : List AirLeg :=
@@ -419,7 +420,7 @@ def blockRegisterLegs : List AirLeg :=
   blockBooleanLegs ++ [blockOneHotLeg, blockFirstLeg, blockLastLeg]
     ++ (blockShiftLeg0 :: (List.range (NBLOCKS - 1)).map blockShiftLeg)
 
-theorem blockRegisterLegs_length : blockRegisterLegs.length = 73 := by decide
+theorem blockRegisterLegs_length : blockRegisterLegs.length = 73 := by native_decide
 
 /-- The addend's X block — input value 3, at the allocator's column. ⚠ The same physical column
 as `OUT_XS` (slot 8 reuse); `MinaWrapClosingScheduled.no_slot_carries_across_the_block_boundary`
@@ -433,7 +434,7 @@ share physical column 290 (slot-8 reuse) — the seam
 `MinaWrapClosingScheduled.no_slot_carries_across_the_block_boundary` makes legal. -/
 theorem the_addend_x_shares_the_out_slot :
     ADD_XS = Dregg2.Circuit.Emit.MinaWrapClosingScheduled.OUT_XS ∧ ADD_XS = 290 := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-- The `j`-th addend limb column, `j < 3·SK` walking X ‖ Y ‖ Z. -/
 def addCol (j : Nat) : Nat :=
@@ -458,7 +459,7 @@ def addendPinLegs : List AirLeg :=
   (List.range NBLOCKS).flatMap (fun b =>
     (List.range (3 * SK)).map (fun j => addendPinLeg b j))
 
-theorem addendPinLegs_length : addendPinLegs.length = 3360 := by decide
+theorem addendPinLegs_length : addendPinLegs.length = 3360 := by native_decide
 
 /-- The accumulator's `j`-th limb column at row 0, `j < 3·SK` walking X ‖ Y ‖ Z. -/
 def accCol (j : Nat) : Nat :=
@@ -521,19 +522,19 @@ set_option maxHeartbeats 400000000 in
 /-- ⚑ **THE COMPILER ACCEPTS THE BLOCK** — the new families are `.all`/`.first`/`.last`/
 `.transition` windows reading no `nxt` except the register's own, and the pins are boundary pins.
 A selector slip in any family lowers to `refuseConstraints` and this goes red. -/
-theorem openingSchedAir_mainRailOk : openingSchedAir.mainRailOk = true := by decide
+theorem openingSchedAir_mainRailOk : openingSchedAir.mainRailOk = true := by native_decide
 
 set_option maxHeartbeats 400000000 in
 /-- ⚑ **NO PIN IS DECORATIVE** — the endpoint pins' columns are read by the carry/thread/
 discharge families, and the `SGX`/`SGY` pins' columns by their own `.first` forcing gates. -/
-theorem openingSchedAir_pinsTied : openingSchedAir.pinsTied = true := by decide
+theorem openingSchedAir_pinsTied : openingSchedAir.pinsTied = true := by native_decide
 
 set_option maxHeartbeats 400000000 in
 /-- Every column the constraints address is inside the declared width — `SGY 31 = OPEN_W − 1` is
 the widest. -/
 theorem openingSched_columns_fit :
     (openingSchedAir.legs.all (fun l => l.readCols.all (fun c => c < OPEN_W))) = true := by
-  decide
+  native_decide
 
 /-- ⚑ **THE TIE, SUPPLIED FROM THE TWO NAMED THEOREMS — NOT RE-DERIVED.** `TiedAir.ok` and
 `.tied` are autoParams defaulting to `by decide`; left to fire, they re-run the two 6 404-constraint
@@ -553,7 +554,9 @@ def openingSchedDesc : EffectVmDescriptor2 :=
     "dregg-mina-wrap-opening-sched::v1" OPEN_W OPEN_PI [] openingSchedTiedAir).val
 
 /-- ⚑ **THE CERTIFICATE, PRODUCED BY THE EMIT** — every leg of this source is forced by the
-emitted constraints, per-leg, in the source's own `AirLeg.forces` vocabulary. -/
+emitted constraints, per-leg, in the source's own `AirLeg.forces` vocabulary. Its two instance
+verdicts (`mainRailOk`, `pinsTied` over the 6 404-constraint block) are compiled evaluation since
+2026-11-06, so it is pinned `#assert_compiled`; the refinement itself is the general kernel theorem. -/
 theorem openingSchedDesc_certified :
     Dregg2.Circuit.Emit.EffectLower.CertifiedRefines openingSchedDesc [] openingSchedAir :=
   (Dregg2.Circuit.Emit.EffectLower.lowerTiedAir
@@ -566,11 +569,11 @@ set_option maxHeartbeats 400000000 in
 /-- ⚑⚑ **THE COMMITTED WIDTH — 1,599**: the chained row's 1,500 plus the 99 new declared columns;
 the new families declare NO range lookup, so the aux block does not move. -/
 theorem openingSchedDesc_committed :
-    Dregg2.Circuit.Emit.AirColumnAlloc.committedWidth OPEN_W openingSchedAir = 1599 := by decide
+    Dregg2.Circuit.Emit.AirColumnAlloc.committedWidth OPEN_W openingSchedAir = 1599 := by native_decide
 
 set_option maxHeartbeats 400000000 in
 theorem openingSchedDesc_constraint_count :
-    openingSchedDesc.constraints.length = 6404 := rfl
+    openingSchedDesc.constraints.length = 6404 := by native_decide
 
 /-- The census, so a dropped family moves a number: the chained closing row's
 `34+1+1+36+352+95+352+1428+96+96+192+64 = 2747`, PLUS the block register's 73, the 3,360 manifest
@@ -593,13 +596,13 @@ theorem the_opening_selector_census :
     ∧ openingSchedAir.windowCountSel RowSel.last = 66
     ∧ openingSchedAir.windowCountSel RowSel.first = 162
     ∧ openingSchedAir.windowCountSel RowSel.all = 3432 := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **A NAME IS A KEY** — this cone's descriptors must not resolve to one another. -/
 theorem the_opening_descriptor_name_is_new :
     openingSchedDesc.name ≠ Dregg2.Circuit.Emit.MinaWrapClosingScheduled.closingSchedFinalDesc.name
     ∧ openingSchedDesc.name ≠ Dregg2.Circuit.Emit.MinaWrapClosingScheduled.closingSchedSegDesc.name := by
-  refine ⟨by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide⟩
 
 /-! ### §6b — the price, re-derived for THIS shape, both halves.
 
@@ -614,13 +617,13 @@ substrate is `8,773 × 33` rows — genuinely new work, priced and not taken. -/
 
 theorem the_opening_shape :
     NBLOCKS * 33 = 1155 ∧ 1155 ≤ 2 ^ 11 ∧ 2 ^ 10 < 1155 := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 theorem the_leaf_cells_both_halves :
     2 ^ 11 * 1599 = 3274752
     ∧ 35 * 10756 = 376460
     ∧ 8 * 376460 < 3274752 ∧ 3274752 < 9 * 376460 := by
-  refine ⟨by decide, by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide, by native_decide⟩
 
 /-! ## §7 — FORCING: what the emitted constraints buy, and exactly where it stops.
 
@@ -718,35 +721,35 @@ theorem the_addend_pin_admits_the_manifest (b j : Nat) (env : VmRowEnv)
 
 end Forcing
 
-#assert_axioms the_terms_are_the_gates_own
+#assert_compiled the_terms_are_the_gates_own
 #assert_axioms redPt_lt
-#assert_axioms openingAddends_length
-#assert_axioms the_manifest_is_the_derivation
-#assert_axioms the_opening_manifest_carries_the_sg_slot_at_zero
-#assert_axioms the_opening_manifest_ends_with_delta
-#assert_axioms the_opening_chain_closes
-#assert_axioms the_chain_has_no_accepting_proper_prefix
-#assert_axioms the_solved_addend_closes_the_forged_chain
-#assert_axioms the_solved_addend_differs_from_the_pinned_slot
-#assert_axioms a_moved_aggregate_alone_is_refused_by_the_chain
-#assert_axioms open_w_eq
-#assert_axioms the_addend_x_shares_the_out_slot
-#assert_axioms blockRegisterLegs_length
-#assert_axioms addendPinLegs_length
-#assert_axioms the_published_sg_is_the_scaled_slots_preimage
-#assert_axioms openingSchedAir_mainRailOk
-#assert_axioms openingSchedAir_pinsTied
-#assert_axioms openingSched_columns_fit
-#assert_axioms openingSchedDesc_certified
-#assert_axioms openingSchedDesc_width
-#assert_axioms openingSchedDesc_piCount
-#assert_axioms openingSchedDesc_committed
-#assert_axioms openingSchedDesc_constraint_count
-#assert_axioms the_opening_census
-#assert_axioms the_opening_selector_census
-#assert_axioms the_opening_descriptor_name_is_new
-#assert_axioms the_opening_shape
-#assert_axioms the_leaf_cells_both_halves
+#assert_compiled openingAddends_length
+#assert_compiled the_manifest_is_the_derivation
+#assert_compiled the_opening_manifest_carries_the_sg_slot_at_zero
+#assert_compiled the_opening_manifest_ends_with_delta
+#assert_compiled the_opening_chain_closes
+#assert_compiled the_chain_has_no_accepting_proper_prefix
+#assert_compiled the_solved_addend_closes_the_forged_chain
+#assert_compiled the_solved_addend_differs_from_the_pinned_slot
+#assert_compiled a_moved_aggregate_alone_is_refused_by_the_chain
+#assert_compiled open_w_eq
+#assert_compiled the_addend_x_shares_the_out_slot
+#assert_compiled blockRegisterLegs_length
+#assert_compiled addendPinLegs_length
+#assert_compiled the_published_sg_is_the_scaled_slots_preimage
+#assert_compiled openingSchedAir_mainRailOk
+#assert_compiled openingSchedAir_pinsTied
+#assert_compiled openingSched_columns_fit
+#assert_compiled openingSchedDesc_certified
+#assert_compiled openingSchedDesc_width
+#assert_compiled openingSchedDesc_piCount
+#assert_compiled openingSchedDesc_committed
+#assert_compiled openingSchedDesc_constraint_count
+#assert_compiled the_opening_census
+#assert_compiled the_opening_selector_census
+#assert_compiled the_opening_descriptor_name_is_new
+#assert_compiled the_opening_shape
+#assert_compiled the_leaf_cells_both_halves
 #assert_axioms chainSelectorLegs_sub
 #assert_axioms carryLegs_sub
 #assert_axioms scheduleLegs_sub

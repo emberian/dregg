@@ -173,8 +173,7 @@ table as *"rows are exactly `[v]` for `v ∈ [0, 2^bits)`"*, which is the same s
 
 **Bignum's emit path IS wireable, and cheaply — but not the way the record says.** Do not call
 `emitConstraint`. Write the two IR-v2 bridges (≈ 2 defs + 2 agreement lemmas), reuse `emitExpr`,
-and land it under **one** registered descriptor. What that does **not** fix is `Dregg2/Bignum/
-LedgerBalance.lean:453 biasedLimbs_valid`, this path's one live `sorry`, and it does not fix the
+and land it under **one** registered descriptor. What that does **not** fix is the
 `[0, p)` range-table wall (`docs/INJECTIVITY-FLOOR-CLASS.md` §4.3), which is genuinely hard and is
 why MapOp uses a bespoke lex-compare gadget rather than Bignum's `borrowSub_iff`.
 

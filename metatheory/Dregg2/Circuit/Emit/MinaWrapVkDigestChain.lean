@@ -273,24 +273,24 @@ theorem the_index_is_twenty_eight_commitments :
     VK_COMM_XY.length = 2 * NVK
     ∧ TXN_VK_COMM_XY.length = 2 * NVK
     ∧ VK_COMM_XY.length % 2 = 0 := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **28/28 ON PALLAS.** `y²·z = x³ + 5·z³` over `Fp` — the same `projOnCurveM` the tape's 26
 points face. -/
 theorem every_vk_commitment_is_on_pallas :
-    ((List.range NVK).all (fun i => projOnCurveM pN curveB (vkPt i))) = true := by decide
+    ((List.range NVK).all (fun i => projOnCurveM pN curveB (vkPt i))) = true := by native_decide
 
 /-- …and none is the point at infinity, so the homogeneous curve equation is not being satisfied by
 a degenerate triple. -/
 theorem no_vk_commitment_is_the_identity :
-    ((List.range NVK).all (fun i => !isInfM pN (vkPt i))) = true := by decide
+    ((List.range NVK).all (fun i => !isInfM pN (vkPt i))) = true := by native_decide
 
 /-- …and the 28 are 28 DIFFERENT points, so a census that matched one point 28 times could not
 pass. -/
 theorem the_vk_commitments_are_twenty_eight_distinct_points :
     ((List.range NVK).all (fun i =>
       (List.range NVK).all (fun k => decide (i = k) || !projEqM pN (vkPt i) (vkPt k)))) = true := by
-  decide
+  native_decide
 
 /-! ## §3 — THE 28 LINKS ARE THE SPONGE'S OWN SCHEDULE, NOT A COUNT. -/
 
@@ -520,7 +520,7 @@ theorem the_vk_wire_block_is_not_trivial :
 claim is checkable rather than asserted. -/
 theorem the_vk_tie_is_the_whole_element :
     SK * PastaFieldSound.SB = 256 ∧ 2 ^ 254 < pN ∧ pN < 2 ^ (SK * PastaFieldSound.SB) := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §7 — ⚠⚠ WHAT THIS DERIVATION CANNOT SEE, AS THEOREMS.
 
@@ -613,7 +613,7 @@ theorem the_transaction_index_is_an_equally_on_curve_twenty_eight :
     ∧ ((List.range NVK).all (fun i => !isInfM pN (txnPt i))) = true
     ∧ ((List.range NVK).all (fun i =>
         (List.range NVK).all (fun k => !projEqM pN (txnPt i) (vkPt k)))) = true := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑⚑ **`the_derivation_cannot_see_which_verifier_index_this_is`** — the machinery is
 index-agnostic. It proves *"this digest is THESE commitments'"*; it cannot prove *"these are THIS
@@ -641,7 +641,7 @@ theorem the_on_curve_leg_cannot_see_the_substituted_commitment :
     ∧ projEqM pN FORGED_VK_SIGMA0 (vkPt 0) = false
     ∧ ((List.range NVK).all
         (fun i => projOnCurveM pN curveB (if i = 0 then FORGED_VK_SIGMA0 else vkPt i))) = true := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND THE FALSIFIER FALSIFIES.** Both coordinates are non-zero and differ from the honest
 ones, and the slot the tamper aims at really is `sigma_comm[0].x` — the three checks whose absence
@@ -650,13 +650,13 @@ theorem the_vk_forgery_is_a_real_displacement :
     FORGED_VK_SIGMA0.1 ≠ 0 ∧ FORGED_VK_SIGMA0.2.1 ≠ 0
     ∧ FORGED_VK_SIGMA0.1 ≠ (vkPt 0).1 ∧ FORGED_VK_SIGMA0.2.1 ≠ (vkPt 0).2.1
     ∧ (vkLinkX 0).1 = (vkPt 0).1 ∧ (vkLinkX 0).1 ≠ 0 := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **…AND IT MOVES ALL 32 PUBLISHED FELTS**, not one. A forgery that moved a single limb would
 leave 31 slices agreeing and would say nothing about the width of the tie. -/
 theorem the_vk_forgery_moves_every_published_felt :
     ((List.range SK).all (fun i =>
-      decide (limbAt (vkPt 0).1 i ≠ limbAt FORGED_VK_SIGMA0.1 i))) = true := by decide
+      decide (limbAt (vkPt 0).1 i ≠ limbAt FORGED_VK_SIGMA0.1 i))) = true := by native_decide
 
 /-- ⚑⚑ **AND IT MOVES THE DIGEST** — 28 permutations downstream, so the substitution reaches the
 phase-1 tape's head and the 32-felt slice comparison of §6 refuses. ⚑ **BOTH LANES**: link 0 absorbs
@@ -677,7 +677,7 @@ theorem the_vk_digest_tamper_target_is_the_first_commitment :
     (vkLinkX 0).1 = (vkPt 0).1 ∧ (vkLinkX 0).2 = (vkPt 0).2.1
     ∧ (vkLinkX 0).1 ≠ FORGED_VK_SIGMA0.1 ∧ (vkLinkX 0).2 ≠ FORGED_VK_SIGMA0.2.1
     ∧ (vkLinkX 0).1 ≠ 0 ∧ (vkLinkX 0).2 ≠ 0 := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND IT MOVES THE WIRE** — both published slots of commitment 0, where §2's on-curve leg saw
 nothing at all. -/
@@ -710,10 +710,10 @@ not `PastaMsmOnCurve.onCurveGates` instantiated on the index's 28 points — the
 not algebra: 28 more 2 048-row traces of an already-deployed AIR.
 -/
 
-#assert_axioms the_index_is_twenty_eight_commitments
-#assert_axioms every_vk_commitment_is_on_pallas
-#assert_axioms no_vk_commitment_is_the_identity
-#assert_axioms the_vk_commitments_are_twenty_eight_distinct_points
+#assert_compiled the_index_is_twenty_eight_commitments
+#assert_compiled every_vk_commitment_is_on_pallas
+#assert_compiled no_vk_commitment_is_the_identity
+#assert_compiled the_vk_commitments_are_twenty_eight_distinct_points
 #assert_axioms the_vk_chain_is_twenty_eight_links
 #assert_axioms the_vk_chain_starts_fresh
 #assert_axioms the_vk_chain_is_the_prefix_fold
@@ -728,13 +728,13 @@ not algebra: 28 more 2 048-row traces of an already-deployed AIR.
 #assert_axioms the_vk_wire_outgoing_lane0
 #assert_axioms the_vk_wire_slot_is_the_coordinates_limbs
 #assert_axioms the_phase1_tape_head_is_the_index_digest
-#assert_axioms the_vk_tie_is_the_whole_element
+#assert_compiled the_vk_tie_is_the_whole_element
 #assert_axioms the_index_digest_cannot_see_the_circuit_shape
-#assert_axioms the_transaction_index_is_an_equally_on_curve_twenty_eight
-#assert_axioms the_on_curve_leg_cannot_see_the_substituted_commitment
-#assert_axioms the_vk_forgery_is_a_real_displacement
-#assert_axioms the_vk_forgery_moves_every_published_felt
-#assert_axioms the_vk_digest_tamper_target_is_the_first_commitment
+#assert_compiled the_transaction_index_is_an_equally_on_curve_twenty_eight
+#assert_compiled the_on_curve_leg_cannot_see_the_substituted_commitment
+#assert_compiled the_vk_forgery_is_a_real_displacement
+#assert_compiled the_vk_forgery_moves_every_published_felt
+#assert_compiled the_vk_digest_tamper_target_is_the_first_commitment
 
 -- ⚑ COMPILER-TRUSTED, and said out loud: each is up to 28 Kimchi permutations of a 255-bit state,
 -- where the `decide` proof-term path overflows.
