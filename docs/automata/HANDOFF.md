@@ -398,3 +398,9 @@ Each change is one commit. Pin the counts delta with `#guard`, and record it in 
 
 ### Processes and clones
 No PID files, no background jobs and no clones. Scratch is under the session scratchpad `.../scratchpad/e/` (probes, commit messages, temporary indexes), none of it needed.
+
+## Root notes for the Codex deputy (2026-11-06)
+
+- The Claude deputy's wrap-up is complete; it stopped on a model-credit limit before its final message. Its sub-lanes A, B, C, E, F are released. Read their full transcripts with `cv show <id>` and `cv cat <id> <tool_use_id>` when a section here is not enough: deputy a875b2c2c74741952; lane E aacbf9710a625485b; lane F a2d9102da89c3b7b8; lane B a6d5dd59f73ce4326; list the rest with `cv lanes 78fef112-a52f-425f-8503-f3fa24ff087c`.
+- Lane F's combined policyc compile finished after this file was written: 129 states, 1,515.5 s, 87 MB peak. Output: /private/tmp/claude-501/-Users-ember-dev-aidev/78fef112-a52f-425f-8503-f3fa24ff087c/scratchpad/laneF/both.json, source /private/tmp/claude-501/-Users-ember-dev-aidev/78fef112-a52f-425f-8503-f3fa24ff087c/scratchpad/laneF/both.policy (outside the repo; copy them in). Next is Lane F section step 2: check it in as demo/absence-receipt/policyc/secrets-absence.json, test that its minimized table equals the receipt's byte for byte, make it the table source, re-run and re-sign, update START in circuit/tests/absence_receipt_record.rs. The two-table receipt question is moot.
+- Pushes from this tree are blocked until the Mina rescue lane fixes the dead reference at metatheory/Dregg2/Circuit/Emit/MinaBodyPreimageBitsAir.lean:437 (its uncommitted edit). Local-only commits waiting: 57f1b83c4 and this one. Do not set DREGG_ALLOW_DEAD_DOC_REFS; push once the hook passes.
