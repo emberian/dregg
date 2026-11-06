@@ -58,8 +58,8 @@ stated here so the next lane builds the weld instead of rediscovering that it fi
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`/`admit`/
-`native_decide`. Named theorems, not `#guard`s. NEW file; not imported by the `Dregg2` root.
+General theorems are `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). Facts
+about concrete data are `native_decide`, pinned `#assert_compiled` (since 2026-11-06). No `sorry`/`admit`. Named theorems, not `#guard`s. NEW file; not imported by the `Dregg2` root.
 -/
 import Dregg2.Circuit.Emit.MinaWrapXiEndoLift
 import Dregg2.Circuit.Emit.MinaWrapXiAggregateMsm
@@ -87,7 +87,7 @@ def xiOnTheWire : Nat :=
   (List.range SK).foldr (fun i acc => acc * 256 + (endoOutputBlock.getD i 0).toNat) 0
 
 /-- ⚑ **THE SHARED BOUNDARY CARRIES THE POLYSCALE.** -/
-theorem the_shared_boundary_decodes_to_the_polyscale : xiOnTheWire = XI := by decide
+theorem the_shared_boundary_decodes_to_the_polyscale : xiOnTheWire = XI := by native_decide
 
 /-! ## §2 — `T_COVER`'s MANIFEST, READ AS DATA.
 
@@ -132,7 +132,7 @@ generator indices — to `ξ⁰ … ξ⁴⁶` followed by the twelve zeros the p
 theorem the_declared_digits_are_the_orbit_of_the_wire_xi :
     manifestScalars
       = (List.range N_REAL).map (qpow xiOnTheWire) ++ List.replicate (N_PAD - N_REAL) 0 := by
-  decide
+  native_decide
 
 /-- ⚑ **AND THE ORBIT IS 47 DIFFERENT SCALARS.** Without this the theorem above would be equally
 green over a ξ of `0` or `1`, whose orbit is constant — which is exactly what a silently-zeroed
@@ -140,7 +140,7 @@ boundary would produce. -/
 theorem the_orbit_is_not_constant :
     ((List.range N_REAL).map (qpow xiOnTheWire)).eraseDups.length = N_REAL
       ∧ xiOnTheWire ≠ 0 ∧ xiOnTheWire ≠ 1 := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- The two rows the refutations below move, READ rather than assumed: the first term row is
 window 1, generator 1, digit 0 (the leading base-4 digit of `ξ⁰ = 1`), and the row at index
@@ -153,7 +153,7 @@ have said so. -/
 theorem the_tampered_rows_are_what_they_are_claimed_to_be :
     coverRows.getD 0 [] = [1, 1, 0] ∧ coverRows.getD 7493 [] = [128, 1, 1]
       ∧ 7493 = (windowsOf NBITS C - 1) * N_PAD := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND ONE MOVED DIGIT LEAVES THE ORBIT.** The first term row's digit raised by one — the
 smallest change a prover that wanted a different aggregate could make to the artifact — and the
@@ -162,7 +162,7 @@ restatement of how `coverManifest` was built. -/
 theorem a_perturbed_digit_leaves_the_orbit :
     (coverRows.set 0 [1, 1, 1]).foldl absorbRow (List.replicate N_PAD 0)
       ≠ (List.range N_REAL).map (qpow xiOnTheWire) ++ List.replicate (N_PAD - N_REAL) 0 := by
-  decide
+  native_decide
 
 /-- ⚑ **AND A RELABELLED KEY LEAVES IT TOO.** The same digit, in the same POSITION, routed to a
 different generator by its own key — the forgery a positional read would not see. -/
@@ -170,7 +170,7 @@ theorem a_relabelled_key_leaves_the_orbit :
     (coverRows.set 7493 [128, 2, (coverRows.getD 7493 []).getD 2 0]).foldl absorbRow
         (List.replicate N_PAD 0)
       ≠ (List.range N_REAL).map (qpow xiOnTheWire) ++ List.replicate (N_PAD - N_REAL) 0 := by
-  decide
+  native_decide
 
 /-- The manifest's shape, so a truncated or over-long emission is a red rather than a different
 still-true sentence: one row per trace row, `128 · 59` of them real. -/
@@ -178,7 +178,7 @@ theorem the_manifest_is_the_trace_height :
     coverRows.length = bucketedRows N_PAD NBITS C
       ∧ termRows N_PAD NBITS C = windowsOf NBITS C * N_PAD
       ∧ manifestScalars.length = N_PAD := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §3 — ⚑ WHAT THIS TIE IS AND IS NOT.
 
@@ -201,7 +201,7 @@ theorem the_aggregate_has_room_for_the_basis_and_not_for_the_orbit :
       ∧ 6 * SK < N_REAL * SK
       ∧ N_REAL * SK = 1504
       ∧ 6 * SK = 192 := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND THE DERIVATION THAT WOULD FIX IT NEEDS SIX WIRE VALUES, NOT FORTY-SEVEN.**
 
@@ -220,12 +220,12 @@ theorem the_squaring_basis_generates_the_orbit :
         = (List.range 6).foldl
             (fun acc j => if (i / 2 ^ j) % 2 = 1 then qmul acc (qpow xiOnTheWire (2 ^ j)) else acc)
             1))) = true := by
-  decide
+  native_decide
 
 /-- ⚑ **AND SIX IS EXACTLY ENOUGH.** Five would drop `ξ³²`, and the aggregate's term count is 47. -/
 theorem six_squarings_cover_forty_seven_terms :
     N_REAL ≤ 2 ^ 6 ∧ ¬ (N_REAL ≤ 2 ^ 5) ∧ 6 * SK = 192 := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-! ### §3b — ⚑ THE PRICE THIS FILE DOES NOT LIFT.
 
@@ -261,16 +261,16 @@ Both curves: `pallasCompleteAddSound_forces`, `vestaCompleteAddSound_forces`, **
 that a migration rather than an impossibility, and §7.2 of `PastaMsmBucketed` records the standing
 verdict on whether this cone should be migrated at all. -/
 
-#assert_axioms the_shared_boundary_decodes_to_the_polyscale
+#assert_compiled the_shared_boundary_decodes_to_the_polyscale
 #assert_axioms the_cover_rows_are_the_descriptors_own_table
-#assert_axioms the_declared_digits_are_the_orbit_of_the_wire_xi
-#assert_axioms the_orbit_is_not_constant
-#assert_axioms a_perturbed_digit_leaves_the_orbit
-#assert_axioms a_relabelled_key_leaves_the_orbit
-#assert_axioms the_tampered_rows_are_what_they_are_claimed_to_be
-#assert_axioms the_manifest_is_the_trace_height
-#assert_axioms the_aggregate_has_room_for_the_basis_and_not_for_the_orbit
-#assert_axioms the_squaring_basis_generates_the_orbit
-#assert_axioms six_squarings_cover_forty_seven_terms
+#assert_compiled the_declared_digits_are_the_orbit_of_the_wire_xi
+#assert_compiled the_orbit_is_not_constant
+#assert_compiled a_perturbed_digit_leaves_the_orbit
+#assert_compiled a_relabelled_key_leaves_the_orbit
+#assert_compiled the_tampered_rows_are_what_they_are_claimed_to_be
+#assert_compiled the_manifest_is_the_trace_height
+#assert_compiled the_aggregate_has_room_for_the_basis_and_not_for_the_orbit
+#assert_compiled the_squaring_basis_generates_the_orbit
+#assert_compiled six_squarings_cover_forty_seven_terms
 
 end Dregg2.Circuit.Emit.MinaWrapXiScalarWeld
