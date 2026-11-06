@@ -216,3 +216,36 @@ process RSS, not `free`, and no tenant peaking). `Dregg2.Circuit.Emit.MinaWrapCo
 (killed at 12G, `run-u79764`; its peak is not yet measured). Everything else in the 174-module emitter
 closure builds under 12G. The clone lives at `/tank/dregg-build/automata/bs` (ZFS, 4.4 GB; a no-op
 `lake build` of the automata closure replays 3,034 jobs in 4 s after the move from `/home`).
+
+### Source commit and provenance are separate phases (2026-11-06)
+
+[MEASURED] Requiring a new descriptor's stamp in pre-commit was circular: the automatic
+emitter correctly requires committed source, but the static gate refused the source/artifact
+commit needed to produce it. The static by-name gate now checks routing and reference closure,
+and reports missing stamp rows as **PENDING**, never as provenance evidence. Commit the named
+source and emitted artifacts, emit from that committed revision in an owned clean bb2 clone,
+then integrate the generated stamp and run strict `--verify-provenance`. The strict verifier
+and committed-source refusal are unchanged. Ten scratch-only tests in
+`scripts/test-emit-routing-phases.py` include the same unstamped artifact passing static routing
+and failing provenance, plus changed bytes, dirty-source/non-emit stamps, ghosts and imports.
+
+### bb2 peaks and parsimony (2026-11-06, provisional chain observations)
+
+| module | chain sample KiB | chain wall seconds | exit | attribution |
+|---|---:|---:|---:|---|
+| MinaBodyPreimageBitsAir | 25,952,960 | 448 | 0 | largest Lean process on whole box |
+| MinaWrapCommitStages | 17,278,016 | 342 | 0 | largest Lean process on whole box |
+
+The predecessor chain at source `609ae705400dd4636a39d5a5acac9138a6e192f8` continues; these
+are completed module observations, **not its final verdict**. Its sampler is not cgroup-specific,
+so these cannot establish isolated module peaks. The rescue lane's directly attributed figures
+are in `metatheory/docs/MINA-PICKLES-RESCUE.md`: body preimage fell from 25.9 GB / 6:16 to
+5.6 GB / 0:50 with unchanged statements, axioms and emitted bytes.
+
+[INFERRED from those measurements] The expensive part is elaborator evaluation of large closed
+objects and repeated scalar multiplication, not descriptor size. Structural proofs replace
+quadratic scans; kernel evaluation replaces avoidable elaborator normalization; named equations
+share expensive computations. Moving these facts to compiled Boolean guards would discard proof
+terms and axiom accounting. The smaller, stronger repair is already demonstrated by the body
+preimage module. Reserve 32 GiB only for independently measured remaining exceptions; a stale
+old-source stamp does not justify carrying those peaks forward as the design's fixed cost.

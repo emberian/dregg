@@ -286,3 +286,15 @@ recursive VK hash (`air_descriptor::fingerprint` is computed at use) or by-name 
 `WIDE_REGISTRY_STAGED_FP` + `UMEM_WELD_TABLE_FP` are a WIRE pin (`dregg_epoch` handshake
 `registry_fp`) and stay regardless; the rest are tamper tripwires whose deletion waits on an
 artifact-triggered re-derive (one artifact from warm oleans: 7.0 s [MEASURED]).
+
+### Source/provenance phase correction (Codex deputy, 2026-11-06)
+
+[MEASURED] The new pre-commit routing check accidentally required stamp coverage before a source
+commit, while the emitter requires committed source. This blocked seven new generated artifacts
+without providing a legal path to mint their stamp. Static routing now reports outstanding stamp
+coverage as PENDING; strict provenance still refuses the same artifact until an automatic emit
+from committed source covers it. Ten scratch-only controls exercise the surviving gate, including
+missing coverage, changed bytes, dirty/non-emit stamps and the original routing/reference failures.
+No stamp is synthesized from existing bytes, no source-dirty override is restored, and static
+acceptance is explicitly not provenance acceptance. The source and generated-artifact commit
+precedes the automatic stamp commit. See `BUILD.md`, source/provenance phases.

@@ -55,7 +55,10 @@ Modes:
                          plus the clean control). Touches nothing shared.
   --verify-by-name-routing
                          reconcile `EmitByName.lean`'s routing table against the
-                         checked-in by-name/ set and the stamp, BOTH directions.
+                         checked-in by-name/ set, BOTH directions. Missing stamp
+                         rows are reported as PENDING, never provenance evidence.
+                         Commit source/artifacts first; then emit and stamp from
+                         that committed source, and run --verify-provenance.
                          Static parse of the .lean — no Lean run, no cargo, seconds
                          — so it still works while the emit is blocked (which is
                          exactly when a routing gap can sit unnoticed). ALSO runs
@@ -1132,8 +1135,8 @@ def _verify_provenance_findings(doors: bool = True) -> tuple[list[str], dict[str
     # hopeful one: these legs read `metatheory/*.lean` (2300 files), tracked `*.rs` (4344) and
     # `.github/workflows/*.yml` — and the red-proof mutates NONE of those. It touches exactly
     # three things: descriptor bytes under a subdirectory, a `<subdir>_sha256` row, and
-    # `source_dirty`. No door leg reads any of the three (`verify_by_name_routing`'s stamp read is
-    # `by_name_sha256`, which the proof never edits). Re-running them once per injected fault cost
+    # `source_dirty`. No door finding depends on any of the three (routing's stamp coverage
+    # report is advisory only). Re-running them once per injected fault cost
     # ~25s each and measured nothing — 8 identical scans — which is how a red-proof grows past its
     # budget and starts reporting TIMEOUT, and a timeout is not a verdict. The proof still makes
     # ONE full-path run (doors on) so this argument cannot silently become false.
@@ -1218,8 +1221,11 @@ def _verify_provenance_findings(doors: bool = True) -> tuple[list[str], dict[str
 #
 # This closes it from the OTHER end: parse the table's name literals out of the .lean
 # source (they are string literals — no Lean toolchain needed) and reconcile them against
-# the tracked/on-disk directory and the PROVENANCE stamp. It therefore keeps working while
-# the emit is blocked, which is exactly when a routing gap can sit unnoticed.
+# the tracked/on-disk directory. Stamp coverage is reported as a PENDING obligation, not a
+# static failure: the automatic emit REQUIRES committed source, so a pre-commit stamp demand
+# would prevent the very commit needed to mint it. `--verify-provenance` independently rejects
+# every missing row (and missing stamp, changed bytes, dirty source, or non-emit mode).
+# This source-phase check keeps working while the emit is blocked.
 #
 # The parse is STRUCTURE-CHECKED, never best-effort: it must find the decl, must find the
 # terminator, must produce one name per list opener, and must agree with the Lean file's
@@ -1335,9 +1341,13 @@ def by_name_on_disk() -> set[str]:
 
 
 def verify_by_name_routing() -> list[str]:
-    """The ROUND TRIP, both directions: every name the Lean routing table authors lands as
-    a checked-in file carrying a provenance row, and every checked-in by-name file is
-    routed. Returns the finding lines (empty == clean); prints a one-line summary."""
+    """STATIC source phase: routed names and checked-in artifacts cover each other.
+
+    Stamp coverage is advisory here, never evidence of provenance. The source/artifact commit
+    must precede emission because `require_committed_emit_source` forbids dirty source. Missing
+    rows remain failures of the separate `_verify_provenance_findings` coverage walk, which also
+    checks bytes, mode and dirty-source stamps. Returns only static routing/reference findings.
+    """
     routed = parse_by_name_routing()
     routed_set = set(routed)
     present, source = by_name_present()
@@ -1345,7 +1355,11 @@ def verify_by_name_routing() -> list[str]:
     stamp_path = DESC / PROVENANCE_FILE
     pinned: set[str] | None = None
     if stamp_path.exists():
-        pinned = set(json.loads(stamp_path.read_text()).get("by_name_sha256", {}))
+        try:
+            pinned = set(json.loads(stamp_path.read_text()).get("by_name_sha256", {}))
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            print(f"verify-by-name-routing: PENDING provenance — stamp unreadable ({exc}); "
+                  "the static check does not validate provenance.")
 
     findings: list[str] = []
 
@@ -1373,23 +1387,23 @@ def verify_by_name_routing() -> list[str]:
             f"(the ungated hand-transcription hop `predicate-arith.json` drifted through)."
         )
 
-    # (4) the third leg: routed AND checked in, but no provenance row — nothing
-    # operator-facing attests those bytes.
-    if pinned is not None:
-        for n in sorted((routed_set & present) - pinned):
-            findings.append(
-                f"UNSTAMPED: circuit/descriptors/by-name/{n} is routed and checked in "
-                f"({source}) but has no PROVENANCE.json `by_name_sha256` row — it landed "
-                f"without the automatic stamp. Remedy: the stamp lands from a clean clone at a "
-                f"committed revision (the canonical host is hbox), by the command in "
-                f"docs/automata/BUILD.md, section \"Emit and stamp (C2)\": "
-                f"`scripts/emit_descriptors.py --rev <sha>`, then commit PROVENANCE.json by "
-                f"name. Do NOT hand-add rows; a stamp not produced by the emit attests nothing."
-            )
+    # (4) Missing stamp rows are an emission obligation, not a source-phase routing defect.
+    # NEVER add these to `findings`: doing so blocks committing the source required by emit.
+    # The strict provenance walk independently checks every on-disk artifact against the stamp.
+    pending = sorted((routed_set & present) - (pinned or set()))
+    if pending:
+        print(
+            f"verify-by-name-routing: PENDING provenance — {len(pending)} routed, tracked "
+            f"artifact(s) lack readable stamp coverage: {', '.join(pending)}. "
+            "Static acceptance is NOT provenance evidence. Commit source/artifacts, then run "
+            "the automatic emit from that committed revision and --verify-provenance; "
+            "never hand-add stamp rows."
+        )
 
     print(
         f"verify-by-name-routing: {len(routed)} routed / {len(present)} checked in "
-        f"({source}) / {len(pinned) if pinned is not None else 0} stamped"
+        f"({source}) / {len(pinned) if pinned is not None else 0} stamp rows "
+        "(provenance NOT checked here)"
         + (f" · {len(inflight)} routed-but-untracked (in flight): {', '.join(inflight)}"
            if inflight else "")
     )
@@ -3560,7 +3574,7 @@ def main():
                 sys.stderr.write(f"  - {f}\n")
             sys.exit(1)
         print("verify-by-name-routing: PASS — the routing table and the checked-in "
-              "by-name set cover each other, every routed artifact is stamped, and every "
+              "by-name set cover each other (STATIC ONLY; provenance is a separate gate), and every "
               "literal include_str!/include_bytes! target, first-party Lean import, and "
               "path invoked by a tracked workflow exists and is tracked.")
         return

@@ -260,19 +260,19 @@ fi
 # BY-NAME ROUTING ROUND TRIP — when the routing table or the by-name set is staged.
 #
 # `emit_descriptors.py --verify-by-name-routing` reconciles `metatheory/EmitByName.lean`'s routing
-# table, the checked-in `circuit/descriptors/by-name/` set and `PROVENANCE.json` in both directions,
-# plus the committed-reference-to-uncommitted-target doors. Static: no Lean, no cargo, ~7-12 s.
-# It replaced the regen-ack ceremony (SUBSTRATE-DECISION §9 row 4, 2026-11-06): a by-name artifact
-# committed without the automatic stamp, or routed with no artifact, is refused here, at the commit
-# that introduces it. The fix for an UNSTAMPED finding is the emit (docs/automata/BUILD.md,
-# "Emit and stamp (C2)"), never a hand-added stamp row.
+# table and the checked-in `circuit/descriptors/by-name/` set in both directions, plus the
+# committed-reference-to-uncommitted-target doors. Static: no Lean, no cargo, ~7-12 s.
+# This is the SOURCE phase (SUBSTRATE-DECISION §9), not the provenance gate: automatic emission
+# requires committed source, so demanding its stamp here would make that source uncommittable.
+# Missing stamp rows are reported PENDING. After this commit, emit/stamp from the committed
+# revision and run the separate strict `--verify-provenance` gate. It still rejects missing
+# coverage, changed bytes, dirty-source stamps and non-emit mode. Never hand-add stamp rows.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 if git diff --cached --name-only --diff-filter=ACMRD -- 'metatheory/EmitByName.lean' \
      'circuit/descriptors/by-name/' | grep -q .; then
   python3 "$repo_root/scripts/emit_descriptors.py" --verify-by-name-routing || {
     echo "pre-commit: by-name routing round trip FAILED (see above); commit refused." >&2
-    echo "  An UNSTAMPED finding is fixed by the automatic stamp, which lands from a clean clone" >&2
-    echo "  on hbox: docs/automata/BUILD.md, section \"Emit and stamp (C2)\". Never hand-add rows." >&2
+    echo "  Fix the static routing/reference finding. Pending provenance is not a source-phase failure." >&2
     exit 1
   }
 fi
