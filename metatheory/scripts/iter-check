@@ -26,8 +26,9 @@ full: rsyncs the tracked + untracked-not-ignored files to a persistent warm clon
   under the box's memory containment, with a PID file, and copies the log back to .iter-check/<run>/build.log.
 
 Box policy (root's rebalance, 2026-11-06; see the repo's BUILD doc): umbrella and 32G jobs on bb2 only; a medium job
-(12G cap) goes to whichever of bb2/hbox/forge has the lowest score = load1/ncpu + used_rss/total_ram among boxes that
-answer, have the cap plus 40 GB headroom free (forge: the cap plus 4 GB; it is a 32 GB box), and are not in a pause
+(12G cap) goes to whichever of bb2/hbox/forge has the lowest score = load1/ncpu + (1 - MemAvailable/MemTotal) among boxes that
+answer, have the cap plus 40 GB headroom free (forge: the cap plus 4 GB; it is a 32 GB box), have at least 30 GB free
+on the filesystem that holds the clone (disk pressure pauses a box), and are not in a pause
 window (forge pauses 10:00-11:00 UTC for fn2's nightly). One lake per lane per box: a box whose clone has a live run
 is skipped. LEAN_NUM_THREADS: 8 on bb2, 6 on hbox and forge.
 
@@ -190,22 +191,35 @@ BOXES = {
                 packages={}, elan='/srv/lanes/iter-check/elan', pause=(10, 11)),
 }
 
+DISK_FLOOR_GB = 30   # disk pressure is a pause condition (ember): a box under it takes no new build
+
 def probe(name):
     b = BOXES[name]
     r = sh(['ssh', '-o', 'ConnectTimeout=8', '-o', 'BatchMode=yes', b['ssh'],
-            'nproc; cut -d" " -f1 /proc/loadavg; ps -eo rss= | awk "{s+=\\$1} END {print s}"; '
+            'nproc; cut -d" " -f1 /proc/loadavg; awk "/MemAvailable/ {print \\$2}" /proc/meminfo; '
             'awk "/MemTotal/ {print \\$2}" /proc/meminfo; date -u +%H; '
+            f'df -Pk {b["base"].rsplit("/", 1)[0]} | awk "NR==2 {{print \\$4}}"; '
+            '(awk "/^size/ {print int(\\$3/1024)}" /proc/spl/kstat/zfs/arcstats 2>/dev/null || echo 0) | head -1 | sed "s/^/arc /"; '
             f'for p in {b["base"]}/*/run.pid; do [ -f "$p" ] && kill -0 $(cat "$p") 2>/dev/null && echo busy "$p"; done; true'],
            timeout=30)
     if r.returncode: return dict(box=name, ok=False, why='unreachable')
     l = r.stdout.split('\n')
     try: ncpu, load, rss, tot, hour = int(l[0]), float(l[1]), int(l[2]), int(l[3]), int(l[4])
     except (ValueError, IndexError): return dict(box=name, ok=False, why='probe parse: ' + r.stdout[:80])
-    busy = [x for x in l[5:] if x.startswith('busy')]
-    free_gb = (tot - rss) / 1048576; cap = int(b['cap'][:-1])
-    d = dict(box=name, ok=True, ncpu=ncpu, load=load, rss_gb=round(rss / 1048576, 1), total_gb=round(tot / 1048576),
-             score=round(load / ncpu + rss / tot, 3), busy=busy)
-    if 'pause' in b and b['pause'][0] <= hour < b['pause'][1]: d.update(ok=False, why='pause window (UTC %d)' % hour)
+    try: disk_gb = int(l[5]) / 1048576
+    except (ValueError, IndexError): disk_gb = 0.0
+    busy = [x for x in l if x.startswith('busy')]
+    # MemAvailable, not summed RSS: every Lean process maps the same oleans, so summed RSS counts the
+    # shared pages once per process (forge read 29.5 of 31 GB "used" with 12 GB available).
+    # ZFS (hbox): the ARC is reclaimable but MemAvailable leaves it out ("free lies on hbox").
+    arc = next((int(x.split()[1]) for x in l if x.startswith('arc ') and x.split()[1].isdigit()), 0)
+    avail = min(tot, rss + arc); used = tot - avail
+    free_gb = avail / 1048576; cap = int(b['cap'][:-1])
+    d = dict(box=name, ok=True, ncpu=ncpu, load=load, used_gb=round(used / 1048576, 1), total_gb=round(tot / 1048576),
+             score=round(load / ncpu + used / tot, 3), busy=busy)
+    d['disk_free_gb'] = round(disk_gb)
+    if disk_gb < DISK_FLOOR_GB: d.update(ok=False, why=f'{disk_gb:.0f} GB free on the build filesystem < {DISK_FLOOR_GB} GB floor')
+    elif 'pause' in b and b['pause'][0] <= hour < b['pause'][1]: d.update(ok=False, why='pause window (UTC %d)' % hour)
     elif free_gb < cap + b['headroom']: d.update(ok=False, why=f'{free_gb:.0f} GB free < cap {cap} + {b["headroom"]}')
     return d
 

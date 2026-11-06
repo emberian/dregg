@@ -116,11 +116,13 @@ no dependencies).
 
 ## Which box (policy of 2026-11-06)
 
-check-full scores every box that answers as `load1/ncpu + used_rss/total_ram` and takes the lowest.
+check-full scores every box that answers as `load1/ncpu + used/total` (used = MemTotal - MemAvailable - ZFS ARC, not summed RSS, which counts shared olean pages once per process) and takes the lowest.
 A box is skipped when it:
 
 - has less free memory than the job's cap plus headroom (40 GB on bb2 and hbox, 4 GB on forge,
   which is a 32 GB machine);
+- has less than 30 GB free on the filesystem that holds its clone (disk pressure is a pause
+  condition: a box under the floor takes no new build; hbox was at 21-25 GB on 2026-11-06);
 - is in a pause window (forge: 10:00-11:00 UTC, fn2's nightly);
 - already holds a live run of this lane (one `lake` per lane per box).
 
