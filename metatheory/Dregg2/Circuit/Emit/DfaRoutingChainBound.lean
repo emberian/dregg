@@ -29,9 +29,18 @@ Model level (`DfaAcceptanceAir`, abstract `CryptoPrimitives`):
     symbols rows = w`.
   * `wordCommit_injective`: under `CollisionFree` and an injective symbol encoding, two words of
     the same length with the same commitment are equal; hence
-    `dfaAir_bound_identifies_record`: an accepted proof and a record of the trace's length whose
-    commitment is the public one yield a satisfying trace that READS the record, classified to
-    `finalState`.
+    `dfaAir_bound_identifies_record`: an accepted proof and a record whose commitment is the public
+    one yield a satisfying trace that READS the record, classified to `finalState`, or a trace of a
+    different length. Only the given statement's `encSym` is required injective;
+    `identifies_record_inhabited` meets every hypothesis over `Sy = ℤ` (a reference kernel
+    `refKernel` that decides `Satisfies`). Both are IDEAL INJECTIVE-HASH lemmas (residual 1).
+
+Deployed form, over the descriptor's own `hash : List ℤ → ℤ`, no injectivity floor (§1½):
+  * `chain_binds_or_collides` — two equal-length preimage lists with one seeded chain are equal, or
+    the deterministic extractor `chainFind` returns a `SpongeColl hash` pair ON THOSE TWO CHAINS (the
+    latest fold step whose inputs differ, else the first differing entry preimage);
+    `chainFind_self`: one list never triggers it. The `Lightclient.MMR.mroot_binds_or_collides`
+    shape.
 
 Descriptor level (the served `dfaRoutingDesc`, `Satisfied2` over its own `hash`):
   * `route_eq_fold` — `pi[route] = runningFold pi[table] (entry-hash column)`, from the chip
@@ -44,30 +53,45 @@ Descriptor level (the served `dfaRoutingDesc`, `Satisfied2` over its own `hash`)
     the anchor. Every row's `(current, symbol, next, zero_lane)` is pinned by the chain alone.
   * `dfaRouting_bound_accepts` — the whole-run corollary: if `pi[final]` is accepting, the record's
     run from `pi[initial]` is an accepting run (`accepts (classify w)`).
+  * ⚑ `dfaRouting_bound_or_collides` — the same conclusion with NO `CollisionFree`: bound, or
+    `SpongeColl hash (boundFind hash t w)` at the trace's and the record's chains.
+    `dfaRouting_bound` is its ideal-hash corollary.
+  * `BoundAccepts` (satisfied, record opens `pi[route]`, record of the trace's length) and
+    `boundAccepts_sound`; `UnboundAccepts` is the record-ignoring acceptance.
 
 ## Falsifier (§4, kernel-checked)
 
-On the genuine 1-row witness `DfaRoutingRung2.wtTrace refHash` (reads `[1]`, `final = 1`): the
-record-ignoring acceptance (`Satisfied2` plus Rung 2's `final = classify (read word)`) HOLDS; read as
-a statement about the record `[0]` it is false (`classify [0] = 0 ≠ 1`); and the bound verifier
-REFUSES, because `pi[route] ≠ wordCommit refHash 0 0 [0]` (`splice_route_mismatch`). The same
-acceptance test meets the unbound shape and fails the bound one.
+On the genuine 1-row witness `DfaRoutingRung2.wtTrace refHash` (reads `[1]`, `final = 1`):
+`splice_separation` — for the one trace and the one record `[0]`, `UnboundAccepts` holds,
+`BoundAccepts` fails (the record-opening equality fails, `splice_route_mismatch`), and the claim
+`final = classify [0]` is false. `wt_boundAccepts`: the honest record `[1]` is bound-accepted;
+`wt_bound_or_collides` / `wt_no_collision`: the deployed form fires, and its collision branch is
+false for the honest trace by `chainFind_self` alone (no property of the hash is used).
 
 ## NOT claimed / residuals
+  * (1) `wordCommit_injective`, `dfaAir_bound_identifies_record` and `dfaRouting_bound` assume
+    `CollisionFree` (`compressN_inj`, global injectivity of the sponge, impossible for a finite
+    digest carrier): IDEAL INJECTIVE-HASH LEMMAS, NOT DEPLOYED COLLISION-RESISTANCE REDUCTIONS. The
+    deployed statement is `dfaRouting_bound_or_collides`; the model level (abstract `Digest`) has
+    no extractor form here.
   * The length of the record is a hypothesis (`|w| = |rows|`): the running fold is injective only
     across equal lengths (`fold_inj`), and the statement does not carry the trace length. A STARK's
     trace length is public; binding it into the statement is a one-field change, not made here.
-  * `CollisionFree` and `ChipTableSound` ride as named hypotheses (as in Rung 2); the reference
-    `refHash` inhabits them. The canonicality envelopes `DfaTraceCanon`, `DfaChainCanon` are Rung 1/2's.
+  * `ChipTableSound` rides as a named hypothesis (as in Rung 2); the reference `refHash` inhabits
+    it and `CollisionFree`. The canonicality envelopes `DfaTraceCanon`, `DfaChainCanon` are Rung 1/2's.
   * The zero lane of the LAST row is not pinned by a gate (gates are divided by the transition
     zerofier); `dfaRouting_bound` gets it from the chain (`compressN` injectivity), so it is not a
-    hole for the bound statement, but `route_eq_wordCommit` at the descriptor level needs it.
+    hole for the bound statement (`rows_of_pre` reads it off the preimage equality), but
+    `route_eq_wordCommit` at the descriptor level needs it.
   * No new column, no new descriptor; this is a statement over the served one.
 
+Codex round 4 (2026-11-06) items 1, 3 and 5 are repaired here.
+
 ## Axiom hygiene
-`#assert_all_clean` ⊆ {propext, Classical.choice, Quot.sound}. NEW file; imports read-only.
+`#assert_all_clean` ⊆ {propext, Classical.choice, Quot.sound}. Imports read-only.
 -/
 import Dregg2.Circuit.Emit.DfaRoutingRung2
+import Dregg2.Circuit.Poseidon2Binding
 
 namespace Dregg2.Circuit.Emit.DfaRoutingChainBound
 
@@ -85,6 +109,7 @@ open Dregg2.Crypto.DfaAcceptanceAir
    runningFold entryHashes entryHashOf lastRunning_eq_fold fold_inj DfaAirVerifierKernel
    classifyFrom_cons classifyFrom_nil)
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gate_modEq_iff)
+open Dregg2.Circuit.Poseidon2Binding (SpongeColl)
 
 set_option autoImplicit false
 
@@ -176,7 +201,9 @@ theorem runEntries_inj (cf : CollisionFree Digest) (d : TableDfa State Sym)
     rw [runEntries_inj cf d encState encSym hsym _ ys₁ ys₂ ht]
 
 /-- ⚑ **`wordCommit_injective`** — two words of one length with one commitment are equal, under
-`CollisionFree` and an injective symbol encoding. -/
+`CollisionFree` and an injective symbol encoding. An IDEAL INJECTIVE-HASH LEMMA, not a deployed
+collision-resistance reduction: `CollisionFree.compressN_inj` is global injectivity of the sponge,
+impossible for a finite digest carrier. The deployed form is `chain_binds_or_collides` (§2). -/
 theorem wordCommit_injective (cf : CollisionFree Digest) (d : TableDfa State Sym)
     (encState : State → Digest) (encSym : Sym → Digest) (hsym : Function.Injective encSym)
     (tc : Digest) (q₀ : State) {w₁ w₂ : List Sym} (hlen : w₁.length = w₂.length)
@@ -206,12 +233,14 @@ theorem dfaAir_bound_verify_sound [K : DfaAirVerifierKernel St Sy Dg Proof]
 
 /-- ⚑ **`dfaAir_bound_identifies_record`** — the record form: for a record whose commitment is the
 public one, an accepted proof yields a satisfying trace that READS THE RECORD and classifies it to
-`finalState`, or a trace of a different length (the one residual the statement leaves open). -/
+`finalState`, or a trace of a different length (the alternative the model statement leaves open:
+it carries no trace length). An ideal injective-hash lemma (see `wordCommit_injective`). Only THIS
+statement's symbol encoding is required injective; `identifies_record_inhabited` meets every
+hypothesis over `Sy = ℤ`. -/
 theorem dfaAir_bound_identifies_record [K : DfaAirVerifierKernel St Sy Dg Proof]
-    (cf : CollisionFree Dg) (hsym : ∀ stmt : Dregg2.Crypto.DfaAcceptanceAir.Statement St Sy Dg,
-      Function.Injective stmt.encSym)
-    (hext : K.extractable) (stmt : Dregg2.Crypto.DfaAcceptanceAir.Statement St Sy Dg)
-    (proof : Proof) (hstart : stmt.d.start = stmt.initialState)
+    (cf : CollisionFree Dg) (hext : K.extractable)
+    (stmt : Dregg2.Crypto.DfaAcceptanceAir.Statement St Sy Dg)
+    (hsym : Function.Injective stmt.encSym) (proof : Proof) (hstart : stmt.d.start = stmt.initialState)
     (haccept : K.verify stmt proof = true) (record : List Sy)
     (hrec : wordCommit stmt.d stmt.encState stmt.encSym stmt.tableCommitment stmt.initialState
       record = stmt.routeCommitment) :
@@ -224,12 +253,148 @@ theorem dfaAir_bound_identifies_record [K : DfaAirVerifierKernel St Sy Dg Proof]
   refine ⟨rows, hsat, ?_⟩
   by_cases hl : (symbols rows).length = record.length
   · left
-    have heq : symbols rows = record := wordCommit_injective cf _ _ _ (hsym stmt) _ _ hl
+    have heq : symbols rows = record := wordCommit_injective cf _ _ _ hsym _ _ hl
       (by rw [hsyms, hw, hrec])
     exact ⟨heq, by rw [hfin, ← hsyms, heq]⟩
   · exact Or.inr hl
 
 end Model
+
+/-! ### The record theorem's hypotheses are jointly met over a non-trivial alphabet.
+
+A reference kernel whose `verify` decides `Satisfies` (classically) and whose `extractable` is
+`True`; the statement is the 1-row toggle run of `DfaRoutingRung2.wtG`, symbols in `ℤ` with the
+identity encoding. -/
+
+/-- The reference routing kernel: a proof is a row list, accepted iff it satisfies the AIR. -/
+@[reducible] noncomputable def refKernel (hash : List ℤ → ℤ) :
+    @DfaAirVerifierKernel ℤ ℤ ℤ _ (dfaPrims hash) (List (Row ℤ ℤ ℤ)) :=
+  letI := dfaPrims hash
+  @DfaAirVerifierKernel.mk ℤ ℤ ℤ _ (dfaPrims hash) _
+    (fun stmt rows => @decide (@Satisfies ℤ ℤ ℤ _ (dfaPrims hash) stmt.d stmt.encState stmt.encSym
+        stmt.tableCommitment stmt.initialState stmt.finalState stmt.routeCommitment rows)
+        (Classical.dec _))
+    True
+    (fun _ _ rows h => ⟨rows, @of_decide_eq_true _ (Classical.dec _) h⟩)
+
+/-- The toggle run's statement: start `0`, final `1`, seed `0`, route the genuine running hash. -/
+def refStmt (hash : List ℤ → ℤ) : @Dregg2.Crypto.DfaAcceptanceAir.Statement ℤ ℤ ℤ _ (dfaPrims hash) :=
+  @Dregg2.Crypto.DfaAcceptanceAir.Statement.mk ℤ ℤ ℤ _ (dfaPrims hash) (pinnedDfa 0) id id 0 0 1
+    (hash [0, hash [0, 1, 1, 0]])
+
+/-- ⚑ Every hypothesis of `dfaAir_bound_identifies_record` holds at `refHash` over `Sy = ℤ`, whose
+symbol encoding is the identity (it separates `0` and `1`); the record `[1]` is identified and
+classified. -/
+theorem identifies_record_inhabited :
+    ∃ rows, @Satisfies ℤ ℤ ℤ _ (dfaPrims refHash) (pinnedDfa 0) id id 0 0 1
+        (refHash [0, refHash [0, 1, 1, 0]]) rows ∧
+      ((symbols rows = [1] ∧ (1 : ℤ) = classify (pinnedDfa 0) [1]) ∨
+        (symbols rows).length ≠ [1].length) := by
+  exact @dfaAir_bound_identifies_record ℤ ℤ ℤ _ (dfaPrims refHash) _ (refKernel refHash)
+    (collisionFree_of_injective refHash_injective) (show True from trivial) (refStmt refHash) Function.injective_id
+    (wtG refHash) rfl (@decide_eq_true _ (Classical.dec _) (wtG_satisfies refHash)) [1] rfl
+
+/-! ## §1½ — The chain binds or names a collision (deployed form, no injectivity floor).
+
+Over `hash : List ℤ → ℤ` (the descriptor's own sponge, `compress a b = hash [a, b]`), a running
+fold over the hashes of a list of preimages. Two equal-length preimage lists with one fold are
+EQUAL, or the deterministic extractor `chainFind` returns a genuine `SpongeColl` pair on those two
+particular chains: first along the fold (the latest step whose inputs differ while its outputs
+agree), else at the first differing entry preimage. The honest prover (one list) never triggers it
+(`chainFind_self`). The house shape of `Lightclient.MMR.mroot_binds_or_collides`. -/
+
+/-- The collision extractor along two folds: walk forward; return the LAST step whose inputs differ
+(the inner result wins when it is already a collision). -/
+def foldFind (hash : List ℤ → ℤ) : ℤ → ℤ → List ℤ → List ℤ → List ℤ × List ℤ
+  | s₁, s₂, e₁ :: r₁, e₂ :: r₂ =>
+    let r := foldFind hash (hash [s₁, e₁]) (hash [s₂, e₂]) r₁ r₂
+    if r.1 ≠ r.2 then r else ([s₁, e₁], [s₂, e₂])
+  | _, _, _, _ => ([], [])
+
+theorem foldFind_self (hash : List ℤ → ℤ) :
+    ∀ (s : ℤ) (es : List ℤ), (foldFind hash s s es es).1 = (foldFind hash s s es es).2
+  | _, [] => rfl
+  | s, e :: es => by
+    have ih := foldFind_self hash (hash [s, e]) es
+    simp only [foldFind, ne_eq, ite_not]
+    split <;> simp_all
+
+/-- Two folds of equal length with equal results: equal seeds and entries, or a named collision. -/
+theorem fold_binds_or_collides (hash : List ℤ → ℤ) :
+    ∀ (es₁ es₂ : List ℤ) (s₁ s₂ : ℤ), es₁.length = es₂.length →
+      @runningFold ℤ _ (dfaPrims hash) s₁ es₁ = @runningFold ℤ _ (dfaPrims hash) s₂ es₂ →
+      (s₁ = s₂ ∧ es₁ = es₂) ∨ SpongeColl hash (foldFind hash s₁ s₂ es₁ es₂)
+  | [], [], _, _, _, h => Or.inl ⟨h, rfl⟩
+  | [], _ :: _, _, _, hl, _ => by simp at hl
+  | _ :: _, [], _, _, hl, _ => by simp at hl
+  | e₁ :: r₁, e₂ :: r₂, s₁, s₂, hl, h => by
+    have h' : @runningFold ℤ _ (dfaPrims hash) (hash [s₁, e₁]) r₁
+        = @runningFold ℤ _ (dfaPrims hash) (hash [s₂, e₂]) r₂ := h
+    rcases fold_binds_or_collides hash r₁ r₂ _ _ (by simpa using hl) h' with ⟨hs, hr⟩ | hc
+    · subst hr
+      have hself := foldFind_self hash (hash [s₁, e₁]) r₁
+      rw [hs] at hself
+      by_cases hp : [s₁, e₁] = [s₂, e₂]
+      · simp only [List.cons.injEq, and_true] at hp
+        exact Or.inl ⟨hp.1, by rw [hp.2]⟩
+      · right
+        simp only [foldFind, hs, ne_eq, hself, not_true_eq_false, if_false]
+        exact ⟨hp, hs⟩
+    · right
+      simp only [foldFind, if_pos hc.1]
+      exact hc
+
+/-- The collision extractor at the first differing preimage of two hashed lists. -/
+def listFind : List (List ℤ) → List (List ℤ) → List ℤ × List ℤ
+  | p₁ :: r₁, p₂ :: r₂ => if p₁ = p₂ then listFind r₁ r₂ else (p₁, p₂)
+  | _, _ => ([], [])
+
+theorem map_hash_binds_or_collides (hash : List ℤ → ℤ) :
+    ∀ (P₁ P₂ : List (List ℤ)), P₁.map hash = P₂.map hash →
+      P₁ = P₂ ∨ SpongeColl hash (listFind P₁ P₂)
+  | [], [], _ => Or.inl rfl
+  | [], _ :: _, h => by simp at h
+  | _ :: _, [], h => by simp at h
+  | p₁ :: r₁, p₂ :: r₂, h => by
+    simp only [List.map_cons, List.cons.injEq] at h
+    by_cases hp : p₁ = p₂
+    · rcases map_hash_binds_or_collides hash r₁ r₂ h.2 with hr | hc
+      · exact Or.inl (by rw [hp, hr])
+      · right; simpa only [listFind, if_pos hp] using hc
+    · right; simp only [listFind, if_neg hp]; exact ⟨hp, h.1⟩
+
+/-- ⚑ The chain's deterministic extractor: the fold's collision if it has one, else the first
+differing entry preimage. -/
+def chainFind (hash : List ℤ → ℤ) (s : ℤ) (P₁ P₂ : List (List ℤ)) : List ℤ × List ℤ :=
+  let r := foldFind hash s s (P₁.map hash) (P₂.map hash)
+  if r.1 ≠ r.2 then r else listFind P₁ P₂
+
+/-- ⚑ **`chain_binds_or_collides`** — two equal-length preimage lists whose seeded chains agree are
+EQUAL, or `chainFind` names a genuine collision of `hash` on those two chains. -/
+theorem chain_binds_or_collides (hash : List ℤ → ℤ) (s : ℤ) (P₁ P₂ : List (List ℤ))
+    (hl : P₁.length = P₂.length)
+    (h : @runningFold ℤ _ (dfaPrims hash) s (P₁.map hash)
+      = @runningFold ℤ _ (dfaPrims hash) s (P₂.map hash)) :
+    P₁ = P₂ ∨ SpongeColl hash (chainFind hash s P₁ P₂) := by
+  rcases fold_binds_or_collides hash _ _ s s (by simpa using hl) h with ⟨_, he⟩ | hc
+  · have hself := foldFind_self hash s (P₁.map hash)
+    rcases map_hash_binds_or_collides hash P₁ P₂ he with hp | hc
+    · exact Or.inl hp
+    · right
+      have hcf : chainFind hash s P₁ P₂ = listFind P₁ P₂ := by
+        simp only [chainFind, ← he, ne_eq, hself, not_true_eq_false, if_false]
+      rw [hcf]; exact hc
+  · right; simp only [chainFind, if_pos hc.1]; exact hc
+
+/-- The honest prover never triggers the extractor: one list yields an equal pair. -/
+theorem chainFind_self (hash : List ℤ → ℤ) (s : ℤ) (P : List (List ℤ)) :
+    (chainFind hash s P P).1 = (chainFind hash s P P).2 := by
+  have hl : ∀ Q : List (List ℤ), (listFind Q Q).1 = (listFind Q Q).2 := by
+    intro Q; induction Q with
+    | nil => rfl
+    | cons p r ih => simpa only [listFind, if_pos rfl] using ih
+  simp only [chainFind, foldFind_self, ne_eq, not_true_eq_false, if_false]
+  exact hl P
 
 /-! ## §2 — The served descriptor: the route PI is the fold of the entry-hash column. -/
 
@@ -382,6 +547,127 @@ theorem dfaRouting_bound_accepts
     (pinnedDfa (t.pub PI_INITIAL)).accepts (classify (pinnedDfa (t.pub PI_INITIAL)) w) := by
   rw [← (dfaRouting_bound hsat hne hcanon hchain hchip hwire cf w hc hlen).2]; exact hacc
 
+/-! ### The deployed form: bound, or a named collision of `hash` (no `CollisionFree`). -/
+
+/-- The entry preimage of a routing row. -/
+def rowPre (a : Assignment) : List ℤ := [a CURRENT, a SYMBOL, a NEXT, a ZERO_LANE]
+
+/-- The entry preimages of `w`'s toggle run from `q`. -/
+def runPre : ℤ → List ℤ → List (List ℤ)
+  | _, [] => []
+  | q, y :: ys => [q, y, toggleStep q y, 0] :: runPre (toggleStep q y) ys
+
+theorem runPre_length : ∀ (q : ℤ) (w : List ℤ), (runPre q w).length = w.length
+  | _, [] => rfl
+  | q, _ :: ys => by simp [runPre, runPre_length _ ys]
+
+theorem runEntries_eq_map (hash : List ℤ → ℤ) (q₀ : ℤ) : ∀ (q : ℤ) (w : List ℤ),
+    @runEntries ℤ ℤ ℤ _ (dfaPrims hash) (pinnedDfa q₀) id id q w = (runPre q w).map hash
+  | _, [] => rfl
+  | q, y :: ys => congrArg₂ List.cons rfl (runEntries_eq_map hash q₀ (toggleStep q y) ys)
+
+/-- Rows whose entry preimages ARE `w`'s run preimages read `w`, and the last row's `next` is `w`'s
+classification. No hash at all. -/
+theorem rows_of_pre (q₀ : ℤ) : ∀ (l : List Assignment) (q : ℤ) (w : List ℤ),
+    l.map rowPre = runPre q w →
+    l.map (fun a => a SYMBOL) = w ∧
+      ∀ hne : l ≠ [], (l.getLast hne) NEXT = classifyFrom (pinnedDfa q₀) q w
+  | [], _, [], _ => ⟨rfl, fun h => absurd rfl h⟩
+  | [], _, _ :: _, h => by simp [runPre] at h
+  | _ :: _, _, [], h => by simp [runPre] at h
+  | a :: rest, q, y :: ys, h => by
+    simp only [List.map_cons, runPre, List.cons.injEq, rowPre] at h
+    obtain ⟨⟨hcur, hsym, hnext, _⟩, ht⟩ := h
+    obtain ⟨ih1, ih2⟩ := rows_of_pre q₀ rest (toggleStep q y) ys ht
+    refine ⟨by simp [hsym, ih1], fun _ => ?_⟩
+    cases rest with
+    | nil =>
+      cases ys with
+      | nil => simp only [List.getLast_singleton, classifyFrom_cons, classifyFrom_nil]
+               rw [hnext]; rfl
+      | cons _ _ => simp at ih1
+    | cons b bs =>
+      rw [List.getLast_cons (by simp), ih2 (by simp), classifyFrom_cons]
+      rfl
+
+/-- The last row's `next` is the public final state (B2, lifted). -/
+theorem final_pin (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t)
+    (hne : t.rows ≠ []) (hcanon : DfaTraceCanon t) :
+    (t.rows.getLast hne) NEXT = t.pub PI_FINAL := by
+  have hpos : 0 < t.rows.length := List.length_pos_of_ne_nil hne
+  have hlt : t.rows.length - 1 < t.rows.length := Nat.sub_lt hpos Nat.one_pos
+  have hb2 := piLast_forces hsat hne mem_b2FinalPin
+  rw [envAt_loc hlt] at hb2
+  have hcN := (hcanon.1 _ hlt).2.2
+  rw [List.getLast_eq_getElem hne]
+  exact eq_of_modEq_of_canon hb2 hcN.1 hcN.2 hcanon.2.2.1 hcanon.2.2.2
+
+/-- The extractor for one trace against one record: the trace's entry preimages against the
+record's run preimages, along the chain seeded at `pi[table]`. -/
+def boundFind (hash : List ℤ → ℤ) (t : VmTrace) (w : List ℤ) : List ℤ × List ℤ :=
+  chainFind hash (t.pub PI_TABLE) (t.rows.map rowPre) (runPre (t.pub PI_INITIAL) w)
+
+/-- ⚑ **`dfaRouting_bound_or_collides` — the content-bound theorem in its deployed form.** For a
+record of the trace's length whose commitment is the public route, a satisfying trace READS the
+record and is classified to it, OR `boundFind` returns a genuine collision of `hash` on the trace's
+chain and the record's. No injectivity hypothesis. -/
+theorem dfaRouting_bound_or_collides
+    (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t)
+    (hne : t.rows ≠ []) (hcanon : DfaTraceCanon t) (hchain : DfaChainCanon t)
+    (hchip : ChipTableSound hash (t.tf .poseidon2))
+    (hwire : t.tf poseidon2narrow = narrowTable (t.tf .poseidon2))
+    (w : List ℤ) (hc : t.pub PI_ROUTE = routeOf hash (t.pub PI_TABLE) (t.pub PI_INITIAL) w)
+    (hlen : t.rows.length = w.length) :
+    (symbols (traceRows t) = w ∧
+      t.pub PI_FINAL = classify (pinnedDfa (t.pub PI_INITIAL)) w) ∨
+      SpongeColl hash (boundFind hash t w) := by
+  have hfold := route_eq_fold hsat hne hchain hchip hwire
+  have hcol : entryHashes (traceRows t) = (t.rows.map rowPre).map hash := by
+    simp only [entryHashes, traceRows, List.map_map]
+    apply List.map_congr_left
+    intro a ha
+    obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp ha
+    exact entry_eq hsat hchip hwire hi
+  have hrun : routeOf hash (t.pub PI_TABLE) (t.pub PI_INITIAL) w
+      = @runningFold ℤ _ (dfaPrims hash) (t.pub PI_TABLE)
+          ((runPre (t.pub PI_INITIAL) w).map hash) := by
+    simp only [routeOf, wordCommit]; rw [runEntries_eq_map]
+  rcases chain_binds_or_collides hash (t.pub PI_TABLE) (t.rows.map rowPre)
+      (runPre (t.pub PI_INITIAL) w) (by simp [runPre_length, hlen])
+      (by rw [← hcol, ← hfold, hc, hrun]) with hP | hcoll
+  · left
+    obtain ⟨hsyms, hlast⟩ := rows_of_pre (t.pub PI_INITIAL) t.rows _ w hP
+    refine ⟨by rw [symbols_traceRows]; exact hsyms, ?_⟩
+    rw [← final_pin hsat hne hcanon, hlast hne]
+    rfl
+  · exact Or.inr hcoll
+
+/-! ### The bound acceptance check (codex round 4 item 5).
+
+`UnboundAccepts` is the record-ignoring acceptance (the descriptor is satisfied; Rung 2's conclusion
+is about the word read off the trace, so the record is not consulted). `BoundAccepts` adds the two
+record checks the content-bound theorem consumes: the record opens the public route, and the record
+has the trace's length. -/
+
+def UnboundAccepts (hash : List ℤ → ℤ) (t : VmTrace) (_w : List ℤ) : Prop :=
+  Satisfied2 hash dfaRoutingDesc (fun _ => 0) (fun _ => (0, 0)) [] t
+
+def BoundAccepts (hash : List ℤ → ℤ) (t : VmTrace) (w : List ℤ) : Prop :=
+  Satisfied2 hash dfaRoutingDesc (fun _ => 0) (fun _ => (0, 0)) [] t ∧
+    t.pub PI_ROUTE = routeOf hash (t.pub PI_TABLE) (t.pub PI_INITIAL) w ∧
+    t.rows.length = w.length
+
+/-- What `BoundAccepts` buys (with the envelopes): the record is read and classified, or a named
+collision. -/
+theorem boundAccepts_sound {w' : List ℤ} (h : BoundAccepts hash t w')
+    (hne : t.rows ≠ []) (hcanon : DfaTraceCanon t) (hchain : DfaChainCanon t)
+    (hchip : ChipTableSound hash (t.tf .poseidon2))
+    (hwire : t.tf poseidon2narrow = narrowTable (t.tf .poseidon2)) :
+    (symbols (traceRows t) = w' ∧
+      t.pub PI_FINAL = classify (pinnedDfa (t.pub PI_INITIAL)) w') ∨
+      SpongeColl hash (boundFind hash t w') :=
+  dfaRouting_bound_or_collides h.1 hne hcanon hchain hchip hwire w' h.2.1 h.2.2
+
 end Descriptor
 
 /-! ## §3 — Non-vacuity: the bound theorem fires on the genuine witness. -/
@@ -406,9 +692,10 @@ bound one. -/
 /-- The unbound shape HOLDS on the witness: `Satisfied2`, and Rung 2's conclusion about the word
 read off the trace. -/
 theorem splice_meets_unbound :
+    Satisfied2 refHash dfaRoutingDesc (fun _ => 0) (fun _ => (0, 0)) [] (wtTrace refHash) ∧
     (wtTrace refHash).pub PI_FINAL
       = classify (pinnedDfa ((wtTrace refHash).pub PI_INITIAL))
-          (symbols (traceRows (wtTrace refHash))) := refWitness_fires
+          (symbols (traceRows (wtTrace refHash))) := ⟨wtTrace_satisfied2 refHash, refWitness_fires⟩
 
 /-- Read as a statement about the record `[0]`, that acceptance is FALSE: `[0]` classifies to `0`,
 the public final state is `1`. -/
@@ -416,7 +703,8 @@ theorem splice_false_of_record :
     (wtTrace refHash).pub PI_FINAL
       ≠ classify (pinnedDfa ((wtTrace refHash).pub PI_INITIAL)) [0] := by decide
 
-/-- The bound verifier REFUSES the record `[0]`: the public route commitment is not its commitment. -/
+/-- The record-opening equality fails for `[0]`: the public route commitment is not its
+commitment. -/
 theorem splice_route_mismatch :
     (wtTrace refHash).pub PI_ROUTE
       ≠ routeOf refHash ((wtTrace refHash).pub PI_TABLE) ((wtTrace refHash).pub PI_INITIAL) [0] := by
@@ -434,12 +722,47 @@ theorem splice_fails_bound :
         = classify (pinnedDfa ((wtTrace refHash).pub PI_INITIAL)) [0]) :=
   fun h => splice_false_of_record h.2
 
+/-- The bound acceptance ACCEPTS the honest record `[1]`. -/
+theorem wt_boundAccepts : BoundAccepts refHash (wtTrace refHash) [1] :=
+  ⟨wtTrace_satisfied2 refHash, rfl, rfl⟩
+
+/-- ⚑ **`splice_separation`** — one trace, one record: the record-ignoring acceptance ACCEPTS
+`(wtTrace, [0])`, the bound acceptance REFUSES it, and the claim about `[0]` is false. -/
+theorem splice_separation :
+    UnboundAccepts refHash (wtTrace refHash) [0] ∧ ¬ BoundAccepts refHash (wtTrace refHash) [0] ∧
+      (wtTrace refHash).pub PI_FINAL
+        ≠ classify (pinnedDfa ((wtTrace refHash).pub PI_INITIAL)) [0] :=
+  ⟨wtTrace_satisfied2 refHash, fun h => splice_route_mismatch h.2.1, splice_false_of_record⟩
+
+/-- The deployed-form theorem fires on the witness with no injectivity hypothesis; its collision
+branch is closed here only because `refHash` is injective. -/
+theorem wt_bound_or_collides :
+    (symbols (traceRows (wtTrace refHash)) = [1] ∧
+      (wtTrace refHash).pub PI_FINAL
+        = classify (pinnedDfa ((wtTrace refHash).pub PI_INITIAL)) [1]) ∨
+      SpongeColl refHash (boundFind refHash (wtTrace refHash) [1]) :=
+  dfaRouting_bound_or_collides (wtTrace_satisfied2 refHash) (by simp [wtTrace])
+    (wtTrace_dfaCanon refHash) (wtTrace_chainCanon refHash refHash_route_canon)
+    (wtTf_chipSound refHash) (wtTf_narrow_wire refHash) [1] wt_route_is_wordCommit rfl
+
+/-- The honest trace never triggers the extractor: its collision disjunct is false by
+`chainFind_self`, which uses no property of the hash. -/
+theorem wt_no_collision : ¬ SpongeColl refHash (boundFind refHash (wtTrace refHash) [1]) :=
+  fun h => h.1 (by
+    have : (wtTrace refHash).rows.map rowPre = runPre ((wtTrace refHash).pub PI_INITIAL) [1] := rfl
+    simp only [boundFind, this]
+    exact chainFind_self _ _ _)
+
 /-! ## §5 — axiom tripwires. -/
 
 #assert_all_clean [runEntries_length, entryHashes_eq_runEntries, exists_getLast',
   route_eq_wordCommit, runEntries_inj, wordCommit_injective, dfaAir_bound_verify_sound,
   dfaAir_bound_identifies_record, route_eq_fold, rows_of_entries, dfaRouting_bound,
   dfaRouting_bound_accepts, wt_route_is_wordCommit, wt_bound_fires, splice_meets_unbound,
-  splice_false_of_record, splice_route_mismatch, splice_fails_bound]
+  splice_false_of_record, splice_route_mismatch, splice_fails_bound, refKernel,
+  identifies_record_inhabited, foldFind_self, fold_binds_or_collides, map_hash_binds_or_collides,
+  chain_binds_or_collides, chainFind_self, runPre_length, runEntries_eq_map, rows_of_pre, final_pin,
+  dfaRouting_bound_or_collides, boundAccepts_sound, wt_boundAccepts, splice_separation,
+  wt_bound_or_collides, wt_no_collision]
 
 end Dregg2.Circuit.Emit.DfaRoutingChainBound
