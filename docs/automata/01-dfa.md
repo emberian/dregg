@@ -46,12 +46,29 @@ column. Three deployed shapes:
 | table routing | 3 | 2 | 4 | 1 / 1 table / 0 | 2 | golden pinned (`:536`) | [MEASURED `DfaRoutingTableEmit.lean:540-543`] |
 | hash-chained routing | 22 (8 base + 2×7 chip lanes) | 4 | 14 | 1 / 2 chip / 2 (×352 cells wide) | 7 (S-box) | byte-pinned `:225` | [MEASURED `DfaRoutingGeneralEmit.lean:272-278`] |
 | attested, scalar root | 4 | 3 | 6 | 1 / 1 map-op (5 felts) / 16 chip rows + 1 leaf digest | 2 | 1205 | [MEASURED `AttestedAutomatonEmit.lean:1171-1212`] |
-| attested, 8-felt weld | 11 | 10 | 20 | 1 / 1 map-op (19 felts deployed) / 16 chip rows + 1 leaf digest | 2 | 2611 | [MEASURED `AttestedAutomatonWeld8.lean:782-795`] |
+| attested, 8-felt weld, graduated (served) | 11 | 10 | 22 | 1 / 1 map-op (19 felts deployed) + 2 range lookups / 16 chip rows + 1 leaf digest | 2 | 2803 | [MEASURED `AttestedAutomatonWeld8.lean:943-957`] |
 
 Table sizes: table routing ships `|Q|·|Σ|` rows in the descriptor (one object per automaton); the
 attested shape ships ZERO rows and one `2^16`-leaf map root (`ASTATES = 32768`, `ASYM = 2`,
 `NKEYS = 65536 = 2^MAP_TREE_DEPTH` [MEASURED]). Main-trace area: `3·|w|` / `22·|w|` / `4·|w|` /
 `11·|w|`.
+
+**Weld graduation (2026-11-06).** The v2 assembly refuses a descriptor with a non-empty `ranges`
+carrier, so the weld's two teeth (`CURRENT < 2^15`, `SYMBOL < 2`) became lookups into the served
+`range_w15` (wire id 84) and `range_w1` (wire id 70) tables; no limb split was needed because a
+15-bit table exists, so the Lean main trace gains no column. Delta against the ungraduated weld
+[MEASURED, `#guard`]: columns 11 → 11, PIs 10 → 10, constraints 20 → 22, tables 1 → 3, wire bytes
+2611 → 2803 (+192), byte crossover against the run table `|w| = 201 → 220`. The kept tooth is
+`weld_lookups_bound` / `lanes8_row_bounded` (faithful range tables ⇒ every accepted row is in
+domain) with the falsifier `weld_range_refuses_out_of_domain`. Served:
+`circuit/tests/weld8_served.rs` loads it through `descriptor_by_name`, passes
+`check_descriptor2_wellformed`, proves and verifies an 8-symbol run of a 3-state automaton
+committed in the 8-felt map tree (debug profile on the Mac: prove 1178 ms, verify 35 ms, 4 batch
+instances, degree bits `[3, 5, 4, 3]` [MEASURED]), and refuses the Lanes8 forgery shape
+(`forgeD` committed, `forgeE` run) at the pre-flight and, with the pre-flight bypassed, at the
+`ir2_p2` chip bus. ⚠ Residual found on contact: the deployed indexed-Merkle tree reserves key `0`
+(edge `(0, 0)`) as its MIN sentinel with value `0`, so an automaton is committable there only if
+`step(0, 0) = 0`; the Lean model's dense `2^16`-leaf heap has no such side condition.
 
 The commitment, the real bill: `c = hash_bytes_8(w)` is a rate-4 sponge over `bytes_to_lanes w`
 (2 bytes per lane, 4 length lanes) [READ `circuit/src/poseidon2.rs:704`;
@@ -159,6 +176,6 @@ and the per-byte cost law (hash dominates).
 | `DfaAccepts`, `dfa_bridge`, `dfa_bound_verify_sound`, `dfa_bound_identifies_record_or_collides`, splice falsifiers | `Dfa.lean` | L1 (statement + proof; kernel OPEN) |
 | table routing descriptor + `tableRouting_refines_classify` | `DfaRoutingTableEmit.lean` | L3 (emitted, witness, refinement) — word unbound |
 | hash-chained routing + `dfaAir_verify_sound` | `DfaRoutingGeneralEmit.lean`, `DfaAcceptanceAir.lean` | L4 (deployed as `dfa-routing-toggle-2state::poseidon2-v1`) — word bound by chain, not stated |
-| attested weld, 8 lanes: `Satisfied2Lanes8`, `weld8_forged_edge_refused`, routing | `AttestedAutomatonWeld8.lean`, `AttestedAutomatonLanes8.lean`, `descriptor_by_name.rs` | L3 (emitted + witness + binding), routed; dense model |
+| attested weld, 8 lanes: `Satisfied2Lanes8`, `weld8_forged_edge_refused`, graduated range lookups, served | `AttestedAutomatonWeld8.lean`, `AttestedAutomatonLanes8.lean`, `descriptor_by_name.rs`, `circuit/tests/weld8_served.rs` | L4 (emitted + witness + binding, proved and verified by the v2 assembly); dense model, sentinel residual |
 | `route_commits_word` for the routing AIR | proposed | L1, one afternoon |
 | route column for table routing / attested | proposed | L3; milestone: `#guard` the wire delta (+1 chip lookup tuple per row = +25 wire felts per row [INFERRED from `CHIP_TUPLE_LEN = 25`]) and restate `tableRouting_refines_classify` with a `c` conjunct and the splice falsifier |

@@ -64,7 +64,11 @@ holds under the SCALAR denotation. The pair is the exhibited separation. The sha
 `DescriptorIR2.MapOp.holdsAt` is unchanged (43 consumer files); moving it remains the named follow-up,
 after which `Satisfied2Lanes8` is definitionally `Satisfied2Public`. The routing half: the `EmitByName`
 row and the by-name artifact `circuit/descriptors/by-name/attested-automaton-map-committed-weld8-v1.json`
-(generator output, 2611 bytes) land with this file. ⚠ ROUTED IS NOT SERVED: the v2 assembly's
+(generator output, 2611 bytes) land with this file. ⚑ 2026-11-06: GRADUATED AND SERVED — §3.G below
+replaces the two range teeth by lookups into the served `range_w15`/`range_w1` tables, the carriers
+are empty, the artifact is 2803 bytes, and `circuit/tests/weld8_served.rs` proves and verifies it
+through `descriptor_by_name` and refuses a forged edge. The paragraph that follows is the
+pre-graduation record. (was:) ⚠ ROUTED IS NOT SERVED: the v2 assembly's
 `check_descriptor2_wellformed` (`circuit/src/descriptor_ir2.rs:2315`) REFUSES any descriptor with a
 non-empty `ranges` carrier ("requires a GRADUATED descriptor"), and `weldDesc` — like the unwelded
 `attestedDesc` — declares `ranges := [⟨CURRENT, 15⟩, ⟨SYMBOL, 1⟩]`. A `descriptor_by_name.rs` arm was
@@ -392,16 +396,54 @@ def weldB3 (i : Fin 8) : VmConstraint2 :=
 def weldLaneConstraints : List VmConstraint2 :=
   (List.finRange 8).flatMap (fun i => [weldRootConst i, weldB3 i])
 
-/-- **`weldDesc name`** — the 8-FELT WELDED attested descriptor. 11 columns, 10 PIs, 20 constraints,
-the map-ops table, ZERO declared rows; wire bytes constant in `|w|` and in `|Q|·|Σ|`. -/
+/-! ### §3.G — ⚑ GRADUATED (2026-11-06): the two range teeth are range-TABLE LOOKUPS.
+
+The v2 assembly refuses a descriptor with a non-empty `ranges` carrier
+(`circuit/src/descriptor_ir2.rs::check_descriptor2`). The weld's two teeth (`CURRENT < 2^15`,
+`SYMBOL < 2`) are therefore lowered the way `EffectVmEmitV2.graduateV1Wide` lowers a v1 `VmRange`:
+a lookup of the bare column into a range table of ITS OWN width. Both widths are already served
+tables: `range_w15` (wire id 84, the borrow-limb table of the faithful spend) and `range_w1` (wire
+id 70, the Pasta/Mina bit table). The ids follow `EffectVmEmitV2.rangeTidW` (`.custom (64 + bits)`)
+and are spelled here rather than imported, because that module's import closure is the whole
+effect-VM tower. No limb split is needed: the 15-bit table bounds `CURRENT` exactly, so the main
+trace gains no column; the Rust assembly realizes each lookup with its own byte-limb aux columns.
+`weld_lookups_bound` (below) is the tooth the old carrier stated: against faithful range tables
+every accepted row has `0 ≤ CURRENT < 2^15` and `0 ≤ SYMBOL < 2`. -/
+
+/-- The 15-bit range table's id (= `EffectVmEmitV2.rangeTidW 15`, wire id 84). -/
+def WELD_TID_RANGE15 : TableId := .custom 79
+/-- The 1-bit range table's id (= `EffectVmEmitV2.rangeTidW 1`, wire id 70). -/
+def WELD_TID_RANGE1 : TableId := .custom 65
+
+/-- `range_w15`: rows `[0, 2^15)`. -/
+def weldRange15Def : TableDef := ⟨WELD_TID_RANGE15, "range_w15", 1, .rangeLimb 15⟩
+/-- `range_w1`: rows `[0, 2)`. -/
+def weldRange1Def : TableDef := ⟨WELD_TID_RANGE1, "range_w1", 1, .rangeLimb 1⟩
+
+/-- `CURRENT ∈ [0, 2^15)` — the state bound, by lookup. -/
+def weldCurRange : VmConstraint2 := .lookup ⟨WELD_TID_RANGE15, [.var CURRENT]⟩
+/-- `SYMBOL ∈ [0, 2)` — the alphabet bound, by lookup. -/
+def weldSymRange : VmConstraint2 := .lookup ⟨WELD_TID_RANGE1, [.var SYMBOL]⟩
+
+/-- The two range lookups, appended after the lane constraints. -/
+def weldRangeLookups : List VmConstraint2 := [weldCurRange, weldSymRange]
+
+/-- The witness-side contract the Rust range tables realize: each width's table IS its range. -/
+def WeldRangeTablesFaithful (tf : TraceFamily) : Prop :=
+  tf WELD_TID_RANGE15 = rangeRows 15 ∧ tf WELD_TID_RANGE1 = rangeRows 1
+
+/-- **`weldDesc name`** — the 8-FELT WELDED attested descriptor, GRADUATED. 11 columns, 10 PIs, 22
+constraints (20 + the two range lookups), the map-ops table and the two range tables, ZERO declared
+rows, EMPTY `hashSites`/`ranges` carriers; wire bytes constant in `|w|` and in `|Q|·|Σ|`. -/
 def weldDesc (name : String) : EffectVmDescriptor2 :=
   { name        := name
   , traceWidth  := WELD_WIDTH
   , piCount     := WELD_PI_COUNT
-  , tables      := [mapOpsTableDef]
-  , constraints := weldTransitionOpen :: attContinuity :: attB1 :: attB2 :: weldLaneConstraints
+  , tables      := [mapOpsTableDef, weldRange15Def, weldRange1Def]
+  , constraints := weldTransitionOpen :: attContinuity :: attB1 :: attB2 ::
+      (weldLaneConstraints ++ weldRangeLookups)
   , hashSites   := []
-  , ranges      := [⟨CURRENT, 15⟩, ⟨SYMBOL, 1⟩] }
+  , ranges      := [] }
 
 /-- The canonical pinned instance name. -/
 def WELD_NAME : String := "dregg-attested-automaton::map-committed-weld8-v1"
@@ -421,7 +463,16 @@ theorem weldB2_mem (name : String) : attB2 ∈ (weldDesc name).constraints :=
 theorem weldLane_mem (name : String) {c : VmConstraint2} (hc : c ∈ weldLaneConstraints) :
     c ∈ (weldDesc name).constraints :=
   List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _
-    (List.mem_cons_of_mem _ hc)))
+    (List.mem_cons_of_mem _ (List.mem_append_left _ hc))))
+
+theorem weldCurRange_mem (name : String) : weldCurRange ∈ (weldDesc name).constraints :=
+  List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _
+    (List.mem_cons_of_mem _ (List.mem_append_right _ List.mem_cons_self))))
+
+theorem weldSymRange_mem (name : String) : weldSymRange ∈ (weldDesc name).constraints :=
+  List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _
+    (List.mem_cons_of_mem _ (List.mem_append_right _
+      (List.mem_cons_of_mem _ List.mem_cons_self)))))
 
 theorem weldRootConst_mem (name : String) (i : Fin 8) :
     weldRootConst i ∈ (weldDesc name).constraints :=
@@ -439,13 +490,21 @@ theorem weldLane_classify {c : VmConstraint2} (hc : c ∈ weldLaneConstraints) :
   simp only [List.mem_cons, List.not_mem_nil, or_false] at h
   exact ⟨i, h⟩
 
+/-- The tail past the four head constraints: a lane constraint or a range lookup. -/
+theorem weldTail_classify {c : VmConstraint2} (hc : c ∈ weldLaneConstraints ++ weldRangeLookups) :
+    (∃ i : Fin 8, c = weldRootConst i ∨ c = weldB3 i) ∨ c = weldCurRange ∨ c = weldSymRange := by
+  rcases List.mem_append.mp hc with h | h
+  · exact Or.inl (weldLane_classify h)
+  · simp only [weldRangeLookups, List.mem_cons, List.not_mem_nil, or_false] at h
+    exact Or.inr h
+
 /-- The descriptor declares no memory ops … -/
 theorem weld_memOps (name : String) : memOpsOf (weldDesc name) = [] := by
   show List.filterMap (fun c => match c with | .memOp m => some m | _ => none)
-    weldLaneConstraints = []
+    (weldLaneConstraints ++ weldRangeLookups) = []
   rw [List.filterMap_eq_nil_iff]
   intro c hc
-  obtain ⟨i, h | h⟩ := weldLane_classify hc <;> rw [h] <;> rfl
+  rcases weldTail_classify hc with ⟨i, h | h⟩ | h | h <;> rw [h] <;> rfl
 
 theorem weld_memLog (name : String) (t : VmTrace) : memLog (weldDesc name) t = [] := by
   simp [memLog, weld_memOps]
@@ -460,10 +519,10 @@ theorem weld_mapOps (name : String) :
          , newRoot := weldRootGroup
          , op      := .read }] := by
   have htail : List.filterMap (fun c => match c with | .mapOp m => some m | _ => none)
-      weldLaneConstraints = [] := by
+      (weldLaneConstraints ++ weldRangeLookups) = [] := by
     rw [List.filterMap_eq_nil_iff]
     intro c hc
-    obtain ⟨i, h | h⟩ := weldLane_classify hc <;> rw [h] <;> rfl
+    rcases weldTail_classify hc with ⟨i, h | h⟩ | h | h <;> rw [h] <;> rfl
   show ({ guard   := .const 1
         , root    := weldRootGroup
         , key     := .add (.mul (.const 2) (.var CURRENT)) (.var SYMBOL)
@@ -471,7 +530,7 @@ theorem weld_mapOps (name : String) :
         , newRoot := weldRootGroup
         , op      := .read } : MapOp)
       :: List.filterMap (fun c => match c with | .mapOp m => some m | _ => none)
-           weldLaneConstraints = _
+           (weldLaneConstraints ++ weldRangeLookups) = _
   rw [htail]
 
 /-- The map log is exactly one row per trace row — the SAME `attMapRow` shape the unwelded object
@@ -597,18 +656,64 @@ def weldPub (q f : Nat) (R8 : Digest8) : Assignment := fun k =>
     weldPub q f R8 (PI_W8ROOT i) = R8 i := by
   fin_cases i <;> rfl
 
+/-- The welded witness's table family: the map log at `.mapOps`, the two range tables at their ids
+(the faithful contents the Rust assembly realizes), empty elsewhere. -/
+def weldTf (rows : List Assignment) : TraceFamily :=
+  fun id => if id = TableId.mapOps then rows.map attMapRow
+    else if id = WELD_TID_RANGE15 then rangeRows 15
+    else if id = WELD_TID_RANGE1 then rangeRows 1 else []
+
+theorem weldTf_faithful (rows : List Assignment) : WeldRangeTablesFaithful (weldTf rows) :=
+  ⟨rfl, rfl⟩
+
 /-- **THE WELDED WITNESS**: the trace that runs `d` from `q` on `w` against the 8-lane group `R8`. -/
 def weldWit (d : TableDfa Nat Nat) (R8 : Digest8) (q : Nat) (w : List Nat) : VmTrace :=
   { rows := rowsW d R8 q w
   , pub  := weldPub q (classifyFrom d q w) R8
-  , tf   := attTf (rowsW d R8 q w) }
+  , tf   := weldTf (rowsW d R8 q w) }
+
+/-- **Both range LOOKUPS hold on every row of the welded witness**, against any table family whose
+two range tables are faithful (`CURRENT < 2^15`, `SYMBOL < 2`, by `range_row_mem_iff`). Hash-free.
+(Before graduation this was `weldWit_rowRanges`, over the `ranges` carrier.) -/
+theorem weldWit_rangeLookups (tf : TraceFamily) (htf : WeldRangeTablesFaithful tf)
+    (d : TableDfa Nat Nat) (R8 : Digest8)
+    (hstep : ∀ s y, d.step s y < ASTATES) (q : Nat) (hq : q < ASTATES)
+    (w : List Nat) (hsym : ∀ y ∈ w, y < ASYM)
+    (i : Nat) (hi : i < (weldWit d R8 q w).rows.length) :
+    Lookup.holdsAt tf (envAt (weldWit d R8 q w) i) ⟨WELD_TID_RANGE15, [.var CURRENT]⟩
+      ∧ Lookup.holdsAt tf (envAt (weldWit d R8 q w) i) ⟨WELD_TID_RANGE1, [.var SYMBOL]⟩ := by
+  have hi' : i < (rowsW d R8 q w).length := hi
+  have hloc : (envAt (weldWit d R8 q w) i).loc = (rowsW d R8 q w)[i]'hi' :=
+    envAt_loc (t := weldWit d R8 q w) hi
+  obtain ⟨s, y, hs, hy, hrow⟩ := rowsW_shape d hstep R8 w q hq hsym i hi'
+  refine ⟨?_, ?_⟩
+  · show [(EmittedExpr.var CURRENT).eval (envAt (weldWit d R8 q w) i).loc] ∈ tf WELD_TID_RANGE15
+    rw [htf.1, range_row_mem_iff]
+    simp only [EmittedExpr.eval]
+    rw [hloc, hrow, asgW_current]
+    refine ⟨Int.natCast_nonneg s, ?_⟩
+    have hlt : s < 2 ^ 15 := by simpa [ASTATES] using hs
+    rw [Int.ofNat_eq_natCast]
+    exact_mod_cast hlt
+  · show [(EmittedExpr.var SYMBOL).eval (envAt (weldWit d R8 q w) i).loc] ∈ tf WELD_TID_RANGE1
+    rw [htf.2, range_row_mem_iff]
+    simp only [EmittedExpr.eval]
+    rw [hloc, hrow, asgW_symbol]
+    refine ⟨Int.natCast_nonneg y, ?_⟩
+    have hlt : y < 2 ^ 1 := by simpa [ASYM] using hy
+    rw [Int.ofNat_eq_natCast]
+    exact_mod_cast hlt
 
 /-- **Every NON-map constraint of the welded descriptor holds on every row of the welded witness, for
-ANY `hash` and ANY table family** — none of continuity, the two state pins, the eight constancy windows
-or the eight lane pins reads either. Factored out of `weldWit_satisfies` (2026-11-05) so the
-LANE-COMPLETE denotation in `AttestedAutomatonLanes8` reuses it verbatim instead of re-proving it. -/
+ANY `hash` and ANY table family whose two range tables are faithful** — continuity, the two state
+pins, the eight constancy windows and the eight lane pins read neither; the two range lookups read
+only the range tables. Factored out of `weldWit_satisfies` (2026-11-05) so the LANE-COMPLETE
+denotation in `AttestedAutomatonLanes8` reuses it verbatim instead of re-proving it. -/
 theorem weldWit_rowConstraints_nonmap (hash : List ℤ → ℤ) (tf : TraceFamily)
-    (d : TableDfa Nat Nat) (R8 : Digest8) (q : Nat) (w : List Nat) (hw : w ≠ []) (name : String)
+    (htf : WeldRangeTablesFaithful tf)
+    (d : TableDfa Nat Nat) (R8 : Digest8)
+    (hstep : ∀ s y, d.step s y < ASTATES) (q : Nat) (hq : q < ASTATES)
+    (w : List Nat) (hw : w ≠ []) (hsym : ∀ y ∈ w, y < ASYM) (name : String)
     (i : Nat) (hi : i < (weldWit d R8 q w).rows.length)
     (c : VmConstraint2) (hc : c ∈ (weldDesc name).constraints) (hne : c ≠ weldTransitionOpen) :
     c.holdsAt hash tf (envAt (weldWit d R8 q w) i) (i == 0)
@@ -657,8 +762,13 @@ theorem weldWit_rowConstraints_nonmap (hash : List ℤ → ℤ) (tf : TraceFamil
     have hlast : i + 1 = (rowsW d R8 q w).length := by simpa using hl
     rw [hloc, rowsW_last_next d R8 w q i hi' hlast]
     exact Int.ModEq.refl _
-  · -- the EIGHT lane constraints: constancy and the public pin, per lane
-    obtain ⟨l, hl | hl⟩ := weldLane_classify hc
+  · -- the EIGHT lane constraints (constancy and the public pin, per lane), then the two lookups
+    rcases weldTail_classify hc with ⟨l, hl | hl⟩ | hl | hl
+    rotate_left 2
+    · subst hl
+      exact (weldWit_rangeLookups tf htf d R8 hstep q hq w hsym i hi).1
+    · subst hl
+      exact (weldWit_rangeLookups tf htf d R8 hstep q hq w hsym i hi).2
     · subst hl
       show WindowConstraint.holdsAt (envAt (weldWit d R8 q w) i)
         (i + 1 == (weldWit d R8 q w).rows.length) ⟨weldRootBody l, true⟩
@@ -688,35 +798,37 @@ theorem weldWit_rowConstraints_nonmap (hash : List ℤ → ℤ) (tf : TraceFamil
       show R8 l ≡ weldPub q (classifyFrom d q w) R8 (PI_W8ROOT l) [ZMOD 2013265921]
       rw [weldPub_root]
 
-/-- **Both range teeth hold on every row of the welded witness** (`CURRENT < 2^15`, `SYMBOL < 2`).
-Hash-free; factored out for the same reason as `weldWit_rowConstraints_nonmap`. -/
-theorem weldWit_rowRanges (d : TableDfa Nat Nat) (R8 : Digest8)
-    (hstep : ∀ s y, d.step s y < ASTATES) (q : Nat) (hq : q < ASTATES)
-    (w : List Nat) (hsym : ∀ y ∈ w, y < ASYM) (name : String)
-    (i : Nat) (hi : i < (weldWit d R8 q w).rows.length) (r : VmRange)
-    (hr : r ∈ (weldDesc name).ranges) : r.holds (envAt (weldWit d R8 q w) i) := by
-  have hi' : i < (rowsW d R8 q w).length := hi
-  have hloc : (envAt (weldWit d R8 q w) i).loc = (rowsW d R8 q w)[i]'hi' :=
-    envAt_loc (t := weldWit d R8 q w) hi
-  obtain ⟨s, y, hs, hy, hrow⟩ := rowsW_shape d hstep R8 w q hq hsym i hi'
-  simp only [weldDesc, List.mem_cons, List.not_mem_nil, or_false] at hr
-  rcases hr with rfl | rfl
-  · show 0 ≤ (envAt (weldWit d R8 q w) i).loc CURRENT
-      ∧ (envAt (weldWit d R8 q w) i).loc CURRENT < (2 : ℤ) ^ 15
-    rw [hloc, hrow]
-    refine ⟨Int.natCast_nonneg s, ?_⟩
-    show Int.ofNat s < (2 : ℤ) ^ 15
-    have hlt : s < 2 ^ 15 := by simpa [ASTATES] using hs
-    rw [Int.ofNat_eq_natCast]
-    exact_mod_cast hlt
-  · show 0 ≤ (envAt (weldWit d R8 q w) i).loc SYMBOL
-      ∧ (envAt (weldWit d R8 q w) i).loc SYMBOL < (2 : ℤ) ^ 1
-    rw [hloc, hrow]
-    refine ⟨Int.natCast_nonneg y, ?_⟩
-    show Int.ofNat y < (2 : ℤ) ^ 1
-    have hlt : y < 2 ^ 1 := by simpa [ASYM] using hy
-    rw [Int.ofNat_eq_natCast]
-    exact_mod_cast hlt
+/-- The graduated descriptor's `ranges` carrier is EMPTY: the two teeth live in the lookups. -/
+theorem weld_ranges (name : String) : (weldDesc name).ranges = [] := rfl
+
+/-- ⚑ **THE TOOTH THE GRADUATION KEEPS.** Any trace whose row constraints hold against faithful range
+tables bounds every row: `0 ≤ CURRENT < 2^15` and `0 ≤ SYMBOL < 2` — exactly the old `ranges`
+carrier's `VmRange.holds`, now forced by the two lookups. -/
+theorem weld_lookups_bound (hash : List ℤ → ℤ) (name : String) (t : VmTrace)
+    (htf : WeldRangeTablesFaithful t.tf)
+    (hrows : ∀ i < t.rows.length, ∀ c ∈ (weldDesc name).constraints,
+      c.holdsAt hash t.tf (envAt t i) (i == 0) (i + 1 == t.rows.length))
+    (i : Nat) (hi : i < t.rows.length) :
+    VmRange.holds (envAt t i) ⟨CURRENT, 15⟩ ∧ VmRange.holds (envAt t i) ⟨SYMBOL, 1⟩ := by
+  have h1 : [(EmittedExpr.var CURRENT).eval (envAt t i).loc] ∈ t.tf WELD_TID_RANGE15 :=
+    hrows i hi weldCurRange (weldCurRange_mem name)
+  have h2 : [(EmittedExpr.var SYMBOL).eval (envAt t i).loc] ∈ t.tf WELD_TID_RANGE1 :=
+    hrows i hi weldSymRange (weldSymRange_mem name)
+  rw [htf.1, range_row_mem_iff] at h1
+  rw [htf.2, range_row_mem_iff] at h2
+  exact ⟨h1, h2⟩
+
+/-- **The falsifier for the tooth**: a row at state `2^15` (one past the domain) FAILS the 15-bit
+lookup against the faithful table. Without the lookup (the run-table shape) it would be accepted. -/
+theorem weld_range_refuses_out_of_domain (tf : TraceFamily) (htf : WeldRangeTablesFaithful tf)
+    (env : VmRowEnv) (hcur : env.loc CURRENT = 2 ^ 15) :
+    ¬ Lookup.holdsAt tf env ⟨WELD_TID_RANGE15, [.var CURRENT]⟩ := by
+  intro h
+  have h' : [(EmittedExpr.var CURRENT).eval env.loc] ∈ tf WELD_TID_RANGE15 := h
+  rw [htf.1, range_row_mem_iff] at h'
+  simp only [EmittedExpr.eval] at h'
+  rw [hcur] at h'
+  exact absurd h'.2 (lt_irrefl _)
 
 /-- ⚑ **THE GATE — a real `Satisfied2Public` witness for the WELDED descriptor.** General in the
 automaton, the start state, the word, the descriptor name, and in ALL EIGHT root lanes. The only
@@ -751,9 +863,10 @@ theorem weldWit_satisfies (hash : List ℤ → ℤ) (d : TableDfa Nat Nat) (R8 :
         rw [hkey]
         exact hscal s y hs hy
       · rfl
-    · exact weldWit_rowConstraints_nonmap hash _ d R8 q w hw name i hi c hc hne
+    · exact weldWit_rowConstraints_nonmap hash _ (weldTf_faithful _) d R8 hstep q hq w hw hsym
+        name i hi c hc hne
   rowHashes := by intro i _; trivial
-  rowRanges := fun i hi r hr => weldWit_rowRanges d R8 hstep q hq w hsym name i hi r hr
+  rowRanges := fun _ _ r hr => absurd hr (by rw [weld_ranges]; exact List.not_mem_nil)
   memAddrsNodup := List.nodup_nil
   memClosed := by rw [weld_memLog]; simp
   memDisciplined := by rw [weld_memLog]; trivial
@@ -762,14 +875,12 @@ theorem weldWit_satisfies (hash : List ℤ → ℤ) (d : TableDfa Nat Nat) (R8 :
   mapTableFaithful := by rw [weld_mapLog]; rfl
   publicTablesFaithful := by
     intro td htd
-    simp only [weldDesc, List.mem_singleton] at htd
-    subst htd
-    trivial
+    simp only [weldDesc, List.mem_cons, List.not_mem_nil, or_false] at htd
+    rcases htd with rfl | rfl | rfl <;> trivial
   publicLookupBalanced := by
     intro td htd
-    simp only [weldDesc, List.mem_singleton] at htd
-    subst htd
-    trivial
+    simp only [weldDesc, List.mem_cons, List.not_mem_nil, or_false] at htd
+    rcases htd with rfl | rfl | rfl <;> trivial
 
 /-- ⚑ **THE GATE, FIRED UNCONDITIONALLY.** The lane-0 scalar root is CONSTRUCTED
 (`AttestedAutomatonEmit.autoRoot_commits`), so the welded descriptor has a real `Satisfied2Public`
@@ -824,12 +935,15 @@ theorem weld_completion_lanes_free (hash : List ℤ → ℤ) (d : TableDfa Nat N
 the run-table baseline by `TinyAutomataSatisfiable.prodRunWit_satisfies`, the unwelded attested
 object by `AttestedAutomatonEmit.attWit_satisfies`. Nothing without a witness is priced. -/
 
--- ⚑ THE WELDED SHAPE: 11 columns (3 + the 8 root lanes), 10 PIs (2 + the 8 root lanes), 20
--- constraints (1 open + 1 continuity + 2 pi bindings + 8 lane windows + 8 lane pins), ONE table,
--- ZERO declared rows, ZERO nonlinear multiplications.
+-- ⚑ THE WELDED SHAPE, GRADUATED (2026-11-06): 11 columns (3 + the 8 root lanes), 10 PIs (2 + the
+-- 8 root lanes), 22 constraints (1 open + 1 continuity + 2 pi bindings + 8 lane windows + 8 lane
+-- pins + 2 range lookups), THREE tables (map_ops, range_w15, range_w1), ZERO declared rows, ZERO
+-- nonlinear multiplications, EMPTY `hashSites`/`ranges` carriers. Pre-graduation: 20 constraints,
+-- 1 table, ranges `[⟨CURRENT, 15⟩, ⟨SYMBOL, 1⟩]` (refused by the v2 assembly).
 #guard costOf weldInstance ==
-  { traceWidth := 11, piCount := 10, constraints := 20, tables := 1
+  { traceWidth := 11, piCount := 10, constraints := 22, tables := 3
   , declaredRows := 0, forcedTraceRows := .unpinned, nonlinearMults := 0 }
+#guard weldInstance.hashSites.isEmpty && weldInstance.ranges.isEmpty
 
 -- … against the UNWELDED attested object (4 / 3 / 6). The weld costs +7 columns, +7 PIs, +14
 -- constraints; it adds NO table, NO declared row and NO nonlinear multiplication.
@@ -837,19 +951,19 @@ object by `AttestedAutomatonEmit.attWit_satisfies`. Nothing without a witness is
   { traceWidth := 4, piCount := 3, constraints := 6, tables := 1
   , declaredRows := 0, forcedTraceRows := .unpinned, nonlinearMults := 0 }
 
--- ⚑ WIRE BYTES, pinned: 2611 welded vs 1205 unwelded — 2.17× (+1406 bytes), CONSTANT in `|w|` and
--- (+15 each since 2026-08-05: the `,"challenges":0` header; the DELTA and the crossover are unmoved.)
--- in `|Q|·|Σ|` exactly as before (ONE object for every automaton and every word length).
-#guard (jsonBytes weldInstance, jsonBytes attestedInstance) == (2611, 1205)
+-- ⚑ WIRE BYTES, pinned: 2803 welded-and-graduated vs 1205 unwelded — 2.33× (+1598 bytes), CONSTANT in
+-- `|w|` and in `|Q|·|Σ|` (ONE object for every automaton and every word length). The graduation
+-- costs +192 bytes over the ungraduated weld's 2611: two table declarations and two lookups.
+#guard (jsonBytes weldInstance, jsonBytes attestedInstance) == (2803, 1205)
 
 -- ⚑ THE RESTATED CROSSOVER. The run-table descriptor at k = 4 grows ~10 bytes per symbol because it
 -- SHIPS THE RUN. The UNWELDED attested object ties it at |w| = 60 and is smaller from 61 on; the
--- WELDED object is still larger at |w| = 200 (2604 < 2611) and is strictly smaller from |w| = 201
--- on (2614 > 2611). The weld moves the byte crossover 60 → 201.
-#guard (List.map (fun n => jsonBytes (prodRunDesc 4 (wordN n))) [60, 61, 128, 199, 200, 201, 202])
-  == [1205, 1214, 1884, 2594, 2604, 2614, 2624]
+-- WELDED, GRADUATED object is still larger at |w| = 219 (2794 < 2803) and is strictly smaller from
+-- |w| = 220 on (2804 > 2803). The weld moved the byte crossover 60 → 201; graduation moves it to 220.
+#guard (List.map (fun n => jsonBytes (prodRunDesc 4 (wordN n))) [60, 61, 128, 200, 201, 219, 220])
+  == [1205, 1214, 1884, 2604, 2614, 2794, 2804]
 
--- At the FIXED 8-symbol probe word the run-table descriptor is far smaller (669–685 vs 2611) — but
+-- At the FIXED 8-symbol probe word the run-table descriptor is far smaller (669–685 vs 2803) — but
 -- it is a DIFFERENT object per k AND per word, and it binds no automaton at any width.
 #guard (List.map (fun k => jsonBytes (prodRunDesc k probeW)) [1, 2, 3, 4]) == [669, 669, 680, 685]
 
@@ -886,9 +1000,10 @@ At word length `|w|`, over descriptors that HAVE WITNESSES:
     constraints, 3 PIs, main area `4·|w|`, `5·|w|` map-op rows, `16·|w|` chip rows, 1190 bytes flat,
     byte crossover at `|w| = 60`. Its binding consumes `Poseidon2SpongeCR` at a BabyBear codomain,
     where it is FALSE (~2^15.5 birthday).
-  * **attested, WELDED TO 8 FELTS** (`weldWit_satisfies_constructed`) — 11 cols, 20 constraints, 10
-    PIs, main area `11·|w|`, the SAME `5·|w|` map-op rows and `16·|w|` chip rows, 2596 bytes flat,
-    byte crossover at `|w| = 201`. Its binding (`root8_binds_automaton_or_collides`) consumes NO
+  * **attested, WELDED TO 8 FELTS, GRADUATED** (`weldWit_satisfies_constructed`) — 11 cols, 22
+    constraints (20 + 2 range lookups), 10 PIs, main area `11·|w|`, the SAME `5·|w|` map-op rows and
+    `16·|w|` chip rows, 2803 bytes flat (2611 before graduation), byte crossover at `|w| = 220`
+    (201 before graduation). Its binding (`root8_binds_automaton_or_collides`) consumes NO
     crypto hypothesis: an equivocating prover must exhibit the collision a TOTAL extractor names at
     the deployed arity-16 chip, whose output is 8 BabyBear felts (~248 bits; the felt-width
     campaign's birthday arithmetic puts that at ~2^124, against ~2^15.5 for one felt — that is the
@@ -899,6 +1014,9 @@ the Merkle-path chip-row count are identical before and after (`5·|w|` and `16�
 permutation and no table is added. The price is paid entirely in the main trace and the wire — +7
 columns (2.75× main area), +14 constraints, +7 public inputs, +1406 wire bytes (2.18×) — and in the
 byte crossover moving 60 → 201. For a security boundary that is a cheap trade, and it is measured.
+GRADUATION (2026-11-06) adds 2 lookups per row, 2 range-table declarations and +192 wire bytes (the
+crossover moves 201 → 220); in the Lean model it adds no main column, and the Rust assembly realizes
+each range lookup with its own byte-limb aux columns (measured in `circuit/tests/weld8_served.rs`).
 
 ⚠ AND, equally honest: those numbers price the WIRE weld. The DENOTATION weld is not in them,
 because it is not in this IR (§3a) — `MapOp.holdsAt` reads lane 0. Whatever the eventual
@@ -912,6 +1030,8 @@ expensive per permutation than an arity-2 one) is NOT counted above and is NOT c
   root8_binds_automaton_or_collides, weld_collision_disjunct_refutable, forged_edge_refused_8,
   weld_memOps, weld_memLog, weld_mapOps, weld_mapLog, weldLane_classify,
   rowsW_length, rowsW_shape, rowsW_chain, rowsW_root, rowsW_head_current, rowsW_last_next,
-  weldWit_satisfies, weldWit_satisfies_constructed, weld_completion_lanes_free]
+  weldWit_satisfies, weldWit_satisfies_constructed, weld_completion_lanes_free,
+  weldCurRange_mem, weldSymRange_mem, weldTail_classify, weldTf_faithful, weldWit_rangeLookups,
+  weldWit_rowConstraints_nonmap, weld_ranges, weld_lookups_bound, weld_range_refuses_out_of_domain]
 
 end Dregg2.Circuit.Emit.AttestedAutomatonWeld8

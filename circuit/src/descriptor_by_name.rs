@@ -170,6 +170,16 @@ const STATIC_GOLDENS: &[(&str, &str)] = &[
         crate::effect_vm_descriptors::DREGG_EFFECTVM_CUSTOM_IR2_JSON,
     ),
     ("dregg-dyck-parse-v1", DYCK_PARSE_JSON),
+    // The 8-felt WELDED attested-automaton descriptor (`AttestedAutomatonWeld8.lean` §3, GRADUATED
+    // 2026-11-06 in §3.G: the two range teeth are lookups into `range_w15`/`range_w1`, so the
+    // `ranges`/`hash_sites` carriers are empty and the v2 assembly admits it). Dispatched by exact
+    // name only, like the table-routed DFA above. Its Lean denotation through all eight root lanes
+    // is `AttestedAutomatonLanes8.Satisfied2Lanes8`; prove/verify and the forged-edge refusal are
+    // `circuit/tests/weld8_served.rs`.
+    (
+        "dregg-attested-automaton::map-committed-weld8-v1",
+        ATTESTED_AUTOMATON_WELD8_JSON,
+    ),
     // The automatafl board-transition automaton-step (D1) descriptors — the Lean-emitted
     // `automataflStepDescN {2,11}` (`AutomataflStepEmit.lean`), packed-felt board commitment,
     // ZERO lookups. These back the deployed automatafl proof-carrying leaderboard's per-turn D1
@@ -520,6 +530,13 @@ const DERIVATION_JSON: &str = include_str!("../descriptors/by-name/derivation.js
 /// [`crate::dsl::dyck_stack::lift_witness_to_v2`]; the prove-path teeth live in
 /// `circuit-prove/tests/dyck_parse_tamper.rs`.
 const DYCK_PARSE_JSON: &str = include_str!("../descriptors/by-name/dyck-parse.json");
+/// The 8-felt welded attested-automaton descriptor
+/// (`dregg-attested-automaton::map-committed-weld8-v1`), authored in `AttestedAutomatonWeld8.lean`
+/// and re-derived onto `by-name/` by `EmitByName.lean`: one `map_op` read of the edge
+/// `2·current + symbol ↦ next` against an 8-column root group pinned to PIs 2..9, plus the two
+/// graduated range lookups.
+const ATTESTED_AUTOMATON_WELD8_JSON: &str =
+    include_str!("../descriptors/by-name/attested-automaton-map-committed-weld8-v1.json");
 /// The automatafl D1 automaton-step descriptors (Lean `automataflStepDescN {2,11}`), byte-pinned by
 /// their `emitVmJson2` `#guard` and re-derived onto `by-name/` by `EmitByName.lean`. n=2 is the
 /// minimal complete instance; n=11 is the deployed stock-game board size.

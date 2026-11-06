@@ -207,10 +207,15 @@ theorem weldTransitionOpen_eq : weldTransitionOpen = .mapOp weldOp := rfl
 /-- The 19-felt map row of a welded trace row. -/
 def weldMapRow8 (a : Assignment) : List ℤ := weldOp.rowAt8 a
 
-/-- The witness's table family at the deployed width: the 19-felt map-ops log at `.mapOps`, empty
-elsewhere. -/
+/-- The witness's table family at the deployed width: the 19-felt map-ops log at `.mapOps`, the two
+range tables of the graduated weld at their ids, empty elsewhere. -/
 def attTf8 (rows : List Assignment) : TraceFamily :=
-  fun id => if id = TableId.mapOps then rows.map weldMapRow8 else []
+  fun id => if id = TableId.mapOps then rows.map weldMapRow8
+    else if id = WELD_TID_RANGE15 then rangeRows 15
+    else if id = WELD_TID_RANGE1 then rangeRows 1 else []
+
+theorem attTf8_faithful (rows : List Assignment) : WeldRangeTablesFaithful (attTf8 rows) :=
+  ⟨rfl, rfl⟩
 
 /-- **THE WELDED WITNESS AT THE DEPLOYED WIDTH**: the same rows and public inputs as
 `AttestedAutomatonWeld8.weldWit`, with the 19-felt map table. -/
@@ -289,15 +294,16 @@ theorem weldWit8_satisfies (S8 : Heap8Scheme) (hash : List ℤ → ℤ) (d : Tab
         · exact VmConstraint2.noConfusion h
         · exact VmConstraint2.noConfusion h
         · exact VmConstraint2.noConfusion h
-        · obtain ⟨l, hl | hl⟩ := weldLane_classify h
+        · rcases weldTail_classify h with ⟨l, hl | hl⟩ | hl | hl
+          · exact VmConstraint2.noConfusion hl
+          · exact VmConstraint2.noConfusion hl
           · exact VmConstraint2.noConfusion hl
           · exact VmConstraint2.noConfusion hl
       · rw [envAt_weldWit8]
-        exact weldWit_rowConstraints_nonmap hash _ d R8 q w hw name i hi c hc hne
+        exact weldWit_rowConstraints_nonmap hash _ (attTf8_faithful _) d R8 hstep q hq w hw hsym
+          name i hi c hc hne
   rowHashes := by intro i _; trivial
-  rowRanges := fun i hi r hr => by
-    rw [envAt_weldWit8]
-    exact weldWit_rowRanges d R8 hstep q hq w hsym name i hi r hr
+  rowRanges := fun _ _ r hr => absurd hr (by rw [weld_ranges]; exact List.not_mem_nil)
   memAddrsNodup := List.nodup_nil
   memClosed := by rw [weld_memLog]; simp
   memDisciplined := by rw [weld_memLog]; trivial
@@ -306,14 +312,12 @@ theorem weldWit8_satisfies (S8 : Heap8Scheme) (hash : List ℤ → ℤ) (d : Tab
   mapTableFaithful8 := by rw [weld_mapLog8]; rfl
   publicTablesFaithful := by
     intro td htd
-    simp only [weldDesc, List.mem_singleton] at htd
-    subst htd
-    trivial
+    simp only [weldDesc, List.mem_cons, List.not_mem_nil, or_false] at htd
+    rcases htd with rfl | rfl | rfl <;> trivial
   publicLookupBalanced := by
     intro td htd
-    simp only [weldDesc, List.mem_singleton] at htd
-    subst htd
-    trivial
+    simp only [weldDesc, List.mem_cons, List.not_mem_nil, or_false] at htd
+    rcases htd with rfl | rfl | rfl <;> trivial
 
 /-- ⚑ **THE GATE, FIRED UNCONDITIONALLY**: `autoRoot8 S8 d` commits `d` at eight felts
 (`autoRoot8_opens`), so the welded descriptor has a `Satisfied2Lanes8` witness with NO hypothesis
@@ -385,6 +389,22 @@ theorem lanes8_root_public (S8 : Heap8Scheme) (hash : List ℤ → ℤ) (name : 
       rw [heq] at h'
       exact (Int.dvd_neg).mp h'
     exact hstep.symm.trans (ih hi0)
+
+/-- ⚑ **The graduated range teeth under the 8-lane denotation**: every accepted row's state is
+`< 2^15` and its symbol `< 2`, given faithful range tables (the lookup arm of `holdsAt8` IS
+`holdsAt`). This is what lets `hs`/`hy` below be DISCHARGED from the trace rather than assumed. -/
+theorem lanes8_row_bounded (S8 : Heap8Scheme) (hash : List ℤ → ℤ) (name : String)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (h : Satisfied2Lanes8 S8 hash (weldDesc name) minit mfin maddrs t)
+    (htf : WeldRangeTablesFaithful t.tf) (i : Nat) (hi : i < t.rows.length) :
+    VmRange.holds (envAt t i) ⟨CURRENT, 15⟩ ∧ VmRange.holds (envAt t i) ⟨SYMBOL, 1⟩ := by
+  have h1 : [(EmittedExpr.var CURRENT).eval (envAt t i).loc] ∈ t.tf WELD_TID_RANGE15 :=
+    h.rowConstraints i hi weldCurRange (weldCurRange_mem name)
+  have h2 : [(EmittedExpr.var SYMBOL).eval (envAt t i).loc] ∈ t.tf WELD_TID_RANGE1 :=
+    h.rowConstraints i hi weldSymRange (weldSymRange_mem name)
+  rw [htf.1, range_row_mem_iff] at h1
+  rw [htf.2, range_row_mem_iff] at h2
+  exact ⟨h1, h2⟩
 
 /-- Cells in canonical BabyBear range: every root-lane cell of every row, and every public lane.
 Over the deployed field this holds by type; in the ℤ-valued model it is a hypothesis. -/
@@ -709,6 +729,6 @@ theorem weld8_forgery_premises_inhabited (hash : List ℤ → ℤ) (name : Strin
   foldLevel8_constChip_zero, foldLevel8_ne_nil, foldLevel8_constChip_zero_of_zero,
   perfectRoot8_constChip_zero, mapRoot8_constChip, lanes8_forces_root_at_constChip,
   weld_completion_lanes_not_free, autoRoot8_constChip, lanes8_constChip_iff,
-  weld8_forgery_premises_inhabited]
+  weld8_forgery_premises_inhabited, attTf8_faithful, lanes8_row_bounded]
 
 end Dregg2.Circuit.Emit.AttestedAutomatonLanes8
