@@ -325,8 +325,11 @@ theorem tampered_column_bites :
     tamperedGatePoly.eval (rowPt 0) ≠
       ((arithResidual (envAt tHonest 0) (0 == 0)
         (0 + 1 == tHonest.rows.length) gate0 : Int) : BabyBear) := by
-  simp [tamperedGatePoly, gate0, lastSelector_eval, colPoly_eval, domainSize,
-    tHonest, zRow, arithResidual, envAt, EmittedExpr.eval, boolScalar]
+  have hcap : tHonest.rows.length ≤ domainSize := by simp [tHonest, domainSize]
+  have h0 : 0 < tHonest.rows.length := by simp [tHonest]
+  simp only [tamperedGatePoly, eval_mul, eval_sub, eval_one, eval_add, eval_C,
+    lastSelector_eval tHonest hcap 0 h0, colPoly_eval tHonest 0 hcap 0 h0]
+  simp [gate0, tHonest, zRow, arithResidual, envAt, EmittedExpr.eval, boolScalar]
 
 end Teeth
 

@@ -103,15 +103,19 @@ theorem holds_iff_entries (table : ThreeEntryTable) :
     Holds (sourceValuation table) 0 successorSkolemFormula <->
       forall j : Fin 3, table.output j = table.input j + 1 := by
   simp only [successorSkolemFormula, Holds]
+  have hout (j : Fin (sourceValuation table SkolemSymbol.table).length) :=
+    eval_lookup_index_at_node (sourceValuation table) (SkolemSymbol.table : skolemSignature.Symbol)
+      outputRow j
+  have hin (j : Fin (sourceValuation table SkolemSymbol.table).length) :=
+    eval_lookup_index_at_node (sourceValuation table) (SkolemSymbol.table : skolemSignature.Symbol)
+      inputRow j
   constructor
   · intro h j
     have hj := h j
-    rw [eval_lookup_index_at_node, evalTerm_add, eval_lookup_index_at_node,
-      evalTerm_rational] at hj
+    rw [hout j, evalTerm_add, hin j, evalTerm_rational] at hj
     exact_mod_cast hj
   · intro h j
-    rw [eval_lookup_index_at_node, evalTerm_add, eval_lookup_index_at_node,
-      evalTerm_rational]
+    rw [hout j, evalTerm_add, hin j, evalTerm_rational]
     exact_mod_cast h j
 
 /-- The RETIRED sum-of-squares acceptance numerator.  No emitted gate reads it
