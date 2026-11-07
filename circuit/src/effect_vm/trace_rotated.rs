@@ -7560,7 +7560,7 @@ mod tests {
         for i in 0..8 {
             reached.insert(rotated_set_field_descriptor_name(i));
         }
-        assert_eq!(reached.len(), 37, "the resolvers reach 37 distinct names");
+        assert_eq!(reached.len(), 38, "the resolvers reach 38 distinct names");
         assert_eq!(
             reached, registry,
             "the resolver names are EXACTLY the rotated registry's members"

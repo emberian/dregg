@@ -3983,6 +3983,30 @@ mod tests {
                     Ok(CUSTOM_COMMIT_VERSION),
                     "the committed custom member must classify as faithful carrier v3"
                 );
+            } else if key == crate::effect_vm::trace_rotated::GRAIN_TURN_DESCRIPTOR_NAME {
+                // The single-tick grain member (initiative 10): the rotated prefix + the fee pin at
+                // `pi_base + 4` (`ROT_FEE_PI`, FIRST row, `prmCol 5`) + the five written slots'
+                // completion pins, contiguous, ahead of the rc tail.
+                assert_eq!(
+                    base_pi_count,
+                    pi_base + 4 + crate::effect_vm::trace_rotated::GRAIN_TURN_EXTRA_PIS,
+                    "{key}: the rotated prefix + the fee pin + 40 completion pins"
+                );
+                let mut extra: Vec<(usize, usize)> = nullifier_pins.clone();
+                extra.sort_by_key(|(_, pi)| *pi);
+                assert_eq!(
+                    extra.len(),
+                    crate::effect_vm::trace_rotated::GRAIN_TURN_EXTRA_PIS,
+                    "{key}: exactly the fee pin + the completion pins ride past the rotated prefix"
+                );
+                assert_eq!(
+                    extra[0],
+                    (PARAM_BASE + 5, pi_base + 4),
+                    "{key}: the fee PI is the first slot past the prefix and pins param5"
+                );
+                for (k, (_, pi)) in extra.iter().enumerate() {
+                    assert_eq!(*pi, pi_base + 4 + k, "{key}: the extra block is contiguous");
+                }
             } else if key.starts_with("setFieldVmDescriptor2-") {
                 // THE VALUE8 EPOCH: the 8 static-slot setField members publish the written slot's
                 // freed completion lanes (the high bits of the 32-byte value) as PIs
