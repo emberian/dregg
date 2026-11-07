@@ -249,7 +249,9 @@ theorem bridge_derives (T : HandlebarsTemplate) (h : HoleId) (T' : HandlebarsTem
     rwa [mem_language_iff] at hmem
   have hlift := derives_lift (g := handlebarsToGrammar T') (g' := handlebarsCompose T h T')
     Sum.inr inner_rule_lifts hinner
-  rw [map_terminal_symMap] at hlift
+  replace hlift := (congrArg (fun z => (handlebarsCompose T h T').Derives
+      (List.map (symMap Sum.inr) [Symbol.nonterminal NT.start]) z)
+    (map_terminal_symMap Sum.inr (render T' d'))).mp hlift
   simp only [List.map_cons, List.map_nil, symMap] at hlift
   have hbridge : (handlebarsCompose T h T').Produces
       [Symbol.nonterminal (Sum.inl (NT.safeD h))] [Symbol.nonterminal (Sum.inr NT.start)] :=
@@ -280,8 +282,9 @@ theorem compose_body_derives (T : HandlebarsTemplate) (h : HoleId) (T' : Handleb
           ((renderSeg (fillH d h (render T' d')) seg).map Symbol.terminal) := by
         cases seg with
         | lit text =>
-            simp only [segSymbols, renderSeg, map_terminal_symMap]
-            exact Relation.ReflTransGen.refl
+            simp only [segSymbols, renderSeg]
+            exact (congrArg (fun z => (handlebarsCompose T h T').Derives z (text.map Symbol.terminal))
+              (map_terminal_symMap Sum.inl text)).mpr Relation.ReflTransGen.refl
         | hole g =>
             simp only [segSymbols, renderSeg, List.map_cons, List.map_nil, symMap]
             by_cases hgh : g = h

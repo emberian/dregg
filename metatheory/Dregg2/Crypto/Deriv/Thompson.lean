@@ -516,23 +516,23 @@ theorem accepts_alt (l r : PredRE)
       obtain ⟨p₁, hr1, hpath1⟩ := hl
       refine ⟨[none] ++ (p₁ ++ [none]), ?_, ?_⟩
       · simp [List.reduceOption_append, List.reduceOption_cons_of_none, hr1]
-      · rw [εNFA.isPath_append]
-        refine ⟨Sum.inr (Sum.inl (tStart l)), by rw [εNFA.isPath_singleton]; exact ⟨rfl, Or.inl rfl⟩, ?_⟩
-        rw [εNFA.isPath_append]
+      · refine (εNFA.isPath_append _).mpr ?_
+        refine ⟨Sum.inr (Sum.inl (tStart l)), by refine (εNFA.isPath_singleton _).mpr ?_; exact ⟨rfl, Or.inl rfl⟩, ?_⟩
+        refine (εNFA.isPath_append _).mpr ?_
         refine ⟨Sum.inr (Sum.inl (tAccept l)),
           isPath_embed (fun u => Sum.inr (Sum.inl u)) (fun x o => Set.subset_union_left) hpath1, ?_⟩
-        rw [εNFA.isPath_singleton]
+        refine (εNFA.isPath_singleton _).mpr ?_
         exact Or.inr ⟨rfl, rfl, rfl⟩
     · rw [← ihr, thompson_accepts_iff] at hr
       obtain ⟨p₁, hr1, hpath1⟩ := hr
       refine ⟨[none] ++ (p₁ ++ [none]), ?_, ?_⟩
       · simp [List.reduceOption_append, List.reduceOption_cons_of_none, hr1]
-      · rw [εNFA.isPath_append]
-        refine ⟨Sum.inr (Sum.inr (tStart r)), by rw [εNFA.isPath_singleton]; exact ⟨rfl, Or.inr rfl⟩, ?_⟩
-        rw [εNFA.isPath_append]
+      · refine (εNFA.isPath_append _).mpr ?_
+        refine ⟨Sum.inr (Sum.inr (tStart r)), by refine (εNFA.isPath_singleton _).mpr ?_; exact ⟨rfl, Or.inr rfl⟩, ?_⟩
+        refine (εNFA.isPath_append _).mpr ?_
         refine ⟨Sum.inr (Sum.inr (tAccept r)),
           isPath_embed (fun u => Sum.inr (Sum.inr u)) (fun x o => Set.subset_union_left) hpath1, ?_⟩
-        rw [εNFA.isPath_singleton]
+        refine (εNFA.isPath_singleton _).mpr ?_
         exact Or.inr ⟨rfl, rfl, rfl⟩
 
 /-! ## Concatenation. -/
@@ -574,7 +574,7 @@ theorem accepts_cat (l r : PredRE)
     obtain ⟨p₂, hr2, hpath2⟩ := hr
     refine ⟨p₁ ++ none :: p₂, ?_, ?_⟩
     · rw [List.reduceOption_append, List.reduceOption_cons_of_none, hr1, hr2]
-    · rw [εNFA.isPath_append]
+    · refine (εNFA.isPath_append _).mpr ?_
       refine ⟨Sum.inl (tAccept l),
         isPath_embed (fun u => Sum.inl u) (fun x o => Set.subset_union_left) hpath1, ?_⟩
       refine εNFA.IsPath.cons _ _ _ _ _ (show Sum.inr (tStart r) ∈ M.step (Sum.inl (tAccept l)) none
@@ -634,7 +634,7 @@ theorem star_thread (r : PredRE) : ∀ (ws : List (List Value)), ws ≠ [] →
         star_thread r (w2 :: rest) (by simp) (fun x hx => hall x (List.mem_cons_of_mem _ hx))
       refine ⟨p ++ none :: q', ?_, ?_⟩
       · simp [List.reduceOption_append, List.reduceOption_cons_of_none, hp1, hq1, List.flatten_cons]
-      · rw [εNFA.isPath_append]
+      · refine (εNFA.isPath_append _).mpr ?_
         refine ⟨Sum.inr (tAccept r),
           isPath_embed (fun u => Sum.inr u) (fun x o => Set.subset_union_left) hpath, ?_⟩
         refine εNFA.IsPath.cons _ _ _ _ _
@@ -709,11 +709,11 @@ theorem accepts_star (r : PredRE)
         (fun x hx => (ihr x).mpr (hall x hx))
       refine ⟨[none] ++ (q ++ [none]), ?_, ?_⟩
       · simp [List.reduceOption_append, List.reduceOption_cons_of_none, hq1, hwf]
-      · rw [εNFA.isPath_append]
-        refine ⟨Sum.inr (tStart r), by rw [εNFA.isPath_singleton]; exact ⟨rfl, Or.inl rfl⟩, ?_⟩
-        rw [εNFA.isPath_append]
+      · refine (εNFA.isPath_append _).mpr ?_
+        refine ⟨Sum.inr (tStart r), by refine (εNFA.isPath_singleton _).mpr ?_; exact ⟨rfl, Or.inl rfl⟩, ?_⟩
+        refine (εNFA.isPath_append _).mpr ?_
         refine ⟨Sum.inr (tAccept r), hqpath, ?_⟩
-        rw [εNFA.isPath_singleton]
+        refine (εNFA.isPath_singleton _).mpr ?_
         exact Or.inr ⟨rfl, rfl, Or.inr rfl⟩
 
 /-! ## The Thompson fragment and the closed obligation. -/

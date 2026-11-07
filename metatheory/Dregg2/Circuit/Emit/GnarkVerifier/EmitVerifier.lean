@@ -270,6 +270,7 @@ theorem verifyAlgo_mk (I : Inputs) (perm : List Fr → List Fr) (RATE : ℕ) (to
 
 /-! ## §5 THE KEYSTONE — the composed refinement, both faces. -/
 
+set_option maxRecDepth 8192 in
 /-- **`emitVerifier_refines` — the structural keystone.** The emitted composed circuit is
 satisfied by its honest witness IFF the specified verifier `verifyAlgo`, instantiated at
 the checks/VK that ARE the emitted leaves' verdicts, accepts — for the verifier's own
