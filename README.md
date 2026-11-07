@@ -1,5 +1,14 @@
 # `dregg` — Dragon's Egg
 
+> **The Dragon's Egg repositories.** This repository (`emberian/dregg`, working name *breadstuffs*) is the
+> whole system built first. Its relatives:
+>
+> - [`minidregg`](https://github.com/emberian/minidregg) — the production demoland and the spec/battleground the rebuild measures itself against.
+> - [`nanodregg`](https://github.com/emberian/nanodregg) — the single-writer rebuild: twelve laws, a judge that refuses, meaningful theorems.
+> - [`zkml-research`](https://github.com/emberian/zkml-research) — the zero-knowledge / machine-learning research line.
+> - [`degg-research`](https://github.com/emberian/degg-research) — dark coordination: MPC/FHE swarm coordination research.
+> - [`delvetalk`](https://github.com/emberian/delvetalk) — the conversations and design talks behind all of it.
+
 <p align="center">
   <img src="hero.png" alt="dregg — Dragon's Egg" width="720">
 </p>

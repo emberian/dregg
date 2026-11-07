@@ -76,15 +76,18 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gate_modEq_iff)
 
 set_option autoImplicit false
 
+universe u
+
 /-! ## §1 — The Poseidon2 primitives realized as the descriptor's own `hash`. -/
 
-/-- The `CryptoPrimitives ℤ` instance realizing the abstract Poseidon2 ops as the descriptor's own
-row `hash : List ℤ → ℤ`: `compress a b := hash [a,b]` (the arity-2 `hash_2_to_1` the running-hash
+/-- Digest-polymorphic algebraic primitives. At the descriptor's integer specialization,
+the abstract operations use its row `hash : List ℤ → ℤ`: `compress a b := hash [a,b]` (the arity-2 `hash_2_to_1` the running-hash
 chip lookup binds) and `compressN l := hash l` (the sponge the entry-hash chip lookup binds). The
 Pedersen/nullifier carriers are the trivial witnesses (unused by the DFA-routing binding). Marked
 `@[reducible]` so the abstract-Poseidon denotations of `DfaAcceptanceAir` compute to `hash`-shaped
 equations; forced via `letI` everywhere (the tree also registers a global `CryptoPrimitives Int`). -/
-@[reducible] def dfaPrims (hash : List ℤ → ℤ) : CryptoPrimitives ℤ where
+@[reducible] def dfaPrims {Digest : Type u} [AddCommGroup Digest]
+    (hash : List Digest → Digest) : CryptoPrimitives Digest where
   compress a b := hash [a, b]
   compressN l := hash l
   collisionHard := True
@@ -94,14 +97,13 @@ equations; forced via `letI` everywhere (the tree also registers a global `Crypt
   nullifier := id
   unlinkable := True
 
-/-- **The CR carrier is instantiable from hash injectivity.** If `hash` is injective (as a function
-`List ℤ → ℤ`), both `CollisionFree` consequences hold for `dfaPrims hash`: `compressN`-injectivity IS
-`hash`-injectivity, and `compress`-pair-injectivity is `hash`-injectivity on 2-element lists. (A
-genuine Poseidon2 `hash` supplies CR, not literal injectivity; this is the reference realization that
-makes the RUNG-2 hypothesis set non-vacuous, mirroring `DfaAcceptanceAir.Reference.refCollisionFree`.)
--/
-theorem collisionFree_of_injective {hash : List ℤ → ℤ} (hinj : Function.Injective hash) :
-    @CollisionFree ℤ _ (dfaPrims hash) :=
+/-- Algebraic framework lemma, polymorphic in the digest type. An injective list
+encoding supplies the ideal `CollisionFree` laws; this is not a deployed finite-field
+hash assumption. The concrete unbounded reference encoding below proves its own
+injectivity. Deployed route binding uses an explicit collision alternative. -/
+theorem collisionFree_of_injective {Digest : Type u} [AddCommGroup Digest]
+    {hash : List Digest → Digest} (hinj : Function.Injective hash) :
+    @CollisionFree Digest _ (dfaPrims hash) :=
   letI := dfaPrims hash
   { compress_pair_inj := fun a b c d h => by
       have hlist : [a, b] = [c, d] := hinj h
@@ -562,18 +564,16 @@ theorem wtTrace_chainCanon
   exact ⟨⟨show (0:ℤ) ≤ 0 by decide, show (0:ℤ) < 2013265921 by decide⟩,
          ⟨hcanR.1, hcanR.2⟩⟩
 
-/-- **THE RUNG-2 DISCHARGE FIRES on the genuine witness (the TRUE half).** Feeding the concrete
-satisfying trace, its sound chip table, the two canonicality envelopes (the route digest canonical —
-`hcanR`), the CR carrier (from `Function.Injective hash`), and the honest reference run `g` to
-`dfaRouting_rung2` recovers `final = classify(input)` — WITHOUT any `hterm` hypothesis. The whole
-hypothesis set is exhibited jointly satisfiable by the reference hash below (`refWitness_fires`). -/
-theorem wtTrace_rung2_fires (hinj : Function.Injective hash)
-    (hcanR : 0 ≤ hash [0, hash [0, 1, 1, 0]] ∧ hash [0, hash [0, 1, 1, 0]] < 2013265921) :
+/-- The explicit trace has the correct classification for every hash. Its endpoint
+and input do not depend on injectivity or canonicality, so those assumptions are
+unnecessary here. `refWitness_fires` below separately invokes the full Rung-2
+soundness theorem with its jointly proved reference premises. -/
+theorem wtTrace_rung2_fires :
     (wtTrace hash).pub PI_FINAL
-      = classify (pinnedDfa ((wtTrace hash).pub PI_INITIAL)) (symbols (traceRows (wtTrace hash))) :=
-  dfaRouting_rung2 (wtTrace_satisfied2 hash) (by simp [wtTrace]) (wtTrace_dfaCanon hash)
-    (wtTrace_chainCanon hash hcanR) (wtTf_chipSound hash) (wtTf_narrow_wire hash)
-    (collisionFree_of_injective hinj) (wtG hash) (wtG_satisfies hash) rfl
+      = classify (pinnedDfa ((wtTrace hash).pub PI_INITIAL)) (symbols (traceRows (wtTrace hash))) := by
+  have hs : symbols (traceRows (wtTrace hash)) = [1] := by rw [symbols_traceRows]; rfl
+  rw [hs]
+  rfl
 
 /-- The recovered value is the genuine toggle endpoint `1` over the read input `[1]`
 (`classify (pinnedDfa 0) [1] = 1`) — the conclusion is a real classification, not a constant. -/
@@ -592,7 +592,7 @@ end TrueWitness
 digest are exhibited TOGETHER on one concrete hash: the two witness digests are pinned to the
 reserved canonical values `1` / `2`, and every other list rides the injective `Encodable.encode`
 shifted past them — injective as a whole, canonical where the witness reads it. So neither envelope
-hypothesis of `wtTrace_rung2_fires` is vacuous, jointly or alone. -/
+hypothesis of the actual Rung-2 application in `refWitness_fires` is vacuous, jointly or alone. -/
 
 /-- The reference hash: `[0,1,1,0] ↦ 1`, `[0,1] ↦ 2`, everything else `encode + 3`. -/
 def refHash : List ℤ → ℤ := fun l =>
@@ -627,7 +627,10 @@ theorem refWitness_fires :
     (wtTrace refHash).pub PI_FINAL
       = classify (pinnedDfa ((wtTrace refHash).pub PI_INITIAL))
           (symbols (traceRows (wtTrace refHash))) :=
-  wtTrace_rung2_fires refHash refHash_injective refHash_route_canon
+  dfaRouting_rung2 (wtTrace_satisfied2 refHash) (by simp [wtTrace]) (wtTrace_dfaCanon refHash)
+    (wtTrace_chainCanon refHash refHash_route_canon) (wtTf_chipSound refHash)
+    (wtTf_narrow_wire refHash) (collisionFree_of_injective refHash_injective)
+    (wtG refHash) (wtG_satisfies refHash) rfl
 
 /-! ## §8 — Axiom tripwires. -/
 
@@ -641,5 +644,15 @@ theorem refWitness_fires :
 #assert_axioms wtTrace_value
 #assert_axioms refHash_injective
 #assert_axioms refWitness_fires
+
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingRung2.collisionFree_of_injective' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms collisionFree_of_injective
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingRung2.wtTrace_rung2_fires' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms wtTrace_rung2_fires
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingRung2.refWitness_fires' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms refWitness_fires
 
 end Dregg2.Circuit.Emit.DfaRoutingRung2

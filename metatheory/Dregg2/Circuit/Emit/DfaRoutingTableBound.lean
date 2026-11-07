@@ -27,7 +27,7 @@ permutation of the declared rows.
     state (each row starts where the previous ended), and the word is the trail's label column.
     This is a forward implication, not a completeness theorem constructing a satisfying trace.
   * ⚑ `word_public_of_functional` — the trivial binding, where it holds: if every state has at most
-    one declared row (`Functional tbl`), any two satisfying traces with the same initial state read
+    one declared row (checked by `functionalB tbl` and proved `Functional tbl`), any two satisfying traces with the same initial state read
     the SAME word. The word is then a function of public data (`trail_unique`).
 
 ## Falsifier (§4, kernel-checked)
@@ -194,24 +194,51 @@ end Extract
 def Functional (tbl : List (List Nat)) : Prop :=
   ∀ r ∈ tbl, ∀ r' ∈ tbl, r.getD 0 0 = r'.getD 0 0 → r = r'
 
-theorem trail_unique {tbl : List (List Nat)} (hf : Functional tbl) :
+/-- Validate the public finite table, rather than assuming an ideal hash floor.
+The entire declared row is determined by its source state. -/
+def functionalB (tbl : List (List Nat)) : Bool :=
+  tbl.all fun r => tbl.all fun r' => decide (r.getD 0 0 ≠ r'.getD 0 0 ∨ r = r')
+
+/-- The original finite structural invariant is constructively decidable. -/
+instance functionalDecidable (tbl : List (List Nat)) : Decidable (Functional tbl) := by
+  unfold Functional
+  infer_instance
+
+/-- Exact decision-procedure correctness, including completeness. This claims
+an equality for every table; it does not assume the structural invariant. -/
+theorem functionalB_eq_decide (tbl : List (List Nat)) :
+    functionalB tbl = decide (Functional tbl) := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [functionalB, List.all_eq_true, decide_eq_true_eq, Functional]
+  simp only [ne_eq, or_iff_not_imp_left, not_not]
+
+/-- The executable validator establishes the exact structural invariant. -/
+theorem functionalB_sound {tbl : List (List Nat)} (h : functionalB tbl = true) :
+    Functional tbl := by
+  intro r hr r' hr' he
+  have hrow := List.all_eq_true.mp h r hr
+  have hpair := of_decide_eq_true (List.all_eq_true.mp hrow r' hr')
+  exact hpair.resolve_left (fun hne => hne he)
+
+theorem trail_unique {tbl : List (List Nat)} (hf : functionalB tbl = true) :
     ∀ (q : ℕ) (T₁ T₂ : List (List ℕ)), (∀ r ∈ T₁, r ∈ tbl) → (∀ r ∈ T₂, r ∈ tbl) →
       T₁.length = T₂.length → IsTrail q T₁ → IsTrail q T₂ → T₁ = T₂
   | _, [], [], _, _, _, _, _ => rfl
   | _, [], _ :: _, _, _, hl, _, _ => by simp at hl
   | _, _ :: _, [], _, _, hl, _, _ => by simp at hl
   | q, r₁ :: R₁, r₂ :: R₂, h₁, h₂, hl, ⟨hq₁, ht₁⟩, ⟨hq₂, ht₂⟩ => by
-    have hr : r₁ = r₂ := hf r₁ (h₁ r₁ List.mem_cons_self) r₂ (h₂ r₂ List.mem_cons_self)
+    have hr : r₁ = r₂ := functionalB_sound hf r₁ (h₁ r₁ List.mem_cons_self) r₂ (h₂ r₂ List.mem_cons_self)
       (by rw [hq₁, hq₂])
     subst hr
     rw [trail_unique hf _ R₁ R₂ (fun r hr => h₁ r (List.mem_cons_of_mem _ hr))
       (fun r hr => h₂ r (List.mem_cons_of_mem _ hr)) (by simpa using hl) ht₁ ht₂]
 
 /-- ⚑ **`word_public_of_functional`** — for a functional table, two satisfying traces with the
-same initial state read the same word: the word is a function of the public data. -/
+same initial state read the same word: the word is a function of the public data.
+The finite-table validator must succeed; no global cryptographic injectivity is assumed. -/
 theorem word_public_of_functional {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
     {maddrs : List ℤ} {name : String} {tbl : List (List Nat)} {t₁ t₂ : VmTrace}
-    (hf : Functional tbl) (hsmall : ∀ r ∈ tbl, ∀ v ∈ r, v < 2013265921)
+    (hf : functionalB tbl = true) (hsmall : ∀ r ∈ tbl, ∀ v ∈ r, v < 2013265921)
     (h₁ : Satisfied2Public hash (tableRoutingDesc name tbl) minit mfin maddrs t₁)
     (h₂ : Satisfied2Public hash (tableRoutingDesc name tbl) minit mfin maddrs t₂)
     (hne₁ : t₁.rows ≠ []) (hne₂ : t₂.rows ≠ [])
@@ -229,6 +256,13 @@ theorem demoTbl_functional : Functional demoTbl := by
   intro r hr r' hr' _
   simp only [demoTbl, List.mem_singleton] at hr hr'
   rw [hr, hr']
+
+/-- A non-singleton validation witness: different states determine different rows. -/
+theorem two_rows_functionalB : functionalB [[0, 1, 1], [1, 2, 2]] = true := rfl
+
+/-- The two distinct rows also inhabit the proposition established by validation. -/
+theorem two_rows_functional : Functional [[0, 1, 1], [1, 2, 2]] :=
+  functionalB_sound two_rows_functionalB
 
 /-- The demo witness's trail and word: `[1]`, read along the one declared row. -/
 theorem demo_trail :
@@ -352,6 +386,9 @@ theorem bound_shape_fails {D : Type} (commit : List ℕ → D) (hinj : Function.
   rw [tA_word, tB_word] at h
   exact absurd h (by decide)
 
+/-- The actual public-data validator rejects the two competing source-state rows. -/
+theorem loopTbl_functionalB_false : functionalB loopTbl = false := rfl
+
 /-- The loop table is not functional (so `word_public_of_functional` is silent on it, as it must be). -/
 theorem loopTbl_not_functional : ¬ Functional loopTbl := by
   intro h
@@ -363,6 +400,34 @@ theorem loopTbl_not_functional : ¬ Functional loopTbl := by
 #assert_all_clean [lookupLog_eq, isTrail_of_chain, row_decl, tableRouting_trail, trail_unique,
   word_public_of_functional, demoTbl_functional, demo_trail, memLog_loop, mapLog_loop,
   loop_satisfies, tA_satisfies, tB_satisfies, loopTbl_graph, both_meet_unbound, tA_word, tB_word,
-  word_not_public, bound_shape_fails, loopTbl_not_functional]
+  word_not_public, bound_shape_fails, loopTbl_not_functional, functionalB_eq_decide, functionalB_sound,
+  two_rows_functionalB, two_rows_functional, loopTbl_functionalB_false]
+
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingTableBound.functionalB_sound' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms functionalB_sound
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingTableBound.two_rows_functionalB' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms two_rows_functionalB
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingTableBound.two_rows_functional' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms two_rows_functional
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingTableBound.loopTbl_functionalB_false' depends on axioms: [propext] -/
+#guard_msgs in
+#print axioms loopTbl_functionalB_false
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingTableBound.trail_unique' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms trail_unique
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingTableBound.word_public_of_functional' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in
+#print axioms word_public_of_functional
+
+/-- info: 'Dregg2.Circuit.Emit.DfaRoutingTableBound.functionalB_eq_decide' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
+#guard_msgs in
+#print axioms functionalB_eq_decide
 
 end Dregg2.Circuit.Emit.DfaRoutingTableBound
