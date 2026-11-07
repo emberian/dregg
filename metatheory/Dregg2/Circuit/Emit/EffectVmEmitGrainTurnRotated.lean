@@ -24,11 +24,14 @@ grain slots, plus the published fee:
 §O1 closes the rotated lift: any `Satisfied2` witness of the host OR the wide member yields every
 hypothesis `grainTurn_trace_ticks_once` consumes, by constraint membership (`graduateV1Wide` keeps each
 face constraint as `.base c`, every wrapper only appends, and `wideAppend` drops only the two legacy
-1-felt commit pins, which the face does not carry).
+1-felt commit pins, which the face does not carry). §O2 closes the wrap row on the emitted
+(last-row-hardened) form: the AFTER nonce of the last row, the one the NEW_COMMIT anchor absorbs, is
+the genesis nonce plus one (`hardened_head_ticks_once`).
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitGrainTurn
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 import Dregg2.Circuit.Emit.EffectVmEmitRotationWide
+import Dregg2.Circuit.Emit.LastRowFrameHardening
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated
 
@@ -248,6 +251,57 @@ theorem wide_refuses_two_ticks (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (
     hovf (t.rows.length - 1) (by omega) (by omega)
   omega
 
+/-! ## §O2 — the wrap row, closed by the deployed last-row hardening.
+
+Every emitted member goes through `LastRowFrameHardening.hardenLastRow` (EmitRotationV3.lean,
+EmitWideRegistryProbe.lean `emitCompact`): each `.base (.gate b)` is lifted onto the WHOLE domain,
+so on the LAST row the grain gates bind too. There the selector is 0 (the window gate at the row
+before), so the nonce gate freezes it, and the last row's AFTER nonce — the block the rotated
+NEW_COMMIT anchor absorbs — is the row-0 before-nonce plus ONE. -/
+theorem hardened_head_ticks_once (D : EffectVmDescriptor2) (hD : CarriesGrainFace D)
+    (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash (Dregg2.Circuit.Emit.LastRowFrameHardening.hardenLastRow D)
+      minit mfin maddrs t)
+    (hlen : 2 ≤ t.rows.length)
+    (hcanon : ∀ i, i < t.rows.length →
+      (0 ≤ (envAt t i).loc SEL_GRAIN_TURN ∧ (envAt t i).loc SEL_GRAIN_TURN < 2013265921)
+      ∧ (0 ≤ (envAt t i).loc (sbCol state.NONCE)
+        ∧ (envAt t i).loc (sbCol state.NONCE) < 2013265921)
+      ∧ (0 ≤ (envAt t i).loc (saCol state.NONCE)
+        ∧ (envAt t i).loc (saCol state.NONCE) < 2013265921))
+    (hovf : (envAt t 0).loc (sbCol state.NONCE) + 1 < 2013265921) :
+    (envAt t (t.rows.length - 1)).loc (saCol state.NONCE)
+      = (envAt t 0).loc (sbCol state.NONCE) + 1 := by
+  have hbase := Dregg2.Circuit.Emit.LastRowFrameHardening.satisfied2_of_hardened hsat
+  have hbefore := carries_ticks_once D hD hash minit mfin maddrs t hbase hlen hcanon hovf
+    (t.rows.length - 1) (by omega) (by omega)
+  -- the selector is 0 on the last row: the window gate at the row before it
+  have hw := hbase.rowConstraints (t.rows.length - 2) (by omega) _ hD.window
+  have hl : (t.rows.length - 2 + 1 == t.rows.length) = false := by simp; omega
+  simp only [VmConstraint2.holdsAt, grainNoSecondActiveRow, WindowConstraint.holdsAt,
+    WindowExpr.eval, ite_true, hl, forall_const] at hw
+  have hnxt : (envAt t (t.rows.length - 2)).nxt SEL_GRAIN_TURN
+      = (envAt t (t.rows.length - 1)).loc SEL_GRAIN_TURN := by
+    simp only [envAt]
+    rw [show t.rows.length - 2 + 1 = t.rows.length - 1 by omega]
+  rw [hnxt, Int.modEq_zero_iff_dvd] at hw
+  have hsel := (hcanon (t.rows.length - 1) (by omega)).1
+  have hsel0 : (envAt t (t.rows.length - 1)).loc SEL_GRAIN_TURN = 0 := by omega
+  -- the hardened nonce gate binds on the last row
+  have hg := Dregg2.Circuit.Emit.LastRowFrameHardening.hardened_gate_binds_on_last_row hsat
+    (by omega) (hD.face _ (by
+      unfold grainTurnVmDescriptor
+      exact List.mem_append_left _ (List.mem_append_left _ (by simp [grainTurnRowGates]))))
+      (body := gNonceG)
+  simp only [gNonceG, eSelG, Dregg2.Circuit.Emit.EffectVmEmitTransfer.eSub,
+    Dregg2.Circuit.Emit.EffectVmEmitTransfer.eSA, Dregg2.Circuit.Emit.EffectVmEmitTransfer.eSB,
+    Dregg2.Exec.CircuitEmit.EmittedExpr.eval] at hg
+  rw [hsel0, Int.modEq_zero_iff_dvd] at hg
+  have ha := (hcanon (t.rows.length - 1) (by omega)).2.2
+  have hb := (hcanon (t.rows.length - 1) (by omega)).2.1
+  omega
+
+#assert_axioms hardened_head_ticks_once
 #assert_axioms face_no_piBinding
 #assert_axioms wide_carries
 #assert_axioms carries_ticks_once

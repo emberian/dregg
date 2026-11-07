@@ -22,8 +22,9 @@ The executor link is `grainTurn_row_agrees_executor`: on an executor-committed g
 row's post-block equals the worker cell's post-turn projection (balance, nonce and all eight slot
 fields) after admission, prologue, body and fee distribution.
 
-STATUS: a design-branch module (`i10-single-tick-grain-descriptor`, ember-gated). It is NOT in any
-registry; nothing emits or deploys it. See `grain-session/SINGLE-TICK-DESCRIPTOR.md`.
+STATUS: deployed as the tail registry member `grainTurnVmDescriptor2R24` (selector 6), emitted
+through `EffectVmEmitGrainTurnRotated.grainTurnHost` / `grainTurnWide`. The design note is
+`grain-session/SINGLE-TICK-DESCRIPTOR.md`.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitSetField
 import Dregg2.Exec.Admission
