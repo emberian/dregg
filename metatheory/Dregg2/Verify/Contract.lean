@@ -160,7 +160,7 @@ theorem always (C : Contract) {s : RecChainedState} (h : C.Inv s) (sched : Sched
 def logAppendOnly (s0 : RecChainedState) : Contract where
   Inv s := s0.log.length ≤ s.log.length
   step_ob s cf h := by
-    rw [CellExecutor.kernelForest_next_eq]
+    erw [CellExecutor.kernelForest_next_eq]
     simp only [cellNextA]
     rcases hc : execFullForestA s cf.1 with _ | s'
     · simp only [Option.getD_none]; exact h
@@ -171,7 +171,7 @@ def logAppendOnly (s0 : RecChainedState) : Contract where
 def conserved (s0 : RecChainedState) : Contract where
   Inv s := cellObsA s = cellObsA s0
   step_ob a cf h := by
-    rw [CellExecutor.kernelForest_next_eq, cellObsA_next]
+    erw [CellExecutor.kernelForest_next_eq, cellObsA_next]
     exact h
   shape := .constant
 
@@ -179,7 +179,7 @@ def conserved (s0 : RecChainedState) : Contract where
 def assetConservedKF (s0 : RecChainedState) (a : AssetId) : Contract where
   Inv s := cellObsA s a = cellObsA s0 a
   step_ob a' cf h := by
-    rw [CellExecutor.kernelForest_next_eq]
+    erw [CellExecutor.kernelForest_next_eq]
     rw [congrFun (cellObsA_next a' cf) a]
     exact h
   shape := .constant
@@ -222,14 +222,14 @@ def affineRelKF (terms : List (ℤ × AssetId)) (cmp : ℤ → ℤ → Prop) (s0
     (shape : SafetyShape := .other) : Contract where
   Inv s := cmp (affineObs terms s) (affineObs terms s0)
   step_ob a' cf h := by
-    rw [CellExecutor.kernelForest_next_eq, affineObs_next]
+    erw [CellExecutor.kernelForest_next_eq, affineObs_next]
     exact h
   shape := shape
 
 def revokedPersists (x : Nat) : Contract where
   Inv s := x ∈ s.kernel.revoked
   step_ob a cf h := by
-    rw [CellExecutor.kernelForest_next_eq]
+    erw [CellExecutor.kernelForest_next_eq]
     unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | some a' => simp only [Option.getD_some]
@@ -240,7 +240,7 @@ def revokedPersists (x : Nat) : Contract where
 def nullifierPersists (nf : Nat) : Contract where
   Inv s := nf ∈ s.kernel.nullifiers
   step_ob a cf h := by
-    rw [CellExecutor.kernelForest_next_eq]
+    erw [CellExecutor.kernelForest_next_eq]
     unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | some a' => simp only [Option.getD_some]
@@ -251,7 +251,7 @@ def nullifierPersists (nf : Nat) : Contract where
 def nameRegisteredContract (name owner : Dregg2.Apps.NameService.Name) : Contract where
   Inv s := Dregg2.Apps.NameService.isRegistered s name owner = true
   step_ob a cf h := by
-    rw [CellExecutor.kernelForest_next_eq]
+    erw [CellExecutor.kernelForest_next_eq]
     unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | some a' => simp only [Option.getD_some]
@@ -269,7 +269,7 @@ def nameRegisteredContract (name owner : Dregg2.Apps.NameService.Name) : Contrac
 def subsetNullifiersContract (base : List Nat) : Contract where
   Inv s := base ⊆ s.kernel.nullifiers
   step_ob a cf h := by
-    rw [CellExecutor.kernelForest_next_eq]
+    erw [CellExecutor.kernelForest_next_eq]
     unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | some a' => simp only [Option.getD_some]
@@ -281,7 +281,7 @@ def subsetNullifiersContract (base : List Nat) : Contract where
 def subsetCommitmentsContract (base : List Nat) : Contract where
   Inv s := base ⊆ s.kernel.commitments
   step_ob a cf h := by
-    rw [CellExecutor.kernelForest_next_eq]
+    erw [CellExecutor.kernelForest_next_eq]
     unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | some a' => simp only [Option.getD_some]

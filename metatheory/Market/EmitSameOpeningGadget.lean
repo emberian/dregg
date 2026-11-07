@@ -488,7 +488,7 @@ theorem rule_column_exact' (hcanon : CanonicalAssignment a)
     a RULE = RULE_ID := by
   have hgate := gadget_gate_vanishes hsat rule_body_mem'
   have hres : a RULE - RULE_ID ≡ 0 [ZMOD BABYBEAR_MODULUS] := by
-    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval] using hgate
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval, ← sub_eq_add_neg] using hgate
   have hcong : a RULE ≡ RULE_ID [ZMOD BABYBEAR_MODULUS] := by
     simpa using hres.add_right RULE_ID
   exact eq_of_modEq_of_canonical hcong (hcanon RULE) (by
@@ -749,7 +749,7 @@ theorem gadget_root_input_decoded (hcanon : CanonicalAssignment a)
   simp only [rootInputExprs, rootPreimage, decodedW, BLINDING, ROOT_DOMAIN_TAG,
     List.ofFn_succ, v, c, DIGEST_WIDTH, BLINDING_BASE]
   norm_num [List.range_succ, Function.comp_apply, EmittedExpr.eval]
-  exact ⟨hr, by simpa using hp⟩
+  exact ⟨hr, by simpa [decodedW, BLINDING, BLINDING_BASE] using hp⟩
 
 theorem gadget_root_semantic (permOut : List Int → List Int)
     (hcanon : CanonicalAssignment a)

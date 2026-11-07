@@ -126,8 +126,10 @@ theorem FhEggCrossingDenotation :
       leanClearingOutput bk k = rustReferenceOutput bk k := by
   intro bk k _ hfit
   simp only [leanClearingOutput, rustReferenceOutput, clearedVolume, crossing]
-  rw [rustArgmaxUpto_eq_argmaxUpto bk hfit,
+  simp only [rustArgmaxUpto_eq_argmaxUpto bk hfit,
     rustExecVol_eq bk hfit (argmaxUpto bk (k - 1))]
+  -- v4.35: the two sides' `if`s carry different `Decidable` instances; `congr` identifies them.
+  congr
 
 /-! The two named books now agree on both implementations. -/
 
@@ -499,7 +501,7 @@ theorem tfheEval_decrypt_eq_fheOutput {Key Cipher BoolCipher : Type*}
   have hn : k - 1 < 4294967296 := by omega
   obtain ⟨hp, hv⟩ := decrypt_tfheArgmaxUptoCipher ops laws key bk hfit (k - 1) hn
   simp only [decryptTfheOutput, tfheEval, fheOutput]
-  rw [hp, hv]
+  simp only [hp, hv]
   simp
 
 /-- Exact source correspondence still owed of the real tfhe-rs routine: its internal output pair must
