@@ -441,7 +441,7 @@ theorem gate_of_gateBy {tr : RowTrace} {tf : TraceFamily} {pub chal : Assignment
   rw [Expr.eval, Expr.eval, Expr.eval] at hb
   have hsel : tr i i ≡ 1 [ZMOD P] := by
     have := hp i hi i (by omega)
-    simpa using this
+    simpa [SEL] using this
   have h1 : (1 : ℤ) * e.eval (tr i) ≡ tr i i * e.eval (tr i) [ZMOD P] :=
     Int.ModEq.mul_right _ hsel.symm
   rw [one_mul] at h1

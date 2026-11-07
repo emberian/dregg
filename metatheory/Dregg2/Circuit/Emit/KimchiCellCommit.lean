@@ -526,7 +526,7 @@ against a real `prove()`. -/
 theorem tamper_substituted_commit_refused (A : Nat → ℤ)
     (hwrong : A (saCol state.STATE_COMMIT) ≠ A (digLane 3)) : ¬ rowsHold A commitRows := by
   intro hr
-  exact hwrong (by simpa [digCol] using pins_force A hr 3 (by norm_num))
+  exact hwrong (pins_force A hr 3 (by norm_num))
 
 /-! ## §7 — THE COST, MEASURED, and the RE-PRICE.
 

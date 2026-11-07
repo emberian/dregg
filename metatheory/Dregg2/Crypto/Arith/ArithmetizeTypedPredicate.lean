@@ -294,7 +294,9 @@ def AlphaSpec (input : Fin 2 → BabyBear) : Prop := input i0 = 1 ∧ input i1 �
 
 /-- The ONLY caller obligation for ALPHA: a program-level bridge. -/
 theorem alphaBridge (input : Fin 2 → BabyBear) : alphaProg.Holds input ↔ AlphaSpec input := by
-  simp [alphaProg, Program.Holds, Program.AtomTruth, alphaSource, alphaAtoms, a0, a1,
+  have e0 : alphaAtoms 0 = .eqConst i0 1 := rfl
+  have e1 : alphaAtoms 1 = .input i1 := rfl
+  simp [alphaProg, Program.Holds, Program.AtomTruth, alphaSource, e0, e1, a0, a1,
     i0, i1, AffineTerm.eqConst, AffineTerm.evalField, AlphaSpec, add_neg_one_zero_iff,
     Dregg2.Metatheory.DirectLogicOptimizerCertificate.Formula.Holds]
 
@@ -318,7 +320,9 @@ def betaProg : Program 1 1 2 := { atomTerms := betaAtoms, source := betaSource }
 def BetaSpec (input : Fin 2 → BabyBear) : Prop := input i0 = 0 ∨ input i1 = 1
 
 theorem betaBridge (input : Fin 2 → BabyBear) : betaProg.Holds input ↔ BetaSpec input := by
-  simp [betaProg, Program.Holds, Program.AtomTruth, betaSource, betaAtoms, a0, a1,
+  have e0 : betaAtoms 0 = .input i0 := rfl
+  have e1 : betaAtoms 1 = .eqConst i1 1 := rfl
+  simp [betaProg, Program.Holds, Program.AtomTruth, betaSource, e0, e1, a0, a1,
     i0, i1, AffineTerm.eqConst, AffineTerm.evalField, BetaSpec, add_neg_one_zero_iff,
     Dregg2.Metatheory.DirectLogicOptimizerCertificate.Formula.Holds]
 
