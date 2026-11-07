@@ -198,7 +198,9 @@ theorem isAgent_bool_nonlast
     {i : Nat} (hi : i < t.rows.length) (hnl : i + 1 ≠ t.rows.length)
     (hc : 0 ≤ isAgentAt t i ∧ isAgentAt t i < 2013265921) :
     isAgentAt t i = 0 ∨ isAgentAt t i = 1 := by
-  have h := gate_forces hsat hi hnl mem_boolGate_isAgent
+  have hm := mem_boolGate_isAgent
+  rw [boolGate_eq] at hm
+  have h := gate_forces hsat hi hnl hm
   simp only [EmittedExpr.eval] at h
   exact bool_of_boolGate h hc.1 hc.2
 

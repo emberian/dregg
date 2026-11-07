@@ -95,7 +95,7 @@ theorem optimized_correct {Input : Type} {n : Nat} (p : ProductionPredicate Inpu
   calc
     Formula.Holds (p.atoms input) p.compile.optimized ↔
         Formula.Holds (p.atoms input) p.source := by
-          simpa [compile] using (optimize_holds_iff (p.atoms input) p.source).symm
+          exact (optimize_holds_iff (p.atoms input) p.source).symm
     _ ↔ p.decision input := p.correct input
 
 /-- Generic arbitrary-trace soundness.  The only application obligation is the
@@ -113,7 +113,7 @@ theorem public_sound (hash : List Int → Int) {Input : Type} {n : Nat}
     (by simpa [compile] using checkPublicLive_certify p.source) t hne hsat
   have hsource := (formula_holds_congr (PublicTruth t.pub) (p.atoms input)
     binding.exact p.compile.source).mp hpublic
-  simpa [compile, certifyPublic] using hsource
+  exact hsource
 
 /-- Generic constructive completeness on the canonical public trace.  No
 application-specific witness construction is needed after `correct`: the
@@ -127,7 +127,7 @@ theorem canonical_complete (hash : List Int → Int) {Input : Type} {n : Nat}
   have hsource : Formula.Holds (p.atoms input) p.source :=
     (p.correct input).mpr hdecision
   have hopt := (optimize_holds_iff (p.atoms input) p.source).mp hsource
-  simpa [atoms, compile, certifyPublic] using hopt
+  exact hopt
 
 end ProductionPredicate
 
@@ -210,8 +210,7 @@ def certificate : PublicLiveCertificate 7 := frontend.compile
 theorem optimized_iff_exec_commits (k : KernelState) (turn : Turn) :
     Formula.Holds (truth k turn) certificate.optimized ↔
       (Dregg2.Exec.exec k turn).isSome = true := by
-  simpa [frontend, ProductionPredicate.atoms, truth] using
-    frontend.optimized_correct { state := k, turn := turn }
+  exact frontend.optimized_correct { state := k, turn := turn }
 
 end TransferWorkload
 
@@ -243,7 +242,9 @@ theorem source_iff_noteSpendGuard (st : RecChainedState) (nf : Nat)
     (spendProof : Bool) :
     Formula.Holds (truth st nf spendProof) source ↔
       noteSpendGuard st nf spendProof := by
-  simp [source, a0, a1, truth, atomBits, Formula.Holds, noteSpendGuard]
+  simp only [source, a0, a1, Formula.Holds]
+  simp only [truth, atomBits]
+  simp [noteSpendGuard]
 
 /-- Exact all-input equivalence to existence of a committed production note spend. -/
 theorem source_iff_noteSpend_commits (st : RecChainedState) (nf actor : Nat)
@@ -274,8 +275,7 @@ theorem optimized_iff_noteSpend_commits (st : RecChainedState) (nf actor : Nat)
     (spendProof : Bool) :
     Formula.Holds (truth st nf spendProof) certificate.optimized ↔
       ∃ st', execFullA st (.noteSpendA nf actor spendProof) = some st' := by
-  simpa [frontend, ProductionPredicate.atoms, truth] using
-    frontend.optimized_correct
+  exact frontend.optimized_correct
       { state := st, nullifier := nf, actor := actor, spendProof := spendProof }
 
 end NoteSpendWorkload
@@ -338,8 +338,7 @@ def certificate : PublicLiveCertificate 4 := frontend.compile
 theorem optimized_iff_reachedConsensusWire (tag payload : Int) :
     Formula.Holds (truth tag payload) certificate.optimized ↔
       reachedConsensusWire tag payload = true := by
-  simpa [frontend, ProductionPredicate.atoms, truth] using
-    frontend.optimized_correct { tag := tag, payload := payload }
+  exact frontend.optimized_correct { tag := tag, payload := payload }
 
 end InterchainWorkload
 
@@ -375,7 +374,9 @@ theorem source_iff_foldAccept {C : ChainParams} (sv : StepVerifier C)
     (h0 h1 h2 h3 : GHolding C) :
     Formula.Holds (truth sv h0 h1 h2 h3) source ↔
       foldAccept C sv [h0, h1, h2, h3] = true := by
-  simp [source, a0, a1, a2, a3, truth, atomBits, Formula.Holds, foldAccept]
+  simp only [source, a0, a1, a2, a3, Formula.Holds]
+  simp only [truth, atomBits]
+  simp [foldAccept]
   aesop
 
 structure Input (C : ChainParams) where
@@ -400,8 +401,7 @@ theorem optimized_iff_foldAccept {C : ChainParams} (sv : StepVerifier C)
     (h0 h1 h2 h3 : GHolding C) :
     Formula.Holds (truth sv h0 h1 h2 h3) certificate.optimized ↔
       foldAccept C sv [h0, h1, h2, h3] = true := by
-  simpa [frontend, ProductionPredicate.atoms, truth] using
-    (frontend sv).optimized_correct { h0 := h0, h1 := h1, h2 := h2, h3 := h3 }
+  exact (frontend sv).optimized_correct { h0 := h0, h1 := h1, h2 := h2, h3 := h3 }
 
 end HoldingFoldWorkload
 
@@ -478,7 +478,7 @@ theorem public_descriptor_sound (hash : List Int → Int) {C : ChainParams}
     foldAccept C sv [h0, h1, h2, h3] = true := by
   apply ProductionPredicate.public_sound hash (frontend sv)
     { h0 := h0, h1 := h1, h2 := h2, h3 := h3 } t hne
-  · simpa [certificate, ProductionPredicate.compile] using hsat
+  · exact hsat
   · exact binding
 
 end HoldingFoldWorkload

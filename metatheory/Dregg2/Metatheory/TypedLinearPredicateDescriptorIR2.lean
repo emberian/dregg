@@ -367,7 +367,7 @@ theorem public_pin_field (hash : List Int -> Int) {pub sec atoms : Nat}
     (.base (.piBinding .first (rawBase atoms + i.val) i.val)) (public_pin_mem p i)
   have hmod : (envAt t 0).loc (rawBase atoms + i.val) ≡ t.pub i.val
       [ZMOD 2013265921] := by
-    simpa [VmConstraint2.holdsAt] using hpin
+    simpa [VmConstraint2.holdsAt, envAt] using hpin
   exact (ZMod.intCast_eq_intCast_iff _ _ 2013265921).2 hmod
 
 theorem atom_link_field (hash : List Int -> Int) {pub sec atoms : Nat}
@@ -379,12 +379,14 @@ theorem atom_link_field (hash : List Int -> Int) {pub sec atoms : Nat}
   have hpos : 0 < t.rows.length := List.length_pos_iff.mpr hne
   have hgate := hsat.rowConstraints 0 hpos (atomLink p a) (atom_link_mem p a)
   have hz := field_zero_of_gate (env := envAt t 0) (body := atomLinkBody p a) (by
-    simpa [atomLink] using hgate)
+    simpa [atomLink, VmConstraint2.holdsAt, gate, WindowConstraint.holdsAt] using hgate)
   simp only [atomLinkBody, subW, negW, fieldWindow] at hz
   rw [AffineTerm.fieldWindow_toWindowAt] at hz
   have hz' : fieldAssignment (envAt t 0).loc a.val -
       (p.atomTerms a).evalField (rowInput p t) = 0 := by
-    simpa [sub_eq_add_neg, rowInput] using hz
+    show fieldAssignment (envAt t 0).loc a.val - (p.atomTerms a).evalField
+      (fun i => fieldAssignment (envAt t 0).loc (rawBase atoms + i.val)) = 0
+    simpa [sub_eq_add_neg] using hz
   linear_combination hz'
 
 theorem graph_nodes_hold (hash : List Int -> Int) {pub sec atoms : Nat}
@@ -409,7 +411,7 @@ theorem accepts_output_one (hash : List Int -> Int) {pub sec atoms : Nat}
   have hgate := hsat.rowConstraints 0 hpos (acceptConstraintAt p) hmem
   have hz := field_zero_of_gate (env := envAt t 0)
     (body := subW (outputAt (boolBase pub sec atoms) p.source).expr (.const 1)) (by
-      simpa [acceptConstraintAt] using hgate)
+      simpa [acceptConstraintAt, VmConstraint2.holdsAt, gate, WindowConstraint.holdsAt] using hgate)
   simp [subW, negW, fieldWindow] at hz
   rw [fieldWire_expr] at hz
   linear_combination hz
@@ -604,7 +606,7 @@ theorem field_output_of_matches {n : Nat} (residual : Fin n -> BabyBear) (base :
   cases p with
   | atom a =>
       have hx := h 0 (by simp [witnessCount])
-      simpa [outputAt, fieldWitness] using hx
+      simpa [outputAt, fieldWireValue, evalBit, fieldWitness] using hx
   | top => rfl
   | bot => rfl
   | not p =>
@@ -615,7 +617,7 @@ theorem field_output_of_matches {n : Nat} (residual : Fin n -> BabyBear) (base :
         [evalBit residual (.not p)] 0 0
       simp only [Nat.add_zero, List.getD_cons_zero] at hlast
       rw [hlast] at hx
-      simpa [outputAt, Nat.add_assoc] using hx
+      simpa [outputAt, fieldWireValue, evalBit, Nat.add_assoc] using hx
   | and p q =>
       have hx := h (witnessCount p + witnessCount q) (by simp [witnessCount])
       rw [fieldWitness,
@@ -626,7 +628,7 @@ theorem field_output_of_matches {n : Nat} (residual : Fin n -> BabyBear) (base :
         [evalBit residual (.and p q)] 0 0
       simp only [Nat.add_zero, List.getD_cons_zero] at hlast
       rw [hlast] at hx
-      simpa [outputAt, Nat.add_assoc] using hx
+      simpa [outputAt, fieldWireValue, evalBit, Nat.add_assoc] using hx
   | or p q =>
       have hx := h (witnessCount p + witnessCount q) (by simp [witnessCount])
       rw [fieldWitness,
@@ -637,7 +639,7 @@ theorem field_output_of_matches {n : Nat} (residual : Fin n -> BabyBear) (base :
         [evalBit residual (.or p q)] 0 0
       simp only [Nat.add_zero, List.getD_cons_zero] at hlast
       rw [hlast] at hx
-      simpa [outputAt, Nat.add_assoc] using hx
+      simpa [outputAt, fieldWireValue, evalBit, Nat.add_assoc] using hx
 
 namespace Node
 
@@ -683,7 +685,7 @@ theorem field_nodes_valid_of_matches {n : Nat} (residual : Fin n -> BabyBear)
         have hout := field_output_of_matches residual base (.not p) row hmatch
         have hg := Dregg2.Logic.BoolGraph.notGate_complete (evalBit_isBit residual p)
         have hout' : row (base + witnessCount p) = evalBit residual (.not p) := by
-          simpa [outputAt] using hout
+          simpa [outputAt, fieldWireValue, evalBit] using hout
         change Dregg2.Logic.BoolGraph.NotGate
           (fieldWireValue row (outputAt base p)) (row (base + witnessCount p))
         rw [hin, hout']
@@ -703,7 +705,7 @@ theorem field_nodes_valid_of_matches {n : Nat} (residual : Fin n -> BabyBear)
           (evalBit_isBit residual p) (evalBit_isBit residual q)
         have hout' : row (base + witnessCount p + witnessCount q) =
             evalBit residual (.and p q) := by
-          simpa [outputAt, Nat.add_assoc] using hout
+          simpa [outputAt, fieldWireValue, evalBit, Nat.add_assoc] using hout
         change Dregg2.Logic.BoolGraph.AndGate
           (fieldWireValue row (outputAt base p))
           (fieldWireValue row (outputAt (base + witnessCount p) q))
@@ -725,7 +727,7 @@ theorem field_nodes_valid_of_matches {n : Nat} (residual : Fin n -> BabyBear)
           (evalBit_isBit residual p) (evalBit_isBit residual q)
         have hout' : row (base + witnessCount p + witnessCount q) =
             evalBit residual (.or p q) := by
-          simpa [outputAt, Nat.add_assoc] using hout
+          simpa [outputAt, fieldWireValue, evalBit, Nat.add_assoc] using hout
         change Dregg2.Logic.BoolGraph.OrGate
           (fieldWireValue row (outputAt base p))
           (fieldWireValue row (outputAt (base + witnessCount p) q))
@@ -1177,10 +1179,9 @@ theorem three_ne_zero : (3 : BabyBear) ≠ 0 := by
 
 theorem program_holds_iff (tag payload : BabyBear) :
     program.Holds (inputOf tag payload) <-> Reaches tag payload := by
-  simp [program, Program.Holds, Program.AtomTruth, source, atom0, atom1,
-    atom2, atom3, atomTerms, input0, input1, inputOf, AffineTerm.eqConst,
-    AffineTerm.evalField, Formula.Holds, Reaches, add_neg_one_zero_iff,
-    add_neg_two_zero_iff]
+  simp only [program, Program.Holds, Program.AtomTruth, source, atom0, atom1, atom2, atom3, input0, input1, Formula.Holds]
+  simp only [atomTerms, AffineTerm.eqConst, AffineTerm.evalField, input0, input1, inputOf]
+  simp [Reaches, add_neg_one_zero_iff, add_neg_two_zero_iff]
 
 /-- Embed the production `(tag,payload)` wire in BabyBear.  This front end is
 field-native: arbitrary unbounded integers must be range/canonicality checked
@@ -1437,7 +1438,7 @@ theorem public_pin_field (hash : List Int -> Int) {pub sec atoms : Nat}
     (.base (.piBinding .first (rawBase atoms + i.val) i.val)) (public_pin_mem p i)
   have hmod : (envAt t 0).loc (rawBase atoms + i.val) ≡ t.pub i.val
       [ZMOD 2013265921] := by
-    simpa [VmConstraint2.holdsAt] using hpin
+    simpa [VmConstraint2.holdsAt, envAt] using hpin
   exact (ZMod.intCast_eq_intCast_iff _ _ 2013265921).2 hmod
 
 /-- The single re-derived atom-link glue: the emitted degree-2 gate pins the
@@ -1451,12 +1452,14 @@ theorem atom_link_field (hash : List Int -> Int) {pub sec atoms : Nat}
   have hpos : 0 < t.rows.length := List.length_pos_iff.mpr hne
   have hgate := hsat.rowConstraints 0 hpos (atomLink p a) (atom_link_mem p a)
   have hz := field_zero_of_gate (env := envAt t 0) (body := atomLinkBody p a) (by
-    simpa [atomLink] using hgate)
+    simpa [atomLink, VmConstraint2.holdsAt, gate, WindowConstraint.holdsAt] using hgate)
   simp only [atomLinkBody, subW, negW, fieldWindow] at hz
   rw [QuadTerm.fieldWindow_toWindowAt] at hz
   have hz' : fieldAssignment (envAt t 0).loc a.val -
       (p.atomTerms a).evalField (rowInput p t) = 0 := by
-    simpa [sub_eq_add_neg, rowInput] using hz
+    show fieldAssignment (envAt t 0).loc a.val - (p.atomTerms a).evalField
+      (fun i => fieldAssignment (envAt t 0).loc (rawBase atoms + i.val)) = 0
+    simpa [sub_eq_add_neg] using hz
   linear_combination hz'
 
 theorem graph_nodes_hold (hash : List Int -> Int) {pub sec atoms : Nat}
@@ -1481,7 +1484,7 @@ theorem accepts_output_one (hash : List Int -> Int) {pub sec atoms : Nat}
   have hgate := hsat.rowConstraints 0 hpos (acceptConstraintAt p) hmem
   have hz := field_zero_of_gate (env := envAt t 0)
     (body := subW (outputAt (boolBase pub sec atoms) p.source).expr (.const 1)) (by
-      simpa [acceptConstraintAt] using hgate)
+      simpa [acceptConstraintAt, VmConstraint2.holdsAt, gate, WindowConstraint.holdsAt] using hgate)
   simp [subW, negW, fieldWindow] at hz
   rw [fieldWire_expr] at hz
   linear_combination hz

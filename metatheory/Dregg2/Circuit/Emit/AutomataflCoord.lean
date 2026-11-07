@@ -455,7 +455,7 @@ theorem oneHotN_of_sat (hsat : Satisfied2 hash d minit mfin maddrs t)
     rw [headToExpr_eval, evalH_foldl_addLin, evalH_c, List.map_map] at hg
     have hEq : (-1 + ((List.range n).map ((fun j => e.loc (sel j)))).sum)
         ≡ 0 [ZMOD 2013265921] := by
-      simpa [Function.comp] using hg
+      simpa [Function.comp_def, he] using hg
     have hmod : ((List.range n).map (fun j => e.loc (sel j))).sum ≡ 1 [ZMOD 2013265921] :=
       (gate_modEq_iff (by ring)).mp hEq
     obtain ⟨hlo, hhi⟩ := sum_bool_bounds hb
