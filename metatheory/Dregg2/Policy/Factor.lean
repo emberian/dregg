@@ -425,6 +425,18 @@ theorem nextSet_discriminates :
 #guard_msgs in
 #print axioms nextSet_spec
 
+/-- info: 'Dregg2.Policy.anyAcc_spec' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms anyAcc_spec
+
+/-- info: 'Dregg2.Policy.absStep_col' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms absStep_col
+
+/-- info: 'Dregg2.Policy.labCheckRep_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms labCheckRep_sound
+
 #assert_all_clean [absStep_col, labCheckRep_sound, nextSet_spec, anyAcc_spec, imgStep_getD, img_getD, memB_toArray, nextSet_discriminates, suffix_snoc, factor_snoc, absRun_spec, labCheck_run, factor_decides, absence_decides,
   closed_run]
 

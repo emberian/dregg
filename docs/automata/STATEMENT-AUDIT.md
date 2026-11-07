@@ -9,7 +9,7 @@ the whole initiative complete.
 [READ] The manifest covers the Datalog exact-count/stratified/join/safe/budget statements, generic
 content-bound DFA kernel, table interpretation boundaries, committed LRAT and bisimulation,
 full-width route binding, the **actual table/weld/Dyck record consumers**, cached compilation,
-certified union, the actual whole-word/absence compiler wrappers, and generated range, borrow, tuple, solvency, caveat and payment AIR, plus the served note-spend wrapper and binary membership. Each scoped review names its
+certified union, the actual whole-word/absence compiler wrappers, and generated range, borrow, tuple, solvency, caveat and payment AIR, plus the served note-spend wrapper, binary membership and the direct-logic front end. Each scoped review names its
 statement, witness, falsifier and limitations. All local module roots participate in dependency
 identity checks, including `Metatheory`; a dependency hash does **not** claim a semantic review of
 every theorem in that file.
@@ -103,6 +103,19 @@ owning-family pin after refreshing the copy's digest. The final injected-axiom c
   full descriptor. The migrated Rust already enforced all ten constraints; this preserves semantics,
   rather than repairing a newly discovered runtime omission. A named depth-eight/two-row witness preserves the distinction between the
   descriptor label and actual path length; neither depth admission nor full-width security follows.
+
+- Direct-logic front-end review covers the descriptor the Rust consumer now parses from Lean
+  (`DirectLogicProgramIR2.compileProgram` through `direct_logic_compile`). Soundness is over every
+  row of a canonical `Satisfied2` trace: booleanity and the per-enumeration sum-to-one gates force
+  the atom columns to be exactly the one-hot encoding of well-typed values, and the source formula
+  (equality, row-major truth tables, connectives, exhaustive quantifier expansion) holds on them.
+  Completeness builds the one-row witness, padding column included. The control is the Boolean
+  polynomial alone: it accepts a two-hot row that encodes no value, which the compiled descriptor
+  refuses. The source name is BLAKE3 of canonically decoded and re-encoded request bytes; no
+  collision-resistance claim follows, and the line protocol and Rust parser are identity-checked
+  transport. Over the 18 existing test and benchmark programs the retired Rust compiler and Lean
+  agree on every relation, width, one-hot and acceptance gate, name and refusal; only the booleanity
+  rendering (and hence descriptor bytes) changed.
 
 ## Boundaries retained
 

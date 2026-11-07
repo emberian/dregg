@@ -3,29 +3,51 @@
 //! The source fragment is deliberately finite and executable.  Inputs and
 //! bound variables range over `Bool` or a declared finite enumeration, terms
 //! are variables/constants, and formulae contain equality, truth-table
-//! predicates, Boolean connectives, and bounded quantifiers.  Quantifiers are
-//! deterministically unrolled.  Enumeration inputs use an exact one-hot
-//! encoding; the generated relation checks it with one linear sum-to-one gate
-//! in addition to the per-column Booleanity gates.
+//! predicates, Boolean connectives, and bounded quantifiers.
 //!
-//! The target is the deployed [`EffectVmDescriptor2`] grammar.  Source atoms
-//! occupy main-trace columns, receive always-on BabyBear Booleanity gates, and
-//! the final always-on gate forces the exact Boolean polynomial to one.  The
-//! emitted JSON follows Lean's `emitVmJson2` field/tag order for this restricted
-//! descriptor face and is parsed and structurally checked before it is returned.
+//! # The compiler is Lean
 //!
-//! This is an executable Rust compiler with differential tests.  It is not a
-//! Rust-to-Lean refinement theorem; the corresponding Lean construction lives
-//! in `Dregg2.Logic.FiniteLogicDescriptorIR2`.
+//! This module authors no constraint.  [`compile_logic_program`] serializes the
+//! program to its canonical source bytes, sends them to the Lean compiler
+//! `Dregg2.Logic.DirectLogicProgramIR2.compileBytes` (the `direct_logic_compile`
+//! executable, root `metatheory/DirectLogicCompile.lean`), and parses the reply:
+//! the descriptor is Lean's `emitVmJson2` bytes, the formula relation is Lean's
+//! grounded Boolean source, and the input layout is Lean's.  Quantifier
+//! expansion, one-hot enumeration gates, the width-at-least-one padding column
+//! and the `dregg-direct-logic-v1-<BLAKE3 of source bytes>` name are all Lean
+//! definitions; `program_sound` / `program_complete` are about exactly that
+//! descriptor, and `compileBytes_spec` ties it to the bytes this module sent.
+//!
+//! What stays here is transport and checking: the source encoding (which Lean
+//! decodes canonically and re-encodes, so a drift is a refusal), the reply
+//! parser, consistency checks of the reply against the request (source hash,
+//! name, width, layout), the transparent reference evaluator, and the
+//! one-row witness encoder.
+//!
+//! # Locating the compiler
+//!
+//! [`LeanExeCompiler::locate`] uses `DREGG_DIRECT_LOGIC_COMPILER` (an executable
+//! path) or else the in-tree build `metatheory/.lake/build/bin/direct_logic_compile`
+//! (`cd metatheory && lake build direct_logic_compile`).  There is no Rust
+//! fallback compiler: without the executable, compilation fails with
+//! [`FrontendError::CompilerUnavailable`].  [`RecordedCompiler`] replays replies
+//! the executable produced earlier (the test corpus), byte for byte.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fmt;
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
-use crate::descriptor_ir2::{
-    EffectVmDescriptor2, TID_MAIN, TableDef2, TableSem, VmConstraint2, WindowExpr, WindowGateSpec,
-    parse_vm_descriptor2,
-};
+use crate::descriptor_ir2::{EffectVmDescriptor2, VmConstraint2, parse_vm_descriptor2};
 use crate::field::BabyBear;
+
+/// Wire tag of a compile request (Lean `requestTag`).
+pub const DIRECT_LOGIC_REQUEST_TAG: &str = "DIRECT-LOGIC-COMPILE-1";
+/// Wire tag of a compile reply (Lean `replyTag`).
+pub const DIRECT_LOGIC_REPLY_TAG: &str = "DIRECT-LOGIC-COMPILED-1";
+/// Environment variable naming the compiler executable.
+pub const DIRECT_LOGIC_COMPILER_ENV: &str = "DREGG_DIRECT_LOGIC_COMPILER";
 
 /// Version of the source encoding, compiler rules, and portable artifact.
 pub const DIRECT_LOGIC_FRONTEND_VERSION: u32 = 1;
@@ -173,7 +195,8 @@ impl BoolExpr {
         }
     }
 
-    fn node_count(&self) -> usize {
+    /// Node count of the relation graph (Lean `sourceSize`).
+    pub fn node_count(&self) -> usize {
         match self {
             Self::Atom(_) | Self::Constant(_) => 1,
             Self::Not(value) => 1 + value.node_count(),
@@ -385,7 +408,13 @@ pub enum FrontendError {
         expected: usize,
         actual: usize,
     },
+    /// The reply's descriptor or relation failed to parse or contradicts the request.
     InternalWireDrift(String),
+    /// No compiler executable could be run.
+    CompilerUnavailable(String),
+    /// The compiler's reply is not a well-formed `DIRECT-LOGIC-COMPILED-1` reply, or Lean
+    /// refused the request bytes themselves.
+    CompilerProtocol(String),
 }
 
 impl fmt::Display for FrontendError {
@@ -396,307 +425,277 @@ impl fmt::Display for FrontendError {
 
 impl std::error::Error for FrontendError {}
 
+/// A compiler backend: takes one request line, returns the reply text.
+pub trait LogicCompiler {
+    fn compile_request(&self, request: &str) -> Result<String, FrontendError>;
+}
+
+/// The Lean compiler executable (`lake build direct_logic_compile`), run once per request.
 #[derive(Clone, Debug)]
-struct BoundValue {
-    ty: LogicType,
-    value: usize,
+pub struct LeanExeCompiler {
+    program: PathBuf,
 }
 
-struct Lowering<'a> {
-    limits: &'a CompileLimits,
-    inputs: Vec<InputEncoding>,
-    bounds: Vec<BoundValue>,
-    quantifier_instances: usize,
-    construction_steps: usize,
-}
-
-impl Lowering<'_> {
-    fn spend(&mut self, amount: usize) -> Result<(), FrontendError> {
-        self.construction_steps = self.construction_steps.saturating_add(amount);
-        if self.construction_steps > self.limits.maximum_expanded_nodes {
-            return Err(FrontendError::ExpandedRelationTooLarge {
-                nodes: self.construction_steps,
-                maximum: self.limits.maximum_expanded_nodes,
-            });
-        }
-        Ok(())
-    }
-
-    fn term_bits(&mut self, term: &Term) -> Result<(LogicType, Vec<BoolExpr>), FrontendError> {
-        self.spend(1)?;
-        match term {
-            Term::Input(index) => {
-                let encoding = self
-                    .inputs
-                    .get(*index)
-                    .ok_or(FrontendError::InputOutOfRange {
-                        index: *index,
-                        available: self.inputs.len(),
-                    })?;
-                let bits = match encoding.ty {
-                    LogicType::Bool => {
-                        let atom = BoolExpr::Atom(encoding.first_atom);
-                        vec![not(atom.clone()), atom]
-                    }
-                    LogicType::Finite { cardinality } => (0..cardinality)
-                        .map(|offset| BoolExpr::Atom(encoding.first_atom + offset))
-                        .collect(),
-                    LogicType::UnboundedInteger => return Err(FrontendError::UnboundedDomain),
-                };
-                Ok((encoding.ty.clone(), bits))
-            }
-            Term::Bound(index) => {
-                let depth = self.bounds.len();
-                let bound = depth
-                    .checked_sub(index.saturating_add(1))
-                    .and_then(|position| self.bounds.get(position))
-                    .ok_or(FrontendError::BoundVariableOutOfRange {
-                        index: *index,
-                        depth,
-                    })?;
-                let cardinality = bound.ty.cardinality()?;
-                Ok((
-                    bound.ty.clone(),
-                    (0..cardinality)
-                        .map(|value| BoolExpr::Constant(value == bound.value))
-                        .collect(),
-                ))
-            }
-            Term::Constant { ty, value } => {
-                let cardinality = ty.cardinality()?;
-                if *value >= cardinality {
-                    return Err(FrontendError::ConstantOutOfRange {
-                        value: *value,
-                        cardinality,
-                    });
-                }
-                Ok((
-                    ty.clone(),
-                    (0..cardinality)
-                        .map(|candidate| BoolExpr::Constant(candidate == *value))
-                        .collect(),
-                ))
-            }
+impl LeanExeCompiler {
+    pub fn new(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
         }
     }
 
-    fn formula(&mut self, formula: &Formula) -> Result<BoolExpr, FrontendError> {
-        self.spend(1)?;
-        match formula {
-            Formula::Top => Ok(BoolExpr::Constant(true)),
-            Formula::Bottom => Ok(BoolExpr::Constant(false)),
-            Formula::Equal(left, right) => {
-                let (left_ty, left_bits) = self.term_bits(left)?;
-                let (right_ty, right_bits) = self.term_bits(right)?;
-                require_same_type(&left_ty, &right_ty)?;
-                Ok(any(left_bits
-                    .into_iter()
-                    .zip(right_bits)
-                    .map(|(l, r)| and(l, r))))
-            }
-            Formula::Predicate { table, arguments } => {
-                if table.argument_types.len() != arguments.len() {
-                    return Err(FrontendError::PredicateArityMismatch {
-                        expected: table.argument_types.len(),
-                        actual: arguments.len(),
-                    });
-                }
-                let mut expected_entries = 1usize;
-                let mut argument_bits = Vec::with_capacity(arguments.len());
-                for (expected_ty, term) in table.argument_types.iter().zip(arguments) {
-                    let cardinality = expected_ty.cardinality()?;
-                    expected_entries = expected_entries.saturating_mul(cardinality);
-                    let (actual_ty, bits) = self.term_bits(term)?;
-                    require_same_type(expected_ty, &actual_ty)?;
-                    argument_bits.push(bits);
-                }
-                if expected_entries > self.limits.maximum_predicate_entries {
-                    return Err(FrontendError::PredicateTooLarge {
-                        entries: expected_entries,
-                        maximum: self.limits.maximum_predicate_entries,
-                    });
-                }
-                if table.values.len() != expected_entries {
-                    return Err(FrontendError::PredicateShapeMismatch {
-                        expected: expected_entries,
-                        actual: table.values.len(),
-                    });
-                }
-                let cards: Vec<usize> = table
-                    .argument_types
-                    .iter()
-                    .map(LogicType::cardinality)
-                    .collect::<Result<_, _>>()?;
-                let mut rows = Vec::new();
-                for (flat, value) in table.values.iter().enumerate() {
-                    if !value {
-                        continue;
-                    }
-                    let tuple = decode_row_major(flat, &cards);
-                    rows.push(all(tuple
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, selected)| argument_bits[i][selected].clone())));
-                }
-                Ok(any(rows))
-            }
-            Formula::Not(value) => Ok(not(self.formula(value)?)),
-            Formula::And(left, right) => Ok(and(self.formula(left)?, self.formula(right)?)),
-            Formula::Or(left, right) => Ok(or(self.formula(left)?, self.formula(right)?)),
-            Formula::ForAll { binder, body } => self.quantifier(binder, body, true),
-            Formula::Exists { binder, body } => self.quantifier(binder, body, false),
-        }
+    /// The in-tree build location of the executable.
+    pub fn default_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../metatheory/.lake/build/bin/direct_logic_compile")
     }
 
-    fn quantifier(
-        &mut self,
-        binder: &LogicType,
-        body: &Formula,
-        universal: bool,
-    ) -> Result<BoolExpr, FrontendError> {
-        let cardinality = binder.cardinality()?;
-        self.quantifier_instances = self.quantifier_instances.saturating_add(cardinality);
-        if self.quantifier_instances > self.limits.maximum_quantifier_instances {
-            return Err(FrontendError::QuantifierExpansionTooLarge {
-                instances: self.quantifier_instances,
-                maximum: self.limits.maximum_quantifier_instances,
-            });
+    /// `DREGG_DIRECT_LOGIC_COMPILER`, else the in-tree build if it exists.
+    pub fn locate() -> Result<Self, FrontendError> {
+        if let Some(path) = std::env::var_os(DIRECT_LOGIC_COMPILER_ENV) {
+            return Ok(Self::new(path));
         }
-        let mut instances = Vec::with_capacity(cardinality);
-        for value in 0..cardinality {
-            self.bounds.push(BoundValue {
-                ty: binder.clone(),
-                value,
-            });
-            let instance = self.formula(body);
-            self.bounds.pop();
-            instances.push(instance?);
-        }
-        Ok(if universal {
-            all(instances)
+        let path = Self::default_path();
+        if path.is_file() {
+            Ok(Self::new(path))
         } else {
-            any(instances)
+            Err(FrontendError::CompilerUnavailable(format!(
+                "set {DIRECT_LOGIC_COMPILER_ENV} or run `lake build direct_logic_compile` in \
+                 metatheory/ (looked for {})",
+                path.display()
+            )))
+        }
+    }
+}
+
+impl LogicCompiler for LeanExeCompiler {
+    fn compile_request(&self, request: &str) -> Result<String, FrontendError> {
+        let unavailable = |why: String| FrontendError::CompilerUnavailable(why);
+        let mut child = Command::new(&self.program)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| unavailable(format!("{}: {e}", self.program.display())))?;
+        {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| unavailable("no stdin".into()))?;
+            stdin
+                .write_all(request.as_bytes())
+                .and_then(|_| stdin.write_all(b"\n"))
+                .map_err(|e| unavailable(format!("writing request: {e}")))?;
+        }
+        let output = child
+            .wait_with_output()
+            .map_err(|e| unavailable(format!("waiting for compiler: {e}")))?;
+        if !output.status.success() {
+            return Err(unavailable(format!(
+                "compiler exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let text = String::from_utf8(output.stdout)
+            .map_err(|_| FrontendError::CompilerProtocol("reply is not UTF-8".into()))?;
+        text.strip_suffix("end\n")
+            .map(str::to_owned)
+            .ok_or_else(|| FrontendError::CompilerProtocol("reply has no `end` line".into()))
+    }
+}
+
+/// Replies the Lean executable produced earlier, keyed by the exact request line.  The corpus
+/// format is the executable's own output with each reply preceded by `request <line>`.
+#[derive(Clone, Debug, Default)]
+pub struct RecordedCompiler {
+    replies: BTreeMap<String, String>,
+}
+
+impl RecordedCompiler {
+    pub fn parse(corpus: &str) -> Result<Self, FrontendError> {
+        let mut replies = BTreeMap::new();
+        let mut lines = corpus.lines();
+        while let Some(line) = lines.next() {
+            if line.is_empty() {
+                continue;
+            }
+            let request = line.strip_prefix("request ").ok_or_else(|| {
+                FrontendError::CompilerProtocol(format!("corpus line is not a request: {line:?}"))
+            })?;
+            let mut reply = String::new();
+            loop {
+                match lines.next() {
+                    Some("end") => break,
+                    Some(l) => {
+                        reply.push_str(l);
+                        reply.push('\n');
+                    }
+                    None => {
+                        return Err(FrontendError::CompilerProtocol(
+                            "corpus reply has no `end` line".into(),
+                        ));
+                    }
+                }
+            }
+            replies.insert(request.to_owned(), reply);
+        }
+        Ok(Self { replies })
+    }
+
+    pub fn requests(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.replies.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+}
+
+impl LogicCompiler for RecordedCompiler {
+    fn compile_request(&self, request: &str) -> Result<String, FrontendError> {
+        self.replies.get(request).cloned().ok_or_else(|| {
+            FrontendError::CompilerUnavailable(
+                "no recorded Lean reply for this request; regenerate the corpus".into(),
+            )
         })
     }
 }
 
-/// Compile a finite program to a live IR-v2 descriptor and stable wire image.
+/// The request line for a program: limits, then the canonical source bytes in hex.
+pub fn compile_request_line(program: &LogicProgram, limits: &CompileLimits) -> String {
+    let bytes = canonical_source_bytes(program);
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in &bytes {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    format!(
+        "{DIRECT_LOGIC_REQUEST_TAG} {} {} {} {} {} {hex}",
+        limits.maximum_source_nodes,
+        limits.maximum_atoms,
+        limits.maximum_predicate_entries,
+        limits.maximum_quantifier_instances,
+        limits.maximum_expanded_nodes,
+    )
+}
+
+/// Compile a finite program with the Lean compiler located by [`LeanExeCompiler::locate`].
 pub fn compile_logic_program(
     program: &LogicProgram,
     limits: &CompileLimits,
 ) -> Result<CompiledLogicArtifact, FrontendError> {
-    let source_nodes = formula_node_count(&program.formula);
-    if source_nodes > limits.maximum_source_nodes {
-        return Err(FrontendError::SourceTooLarge {
-            nodes: source_nodes,
-            maximum: limits.maximum_source_nodes,
-        });
-    }
+    compile_logic_program_with(&LeanExeCompiler::locate()?, program, limits)
+}
 
-    let mut names = BTreeSet::new();
-    let mut inputs = Vec::with_capacity(program.inputs.len());
-    let mut next_atom = 0usize;
-    for input in &program.inputs {
-        if !names.insert(input.name.clone()) {
-            return Err(FrontendError::DuplicateInputName(input.name.clone()));
-        }
-        let atom_count = match input.ty {
-            LogicType::Bool => 1,
-            LogicType::Finite { .. } => input.ty.cardinality()?,
-            LogicType::UnboundedInteger => return Err(FrontendError::UnboundedDomain),
-        };
-        next_atom = next_atom.saturating_add(atom_count);
-        if next_atom > limits.maximum_atoms {
-            return Err(FrontendError::TooManyAtoms {
-                atoms: next_atom,
-                maximum: limits.maximum_atoms,
-            });
-        }
-        inputs.push(InputEncoding {
-            name: input.name.clone(),
-            ty: input.ty.clone(),
-            first_atom: next_atom - atom_count,
-            atom_count,
-        });
-    }
-
-    let mut lowering = Lowering {
-        limits,
-        inputs: inputs.clone(),
-        bounds: Vec::new(),
-        quantifier_instances: 0,
-        construction_steps: 0,
-    };
-    let formula_relation = lowering.formula(&program.formula)?;
-    let expanded_nodes = formula_relation.node_count();
-    if expanded_nodes > limits.maximum_expanded_nodes {
-        return Err(FrontendError::ExpandedRelationTooLarge {
-            nodes: expanded_nodes,
-            maximum: limits.maximum_expanded_nodes,
-        });
-    }
-
+/// Compile a finite program with an explicit compiler backend.
+pub fn compile_logic_program_with(
+    compiler: &dyn LogicCompiler,
+    program: &LogicProgram,
+    limits: &CompileLimits,
+) -> Result<CompiledLogicArtifact, FrontendError> {
     let source_bytes = canonical_source_bytes(program);
     let source_blake3 = *blake3::hash(&source_bytes).as_bytes();
-    let name = format!(
-        "dregg-direct-logic-v{}-{}",
-        DIRECT_LOGIC_FRONTEND_VERSION,
-        hex32(&source_blake3)
-    );
-    let trace_width = next_atom.max(1);
-    let finite_input_count = inputs
-        .iter()
-        .filter(|input| matches!(input.ty, LogicType::Finite { .. }))
-        .count();
-    let mut constraints = Vec::with_capacity(trace_width + finite_input_count + 1);
-    for atom in 0..trace_width {
-        constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-            body: binary_body(atom),
-            on_transition: false,
-        }));
+    let reply = compiler.compile_request(&compile_request_line(program, limits))?;
+    parse_reply(program, &reply, source_blake3)
+}
+
+fn protocol(why: impl Into<String>) -> FrontendError {
+    FrontendError::CompilerProtocol(why.into())
+}
+
+fn parse_reply(
+    program: &LogicProgram,
+    reply: &str,
+    source_blake3: [u8; 32],
+) -> Result<CompiledLogicArtifact, FrontendError> {
+    let mut lines = reply.lines();
+    if lines.next() != Some(DIRECT_LOGIC_REPLY_TAG) {
+        return Err(protocol("missing reply tag"));
     }
-    for input in &inputs {
-        let LogicType::Finite { cardinality } = input.ty else {
-            continue;
-        };
-        let sum = sum_window(
-            (0..cardinality)
-                .map(|offset| WindowExpr::Loc(input.first_atom + offset))
-                .collect(),
-        );
-        constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-            body: WindowExpr::Add(Box::new(sum), Box::new(WindowExpr::Const(-1))),
-            on_transition: false,
-        }));
+    let status = lines.next().ok_or_else(|| protocol("missing status"))?;
+    if let Some(error) = status.strip_prefix("error ") {
+        return Err(parse_error(error)?);
     }
-    constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-        body: WindowExpr::Add(
-            Box::new(bool_expr_to_window(&formula_relation)),
-            Box::new(WindowExpr::Const(-1)),
-        ),
-        on_transition: false,
-    }));
-    let descriptor = EffectVmDescriptor2 {
-        name,
-        trace_width,
-        public_input_count: 0,
-        challenges: 0,
-        tables: vec![TableDef2 {
-            id: TID_MAIN,
-            name: "main".to_string(),
-            arity: trace_width,
-            sem: TableSem::Main,
-        }],
-        constraints,
-        hash_sites: Vec::new(),
-        ranges: Vec::new(),
+    if status != "ok" {
+        return Err(protocol(format!("unknown status {status:?}")));
+    }
+    let mut field = |key: &str| -> Result<&str, FrontendError> {
+        let line = lines
+            .next()
+            .ok_or_else(|| protocol(format!("missing {key}")))?;
+        if line == key {
+            return Ok("");
+        }
+        line.strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix(' '))
+            .ok_or_else(|| protocol(format!("expected {key}, got {line:?}")))
     };
-    let descriptor_json = canonical_descriptor_json(&descriptor)?;
-    let reparsed =
-        parse_vm_descriptor2(&descriptor_json).map_err(FrontendError::InternalWireDrift)?;
-    if reparsed != descriptor {
+    let hash = field("source_blake3")?;
+    let atoms = field("logical_atom_count")?;
+    let layout = field("inputs")?;
+    let relation = field("relation")?;
+    let descriptor_json = field("descriptor")?.to_owned();
+
+    let expected_hash = hex32(&source_blake3);
+    if hash != expected_hash {
+        return Err(FrontendError::InternalWireDrift(format!(
+            "Lean hashed different source bytes: {hash} != {expected_hash}"
+        )));
+    }
+    let logical_atom_count: usize = atoms
+        .parse()
+        .map_err(|_| protocol("bad logical_atom_count"))?;
+
+    let mut inputs = Vec::with_capacity(program.inputs.len());
+    let mut next = 0usize;
+    let entries: Vec<&str> = layout.split(' ').filter(|s| !s.is_empty()).collect();
+    if entries.len() != program.inputs.len() {
         return Err(FrontendError::InternalWireDrift(
-            "canonical wire did not round-trip to the compiled descriptor".to_string(),
+            "input layout does not cover the declared inputs".into(),
+        ));
+    }
+    for (decl, entry) in program.inputs.iter().zip(entries) {
+        let (first, count) = entry
+            .split_once(':')
+            .and_then(|(f, c)| Some((f.parse::<usize>().ok()?, c.parse::<usize>().ok()?)))
+            .ok_or_else(|| protocol(format!("bad layout entry {entry:?}")))?;
+        let expected_count = match decl.ty {
+            LogicType::Bool => 1,
+            LogicType::Finite { cardinality } => cardinality,
+            LogicType::UnboundedInteger => 0,
+        };
+        if first != next || count != expected_count {
+            return Err(FrontendError::InternalWireDrift(format!(
+                "input {:?} laid out at {first}:{count}, expected {next}:{expected_count}",
+                decl.name
+            )));
+        }
+        next += count;
+        inputs.push(InputEncoding {
+            name: decl.name.clone(),
+            ty: decl.ty.clone(),
+            first_atom: first,
+            atom_count: count,
+        });
+    }
+    if next != logical_atom_count {
+        return Err(FrontendError::InternalWireDrift(
+            "layout and logical_atom_count disagree".into(),
+        ));
+    }
+
+    let formula_relation = parse_relation(relation, logical_atom_count)?;
+    let descriptor =
+        parse_vm_descriptor2(&descriptor_json).map_err(FrontendError::InternalWireDrift)?;
+    let expected_name =
+        format!("dregg-direct-logic-v{DIRECT_LOGIC_FRONTEND_VERSION}-{expected_hash}");
+    if descriptor.name != expected_name
+        || descriptor.trace_width != logical_atom_count.max(1)
+        || descriptor.public_input_count != 0
+        || descriptor
+            .constraints
+            .iter()
+            .any(|constraint| !matches!(constraint, VmConstraint2::WindowGate(_)))
+    {
+        return Err(FrontendError::InternalWireDrift(
+            "descriptor name, width, public inputs or constraint kinds contradict the request"
+                .into(),
         ));
     }
     let descriptor_blake3 = *blake3::hash(descriptor_json.as_bytes()).as_bytes();
@@ -707,8 +706,145 @@ pub fn compile_logic_program(
         source_blake3,
         formula_relation,
         inputs,
-        logical_atom_count: next_atom,
+        logical_atom_count,
     })
+}
+
+/// Postfix relation tokens (Lean `rpn`): `A<n>`, `T`, `F`, `N`, `&`, `|`.
+fn parse_relation(tokens: &str, atom_count: usize) -> Result<BoolExpr, FrontendError> {
+    let mut stack: Vec<BoolExpr> = Vec::new();
+    let pop = |stack: &mut Vec<BoolExpr>| stack.pop().ok_or_else(|| protocol("relation underflow"));
+    for token in tokens.split(' ').filter(|t| !t.is_empty()) {
+        let node = match token {
+            "T" => BoolExpr::Constant(true),
+            "F" => BoolExpr::Constant(false),
+            "N" => BoolExpr::Not(Box::new(pop(&mut stack)?)),
+            "&" | "|" => {
+                let right = pop(&mut stack)?;
+                let left = pop(&mut stack)?;
+                if token == "&" {
+                    BoolExpr::And(Box::new(left), Box::new(right))
+                } else {
+                    BoolExpr::Or(Box::new(left), Box::new(right))
+                }
+            }
+            atom => {
+                let index: usize = atom
+                    .strip_prefix('A')
+                    .and_then(|n| n.parse().ok())
+                    .ok_or_else(|| protocol(format!("bad relation token {atom:?}")))?;
+                if index >= atom_count {
+                    return Err(FrontendError::InternalWireDrift(format!(
+                        "relation reads atom {index} of {atom_count}"
+                    )));
+                }
+                BoolExpr::Atom(index)
+            }
+        };
+        stack.push(node);
+    }
+    match (stack.pop(), stack.is_empty()) {
+        (Some(expr), true) => Ok(expr),
+        _ => Err(protocol("relation is not a single expression")),
+    }
+}
+
+fn parse_type(text: &str) -> Result<LogicType, FrontendError> {
+    match text {
+        "bool" => Ok(LogicType::Bool),
+        "unbounded" => Ok(LogicType::UnboundedInteger),
+        other => other
+            .strip_prefix("finite:")
+            .and_then(|n| n.parse().ok())
+            .map(|cardinality| LogicType::Finite { cardinality })
+            .ok_or_else(|| protocol(format!("bad type {other:?}"))),
+    }
+}
+
+fn unhex_utf8(text: &str) -> Result<String, FrontendError> {
+    if text.len() % 2 != 0 {
+        return Err(protocol("odd hex"));
+    }
+    let bytes = (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16))
+        .collect::<Result<Vec<u8>, _>>()
+        .map_err(|_| protocol("bad hex"))?;
+    String::from_utf8(bytes).map_err(|_| protocol("bad UTF-8"))
+}
+
+/// Lean `renderError` back to the error value.
+fn parse_error(text: &str) -> Result<FrontendError, FrontendError> {
+    let parts: Vec<&str> = text.split(' ').collect();
+    let num = |i: usize| -> Result<usize, FrontendError> {
+        parts
+            .get(i)
+            .and_then(|p| p.parse::<u128>().ok())
+            .map(|n| usize::try_from(n).unwrap_or(usize::MAX))
+            .ok_or_else(|| protocol(format!("bad error {text:?}")))
+    };
+    Ok(match parts[0] {
+        "EmptyFiniteDomain" => FrontendError::EmptyFiniteDomain,
+        "UnboundedDomain" => FrontendError::UnboundedDomain,
+        "DuplicateInputName" => {
+            FrontendError::DuplicateInputName(unhex_utf8(parts.get(1).copied().unwrap_or(""))?)
+        }
+        "SourceTooLarge" => FrontendError::SourceTooLarge {
+            nodes: num(1)?,
+            maximum: num(2)?,
+        },
+        "TooManyAtoms" => FrontendError::TooManyAtoms {
+            atoms: num(1)?,
+            maximum: num(2)?,
+        },
+        "PredicateTooLarge" => FrontendError::PredicateTooLarge {
+            entries: num(1)?,
+            maximum: num(2)?,
+        },
+        "PredicateShapeMismatch" => FrontendError::PredicateShapeMismatch {
+            expected: num(1)?,
+            actual: num(2)?,
+        },
+        "PredicateArityMismatch" => FrontendError::PredicateArityMismatch {
+            expected: num(1)?,
+            actual: num(2)?,
+        },
+        "QuantifierExpansionTooLarge" => FrontendError::QuantifierExpansionTooLarge {
+            instances: num(1)?,
+            maximum: num(2)?,
+        },
+        "ExpandedRelationTooLarge" => FrontendError::ExpandedRelationTooLarge {
+            nodes: num(1)?,
+            maximum: num(2)?,
+        },
+        "InputOutOfRange" => FrontendError::InputOutOfRange {
+            index: num(1)?,
+            available: num(2)?,
+        },
+        "BoundVariableOutOfRange" => FrontendError::BoundVariableOutOfRange {
+            index: num(1)?,
+            depth: num(2)?,
+        },
+        "ConstantOutOfRange" => FrontendError::ConstantOutOfRange {
+            value: num(1)?,
+            cardinality: num(2)?,
+        },
+        "TypeMismatch" => FrontendError::TypeMismatch {
+            expected: parse_type(parts.get(1).copied().unwrap_or(""))?,
+            actual: parse_type(parts.get(2).copied().unwrap_or(""))?,
+        },
+        "MalformedRequest" => FrontendError::CompilerProtocol(format!(
+            "Lean refused the request: {}",
+            unhex_utf8(parts.get(1).copied().unwrap_or(""))?
+        )),
+        other => return Err(protocol(format!("unknown error kind {other:?}"))),
+    })
+}
+
+#[derive(Clone, Debug)]
+struct BoundValue {
+    ty: LogicType,
+    value: usize,
 }
 
 /// Transparent source evaluator, independent of descriptor construction.
@@ -891,150 +1027,6 @@ fn require_same_type(expected: &LogicType, actual: &LogicType) -> Result<(), Fro
     }
 }
 
-fn not(value: BoolExpr) -> BoolExpr {
-    match value {
-        BoolExpr::Constant(value) => BoolExpr::Constant(!value),
-        BoolExpr::Not(inner) => *inner,
-        other => BoolExpr::Not(Box::new(other)),
-    }
-}
-
-fn and(left: BoolExpr, right: BoolExpr) -> BoolExpr {
-    match (left, right) {
-        (BoolExpr::Constant(false), _) | (_, BoolExpr::Constant(false)) => {
-            BoolExpr::Constant(false)
-        }
-        (BoolExpr::Constant(true), value) | (value, BoolExpr::Constant(true)) => value,
-        (left, right) if left == right => left,
-        (left, right) => BoolExpr::And(Box::new(left), Box::new(right)),
-    }
-}
-
-fn or(left: BoolExpr, right: BoolExpr) -> BoolExpr {
-    match (left, right) {
-        (BoolExpr::Constant(true), _) | (_, BoolExpr::Constant(true)) => BoolExpr::Constant(true),
-        (BoolExpr::Constant(false), value) | (value, BoolExpr::Constant(false)) => value,
-        (left, right) if left == right => left,
-        (left, right) => BoolExpr::Or(Box::new(left), Box::new(right)),
-    }
-}
-
-fn all(values: impl IntoIterator<Item = BoolExpr>) -> BoolExpr {
-    reduce_balanced(values.into_iter().collect(), true, and)
-}
-
-fn any(values: impl IntoIterator<Item = BoolExpr>) -> BoolExpr {
-    reduce_balanced(values.into_iter().collect(), false, or)
-}
-
-fn reduce_balanced(
-    mut values: Vec<BoolExpr>,
-    identity: bool,
-    combine: fn(BoolExpr, BoolExpr) -> BoolExpr,
-) -> BoolExpr {
-    if values.is_empty() {
-        return BoolExpr::Constant(identity);
-    }
-    while values.len() > 1 {
-        let mut next = Vec::with_capacity(values.len().div_ceil(2));
-        let mut iter = values.into_iter();
-        while let Some(left) = iter.next() {
-            next.push(match iter.next() {
-                Some(right) => combine(left, right),
-                None => left,
-            });
-        }
-        values = next;
-    }
-    values.pop().expect("nonempty by construction")
-}
-
-fn decode_row_major(mut flat: usize, cards: &[usize]) -> Vec<usize> {
-    let mut out = vec![0; cards.len()];
-    for index in (0..cards.len()).rev() {
-        out[index] = flat % cards[index];
-        flat /= cards[index];
-    }
-    out
-}
-
-fn binary_body(atom: usize) -> WindowExpr {
-    WindowExpr::Mul(
-        Box::new(WindowExpr::Loc(atom)),
-        Box::new(WindowExpr::Add(
-            Box::new(WindowExpr::Loc(atom)),
-            Box::new(WindowExpr::Const(-1)),
-        )),
-    )
-}
-
-fn sum_window(mut values: Vec<WindowExpr>) -> WindowExpr {
-    if values.is_empty() {
-        return WindowExpr::Const(0);
-    }
-    while values.len() > 1 {
-        let mut next = Vec::with_capacity(values.len().div_ceil(2));
-        let mut iter = values.into_iter();
-        while let Some(left) = iter.next() {
-            next.push(match iter.next() {
-                Some(right) => WindowExpr::Add(Box::new(left), Box::new(right)),
-                None => left,
-            });
-        }
-        values = next;
-    }
-    values.pop().expect("nonempty by construction")
-}
-
-fn bool_expr_to_window(expr: &BoolExpr) -> WindowExpr {
-    match expr {
-        BoolExpr::Atom(index) => WindowExpr::Loc(*index),
-        BoolExpr::Constant(value) => WindowExpr::Const(i64::from(*value)),
-        BoolExpr::Not(value) => WindowExpr::Add(
-            Box::new(WindowExpr::Const(1)),
-            Box::new(WindowExpr::Mul(
-                Box::new(WindowExpr::Const(-1)),
-                Box::new(bool_expr_to_window(value)),
-            )),
-        ),
-        BoolExpr::And(left, right) => WindowExpr::Mul(
-            Box::new(bool_expr_to_window(left)),
-            Box::new(bool_expr_to_window(right)),
-        ),
-        BoolExpr::Or(left, right) => {
-            let left = bool_expr_to_window(left);
-            let right = bool_expr_to_window(right);
-            WindowExpr::Add(
-                Box::new(WindowExpr::Add(
-                    Box::new(left.clone()),
-                    Box::new(right.clone()),
-                )),
-                Box::new(WindowExpr::Mul(
-                    Box::new(WindowExpr::Const(-1)),
-                    Box::new(WindowExpr::Mul(Box::new(left), Box::new(right))),
-                )),
-            )
-        }
-    }
-}
-
-fn formula_node_count(formula: &Formula) -> usize {
-    match formula {
-        Formula::Top | Formula::Bottom => 1,
-        Formula::Equal(left, right) => 1 + term_node_count(left) + term_node_count(right),
-        Formula::Predicate { arguments, .. } => 1 + arguments.len(),
-        Formula::Not(value) => 1 + formula_node_count(value),
-        Formula::And(left, right) | Formula::Or(left, right) => {
-            1 + formula_node_count(left) + formula_node_count(right)
-        }
-        Formula::ForAll { body, .. } | Formula::Exists { body, .. } => 1 + formula_node_count(body),
-    }
-}
-
-fn term_node_count(_term: &Term) -> usize {
-    1
-}
-
 fn canonical_source_bytes(program: &LogicProgram) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(b"dregg-direct-logic-source\0");
@@ -1136,80 +1128,6 @@ fn put_u64(out: &mut Vec<u8>, value: u64) {
 fn put_bytes(out: &mut Vec<u8>, value: &[u8]) {
     put_u64(out, value.len() as u64);
     out.extend_from_slice(value);
-}
-
-fn canonical_descriptor_json(descriptor: &EffectVmDescriptor2) -> Result<String, FrontendError> {
-    if descriptor.tables.len() != 1
-        || descriptor.tables[0].id != TID_MAIN
-        || descriptor.tables[0].sem != TableSem::Main
-        || !descriptor.hash_sites.is_empty()
-        || !descriptor.ranges.is_empty()
-        || descriptor
-            .constraints
-            .iter()
-            .any(|constraint| !matches!(constraint, VmConstraint2::WindowGate(_)))
-    {
-        return Err(FrontendError::InternalWireDrift(
-            "restricted direct-logic serializer received an unsupported descriptor face".into(),
-        ));
-    }
-    let table = &descriptor.tables[0];
-    // ⚑ `"challenges"` is REQUIRED on the `ir:2` wire since 2026-08-05 and is written from the
-    // descriptor, never as a literal `0`: this serializer's output is fed straight back through
-    // `parse_vm_descriptor2`, so a hard-coded count would make a challenge-bearing descriptor
-    // round-trip into a DIFFERENT relation instead of refusing. The face check above admits only
-    // `window_gate` constraints, so today the value is always 0 — writing it from the field is what
-    // keeps that a fact about the input rather than an assumption baked into the wire.
-    let mut out = format!(
-        "{{\"name\":\"{}\",\"ir\":2,\"trace_width\":{},\"public_input_count\":{},\"challenges\":{},\"tables\":[{{\"id\":{},\"name\":\"main\",\"arity\":{},\"sem\":\"main\"}}],\"constraints\":[",
-        descriptor.name,
-        descriptor.trace_width,
-        descriptor.public_input_count,
-        descriptor.challenges,
-        table.id,
-        table.arity,
-    );
-    for (index, constraint) in descriptor.constraints.iter().enumerate() {
-        if index != 0 {
-            out.push(',');
-        }
-        let VmConstraint2::WindowGate(window) = constraint else {
-            unreachable!("checked above")
-        };
-        out.push_str("{\"t\":\"window_gate\",\"on_transition\":");
-        out.push_str(if window.on_transition {
-            "true"
-        } else {
-            "false"
-        });
-        out.push_str(",\"body\":");
-        put_window_json(&mut out, &window.body);
-        out.push('}');
-    }
-    out.push_str("],\"hash_sites\":[],\"ranges\":[]}");
-    Ok(out)
-}
-
-fn put_window_json(out: &mut String, expression: &WindowExpr) {
-    match expression {
-        WindowExpr::Loc(column) => out.push_str(&format!("{{\"t\":\"loc\",\"c\":{column}}}")),
-        WindowExpr::Nxt(column) => out.push_str(&format!("{{\"t\":\"nxt\",\"c\":{column}}}")),
-        WindowExpr::Const(value) => out.push_str(&format!("{{\"t\":\"const\",\"v\":{value}}}")),
-        WindowExpr::Add(left, right) => {
-            out.push_str("{\"t\":\"add\",\"l\":");
-            put_window_json(out, left);
-            out.push_str(",\"r\":");
-            put_window_json(out, right);
-            out.push('}');
-        }
-        WindowExpr::Mul(left, right) => {
-            out.push_str("{\"t\":\"mul\",\"l\":");
-            put_window_json(out, left);
-            out.push_str(",\"r\":");
-            put_window_json(out, right);
-            out.push('}');
-        }
-    }
 }
 
 fn hex32(bytes: &[u8; 32]) -> String {

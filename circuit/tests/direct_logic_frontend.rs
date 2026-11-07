@@ -3,11 +3,37 @@ use dregg_circuit::descriptor_ir2::{
     verify_vm_descriptor2,
 };
 use dregg_circuit::direct_logic_frontend::{
-    CompileLimits, Formula, FrontendError, InputDecl, LogicProgram, LogicType, LogicValue,
-    PredicateTable, Term, compile_logic_program, evaluate_logic_program,
+    CompileLimits, CompiledLogicArtifact, Formula, FrontendError, InputDecl, LeanExeCompiler,
+    LogicCompiler, LogicProgram, LogicType, LogicValue, PredicateTable, RecordedCompiler, Term,
+    compile_logic_program_with, compile_request_line, evaluate_logic_program,
 };
 
 const BABY_BEAR: i128 = 2_013_265_921;
+
+/// Replies of the Lean compiler (`direct_logic_compile`) for every program these tests compile.
+/// Regenerate with `DREGG_DIRECT_LOGIC_COMPILER=<exe or metatheory/scripts/direct-logic-compile-interp.sh>
+/// cargo test -p dregg-circuit --test direct_logic_frontend -- --ignored regenerate_lean_corpus`.
+const CORPUS_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/direct-logic-lean-replies.txt"
+);
+const CORPUS: &str = include_str!("fixtures/direct-logic-lean-replies.txt");
+
+/// The Lean executable when one is available, else its recorded replies.  Both paths feed the
+/// same consumer; `recorded_corpus_is_the_lean_compiler_output` keeps them identical.
+fn compiler() -> Box<dyn LogicCompiler> {
+    match LeanExeCompiler::locate() {
+        Ok(exe) => Box::new(exe),
+        Err(_) => Box::new(RecordedCompiler::parse(CORPUS).expect("corpus parses")),
+    }
+}
+
+fn compile_logic_program(
+    program: &LogicProgram,
+    limits: &CompileLimits,
+) -> Result<CompiledLogicArtifact, FrontendError> {
+    compile_logic_program_with(&*compiler(), program, limits)
+}
 
 fn sample_program() -> LogicProgram {
     let bool_ty = LogicType::Bool;
@@ -284,9 +310,11 @@ fn portable_wire_roundtrips_and_hashes_are_pinned() {
         artifact.source_blake3_hex(),
         "dedc2cf1fbf6548930b4217eee7e6373b055a0bfb1164f6845d442079affdb90"
     );
+    // Lean's `emitVmJson2` bytes.  The retired Rust compiler pinned 38e5a5ad...; the only
+    // difference is the booleanity rendering (Lean's corpus-canonical `binaryBody`).
     assert_eq!(
         artifact.descriptor_blake3_hex(),
-        "38e5a5adf04722bd7e4df693fa5233c288b6c5669842f3ff7beb496000868675"
+        "2c74f8bbe4f7c9aa47355e05894081b96b8d9392ae5c4ddb27249800455e8052"
     );
 }
 
@@ -312,6 +340,213 @@ fn input_encoder_rejects_wrong_values() {
             cardinality: 3,
         }
     );
+}
+
+/// Every (program, limits) pair compiled above, in a fixed order.
+fn corpus_programs() -> Vec<(LogicProgram, CompileLimits)> {
+    let d = CompileLimits::default();
+    let bool_ty = LogicType::Bool;
+    vec![
+        (sample_program(), d.clone()),
+        (
+            LogicProgram {
+                inputs: vec![],
+                formula: Formula::ForAll {
+                    binder: LogicType::UnboundedInteger,
+                    body: Box::new(Formula::Top),
+                },
+            },
+            d.clone(),
+        ),
+        (
+            LogicProgram {
+                inputs: vec![
+                    InputDecl {
+                        name: "bit".into(),
+                        ty: LogicType::Bool,
+                    },
+                    InputDecl {
+                        name: "tri".into(),
+                        ty: LogicType::Finite { cardinality: 3 },
+                    },
+                ],
+                formula: Formula::Equal(Term::Input(0), Term::Input(1)),
+            },
+            d.clone(),
+        ),
+        (
+            LogicProgram {
+                inputs: vec![],
+                formula: Formula::Predicate {
+                    table: PredicateTable {
+                        name: "bad".into(),
+                        argument_types: vec![LogicType::Bool],
+                        values: vec![true],
+                    },
+                    arguments: vec![Term::Constant {
+                        ty: LogicType::Bool,
+                        value: 0,
+                    }],
+                },
+            },
+            d.clone(),
+        ),
+        (
+            LogicProgram {
+                inputs: vec![],
+                formula: Formula::ForAll {
+                    binder: LogicType::Bool,
+                    body: Box::new(Formula::Top),
+                },
+            },
+            CompileLimits {
+                maximum_quantifier_instances: 1,
+                ..d.clone()
+            },
+        ),
+        (
+            LogicProgram {
+                inputs: vec![],
+                formula: Formula::ForAll {
+                    binder: bool_ty.clone(),
+                    body: Box::new(Formula::Equal(
+                        Term::Bound(0),
+                        Term::Constant {
+                            ty: bool_ty.clone(),
+                            value: 0,
+                        },
+                    )),
+                },
+            },
+            d.clone(),
+        ),
+        (
+            LogicProgram {
+                inputs: vec![],
+                formula: Formula::Top,
+            },
+            d.clone(),
+        ),
+        (flag_is_true(), d.clone()),
+        (duplicate_names(), d),
+    ]
+}
+
+fn flag_is_true() -> LogicProgram {
+    LogicProgram {
+        inputs: vec![InputDecl {
+            name: "flag".into(),
+            ty: LogicType::Bool,
+        }],
+        formula: Formula::Equal(
+            Term::Input(0),
+            Term::Constant {
+                ty: LogicType::Bool,
+                value: 1,
+            },
+        ),
+    }
+}
+
+fn lean_corpus(exe: &LeanExeCompiler) -> String {
+    let mut out = String::new();
+    for (program, limits) in corpus_programs() {
+        let request = compile_request_line(&program, &limits);
+        let reply = exe.compile_request(&request).expect("Lean compiler runs");
+        out.push_str("request ");
+        out.push_str(&request);
+        out.push('\n');
+        out.push_str(&reply);
+        out.push_str("end\n");
+    }
+    out
+}
+
+#[test]
+#[ignore = "rewrites the recorded Lean corpus; needs the compiler executable"]
+fn regenerate_lean_corpus() {
+    let exe = LeanExeCompiler::locate().expect("Lean compiler executable");
+    std::fs::write(CORPUS_PATH, lean_corpus(&exe)).unwrap();
+}
+
+/// With the executable present, the recorded replies are exactly what it prints now; without
+/// it, every program above still has a recorded reply that the consumer accepts or refuses.
+#[test]
+fn recorded_corpus_is_the_lean_compiler_output() {
+    match LeanExeCompiler::locate() {
+        Ok(exe) => assert_eq!(
+            lean_corpus(&exe),
+            CORPUS,
+            "the recorded corpus is stale; run regenerate_lean_corpus"
+        ),
+        Err(why) => {
+            eprintln!("direct_logic_compile not available ({why}); checking the recording only");
+            let recorded = RecordedCompiler::parse(CORPUS).unwrap();
+            for (program, limits) in corpus_programs() {
+                let request = compile_request_line(&program, &limits);
+                assert!(
+                    recorded.compile_request(&request).is_ok(),
+                    "no recorded reply for a corpus program"
+                );
+            }
+        }
+    }
+}
+
+/// The audit's control: the Boolean formula polynomial alone (the descriptor minus its one-hot
+/// gates) accepts a two-hot row that encodes no source value; the compiled descriptor refuses it.
+/// Lean: `booleanOnly_accepts_twoHot` / `program_refuses_twoHot`.
+#[test]
+fn boolean_only_descriptor_accepts_what_the_compiled_one_refuses() {
+    let artifact = compile_logic_program(&sample_program(), &CompileLimits::default()).unwrap();
+    let two_hot = [false, true, true, false];
+    assert!(!descriptor_accepts_row(artifact.descriptor(), &two_hot));
+    let mut weakened = artifact.descriptor().clone();
+    let width = weakened.trace_width;
+    let accept = weakened.constraints.pop().unwrap();
+    weakened.constraints.truncate(width);
+    weakened.constraints.push(accept);
+    assert_eq!(
+        weakened.constraints.len() + 1,
+        artifact.descriptor().constraints.len()
+    );
+    assert!(descriptor_accepts_row(&weakened, &two_hot));
+}
+
+#[test]
+fn lean_errors_map_back_to_frontend_errors() {
+    assert_eq!(
+        compile_logic_program(&duplicate_names(), &CompileLimits::default()).unwrap_err(),
+        FrontendError::DuplicateInputName("x".into())
+    );
+    let unrecorded = LogicProgram {
+        inputs: vec![],
+        formula: Formula::Bottom,
+    };
+    assert!(matches!(
+        compile_logic_program_with(
+            &RecordedCompiler::default(),
+            &unrecorded,
+            &CompileLimits::default()
+        ),
+        Err(FrontendError::CompilerUnavailable(_))
+    ));
+}
+
+fn duplicate_names() -> LogicProgram {
+    LogicProgram {
+        inputs: vec![
+            InputDecl {
+                name: "x".into(),
+                ty: LogicType::Bool,
+            },
+            InputDecl {
+                name: "x".into(),
+                ty: LogicType::Bool,
+            },
+        ],
+        formula: Formula::Top,
+    }
 }
 
 fn descriptor_accepts_row(

@@ -1442,6 +1442,7 @@ import Dregg2.Metatheory.TypedLinearPredicateOptimizerCost -- CASHES the cost ch
 import Dregg2.Metatheory.TypedLinearPredicateOptimizedWiring -- WIRES the certified optimizer to the live typed compiler (the deep read found `descriptor` never called `optimize`): Program.optimized + the Holds-agreement via optimize_holds_iff, with sound/canonical_iff/public_sound TRANSPORTED to the optimized descriptor — the payoff of having proven semantic preservation. `descriptor`'s lowering geometry is UNCHANGED (the peephole recognizers depend on it); the optimized path is added alongside.
 import Dregg2.Metatheory.RealizabilityLocalRewriteOracle
 import Dregg2.Metatheory.DirectLogicDreggProductionPredicates
+import Dregg2.Logic.DirectLogicProgramIR2 -- the direct-logic front end compiled in Lean (one-hot inputs, quantifier expansion, source-hash name, padding width); `direct_logic_compile` serves it to circuit/src/direct_logic_frontend.rs
 import Dregg2.Calculus.IntensionalCCCInteractionMultiBlockDescriptorIR2
 import Dregg2.Verify.DirectLogicAdversarialFalsifierV2
 import Dregg2.Bridge.ConditionalInterchainAdapter

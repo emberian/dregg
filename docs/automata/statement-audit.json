@@ -212,10 +212,11 @@
       "witness": "Dregg2.Policy.UnionReference.either_decides",
       "falsifier": "Dregg2.Policy.UnionReference.union_choices",
       "witness_scope": "constructor-instance",
-      "scope": "Actual policyc whole-word wrapper recursively composes surface alternatives, retaining derivative compilation for other forms. Every returned table intrinsically carries Certified.hdec; reachable trimming and optimization are accepted only after checked simulation. The named witness covers the certified constructor. Success of the actual partial wrapper is separately executed in the source-bound smoke artifact on byte7|byte9, both branches, empty and rejecting words; runtime success is not claimed as a kernel-decided proposition.",
+      "scope": "Actual policyc whole-word wrapper recursively composes surface alternatives, retaining derivative compilation for other forms. Every returned table intrinsically carries Certified.hdec; reachable trimming and optimization are accepted only after checked simulation; the optimized table is then materialized into arrays under the same hdec by the table equality Table.materialize_eq (no simulation check needed). The named witness covers the certified constructor. Success of the actual partial wrapper is separately executed in the source-bound smoke artifact on byte7|byte9, both branches, empty and rejecting words; runtime success is not claimed as a kernel-decided proposition.",
       "supporting_evidence": [
         "Dregg2.Policy.Certified.hdec",
-        "Dregg2.Policy.Certified.union"
+        "Dregg2.Policy.Certified.union",
+        "Dregg2.Policy.Table.materialize_eq"
       ],
       "execution": {
         "source": "metatheory/scripts/automata-compiler-smoke.lean",
@@ -229,11 +230,14 @@
       "witness": "Dregg2.Policy.UnionReference.either_decides",
       "falsifier": "Dregg2.Policy.UnionReference.malformed_refused",
       "witness_scope": "constructor-instance",
-      "scope": "Actual policyc absence wrapper passes its certified whole-word table directly into certifyAbsenceFrom. Finite bounds and factor labelling are checked before Certified.ofFactor is returned; fuel exhaustion is an error. The returned hdec covers the padded complement language. Successful actual wrapper execution and five verdicts are recorded separately as runtime evidence; no native-evaluator theorem is introduced.",
+      "scope": "Actual policyc absence wrapper passes its certified whole-word table directly into certifyAbsenceFrom. Finite bounds and factor labelling are checked before Certified.ofFactor is returned: labCheckRep checks the abstract successor at one byte per whole-word column class (colCheck verifies the class map) and requires every other byte to step to its representative's state; labCheckRep_sound (via absStep_col) proves it implies the full 256-byte labCheck, so absence_decides applies unchanged. nextSet/anyAcc are array-backed and nextSet_spec/anyAcc_spec prove them equal to the original pointwise set expressions; fuel exhaustion is an error. The returned hdec covers the padded complement language. Successful actual wrapper execution and five verdicts are recorded separately as runtime evidence; no native-evaluator theorem is introduced.",
       "supporting_evidence": [
         "Dregg2.Policy.Certified.hdec",
         "Dregg2.Policy.nextSet_spec",
-        "Dregg2.Policy.nextSet_discriminates"
+        "Dregg2.Policy.nextSet_discriminates",
+        "Dregg2.Policy.anyAcc_spec",
+        "Dregg2.Policy.absStep_col",
+        "Dregg2.Policy.labCheckRep_sound"
       ],
       "execution": {
         "source": "metatheory/scripts/automata-compiler-smoke.lean",
@@ -367,6 +371,24 @@
         "Dregg2.Circuit.Emit.DfaRoutingTableBound.word_public_of_functional"
       ],
       "scope": "Finite public-table validation computes whether each source state determines its entire declared row. The general Boolean equality to the constructive decision procedure for the original Functional predicate proves both soundness and completeness. A positive table contains two distinct rows with different source states; the competing-loop table is refused. The trail/word uniqueness consumers now require the validator to succeed and retain the exact-public multiset, canonical small-cell, nonempty trace and common-start envelopes. This is the legacy deterministic-table special case, not ordered record binding for a branching table; no deployed cryptographic injectivity or new floor exemption is assumed."
+    },
+    {
+      "id": "direct-logic-frontend",
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "statement": "Dregg2.Logic.DirectLogicProgramIR2.program_sound",
+      "witness": "Dregg2.Logic.DirectLogicProgramIR2.sample_satisfied",
+      "falsifier": "Dregg2.Logic.DirectLogicProgramIR2.program_refuses_twoHot",
+      "witness_scope": "checker-premise",
+      "supporting_evidence": [
+        "Dregg2.Logic.DirectLogicProgramIR2.program_complete",
+        "Dregg2.Logic.DirectLogicProgramIR2.lower_eval",
+        "Dregg2.Logic.DirectLogicProgramIR2.compileBytes_spec",
+        "Dregg2.Logic.DirectLogicProgramIR2.compileBytes_source_identity",
+        "Dregg2.Logic.DirectLogicProgramIR2.compileBytes_sound",
+        "Dregg2.Logic.DirectLogicProgramIR2.booleanOnly_accepts_twoHot",
+        "Dregg2.Logic.DirectLogicProgramIR2.decodeProgram_canonical"
+      ],
+      "scope": "Every row of a canonical Satisfied2 trace of the descriptor compileProgram emits is exactly the one-hot atom encoding of well-typed source values (Booleans as their own column, nonempty enumerations as one-hot blocks forced by booleanity plus one sum-to-one gate, enumerations below a 2^24 atom ceiling so the sum cannot wrap), and evalFormula holds on them: equality, row-major truth-table predicates, connectives and exhaustive finite quantifier expansion through the same balanced folds the retired Rust compiler used. program_complete gives the converse with a one-row witness whose padding column covers width at least one; sample_satisfied inhabits hc and hsat on a two-input program with a predicate and nested quantifiers. The control: the Boolean polynomial alone (FiniteLogicDescriptorIR2.compileDescriptor of the same lowered relation) canonically accepts a two-hot row that encodes no source value, and the compiled descriptor refuses it. compileBytes binds the program to the request bytes by canonical decode-and-re-encode and names the descriptor by BLAKE3 of those bytes; equal names imply equal artifacts or a BLAKE3 collision on distinct bytes, no collision-resistance claim follows. The Rust consumer (circuit/src/direct_logic_frontend.rs) parses the reply and cross-checks hash, name, width and layout; that parser, the request encoder and the line protocol are identity-checked transport, not a proved codec, and the IR2 integer denotation is not a STARK extraction theorem."
     }
   ],
   "axiom_pins": {
@@ -927,12 +949,12 @@
     },
     "Dregg2.Policy.nextSet_discriminates": {
       "source": "metatheory/Dregg2/Policy/Factor.lean",
-      "report": "info: 'Dregg2.Policy.nextSet_discriminates' depends on axioms: [propext]",
+      "report": "info: 'Dregg2.Policy.nextSet_discriminates' does not depend on any axioms",
       "command": "nextSet_discriminates"
     },
     "Dregg2.Policy.nextSet_spec": {
       "source": "metatheory/Dregg2/Policy/Factor.lean",
-      "report": "info: 'Dregg2.Policy.nextSet_spec' depends on axioms: [propext, Quot.sound]",
+      "report": "info: 'Dregg2.Policy.nextSet_spec' depends on axioms: [propext, Classical.choice, Quot.sound]",
       "command": "nextSet_spec"
     },
     "Dregg2.Policy.Certified.restrict": {
@@ -1379,6 +1401,76 @@
       "source": "metatheory/Dregg2/Circuit/Emit/DfaRoutingTableBound.lean",
       "report": "info: 'Dregg2.Circuit.Emit.DfaRoutingTableBound.functionalB_eq_decide' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
       "command": "functionalB_eq_decide"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.lower_eval": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.lower_eval' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "lower_eval"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.program_complete": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.program_complete' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "program_complete"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.program_sound": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.program_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "program_sound"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.compileBytes_spec": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.compileBytes_spec' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "compileBytes_spec"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.compileBytes_source_identity": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.compileBytes_source_identity' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "compileBytes_source_identity"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.compileBytes_sound": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.compileBytes_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "compileBytes_sound"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.sample_satisfied": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.sample_satisfied' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "sample_satisfied"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.booleanOnly_accepts_twoHot": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.booleanOnly_accepts_twoHot' depends on axioms: [propext,\n Classical.choice,\n Quot.sound]",
+      "command": "booleanOnly_accepts_twoHot"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.program_refuses_twoHot": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.program_refuses_twoHot' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "program_refuses_twoHot"
+    },
+    "Dregg2.Logic.DirectLogicProgramIR2.decodeProgram_canonical": {
+      "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
+      "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.decodeProgram_canonical' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "decodeProgram_canonical"
+    },
+    "Dregg2.Policy.anyAcc_spec": {
+      "source": "metatheory/Dregg2/Policy/Factor.lean",
+      "report": "info: 'Dregg2.Policy.anyAcc_spec' depends on axioms: [propext, Quot.sound]",
+      "command": "anyAcc_spec"
+    },
+    "Dregg2.Policy.absStep_col": {
+      "source": "metatheory/Dregg2/Policy/Factor.lean",
+      "report": "info: 'Dregg2.Policy.absStep_col' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "absStep_col"
+    },
+    "Dregg2.Policy.labCheckRep_sound": {
+      "source": "metatheory/Dregg2/Policy/Factor.lean",
+      "report": "info: 'Dregg2.Policy.labCheckRep_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "labCheckRep_sound"
+    },
+    "Dregg2.Policy.Table.materialize_eq": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.Table.materialize_eq' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Table.materialize_eq"
     }
   },
   "source_sha256": {
@@ -1482,6 +1574,7 @@
     "metatheory/Dregg2/Confluence.lean": "e82168d7ec538f1a5bd03f48199354d6b51cd6e2e67f91fd28e27db2fcec5b50",
     "metatheory/Dregg2/Core.lean": "dc76275a7d3adb96ffa4b031c491027e31a27049d60c67161ac1e83fddaaa11b",
     "metatheory/Dregg2/Crypto/AbstractMachine.lean": "31a2a2b2fd5a175df122c449f42cb8b3479445d5cd465d8fc3031f57bb4eb191",
+    "metatheory/Dregg2/Crypto/Blake3Compute.lean": "550421e780551ff117dfad8a4e7bab4d19f68358db95061744f4be61490b51de",
     "metatheory/Dregg2/Crypto/Cfg.lean": "b41791495157c529646c5e4de5131d4944119cc0907a30f58e35ad4e0a610d6c",
     "metatheory/Dregg2/Crypto/CfgCompact.lean": "75bcac79b9c1f535c387e571e8d59ae50de917f4f220a370a89f928ed46ee510",
     "metatheory/Dregg2/Crypto/Chain.lean": "44c04fcfac64ba2686e564b7763beacdb6a529af8f85c1ae2ef27f736c5b2f31",
@@ -1583,10 +1676,13 @@
     "metatheory/Dregg2/Lightclient/AttestedQuery.lean": "692beca47c39e03cf111cdd5d3b635b5527925df5e791d56676d1f1b07d0de2d",
     "metatheory/Dregg2/Lightclient/HistoryIndex.lean": "c460e91141b6c15750454058d1b8853ca87c2854a80bbccb4d4770dbec06b8ff",
     "metatheory/Dregg2/Lightclient/MMR.lean": "a3605a350e916cd2cd2cc9e18129578bf67bc54f3b4ce6c3180c4f7352ef2b0c",
-    "metatheory/Dregg2/Policy/Compile.lean": "87ebd8962de9ed4f2714913c9748a964ab52499daf4fc01e6c8b5d4ec5fd56f5",
+    "metatheory/Dregg2/Logic/CompilationCertificateBundle.lean": "3b42110957e3320f10cee27514bfa6eac7d070c02e61aa4b91b54ddaddfbac22",
+    "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean": "f0e2a391cb92f1590d816b38373e879bc644293de0adb17a0e16a36d768afece",
+    "metatheory/Dregg2/Logic/FiniteLogicDescriptorIR2.lean": "999ef0a00917d341b6c8802c57eb02b7552ff60ff96a1c3a541c0bcce1b2077c",
+    "metatheory/Dregg2/Policy/Compile.lean": "96cf43090202454de4e5f159a50524b7fa0348f0f36dfd581271732ab98795b4",
     "metatheory/Dregg2/Policy/Compositional.lean": "9663b51b5dd44986a04e9da2a94f1f0a1e00b0095e788997de9e1b9619132e34",
     "metatheory/Dregg2/Policy/Elab.lean": "429d78f09e0c3ae5e8f6d25a8477b5c1e8ebccdffcac50f077617fd130c8ee88",
-    "metatheory/Dregg2/Policy/Factor.lean": "6cf519bf32dc278b396df13bbbccc4c938c2d2d1c477e04c13b3a2a64be43151",
+    "metatheory/Dregg2/Policy/Factor.lean": "174084eef4a1c0e7fb4ef35e24c3a4348143f71982e75b44e44b3e38668cc067",
     "metatheory/Dregg2/Policy/LexRoundTrip.lean": "313461b17563b9554f38af25b4920159719007ab5eb253feb08d70252a95c7c8",
     "metatheory/Dregg2/Policy/Lexer.lean": "f9ef6eb5db9d6913444e3533be27287d9cf698844f770fcfe1194ebe25d457f3",
     "metatheory/Dregg2/Policy/ParseRoundTrip.lean": "93f184d14c3803ab50fda2da8eb973dcf0705c6ea0684e66702cbb0bb8251879",
@@ -1613,7 +1709,7 @@
     "metatheory/Metatheory/Dynamics/Substance.lean": "6996709fafffbc74d68d82d52f05b09415c1db1fa1465cfbd34f3d3531f3b473",
     "metatheory/Metatheory/Dynamics/VerbSignature.lean": "311c8b6885b2f1924f88db6ee355e6e7a42f5ad8f0114fca9a92008b99316142",
     "metatheory/Metatheory/EpistemicDial.lean": "6108a42f8db59be2066f35844134499c7b9ac1458f789ddc9cf9faadc85e312e",
-    "metatheory/Policyc.lean": "229fdd8f75f5179eb3fd8cc514e9b9ef7df8174715ecf26a5cc8604da71b334b",
+    "metatheory/Policyc.lean": "fe5315ded13f9a23aeabd0979bc242fbbeeff36bfd78c524b6d3485493007a32",
     "metatheory/lake-manifest.json": "b6047d289ce49af087d97fe5b2b352f9bdd7a74787e2e2305ae2f63793a0184b",
     "metatheory/lean-toolchain": "ca5f1f601d34c49079e38d7e7041eb0f2a9c227fbc1df0f404820069a052330c",
     "metatheory/scripts/automata-compiler-smoke.lean": "57297afcc82f6e780692e682eaa645ad20dda5b8ab17489724ffa5cc27f6da3a"

@@ -684,6 +684,18 @@ root = "DfaRun"
 name = "policyc"
 root = "Policyc"
 
+# direct_logic_compile — the direct-logic front end's compiler (C9 cutover, 2026-11-07). Reads
+# `DIRECT-LOGIC-COMPILE-1 <limits> <hex source bytes>` lines on stdin and prints
+# `Dregg2.Logic.DirectLogicProgramIR2.respond` of each, terminated by `end`; the descriptor in a reply
+# is `emitVmJson2 (compileProgram ..)`, the function `program_sound` / `program_complete` are about.
+# `circuit/src/direct_logic_frontend.rs` runs it (`DREGG_DIRECT_LOGIC_COMPILER`, else this build
+# output). NOT a default target. Without a native build, `scripts/direct-logic-compile-interp.sh`.
+#
+#     lake build direct_logic_compile
+[[lean_exe]]
+name = "direct_logic_compile"
+root = "DirectLogicCompile"
+
 # calltree-check — the call-tree certificate checker (initiative 9, 2026-11-06): reads a bundle
 # {root, policy, tree, evidence}, runs `CallTreeDeploy.deployedVerify` (= `CallTreeCore.verify` at
 # the deployed BLAKE3 hash and hop predicate; `CallTree.verify_sound` / `no_omission` /
