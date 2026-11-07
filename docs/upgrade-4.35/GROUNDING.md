@@ -145,3 +145,32 @@ Gates around it (`metatheory/BUILD.md`): `make check-fast` (Mac, `lake lean` per
   after this lands rebuilds cold once (no 4.30 olean is reusable) unless it fetches the 4.35 snapshot.
 - In-flight lanes with `.lean` edits will hit the same transparency breaks in their new code; the
   fix patterns above apply.
+
+## Built atop it: `veil-bridge/`
+
+A separate Lake package (root `veil-bridge/`) that requires `Dregg2` by path (`../metatheory`) and Veil
+2.0 at `4eaf93e9`. Its manifest is breadstuffs' package set plus Veil's (smt, Loom, VerifiedHAMT,
+Lasso, lentil, cvc5, auto); the four shared packages (batteries, aesop, Qq, proofwidgets) are the same
+revisions in both, which the manifest generator asserted.
+
+- `VeilBridge.toSystem` (the shared definition, `@[reducible]`): a Veil `RelationalTransitionSystem`
+  at background theory `th` as a breadstuffs `Dregg2.Execution.System` (Config = Veil state, Step =
+  Veil's `next`).
+- `VeilBridge.invariant_iff_AG`: a Veil invariant (every reachable state is in `P`) iff breadstuffs'
+  gfp `CTL.AG P` holds at every initial state; with `reachable_of_run`/`run_of_reachable` relating
+  Veil's `reachable` to `Run`. Kernel-clean (`#assert_all_clean`).
+- `VeilBridge.RingCTL.single_leader_invariant_iff_AG`: Veil's tutorial ring leader election, its
+  `single_leader` safety property as an `AG` statement. (Veil keeps the abstract-state
+  `FieldRepresentation` instances module-local; the bridge opens them with `attribute [local instance]`.)
+
+So every `Dregg2.Proof.CTL`/`MuCalculus` theorem applies to a Veil protocol as is; the next step is
+checking CTL formulas on Veil systems (Veil's explicit-state checker for the finite instance, Lasso's
+LTL->TGBA and nested DFS for the liveness side, breadstuffs' Stream omega-automata as the spec side).
+
+Building it (bb2): Veil compiles C for its dependencies (Qq and friends), so the bridge cannot use the
+read-only package store for those. `veil-bridge/.lake/packages/` holds symlinks into the store for
+mathlib, Cli, importGraph, LeanSearchClient, writable copies (`cp -a`, then `chmod -R u+w`) of Qq,
+batteries, aesop, proofwidgets, plausible, and Lake's own clones of Veil's packages. Then
+`lake build` in `veil-bridge/` (about 1,300 Veil jobs the first time, then only the bridge). The
+`../metatheory` path dependency builds into `metatheory/.lake`, so never run it while a whole-tree
+build runs in the same clone.
