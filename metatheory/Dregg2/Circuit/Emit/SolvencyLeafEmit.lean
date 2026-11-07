@@ -254,10 +254,10 @@ theorem honest_satisfies : Satisfied2 (fun _ => 0) solvencyDescriptor
       firstGate, factSite, BoundedFactEmit.factSite, rangeBodies] at hop
   · simp [memLog, memOpsOf, solvencyDescriptor, arithmeticBodies, firstGate, factSite, BoundedFactEmit.factSite,
       rangeBodies, honestTrace, Dregg2.Crypto.MemoryChecking.Disciplined,
-      Dregg2.Crypto.MemoryChecking.DisciplinedFrom]
+      Dregg2.Crypto.MemoryChecking.DisciplinedFrom, Function.comp_def]
   · simp [Dregg2.Crypto.MemoryChecking.MemCheck, memLog, memOpsOf, solvencyDescriptor,
       arithmeticBodies, firstGate, factSite, BoundedFactEmit.factSite, rangeBodies, honestTrace,
-      Dregg2.Crypto.MemoryChecking.initSet, Dregg2.Crypto.MemoryChecking.finalSet]
+      Dregg2.Crypto.MemoryChecking.initSet, Dregg2.Crypto.MemoryChecking.finalSet, Function.comp_def]
   · simp [honestTrace, honestTable, memLog, memOpsOf, solvencyDescriptor,
       arithmeticBodies, firstGate, factSite, BoundedFactEmit.factSite, rangeBodies]
   · simp [honestTrace, honestTable, mapLog, mapOpsOf, solvencyDescriptor,

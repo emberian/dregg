@@ -399,7 +399,8 @@ theorem runWit_satisfies (d : TableDfa Nat Nat) (q : Nat) (w : List Nat) (hw : w
       show (i + 1 == (runWit d q w).rows.length) = true → (envAt (runWit d q w) i).loc NEXT
         ≡ (envAt (runWit d q w) i).pub PI_FINAL [ZMOD 2013265921]
       intro hl
-      have hlast : i + 1 = (runRows d q w).length := by simpa using hl
+      have hlast : i + 1 = (runRows d q w).length :=
+        (by simpa using hl : i + 1 = (runWit d q w).rows.length)
       rw [hloc, runRows_last_next d w q i hi' hlast]
       exact Int.ModEq.refl _
   rowHashes := by intro i _; trivial
@@ -817,7 +818,8 @@ theorem lanes2Wit_satisfies (d0 d1 : TableDfa Nat Nat) (q0 q1 : Nat) (w : List N
         (envAt (lanes2Wit d0 d1 q0 q1 w) i).loc (laneNext 0)
           ≡ (envAt (lanes2Wit d0 d1 q0 q1 w) i).pub 1 [ZMOD 2013265921]
       intro hl
-      have hlast : i + 1 = (lanes2Rows d0 d1 q0 q1 w).length := by simpa using hl
+      have hlast : i + 1 = (lanes2Rows d0 d1 q0 q1 w).length :=
+        (by simpa using hl : i + 1 = (lanes2Wit d0 d1 q0 q1 w).rows.length)
       rw [hloc, lanes2Rows_last0 d0 d1 w q0 q1 i hi' hlast]
       exact Int.ModEq.refl _
     · -- lane 1 lookup
@@ -860,7 +862,8 @@ theorem lanes2Wit_satisfies (d0 d1 : TableDfa Nat Nat) (q0 q1 : Nat) (w : List N
         (envAt (lanes2Wit d0 d1 q0 q1 w) i).loc (laneNext 1)
           ≡ (envAt (lanes2Wit d0 d1 q0 q1 w) i).pub 3 [ZMOD 2013265921]
       intro hl
-      have hlast : i + 1 = (lanes2Rows d0 d1 q0 q1 w).length := by simpa using hl
+      have hlast : i + 1 = (lanes2Rows d0 d1 q0 q1 w).length :=
+        (by simpa using hl : i + 1 = (lanes2Wit d0 d1 q0 q1 w).rows.length)
       rw [hloc, lanes2Rows_last1 d0 d1 w q0 q1 i hi' hlast]
       exact Int.ModEq.refl _
   rowHashes := by intro i _; trivial

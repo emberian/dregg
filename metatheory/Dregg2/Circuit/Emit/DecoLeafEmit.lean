@@ -168,10 +168,10 @@ theorem honest_satisfies : Satisfied2 (fun _ => 0) decoDescriptor
       factSite, pin] at hop
   · simp [memLog, memOpsOf, decoDescriptor, rangeBodiesOffset, firstGate, factSite, pin,
       honestTrace, Dregg2.Crypto.MemoryChecking.Disciplined,
-      Dregg2.Crypto.MemoryChecking.DisciplinedFrom]
+      Dregg2.Crypto.MemoryChecking.DisciplinedFrom, Function.comp_def]
   · simp [Dregg2.Crypto.MemoryChecking.MemCheck, memLog, memOpsOf, decoDescriptor,
       rangeBodiesOffset, firstGate, factSite, pin, honestTrace,
-      Dregg2.Crypto.MemoryChecking.initSet, Dregg2.Crypto.MemoryChecking.finalSet]
+      Dregg2.Crypto.MemoryChecking.initSet, Dregg2.Crypto.MemoryChecking.finalSet, Function.comp_def]
   · simp [honestTrace, honestTable, memLog, memOpsOf, decoDescriptor,
       rangeBodiesOffset, firstGate, factSite, pin]
   · simp [honestTrace, honestTable, mapLog, mapOpsOf, decoDescriptor,
