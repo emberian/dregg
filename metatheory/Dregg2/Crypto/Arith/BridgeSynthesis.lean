@@ -222,10 +222,16 @@ that reads the canonical form as the hand `Reaches`. -/
 theorem rung_holds_iff_synth (tag payload : BabyBear) :
     RungPilot.program.Holds (inputOf tag payload) ↔ Reaches tag payload :=
   (holds_iff_canonForm RungPilot.program (inputOf tag payload)).trans (by
+    have e0 : RungPilot.atomTerms 0 = .eqConst RungPilot.i0 0 := rfl
+    have e1 : RungPilot.atomTerms 1 = .eqConst RungPilot.i0 1 := rfl
+    have e2 : RungPilot.atomTerms 2 = .eqConst RungPilot.i0 2 := rfl
+    have e3 : RungPilot.atomTerms 3 = .eqConst RungPilot.i1 0 := rfl
+    have t0 : inputOf tag payload 0 = tag := rfl
+    have t1 : inputOf tag payload 1 = payload := rfl
     simp [canonForm, canonAtom, RungPilot.program, RungPilot.source,
       RungPilot.a0, RungPilot.a1, RungPilot.a2, RungPilot.a3,
-      RungPilot.atomTerms, RungPilot.i0, RungPilot.i1,
-      AffineTerm.eqConst, Formula.Holds, inputOf, Reaches])
+      e0, e1, e2, e3, RungPilot.i0, RungPilot.i1,
+      AffineTerm.eqConst, Formula.Holds, t0, t1, Reaches])
 
 /-! ## 6. Kernel hygiene and the load-bearing canaries. -/
 

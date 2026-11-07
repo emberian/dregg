@@ -611,12 +611,16 @@ theorem canon9_forces_canonical {hash : List ℤ → ℤ} {w : Nat} {d : EffectV
         (List.mem_append_right _ (List.mem_append_right _ (by simp)))
     · exact lookup_forces hsat h28 hi (blk := blk) (slot := slot)
         (List.mem_append_right _ (List.mem_append_right _ (by simp)))
-  have hr := haux 0 (by decide) (by decide)
-  have hv0 := haux 3 (by decide) (by decide)
-  have hv0b := haux 4 (by decide) (by decide)
-  have hv1 := haux 5 (by decide) (by decide)
-  have hv1b := haux 6 (by decide) (by decide)
-  simp only [Fin.isValue, if_pos, if_neg, reduceIte] at hr hv0 hv0b hv1 hv1b
+  have hr : 0 ≤ E.loc (auxColAt w blk slot 0) ∧ E.loc (auxColAt w blk slot 0) < (2 : ℤ) ^ 24 :=
+    haux 0 (by decide) (by decide)
+  have hv0 : 0 ≤ E.loc (auxColAt w blk slot 3) ∧ E.loc (auxColAt w blk slot 3) < (2 : ℤ) ^ 28 :=
+    haux 3 (by decide) (by decide)
+  have hv0b : 0 ≤ E.loc (auxColAt w blk slot 4) ∧ E.loc (auxColAt w blk slot 4) < (2 : ℤ) ^ 28 :=
+    haux 4 (by decide) (by decide)
+  have hv1 : 0 ≤ E.loc (auxColAt w blk slot 5) ∧ E.loc (auxColAt w blk slot 5) < (2 : ℤ) ^ 28 :=
+    haux 5 (by decide) (by decide)
+  have hv1b : 0 ≤ E.loc (auxColAt w blk slot 6) ∧ E.loc (auxColAt w blk slot 6) < (2 : ℤ) ^ 28 :=
+    haux 6 (by decide) (by decide)
   -- the seven gates
   have gs : ∀ b ∈ gadgetBodies (laneColAt w blk slot 0) (laneColAt w blk slot 1)
       (laneColAt w blk slot 8) (auxColAt w blk slot 0) (auxColAt w blk slot 1)

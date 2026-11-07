@@ -452,7 +452,7 @@ theorem limbs_canonical (hsat : Satisfied2 hash shieldedWideValueLinkDesc minit 
   have h := hsat.rowRanges i hi _ hmem
   simp only [Dregg2.Circuit.Emit.EffectVmEmit.VmRange.holds, envAt] at h
   norm_num at h
-  simpa only [rowAt] using h
+  simpa only [rowAt, List.getD_eq_getElem?_getD] using h
 
 /-- **The 8 wide digest columns are FORCED** to the genuine full-width squeeze of the row's
 own limb/randomness cells — the `chip_lookup_sound_N` lever fired at this site. -/

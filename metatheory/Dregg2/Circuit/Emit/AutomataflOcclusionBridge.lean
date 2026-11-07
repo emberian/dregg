@@ -346,7 +346,7 @@ theorem lineReadsVert_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit
   have hcell : (boardDecodeOld e).cellAt ⟨(e.loc (cFx b)).toNat, k⟩
       = codeToParticle (e.loc (old (k * NN + (e.loc (cFx b)).toNat))) := by
     simp only [Board.cellAt, boardDecodeOld]
-    rw [if_pos (⟨hxlt, by simpa [NN] using hk⟩ : _ ∧ _)]
+    exact if_pos (⟨hxlt, by simpa [NN] using hk⟩ : _ ∧ _)
   show e.loc (cLine o k) = 0 ↔ _
   rw [hline, hcell]
   exact (vacuum_iff_zero (halph _ hidxK).1).symm
@@ -410,7 +410,7 @@ theorem lineReadsHoriz_of_sat (hsat : Satisfied2 hash automataflResolveDesc mini
   have hcell : (boardDecodeOld e).cellAt ⟨k, (e.loc (cFy b)).toNat⟩
       = codeToParticle (e.loc (old ((e.loc (cFy b)).toNat * NN + k))) := by
     simp only [Board.cellAt, boardDecodeOld]
-    rw [if_pos (⟨by simpa [NN] using hk, hylt⟩ : _ ∧ _)]
+    exact if_pos (⟨by simpa [NN] using hk, hylt⟩ : _ ∧ _)
   show e.loc (cLine o k) = 0 ↔ _
   rw [hline, hcell]
   exact (vacuum_iff_zero (halph _ hidxK).1).symm

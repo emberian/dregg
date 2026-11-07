@@ -773,7 +773,7 @@ theorem lineReadsVertN (n : Nat)
   rw [lineVertValN n hsat hc i hi b o ob k hk hlift fx hfxN hcolOH halph hiv]
   have hcell : (boardDecodeOldN n (envAt t i)).cellAt ⟨fx, k⟩
       = codeToParticle ((envAt t i).loc (NGen.old n (k * n + fx))) := by
-    simp only [Board.cellAt, boardDecodeOldN]; rw [if_pos ⟨hfxN, hk⟩]
+    simp only [Board.cellAt, boardDecodeOldN]; exact if_pos (⟨hfxN, hk⟩ : fx < n ∧ k < n)
   rw [hcell]
   exact (vacuum_iff_zeroN (halph4 _ hidx)).symm
 
@@ -798,7 +798,7 @@ theorem lineReadsHorizN (n : Nat)
   rw [lineHorizValN n hsat hc i hi b o ob k hk hlift fy hfyN hrowOH halph hiv]
   have hcell : (boardDecodeOldN n (envAt t i)).cellAt ⟨k, fy⟩
       = codeToParticle ((envAt t i).loc (NGen.old n (fy * n + k))) := by
-    simp only [Board.cellAt, boardDecodeOldN]; rw [if_pos ⟨hk, hfyN⟩]
+    simp only [Board.cellAt, boardDecodeOldN]; exact if_pos (⟨hk, hfyN⟩ : k < n ∧ fy < n)
   rw [hcell]
   exact (vacuum_iff_zeroN (halph4 _ hidx)).symm
 
@@ -1113,7 +1113,7 @@ theorem osrc_arithN (n : Nat) (hn : (n : ℤ) < 2013265921)
     rw [headToExpr_eval, evalH_foldl_addLin, evalH_lin, List.map_map] at hg
     have hEq : ((-1) * e.loc (NGen.cOg n o)
         + ((List.range n).map (fun j => e.loc (NGen.cOsrc n o j))).sum) ≡ 0 [ZMOD 2013265921] := by
-      simpa [Function.comp] using hg
+      simpa [Function.comp_def, he] using hg
     have hmod : ((List.range n).map (fun j => e.loc (NGen.cOsrc n o j))).sum
         ≡ e.loc (NGen.cOg n o) [ZMOD 2013265921] := (gate_modEq_iff (by ring)).mp hEq
     obtain ⟨hlo, hhi⟩ := sum_bool_bounds hbool
