@@ -671,6 +671,14 @@ fn effects_hash_inputs(effects: &[Effect]) -> Vec<BabyBear> {
                 hasher_inputs.push(BabyBear::new(*field_idx));
                 hasher_inputs.push(*value);
             }
+            Effect::GrainTurn { values, fee } => {
+                // Tag 6 = `sel::GRAIN_TURN`; the five lane-0 values, then the fee limbs.
+                hasher_inputs.push(BabyBear::new(6));
+                hasher_inputs.extend_from_slice(values);
+                let (lo, hi) = split_u64(*fee);
+                hasher_inputs.push(lo);
+                hasher_inputs.push(hi);
+            }
             Effect::GrantCapability { cap_entry, phase_b } => {
                 hasher_inputs.push(BabyBear::new(3));
                 // 32-byte widening: absorb all 8 limbs (~256-bit binding).

@@ -70,8 +70,8 @@ use dregg_sdk::{
 mod finalize;
 #[cfg(feature = "prover")]
 pub use finalize::{
-    finalize_grain_turn, finalize_session, finalize_session_threaded, session_head_openings,
-    session_model_nonce,
+    GRAIN_WRITE_ORDER, finalize_grain_turn, finalize_grain_turn_in, finalize_session,
+    finalize_session_threaded, grain_turn_vm_effect, mint_grain_leg_with, session_head_openings,
 };
 
 /// **A captured grain turn — the R3-adapter input.** Everything

@@ -80,6 +80,7 @@ import Dregg2.Circuit.Emit.FieldsCanonicity9Emit
 -- ⚑ THE OWNER FREEZE (E10) — see `emitCompact` below and `OwnerFreezeWire`'s header.
 import Dregg2.Circuit.Emit.KeyCanonicity9Emit
 import Dregg2.Circuit.Emit.OwnerFreezeWire
+import Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2 EffectVmDescriptor2)
 open Dregg2.Circuit.Emit.CapOpenEmit (v3RegistryCapOpenWide v3RegistryCapOpenWriteWide)
@@ -376,3 +377,9 @@ def main : IO Unit := do
   let smBB := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintTickFace.traceWidth
   let smWide := wideAppend Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + B_SPAN)
   emitCompact "supplyMintVmDescriptor2R24" smWide
+  -- position 57: the SINGLE-TICK GRAIN TURN (initiative 10). `grainTurnWide = wideAppend
+  -- (withDfaRcPins grainTurnVmDescriptor2R24) bb (bb + B_SPAN)` at the 188-wide face base (the same
+  -- base every setField member uses). Not a bare cohort route, so no gentian weld; the same
+  -- `emitCompact` chain (owner/key/fields welds, S2, E1, last-row hardening, unforced-pin drop).
+  emitCompact "grainTurnVmDescriptor2R24"
+    Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated.grainTurnWide

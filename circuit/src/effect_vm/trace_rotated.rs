@@ -891,6 +891,31 @@ fn generate_rotated_effect_vm_trace_avail_core(
         );
     }
 
+    // THE GRAIN-TURN TAIL (initiative 10, Lean `EffectVmEmitGrainTurnRotated`): the fee pin
+    // (`.piBinding .first (prmCol 5)` at `ROT_PI_COUNT`, the `ROT_FEE_PI` slot) then the five
+    // written slots' completion lanes (slots 3..=7 in order, each `withSetFieldCompletionPins`'s
+    // `.last` pins), all before the rc tail. Read through the emitted nonet table, never a stride.
+    if matches!(effects.first(), Some(Effect::GrainTurn { .. })) {
+        use super::columns::PARAM_BASE;
+        if effects.len() != 1 {
+            return Err(format!(
+                "rotated grain-turn leg proves exactly ONE grain row (the single-tick shape: the \
+                 first-row pin + the window gate make row 0 the only active row), got {}",
+                effects.len()
+            ));
+        }
+        dpis.push(r0[PARAM_BASE + 5]);
+        for slot in 3..8 {
+            for lane in 1..=crate::effect_vm::layout_generated::ROTATED_FIELD_COMPLETION_LANES {
+                dpis.push(
+                    last[after_base
+                        + crate::effect_vm::layout_generated::ROTATED_FIELD_LANE_COL[slot][lane]],
+                );
+            }
+        }
+        debug_assert_eq!(dpis.len(), ROT_PI_COUNT + GRAIN_TURN_EXTRA_PIS);
+    }
+
     // THE DSL rc-EMIT TAIL (the `Witnessed{Dfa}` route-commitment exposure). EVERY deployed cohort
     // member is wrapped OUTERMOST through Lean `withDfaRcPins`, publishing the caveat-region DFA
     // route-commitment carrier (cols `CAVEAT_BASE + C_DFA_RC_OFF ..+4`, filled by `fill_caveat`
@@ -2977,11 +3002,24 @@ pub fn rotated_descriptor_name(selector: usize) -> Option<&'static str> {
         // recursion engine. THE LAST rotation-cutover residue closed; the residue is now EMPTY,
         // so the cutover can delete v1 with zero residue.
         s if s == sel::CUSTOM => "customVmDescriptor2R24",
+        // The SINGLE-TICK GRAIN TURN (initiative 10): one executor grain turn as one row on its own
+        // repurposed selector (6). A TAIL registry member (the supplyMint precedent), Lean
+        // `EffectVmEmitGrainTurnRotated.grainTurnHost` / `grainTurnWide`.
+        s if s == sel::GRAIN_TURN => GRAIN_TURN_DESCRIPTOR_NAME,
         // The residue is EMPTY: every LIVE selector resolves above. NoOp and unknown selectors
         // fail closed.
         _ => return None,
     })
 }
+
+/// The registry key of the single-tick grain-turn member (`grainTurnVmDescriptor2R24`).
+pub const GRAIN_TURN_DESCRIPTOR_NAME: &str = "grainTurnVmDescriptor2R24";
+
+/// The grain-turn member's extra PI block past `ROT_PI_COUNT`: the published fee (1) + the five
+/// written slots' completion lanes (5 × `ROTATED_FIELD_COMPLETION_LANES`). Lean
+/// `grainTurnVmDescriptor2R24.piCount = GRAIN_FEE_PI + 1 + 40`.
+pub const GRAIN_TURN_EXTRA_PIS: usize =
+    1 + 5 * crate::effect_vm::layout_generated::ROTATED_FIELD_COMPLETION_LANES;
 
 /// Resolve the per-slot `SetField` rotated descriptor name for a concrete field index
 /// (`setFieldVmDescriptor2-{0..7}R24`), or the dynamic descriptor for an out-of-range /
@@ -5023,6 +5061,8 @@ pub fn generate_rotated_transfer_shape_wide_avail(
     let value8 = if matches!(effects.first(), Some(Effect::SetField { field_idx, .. }) if (*field_idx as usize) < 8)
     {
         crate::effect_vm_descriptors::SETFIELD_VALUE8_PI_LEN
+    } else if matches!(effects.first(), Some(Effect::GrainTurn { .. })) {
+        GRAIN_TURN_EXTRA_PIS
     } else {
         0
     };

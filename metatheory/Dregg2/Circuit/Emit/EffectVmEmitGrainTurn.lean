@@ -68,6 +68,10 @@ def grainParam (j : Fin 8) : Nat := j.val - 3
 /-- The param column carrying `turn.fee` (the Phase-1 debit). -/
 def FEE_PARAM : Nat := 5
 
+/-- The fee range width: the wide graduation's 15-bit table. A grain turn's fee (`5_000`) fits; a
+larger fee is refused (fail-closed completeness bound, not a soundness gap). -/
+def FEE_BITS : Nat := 15
+
 /-- The selector as an expression. -/
 def eSelG : EmittedExpr := .var SEL_GRAIN_TURN
 
@@ -107,15 +111,20 @@ def grainTurnVmAirName : String := "dregg-effectvm-grainturn-v1"
 
 /-- **`grainTurnVmDescriptor`** — the v1 face: the row gates, the first-row pin, whole-block
 continuity (`transitionAll`, the transfer face's; the per-slot setField face carries none), the
-transfer GROUP-4 hash sites (all eight field columns are among the absorbed state-block columns) and the two
-balance-limb range teeth (the `bal_lo` one is what refuses an underflowing fee debit). -/
+transfer GROUP-4 hash sites (all eight field columns are among the absorbed state-block columns), the two
+balance-limb range teeth, and a `FEE_BITS`-bit (15) range on the fee param. Together the after-`bal_lo`
+tooth and the fee tooth refuse the mod-p wrap forgery (docs/FINDING-modp-wrap-forgery-audit.md): an
+underflowing debit (`fee > bal_lo_before`) lands at `bal_lo_before − fee + p ≥ p − 2^15 > 2^30` and fails
+the 30-bit after-`bal_lo` range. A 30-bit fee range would NOT suffice (`p − 2^30 < 2^30`, so a fee in
+`(p − 2^30, 2^30)` against a zero balance would read as a credit); the 15-bit width rides the wide
+graduation's 15-bit table (`graduateV1Wide`, the borrow-weld precedent). -/
 def grainTurnVmDescriptor : EffectVmDescriptor :=
   { name := grainTurnVmAirName
   , traceWidth := EFFECT_VM_WIDTH
   , piCount := pi.V1_PI_COUNT
   , constraints := grainTurnRowGates ++ [grainFirstRowPin] ++ transitionAll
   , hashSites := transferHashSites
-  , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
+  , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩, ⟨prmCol FEE_PARAM, FEE_BITS⟩ ] }
 
 #guard grainTurnRowGates.length == 14
 #guard grainTurnVmDescriptor.constraints.length == 14 + 1 + 14
@@ -195,14 +204,14 @@ theorem grainTurnVm_faithful (env : VmRowEnv) (hrow : IsGrainTurnRow env)
     refine ⟨by omega, by omega, by omega, by omega, by omega, ?_, ?_⟩
     · intro j hj
       have hW := h _ (mem_grainTurnRowGates_slot j)
-      simp only [grainSlotGate, hj, if_true, VmConstraint.holdsVm, gGrainWrite, eSelG, eSA, eSB,
+      simp only [grainSlotGate, hj, ite_true, VmConstraint.holdsVm, gGrainWrite, eSelG, eSA, eSB,
         ePrm, eSub, EmittedExpr.eval] at hW
       rw [hrow, Int.modEq_zero_iff_dvd] at hW
       have := hF j; have := hP j hj
       omega
     · intro j hj
       have hW := h _ (mem_grainTurnRowGates_slot j)
-      simp only [grainSlotGate, hj, Bool.false_eq_true, if_false, VmConstraint.holdsVm,
+      simp only [grainSlotGate, hj, Bool.false_eq_true, ite_false, VmConstraint.holdsVm,
         gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hW
       rw [Int.modEq_zero_iff_dvd] at hW
       have := hF j
@@ -225,11 +234,11 @@ theorem grainTurnVm_faithful (env : VmRowEnv) (hrow : IsGrainTurnRow env)
       rw [Int.modEq_zero_iff_dvd, hrow]; omega
     · cases hj : IsGrainSlot j
       · have := hP0 j hj
-        simp only [grainSlotGate, hj, Bool.false_eq_true, if_false, VmConstraint.holdsVm,
+        simp only [grainSlotGate, hj, Bool.false_eq_true, ite_false, VmConstraint.holdsVm,
           gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
         rw [Int.modEq_zero_iff_dvd]; omega
       · have := hW j hj
-        simp only [grainSlotGate, hj, if_true, VmConstraint.holdsVm, gGrainWrite, eSelG, eSA,
+        simp only [grainSlotGate, hj, ite_true, VmConstraint.holdsVm, gGrainWrite, eSelG, eSA,
           eSB, ePrm, eSub, EmittedExpr.eval]
         rw [Int.modEq_zero_iff_dvd, hrow]; omega
 
@@ -258,10 +267,10 @@ theorem grainTurn_inactive_row_frozen (env : VmRowEnv) (hoff : env.loc SEL_GRAIN
     (by have := j.isLt; simp only [state.FIELD_BASE, STATE_SIZE]; omega)
   have hW := h _ (mem_grainTurnRowGates_slot j)
   cases hj : IsGrainSlot j
-  · simp only [grainSlotGate, hj, Bool.false_eq_true, if_false, VmConstraint.holdsVm, gFieldPass,
+  · simp only [grainSlotGate, hj, Bool.false_eq_true, ite_false, VmConstraint.holdsVm, gFieldPass,
       eSA, eSB, eSub, EmittedExpr.eval] at hW
     rw [Int.modEq_zero_iff_dvd] at hW; omega
-  · simp only [grainSlotGate, hj, if_true, VmConstraint.holdsVm, gGrainWrite, eSelG, eSA, eSB,
+  · simp only [grainSlotGate, hj, ite_true, VmConstraint.holdsVm, gGrainWrite, eSelG, eSA, eSB,
       ePrm, eSub, EmittedExpr.eval] at hW
     rw [hoff, Int.modEq_zero_iff_dvd] at hW; omega
 
@@ -357,7 +366,7 @@ theorem grainTurn_trace_ticks_once (t : DescriptorIR2.VmTrace)
       have hprev := ih hn (by omega)
       have hw := hwin (n - 1) (by omega)
       simp only [grainNoSecondActiveRow, DescriptorIR2.WindowConstraint.holdsAt,
-        DescriptorIR2.WindowExpr.eval, if_true, forall_const] at hw
+        DescriptorIR2.WindowExpr.eval, ite_true, forall_const] at hw
       have hnxt : (DescriptorIR2.envAt t (n - 1)).nxt SEL_GRAIN_TURN
           = (DescriptorIR2.envAt t n).loc SEL_GRAIN_TURN := by
         simp only [DescriptorIR2.envAt]
@@ -596,18 +605,18 @@ theorem grainTurn_row_agrees_executor
     rw [← eaLo, hLo, ebLo, hfee]
     show _ = fieldOf balanceField _
     simp only [fieldOf_setField_eq]
-    simp only [show balanceField ≠ nonceField by decide, if_false, if_true]
+    simp only [show balanceField ≠ nonceField by decide, ite_false, ite_true]
     rfl
   · -- nonce: pre + 1, one tick
     rw [← eaN, hNon, ebN]
     show _ = fieldOf nonceField _
-    simp only [fieldOf_setField_eq, if_true]
+    simp only [fieldOf_setField_eq, ite_true]
     rfl
   · intro j
     rw [← eaF j]
     have hb : slotName j ≠ balanceField := slotName_ne_balance j
     have hn : slotName j ≠ nonceField := slotName_ne_nonce j
-    simp only [fieldOf_setField_eq, slotName_inj, hb, hn, if_false]
+    simp only [fieldOf_setField_eq, slotName_inj, hb, hn, ite_false]
     cases hj : IsGrainSlot j
     · rw [hP j hj, ebF j]
       have hlt : j.val < 3 := by simpa [IsGrainSlot] using hj
@@ -616,7 +625,7 @@ theorem grainTurn_row_agrees_executor
       have h5 : j ≠ 5 := fun e => by subst e; simp at hlt
       have h4 : j ≠ 4 := fun e => by subst e; simp at hlt
       have h3 : j ≠ 3 := fun e => by subst e; simp at hlt
-      simp only [h7, h6, h5, h4, h3, if_false]
+      simp only [h7, h6, h5, h4, h3, ite_false]
       rfl
     · rw [hW j hj, hval j hj]
       have hge : 3 ≤ j.val := by simpa [IsGrainSlot] using hj

@@ -138,6 +138,14 @@ pub mod sel {
     /// `EffectVmEmit.sel.MINT` (= 14); the rotated descriptor is
     /// `supplyMintVmDescriptor2R24` (`EffectVmEmitRotationV3.supplyMintV3`).
     pub const MINT: usize = 14;
+    /// GrainTurn: the single-tick multi-field grain turn (initiative 10) — one executor turn on
+    /// the grain worker cell as one row (slots 3..=7 written, `turn.fee` debited, ONE nonce tick).
+    /// Repurposes the FIRST retired index (6), the [`MINT`] precedent: no live descriptor ever
+    /// referenced column 6 (`unforced_pi_pin_census.rs::retired_selector_columns_are_referenced_by_nothing`
+    /// measured it), so giving it a meaning shifts no absolute column. Lean twin
+    /// `EffectVmEmitGrainTurn.SEL_GRAIN_TURN = 6`; the rotated member is
+    /// `grainTurnVmDescriptor2R24`.
+    pub const GRAIN_TURN: usize = 6;
     /// BridgeMint: actor mints tokens carried by a portable proof from
     /// another federation. Balance credit (mirror NoteSpend). The SHIELD verb —
     /// the one bridge variant that survives the lockstep.
@@ -201,8 +209,9 @@ pub mod sel {
     ///
     /// Index ↔ retired effect (index 14, the dissolved `ExportSturdyRef`, was
     /// REPURPOSED for the dedicated supply [`MINT`] selector, SUPPLY-MODEL.md
-    /// Stage 2b — it is no longer pinned to zero):
-    ///   6  CreateObligation      7  FulfillObligation   9  SlashObligation
+    /// Stage 2b — it is no longer pinned to zero; index 6, the dissolved
+    /// `CreateObligation`, was REPURPOSED for [`GRAIN_TURN`], initiative 10):
+    ///   7  FulfillObligation   9  SlashObligation
     ///   10 Seal                  11 Unseal
     ///   15 EnlivenRef            16 DropRef             17 ValidateHandoff
     ///   18 AllocateQueue         19 EnqueueMessage      20 DequeueMessage
@@ -211,8 +220,8 @@ pub mod sel {
     ///   38 BridgeLock            39 CreateCommittedEscrow
     ///   41 BridgeFinalize        42 ReleaseEscrow       43 RefundEscrow
     ///   44 ReleaseCommittedEscrow 45 RefundCommittedEscrow
-    pub const RETIRED_SELECTORS: [usize; 24] = [
-        6, 7, 9, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22, 23, 28, 33, 37, 38, 39, 41, 42, 43, 44, 45,
+    pub const RETIRED_SELECTORS: [usize; 23] = [
+        7, 9, 10, 11, 15, 16, 17, 18, 19, 20, 21, 22, 23, 28, 33, 37, 38, 39, 41, 42, 43, 44, 45,
     ];
 }
 

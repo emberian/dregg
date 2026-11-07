@@ -99,6 +99,7 @@ import Dregg2.Circuit.Emit.OwnerFreezeWire
 -- which therefore decodes byte-for-byte to the ALL-ZERO key. Zero gates, zero aux columns, zero new
 -- hash sites; applied beside the other two wraps at the face width the member's own NAME declares.
 import Dregg2.Circuit.Emit.KeyCanonicity9Emit
+import Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
 open Dregg2.Circuit.Emit.LastRowFrameHardening (hardenLastRow)
@@ -233,3 +234,10 @@ def main : IO Unit := do
   -- live routing, no deployed-default flip — GENTIAN-blocked); the descriptor a flippable vault weld
   -- commits a VK for. In-proof refinement `Dregg2.Deos.VaultSatDescriptor.vaultSatV3_forces`.
   IO.println s!"v3rot\tvaultSatVmDescriptor2R24\t{(Dregg2.Deos.VaultSatDescriptor.vaultSatVmDescriptor2R24 0 1).name}\t{emitVmJson2 <| Dregg2.Circuit.Emit.UnforcedPiPins.dropUnforcedPins <| hardenLastRow <| fieldsCanonical9Wire <| keyCanonical9Wire <| ownerFreezeWire <| (Dregg2.Deos.VaultSatDescriptor.vaultSatVmDescriptor2R24 0 1)}"
+  -- THE SINGLE-TICK GRAIN TURN (initiative 10, `grain-session/SINGLE-TICK-DESCRIPTOR.md`): ONE
+  -- executor grain turn as ONE active row (slots 3..7 written, `turn.fee` debited from `bal_lo` and
+  -- published at PI `ROT_FEE_PI`, ONE nonce tick). A TAIL member after the satisfaction trio, the
+  -- `supplyMint` precedent (not a `v3RegistryBare` member, so the 36-member cohort zips stay put).
+  -- Selector `sel.GRAIN_TURN = 6` (a repurposed retired index). Lean source
+  -- `Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated.grainTurnHost`.
+  IO.println s!"v3rot\tgrainTurnVmDescriptor2R24\t{Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated.grainTurnHost.name}\t{emitVmJson2 <| Dregg2.Circuit.Emit.UnforcedPiPins.dropUnforcedPins <| hardenLastRow <| fieldsCanonical9Wire <| keyCanonical9Wire <| ownerFreezeWire <| Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated.grainTurnHost}"

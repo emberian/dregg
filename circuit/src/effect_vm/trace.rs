@@ -57,6 +57,7 @@ pub fn effect_selector(effect: &Effect) -> usize {
         Effect::NoOp => sel::NOOP,
         Effect::Transfer { .. } => sel::TRANSFER,
         Effect::SetField { .. } => sel::SET_FIELD,
+        Effect::GrainTurn { .. } => sel::GRAIN_TURN,
         Effect::GrantCapability { .. } => sel::GRANT_CAP,
         Effect::NoteSpend { .. } => sel::NOTE_SPEND,
         Effect::NoteCreate { .. } => sel::NOTE_CREATE,
@@ -447,6 +448,11 @@ pub enum EffectVmTraceError {
     TransferUnderflow { amount: u64, running_balance: u64 },
     /// A `Burn` whose low-30-bit amount exceeds the running balance (same reasoning).
     BurnUnderflow { amount: u64, running_balance: u64 },
+    /// A `GrainTurn` whose fee the single-tick grain member cannot express: the fee exceeds the
+    /// member's 15-bit fee range (`EffectVmEmitGrainTurn.FEE_BITS`), or debiting it would borrow
+    /// from `bal_hi` (the member debits `bal_lo` only and freezes `bal_hi`). A refusal, never a
+    /// wrapped trace.
+    GrainTurnFeeOutOfDomain { fee: u64, balance_lo: u64 },
 }
 
 impl core::fmt::Display for EffectVmTraceError {
@@ -477,6 +483,12 @@ impl core::fmt::Display for EffectVmTraceError {
             } => write!(
                 f,
                 "Burn underflow: amount_lo {amount} > running balance {running_balance}"
+            ),
+            Self::GrainTurnFeeOutOfDomain { fee, balance_lo } => write!(
+                f,
+                "GrainTurn fee {fee} is outside the single-tick grain member's domain: the fee must \
+                 be < 2^15 (the member's fee range) and <= bal_lo {balance_lo} (the member debits \
+                 bal_lo and freezes bal_hi, so a borrowing debit has no witness)"
             ),
         }
     }
@@ -582,6 +594,17 @@ pub fn try_generate_effect_vm_trace_ext(
 
                 Effect::NoteSpend { value, .. } => {
                     running_balance = running_balance.saturating_add(*value);
+                }
+
+                Effect::GrainTurn { fee, .. } => {
+                    let balance_lo = running_balance & 0x3FFF_FFFF;
+                    if *fee >= (1 << 15) || *fee > balance_lo {
+                        return Err(EffectVmTraceError::GrainTurnFeeOutOfDomain {
+                            fee: *fee,
+                            balance_lo,
+                        });
+                    }
+                    running_balance -= fee;
                 }
 
                 Effect::Burn {
@@ -699,6 +722,19 @@ pub fn try_generate_effect_vm_trace_ext(
                 row[AUX_BASE] = current_state.fields[idx];
 
                 new_state.fields[idx] = *value;
+                new_state.nonce += 1;
+            }
+            Effect::GrainTurn { values, fee } => {
+                // ONE executor grain turn as ONE row (Lean `EffectVmEmitGrainTurn`): slot `j`
+                // (3..=7) takes `param (j-3)`, `param5` carries the fee debited from `bal_lo`,
+                // and the nonce ticks ONCE. The domain check above guarantees no `bal_lo` borrow.
+                for (k, v) in values.iter().enumerate() {
+                    row[PARAM_BASE + k] = *v;
+                    new_state.fields[3 + k] = *v;
+                }
+                row[PARAM_BASE + 5] = BabyBear::new(*fee as u32);
+                new_state.balance -= *fee;
+                net_delta -= *fee as i64;
                 new_state.nonce += 1;
             }
             Effect::GrantCapability { cap_entry, phase_b } => {

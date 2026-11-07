@@ -37,8 +37,10 @@
 //! the host's own list of turn hashes; nothing here re-executes or opens a turn), `EngineSound`
 //! (which includes the leaf-to-executor-step correspondence, not only FRI), the verifier binary
 //! and its linked Lean archive, and its own key custody and VK. The folded head is the
-//! EffectVM-model head (see `grain_turn::finalize_session_threaded` for exactly what it carries;
-//! the nonce counts field writes instead of turns). A host that shows two renters two histories
+//! executor's on-ledger head: one leg per executor turn through the single-tick grain member
+//! (`grain-session/SINGLE-TICK-DESCRIPTOR.md`), so the head's balance and nonce are the
+//! ledger's (each turn's fee debited and its nonce ticked once, the fee published by its leg).
+//! A host that shows two renters two histories
 //! is not caught here (no witnesses). Nothing here says the model's outputs or the tools' effects
 //! were true or wanted.
 
@@ -55,7 +57,7 @@ pub mod produce;
 pub mod tamper;
 
 /// Bundle format version.
-pub const BUNDLE_VERSION: u32 = 1;
+pub const BUNDLE_VERSION: u32 = 2;
 /// Domain of [`call_commit`].
 pub const CALL_COMMIT_DOMAIN: &[u8] = b"dregg-cc-call-commit-v1";
 /// Domain of [`call_leaf`].
@@ -486,11 +488,6 @@ pub struct Bundle {
     pub aggregate: String,
     /// The head opening: the session's last committed grain cell (the executor's own `Cell`).
     pub last_cell: dregg_cell::Cell,
-    /// The EffectVM model nonce the folded head carries (see `grain_turn::session_model_nonce`).
-    pub model_nonce: u64,
-    /// The EffectVM model balance the folded head carries (the first turn's pre-balance; the
-    /// per-slot setField members freeze the balance while each executor turn debits its fee).
-    pub model_balance: i64,
     /// The executor's signed receipts for the grain's turns, in commit order. Receipt `i` names
     /// manifest entry `i`; their hashes are the log whose prefix root the last cell binds at
     /// `HISTORY_ROOT_SLOT`.
@@ -786,10 +783,9 @@ pub fn verify_bundle(
     if links != manifest || unique.len() != links.len() {
         return Err(Refusal::LinksNotManifest);
     }
-    let (_, model_head) =
-        grain_turn::session_head_openings(&b.last_cell, &manifest, b.model_nonce, b.model_balance)
-            .map_err(Refusal::Malformed)?;
-    if model_head != env.final_root || model_head != st.r3_head {
+    let head =
+        grain_turn::session_head_openings(&b.last_cell, &manifest).map_err(Refusal::Malformed)?;
+    if head != env.final_root || head != st.r3_head {
         return Err(Refusal::HeadOpening(
             "the aggregate's head is not the last cell under these turns",
         ));

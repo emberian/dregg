@@ -15,7 +15,7 @@ use dregg_circuit_prove::ivc_turn_chain::{
     WholeChainProof, WholeChainProofBytes, prove_turn_chain_recursive_without_host_gate,
 };
 use dregg_circuit_prove::joint_turn_aggregation::verify_descriptor_participant;
-use grain_turn::{ToolGatewayMinter, finalize_session_threaded, session_model_nonce};
+use grain_turn::{ToolGatewayMinter, finalize_session_threaded};
 use grain_verify::{GenesisPin, GrainAttestation};
 
 use crate::{
@@ -212,14 +212,6 @@ pub fn produce(
             .ok_or("no committed turn")?
             .after_cell
             .clone(),
-        model_nonce: session_model_nonce(minter.records())?,
-        model_balance: minter
-            .records()
-            .first()
-            .ok_or("no committed turn")?
-            .before_cell
-            .state
-            .balance(),
         executor_receipts: minter.turn_receipts().to_vec(),
         executor_pubkey: minter
             .executor_pubkey()

@@ -237,6 +237,52 @@ fn every_setfield_slot_member_carries_exactly_one_selector_gate() {
     }
 }
 
+/// The single-tick grain member (`grainTurnVmDescriptor2R24`, selector `GRAIN_TURN = 6`) carries
+/// exactly ONE appended `selectorGate GRAIN_TURN` in both registries — the same cross-selector
+/// replay close every cohort member carries, admitting the selector in
+/// `proof_forest::CUTOVER_READY_SELECTORS`.
+#[test]
+fn grain_turn_member_carries_one_selector_gate_and_owns_column_6() {
+    let want = selector_gate_body(sel::GRAIN_TURN);
+    let wire = dregg_circuit::effect_vm::trace_rotated::GRAIN_TURN_DESCRIPTOR_NAME;
+    assert_eq!(
+        dregg_circuit::effect_vm::trace_rotated::rotated_descriptor_name(sel::GRAIN_TURN),
+        Some(wire)
+    );
+    for (registry, tsv) in [
+        ("V3_STAGED", V3_STAGED_REGISTRY_TSV),
+        (
+            "WIDE",
+            dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV,
+        ),
+    ] {
+        let mut seen = 0;
+        for l in tsv.lines().filter(|l| !l.is_empty()) {
+            let mut it = l.splitn(3, '\t');
+            let key = it.next().expect("key");
+            let _ = it.next();
+            let desc = parse_vm_descriptor2(it.next().expect("json")).expect("member parses");
+            let gates = desc
+                .constraints
+                .iter()
+                .filter(|c| {
+                    dregg_circuit::descriptor_ir2::row_local_body(c).as_deref() == Some(&want)
+                })
+                .count();
+            if key == wire {
+                seen += 1;
+                assert_eq!(gates, 1, "{registry} {wire}: selectorGate GRAIN_TURN count");
+            } else {
+                assert_eq!(
+                    gates, 0,
+                    "{registry} {key} carries a GRAIN_TURN selector gate"
+                );
+            }
+        }
+        assert_eq!(seen, 1, "{registry}: exactly one grain-turn member");
+    }
+}
+
 /// THE NEGATIVE TOOTH (setField LEAD): a `[SetField(slot0, v), Transfer]` trace under the setField-0
 /// LEAD descriptor — with the Transfer tail row carrying a FORGED free balance debit — is UNSAT.
 /// The appended `selectorGate SET_FIELD` rejects the foreign-selector (TRANSFER) tail row.

@@ -83,6 +83,15 @@ pub enum Effect {
     },
     /// Set a custom field value.
     SetField { field_idx: u32, value: BabyBear },
+    /// **The single-tick grain turn** (initiative 10, `grain-session/SINGLE-TICK-DESCRIPTOR.md`):
+    /// ONE executor turn on the grain worker cell as ONE row. Slots 3..=7 take `values[j - 3]`
+    /// (lane 0 of each written 32-byte value; the high lanes ride the rotated after block and are
+    /// published by the member's completion pins), the balance is debited by `fee` (the executor's
+    /// Phase-1 `turn.fee`), and the nonce ticks ONCE. Slots 0..=2, the cap root and the reserved
+    /// column are untouched. Proven by `grainTurnVmDescriptor2R24` (selector [`sel::GRAIN_TURN`]).
+    ///
+    /// [`sel::GRAIN_TURN`]: crate::effect_vm::columns::sel::GRAIN_TURN
+    GrainTurn { values: [BabyBear; 5], fee: u64 },
     /// Grant a capability — the cross-cell delegation. ONE selector, TWO row
     /// roles (params[1] `GRANT_DIRECTION`, mirroring `Transfer.direction`):
     ///

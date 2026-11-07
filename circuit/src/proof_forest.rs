@@ -64,4 +64,15 @@ pub const CUTOVER_READY_SELECTORS: &[usize] = &[
     // PER SLOT and all eight share one display name, so `joint_turn_aggregation::
     // rotated_descriptor_selector` admits it by descriptor CONTENT (equal to a committed member).
     crate::effect_vm::columns::sel::SET_FIELD,
+    // GRAIN_TURN (6): the single-tick grain member `grainTurnVmDescriptor2R24` (initiative 10,
+    // `grain-session/SINGLE-TICK-DESCRIPTOR.md`) — ONE executor grain turn as ONE row, so a grain
+    // session folds T legs at the LEDGER head. The evidence: the Lean face is proved against the
+    // executor's per-turn transition (`EffectVmEmitGrainTurn.grainTurn_row_agrees_executor`) and
+    // its single tick on the emitted host and wide member (`EffectVmEmitGrainTurnRotated.
+    // carries_ticks_once`, `wide_refuses_two_ticks`); the member carries exactly ONE appended
+    // `selectorGate GRAIN_TURN` and is the only member that reads column 6
+    // (`effect_vm_selector_gate_forgery.rs::grain_turn_member_carries_one_selector_gate_and_owns_column_6`);
+    // a real multi-turn grain session folds and a wrong fee / wrong nonce tick is refused
+    // (`grain-turn/tests/r3_threaded_session.rs`).
+    crate::effect_vm::columns::sel::GRAIN_TURN,
 ];

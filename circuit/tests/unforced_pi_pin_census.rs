@@ -739,11 +739,49 @@ fn v1_pi_window_has_no_slack_above_its_highest_pin() {
 ///
 /// `circuit/src/effect_vm/columns.rs` used to state that "the AIR pins every retired selector to
 /// ZERO on every row, so no valid trace can carry a doomed effect (the refusal is in-circuit)".
-/// That was FALSE: measured here, across all 117 emitted members of the two registries, the 24
-/// retired selector columns are referenced by **zero** constraints — no pin-to-zero, no gate, no
+/// That was FALSE: measured here, across every emitted member of the two registries, the retired
+/// selector columns (24 until index 6 was repurposed for `sel::GRAIN_TURN`, 23 since) are
+/// referenced by **zero** constraints — no pin-to-zero, no gate, no
 /// lookup. What makes them harmless is not a refusal but INERTNESS: nothing reads them, so their
 /// value cannot reach any published slot. This test is that fact, and it goes red the day one of
 /// them becomes load-bearing.
+/// **The repurposed index 6 (`sel::GRAIN_TURN`) is read by the grain member ONLY.** Repurposing a
+/// retired selector is safe exactly when no OTHER member reads its column (the `MINT = 14`
+/// precedent): a member that read column 6 would change meaning the day grain rows carry 1 there.
+/// Measured: every member except `grainTurnVmDescriptor2R24` is blind to column 6 and pins nothing
+/// at it, and the grain member does read it (else the selector would be decorative).
+#[test]
+fn grain_turn_selector_column_is_read_only_by_the_grain_member() {
+    use dregg_circuit::effect_vm::columns::sel::GRAIN_TURN;
+    use dregg_circuit::effect_vm::trace_rotated::GRAIN_TURN_DESCRIPTOR_NAME;
+    for (label, tsv) in [
+        ("v3", V3_STAGED_REGISTRY_TSV),
+        ("wide", WIDE_REGISTRY_STAGED_TSV),
+    ] {
+        let mut grain_seen = false;
+        for line in tsv.lines().filter(|l| !l.is_empty()) {
+            let key = line.split('\t').next().expect("key");
+            let json = line.split('\t').nth(2).expect("member json");
+            let d = parse_vm_descriptor2(json).expect("deployed member parses");
+            let r = collect(&d);
+            let blind = free_row_blind(&r, GRAIN_TURN);
+            if key == GRAIN_TURN_DESCRIPTOR_NAME {
+                grain_seen = true;
+                assert!(
+                    !blind,
+                    "{label}/{key}: the grain member must read its own selector"
+                );
+            } else {
+                assert!(
+                    blind,
+                    "{label}/{key}: reads column {GRAIN_TURN} (the grain selector)"
+                );
+            }
+        }
+        assert!(grain_seen, "{label}: the grain member is in the registry");
+    }
+}
+
 #[test]
 fn retired_selector_columns_are_referenced_by_nothing() {
     use dregg_circuit::effect_vm::columns::sel::RETIRED_SELECTORS;

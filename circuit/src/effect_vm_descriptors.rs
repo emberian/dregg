@@ -4344,9 +4344,10 @@ mod tests {
         assert_eq!(
             n,
             live_keys.len(),
-            "the wide registry is a member-for-member cover of the live V3 registry (57 members)"
+            "the wide registry is a member-for-member cover of the live V3 registry (58 members)"
         );
-        assert_eq!(n, 57, "the wide registry covers all 57 live V3 members");
+        // 58 since initiative 10 appended the single-tick grain member (`grainTurnVmDescriptor2R24`).
+        assert_eq!(n, 58, "the wide registry covers all 58 live V3 members");
     }
 
     /// **THE DERIVED WIDE+UMEM WELDED SET: the Lean contract holds, member for member.** The

@@ -140,7 +140,7 @@ EMITTERS = [
     "Dregg2/Circuit/Emit/EmitAllJson.lean",  # v1: name-keyed
     "EmitAllJsonV2.lean",                    # ir2: defName-keyed (V2_DESCRIPTORS)
     "EmitRotationV3.lean",                   # rotation v3-staged artifacts + registry tsv
-    "EmitWideRegistryProbe.lean",            # ADDITIVE: the 57-member faithful 8-felt wide registry (covers live V3)
+    "EmitWideRegistryProbe.lean",            # ADDITIVE: the 58-member faithful 8-felt wide registry (covers live V3)
     "EmitBilateralLegs.lean",                # bilateral-aggregation legs
     "EmitCrossCellConservation.lean",        # turn-wide cross-cell Σδ=0 conservation AIR (foolable gap #6)
     "EmitWideUMemWeldRegistryProbe.lean",    # ADDITIVE/STAGED: the WIDE+umem welded registry (covers wide V3)
@@ -2536,20 +2536,22 @@ def split_wide_registry(stdout: str, written):
     ]
     geo = [ln for ln in lines if ln.startswith("s2compact\t")]
     e1 = [ln for ln in lines if ln.startswith("e1compact\t")]
-    if len(members) != 57:
+    # 58 since initiative 10 appended the single-tick grain member (`grainTurnVmDescriptor2R24`,
+    # position 57, after supplyMint).
+    if len(members) != 58:
         sys.exit(
             f"emit_descriptors: wide registry emitter produced {len(members)} member lines "
-            "(expected 57)"
+            "(expected 58)"
         )
-    if len(geo) != 57:
+    if len(geo) != 58:
         sys.exit(
             f"emit_descriptors: wide registry emitter produced {len(geo)} s2compact lines "
-            "(expected 57)"
+            "(expected 58)"
         )
-    if len(e1) != 57:
+    if len(e1) != 58:
         sys.exit(
             f"emit_descriptors: wide registry emitter produced {len(e1)} e1compact lines "
-            "(expected 57)"
+            "(expected 58)"
         )
     for ln in members:
         if ln.count("\t") != 2:
