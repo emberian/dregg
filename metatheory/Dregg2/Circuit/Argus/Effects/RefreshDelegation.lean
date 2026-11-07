@@ -167,15 +167,10 @@ theorem interp_refreshDelegationStmt_eq_refreshDelegationStep (actor child : Cel
   simp only [refreshDelegationStmt, interp, refreshDelegationGuard]
   unfold refreshDelegationStep
   by_cases hg : (stateAuthB k.caps actor child && (k.delegate child).isSome) = true
-  · rw [if_pos hg]
-    simp only [Option.bind]
-    rw [if_pos hg]
-    -- the IR `setDelegations` leaf is `refreshDelegationsMap k child`, which UNFOLDS to the kernel step's
+  · -- the IR `setDelegations` leaf is `refreshDelegationsMap k child`, which UNFOLDS to the kernel step's
     -- inline `fun c => if c = child then parentClist k child else k.delegations c` — definitionally equal.
-    rfl
-  · rw [if_neg hg]
-    simp only [Option.bind]
-    rw [if_neg hg]
+    simp only [hg, ↓reduceIte, Option.bind] <;> rfl
+  · simp only [hg, Bool.false_eq_true, ↓reduceIte, Option.bind]
 
 #assert_axioms interp_refreshDelegationStmt_eq_refreshDelegationStep
 

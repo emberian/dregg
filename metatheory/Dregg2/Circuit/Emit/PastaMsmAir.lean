@@ -415,7 +415,7 @@ theorem ladderGatesFrom_counts (digitBases : List (Nat × Nat × Nat)) (n : Nat)
     ∧ (ladderGatesFrom digitBases n acc0 fresh0).2.2 = fresh0 + 2 * RCB_COLS * n := by
   obtain ⟨h1, h2⟩ := dstep_counts digitBases (List.range n) ([], acc0, fresh0)
   rw [List.length_range] at h1 h2
-  exact ⟨by simpa using h1, h2⟩
+  exact ⟨by simpa [ladderGatesFrom] using h1, h2⟩
 
 /-- One MSM term is a ladder plus one accumulating RCB add. -/
 theorem msmTermStep_one (digitsOf : Nat → List (Nat × Nat × Nat)) (nDigits : Nat)
@@ -473,9 +473,9 @@ theorem openingCheckGates_counts (digitsOf : Nat → List (Nat × Nat × Nat)) (
     ([], acc0, fresh0)
   rw [List.length_range] at h1 h2
   have h1' : (msmGatesFrom digitsOf nDigits zeroBases n acc0 fresh0).1.length
-      = (2 * RCB_GATES * nDigits + RCB_GATES) * n := by simpa using h1
+      = (2 * RCB_GATES * nDigits + RCB_GATES) * n := by simpa [msmGatesFrom] using h1
   have h2' : (msmGatesFrom digitsOf nDigits zeroBases n acc0 fresh0).2.2
-      = fresh0 + (2 * RCB_COLS * nDigits + RCB_COLS) * n := by simpa using h2
+      = fresh0 + (2 * RCB_COLS * nDigits + RCB_COLS) * n := by simpa [msmGatesFrom] using h2
   refine ⟨?_, ?_⟩ <;>
     simp only [openingCheckGates, pointAtInfinityGates, List.length_append,
       List.length_cons, List.length_nil, pallasCompleteAdd_length, pallasCompleteAdd_fresh,

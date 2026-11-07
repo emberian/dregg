@@ -223,6 +223,9 @@ def wideFind (h : List ℤ → ℤ) (a b : WideVal) : List ℤ × List ℤ :=
                     b.1.1 b.1.2.1 b.1.2.2 (h (rootList b.2))
   else (rootList a.2, rootList b.2)
 
+theorem rootList_length_eight (sr : SysRoots) : (rootList sr).length = 8 :=
+  List.length_ofFn
+
 /-- **`wideStateCarrier` — the deployed `system_roots`-absorbing `state_commit`, as a
 `SpongeCarrier`.** `enc` IS `EffectVmFullStateRunnable.wideCommitOf` with the fourth slot expanded to
 the roots sponge (`systemRootsDigest_eq_hash_rootList`), so the payload is the WHOLE 17-field bound
@@ -256,8 +259,8 @@ def wideStateCarrier : SpongeCarrier where
   outBo := 8
   find_len_le := by
     intro h _ a b
-    have hr₁ : (rootList a.2).length = 8 := by simp [rootList, N_SYSTEM_ROOTS]
-    have hr₂ : (rootList b.2).length = 8 := by simp [rootList, N_SYSTEM_ROOTS]
+    have hr₁ : (rootList a.2).length = 8 := rootList_length_eight a.2
+    have hr₂ : (rootList b.2).length = 8 := rootList_length_eight b.2
     show (wideFind h a b).1.length + (wideFind h a b).2.length
       ≤ 1 * ((a.1.1.length + a.1.2.1.length + a.1.2.2.length + (rootList a.2).length)
               + (b.1.1.length + b.1.2.1.length + b.1.2.2.length + (rootList b.2).length)) + 8

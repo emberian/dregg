@@ -416,7 +416,7 @@ theorem output_eval_of_matches {n : Nat} (truth : Fin n -> Bool) (base : Nat)
   cases p with
   | atom x =>
       have hx := h 0 (by simp [witnessCount])
-      simpa [outputAt, witnessBits] using hx
+      simpa [outputAt, witnessBits, eval] using hx
   | top => rfl
   | bot => rfl
   | not p =>
@@ -771,7 +771,8 @@ theorem canonical_trace_satisfied_iff (hash : List Int -> Int) {n : Nat}
   · intro hsat
     have haccept := hsat.rowConstraints 0 (by simp [canonicalTrace])
       (acceptConstraint p) (by simp [descriptor])
-    exact canonical_accept_iff truth p |>.mp (by simpa using haccept)
+    exact canonical_accept_iff truth p |>.mp (by
+      simpa [VmConstraint2.holdsAt, acceptConstraint, gate, WindowConstraint.holdsAt] using haccept)
   · intro heval
     refine ⟨?_, ?_, ?_, List.nodup_nil, ?_, ?_, ?_, ?_, ?_⟩
     · intro i hi c hc
@@ -1055,7 +1056,7 @@ theorem public_pin_field {hash : List Int -> Int} {n : Nat} {p : Formula n}
   have hpin := hsat.rowConstraints 0 hpos
     (.base (.piBinding .first a.val a.val)) (public_pin_mem p a)
   have hmod : (envAt t 0).loc a.val ≡ t.pub a.val [ZMOD 2013265921] := by
-    simpa [VmConstraint2.holdsAt] using hpin
+    simpa [VmConstraint2.holdsAt, envAt] using hpin
   exact (ZMod.intCast_eq_intCast_iff _ _ 2013265921).2 hmod
 
 theorem public_nodes_hold {hash : List Int -> Int} {n : Nat} {p : Formula n}
@@ -1084,7 +1085,7 @@ theorem public_accepts_output_one {hash : List Int -> Int} {n : Nat}
   have hgate := hsat.rowConstraints 0 hpos (acceptConstraint p) hmem
   have hz := field_zero_of_gate (env := envAt t 0) (body :=
     subW (outputAt n p).expr (.const 1)) (by
-      simpa [acceptConstraint] using hgate)
+      simpa [acceptConstraint, VmConstraint2.holdsAt, gate, WindowConstraint.holdsAt] using hgate)
   simp [subW, negW, fieldWindow] at hz
   rw [fieldWire_expr] at hz
   linear_combination hz

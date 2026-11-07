@@ -475,7 +475,9 @@ theorem isAgent_cases (hsat : Satisfied2 hash bilateralAggDescriptor minit mfin 
   by_cases hnl : j + 1 = t.rows.length
   · have hje : j = t.rows.length - 1 := by omega
     rw [hje]; exact hcanon.lastAgentBool
-  · have h := gate_forces hsat hj hnl mem_boolIsAgent
+  · have hm := mem_boolIsAgent
+    rw [boolGate_eq] at hm
+    have h := gate_forces hsat hj hnl hm
     simp only [EmittedExpr.eval] at h
     exact bool_of_boolGate h
       (hcanon.cells j (Agg.schCol Sched.IS_AGENT_CELL)).1
@@ -489,7 +491,9 @@ theorem consistent_cases (hsat : Satisfied2 hash bilateralAggDescriptor minit mf
   by_cases hnl : j + 1 = t.rows.length
   · have hje : j = t.rows.length - 1 := by omega
     rw [hje]; exact hcanon.lastConsistentBool
-  · have h := gate_forces hsat hj hnl mem_boolConsistent
+  · have hm := mem_boolConsistent
+    rw [boolGate_eq] at hm
+    have h := gate_forces hsat hj hnl hm
     simp only [EmittedExpr.eval] at h
     exact bool_of_boolGate h
       (hcanon.cells j Agg.CONSISTENT_INDICATOR_COL).1
@@ -665,8 +669,7 @@ theorem witness_value :
     witTrace.pub OuterPi.N_CELLS = 2 ∧
     prefixSum (consistentAt witTrace) (witTrace.rows.length - 1) = 2 := by
   refine ⟨witness_aggregated.exactlyOneAgent, by decide, ?_⟩
-  have := witness_aggregated.publishedCount
-  simpa using this.symm
+  exact witness_aggregated.publishedCount.symm.trans (by decide)
 
 /-- A WRONG bundle: a single cell whose `is_agent_cumulative` is `0`, not the required `1`. -/
 def badTrace : VmTrace := { rows := [zeroAsg], pub := zeroAsg, tf := fun _ => [] }

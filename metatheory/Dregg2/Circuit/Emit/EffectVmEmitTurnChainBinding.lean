@@ -387,7 +387,7 @@ theorem turnChain_descriptor_refines_rust_air
   · simpa only [sub_eq_add_neg] using hroot
   · simpa only [sub_eq_add_neg, add_assoc] using hacc
   · simpa only [neg_mul, one_mul] using hidx
-  · simpa only [sub_eq_add_neg] using hbool
+  · simpa only [sub_eq_add_neg, Bool.false_eq_true, ↓reduceIte] using hbool
   · simpa only [sub_eq_add_neg] using hmono
   · simpa only [sub_eq_add_neg] using hcount0
   · simpa only [neg_mul, one_mul] using hcount

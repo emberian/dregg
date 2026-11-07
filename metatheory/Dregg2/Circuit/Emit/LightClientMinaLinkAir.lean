@@ -1407,7 +1407,8 @@ theorem seam_forces_the_pinned_program {env : VmRowEnv} (hc : HashVkCanon env.lo
     hashVkRead env.loc = ABSORB_VK_LANES := by
   obtain ⟨-, hvk, -⟩ := h
   refine zeroLanes_one_exact _ _ hc (by decide) ?_
-  simpa [hashVkRead, minaLinkSeam] using hvk
+  simpa [hashVkRead, minaLinkSeam, Dregg2.Exec.CircuitEmit.emitExpr,
+    Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using hvk
 
 /-- ⚑⚑⚑ **`StateHashEngine` — WHAT THE PINNED SUB-PROGRAM PROVES, as a NAMED hypothesis about the
 recursion engine.**
@@ -1751,9 +1752,18 @@ theorem segmentFrom_refines_chainFrom (L : MinaLeaf) (enc : L.Digest → ℤ)
       have hheq : a HEIGHT = ((b.height : ℤ)) := by
         have h0 := hht 0 (by simp) (by simp); simpa using h0
       refine ih rows' (blockHash L b) b.height (by simpa using hlen)
-        (fun i hi hb' => by simpa using hht (i + 1) (by simpa using hi) (by simpa using hb'))
-        (fun i hi hb' => by simpa using hpar (i + 1) (by simpa using hi) (by simpa using hb'))
-        (fun i hi hb' => by simpa using hres (i + 1) (by simpa using hi) (by simpa using hb'))
+        (fun i hi hb' => by
+          have h := hht (i + 1) (by simpa using hi) (by simpa using hb')
+          simp only [List.getElem_cons_succ] at h
+          exact h)
+        (fun i hi hb' => by
+          have h := hpar (i + 1) (by simpa using hi) (by simpa using hb')
+          simp only [List.getElem_cons_succ] at h
+          exact h)
+        (fun i hi hb' => by
+          have h := hres (i + 1) (by simpa using hi) (by simpa using hb')
+          simp only [List.getElem_cons_succ] at h
+          exact h)
         ?_
       rw [← hown, ← hheq]
       exact hrec

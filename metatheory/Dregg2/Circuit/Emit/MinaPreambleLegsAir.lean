@@ -359,7 +359,9 @@ theorem the_row_forces_the_step_domain_bound (h : PreambleRowOk row pub) :
     linarith [hs0.1, hs1.1, hs2.1, hs3.1, hs4.1]
   have hhigh : row DOMAIN_LOG2 ≤ 16 := by linarith [h.domainSlack]
   refine ⟨hlow, hhigh, ?_⟩
-  simp only [stepDomainOk, BACKEND_TICK_ROUNDS_N, decide_eq_true_eq]
+  unfold stepDomainOk
+  refine decide_eq_true ?_
+  show (row DOMAIN_LOG2).toNat ≤ 16
   omega
 
 /-- ⚑⚑ **D1b + C3-LENGTH ARE FORCED.** Any accepted row's declared `public` IS the packing
@@ -388,7 +390,9 @@ theorem the_row_forces_the_public_length_equality (h : PreambleRowOk row pub) :
   have heq : row IDX_PUBLIC = 24 + row N_CHAL := by
     rw [← h.pubLenIndex, h.pubLenSchedule]
   refine ⟨heq, hlow, hhigh, ?_⟩
-  simp only [publicInputLenOk, toPublicInputLen, PUBLIC_INPUT_FIXED_WORDS, decide_eq_true_eq]
+  unfold publicInputLenOk
+  refine decide_eq_true ?_
+  show 24 + (row N_CHAL).toNat = (row IDX_PUBLIC).toNat
   omega
 
 /-- **D1a IS FORCED.** `prevChallengesLenOk`, `verifier.rs:810-815`. -/

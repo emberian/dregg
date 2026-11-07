@@ -83,6 +83,7 @@ cover (which is every exponent this tree forms: the largest is `m − 2` at a 25
 ⚑ This is what `powFast_is_pow`'s four `decide`d cases were standing in for. -/
 theorem powFast_eq_pow {R : Type} [Monoid R] (b : R) (e : Nat) (h : e < 2 ^ 512) :
     powFast b e = b ^ e := by
+  unfold powFast
   simpa using powFastAux_eq 512 b e 1 h
 
 /-- The exponents the Wrap leg actually forms are all `< 2^512` by a wide margin — the largest is

@@ -645,8 +645,7 @@ theorem decoded_auto_holds_automaton
   obtain ⟨X, Y, hX, hY, hAX, hAY, hcell⟩ := autoPin_of_sat hsat hc i hi
   have hxn : ((envAt t i).loc AX).toNat = X := by rw [hAX]; simp
   have hyn : ((envAt t i).loc AY).toNat = Y := by rw [hAY]; simp
-  simp only [Board.cellAt, boardDecode]
-  rw [hxn, hyn, hcell, if_pos ⟨hX, hY⟩]
+  simp only [Board.cellAt, boardDecode, hxn, hyn, hcell, hX, hY, and_self, ↓reduceIte]
   simp [codeToParticle, AUTO]
 
 end AutoPin
@@ -663,7 +662,8 @@ or `p−1` (`≡ −1`). Same primality argument as `bin_of_gate`, one factor wi
 theorem tri_of_gate {a : Assignment} {c : Nat}
     (h : (memberExpr c [-1, 0, 1]).eval a ≡ 0 [ZMOD 2013265921]) (hc : Canon (a c)) :
     a c = 0 ∨ a c = 1 ∨ a c = 2013265920 := by
-  simp only [memberExpr, List.foldl, EmittedExpr.eval] at h
+  have e : (memberExpr c [-1, 0, 1]).eval a = (a c + -(-1)) * a c * (a c + -1) := rfl
+  rw [e] at h
   have hd : (2013265921 : ℤ) ∣ (a c + -(-1)) * (a c + -0) * (a c + -1) :=
     Int.modEq_zero_iff_dvd.mp (by simpa using h)
   obtain ⟨hc0, hc1⟩ := hc
@@ -679,7 +679,8 @@ primality argument as `tri_of_gate`. -/
 theorem mem3_of_gate {a : Assignment} {c : Nat}
     (h : (memberExpr c [0, 1, 2]).eval a ≡ 0 [ZMOD 2013265921]) (hc : Canon (a c)) :
     a c = 0 ∨ a c = 1 ∨ a c = 2 := by
-  simp only [memberExpr, List.foldl, EmittedExpr.eval] at h
+  have e : (memberExpr c [0, 1, 2]).eval a = a c * (a c + -1) * (a c + -2) := rfl
+  rw [e] at h
   have hd : (2013265921 : ℤ) ∣ a c * (a c + -1) * (a c + -2) :=
     Int.modEq_zero_iff_dvd.mp (by simpa using h)
   obtain ⟨hc0, hc1⟩ := hc
@@ -4331,7 +4332,8 @@ as a top-level fact; the bridge is stated as the conditional it is. -/
 theorem mem4_of_gate {a : Assignment} {c : Nat}
     (h : (memberExpr c [0, 1, 2, 3]).eval a ≡ 0 [ZMOD 2013265921]) (hc : Canon (a c)) :
     a c = 0 ∨ a c = 1 ∨ a c = 2 ∨ a c = 3 := by
-  simp only [memberExpr, List.foldl, EmittedExpr.eval] at h
+  have e : (memberExpr c [0, 1, 2, 3]).eval a = a c * (a c + -1) * (a c + -2) * (a c + -3) := rfl
+  rw [e] at h
   have hd : (2013265921 : ℤ) ∣ a c * (a c + -1) * (a c + -2) * (a c + -3) :=
     Int.modEq_zero_iff_dvd.mp (by simpa using h)
   obtain ⟨hc0, hc1⟩ := hc

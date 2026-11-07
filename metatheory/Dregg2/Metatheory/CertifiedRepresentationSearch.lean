@@ -205,7 +205,7 @@ theorem resourceBound (path : Path graph sourceNode targetNode) (statement : Sta
         (path.symbolicOverhead statement)) := by
   induction path with
   | nil node =>
-      simpa [composite, symbolicOverhead] using
+      simpa [composite, symbolicOverhead, Change.id] using
         CostLE.combine_zero ((graph.presentation node).resources statement evidence)
   | @step source mid destination edge rest ih =>
       have hrest := ih (edge.change.mapEvidence statement evidence)
@@ -290,7 +290,10 @@ inductive Node where
   | noWrap
   | booleanGraph
   | hybrid
-  deriving DecidableEq, Fintype, Repr
+  deriving DecidableEq, Repr
+
+instance : Fintype Node :=
+  Fintype.ofList [.noWrap, .booleanGraph, .hybrid] (by intro x; cases x <;> simp)
 
 def presentationAt : Node → Presentation (Problem Atom p)
   | .noWrap => noWrapPresentation
@@ -386,7 +389,10 @@ def proofToFhe : Change (proofPresentation (n := n)) (fhePresentation (n := n)) 
 inductive Node where
   | proof
   | fhe
-  deriving DecidableEq, Fintype, Repr
+  deriving DecidableEq, Repr
+
+instance : Fintype Node :=
+  Fintype.ofList [.proof, .fhe] (by intro x; cases x <;> simp)
 
 def presentationAt : Node → Presentation (Instance n)
   | .proof => proofPresentation
