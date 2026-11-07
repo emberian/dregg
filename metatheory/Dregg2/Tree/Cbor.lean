@@ -307,7 +307,7 @@ theorem decN_encList : ∀ (xs : List Item), AdmList xs → ∀ (fuel : Nat), de
   | [], _, _, _, r => rfl
   | x :: xs, h, fuel, hd, r => by
     simp only [depthList] at hd
-    simp only [encList, List.append_assoc, decN]
+    simp only [encList, List.append_assoc, List.length_cons, decN]
     simp [dec_enc x h.1 fuel (by omega), decN_encList xs h.2 fuel (by omega)]
 theorem decN_encPairs : ∀ (kvs : List (Item × Item)), AdmPairs kvs → ∀ (fuel : Nat),
     depthPairs kvs < fuel → ∀ (r : List UInt8),
@@ -315,7 +315,7 @@ theorem decN_encPairs : ∀ (kvs : List (Item × Item)), AdmPairs kvs → ∀ (f
   | [], _, _, _, r => rfl
   | (k, v) :: kvs, h, fuel, hd, r => by
     simp only [depthPairs] at hd
-    simp only [encPairs, List.append_assoc, decN, decPair]
+    simp only [encPairs, List.append_assoc, List.length_cons, decN, decPair]
     simp [dec_enc k h.1 fuel (by omega), dec_enc v h.2.1 fuel (by omega),
       decN_encPairs kvs h.2.2 fuel (by omega)]
 end
