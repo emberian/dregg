@@ -6,7 +6,8 @@
 //! `EffectVmEmitGrainTurnRotated`). The teeth here run the real `prove_vm_descriptor2` /
 //! `verify_vm_descriptor2` over the member parsed from the committed registries:
 //!   * the honest turn proves and verifies (narrow V3 and the live wide member);
-//!   * a row whose fee param is not the debit (the after-block carries the real post-cell) is UNSAT;
+//!   * a row whose published fee is not its balance debit is UNSAT; a row built over a fee the
+//!     ledger did not debit proves a DIFFERENT post-state (refused at the head opening);
 //!   * the published fee PI moved off the proven fee does not verify;
 //!   * a row that ticks the nonce TWICE is UNSAT (`grainTurn_rejects_double_tick_row`);
 //!   * a second active grain row is UNSAT (the window gate, `grainTurn_refuses_two_ticks`).
@@ -24,7 +25,8 @@ use dregg_circuit::effect_vm::trace_rotated::{
     generate_rotated_effect_vm_trace, rotated_descriptor_name_for_effect,
 };
 use dregg_circuit::effect_vm::{
-    CellState, Effect, STATE_AFTER_BASE, STATE_BEFORE_BASE, fold_bytes32_to_bb, sel, state,
+    CellState, Effect, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE, fold_bytes32_to_bb, sel,
+    state,
 };
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
 use dregg_circuit::field::BabyBear;
@@ -176,14 +178,47 @@ fn honest_grain_turn_proves_on_the_live_wide_member() {
 
 #[test]
 fn a_fee_that_is_not_the_debit_is_unsat() {
-    // The row claims 4999 while the post-cell (the after block the welds read) carries the 5000
-    // debit: the v1 after-balance and the rotated after-block disagree, and the gates refuse it.
-    let f = fixture(FEE - 1);
+    // The honest row debits 5000. Forge the row's fee param (and its published PI, so the fee pin
+    // is satisfied) to 4999 while the balance columns still carry the 5000 debit: the fee gate
+    // `after − before + s_g·fee` refuses it. The debit and the published fee cannot disagree.
+    let f = fixture(FEE);
     let (trace, dpis) = narrow(&f);
-    assert_eq!(dpis[ROT_PI_COUNT], BabyBear::new(FEE as u32 - 1));
+    let desc = v3_desc();
+    assert!(prove_verify(&desc, &trace, &dpis), "honest baseline");
+    let mut forged = trace.clone();
+    forged[0][PARAM_BASE + 5] = BabyBear::new(FEE as u32 - 1);
+    let mut fpis = dpis.clone();
+    fpis[ROT_PI_COUNT] = BabyBear::new(FEE as u32 - 1);
     assert!(
-        !prove_verify(&v3_desc(), &trace, &dpis),
-        "a row whose fee is not the debit the post-cell carries must be UNSAT"
+        !prove_verify(&desc, &forged, &fpis),
+        "a row whose published fee is not its balance debit must be UNSAT"
+    );
+}
+
+/// A row built over a fee that is NOT what the ledger debited is SELF-CONSISTENT (the generator
+/// derives the post-balance from the row, so it proves) but it proves a DIFFERENT post-state: its
+/// committed after-block is not the ledger's post-cell. The refusal of that lie is the head
+/// opening (`grain-turn/tests/r3_threaded_session.rs`), not this leg; measured here so the rung is
+/// named rather than assumed.
+#[test]
+fn a_fee_that_is_not_the_ledger_debit_proves_a_different_post_state() {
+    let honest = fixture(FEE);
+    let lying = fixture(FEE - 1);
+    let (ht, hp) = narrow(&honest);
+    let (lt, lp) = narrow(&lying);
+    assert!(
+        prove_verify(&v3_desc(), &lt, &lp),
+        "the self-consistent lie proves"
+    );
+    let last = ht.len() - 1;
+    assert_ne!(
+        ht[last][STATE_AFTER_BASE + state::BALANCE_LO],
+        lt[last][STATE_AFTER_BASE + state::BALANCE_LO],
+        "the two rows commit different post-balances"
+    );
+    assert_ne!(
+        hp, lp,
+        "and publish different PI vectors (fee, commitments)"
     );
 }
 

@@ -194,9 +194,10 @@ fn a_multi_turn_session_folds_at_the_ledger_head_one_leg_per_turn() {
     );
 }
 
-/// TAMPER (fee, the LEG rung). (1) A leg whose published fee PI is moved off the fee the proof
-/// debited does not verify. (2) A witness that debits the true fee while CLAIMING a different
-/// one has no proof: the mint's own prove/self-verify refuses it.
+/// TAMPER (fee, the LEG rung, and where a ledger lie is refused). (1) A leg whose published fee
+/// PI is moved off the fee the proof debited does not verify. (2) A leg minted over a fee that is
+/// NOT the ledger's debit is self-consistent — it proves — but its committed head is not the
+/// ledger's post-cell, so the head opening refuses it.
 #[test]
 #[ignore = "SLOW: leg proves; run with --ignored"]
 fn a_wrong_fee_is_refused_by_the_leg() {
@@ -216,7 +217,7 @@ fn a_wrong_fee_is_refused_by_the_leg() {
         "{err}"
     );
 
-    // The honest row with the fee param one short: the balance moved by 5000, the row claims 4999.
+    // The row with the fee one short of what the ledger debited.
     let VmEffect::GrainTurn { values, fee } = grain_turn_vm_effect(rec).unwrap() else {
         panic!("a grain turn coalesces to GrainTurn")
     };
@@ -225,9 +226,20 @@ fn a_wrong_fee_is_refused_by_the_leg() {
         values,
         fee: fee - 1,
     };
-    let Err(err) = grain_turn::mint_grain_leg_with(rec, &[rec.turn_hash], lying) else {
-        panic!("a fee that is not the debit has no proof")
-    };
-    eprintln!("fee-witness tamper refusal: {err}");
-    assert!(err.contains("rotated-leg mint failed"), "{err}");
+    let head = session_head_openings(&rec.after_cell, &[rec.turn_hash]).unwrap();
+    match grain_turn::mint_grain_leg_with(rec, &[rec.turn_hash], lying) {
+        Ok(leg) => {
+            let w = leg.participant.rotated.wide_new_root8().unwrap();
+            let lie_head: [u32; 8] = core::array::from_fn(|i| w[i].as_u32());
+            eprintln!("fee-witness lie: the leg proves a post-state that is not the ledger cell");
+            assert_ne!(
+                lie_head, head,
+                "a leg over a fee the ledger did not debit cannot open to the ledger head"
+            );
+        }
+        Err(err) => {
+            eprintln!("fee-witness lie refused at the mint: {err}");
+            assert!(err.contains("rotated-leg mint failed"), "{err}");
+        }
+    }
 }
