@@ -7435,9 +7435,10 @@ mod tests {
             .collect();
         assert_eq!(
             registry.len(),
-            37,
-            "the rotated resolver cohort has 37 members: the original 36 + the DEDICATED supply-mint \
-             (`supplyMintVmDescriptor2R24`, SUPPLY-MODEL.md Stage 2b — `sel::MINT`-routed); cap-open \
+            38,
+            "the rotated resolver cohort has 38 members: the original 36 + the DEDICATED supply-mint \
+             (`supplyMintVmDescriptor2R24`, SUPPLY-MODEL.md Stage 2b — `sel::MINT`-routed) + the \
+             single-tick grain turn (`grainTurnVmDescriptor2R24`, `sel::GRAIN_TURN`-routed); cap-open \
              + fee-in-proof + heap-write are separately routed"
         );
         // The fee-path resolver reaches the fee descriptor (and falls back to the unfee'd resolver
@@ -7524,6 +7525,7 @@ mod tests {
             rotated_descriptor_name(super::super::columns::sel::BRIDGE_MINT).unwrap(),
             // The DEDICATED supply-mint (SUPPLY-MODEL.md Stage 2b) on `sel::MINT`:
             rotated_descriptor_name(super::super::columns::sel::MINT).unwrap(),
+            rotated_descriptor_name(super::super::columns::sel::GRAIN_TURN).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::NOTE_SPEND).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::NOTE_CREATE).unwrap(),
             rotated_descriptor_name(super::super::columns::sel::CELL_SEAL).unwrap(),

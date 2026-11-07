@@ -82,4 +82,5 @@ pub const S2_COMPACT_TABLE: &[(&str, usize, usize)] = &[
     ("spawnCapOpenVmDescriptor2R24", 188, 875),
     ("exerciseCapOpenVmDescriptor2R24", 188, 875),
     ("supplyMintVmDescriptor2R24", 188, 875),
+    ("grainTurnVmDescriptor2R24", 188, 875),
 ];

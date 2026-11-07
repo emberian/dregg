@@ -85,6 +85,10 @@ fn v3_coverage_ledger() -> Vec<(&'static str, Cov)> {
             ),
         ),
         (
+            "grainTurnVmDescriptor2R24",
+            Covered("grain_turn_member::honest_grain_turn_proves_on_the_committed_v3_member"),
+        ),
+        (
             "transferFeeVmDescriptor2R24",
             Covered("effect_vm_rotation_flip"),
         ),
@@ -469,6 +473,10 @@ fn wide_coverage_ledger() -> Vec<(&'static str, Cov)> {
         (
             "supplyMintVmDescriptor2R24",
             Covered("wide_new_members_cover (supplyMint proves + LC verifies)"),
+        ),
+        (
+            "grainTurnVmDescriptor2R24",
+            Covered("grain_turn_member::honest_grain_turn_proves_on_the_live_wide_member"),
         ),
         ("setFieldVmDescriptor2-0R24", Covered(scoreboard)),
         ("setFieldVmDescriptor2-1R24", Covered(scoreboard)),

@@ -11,11 +11,9 @@
 //! (~minutes), so `#[ignore]`'d — run with
 //! `cargo test -p grain-turn --features prover --test r3_grain_adapter -- --ignored --nocapture`.
 //!
-//! Scope note (see `finalize::finalize_session`'s RESIDUAL GAP doc): a grain turn writes
-//! ≥3 distinct field slots in one executor turn that ticks the cell nonce ONCE, while the
-//! rotated EffectVM leg ticks it once PER field-write — so the head this fold binds is the
-//! EffectVM-model head, NOT the executor's on-ledger grain-cell head. A single-turn session
-//! folds internally-consistently and is anchored at that model head here.
+//! Scope note: one executor grain turn is ONE leg through the single-tick grain member
+//! (`grainTurnVmDescriptor2R24`), minted over the real pre- and post-cells, so the head this fold
+//! binds is the executor's on-ledger grain-cell head (`grain-session/SINGLE-TICK-DESCRIPTOR.md`).
 
 #![cfg(feature = "prover")]
 
@@ -59,8 +57,7 @@ fn r3_verifies_a_real_driven_grain_session() {
     }
 
     // ── DRIVE a tiny grain session (ONE admitted action → ONE committed executor turn). ──
-    // A single grain turn's legs form a chain that closes internally at the EffectVM head
-    // (the multi-turn cross-continuity is the named residual gap, so we drive one turn).
+    // One committed turn, one leg; the multi-turn fold is `r3_threaded_session.rs`.
     let mut minter = ToolGatewayMinter::open("grain-r3-adapter", 8).expect("open grain minter");
     let cell_root = [9u8; 32];
     let t_mint = std::time::Instant::now();
@@ -78,10 +75,11 @@ fn r3_verifies_a_real_driven_grain_session() {
     let t_fin = std::time::Instant::now();
     let legs = finalize_session(minter.records()).expect("real grain turn finalizes to legs");
     let finalize_elapsed = t_fin.elapsed();
-    assert!(
-        legs.len() >= 3,
-        "a grain turn writes ≥3 distinct field slots (calls_made/consumed/heap_root/action) \
-         → a cohort-run chain of ≥3 rotated legs; got {}",
+    assert_eq!(
+        legs.len(),
+        1,
+        "one executor grain turn is ONE leg (the single-tick grain member writes all five slots, \
+         debits the fee and ticks the nonce once); got {}",
         legs.len()
     );
     let head = chain_head(&legs);

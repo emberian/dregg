@@ -551,6 +551,15 @@ pub const UMEM_WELD_TABLE: &[UMemWeldRow] = &[
         constraints: 644,
         name: "dregg-effectvm-mint-v1-rot24-v3-staged-umem-wide-welded-staged",
     },
+    UMemWeldRow {
+        key: "grainTurnVmDescriptor2R24",
+        domain: 1,
+        splice: 314,
+        trace_width: 1754,
+        pi_count: 100,
+        constraints: 646,
+        name: "dregg-effectvm-grainturn-v1-rot24-v3-staged-umem-wide-welded-staged",
+    },
 ];
 
 /// sha256 of the Lean `umemweld` companion lines this table was rendered from — the byte
@@ -558,4 +567,4 @@ pub const UMEM_WELD_TABLE: &[UMemWeldRow] = &[
 /// `registry_fp` (it replaces the deleted `WIDE_UMEM_WELD_REGISTRY_FP`, which was the
 /// sha256 of the deleted TSV).
 pub const UMEM_WELD_TABLE_FP: &str =
-    "a19949dd0f69926d9b128a50c9348a328256485641d595d5d71672663e1b7946";
+    "1c4e24d5d8a26412f8a36581739a36b6aaa18f7c6f99117dc62870ea5d3b6e1f";

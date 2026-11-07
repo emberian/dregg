@@ -234,4 +234,8 @@ pub const E1_COMPACT_TABLE: &[(&str, &[(usize, usize)])] = &[
         "supplyMintVmDescriptor2R24",
         &[(90, 98), (101, 186), (187, 188)],
     ),
+    (
+        "grainTurnVmDescriptor2R24",
+        &[(90, 98), (101, 186), (187, 188)],
+    ),
 ];

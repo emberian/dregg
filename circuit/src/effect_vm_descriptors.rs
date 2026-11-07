@@ -832,7 +832,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "158dad4988d193746b0f0444a94b7e0cd8191d3bb921d49e2bbd8a735bff8c49";
+    "c60c214efd0fe8ed5ac828e1ab87a12423d6396d6bc8bfc0182067c7b8e319ee";
 
 /// The wire-name suffix marking a descriptor as the rotated+umem WELD
 /// ([`weld_umem_into_rotated_descriptor`]). A descriptor whose `name` ends with this is a STAGED
@@ -1274,7 +1274,7 @@ fn canonicity_splice_of(desc: &crate::descriptor_ir2::EffectVmDescriptor2) -> us
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "66cb248ed9ce636a796944f1342399427b37176fc67aa9e7d7a95efa08b47417";
+    "f101a2195cf1872ad339981c5dfd1d07c90988565155b98103346bea94b3a649";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -4199,7 +4199,7 @@ mod tests {
         // that happens to total 22 would be a guess wearing a derivation's clothes. What is
         // asserted is what was measured: a flat +22 on all 57, agreeing with an independently
         // re-typed Rust constant.
-        const WIDE_MEMBER_GEOMETRY: [(&str, usize); 57] = [
+        const WIDE_MEMBER_GEOMETRY: [(&str, usize); 58] = [
             ("transferVmDescriptor2R24", 1804),
             ("burnVmDescriptor2R24", 1800),
             ("mintVmDescriptor2R24", 1795),
@@ -4269,6 +4269,8 @@ mod tests {
             ("spawnCapOpenVmDescriptor2R24", 2076),
             ("exerciseCapOpenVmDescriptor2R24", 2076),
             ("supplyMintVmDescriptor2R24", 1747),
+            // initiative 10: the single-tick grain member (188-wide face, like setField).
+            ("grainTurnVmDescriptor2R24", 1747),
         ];
 
         let mut n = 0usize;
