@@ -20,6 +20,7 @@ prerequisite plan refuses answers `false`, so a broken prerequisite reds THIS mo
 Named residue: none.
 -/
 import Dregg2.Games.PathOfAngels.EventBatchRuntime
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.EventBatchRuntime
 

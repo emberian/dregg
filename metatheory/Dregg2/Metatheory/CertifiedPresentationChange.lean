@@ -596,7 +596,8 @@ noncomputable def noWrapToBoolean :
     change booleanAccepts statement statement.formula
         (canonicalBooleanEvidence statement statement.formula) ↔
       noWrapAccepts statement statement.formula evidence
-    rw [booleanAccepts_iff, noWrapAccepts_iff]
+    exact (booleanAccepts_iff statement statement.formula _).trans
+      (noWrapAccepts_iff statement statement.formula evidence).symm
   resourceBound := by
     refine ⟨fun statement =>
       ArithmetizationCost.BooleanGraph.cost (toBoolean statement.formula), ?_⟩

@@ -290,8 +290,7 @@ theorem group_distKnows_p : F.DistKnows (fun _ => True) p F.actual := by
   -- agentB (false) is in the group; its edge `Indist false w' actual` is `w' = actual`.
   have hedge : F.Indist false w' F.actual := hall false trivial
   have hw : w' = true := by
-    have : w' = F.actual := by unfold Frame.Indist F at hedge; simpa using hedge
-    simpa [F] using this
+    unfold Frame.Indist F at hedge; simpa using hedge
   show p w'
   rw [hw]; unfold p; rfl
 

@@ -791,9 +791,7 @@ theorem automatonStep_congr (b₁ b₂ : Board) (hs : b₁.size = b₂.size)
       simp only [Board.cellAt, if_pos (⟨hcx, hcy⟩ : c.x < b₁.size ∧ c.y < b₁.size),
         if_pos (⟨hcx', hcy'⟩ : c.x < b₂.size ∧ c.y < b₂.size)] at h
       exact h
-    simp only [stepTo, Board.cellAt, hs, ha]
-    rw [if_pos (⟨hcx', hcy'⟩ : c.x < b₂.size ∧ c.y < b₂.size),
-        if_pos (⟨hcx', hcy'⟩ : c.x < b₂.size ∧ c.y < b₂.size)]
+    simp only [stepTo, Board.cellAt, hs, ha, hcx', hcy', and_self, if_true]
     split
     · rfl
     · split

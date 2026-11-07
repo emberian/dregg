@@ -24,6 +24,7 @@ theorem in the parent because it is `rfl` (the sponsor wire is unconditionally t
 string), not an evaluation, and its `#assert_axioms` census line stayed with it.
 -/
 import Dregg2.Games.PathOfAngels.GalleyMaintenanceDailyRuntime
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.GalleyMaintenanceDailyRuntime
 

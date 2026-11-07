@@ -306,7 +306,6 @@ theorem bytes_foldl_eq {β : Type} (f : β → UInt8 → β) (init : β) (b : By
       have hd : b.data.toList.drop j = b[j] :: b.data.toList.drop (j+1) := by
         rw [← List.getElem_cons_drop (by simpa [← ByteArray.size_data] using hj)]
         simp [ByteArray.getElem_eq_getElem_data]
-        rfl
       rw [hd, List.foldl_cons, ← ih (j+1) (f acc b[j]) (by omega)]
       rfl
   simp only [ByteArray.foldl, ByteArray.foldlM, Nat.le_refl, dif_pos, Nat.sub_zero]

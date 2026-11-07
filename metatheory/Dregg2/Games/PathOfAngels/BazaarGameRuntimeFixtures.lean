@@ -25,6 +25,7 @@ fallback is constructible and the fail-closed `match` shape does not apply. The 
 header records all three.
 -/
 import Dregg2.Games.PathOfAngels.BazaarGameRuntime
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.BazaarGameRuntime
 

@@ -330,7 +330,8 @@ theorem disagreeing_badEdges :
   ext edge
   rcases edge with ⟨i, j⟩
   cases i <;> cases j <;>
-    simp [overlapBadEdges, wholeOverlapReject, disagreeing, pairSection,
+    simp only [overlapBadEdges, Finset.mem_filter, Finset.mem_univ, true_and] <;>
+    simp [wholeOverlapReject, disagreeing, pairSection,
       FinCover.patchSet, cover, patch]
 
 /-- Two hidden independent overlap queries miss the inconsistent family's two bad edges in exactly

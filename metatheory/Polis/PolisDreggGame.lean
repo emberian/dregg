@@ -121,9 +121,7 @@ theorem shield_refuses_floor_breaking (k0 : KernelState) (resp : KernelState →
     (h : ¬ dreggFloor k0 ((dreggGame k0).step k t (resp k t))) :
     kernelShield (dreggGame k0) resp k t = k := by
   unfold kernelShield
-  rw [if_neg]
-  intro hk
-  exact not_in_kernel_of_floor_violation k0 _ h hk
+  exact if_neg fun hk => not_in_kernel_of_floor_violation k0 _ h hk
 
 /-- **`shield_refuses_solvency_violation`** — concretely: a turn whose committed successor has an
 account in debt is shielded. (Specialization of the above to the solvency face.) -/
@@ -150,7 +148,7 @@ theorem shield_admits_when_kernel (k0 : KernelState) (resp : KernelState → Tur
     (h : ViabilityKernel (dreggGame k0) ((dreggGame k0).step k t (resp k t))) :
     kernelShield (dreggGame k0) resp k t = (dreggGame k0).step k t (resp k t) := by
   unfold kernelShield detStep
-  rw [if_pos h]
+  exact if_pos h
 
 /-! ## §4. The CPre of the kernel is the real "there is a safe dregg turn".
 

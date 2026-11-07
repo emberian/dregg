@@ -393,11 +393,15 @@ theorem successorTable_holds (x : Rat) :
     Holds successorValuation x successorSkolemFormula := by
   simp only [successorSkolemFormula, Holds]
   intro j
-  rw [eval_lookup_index_at_node, evalTerm_add, eval_lookup_index_at_node,
-    evalTerm_rational]
-  change (successorTable.cell outputRow j : Rat) =
-    (successorTable.cell inputRow j : Rat) + 1
-  fin_cases j <;> norm_num [successorTable_cell, outputRow, inputRow]
+  refine (eval_lookup_index_at_node successorValuation SkolemSymbol.table outputRow j).trans ?_
+  refine Eq.trans ?_ (evalTerm_add _ _ _ _).symm
+  refine Eq.trans ?_ (congrArg₂ (· + ·)
+    (eval_lookup_index_at_node successorValuation SkolemSymbol.table inputRow j)
+    (evalTerm_rational _ _ _)).symm
+  change (((if (outputRow : Fin 2).1 = 0 then (j.1 : Int) else ((j.1 + 1 : Nat) : Int)) : Int) :
+      Rat) =
+    (((if (inputRow : Fin 2).1 = 0 then (j.1 : Int) else ((j.1 + 1 : Nat) : Int)) : Int) : Rat) + 1
+  norm_num [outputRow, inputRow]
 
 /-- The compiled residual of the Skolem table is exactly zero. -/
 theorem successorTable_compiles_to_zero (x : Rat) :
@@ -415,8 +419,9 @@ theorem successorTable_polynomial_eq_zero :
         (.add (.lookup .table inputRow .index) (.rational 1)))).eval
       (successorTable.node j)) = 0
   rw [← Polynomial.C_0, Polynomial.C_inj]
-  simpa only [successorSkolemFormula, residual, denoteFormula, Polynomial.eval_C] using
-    successorTable_compiles_to_zero 0
+  have h := successorTable_compiles_to_zero 0
+  simp only [successorSkolemFormula, residual, denoteFormula, Polynomial.eval_C] at h
+  exact h
 
 /-- The example's exact witness table size is six integer cells. -/
 theorem successorTable_size : successorTable.tableSize = 6 := by

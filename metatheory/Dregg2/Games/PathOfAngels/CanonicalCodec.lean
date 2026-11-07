@@ -121,7 +121,8 @@ def natRead (limit : Nat) (j : Lean.Json) : Except String Nat :=
 theorem natRead_natToJson (limit n : Nat) (bounded : decide (n ≤ limit) = true) :
     natRead limit (natToJson n) = Except.ok n := by
   have hle : n ≤ limit := of_decide_eq_true bounded
-  simp [natRead, natToJson, hle]
+  simp only [natRead, natToJson]
+  simp [hle]
 
 /-- The bounded `Nat` codec. `render` is `toString`, which is byte-for-byte what every
 hand-written PoA encoder already emits for a numeric field. -/

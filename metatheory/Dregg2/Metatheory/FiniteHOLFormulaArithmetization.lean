@@ -262,7 +262,8 @@ theorem termPolynomial_lambda_beta (body : Tm F (A :: Γ) B)
     (env : Env F Γ) (x : Val F A) (j : Coord F B) :
     MvPolynomial.eval (flattenEnv env) (termPolynomial (.lam body) (x, j)) =
       MvPolynomial.eval (flattenEnv (Γ := A :: Γ) (x, env)) (termPolynomial body j) := by
-  simp only [eval_termPolynomial]
+  refine (eval_termPolynomial (.lam body) env (x, j)).trans
+    (Eq.trans ?_ (eval_termPolynomial body (x, env) j).symm)
   rfl
 
 /-- The complete polynomial arithmetization of a finite-HOL formula.  Its

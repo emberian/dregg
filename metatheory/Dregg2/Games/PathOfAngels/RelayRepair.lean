@@ -357,16 +357,14 @@ theorem installedCount_install (p : Panel) (a : Action) (h : installed p a = fal
     installedCount (install p a) = installedCount p + 1 := by
   obtain ⟨aB, aG, bD, gD, dO⟩ := p
   cases a <;> cases aB <;> cases aG <;> cases bD <;> cases gD <;> cases dO <;>
-    first
-      | simp_all [installedCount, allLinks, install, installed]
-      | (revert h; decide)
+    revert h <;> decide
 
 theorem spent_install (b : Board) (p : Panel) (a : Action) (h : installed p a = false) :
     spent b (install p a) = spent b p + cost b a := by
   revert h
   obtain ⟨aB, aG, bD, gD, dO⟩ := p
   cases a <;> cases aB <;> cases aG <;> cases bD <;> cases gD <;> cases dO <;>
-    simp [spent, linkSum, allLinks, install, installed, cost] <;> omega
+    simp [spent, linkSum, allLinks, install, installed, cost, List.filter_cons, List.filter_nil] <;> omega
 
 /-- The crate is never overdrawn.  Nat subtraction in `sparesLeft` therefore never
 silently clamps a negative balance to zero on a reachable state. -/
