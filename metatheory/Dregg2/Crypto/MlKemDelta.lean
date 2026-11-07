@@ -25,7 +25,7 @@ centered noise as `ez c : Ω → ℤ`. Then the failure probability decomposes i
 * **PER-COEFFICIENT TAIL (DISCHARGED from the CBD sum structure — §5–§8).** `Pr_r[832 ≤ |e_total c|] ≤ τ`. Each
   `e_total c` is a sum of `[−2,2]`-bounded independent centered CBD terms (plus bounded compression errors), i.e. a
   sub-Gaussian tail. This is now PROVED, not merely named. §5 bridges the `winProb` counting model to the uniform
-  `MeasureTheory.Measure` (`winProb_eq_measureReal`, via `PMF.uniformOfFintype`). §6 (`winProb_abs_subgaussian_le`)
+  `MeasureTheory.Measure` (`winProb_eq_measureReal`, via `PMF.uniformFintype`). §6 (`winProb_abs_subgaussian_le`)
   actually APPLIES Hoeffding's lemma (`hasSubgaussianMGF_of_mem_Icc`, parameter `((b−a)/2)² = 4` per `[−2,2]` term)
   and Hoeffding's inequality for the independent sum (`measure_sum_ge_le_of_iIndepFun`), unioning the two signs of
   `|·|` to `Pr[832 ≤ |e_total c|] ≤ 2·exp(−832²/(2·V))` in the `winProb` model. §7 closes the arithmetic
@@ -95,6 +95,7 @@ import Dregg2.ForMathlib.BerryEsseen
 import Dregg2.Tactics
 import Mathlib.Probability.Moments.SubGaussian
 import Mathlib.Probability.Distributions.Uniform
+import Dregg2.ForMathlib.UniformPMF
 import Mathlib.Probability.ProbabilityMassFunction.Integrals
 import Mathlib.Probability.Independence.Basic
 import Mathlib.MeasureTheory.Constructions.Pi
@@ -256,7 +257,7 @@ theorem perCoeff_tail_refutable {τ : ℝ} (hτ : τ < 1) : ¬ PerCoeffHoeffding
 
 `winProb` counts a fraction of a finite outcome space; Mathlib's concentration inequalities speak about a
 `MeasureTheory.Measure`. The uniform counting measure on a `Fintype` IS such a measure — concretely
-`(PMF.uniformOfFintype Ω).toMeasure`, a genuine `IsProbabilityMeasure`. This section establishes
+`(PMF.uniformFintype Ω).toMeasure`, a genuine `IsProbabilityMeasure`. This section establishes
 `winProb win = (unifMeasure Ω).real {ω | win ω}`, the exact bridge that lets any `μ.real`-tail bound
 transfer to the `winProb` framework the rest of the ML-KEM stack is stated against. -/
 
@@ -264,7 +265,7 @@ transfer to the `winProb` framework the rest of the ML-KEM stack is stated again
 the `winProb` counting model: every point has mass `1/|Ω|`. This is where the finite counting probability
 meets `MeasureTheory`. -/
 noncomputable def unifMeasure (Ω : Type*) [Fintype Ω] [Nonempty Ω] [MeasurableSpace Ω] : Measure Ω :=
-  (PMF.uniformOfFintype Ω).toMeasure
+  (PMF.uniformFintype Ω).toMeasure
 
 instance instIsProbabilityUnif {Ω : Type*} [Fintype Ω] [Nonempty Ω] [MeasurableSpace Ω] :
     IsProbabilityMeasure (unifMeasure Ω) :=
@@ -272,7 +273,7 @@ instance instIsProbabilityUnif {Ω : Type*} [Fintype Ω] [Nonempty Ω] [Measurab
 
 /-- **THE BRIDGE (PROVED).** `winProb win` — the counting fraction — equals `(unifMeasure Ω).real` of the
 favorable set. The counting numerator `|{ω | win ω}|` is `Fintype.card` of the winning subtype
-(`Fintype.card_subtype`), and `toMeasure_uniformOfFintype_apply` gives the uniform measure of any set as
+(`Fintype.card_subtype`), and `toMeasure_uniformFintype_apply` gives the uniform measure of any set as
 `card s / card Ω`; taking `.toReal` matches `winProb` on the nose. This is the transfer seam: a
 `MeasureTheory` tail bound on `{ω | win ω}` becomes a `winProb` bound. -/
 theorem winProb_eq_measureReal {Ω : Type*} [Fintype Ω] [Nonempty Ω] [MeasurableSpace Ω]
@@ -283,7 +284,7 @@ theorem winProb_eq_measureReal {Ω : Type*} [Fintype Ω] [Nonempty Ω] [Measurab
   have happly : (unifMeasure Ω) {ω : Ω | win ω = true}
       = (Fintype.card {ω : Ω // win ω = true} : ℝ≥0∞) / (Fintype.card Ω : ℝ≥0∞) := by
     rw [unifMeasure]
-    exact PMF.toMeasure_uniformOfFintype_apply _ hms
+    exact PMF.toMeasure_uniformFintype_apply _ hms
   rw [Measure.real, happly, ENNReal.toReal_div, ENNReal.toReal_natCast, ENNReal.toReal_natCast]
   unfold winProb
   rw [Fintype.card_subtype]
@@ -450,7 +451,7 @@ noncomputable def rademacherX : Bool → ℝ := fun b => if b then (1 : ℝ) els
 
 theorem rademacher_mean_zero : ∫ b, rademacherX b ∂(unifMeasure Bool) = 0 := by
   rw [unifMeasure, PMF.integral_eq_sum]
-  simp only [rademacherX, Fintype.sum_bool, PMF.uniformOfFintype_apply, Fintype.card_bool]
+  simp only [rademacherX, Fintype.sum_bool, PMF.uniformFintype_apply, Fintype.card_bool]
   norm_num
 
 /-- **(TOOTH — `CoeffIsSubgaussianSum` is satisfiable with POSITIVE variance.)** The Rademacher model
@@ -516,7 +517,7 @@ def cbd2Ez : Fin 768 → CbdΩ → ℤ :=
 a genuine mean-zero computation over the 16-point space `Bool⁴`. -/
 theorem cbd2_mean_zero : ∫ ω, cbd2X ω ∂(unifMeasure CbdΩ) = 0 := by
   rw [unifMeasure, PMF.integral_eq_sum]
-  simp only [PMF.uniformOfFintype_apply, Fintype.card_prod, Fintype.card_bool,
+  simp only [PMF.uniformFintype_apply, Fintype.card_prod, Fintype.card_bool,
     ENNReal.toReal_inv, ENNReal.toReal_natCast, Fintype.sum_prod_type, Fintype.sum_bool, cbd2X,
     smul_eq_mul]
   norm_num
@@ -817,7 +818,7 @@ theorem mgf_cbd2_sum (s : ℝ) :
     mgf cbd2X (unifMeasure CbdΩ) s
       = (1/16) * (Real.exp (s*2) + 4*Real.exp (s*1) + 6 + 4*Real.exp (s*(-1)) + Real.exp (s*(-2))) := by
   rw [mgf, unifMeasure, PMF.integral_eq_sum]
-  simp only [PMF.uniformOfFintype_apply, Fintype.card_prod, Fintype.card_bool,
+  simp only [PMF.uniformFintype_apply, Fintype.card_prod, Fintype.card_bool,
     ENNReal.toReal_inv, ENNReal.toReal_natCast, Fintype.sum_prod_type, Fintype.sum_bool, cbd2X,
     smul_eq_mul]
   norm_num
@@ -873,7 +874,7 @@ theorem mgf_cbd2_as_sum (t : ℝ) :
   rw [mgf, unifMeasure, PMF.integral_eq_sum]
   apply Finset.sum_congr rfl
   intro b _
-  rw [PMF.uniformOfFintype_apply]
+  rw [PMF.uniformFintype_apply]
   simp only [Fintype.card_prod, Fintype.card_bool, smul_eq_mul]
   norm_num
 
@@ -893,7 +894,7 @@ theorem mgf_cbd2prod_factored (s : ℝ) :
   rw [← hcbd, mgf_cbd2_as_sum, Finset.mul_sum]
   apply Finset.sum_congr rfl
   intro b _
-  rw [PMF.uniformOfFintype_apply]
+  rw [PMF.uniformFintype_apply]
   have hcard : (Fintype.card (CbdΩ × CbdΩ) : ℝ≥0∞) = 256 := by
     simp [Fintype.card_prod, Fintype.card_bool]
   have harg : s * cbd2ProdX (a, b) = s * cbd2X a * cbd2X b := by simp only [cbd2ProdX]; ring
@@ -1176,12 +1177,12 @@ theorem unifMeasure_pi_eq :
   rw [Measure.pi_singleton]
   have hL : unifMeasure mlkemΩ {f} = (Fintype.card mlkemΩ : ℝ≥0∞)⁻¹ := by
     rw [unifMeasure, PMF.toMeasure_apply_singleton _ _ (measurableSet_singleton f),
-      PMF.uniformOfFintype_apply]
+      PMF.uniformFintype_apply]
   have hR : ∀ i : Fin 2306, unifMeasure (CbdΩ × CbdΩ) {f i}
       = (Fintype.card (CbdΩ × CbdΩ) : ℝ≥0∞)⁻¹ := by
     intro i
     rw [unifMeasure, PMF.toMeasure_apply_singleton _ _ (measurableSet_singleton _),
-      PMF.uniformOfFintype_apply]
+      PMF.uniformFintype_apply]
   rw [hL]
   simp_rw [hR]
   rw [Finset.prod_const, Finset.card_univ, Fintype.card_fun, Nat.cast_pow, ENNReal.inv_pow]
@@ -1211,7 +1212,7 @@ theorem mgf_cbd2_fst (s : ℝ) :
       = mgf cbd2X (unifMeasure CbdΩ) s := by
   rw [mgf_cbd2_as_sum, mgf, unifMeasure, PMF.integral_eq_sum, Fintype.sum_prod_type]
   refine Finset.sum_congr rfl (fun a _ => ?_)
-  simp only [PMF.uniformOfFintype_apply, smul_eq_mul, ENNReal.toReal_inv, ENNReal.toReal_natCast]
+  simp only [PMF.uniformFintype_apply, smul_eq_mul, ENNReal.toReal_inv, ENNReal.toReal_natCast]
   rw [Finset.sum_const, Finset.card_univ]
   simp only [Fintype.card_prod, Fintype.card_bool, nsmul_eq_mul]
   ring
@@ -1226,7 +1227,7 @@ theorem mgf_dvX_closed (s : ℝ) :
     mgf dvX (unifMeasure (CbdΩ × CbdΩ)) s
       = (Real.exp (s * 104) + Real.exp (s * (-104))) / 2 := by
   rw [mgf, unifMeasure, PMF.integral_eq_sum]
-  simp only [PMF.uniformOfFintype_apply, Fintype.card_prod, Fintype.card_bool,
+  simp only [PMF.uniformFintype_apply, Fintype.card_prod, Fintype.card_bool,
     ENNReal.toReal_inv, ENNReal.toReal_natCast, Fintype.sum_prod_type, Fintype.sum_bool, dvX,
     smul_eq_mul]
   norm_num
@@ -1365,7 +1366,7 @@ theorem prod_mlkemBoundOf : (∏ i, mlkemBoundOf i) = mlkemExactMgfBound := by
 bounded by `mlkem_termbound`, the product evaluated by `prod_mlkemBoundOf`. -/
 theorem mlkem_prod_mgf_le :
     (∏ i, mgf (mlkemT i) (unifMeasure mlkemΩ) (3/10)) ≤ mlkemExactMgfBound := by
-  refine le_trans (Finset.prod_le_prod (fun i _ => mgf_nonneg) (fun i _ => mlkem_termbound i)) ?_
+  refine le_trans (Finset.prod_le_prod₀ (fun i _ => mgf_nonneg) (fun i _ => mlkem_termbound i)) ?_
   rw [prod_mlkemBoundOf]
 
 /-- **`CoeffIsExactMgfSum` PROVED for the real `e_total` (the deliverable).** The full `2306`-term decomposition,
@@ -1470,7 +1471,7 @@ theorem mgf_cbd2scaled_factored {G : Type*} [Fintype G] [Nonempty G] [Measurable
   rw [← hcbd, mgf_cbd2_as_sum, Finset.mul_sum]
   apply Finset.sum_congr rfl
   intro a _
-  rw [PMF.uniformOfFintype_apply]
+  rw [PMF.uniformFintype_apply]
   have hcard : ((Fintype.card (CbdΩ × G) : ℝ≥0∞)⁻¹).toReal
       = (Fintype.card G : ℝ)⁻¹ * (1/16) := by
     rw [Fintype.card_prod]
@@ -1623,7 +1624,7 @@ theorem gprod (Vz : CbdΩ → ℤ)
     (hbnd : mgf (fun p : CbdΩ × CbdΩ => cbd2X p.1 * (Vz p.2 : ℝ)) (unifMeasure (CbdΩ × CbdΩ)) (3/10)
       ≤ mlkemProdMgfBound) :
     (∏ i, mgf (gT Vz i) (unifMeasure mlkemΩ) (3/10)) ≤ mlkemExactMgfBound := by
-  refine le_trans (Finset.prod_le_prod (fun i _ => mgf_nonneg) (fun i _ => gtermbound Vz hbnd i)) ?_
+  refine le_trans (Finset.prod_le_prod₀ (fun i _ => mgf_nonneg) (fun i _ => gtermbound Vz hbnd i)) ?_
   rw [prod_mlkemBoundOf]
 
 /-- **`CoeffIsExactMgfSum` FOR THE BYTE-FAITHFUL GROUPED MODEL.** Independence, per-term exact MGFs, symmetry,
@@ -1954,7 +1955,7 @@ theorem bf_termbound (i : Fin 2306) :
 /-- **THE PRODUCT-OF-MGFS MEETS THE CORRECTED δ-ENVELOPE (PROVED).** `∏ mgf(bfT i)(3/10) ≤ mlkemGroupedBound`. -/
 theorem bf_prod_mgf_le :
     (∏ i : Fin 2306, mgf (bfT i) (unifMeasure mlkemΩ) (3/10)) ≤ mlkemGroupedBound := by
-  refine le_trans (Finset.prod_le_prod (fun i _ => mgf_nonneg) (fun i _ => bf_termbound i)) ?_
+  refine le_trans (Finset.prod_le_prod₀ (fun i _ => mgf_nonneg) (fun i _ => bf_termbound i)) ?_
   rw [prod_bfBoundOf]
 
 /-- **THE PER-COEFFICIENT TAIL for the byte-faithful model (PROVED): `≤ 2⁻¹⁵¹`.** The exact Chernoff engine at
@@ -2387,7 +2388,7 @@ theorem mgf_eq_partition_div {Ω : Type*} [Fintype Ω] [Nonempty Ω] [Measurable
   rw [mgf, unifMeasure, PMF.integral_eq_sum, partition, Finset.sum_div]
   apply Finset.sum_congr rfl
   intro ω _
-  rw [PMF.uniformOfFintype_apply, smul_eq_mul, ENNReal.toReal_inv, ENNReal.toReal_natCast,
+  rw [PMF.uniformFintype_apply, smul_eq_mul, ENNReal.toReal_inv, ENNReal.toReal_natCast,
       div_eq_inv_mul]
 
 /-- **BRIDGE: the `winProb` one-sided tail IS the ForMathlib tail fraction (PROVED).** -/
@@ -2801,7 +2802,7 @@ theorem mgf_dvTrue_sum (t : ℝ) :
   rw [mgf, unifMeasure, PMF.integral_eq_sum]
   apply Finset.sum_congr rfl
   intro x _
-  rw [PMF.uniformOfFintype_apply]
+  rw [PMF.uniformFintype_apply]
   simp only [Fintype.card_fin, smul_eq_mul, dvTrueX, ENNReal.toReal_inv, ENNReal.toReal_natCast]
   norm_num
 
@@ -2935,9 +2936,9 @@ theorem winProb_abs_exactMgf_bound_le {Ω : Type*} [Fintype Ω] [Nonempty Ω] [M
       have := mgf_neg (X := Z) (μ := μ) (t := s); simpa [Pi.neg_def] using this
     rw [h1, hZsum, hindep.mgf_sum hmeas Finset.univ]
   have hprodpos : (∏ i, mgf (T i) μ s) ≤ ∏ i, B i :=
-    Finset.prod_le_prod (fun i _ => mgf_nonneg) (fun i _ => hpos i)
+    Finset.prod_le_prod₀ (fun i _ => mgf_nonneg) (fun i _ => hpos i)
   have hprodneg : (∏ i, mgf (T i) μ (-s)) ≤ ∏ i, B i :=
-    Finset.prod_le_prod (fun i _ => mgf_nonneg) (fun i _ => hneg i)
+    Finset.prod_le_prod₀ (fun i _ => mgf_nonneg) (fun i _ => hneg i)
   have hexp : (0:ℝ) ≤ Real.exp (-s * ε) := le_of_lt (Real.exp_pos _)
   have hintR : Integrable (fun ω => Real.exp (s * Z ω)) μ := Integrable.of_finite
   have hR : μ.real {ω | ε ≤ Z ω} ≤ Real.exp (-s * ε) * ∏ i, B i := by
@@ -2979,11 +2980,11 @@ theorem runifMeasure_pi_eq :
   rw [Measure.pi_singleton]
   have hL : unifMeasure rΩ {f} = (Fintype.card rΩ : ℝ≥0∞)⁻¹ := by
     rw [unifMeasure, PMF.toMeasure_apply_singleton _ _ (measurableSet_singleton f),
-      PMF.uniformOfFintype_apply]
+      PMF.uniformFintype_apply]
   have hR : ∀ i : Fin 2306, unifMeasure RC {f i} = (Fintype.card RC : ℝ≥0∞)⁻¹ := by
     intro i
     rw [unifMeasure, PMF.toMeasure_apply_singleton _ _ (measurableSet_singleton _),
-      PMF.uniformOfFintype_apply]
+      PMF.uniformFintype_apply]
   rw [hL]; simp_rw [hR]
   rw [Finset.prod_const, Finset.card_univ, Fintype.card_fun, Nat.cast_pow, ENNReal.inv_pow]
 
@@ -3005,11 +3006,11 @@ theorem mgf_fst_RC (f : (CbdΩ × CbdΩ) → ℝ) (s : ℝ) :
     Fintype.sum_prod_type]
   apply Finset.sum_congr rfl
   intro a _
-  have hin : ∀ y : Fin 3329, ((PMF.uniformOfFintype RC) (a, y)).toReal • Real.exp (s * f (a, y).1)
+  have hin : ∀ y : Fin 3329, ((PMF.uniformFintype RC) (a, y)).toReal • Real.exp (s * f (a, y).1)
        = ((Fintype.card RC : ℝ≥0∞)⁻¹).toReal * Real.exp (s * f a) := by
-    intro y; rw [PMF.uniformOfFintype_apply]; simp [smul_eq_mul]
+    intro y; rw [PMF.uniformFintype_apply]; simp [smul_eq_mul]
   rw [Finset.sum_congr rfl (fun y _ => hin y), Finset.sum_const, Finset.card_univ,
-    PMF.uniformOfFintype_apply]
+    PMF.uniformFintype_apply]
   simp only [Fintype.card_prod, Fintype.card_fin, Fintype.card_bool, ENNReal.toReal_inv,
     ENNReal.toReal_natCast, smul_eq_mul, nsmul_eq_mul]
   push_cast; ring
@@ -3020,11 +3021,11 @@ theorem mgf_snd_RC (g : Fin 3329 → ℝ) (s : ℝ) :
     Fintype.sum_prod_type, Finset.sum_comm]
   apply Finset.sum_congr rfl
   intro b _
-  have hin : ∀ a : CbdΩ × CbdΩ, ((PMF.uniformOfFintype RC) (a, b)).toReal • Real.exp (s * g (a, b).2)
+  have hin : ∀ a : CbdΩ × CbdΩ, ((PMF.uniformFintype RC) (a, b)).toReal • Real.exp (s * g (a, b).2)
        = ((Fintype.card RC : ℝ≥0∞)⁻¹).toReal * Real.exp (s * g b) := by
-    intro a; rw [PMF.uniformOfFintype_apply]; simp [smul_eq_mul]
+    intro a; rw [PMF.uniformFintype_apply]; simp [smul_eq_mul]
   rw [Finset.sum_congr rfl (fun a _ => hin a), Finset.sum_const, Finset.card_univ,
-    PMF.uniformOfFintype_apply]
+    PMF.uniformFintype_apply]
   simp only [Fintype.card_prod, Fintype.card_fin, Fintype.card_bool, ENNReal.toReal_inv,
     ENNReal.toReal_natCast, smul_eq_mul, nsmul_eq_mul]
   push_cast; ring

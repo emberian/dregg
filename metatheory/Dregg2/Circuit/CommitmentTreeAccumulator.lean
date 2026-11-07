@@ -144,10 +144,10 @@ private theorem window_child_subset (index m p i : Nat) (hm : m < 4)
     index*(4*p) ≤ i ∧ i < (index+1)*(4*p) := by
   refine ⟨?_, ?_⟩
   · calc index*(4*p) = (4*index)*p := by ring
-      _ ≤ (4*index+m)*p := by gcongr; omega
+      _ ≤ (4*index+m)*p := Nat.mul_le_mul_right _ (by omega)
       _ ≤ i := hlo
   · calc i < (4*index+m+1)*p := hhi
-      _ ≤ (4*index+4)*p := by gcongr; omega
+      _ ≤ (4*index+4)*p := Nat.mul_le_mul_right _ (by omega)
       _ = (index+1)*(4*p) := by ring
 
 /-! ## §3 — the empty-subtree shortcut is SOUND (faithfulness to the deployed optimization). -/

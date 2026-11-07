@@ -109,7 +109,7 @@ deduplication laws need. -/
 theorem reEq_refl_of_rigid {R : PredRE} (h : rigidLeaf R = true) : reEq R R = true := by
   cases R with
   | ε => rfl
-  | sym p => simpa [reEq] using h
+  | sym p => simpa [reEq, rigidLeaf] using h
   | _ => simp [rigidLeaf] at h
 
 /-! ## The order-preserving union monoid. -/
@@ -379,6 +379,7 @@ theorem sim_key {R S : PredRE} (h : Sim R S) : key R = key S := by
   induction h with
   | @assoc R₁ R₂ R₃ =>
     simp only [key, altList_alt, List.append_assoc]
+    rfl
   | @dedup R₁ R₂ =>
     rw [key_alt, key_alt, key_alt]
     cases hR : key R₁ with
@@ -486,7 +487,7 @@ theorem reEq_refl_of_rigidRE : ∀ {R : PredRE}, rigidRE R = true → reEq R R =
   intro R
   induction R with
   | ε => intro _; rfl
-  | sym p => intro h; simpa [reEq] using h
+  | sym p => intro h; simpa [reEq, rigidRE] using h
   | alt a b iha ihb =>
     intro h; simp only [rigidRE, Bool.and_eq_true] at h; simp [reEq, iha h.1, ihb h.2]
   | inter a b iha ihb =>
@@ -759,6 +760,7 @@ theorem sim_nkey {R S : PredRE} (h : Sim R S) : nkey R = nkey S := by
     -- `nlist` does NOT `ddf` at `alt` nodes, so associativity is `List.append_assoc` and no
     -- `mergeR`-associativity is ever needed.
     simp only [nkey, rigidRE, nlist_alt, List.append_assoc, Bool.and_assoc]
+    rfl
   | @dedup R₁ R₂ =>
     by_cases h1 : rigidRE R₁ = true
     · by_cases h2 : rigidRE R₂ = true

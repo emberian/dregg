@@ -814,8 +814,9 @@ private theorem inst_refines (sh : InstShape) (d : InstData) (B : ℕ) (a : Assi
             = recomposedQuotient frArith (openingOf sh d)) := by
     simp [finalAsserts, Wire.eval, h2, h3, h4, hsqtop, hhorner, hdot]
   rw [hfinal]
-  simp only [singleAirOk, openingOf, Bool.and_eq_true, decide_eq_true_eq,
-    frArith_add, frArith_mul, frArith_pow, frArith_one]
+  -- strip the `decide`s before rewriting their arguments (the instances keep the unrewritten type)
+  simp only [singleAirOk, Bool.and_eq_true, decide_eq_true_eq]
+  simp only [openingOf, frArith_add, frArith_mul, frArith_pow, frArith_one]
   constructor
   · rintro ⟨hp, hv, hi, hq⟩
     have hpe : d.degreeBits = sh.edb := cast_inj_lt hdb hedb hp

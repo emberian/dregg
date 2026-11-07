@@ -137,7 +137,7 @@ theorem assign_guardedSafe : ∀ (segs : List GSeg) (spans : List (List Value)),
       rcases List.mem_cons.mp hmem with heq | hin
       · simp only [GSeg.hole.injEq] at heq
         obtain ⟨rfl, rfl⟩ := heq
-        simpa only [assign, if_pos rfl] using hguard
+        simpa only [assign, if_pos rfl, if_true] using hguard
       · have hne : id ≠ id0 := fun hEq => hnd.1 (hEq ▸ mem_holeIds hin)
         simp only [assign, if_neg hne]
         exact assign_guardedSafe rest spans hrest hnd.2 id g hin

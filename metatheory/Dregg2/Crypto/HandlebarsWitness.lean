@@ -87,7 +87,7 @@ theorem lit_replay {T : HandlebarsTemplate} (text : List Tok)
     (hcont : Replay (handlebarsToGrammar T) rs2 in2 stk2) :
     Replay (handlebarsToGrammar T) rs2 (text ++ in2) (text.map Symbol.terminal ++ stk2) := by
   induction text with
-  | nil => simpa using hcont
+  | nil => exact hcont
   | cons t ts ih =>
       simp only [List.map_cons, List.cons_append]
       exact Replay.term t ih

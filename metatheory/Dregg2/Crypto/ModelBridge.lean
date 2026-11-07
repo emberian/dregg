@@ -56,7 +56,7 @@ counting probability — establishing `TailIndependent`'s measure content needs 
 this model does not carry." §C BUILDS that measure and proves the identification.
 
   * **`roMeasure` (the RO measure, CLOSED).** The random oracle `ℕ → Rq` carries the infinite PRODUCT of the
-    uniform measure on the finite `Rq` — `MeasureTheory.Measure.infinitePi (fun _ => uniformOfFintype Rq)` — a
+    uniform measure on the finite `Rq` — `MeasureTheory.Measure.infinitePi (fun _ => uniformFintype Rq)` — a
     genuine `IsProbabilityMeasure` on `ℕ → Rq` (`instIsProbabilityMeasure_roMeasure`). The abstract Forger's
     advantage is now a real probability over `ℕ → Rq`, not a finite counting stand-in.
 
@@ -87,6 +87,7 @@ import Dregg2.Tactics
 import Mathlib.Tactic
 import Mathlib.Probability.ProductMeasure
 import Mathlib.Probability.Distributions.Uniform
+import Dregg2.ForMathlib.UniformPMF
 
 namespace Dregg2.Crypto.ModelBridge
 
@@ -552,28 +553,28 @@ variable {Msg : Type*}
 /-! ### The RO measure and finite uniform-product primitives. -/
 
 /-- **THE RANDOM-ORACLE MEASURE.** The random oracle `ℕ → Rq` carries the infinite PRODUCT of the uniform
-measure on the finite `Rq` (`PMF.uniformOfFintype Rq |>.toMeasure`, a genuine probability measure). This is
+measure on the finite `Rq` (`PMF.uniformFintype Rq |>.toMeasure`, a genuine probability measure). This is
 `MeasureTheory.Measure.infinitePi`, whose `IsProbabilityMeasure` instance makes the abstract Forger's advantage
 a genuine probability over `ℕ → Rq` — the object the prior lane could not construct. -/
 noncomputable def roMeasure (Rq : Type*) [Fintype Rq] [Nonempty Rq] [MeasurableSpace Rq] :
     Measure (ℕ → Rq) :=
-  Measure.infinitePi (fun _ : ℕ => (PMF.uniformOfFintype Rq).toMeasure)
+  Measure.infinitePi (fun _ : ℕ => (PMF.uniformFintype Rq).toMeasure)
 
 instance instIsProbabilityMeasure_roMeasure : IsProbabilityMeasure (roMeasure Rq) := by
   unfold roMeasure; infer_instance
 
 /-- The finite product of uniform measures assigns to a SINGLETON the reciprocal of the product's cardinality
-(`(|Rq|⁻¹)^|κ|`). Each factor is `PMF.uniformOfFintype`, whose singleton mass is `|Rq|⁻¹`
-(`toMeasure_apply_singleton` + `uniformOfFintype_apply`); the product over `κ` multiplies them. -/
+(`(|Rq|⁻¹)^|κ|`). Each factor is `PMF.uniformFintype`, whose singleton mass is `|Rq|⁻¹`
+(`toMeasure_apply_singleton` + `uniformFintype_apply`); the product over `κ` multiplies them. -/
 theorem pi_uniform_singleton (Rq : Type*) [Fintype Rq] [Nonempty Rq] [MeasurableSpace Rq]
     [MeasurableSingletonClass Rq] {κ : Type*} [Fintype κ] (x : κ → Rq) :
-    Measure.pi (fun _ : κ => (PMF.uniformOfFintype Rq).toMeasure) {x}
+    Measure.pi (fun _ : κ => (PMF.uniformFintype Rq).toMeasure) {x}
       = (Fintype.card Rq : ℝ≥0∞)⁻¹ ^ (Fintype.card κ) := by
   rw [← Set.univ_pi_singleton x, Measure.pi_pi]
-  have hfac : ∀ i : κ, (PMF.uniformOfFintype Rq).toMeasure {x i} = (Fintype.card Rq : ℝ≥0∞)⁻¹ := by
+  have hfac : ∀ i : κ, (PMF.uniformFintype Rq).toMeasure {x i} = (Fintype.card Rq : ℝ≥0∞)⁻¹ := by
     intro i
-    rw [(PMF.uniformOfFintype Rq).toMeasure_apply_singleton (x i) (measurableSet_singleton _),
-        PMF.uniformOfFintype_apply]
+    rw [(PMF.uniformFintype Rq).toMeasure_apply_singleton (x i) (measurableSet_singleton _),
+        PMF.uniformFintype_apply]
   simp only [hfac]
   rw [Finset.prod_const, Finset.card_univ]
 
@@ -582,7 +583,7 @@ probability. `↑S` is the disjoint union of its singletons; `measure_biUnion_fi
 (`pi_uniform_singleton`). -/
 theorem pi_uniform_finset (Rq : Type*) [Fintype Rq] [Nonempty Rq] [MeasurableSpace Rq]
     [MeasurableSingletonClass Rq] {κ : Type*} [Fintype κ] (S : Finset (κ → Rq)) :
-    Measure.pi (fun _ : κ => (PMF.uniformOfFintype Rq).toMeasure) (↑S : Set (κ → Rq))
+    Measure.pi (fun _ : κ => (PMF.uniformFintype Rq).toMeasure) (↑S : Set (κ → Rq))
       = (S.card : ℝ≥0∞) * (Fintype.card Rq : ℝ≥0∞)⁻¹ ^ (Fintype.card κ) := by
   classical
   have hcov : (↑S : Set (κ → Rq)) = ⋃ x ∈ S, ({x} : Set (κ → Rq)) := by
@@ -710,10 +711,10 @@ theorem roMeasure_accept (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq 
       = (accBase A t β F).card * (Fintype.card Rq : ℝ≥0∞)⁻¹ ^ (F.challengeIdx + 1) := by
   rw [acceptEvent_eq_cylinder A t β F h]
   have hcyl : roMeasure Rq (cylinder (Finset.Iic F.challengeIdx) (↑(accBase A t β F)))
-      = Measure.pi (fun _ : ↥(Finset.Iic F.challengeIdx) => (PMF.uniformOfFintype Rq).toMeasure)
+      = Measure.pi (fun _ : ↥(Finset.Iic F.challengeIdx) => (PMF.uniformFintype Rq).toMeasure)
           (↑(accBase A t β F)) := by
     rw [roMeasure]
-    exact Measure.infinitePi_cylinder (μ := fun _ : ℕ => (PMF.uniformOfFintype Rq).toMeasure)
+    exact Measure.infinitePi_cylinder (μ := fun _ : ℕ => (PMF.uniformFintype Rq).toMeasure)
       (mS := Finset.measurableSet _)
   rw [hcyl, pi_uniform_finset, Fintype.card_coe, Nat.card_Iic]
 
@@ -743,8 +744,6 @@ theorem accBase_card (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N 
   rw [← Finset.card_filter]
   unfold hits acceptSet
   congr 1
-  ext c
-  simp only [Finset.mem_filter, Finset.mem_univ, true_and, abstractShadow, decide_eq_true_eq]
 
 /-- **THE BRIDGE — the finite shadow's advantage IS the RO probability of acceptance.** Under
 `TailIndependent`, the finite shadow's `advantage` (a `ℚ` counting probability over `(Fin challengeIdx → Rq) ×
