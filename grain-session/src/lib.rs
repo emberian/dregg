@@ -491,9 +491,12 @@ pub struct Bundle {
     /// The EffectVM model balance the folded head carries (the first turn's pre-balance; the
     /// per-slot setField members freeze the balance while each executor turn debits its fee).
     pub model_balance: i64,
-    /// The executor's receipt-hash log for the grain cell (hex), whose prefix root the last cell
-    /// binds at `HISTORY_ROOT_SLOT`.
-    pub executor_receipts: Vec<String>,
+    /// The executor's signed receipts for the grain's turns, in commit order. Receipt `i` names
+    /// manifest entry `i`; their hashes are the log whose prefix root the last cell binds at
+    /// `HISTORY_ROOT_SLOT`.
+    pub executor_receipts: Vec<dregg_turn::TurnReceipt>,
+    /// The executor key those receipts are signed under (the host's, like the R0 signer).
+    pub executor_pubkey: [u8; 32],
 }
 
 impl Bundle {
@@ -596,6 +599,8 @@ pub enum Refusal {
     LinksNotManifest,
     /// The folded head does not open to the published last cell under the manifest's turn hashes.
     HeadOpening(&'static str),
+    /// The executor receipts are missing, unsigned, forged, unchained or name other turns.
+    ExecutorReceipts(String),
 }
 
 impl std::fmt::Display for Refusal {
@@ -643,6 +648,7 @@ impl std::fmt::Display for Refusal {
                 "REFUSED (R2): the receipts' turn links are not the manifest in order, once each"
             ),
             Refusal::HeadOpening(w) => write!(f, "REFUSED (R3 head opening): {w}"),
+            Refusal::ExecutorReceipts(w) => write!(f, "REFUSED (executor receipts): {w}"),
         }
     }
 }
@@ -800,12 +806,23 @@ pub fn verify_bundle(
             "the last cell's turn counter is not the number of windows",
         ));
     }
-    let exec_log = b
-        .executor_receipts
-        .iter()
-        .map(|h| parse32(h))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(Refusal::Malformed)?;
+    // The executor receipts: one per window, each naming its manifest turn, signed under the
+    // executor key and chained (every receipt, the LAST one included, which the history root
+    // cannot cover: the state committed by turn N binds receipts 0..N-1).
+    let rs = &b.executor_receipts;
+    if rs.len() != manifest.len()
+        || rs
+            .iter()
+            .zip(manifest.iter())
+            .any(|(r, m)| &r.turn_hash != m)
+    {
+        return Err(Refusal::ExecutorReceipts(
+            "they do not name the manifest's turns in order".into(),
+        ));
+    }
+    dregg_turn::verify_receipt_chain_strict(rs, &[b.executor_pubkey])
+        .map_err(|e| Refusal::ExecutorReceipts(e.to_string()))?;
+    let exec_log: Vec<[u8; 32]> = rs.iter().map(|r| r.receipt_hash()).collect();
     if grain_turn::verify_grain_history(&b.last_cell, &exec_log)
         != grain_turn::GrainHistoryVerdict::Bound
     {

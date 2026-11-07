@@ -341,6 +341,17 @@ pub fn finalize_session(records: &[GrainTurnRecord]) -> Result<Vec<FinalizedTurn
 ///
 /// Every leg uses ONE receipt context, the ordered turn hashes of the whole session, so the
 /// wide anchors' `iroot` is the same across every turn boundary.
+///
+/// ## What the aggregate attests, and what it does not
+///
+/// A continuous EffectVM MODEL execution of the session's setField writes, from turn 0's real
+/// pre-cell to the model head. It does NOT attest that the executor committed those transitions:
+/// the per-turn fee debit and the per-turn nonce tick are absent from the model, the records'
+/// adjacency is not checked here, and the receipt context's root enters the anchors through
+/// `iroot`, which the rotation witness carries as ONE felt (`rotation_witness::iroot`, lane 0 of
+/// the 8-lane receipt root), so the turn-hash list is bound at about 31 bits, not 124. Written
+/// slot values are published full-width (the deployed setField members free the written slot's
+/// completion lanes), so R3 binds the bytes chosen, not their BLAKE3 provenance.
 /// The faithful fix is the single-nonce-tick multi-field grain descriptor named in
 /// [`finalize_session`] (a circuit + VK change, ember-gated); this function does not claim it.
 pub fn finalize_session_threaded(

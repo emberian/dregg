@@ -96,5 +96,15 @@ pub fn cases(b: &Bundle) -> Vec<(&'static str, Bundle)> {
     }
     t.aggregate = hex::encode(agg);
     out.push(("R3: aggregate byte flipped", t));
+    let mut t = b.clone();
+    if let Some(r) = t.executor_receipts.last_mut() {
+        r.post_state_hash[0] ^= 1;
+    }
+    out.push(("executor: last receipt forged", t));
+    let mut t = b.clone();
+    if let Some(r) = t.executor_receipts.last_mut() {
+        r.executor_signature = None;
+    }
+    out.push(("executor: last receipt unsigned", t));
     out
 }

@@ -341,18 +341,47 @@ pub struct ToolGatewayMinter {
     /// `i`. The MMR values whose root ([`grain_history_root`]) the next turn
     /// binds at [`HISTORY_ROOT_SLOT`] (the per-grain CommitBindsMMR weld).
     receipt_log: Vec<[u8; 32]>,
+    /// The executor's full receipts, in commit order (the preimages of `receipt_log`).
+    turn_receipts: Vec<dregg_turn::TurnReceipt>,
 }
 
 impl ToolGatewayMinter {
+    /// The executor public key the grain turns' receipts are signed under, if a seed is
+    /// installed ([`open_signed`](Self::open_signed)).
+    pub fn executor_pubkey(&self) -> Option<[u8; 32]> {
+        self.runtime.executor_pubkey()
+    }
+
+    /// The executor's full receipts for this grain, in commit order: receipt `i` hashes to
+    /// [`receipt_log`](Self::receipt_log)`[i]` and names [`committed_turns`](Self::committed_turns)`[i]`.
+    pub fn turn_receipts(&self) -> &[dregg_turn::TurnReceipt] {
+        &self.turn_receipts
+    }
+
     /// Open a grain turn-cell: a fresh runtime + a [`ToolGateway`] whose cap-gated
     /// worker cell IS the grain turn-cell. The rate ceiling is `budget`, so the
     /// executor's own `calls_made` `FieldLte` caveat bounds the number of committed
     /// turns host-side (the meter as a kernel caveat). Fails only if the executor
     /// refuses to admit the worker.
     pub fn open(domain: &str, budget: i64) -> Result<ToolGatewayMinter, SdkError> {
+        Self::open_signed(domain, budget, None)
+    }
+
+    /// [`open`](Self::open) with a HOST executor signing seed installed on the runtime BEFORE the
+    /// gateway is admitted, so every grain turn's executor receipt carries an Ed25519
+    /// `executor_signature` under [`executor_pubkey`](Self::executor_pubkey). (Installing the seed
+    /// after admission does not reach the gateway's turns: measured, the receipts stayed unsigned.)
+    pub fn open_signed(
+        domain: &str,
+        budget: i64,
+        executor_seed: Option<[u8; 32]>,
+    ) -> Result<ToolGatewayMinter, SdkError> {
         let mut cclerk = AgentCipherclerk::new();
         let root = cclerk.mint_token(&[0x6au8; 32], domain);
-        let runtime = AgentRuntime::new(Arc::new(RwLock::new(cclerk)), domain);
+        let mut runtime = AgentRuntime::new(Arc::new(RwLock::new(cclerk)), domain);
+        if let Some(seed) = executor_seed {
+            runtime = runtime.with_executor_signing_key(seed);
+        }
         let grant = ToolGrant {
             tool_id: GRAIN_TOOL_ID,
             rate_limit: budget.max(0),
@@ -368,6 +397,7 @@ impl ToolGatewayMinter {
             pending_attestation: None,
             records: Vec::new(),
             receipt_log: Vec::new(),
+            turn_receipts: Vec::new(),
         })
     }
 
@@ -399,6 +429,7 @@ impl ToolGatewayMinter {
             pending_attestation: None,
             records: Vec::new(),
             receipt_log: Vec::new(),
+            turn_receipts: Vec::new(),
         })
     }
 
@@ -574,6 +605,7 @@ impl GrainTurnMinter for ToolGatewayMinter {
         // Advance the history MMR: this committed turn's receipt digest becomes
         // leaf N of the log the NEXT turn's HISTORY_ROOT_SLOT write binds.
         self.receipt_log.push(receipt.receipt.receipt_hash());
+        self.turn_receipts.push(receipt.receipt.clone());
 
         // R3-ADAPTER CAPTURE (post-state). Record the committed turn only if both
         // snapshots exist (they always do after admission) — a missing snapshot is not
@@ -587,6 +619,38 @@ impl GrainTurnMinter for ToolGatewayMinter {
             });
         }
         Ok(turn_hash)
+    }
+}
+
+#[cfg(test)]
+mod signed_receipt_tests {
+    use super::*;
+
+    /// A signed minter's executor receipts carry signatures that verify, strictly, under its key;
+    /// each names its committed turn; an unsigned minter's do not pass the strict check.
+    #[test]
+    fn a_signed_minter_signs_every_receipt_and_an_unsigned_one_does_not() {
+        let mut m = ToolGatewayMinter::open_signed("grain-signed", 8, Some([0x33; 32])).unwrap();
+        for t in 0..3 {
+            m.mint_turn(&format!("a{t}"), 1, t + 1, [t as u8; 32])
+                .unwrap();
+        }
+        let pk = m.executor_pubkey().expect("signed");
+        assert!(
+            m.turn_receipts()
+                .iter()
+                .zip(m.committed_turns())
+                .all(|(r, h)| &r.turn_hash == h)
+        );
+        dregg_turn::verify_receipt_chain_strict(m.turn_receipts(), &[pk]).expect("strict");
+        let mut forged = m.turn_receipts().to_vec();
+        forged.last_mut().unwrap().post_state_hash[0] ^= 1;
+        assert!(dregg_turn::verify_receipt_chain_strict(&forged, &[pk]).is_err());
+
+        let mut u = ToolGatewayMinter::open("grain-unsigned", 8).unwrap();
+        u.mint_turn("a", 1, 1, [0; 32]).unwrap();
+        assert!(u.executor_pubkey().is_none());
+        assert!(dregg_turn::verify_receipt_chain_strict(u.turn_receipts(), &[pk]).is_err());
     }
 }
 

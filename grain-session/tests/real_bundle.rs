@@ -54,6 +54,10 @@ fn the_real_bundle_is_accepted_and_every_tamper_class_is_refused() {
             ) => true,
             ("reorder: two receipts" | "rewrite: a receipt label", Refusal::Ladder(_)) => true,
             ("R3: aggregate byte flipped", Refusal::R3(_) | Refusal::Malformed(_)) => true,
+            (
+                "executor: last receipt forged" | "executor: last receipt unsigned",
+                Refusal::ExecutorReceipts(_),
+            ) => true,
             _ => false,
         };
         assert!(
