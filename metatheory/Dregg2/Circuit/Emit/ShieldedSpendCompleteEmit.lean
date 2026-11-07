@@ -561,7 +561,8 @@ theorem leaf_sponge_executes (perm16 : List ℤ → List ℤ)
     (by
       have hall : leafPlan.all (fun s => s.input.length == 16) = true := by decide
       have hs := List.all_eq_true.mp hall step hstep
-      simpa using of_decide_eq_true hs)
+      have h16 : step.input.length = 16 := by simpa using of_decide_eq_true hs
+      exact h16)
     hc
 
 /-- **The node sponge EXECUTES** — the same statement for the membership core's 10 node sites
@@ -579,7 +580,8 @@ theorem node_sponge_executes (perm16 : List ℤ → List ℤ)
     (by
       have hall : nodePlan.all (fun s => s.input.length == 16) = true := by decide
       have hs := List.all_eq_true.mp hall step hstep
-      simpa using of_decide_eq_true hs)
+      have h16 : step.input.length = 16 := by simpa using of_decide_eq_true hs
+      exact h16)
     hc
 
 /-- **The fold's opened leaf IS the leaf-sponge digest**: row-0 `current[lane]` ≡ the leaf digest
@@ -965,7 +967,9 @@ theorem wrong_leaf_refused (tf : TraceFamily) :
     (by
       show ¬ (wrongLeafRow (MCUR + 0) ≡ wrongLeafRow (leafDigestCols.getD 0 0)
         [ZMOD 2013265921])
-      simpa [wrongLeafRow] using one_ne_zero_mod_p')
+      rw [show wrongLeafRow (MCUR + 0) = 1 from if_pos rfl,
+        show wrongLeafRow (leafDigestCols.getD 0 0) = 0 from if_neg (by decide)]
+      exact one_ne_zero_mod_p')
 
 /-- **REFUSED: the foreign note** — a claimed commitment the opened leaf does not carry. -/
 theorem foreign_note_refused (tf : TraceFamily) :
@@ -975,7 +979,10 @@ theorem foreign_note_refused (tf : TraceFamily) :
     (by
       show ¬ (foreignNoteRow cCM ≡ foreignNoteRow cADDR0 + 65536 * foreignNoteRow cADDR1
         [ZMOD 2013265921])
-      simpa [foreignNoteRow] using one_ne_zero_mod_p')
+      rw [show foreignNoteRow cCM = 1 from if_pos rfl,
+        show foreignNoteRow cADDR0 = 0 from if_neg (by decide),
+        show foreignNoteRow cADDR1 = 0 from if_neg (by decide)]
+      simpa using one_ne_zero_mod_p')
 
 end Teeth
 
@@ -1011,7 +1018,7 @@ theorem czState16_sound : ChipTableSoundState16 pz16 czState16 := by
   intro r hr
   simp only [czState16, List.mem_map] at hr
   obtain ⟨step, hstep, rfl⟩ := hr
-  refine ⟨step.input.map (·.eval zeroAsg), by simpa using step.width, rfl, ?_⟩
+  refine ⟨step.input.map (·.eval zeroAsg), by simpa using (step.width.trans rfl : step.input.length = CHIP_STATE_LANES), rfl, ?_⟩
   have houtlen : step.outputCols.length = 16 := by
     have hall : czSteps.all (fun s => s.outputCols.length == 16) = true := by decide
     have hs := List.all_eq_true.mp hall step hstep

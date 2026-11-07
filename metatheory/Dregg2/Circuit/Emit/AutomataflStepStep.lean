@@ -253,7 +253,7 @@ theorem oneHotGatedStepN_of_sat (hsat : Satisfied2 hash d minit mfin maddrs t)
     have hg := sgateH hsat i hi hsumG
     rw [headToExpr_evalStep, evalHStep_foldl_addLin, evalHStep_lin, List.map_map] at hg
     have hEq : (-1 * e.loc gate + ((List.range n).map ((fun j => e.loc (sel j)))).sum)
-        ≡ 0 [ZMOD 2013265921] := by simpa [Function.comp] using hg
+        ≡ 0 [ZMOD 2013265921] := by rw [← he] at hg; simpa [Function.comp_def] using hg
     have hmod : ((List.range n).map (fun j => e.loc (sel j))).sum ≡ e.loc gate [ZMOD 2013265921] :=
       (gate_modEq_iff (by ring)).mp hEq
     obtain ⟨hlo, hhi⟩ := sum_bool_bounds hb

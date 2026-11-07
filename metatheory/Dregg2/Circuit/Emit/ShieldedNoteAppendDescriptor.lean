@@ -733,7 +733,7 @@ theorem demo_after_spine_sorted : Sorted (sortedInsertW cmNew demoBeforeSpine) :
 theorem demoOpens_before_spine : SpineCommitsW (V := ℤ) demoOpens false demoBeforeSpine :=
   { sorted := demoBeforeSpine_sorted
     present_iff := fun k =>
-      ⟨fun ⟨_e, he, hz, hmem⟩ => he ▸ (by simpa using hmem),
+      ⟨fun ⟨_e, he, hz, hmem⟩ => he ▸ (by simpa [SortedTreeNonMembershipWide8.keyOfW] using hmem),
        fun hk => ⟨(k, 0), rfl, rfl, by simpa using hk⟩⟩ }
 
 /-- The AFTER root commits the GROWN spine. -/
@@ -741,7 +741,7 @@ theorem demoOpens_after_spine :
     SpineCommitsW (V := ℤ) demoOpens true (sortedInsertW cmNew demoBeforeSpine) :=
   { sorted := demo_after_spine_sorted
     present_iff := fun k =>
-      ⟨fun ⟨_e, he, hz, hmem⟩ => he ▸ (by simpa using hmem),
+      ⟨fun ⟨_e, he, hz, hmem⟩ => he ▸ (by simpa [SortedTreeNonMembershipWide8.keyOfW] using hmem),
        fun hk => ⟨(k, 0), rfl, rfl, by simpa using hk⟩⟩ }
 
 /-- The fresh commitment is genuinely ABSENT from the BEFORE committed key set. -/

@@ -307,6 +307,14 @@ theorem oodColumnLayoutExt_law_mem (d : EffectVmDescriptor2) (t : VmTrace) (ζ :
   · rw [oodColumnLayoutExt_law d t ζ qp ⟨i, hlt⟩]
     simp only [List.get_eq_getElem, hget]
 
+/-- Coefficient `0` of the extension-valued batched residual, at a generic descriptor with a
+nonempty layout (so the definitional unfolding never meets a concrete descriptor's body). -/
+private theorem oodBatchResidualExt_coeff_zero (d : EffectVmDescriptor2)
+    (h : 0 < (oodArithList d).length) (t : VmTrace) (ζ : E)
+    (qp : VmConstraint2 → Polynomial E) :
+    (oodBatchResidualExt E d t ζ qp).coeff 0 = oodRfamExt E d t ζ qp ⟨0, h⟩ :=
+  batchResidual_coeff (oodRfamExt E d t ζ qp) ⟨0, h⟩
+
 /-- **The law FIRES on the DEPLOYED descriptor at the deployed challenge typing**: coefficient `0`
 of `transferV3`'s extension-valued batched residual is the extension-valued residual of the FIRST
 column of its actual 155-column layout. -/
@@ -314,7 +322,7 @@ theorem oodColumnLayoutExt_law_fires_transferV3 (t : VmTrace) (ζ : E)
     (qp : VmConstraint2 → Polynomial E) :
     (oodBatchResidualExt E transferV3 t ζ qp).coeff 0
       = oodRfamExt E transferV3 t ζ qp ⟨0, oodArithList_transferV3_pos⟩ :=
-  batchResidual_coeff (oodRfamExt E transferV3 t ζ qp) ⟨0, oodArithList_transferV3_pos⟩
+  oodBatchResidualExt_coeff_zero transferV3 oodArithList_transferV3_pos t ζ qp
 
 /-- **The deployed RLC bad-Λ cap at the extension typing**: fewer than 155 bad batching challenges,
 now inside a challenge space of size `|E|` rather than `|BabyBear|`. (`OodColumnLayout`'s

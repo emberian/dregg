@@ -767,14 +767,12 @@ theorem interior_sorted_insert_moves_more_than_one_cell (dep : Nat) (hdep : 2 â‰
   have hp0 : p = 0 := by
     by_contra hne
     have h := congrArg (fun L => L[0]?) he
-    simp only at h
     rw [List.getElem?_set_ne (fun hc => hne hc)] at h
     rw [hpost0, hpre0] at h
     exact shift_pos0_ne (Option.some.inj h)
   have hp1 : p = 1 := by
     by_contra hne
     have h := congrArg (fun L => L[1]?) he
-    simp only at h
     rw [List.getElem?_set_ne (fun hc => hne hc)] at h
     rw [hpost1, hpre1] at h
     exact shift_pos1_ne (Option.some.inj h)

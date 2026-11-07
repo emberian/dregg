@@ -963,7 +963,7 @@ theorem landNzV2N_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) mini
     have hcode : (boardDecodeOldN n e).cellAt L
         = codeToParticle (e.loc (NGen.old n (L.y * n + L.x))) := by
       simp only [boardDecodeOldN, Board.cellAt]
-      rw [if_pos (⟨hLx, hLy⟩ : L.x < n ∧ L.y < n)]
+      exact if_pos (⟨hLx, hLy⟩ : L.x < n ∧ L.y < n)
     rw [Dregg2.Games.AutomataflRules.carAt, hcode]
     rcases halpha with h | h | h | h <;> rw [h] <;> decide
   exact ⟨hb, hiff_old.trans hcarr.symm⟩
@@ -2480,7 +2480,7 @@ theorem oldCell_decode (x y : Nat) (e : VmRowEnv) (hx : x < n) (hy : y < n) :
     codeToParticle (e.loc (NGen.old n (y * n + x)))
       = (boardDecodeOldN n e).cellAt ⟨x, y⟩ := by
   simp only [boardDecodeOldN, Board.cellAt]
-  rw [if_pos (show x < n ∧ y < n from ⟨hx, hy⟩)]
+  exact (if_pos (show x < n ∧ y < n from ⟨hx, hy⟩)).symm
 
 /-- **THE SURV↔CLASH BRIDGE (circuit side).** Off a satisfying, canonical row, the survival bit is
 `1` exactly when the reference round has no fork/collide conflict — `cSurv = 1 ↔ clashCoords = []`. -/
