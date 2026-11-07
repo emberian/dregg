@@ -66,18 +66,15 @@
 //!    balances, and the *keys* of that tree are still one-felt digests of the
 //!    32-byte `CellId` (the accumulator-KEY class, kind D, unclosed).
 //! 3. **The lane-0 waist persists** wherever a narrow leg still broadcasts into
-//!    slot 0 of a wide carrier. This anchor does not touch those sites. The one
-//!    that was IN this anchor — `cells_root` — is closed; `V9RotationContext.iroot`
-//!    is the remaining bare `BabyBear` in the same struct (see below).
-//! 3b. **`iroot`'s FOLD is now 8-felt** (`rotation_witness::iroot8` →
-//!    `poseidon2::receipt_chain_root_8`, every intermediate `Faithful8`, Lean
-//!    `ReceiptChain8.rchain8_binds_or_collides` at 2^123.63) — **but the WIRE SLOT
-//!    `B_IROOT` is still ONE COLUMN, so only lane 0 is absorbed.** The rotated block
-//!    has no free limb (`ROTATED_PADS` is empty), so lanes 1..7 have nowhere to go
-//!    until the extent grows and the descriptors re-emit; the named residual is
-//!    `rotation_witness::IROOT_LANES_1_TO_7_UNABSORBED` and the gate that refuses to
-//!    let it become furniture is
-//!    `turn/tests/iroot_wide_old_admits_new_rejects.rs::the_residual_is_a_gate_not_a_note`.
+//!    slot 0 of a wide carrier. This anchor does not touch those sites. The two
+//!    that were IN this anchor — `cells_root` and `iroot` — are closed.
+//! 3b. **`iroot` is 8-felt end to end** (`rotation_witness::iroot8` →
+//!    `poseidon2::receipt_chain_root_8`, Lean `ReceiptChain8.rchain8_binds_or_collides`
+//!    at 2^123.63): `V9RotationContext.iroot` is a `Faithful8`, lane 0 is absorbed
+//!    last at `B_IROOT` and lanes 1..7 are the pre-limbs `ROTATED_IROOT_COMPLETION`
+//!    (the iroot-widening flag day, 187 -> 196). Before it only lane 0 reached the
+//!    wire, and `turn/tests/iroot_wide_old_admits_new_rejects.rs` exhibited two receipt
+//!    logs with one signed anchor.
 //!    ⚑ **On THIS path it is a pinned constant** (the empty-log root — the ctx builder
 //!    below pins it, deliberately), so the classical anchor does not depend on the
 //!    receipt log at all and the width costs nothing here.
@@ -173,7 +170,7 @@ use dregg_circuit::field::BabyBear;
 /// | field | here | proof side |
 /// |---|---|---|
 /// | `cells_root` | the WHOLE ledger | a single-cell context ledger holding only the actor |
-/// | `iroot` | `empty_iroot()`, pinned | three different logs across four producers |
+/// | `iroot` | `empty_iroot_8()`, pinned | three different logs across four producers |
 /// | `revoked_root` | the executor's LIVE `note_revoked.root8()` | `empty_revoked_root_8()`, unconditionally — there is no parameter to thread it |
 /// | `material` | `Default` | the installed `child_vk` on a factory turn's AFTER block |
 ///
@@ -202,7 +199,7 @@ pub fn consensus_ctx(
         nullifier_root,
         commitments_root,
         revoked_root,
-        iroot: crate::rotation_witness::empty_iroot(),
+        iroot: crate::rotation_witness::empty_iroot_8(),
         material: RotationCarrierMaterial::default(),
     }
 }

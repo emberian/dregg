@@ -46,9 +46,10 @@
 //!   tamper/truncate/extend/reorder all move at **2^123.63**, unconditionally (no `Compress8CR`,
 //!   no `Poseidon2SpongeCR` — both refuted at deployed parameters). ⚠ This note used to cite
 //!   `mroot_injective` (`MMR.lean:313`) and to call the fold an MMR; the theorem was deleted
-//!   2026-07-28 and the fold is not an MMR. ⚠ The value that reaches the wire is still lane 0 —
-//!   see [`IROOT_LANES_1_TO_7_UNABSORBED`], which is the one number to read before citing this
-//!   root's strength at the anchor.
+//!   2026-07-28 and the fold is not an MMR. All eight lanes reach the anchor: lane 0 at
+//!   `B_IROOT` (absorbed last), lanes 1..7 as the pre-limbs `ROTATED_IROOT_COMPLETION` (the
+//!   iroot-widening flag day, 187 -> 196). Until then only lane 0 did, and a lane-0 collision
+//!   (2^15.45, found in 64,147 evaluations) gave two receipt logs one signed anchor.
 //! * `cells_root` is the sorted-Poseidon2 boundary root over the present cells' existence
 //!   leaves (`dregg_circuit::heap_root` — the SAME tree the heap domain commits to), the
 //!   `boundary_root_derived` analogue at the turn level (`UNIVERSAL-MEMORY.md`).
@@ -107,13 +108,14 @@ const CELL_PRESENT_VALUE: u64 = 1;
 
 /// One turn's rotated state-block witness for a single cell's before/after RecordKernelState.
 ///
-/// `pre_limbs` is the 178-limb absorption vector in the Lean-pinned order; `iroot` is the
+/// `pre_limbs` is the `NUM_PRE_LIMBS`-limb absorption vector in the Lean-pinned order; `iroot` is the
 /// MMR root absorbed LAST. `state_commit = wireCommitR(pre_limbs, iroot)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RotationWitness {
-    /// The 178 pre-iroot limbs, in absorption order.
+    /// The `NUM_PRE_LIMBS` pre-iroot limbs, in absorption order.
     pub pre_limbs: Vec<BabyBear>,
-    /// The receipt-index MMR root (absorbed last).
+    /// Lane 0 of the receipt-log root, the value absorbed LAST at `B_IROOT`. Lanes 1..7 are
+    /// inside `pre_limbs` (`ROTATED_IROOT_COMPLETION`).
     pub iroot: BabyBear,
     /// The chained state commitment `wireCommitR(pre_limbs, iroot)`.
     pub state_commit: BabyBear,
@@ -467,65 +469,15 @@ pub fn iroot8(receipt_hashes: &[[u8; 32]]) -> dregg_circuit::Faithful8 {
     dregg_circuit::poseidon2::receipt_chain_root_8(receipt_hashes)
 }
 
-/// ⚠ **THE WIRE SLOT — LANE 0 ONLY, AND THAT IS THE WHOLE OF THE RESIDUAL.**
-///
-/// `B_IROOT` is ONE trace column. The rotated block's every other column is occupied
-/// (`layout_generated::ROTATED_PADS` is EMPTY at the nine-lane geometry), so lanes 1..7 of
-/// [`iroot8`] have nowhere to be absorbed until the block extent grows and the descriptors re-emit.
-/// This projection is that gap, named: see [`IROOT_LANES_1_TO_7_UNABSORBED`] for the cost, the
-/// geometry, and the exact cutover.
-///
-/// ⚑ It is a PROJECTION OF THE WIDE FOLD, not a second fold. The retired narrow body is deleted:
-/// the day the columns exist, `produce` writes `iroot8(..).write_lanes(..)` and this function is
-/// deleted outright — there is no narrow definition left to re-derive or to drift.
-pub fn iroot(receipt_hashes: &[[u8; 32]]) -> BabyBear {
-    iroot8(receipt_hashes).limbs()[0]
-}
-
-/// The receipt root of the EMPTY log — the value `state_commit::consensus_ctx` pins on the classical
-/// executor path, where the anchor deliberately does not bind the receipt log (the current turn's
-/// receipt hash is computed FROM this commitment, so it cannot be inside it; `previous_receipt_hash`
-/// chains the history instead).
-///
-/// ⚑ It was `BabyBear::ZERO`. It is now the domain-separated arity-0 chip image, DERIVED by calling
-/// the fold on the empty log rather than restated as a constant — so the pin and the producer cannot
-/// drift, and the empty receipt root no longer aliases every other zero sentinel in the tree.
-#[inline]
-pub fn empty_iroot() -> BabyBear {
-    iroot(&[])
-}
-
-/// The 8-lane empty receipt root — the wide form of [`empty_iroot`], for the day the wire carries
-/// all eight.
+/// The receipt root of the EMPTY log, at all eight lanes — the value `state_commit::consensus_ctx`
+/// pins on the classical executor path, where the anchor deliberately does not bind the receipt log
+/// (the current turn's receipt hash is computed FROM this commitment, so it cannot be inside it;
+/// `previous_receipt_hash` chains the history instead). It is the domain-separated arity-0 chip
+/// image, DERIVED from the fold rather than restated, so it aliases no other zero sentinel.
 #[inline]
 pub fn empty_iroot_8() -> dregg_circuit::Faithful8 {
     iroot8(&[])
 }
-
-/// The NAMED residual [`iroot`] carries, in the burn-down grammar
-/// (`docs/FAITHFUL-COMMITMENT-LAW.md`). Swept by
-/// `turn/tests/iroot_wide_old_admits_new_rejects.rs::the_residual_is_a_gate_not_a_note`, which goes
-/// RED — deliberately — the day `NUM_PRE_LIMBS` moves off 184, so this cannot quietly persist past
-/// its own cutover.
-pub const IROOT_LANES_1_TO_7_UNABSORBED: &str = "\
-iroot lanes 1..7 are computed and DISCARDED at the wire: `B_IROOT` is one column and the rotated \
-block has no free limb (NUM_PRE_LIMBS = 184 emitted / 187 in Lean, ROTATED_PADS empty). The value \
-reaching the signed anchor is therefore ONE felt — image 2^30.91, COLLISION 2^15.45 — against the \
-2^123.63 the fold itself now carries. ⚑ THIS IS A LIVE, EXHIBITED BREAK AT HEAD, NOT BOOKKEEPING: \
-the retired ENTRY collision (two distinct receipts, one log entry) cost 71,133 evaluations and IS \
-closed by hash_bytes_8, but the OUTPUT-PROJECTION collision — generic birthday on lane 0, which has \
-a 2^30.91 image however wide the fold is internally — is UNTOUCHED by that widening and was found \
-at HEAD in 64,147 evaluations, giving two well-formed receipt logs one byte-identical 32-byte \
-signed anchor (`the_residual_is_a_live_exhibited_break_at_head`). Widening the entry does not reach \
-the projection; only the columns do. CUTOVER: extend the \
-block to carry ir1..ir7 (Legal.bodyAligned forces extent 196, not 195), change the WIDE final chain \
-site from arity 11 (`d8 ‖ iroot ‖ 0 ‖ 0`, EffectVmEmitRotationWide.lean:217) to arity 16 \
-(`d8 ‖ iroot8` — already an admitted chip arity), split the NARROW V3 final site \
-(EffectVmEmitRotationV3.lean:500) off arity 9 which is NOT admitted, re-emit, rotate the VK, and \
-bump CANONICAL_STATE_SCHEMA_EPOCH. BLOCKED 2026-08-01, verified not relayed: \
-EmitLayoutManifest.lean cannot load — EffectVmEmitRotationWide.olean does not exist because that \
-module is RED in the working tree under another lane's 187 key-nonet flag day, so \
-emit_descriptors.py cannot run at all.";
 
 /// The chained rotated state commitment — the Rust twin of Lean `wireCommitR`
 /// (`EffectVmEmitRotationR.lean`): the 4-wide head over the first four limbs, 3-wide chip
@@ -599,7 +551,7 @@ pub fn produce_in_ctx(
     ctx: &dregg_cell::commitment::V9RotationContext,
 ) -> RotationWitness {
     let pre_limbs = dregg_cell::commitment::compute_rotated_pre_limbs(cell, ctx);
-    let state_commit = wire_commit(&pre_limbs, ctx.iroot);
+    let state_commit = wire_commit(&pre_limbs, ctx.iroot.limbs()[0]);
     // The per-cell asset class (the fold of the cell's committed ASSET — its currency, not its
     // name salt) the light-client conservation partition keys on — the SAME fold the executor's
     // collector uses (`atomic::asset_class_for_cell`), so the proof-bound class agrees with the
@@ -608,7 +560,7 @@ pub fn produce_in_ctx(
         dregg_circuit::block_conservation::fold_token_id_to_asset(cell.asset().as_bytes());
     RotationWitness {
         pre_limbs,
-        iroot: ctx.iroot,
+        iroot: ctx.iroot.limbs()[0],
         state_commit,
         asset_class,
     }
@@ -644,7 +596,7 @@ pub fn produce(
             nullifier_root: *nullifier_root,
             commitments_root: *commitments_root,
             revoked_root: *revoked_root,
-            iroot: iroot(receipt_hashes),
+            iroot: iroot8(receipt_hashes),
             material: *material,
         },
     )
@@ -713,7 +665,7 @@ impl SovereignTurnCtx {
                 nullifier_root: empty_nullifier_root_8(),
                 commitments_root: empty_commitments_root_8(),
                 revoked_root: empty_revoked_root_8(),
-                iroot: iroot(receipt_hashes),
+                iroot: iroot8(receipt_hashes),
                 material,
             },
         }
@@ -748,7 +700,7 @@ impl SovereignTurnCtx {
 
     /// The `iroot` this context absorbs LAST — the value a caller needs to rebuild a
     /// `RotatedBlockWitness` beside the witness itself.
-    pub fn iroot(&self) -> BabyBear {
+    pub fn iroot(&self) -> dregg_circuit::Faithful8 {
         self.inner.iroot
     }
 
@@ -1383,7 +1335,7 @@ mod tests {
             nullifier_root,
             commitments_root,
             revoked_root,
-            iroot: iroot(&receipt_hashes),
+            iroot: iroot8(&receipt_hashes),
             material,
         };
         assert_eq!(
@@ -1602,33 +1554,33 @@ mod tests {
     #[test]
     fn iroot_binds_the_whole_log() {
         let log = vec![[1u8; 32], [2u8; 32], [3u8; 32]];
-        let base = iroot(&log);
+        let base = iroot8(&log);
         // tamper a leaf
         let mut tampered = log.clone();
         tampered[1] = [9u8; 32];
-        assert_ne!(base, iroot(&tampered), "tampered leaf must move the root");
+        assert_ne!(base, iroot8(&tampered), "tampered leaf must move the root");
         // truncate
-        assert_ne!(base, iroot(&log[..2]), "truncation must move the root");
+        assert_ne!(base, iroot8(&log[..2]), "truncation must move the root");
         // extend
         let mut extended = log.clone();
         extended.push([4u8; 32]);
-        assert_ne!(base, iroot(&extended), "extension must move the root");
+        assert_ne!(base, iroot8(&extended), "extension must move the root");
         // reorder
         let reordered = vec![log[1], log[0], log[2]];
-        assert_ne!(base, iroot(&reordered), "reorder must move the root");
+        assert_ne!(base, iroot8(&reordered), "reorder must move the root");
         // ⚑ FLAG DAY: the empty log is NO LONGER the zero root. It is the domain-separated arity-0
         // chip image, like every sibling accumulator's empty root — a bare zero sentinel aliases
         // them all, and it is also what made the Lean collision extractor non-total
         // (`0 = chipAbsorb8 (…)` names no colliding preimage pair). `state_commit::consensus_ctx`
         // moved with it.
         assert_ne!(
-            iroot(&[]),
-            BabyBear::ZERO,
+            iroot8(&[]).limbs(),
+            [BabyBear::ZERO; 8],
             "the empty receipt root is not a zero sentinel"
         );
         assert_eq!(
-            iroot(&[]),
-            empty_iroot(),
+            iroot8(&[]),
+            empty_iroot_8(),
             "…and the constant is derived, not restated"
         );
     }
@@ -1910,7 +1862,7 @@ mod tests {
             nullifier_root: empty_nullifier_root_8(),
             commitments_root: empty_commitments_root_8(),
             revoked_root: empty_revoked_root_8(),
-            iroot: BabyBear::new(7),
+            iroot: iroot8(&[[7u8; 32]]),
             material: Default::default(),
         };
         // a permission flip — folded into the authority-digest limb (r23), a HIGH limb.
@@ -1938,7 +1890,7 @@ mod tests {
         // why the flip repointed to the chip chain; the executor anchors against THIS.
         let pre = dregg_cell::commitment::compute_rotated_pre_limbs(&base, &ctx);
         assert_eq!(
-            dregg_circuit::poseidon2::wire_commit_8_chip(&pre, ctx.iroot),
+            dregg_circuit::poseidon2::wire_commit_8_chip(&pre, ctx.iroot.limbs()[0]),
             c_base,
             "cell 8-felt twin must equal the deployed chip-faithful circuit primitive"
         );

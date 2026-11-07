@@ -15,13 +15,13 @@
 pub const EFFECT_VM_WIDTH: usize = 188;
 
 /// pre-iroot limbs in one rotated block — projected from the verified RotatedLayout
-pub const NUM_PRE_LIMBS: usize = 187;
+pub const NUM_PRE_LIMBS: usize = 196;
 
 /// one rotated state block's span (BEFORE and AFTER each occupy B_SPAN columns)
-pub const B_SPAN: usize = 251;
+pub const B_SPAN: usize = 263;
 
 /// column offset from a member's face to its AFTER block (= B_SPAN)
-pub const AFTER_BLOCK_OFF: usize = 251;
+pub const AFTER_BLOCK_OFF: usize = 263;
 
 /// the caveat region's span
 pub const C_SPAN: usize = 45;
@@ -39,7 +39,7 @@ pub const C_RC_CARRIER: usize = 43;
 pub const C_COMMIT: usize = 44;
 
 /// in-appendix base of the FIELDS-CANONICITY region (= 2*B_SPAN + C_SPAN, past both blocks and the caveat region). Its 7 aux columns per (block, slot) are what makes Canonical9's NoWrap leg expressible; the producer MUST fill them or every honest turn is UNSAT.
-pub const CANON9_REGION_OFF: usize = 547;
+pub const CANON9_REGION_OFF: usize = 571;
 
 /// aux columns one (block, slot) canonicity gadget uses, in order: r, q0, q1, v0, v0b, v1, v1b
 pub const CANON9_PER_SLOT: usize = 7;
@@ -48,10 +48,10 @@ pub const CANON9_PER_SLOT: usize = 7;
 pub const CANON9_SPAN: usize = 112;
 
 /// 2*B_SPAN + C_SPAN + CANON9_SPAN — the rotated appendix appended to the v1 face
-pub const APPENDIX_SPAN: usize = 659;
+pub const APPENDIX_SPAN: usize = 683;
 
 /// poseidon2-chip SITES the rotated appendix contributes (2 blocks + the caveat region incl. the rc fold). Graduation appends 7 lane columns per site, so this is the multiplier the Rust host width uses — it was a hand-carried arithmetic literal in trace_rotated.rs and it drifted.
-pub const ROT_APPENDIX_SITES: usize = 138;
+pub const ROT_APPENDIX_SITES: usize = 144;
 
 /// committed record/authority digest limb
 pub const B_RECORD_DIGEST: usize = 24;
@@ -102,25 +102,25 @@ pub const B_PERMS_COMPLETION: usize = 38;
 pub const B_VK_COMPLETION: usize = 45;
 
 /// the iroot limb (pre-iroot limbs end here)
-pub const B_IROOT: usize = 187;
+pub const B_IROOT: usize = 196;
 
 /// the state-commitment limb
-pub const B_STATE_COMMIT: usize = 188;
+pub const B_STATE_COMMIT: usize = 197;
 
 /// in-block base of the chained-absorption carriers — READ OFF `rotV3SitesAt`'s first emitted site, so the producer writes the columns the descriptors bind. Rust carried this by hand and it rotted across the 178 -> 184 flag day (180 vs 186): the producer overwrote four pre-limbs plus iroot/state_commit and every rotated member was UNSAT.
-pub const B_CHAIN_BASE: usize = 189;
+pub const B_CHAIN_BASE: usize = 198;
 
 /// chain carriers per block: they fill `[B_CHAIN_BASE, B_SPAN)` exactly
-pub const B_NUM_CHAIN: usize = 62;
+pub const B_NUM_CHAIN: usize = 65;
 
 /// in-block offset of the first S2-deleted column (the 1-felt state_commit digest)
-pub const S2_CARRIER_OFF: usize = 188;
+pub const S2_CARRIER_OFF: usize = 197;
 
 /// one S2-deleted carrier band's width (state_commit digest + B_NUM_CHAIN chain carriers)
-pub const S2_CARRIER_SPAN: usize = 63;
+pub const S2_CARRIER_SPAN: usize = 66;
 
 /// the S2-deleted graduated chip-lane band's width (7 lanes per deleted block site)
-pub const S2_LANE_SPAN: usize = 882;
+pub const S2_LANE_SPAN: usize = 924;
 
 /// state register index of the first committed field (fields[0]); the AFTER-block field octet holds register r(FIELD_BASE+i) at octet index i, so octet_index(r) = r - FIELD_BASE
 pub const FIELD_BASE: usize = 3;
@@ -158,7 +158,7 @@ pub const KEY_TOP_BITS: usize = 24;
 /// One faithful-8 group: lane 0 followed by seven completion columns.
 pub type Felt8Group = [usize; 8];
 
-/// Every named group, emitted verbatim from `rotated187.groupTable`.
+/// Every named group, emitted verbatim from `rotated196.groupTable`.
 pub const ROTATED_GROUP_TABLE: [Felt8Group; 10] = [
     [24, 12, 13, 14, 15, 16, 17, 18],
     [25, 52, 53, 54, 55, 56, 57, 58],
@@ -206,8 +206,11 @@ pub const ROTATED_FIELDS_LANE_COLS: [usize; 64] = [
 /// The legacy cells-completion slot (empty since `cells` became a named group).
 pub const ROTATED_CELLS_COMPLETION: [usize; 0] = [];
 
-/// Unoccupied pad columns. EMPTY at the nine-lane geometry — the two former pads (176, 177) were consumed by the fields nonet.
-pub const ROTATED_PADS: [usize; 0] = [];
+/// Lanes 1..7 of the receipt-log root `iroot8` (lane 0 is `B_IROOT`). ABSORBED pre-limbs: the producers write `iroot8(..).limbs()[1..8]` here, so the signed anchor binds the receipt log at all eight lanes (the iroot-widening flag day, 187 -> 196).
+pub const ROTATED_IROOT_COMPLETION: [usize; 7] = [187, 188, 189, 190, 191, 192, 193];
+
+/// Unoccupied pad columns: the two the 1-mod-3 body discipline leaves at 196 (the producers write zero).
+pub const ROTATED_PADS: [usize; 2] = [194, 195];
 
 /// `ROTATED_FIELD_LANE_COL[slot][lane]` — the column carrying lane `lane` of `fields[slot]`.
 /// Lane 0 is the welded v1-face limb, lanes 1..7 the historical completion window, lane 8 the

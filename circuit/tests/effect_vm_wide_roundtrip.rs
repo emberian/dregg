@@ -214,7 +214,8 @@ fn assert_executor_anchor(
     // The cell's OWN pre_limbs (computed from its RecordKernelState + turn ctx, NOT the producer's
     // — the independent path the executor takes), through the CHIP-FAITHFUL wide chain.
     let cell_pre = ctx.pre_limbs(cell);
-    let cell_felt8 = dregg_circuit::poseidon2::wire_commit_8_chip(&cell_pre, ctx.iroot());
+    let cell_felt8 =
+        dregg_circuit::poseidon2::wire_commit_8_chip(&cell_pre, ctx.iroot().limbs()[0]);
     let circuit_carrier12 = before_commit_8(trace);
     assert_eq!(
         cell_felt8, circuit_carrier12,

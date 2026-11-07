@@ -18,7 +18,7 @@
 //! causes. There are four fields of `V9RotationContext` on which the two sides disagree, and the
 //! two that were missing are the ones that make the alignment cost what it costs:
 //!
-//! 1. **`iroot`.** `state_commit::consensus_ctx` pins `rotation_witness::empty_iroot()`
+//! 1. **`iroot`.** `state_commit::consensus_ctx` pins `rotation_witness::empty_iroot_8()`
 //!    deliberately (a receipt cannot bind a commitment its own hash is computed from). The
 //!    proof side folds something — and **which** something is not one convention but THREE, see
 //!    below.
@@ -167,7 +167,7 @@ fn ctx_with(
         nullifier_root: rw::empty_nullifier_root_8(),
         commitments_root: rw::empty_commitments_root_8(),
         revoked_root: revoked,
-        iroot: rw::iroot(receipt_hashes),
+        iroot: rw::iroot8(receipt_hashes),
         material,
     }
 }
@@ -231,7 +231,7 @@ fn the_receipt_state_commit_is_not_the_proof_state_commit() {
     assert_ne!(
         receipt_commit, iroot_only,
         "folding the real receipt chain into `iroot` must move the commit — if it does not, \
-         `empty_iroot()` is aliasing a real fold and the anchor is weaker than documented"
+         `empty_iroot_8()` is aliasing a real fold and the anchor is weaker than documented"
     );
 
     // ── CAUSE 2: `cells_root`, alone. ───────────────────────────────────────

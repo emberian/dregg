@@ -17,7 +17,7 @@ use dregg_cell::{Cell, Ledger};
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::{HeapLeaf, compute_canonical_heap_root_8, empty_heap_root_8};
 use dregg_turn::rotation_witness::{
-    cells_root, empty_nullifier_root_8, iroot, produce, produce_in_ctx, wire_commit_8,
+    cells_root, empty_nullifier_root_8, iroot8, produce, produce_in_ctx, wire_commit_8,
 };
 
 /// (a) A non-empty nullifier accumulator root fills ALL 8 rotated lanes — limb 26 = root lane 0,
@@ -59,7 +59,7 @@ fn nullifier_root_fills_all_8_lanes_at_the_emitted_positions() {
         nullifier_root: nf_root,
         commitments_root: dregg_turn::rotation_witness::empty_commitments_root_8(),
         revoked_root: dregg_turn::rotation_witness::empty_revoked_root_8(),
-        iroot: iroot(&receipts),
+        iroot: iroot8(&receipts),
         material: Default::default(),
     };
     let w = produce_in_ctx(&cell, &ctx);
@@ -171,7 +171,7 @@ fn different_nullifier_sets_yield_different_committed_roots() {
             &receipts,
             &Default::default(),
         );
-        wire_commit_8(&w.pre_limbs, iroot(&receipts))
+        wire_commit_8(&w.pre_limbs, iroot8(&receipts).limbs()[0])
     };
     assert_ne!(
         commit(&root_a),

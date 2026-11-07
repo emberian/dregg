@@ -51,7 +51,7 @@
 //! `turn/tests/receipt_state_commit_is_not_the_proof_state_commit.rs`:
 //!
 //! * **`iroot`.** The receipt anchor pins `state_commit::consensus_ctx`'s
-//!   `iroot = rotation_witness::empty_iroot()` deliberately (a receipt cannot bind the
+//!   `iroot = rotation_witness::empty_iroot_8()` deliberately (a receipt cannot bind the
 //!   commitment its own hash is computed from). ⚠ The proof side does NOT "fold the real receipt
 //!   chain" — that is true of exactly one of four producers, the ledgerless sovereign
 //!   `cipherclerk`, whose artifacts this endpoint never serves. The live node path folds a

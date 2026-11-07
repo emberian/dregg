@@ -7591,7 +7591,7 @@ mod tests {
         assert_eq!(
             occ, expected,
             "rotated pre-iroot layout must be a complete disjoint tiling of 0..{NUM_PRE_LIMBS} \
-             (matches Lean rotated187_legal + rotated187_complete)"
+             (matches Lean rotated196_legal + rotated196_complete)"
         );
         // The named octet bases the rest of this module reads ARE the emitted octet list — the one
         // place a consumer could still drift off the table it just checked.

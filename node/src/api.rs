@@ -363,7 +363,10 @@ const fn parse_u64(s: &str) -> u64 {
     let mut i = 0;
     let mut n: u64 = 0;
     while i < b.len() {
-        assert!(b[i].is_ascii_digit(), "DREGG_NODE_BUILD_UNIX is not a decimal integer");
+        assert!(
+            b[i].is_ascii_digit(),
+            "DREGG_NODE_BUILD_UNIX is not a decimal integer"
+        );
         n = n * 10 + (b[i] - b'0') as u64;
         i += 1;
     }
@@ -4132,7 +4135,7 @@ async fn get_turn_proof(
 /// `state_commit::consensus_ctx`; the full-turn proof publishes the rotated leg's commitment
 /// under a context the prover assembles for itself. They are two commitments of one transition
 /// and they differ on **four** fields of `V9RotationContext`, each independently sufficient —
-/// `cells_root` (whole ledger vs a single-cell context ledger), `iroot` (`empty_iroot()` pinned
+/// `cells_root` (whole ledger vs a single-cell context ledger), `iroot` (`empty_iroot_8()` pinned
 /// vs three different logs across four producers), `revoked_root` (the executor's live root vs
 /// `empty_revoked_root_8()`, which the proof side has no parameter to thread) and `material`
 /// (`Default` vs a factory turn's installed `child_vk`). Measured cause by cause in
@@ -12977,7 +12980,9 @@ mod tests {
 
         let (code, json) = get_json(&app, "/status").await;
         assert_eq!(code, StatusCode::OK);
-        let version = json.get("version").unwrap_or_else(|| panic!("/status lacks version: {json}"));
+        let version = json
+            .get("version")
+            .unwrap_or_else(|| panic!("/status lacks version: {json}"));
         let sha = version["git_sha"].as_str().expect("git_sha is a string");
         assert_eq!(sha, NodeVersion::CURRENT.git_sha);
         let head = std::process::Command::new("git")
@@ -12999,12 +13004,20 @@ mod tests {
                     .status()
                     .map(|s| s.success())
                     .unwrap_or(false);
-                assert!(known, "stamped sha {sha} is not a commit here (HEAD {head})");
+                assert!(
+                    known,
+                    "stamped sha {sha} is not a commit here (HEAD {head})"
+                );
             }
         }
-        let unix = version["build_unix_seconds"].as_u64().expect("build_unix_seconds");
+        let unix = version["build_unix_seconds"]
+            .as_u64()
+            .expect("build_unix_seconds");
         assert_eq!(unix, NodeVersion::CURRENT.build_unix_seconds);
-        assert!(unix > 1_700_000_000, "build stamp {unix} predates this code");
+        assert!(
+            unix > 1_700_000_000,
+            "build stamp {unix} predates this code"
+        );
         let time = version["build_time"].as_str().expect("build_time");
         assert_eq!(time.len(), 20, "RFC 3339 UTC seconds, got {time}");
         assert!(time.ends_with('Z') && time.as_bytes()[10] == b'T', "{time}");

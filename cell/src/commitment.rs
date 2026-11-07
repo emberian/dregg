@@ -866,8 +866,11 @@ pub struct V9RotationContext {
     /// 2026-08-07; see the ⚑ on `nullifier_root` above. This is the field `c45814b9f` repaired in
     /// three sites and this doc mis-taught in every other.
     pub revoked_root: dregg_circuit::Faithful8,
-    /// The receipt-index MMR root, absorbed LAST.
-    pub iroot: dregg_circuit::field::BabyBear,
+    /// The receipt-log root at ALL EIGHT LANES (`rotation_witness::iroot8`). Lane 0 is absorbed
+    /// LAST at `B_IROOT`; lanes 1..7 are the pre-limbs `ROTATED_IROOT_COMPLETION` (187..193), so
+    /// the anchor binds the receipt log at full width (the iroot-widening flag day, 187 -> 196;
+    /// before it only lane 0 reached the wire, a 2^15.45 collision).
+    pub iroot: dregg_circuit::Faithful8,
     /// The v12 per-effect CARRIER MATERIAL for the child-vk / contract-hash octets (limbs 89..104).
     /// `None`/`None` (the `Default`) on a generic turn — only a `CreateCellFromFactory` turn carries
     /// `child_vk` (the executor's captured `effective_vk`) and a hatchery mint carries
@@ -1204,7 +1207,7 @@ pub fn authority_residue_bytes(cell: &Cell) -> Vec<u8> {
     bytes
 }
 
-/// Build the 178 pre-iroot rotated limbs for a cell + turn-context, in the Lean-pinned
+/// Build the `NUM_PRE_LIMBS` (196) pre-iroot rotated limbs for a cell + turn-context, in the Lean-pinned
 /// absorption order (`EffectVmEmitRotationV3.preLimbsAt`). Byte-identical to the producer
 /// `dregg_turn::rotation_witness::produce`'s `pre_limbs`.
 pub fn compute_rotated_pre_limbs(
@@ -1421,6 +1424,15 @@ pub fn compute_rotated_pre_limbs(
     // `Faithful9::from_key_lanes9` over the SAME `PUBKEY_NONET_LANE_COL`.
     dregg_circuit::Faithful9::from_key_lanes9(cell.public_key())
         .write_lanes(&mut pre, PUBKEY_NONET_LANE_COL);
+    // 187..=193: lanes 1..7 of the receipt-log root (lane 0 is `B_IROOT`, absorbed last by the
+    // chain). 194, 195 are the layout's pads and stay ZERO.
+    let ir = ctx.iroot.limbs();
+    for (k, &col) in dregg_circuit::effect_vm::layout_generated::ROTATED_IROOT_COMPLETION
+        .iter()
+        .enumerate()
+    {
+        pre[col] = ir[k + 1];
+    }
     pre
 }
 
@@ -1534,7 +1546,7 @@ pub fn compute_canonical_state_commitment_v9_felt(
     ctx: &V9RotationContext,
 ) -> dregg_circuit::field::BabyBear {
     let pre = compute_rotated_pre_limbs(cell, ctx);
-    v9_wire_commit(&pre, ctx.iroot)
+    v9_wire_commit(&pre, ctx.iroot.limbs()[0])
 }
 
 /// **THE v9 ROTATED canonical commitment (32 bytes)** — the canonical
@@ -1575,7 +1587,7 @@ pub fn compute_canonical_state_commitment_v9_felt8(
     // `wire_commit_8_chip` is verify-level in `dregg-circuit` (the chip absorb is part of the
     // verify floor), so this faithful commit is unconditional — the divergent plain-chain floor is
     // retired. `Faithful8::from_wire_commit_chip` IS that chain (the wall's wire-commit constructor).
-    dregg_circuit::Faithful8::from_wire_commit_chip(&pre, ctx.iroot)
+    dregg_circuit::Faithful8::from_wire_commit_chip(&pre, ctx.iroot.limbs()[0])
 }
 
 /// The 32-byte encoding of the faithful 8-felt commitment: the 8 felts packed as 8×4 LE bytes

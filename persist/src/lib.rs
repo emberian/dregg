@@ -717,7 +717,7 @@ impl PersistentStore {
     /// ⚠ **WHAT THIS EPOCH DOES *NOT* CLOSE, and it is the load-bearing half.** `B_PUBKEY_OCTET`
     /// is **eight columns wide in the deployed 184-limb geometry**, and the nonet's ninth lane has
     /// no column to live in. The 187-limb layout that gives it one (in-block limb 186) is PROVED
-    /// and committed in Lean (`RotatedLayout.rotated187`, `94532b3a4`) and **not emitted**: the
+    /// and committed in Lean (`RotatedLayout.rotated196`, `94532b3a4`) and **not emitted**: the
     /// emitter `metatheory/EmitLayoutManifest.lean` transitively imports
     /// `Dregg2/Circuit/Emit/EffectVmEmitRotationWide.lean`, which is red on three `sorryAx`
     /// axiom-hygiene failures under another lane's edit. So at epoch 21 the nonet reaches the

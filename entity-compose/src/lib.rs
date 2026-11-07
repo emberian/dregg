@@ -186,7 +186,7 @@ pub fn v9_commitment(cell: &Cell) -> ([u8; 32], V9RotationContext) {
         nullifier_root: dregg_circuit::heap_root::empty_heap_root_8(),
         commitments_root: dregg_circuit::heap_root::empty_heap_root_8(),
         revoked_root: dregg_turn::rotation_witness::empty_revoked_root_8(),
-        iroot: dregg_turn::rotation_witness::iroot(&[]),
+        iroot: dregg_turn::rotation_witness::iroot8(&[]),
         material: Default::default(),
     };
     let commitment = compute_canonical_state_commitment_v9_8(cell, &ctx);

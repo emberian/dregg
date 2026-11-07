@@ -26,11 +26,11 @@ pub const E1_COMPACT_TABLE: &[(&str, &[(usize, usize)])] = &[
     ("mintVmDescriptor2R24", &[(90, 98), (101, 186), (187, 188)]),
     (
         "noteSpendVmDescriptor2R24",
-        &[(90, 98), (101, 186), (187, 188), (836, 840), (1128, 1162)],
+        &[(90, 98), (101, 186), (187, 188), (854, 858), (1146, 1180)],
     ),
     (
         "noteCreateVmDescriptor2R24",
-        &[(90, 98), (101, 186), (187, 188), (836, 840), (1128, 1162)],
+        &[(90, 98), (101, 186), (187, 188), (854, 858), (1146, 1180)],
     ),
     (
         "cellSealVmDescriptor2R24",
@@ -93,7 +93,7 @@ pub const E1_COMPACT_TABLE: &[(&str, &[(usize, usize)])] = &[
     ),
     (
         "createCellVmDescriptor2R24",
-        &[(90, 98), (101, 186), (187, 188), (836, 840), (1128, 1162)],
+        &[(90, 98), (101, 186), (187, 188), (854, 858), (1146, 1180)],
     ),
     (
         "factoryVmDescriptor2R24",
@@ -189,9 +189,9 @@ pub const E1_COMPACT_TABLE: &[(&str, &[(usize, usize)])] = &[
         &[
             (90, 102),
             (103, 188),
-            (815, 819),
-            (1107, 1141),
-            (1144, 1148),
+            (833, 837),
+            (1125, 1159),
+            (1162, 1166),
         ],
     ),
     (
@@ -208,11 +208,11 @@ pub const E1_COMPACT_TABLE: &[(&str, &[(usize, usize)])] = &[
     ),
     (
         "revokeDelegationWriteCapOpenVmDescriptor2R24",
-        &[(90, 98), (101, 186), (187, 188), (1162, 1169)],
+        &[(90, 98), (101, 186), (187, 188), (1180, 1187)],
     ),
     (
         "revokeCapabilityWriteCapOpenVmDescriptor2R24",
-        &[(90, 98), (101, 186), (187, 188), (1162, 1169)],
+        &[(90, 98), (101, 186), (187, 188), (1180, 1187)],
     ),
     (
         "refreshDelegationWriteCapOpenVmDescriptor2R24",

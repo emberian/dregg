@@ -327,7 +327,7 @@ fn both_producers_fill_the_cells_root_group_byte_identically() {
         nullifier_root: empty_nullifier_root_8(),
         commitments_root: empty_commitments_root_8(),
         revoked_root: empty_revoked_root_8(),
-        iroot: dregg_turn::rotation_witness::iroot(&receipts),
+        iroot: dregg_turn::rotation_witness::iroot8(&receipts),
         material: Default::default(),
     };
     let pre_cell = compute_rotated_pre_limbs(&agent, &ctx);

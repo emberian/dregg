@@ -50,7 +50,7 @@
 //!   committee's. The committee signs `TurnReceipt::{pre,post}_state_hash`, a **different**
 //!   commitment of the same transition — measured cause by cause in
 //!   `turn/tests/receipt_state_commit_is_not_the_proof_state_commit.rs` (the receipt anchor uses
-//!   `state_commit::consensus_ctx`: whole-ledger `cells_root`, `iroot = empty_iroot()`, the
+//!   `state_commit::consensus_ctx`: whole-ledger `cells_root`, `iroot = empty_iroot_8()`, the
 //!   executor's live `revoked_root`, `Default` carrier material; the proof-side builders use a
 //!   single-cell context ledger, a per-producer `iroot`, the empty revoked root, and a factory
 //!   turn's installed `child_vk`). Feeding the receipt's pair here still refuses every honest

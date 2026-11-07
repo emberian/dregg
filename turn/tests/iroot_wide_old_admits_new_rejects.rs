@@ -28,6 +28,8 @@
 //! ⚑ ANTI-VACUITY IS THE POINT OF §5. A widened fold that happened to ignore a leaf would pass 1-4
 //! and prove nothing.
 
+use dregg_cell::Cell;
+use dregg_circuit::effect_vm::layout_generated::{ROTATED_IROOT_COMPLETION, ROTATED_PADS};
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::{hash_bytes, hash_bytes_8, hash_many, receipt_chain_root_8};
 use dregg_turn::rotation_witness as rw;
@@ -128,7 +130,7 @@ fn old_admits_reaches_a_byte_identical_signed_state_anchor() {
     // into `before_w.iroot` / `after_w.iroot`, so a collision there is a collision in the anchor.
     let (l1, l2, _, _) = two_histories();
 
-    // A fixed, honest 184-limb pre-limb vector; only the receipt log differs between the two runs.
+    // A fixed, honest pre-limb vector; only the receipt log differs between the two runs.
     let mut pre = vec![BabyBear::ZERO; rw::NUM_PRE_LIMBS];
     for (i, slot) in pre.iter_mut().enumerate() {
         *slot = BabyBear::new((i as u32) * 7 + 3);
@@ -143,15 +145,15 @@ fn old_admits_reaches_a_byte_identical_signed_state_anchor() {
         "OLD-ADMITS at the anchor: two histories, ONE byte-identical 32-byte pre/post_state_hash"
     );
 
-    // The widened fold moves the anchor — as soon as its lanes are absorbed. Lane 0 alone is what
-    // the wire carries today (`IROOT_LANES_1_TO_7_UNABSORBED`), so state the two facts separately
-    // rather than letting a lane-0 accident read as a closure.
+    // The widened fold moves the anchor, because all eight lanes are absorbed: lanes 1..7 at the
+    // layout's `ROTATED_IROOT_COMPLETION` pre-limbs, lane 0 last at `B_IROOT`.
     let w1 = receipt_chain_root_8(&l1).limbs();
     let w2 = receipt_chain_root_8(&l2).limbs();
     let anchor_new_full = |lanes: [BabyBear; 8]| {
-        // All eight lanes absorbed — the post-cutover shape (arity-16 final site).
         let mut wide = pre.clone();
-        wide.extend_from_slice(&lanes[1..]);
+        for (k, &col) in ROTATED_IROOT_COMPLETION.iter().enumerate() {
+            wide[col] = lanes[k + 1];
+        }
         dregg_circuit::Faithful8::from_wire_commit_chip(&wide, lanes[0]).to_bytes32()
     };
     assert_ne!(
@@ -238,42 +240,41 @@ fn the_leaf_entry_encoding_is_wide_now() {
 }
 
 #[test]
-fn the_narrow_wire_slot_is_still_lane_zero_and_the_producer_agrees() {
-    // `iroot` is a PROJECTION of `iroot8`, not a second fold. If these ever disagree there are two
-    // bodies again, which is the twin class this repo keeps paying for.
+fn the_producer_writes_all_eight_lanes() {
+    // Lane 0 is the value absorbed last (`RotationWitness::iroot`, `B_IROOT`); lanes 1..7 are the
+    // pre-limbs `ROTATED_IROOT_COMPLETION`. One fold, `iroot8`, feeds both.
     let log: Vec<[u8; 32]> = (0u64..5).map(rh).collect();
-    assert_eq!(
-        rw::iroot(&log),
-        rw::iroot8(&log).limbs()[0],
-        "the wire slot must be lane 0 of the ONE fold"
-    );
-    assert_eq!(rw::iroot8(&log).limbs(), receipt_chain_root_8(&log).limbs());
+    let cell = Cell::with_balance([3u8; 32], [0u8; 32], 100);
+    let w = rw::SovereignTurnCtx::for_cell(&cell, &log, Default::default()).witness(&cell);
+    let lanes = rw::iroot8(&log).limbs();
+    assert_eq!(lanes, receipt_chain_root_8(&log).limbs());
+    assert_eq!(w.iroot, lanes[0], "lane 0 is the value absorbed at B_IROOT");
+    for (k, &col) in ROTATED_IROOT_COMPLETION.iter().enumerate() {
+        assert_eq!(
+            w.pre_limbs[col],
+            lanes[k + 1],
+            "lane {} rides pre-limb {col}",
+            k + 1
+        );
+    }
+    for &col in ROTATED_PADS.iter() {
+        assert_eq!(w.pre_limbs[col], BabyBear::ZERO, "pad {col} is zero");
+    }
 }
 
-/// ⚑ **THE RESIDUAL IS A LIVE, EXHIBITED BREAK — NOT A COSMETIC ONE — AND THIS IS THE PROOF.**
+/// ⚑ **THE FALSIFIER, FLIPPED.** Until the iroot-widening flag day (187 -> 196) the rotated block
+/// had one receipt-root column, and this test FOUND a lane-0 collision (birthday over lane 0's
+/// 2^30.91 image, about 2^15.45 evaluations; 64,147 at the time) and showed it reached the signed
+/// anchor: two receipt histories, one byte-identical 32-byte state hash.
 ///
-/// It was put to me that widening the ENTRY (`hash_bytes` → `hash_bytes_8`) is the closure, since it
-/// is independent of the pre-limb geometry: two distinct receipts can no longer be one log entry, so
-/// the cheap attack is dead and the unabsorbed lanes are bookkeeping. **The first half is true and
-/// the second is false**, and the distinction is worth being exact about because it is the shape
-/// CLAUDE.md's "cost estimate → constraint" warning is about, arrived at from the other direction.
-///
-/// There are TWO attacks, and the entry widening kills only one:
-///
-///   (a) **collide the ENTRY** — `rh_a ≠ rh_b` with `hash_bytes rh_a = hash_bytes rh_b`. The two logs
-///       become the SAME list of felts, so every downstream fold agrees at any width. DEAD:
-///       `hash_bytes_8` has a `2^123.63` image (`the_leaf_entry_encoding_is_wide_now`).
-///   (b) **collide the OUTPUT PROJECTION** — `L₁ ≠ L₂` with `iroot8(L₁)[0] = iroot8(L₂)[0]`. Generic
-///       birthday over lane 0's image, which is `p ≈ 2^30.91` NO MATTER HOW WIDE THE FOLD IS
-///       INTERNALLY. **UNTOUCHED**, because the binding waist is the projection, and the projection
-///       is exactly what the geometry gates.
-///
-/// This test runs (b) against the fold AS SHIPPED and finds a real collision. The strength is
-/// genuinely there in the eight lanes — the assertion below shows the full octet separating the very
-/// pair that lane 0 merges — and it is thrown away at `B_IROOT`. So the residual is not a label on a
-/// closed hole; it is the hole, measured, at HEAD.
+/// It runs the same search now. The collision still exists in lane 0 — it is a property of one
+/// felt, not of the geometry — but the anchor is computed through the real producer
+/// (`SovereignTurnCtx::commitment_felt8`, the value a fixture registers and the executor signs),
+/// which absorbs lanes 1..7, so the two histories give DIFFERENT anchors. The control re-runs the
+/// old shape (lanes 1..7 zeroed) over the same pair and shows it still collides, so the flip is
+/// the columns and nothing else.
 #[test]
-fn the_residual_is_a_live_exhibited_break_at_head() {
+fn the_lane0_collision_no_longer_reaches_the_signed_anchor() {
     let prefix: Vec<[u8; 32]> = (100u64..105).map(rh).collect();
     let t0 = std::time::Instant::now();
     let mut seen: HashMap<u32, u64> = HashMap::new();
@@ -282,104 +283,69 @@ fn the_residual_is_a_live_exhibited_break_at_head() {
     for i in 0u64..(1 << 22) {
         let mut log = prefix.clone();
         log.push(rh(i));
-        // THE VALUE THAT ACTUALLY REACHES `B_IROOT` AT HEAD: lane 0 of the WIDE fold.
-        let wire = rw::iroot(&log).0;
+        let lane0 = rw::iroot8(&log).limbs()[0].0;
         evals += 1;
-        if let Some(&j) = seen.get(&wire) {
+        if let Some(&j) = seen.get(&lane0) {
             found = Some((j, i));
             break;
         }
-        seen.insert(wire, i);
+        seen.insert(lane0, i);
     }
     let dt = t0.elapsed();
     let (a, b) = found.expect("birthday over a 2^30.91 image must land well inside 2^22");
-
     let mut l1 = prefix.clone();
     let mut l2 = prefix.clone();
     l1.push(rh(a));
     l2.push(rh(b));
     assert_ne!(l1, l2, "two genuinely different receipt histories");
-
-    // The wire slot merges them — TODAY, after the entry widening.
     assert_eq!(
-        rw::iroot(&l1),
-        rw::iroot(&l2),
-        "the value absorbed at B_IROOT is identical for two different histories"
+        rw::iroot8(&l1).limbs()[0],
+        rw::iroot8(&l2).limbs()[0],
+        "lane 0 still collides: one felt is one felt"
     );
-    println!(
-        "RESIDUAL IS LIVE: wire-lane collision after {evals} evaluations / {dt:?} \
-         (birthday over lane 0's 2^30.91 image = 2^15.45). The ENTRY widening does NOT reach this."
-    );
+    println!("lane-0 collision found after {evals} evaluations / {dt:?}");
 
-    // …and it reaches the signed anchor, which is the whole point.
-    let mut pre = vec![BabyBear::ZERO; rw::NUM_PRE_LIMBS];
-    for (i, slot) in pre.iter_mut().enumerate() {
-        *slot = BabyBear::new((i as u32) * 7 + 3);
-    }
+    let cell = Cell::with_balance([3u8; 32], [0u8; 32], 100);
     let anchor = |log: &[[u8; 32]]| {
-        dregg_circuit::Faithful8::from_wire_commit_chip(&pre, rw::iroot(log)).to_bytes32()
+        rw::SovereignTurnCtx::for_cell(&cell, log, Default::default())
+            .commitment_felt8(&cell)
+            .to_bytes32()
     };
-    assert_eq!(
+    assert_ne!(
         anchor(&l1),
         anchor(&l2),
-        "AT HEAD: two histories, ONE byte-identical 32-byte signed state anchor"
+        "NEW-REJECTS at the signed anchor: lanes 1..7 are absorbed, so the histories separate"
     );
 
-    // The strength EXISTS and is discarded: the full octet separates the pair lane 0 merged.
-    assert_ne!(
-        rw::iroot8(&l1).limbs(),
-        rw::iroot8(&l2).limbs(),
-        "the eight lanes separate them — the fold is strong, the WIRE is what is narrow"
+    // Control: the pre-flag-day wire (lane 0 only) over the SAME pair still merges them.
+    let narrow = |log: &[[u8; 32]]| {
+        let ctx = rw::SovereignTurnCtx::for_cell(&cell, log, Default::default());
+        let mut pre = ctx.pre_limbs(&cell);
+        for &col in ROTATED_IROOT_COMPLETION.iter() {
+            pre[col] = BabyBear::ZERO;
+        }
+        dregg_circuit::Faithful8::from_wire_commit_chip(&pre, ctx.iroot().limbs()[0]).to_bytes32()
+    };
+    assert_eq!(
+        narrow(&l1),
+        narrow(&l2),
+        "the old one-column wire would still have given the two histories one anchor"
     );
 }
 
+/// The geometry the flip rests on, read from the generated layout: seven completion columns, all
+/// absorbed pre-limbs, pairwise distinct, none of them a pad, and lane 0 at `B_IROOT`.
 #[test]
-fn the_residual_is_a_gate_not_a_note() {
-    // ⚑ "Documented != detected". `IROOT_LANES_1_TO_7_UNABSORBED` names a live shortfall. This
-    // assertion is what stops it becoming furniture: the day the rotated block has a column the
-    // iroot's lanes 1..7 could occupy, this test goes RED and forces the projection in
-    // `rotation_witness::iroot` to be deleted rather than quietly kept.
-    //
-    // ⚠ IT USED TO BE KEYED ON `NUM_PRE_LIMBS == 184`, AND THAT PREMISE WAS FALSE. It read "the day
-    // the extent moves off 184, the wire can carry lanes 1..7" — and on 2026-08-01 the extent DID
-    // move (184 → 187, `76c3f7b9b`) while the wire gained NOTHING for the iroot: all three new
-    // columns went to `ROTATED_OCTET_NINTH_LANES` (child_vk, contract_hash, pubkey key nonets), and
-    // `rotated187_complete` proves 0..186 is tiled with nothing spare. So the tripwire fired on a
-    // condition that does not imply its conclusion, and bumping the literal to 187 would have been
-    // RELAXING it — the same red, deferred one flag day.
-    //
-    // It is now keyed on what it always meant: IS THERE A FREE COLUMN. `ROTATED_PADS` is the
-    // emitter's own record of unoccupied positions in the rotated block; while it is empty there is
-    // nowhere to write lanes 1..7 and the projection is forced, not chosen. An extent bump that
-    // hands the iroot real columns reds here; one that spends them elsewhere does not.
-    assert!(
-        dregg_circuit::effect_vm::layout_generated::ROTATED_PADS.is_empty(),
-        "ROTATED_PADS is no longer empty ({:?} at extent {}): the rotated block now has free \
-         column(s), so the iroot's lanes 1..7 CAN be carried. ABSORB THEM — write \
-         `iroot8(..).write_lanes(..)` in `produce`, change the WIDE final chain site to arity 16, \
-         delete `rotation_witness::iroot` and IROOT_LANES_1_TO_7_UNABSORBED, and delete this \
-         assertion rather than relaxing it.",
-        dregg_circuit::effect_vm::layout_generated::ROTATED_PADS,
-        dregg_circuit::effect_vm::layout_generated::NUM_PRE_LIMBS,
-    );
-    // The residual must keep naming its own number and its own cutover, or it is not a residual.
-    let r = rw::IROOT_LANES_1_TO_7_UNABSORBED;
-    assert!(
-        r.contains("2^15.45"),
-        "the residual must state the COLLISION bound it actually has"
-    );
-    assert!(r.contains("2^123.63"), "…and the bound the fold carries");
-    assert!(
-        r.contains("71,133"),
-        "…and the measured cost of the ENTRY collision"
-    );
-    assert!(
-        r.contains("64,147"),
-        "…and the measured cost of the OUTPUT-PROJECTION collision AT HEAD — the one the entry \
-         widening does NOT close, and what makes this residual a live break rather than a label"
-    );
-    assert!(
-        !r.contains("2^247"),
-        "never quote the second-preimage figure for a collision residual"
-    );
+fn the_receipt_root_has_eight_absorbed_columns() {
+    use dregg_circuit::effect_vm::layout_generated::{B_IROOT, NUM_PRE_LIMBS};
+    assert_eq!(ROTATED_IROOT_COMPLETION.len(), 7);
+    assert_eq!(B_IROOT, NUM_PRE_LIMBS, "lane 0 is the column absorbed last");
+    let mut cols = ROTATED_IROOT_COMPLETION.to_vec();
+    cols.sort();
+    cols.dedup();
+    assert_eq!(cols.len(), 7, "seven distinct columns");
+    for &c in ROTATED_IROOT_COMPLETION.iter() {
+        assert!(c < NUM_PRE_LIMBS, "lane column {c} is an absorbed pre-limb");
+        assert!(!ROTATED_PADS.contains(&c), "lane column {c} is not a pad");
+    }
 }
