@@ -237,6 +237,20 @@ not merged.
 
 ## Gates (status as measured)
 
+At abfe4f8dc on bb2 (whole default build through `scripts/axiom-hygiene-guard.sh`, one lake process,
+LEAN_NUM_THREADS=6, 48G scope; warm 4.35 snapshot published as
+`bb2:~/olean-store/metatheory/abfe4f8dc7bfc5dd7b59f56b68a558347768f73b`):
+- Default build: every module green except the two pre-existing stale pins below.
+- `scripts/axiom-hygiene-guard.sh`: trips only on those two modules.
+- `metatheory/scripts/automata-check.sh -j 8`: 74 files, 0 failed, 340 guards, 862 keystones.
+- `scripts/check-automata-statements.py`: green after re-recording `docs/automata/statement-audit.json`
+  (hashes + moved pins, with an `upgrade_note`).
+- Statement audit: every theorem/lemma header in the 316 changed `.lean` files compared with the
+  merge base: no statement changed except the documented `PMF.uniformFintype` spelling in
+  ModelBridge; 31 helper lemmas added. Escape hatches added: 1+1
+  `backward.isDefEq.respectTransparency false` (ConcreteKernel, AttenuateA), ~12 `maxRecDepth`,
+  ~15 `decide +kernel` (all still kernel-proved), no `native_decide`, no `sorry`, no axiom.
+
 - Pre-existing red, not from this upgrade: `Dregg2.Circuit.Emit.KimchiStepProverChoice`. Two
   `native_decide` census pins (`the_opening_response_scalars_own_one_cell_each`,
   `the_step_prover_choice_census`) evaluate to false: `vGx`/`vGy` have 4/3 readers where the pins
