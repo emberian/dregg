@@ -90,6 +90,7 @@ theorem queryQuotient_effectiveCover
     ⟨raw, rawCode, hquot, hliftApp, hraw⟩
   refine ⟨(query, raw), C.pairVal queryCode rawCode, ?_, ?_, ?_⟩
   · simp [hquot]
+    rfl
   · exact C.app_fork (C.app_fst queryCode familyCode)
       (A.app_compose (C.app_snd queryCode familyCode) hliftApp)
   · exact ⟨queryCode, hquery, rawCode, hraw, rfl⟩
@@ -287,12 +288,12 @@ def badOracle : Oracle 2 := twoRows goodFirst badSecond
 
 /-- The indiscrete assembly over the one-point PCA.  It is used only as a finite,
 nonvacuous model of the bridge's interfaces. -/
-def unitAssembly (X : Type v) : Assembly.{0, v} PCA.unitPCA where
+@[reducible] def unitAssembly (X : Type v) : Assembly.{0, v} PCA.unitPCA where
   Carrier := X
   Realizes := fun _ _ => True
   realized := fun _ => ⟨(), trivial⟩
 
-def unitHom {X Y : Type v} (f : X → Y) : unitAssembly X ⟶ unitAssembly Y where
+@[reducible] def unitHom {X Y : Type v} (f : X → Y) : unitAssembly X ⟶ unitAssembly Y where
   toFun := f
   tracked := by
     refine ⟨(), ?_⟩
@@ -387,11 +388,12 @@ theorem badOracle_badSet_card :
   rw [Finset.card_eq_one]
   refine ⟨secondQuery, ?_⟩
   ext query
-  simp only [CoveragePresentation.mem_badSet, Finset.mem_singleton]
+  simp only [CoveragePresentation.mem_badSet]
+  refine Iff.trans ?_ Finset.mem_singleton.symm
   change
     (interactionOracle.semanticObserve.toFun (query, badOracle) = true) ↔
       query = secondQuery
-  rw [semanticObserve_eq_reject]
+  refine Iff.trans (iff_of_eq (congrArg (· = true) (semanticObserve_eq_reject query badOracle))) ?_
   change Fin 2 at query
   fin_cases query
   · change reject goodFirst = true ↔ (0 : Fin 2) = (1 : Fin 2)
@@ -456,14 +458,12 @@ theorem two_query_transparent_acceptance_card :
       have haccept : uniformAccept badOracle 2 seed := by
         simpa [eventSeeds] using hseed
       have hmiss := (uniformAccept_iff_misses badOracle 2 seed).mp haccept
-      change seed ∈ Finset.univ.filter
-        (Misses (interactionCoverage.badSet badOracle))
-      exact Finset.mem_filter.mpr ⟨Finset.mem_univ seed, hmiss⟩
+      rw [missSamples_eq_piFinset]
+      exact Fintype.mem_piFinset.mpr fun i => Finset.mem_compl.mpr (hmiss i)
     · intro hseed
-      change seed ∈ Finset.univ.filter
-        (Misses (interactionCoverage.badSet badOracle)) at hseed
+      rw [missSamples_eq_piFinset] at hseed
       have hmiss : Misses (interactionCoverage.badSet badOracle) seed :=
-        (Finset.mem_filter.mp hseed).2
+        fun i => Finset.mem_compl.mp (Fintype.mem_piFinset.mp hseed i)
       have haccept := (uniformAccept_iff_misses badOracle 2 seed).mpr hmiss
       simpa [eventSeeds] using haccept
   rw [hevents]

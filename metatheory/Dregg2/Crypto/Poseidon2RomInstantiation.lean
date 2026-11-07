@@ -268,8 +268,7 @@ theorem romWorldAdv_collision (M : CollisionForger) :
 /-- The deployed digest space has EXACTLY `2013265921^8` elements — the deployed cardinality, where
 the prose collision caveat's `Fin (2 ^ l)` matched at no `l`. -/
 theorem card_Digest : Fintype.card Digest = babyBearP ^ 8 := by
-  show Fintype.card (Fin 8 → Felt) = babyBearP ^ 8
-  rw [Fintype.card_fun, Fintype.card_fin, Fintype.card_fin]
+  rw [Fintype.card_eq_nat_card, Nat.card_fun, Nat.card_fin, Nat.card_fin]
 
 theorem one_lt_card_Digest : 1 < Fintype.card Digest := by
   rw [card_Digest]

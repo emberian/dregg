@@ -574,7 +574,7 @@ theorem effHeapWriteV3_afterCore (base : EffectVmDescriptor2) (name : String)
     simpa [VmConstraint2.holdsAt] using h
   · intro lvl hlvl
     have := hdir lvl hlvl
-    simpa [afterSpineColsH_dir] using this
+    exact this
   · intro k
     have hin : VmConstraint2.base (.gate (rootPinGate (afterSpineColsH base.traceWidth) k))
         ∈ afterSpineConstraintsH base.traceWidth := by

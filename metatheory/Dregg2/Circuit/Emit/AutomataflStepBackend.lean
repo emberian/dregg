@@ -1040,7 +1040,7 @@ theorem decodeN_attAtt {pd nd le lt gt gm minv v pos att rep : ℤ}
       have hgtm : 1 < min pd.toNat nd.toNat := by rw [hmin]; omega
       rw [hmv]
       norm_num [decodeDecision, evaluateAxis, hne, hmin, hgtm, hlted]
-      exact fun hbad => absurd hbad (by omega)
+      omega
   · -- lt = 1, gt = 0: pd < nd, min = pd.
     have hpn : pd < nd := hlt1 rfl
     have hlev : le = 1 := by rcases hle0 with h | h; · exact absurd (hle2 h) (by omega)
@@ -1060,7 +1060,7 @@ theorem decodeN_attAtt {pd nd le lt gt gm minv v pos att rep : ℤ}
       have hgtm : 1 < min pd.toNat nd.toNat := by rw [hmin]; omega
       rw [hmv]
       norm_num [decodeDecision, evaluateAxis, hne, hmin, hgtm, hlted]
-      exact fun hbad => absurd hbad (by omega)
+      omega
   · exact absurd (hlt1 rfl) (by have := hgt1 rfl; omega)
 
 /-! ## §6 — the nine `decide_axis` cases OFF THE GATES, `∀ n`, and the per-axis capstone. -/
