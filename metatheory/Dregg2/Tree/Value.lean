@@ -30,6 +30,11 @@ namespace Dregg2.Tree
 
 open Cbor
 
+/- v4.35 core gives `UInt8`/`Int` a `Std.LinearOrderPackage` whose `BEq` outranks
+`instBEqOfDecidableEq` and is built with `Classical.choice`; keep `==` on the
+decidable-equality instance so the checker reader stays choice-free. -/
+attribute [local instance high] instBEqOfDecidableEq
+
 /-- A JSON value in the projected model. -/
 inductive JVal where
   | null
