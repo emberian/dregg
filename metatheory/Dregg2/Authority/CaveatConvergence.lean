@@ -184,8 +184,7 @@ theorem coreOfCaveat_view_embeds (f : FieldName) (actor : Dregg2.Exec.CellId) (o
   | validUntil t => exact caveatPred_validUntil_embeds f t actor old new
   | heightLt h =>
       -- the helper is stated at `actor := 0`; the denotation does not read `actor`, so it transports.
-      have := heightLt_embeds f h old new
-      simpa [CaveatPred.eval, txViewNew, coreOfCaveat, Pred.eval] using this
+      exact heightLt_embeds f h old new
   | tt => rfl
   | ff => rfl
   | and l r ihl ihr =>
