@@ -436,13 +436,14 @@ theorem historySplice_binds_rom (Q : ℕ → ℕ)
         fun l => OracleComp.mapOut_queryBounded _ (hM l), fun _ _ => rfl⟩)
   refine @winProb_le_of_imp _ ((historySpliceGame Val Session RulesRoot).instFin l) _ _
     (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hlinked, hbinds, hsplice⟩ := hH
   have hBrun : (romCarrierAdv _ _
       (fun l => OracleComp.mapOut (spliceExtract Val Session RulesRoot l) (M l))).run l H
       = spliceExtract Val Session RulesRoot l (A.run l H) := by
     show (OracleComp.mapOut (spliceExtract Val Session RulesRoot l) (M l)).eval H = _
-    rw [OracleComp.mapOut_eval, hrun l H]
+    erw [OracleComp.mapOut_eval, hrun l H]
     rfl
   rw [hBrun]
   obtain ⟨⟨g, h⟩, hfind⟩ := Option.isSome_iff_exists.mp hsplice

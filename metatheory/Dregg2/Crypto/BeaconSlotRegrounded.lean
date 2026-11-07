@@ -367,7 +367,8 @@ theorem bias_adv_le {Ct O : Type} (D : BeaconDeployment Ct O) (A : Adversary (be
     gameAdv (beaconBiasGame D) A l
       ≤ gameAdv (multisetCollisionGame D) (biasToCollisionFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact bias_wins_imp D A l t ht
 
 /-! ## §5 — the RE-GROUNDED CONSUMERS.

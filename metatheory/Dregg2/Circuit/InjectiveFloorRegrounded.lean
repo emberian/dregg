@@ -271,7 +271,8 @@ breaker wins the extracted finder wins. A genuine reduction inequality over real
 theorem node8_adv_le (D : Chip8Keyed) (A : Adversary (node8BreakGame D)) (l : ℕ) :
     gameAdv (node8BreakGame D) A l ≤ gameAdv (hashGame (chip8Family D)) (node8BreakToFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact node8_wins_imp D A l t ht
 
 /-- **⚑ THE PRICE OF THE `node8` COLLISION DISJUNCT — from the CHIP's collision floor, VIA the reduction.**
@@ -324,7 +325,8 @@ theorem leaf8_wins_imp (D : Chip8Keyed) (A : Adversary (leaf8BreakGame D)) (l : 
 theorem leaf8_adv_le (D : Chip8Keyed) (A : Adversary (leaf8BreakGame D)) (l : ℕ) :
     gameAdv (leaf8BreakGame D) A l ≤ gameAdv (hashGame (chip8Family D)) (leaf8BreakToFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact leaf8_wins_imp D A l t ht
 
 /-- **⚑ THE PRICE OF THE LEAF COLLISION DISJUNCT.** Under the deployed chip's collision floor,
@@ -609,7 +611,8 @@ finder's, at every parameter — over the SAME sampled tag space. -/
 theorem commit4_adv_le (D : H4Keyed) (A : Adversary (commit4BreakGame D)) (l : ℕ) :
     gameAdv (commit4BreakGame D) A l ≤ gameAdv (hashGame (h4Family D)) (commit4BreakToFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact commit4_wins_imp D A l t ht
 
 /-- **⚑ RE-GROUNDED `CommitDifferential.effectVmCommit_binds_all` — from the `h4` collision floor, VIA
@@ -782,7 +785,8 @@ theorem wire_adv_le (D : WideKeyed) (A : Adversary (wireCommitBreakGame D)) (l :
     gameAdv (wireCommitBreakGame D) A l
       ≤ gameAdv (hashGame (wideFamily D)) (wireBreakToFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact wire_wins_imp D A l t ht
 
 /-- **⚑ RE-GROUNDED `Emit.EffectVmEmitRotationR.wireCommitR8_binds` — from the WIDE permutation's
@@ -1226,7 +1230,7 @@ theorem effectVmCommit_binds_all_rom (D : H4Keyed) (tagDec : DecidableEq D.Tag)
       (fun l => OracleComp.mapOut (commit4InnerSelect D tagDec l) (M l))).run l H
       = commit4InnerSelect D tagDec l a := by
     show (OracleComp.mapOut (commit4InnerSelect D tagDec l) (M l)).eval H = _
-    rw [OracleComp.mapOut_eval, ← hArun]
+    erw [OracleComp.mapOut_eval, ← hArun]
   have hB₂run : (romCarrierAdv _ _ (commit4OuterComp D tagDec M)).run l H
       = ((a.1, ()),
           ((H (a.1, Sum.inl a.2.1.1.1), H (a.1, Sum.inl a.2.1.1.2.1),
@@ -1235,7 +1239,7 @@ theorem effectVmCommit_binds_all_rom (D : H4Keyed) (tagDec : DecidableEq D.Tag)
             H (a.1, Sum.inl a.2.2.1.2.2)), a.2.2.2)) := by
     show (commit4OuterComp D tagDec M l).eval H = _
     unfold commit4OuterComp
-    rw [OracleComp.bindComp_eval, ← hArun]
+    erw [OracleComp.bindComp_eval, ← hArun]
     rfl
   by_cases hT :
       (((H (a.1, Sum.inl a.2.1.1.1), H (a.1, Sum.inl a.2.1.1.2.1),

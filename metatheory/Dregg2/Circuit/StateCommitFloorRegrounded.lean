@@ -539,7 +539,7 @@ theorem sc_adv_le (F : StateCommitFamily) (A : Adversary (scEquivGame F)) (l : �
           (gameAdv (hashGame (scSpongeFamily F)) (scToSpongeAdv F A) l +
             gameAdv (hashGame (scLeafFamily F)) (scToLeafAdv F A) l)) := by
   refine @winProb_le_add4_of_imp _ (F.instFin l) _ _ _ _ _ (fun i hi => ?_)
-  rw [Adversary.hit_eq_true] at hi
+  replace hi := (Adversary.hit_eq_true _ _ _).mp hi
   rcases sc_wins_imp F A l i hi with h1 | h2 | h3 | h4
   · exact Or.inl ((Adversary.hit_eq_true (scToOuterNodeAdv F A) l i).mpr h1)
   · exact Or.inr (Or.inl ((Adversary.hit_eq_true (scToMovedNodeAdv F A) l i).mpr h2))
@@ -1102,7 +1102,8 @@ theorem scNodeRom_hard (t₀ : Turn) (m : ℕ) (Q : ℕ → ℕ)
     intro l
     refine @winProb_le_of_imp _
       ((hashGame (scNodeFamily (scRomFamily t₀ m))).instFin l) _ _ (fun H hH => ?_)
-    rw [Adversary.hit_eq_true] at hH ⊢
+    replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+    refine (Adversary.hit_eq_true _ _ _).mpr ?_
     obtain ⟨hne, heq⟩ := hH
     obtain ⟨h11, h12, h21, h22⟩ := hwr l H ⟨hne, heq⟩
     refine ⟨fun hc => ?_, liftD_inj heq⟩
@@ -1121,7 +1122,7 @@ theorem scNodeRom_hard (t₀ : Turn) (m : ℕ) (Q : ℕ → ℕ)
     · intro l H
       show (((), Sum.inr (Sum.inl (clampD l (B.run l H).1.1, clampD l (B.run l H).1.2))),
           ((), Sum.inr (Sum.inl (clampD l (B.run l H).2.1, clampD l (B.run l H).2.2)))) = _
-      rw [OracleComp.mapOut_eval, hrun l H]
+      erw [OracleComp.mapOut_eval, hrun l H]
       rfl
   exact negl_of_le
     (fun l => (gameAdv_mem_unit (hashGame (scNodeFamily (scRomFamily t₀ m))) B l).1)
@@ -1143,7 +1144,8 @@ theorem scSpongeRom_hard (t₀ : Turn) (m : ℕ) (Q : ℕ → ℕ)
     intro l
     refine @winProb_le_of_imp _
       ((hashGame (scSpongeFamily (scRomFamily t₀ m))).instFin l) _ _ (fun H hH => ?_)
-    rw [Adversary.hit_eq_true] at hH ⊢
+    replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+    refine (Adversary.hit_eq_true _ _ _).mpr ?_
     obtain ⟨hne, heq⟩ := hH
     obtain ⟨⟨hl1, hr1⟩, ⟨hl2, hr2⟩⟩ := hwr l H ⟨hne, heq⟩
     refine ⟨fun hc => ?_, liftD_inj heq⟩
@@ -1159,7 +1161,7 @@ theorem scSpongeRom_hard (t₀ : Turn) (m : ℕ) (Q : ℕ → ℕ)
     · intro l H
       show (((), Sum.inr (Sum.inr (bvecD m l (B.run l H).1))),
           ((), Sum.inr (Sum.inr (bvecD m l (B.run l H).2)))) = _
-      rw [OracleComp.mapOut_eval, hrun l H]
+      erw [OracleComp.mapOut_eval, hrun l H]
       rfl
   exact negl_of_le
     (fun l => (gameAdv_mem_unit (hashGame (scSpongeFamily (scRomFamily t₀ m))) B l).1)
@@ -1182,7 +1184,8 @@ theorem scLeafRom_hard (t₀ : Turn) (m : ℕ) (Q : ℕ → ℕ)
     intro l
     refine @winProb_le_of_imp _
       ((hashGame (scLeafFamily (scRomFamily t₀ m))).instFin l) _ _ (fun H hH => ?_)
-    rw [Adversary.hit_eq_true] at hH ⊢
+    replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+    refine (Adversary.hit_eq_true _ _ _).mpr ?_
     obtain ⟨hne, heq⟩ := hH
     obtain ⟨hc1, hc2, hv1, hv2⟩ := hwr l H ⟨hne, heq⟩
     refine ⟨fun hc => ?_, liftD_inj heq⟩
@@ -1200,7 +1203,7 @@ theorem scLeafRom_hard (t₀ : Turn) (m : ℕ) (Q : ℕ → ℕ)
     · intro l H
       show (((), Sum.inl (natBB (B.run l H).1.1, natBB (encV (B.run l H).1.2))),
           ((), Sum.inl (natBB (B.run l H).2.1, natBB (encV (B.run l H).2.2)))) = _
-      rw [OracleComp.mapOut_eval, hrun l H]
+      erw [OracleComp.mapOut_eval, hrun l H]
       rfl
   exact negl_of_le
     (fun l => (gameAdv_mem_unit (hashGame (scLeafFamily (scRomFamily t₀ m))) B l).1)
@@ -1260,9 +1263,8 @@ theorem scRomConst_outer_eff (t₀ : Turn) (m : ℕ) :
     · intro l H
       show (scOuterPair (scRomFamily t₀ m) l H scRomK₀,
           scOuterPair (scRomFamily t₀ m) l H scRomK₀) = _
-      simp only [OracleComp.eval]
       unfold scOuterPair
-      simp only [scFrameDigest_eq, scFrameList_k₀]
+      erw [scFrameDigest_eq, scFrameList_k₀]
       rfl
   · intro l H hw
     exact (hw.1 rfl).elim
@@ -1339,7 +1341,7 @@ theorem scRomEquiv_winnable (m : ℕ) (l : ℕ) :
   obtain ⟨r₀⟩ := (scRomOracle m).rNe l
   refine @Dregg2.Crypto.RomCarrierSites.winProb_pos_of_witness _
     ((scEquivGame (scRomFamily ⟨0, 1, 2, 0⟩ m)).instFin l) _ (fun _ => r₀) ?_
-  rw [Adversary.hit_eq_true]
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   refine ⟨fun c hc => rfl, fun c hc => ?_, rfl, ?_, rfl⟩
   · have h0 : ¬ c = 0 := by
       intro h

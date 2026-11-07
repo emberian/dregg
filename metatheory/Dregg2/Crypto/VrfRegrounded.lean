@@ -238,7 +238,8 @@ wins the solver wins. A genuine reduction inequality over real advantages, prove
 theorem uniqBreak_adv_le_msis_adv (F : LatticeVrfFamily) (A : Adversary (vrfUniqGame F)) (l : ℕ) :
     gameAdv (vrfUniqGame F) A l ≤ gameAdv (msisGame (vrfMsisFamily F)) (uniqBreakToMsisSolver F A) l := by
   refine @winProb_le_of_imp _ (F.instFin l) _ _ (fun i hi => ?_)
-  rw [Adversary.hit_eq_true] at hi ⊢
+  replace hi := (Adversary.hit_eq_true _ _ _).mp hi
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact uniqBreak_reduces_to_msis F A l i hi
 
 /-- **⚑ RE-GROUNDED LATTICE-VRF UNIQUENESS — from MSIS hardness, VIA the reduction.**

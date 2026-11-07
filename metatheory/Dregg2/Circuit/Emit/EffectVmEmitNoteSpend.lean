@@ -882,7 +882,8 @@ theorem noteSpend_binds_sysdigest_rom (D : SpongeKeyed) (tagDec : DecidableEq D.
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _
     (((noteSpendSysDigRomTamper D tagDec).game).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrArg Prod.snd hc), heq⟩
 
@@ -928,7 +929,8 @@ theorem noteSpend_binds_nullifiers_root_rom (D : SpongeKeyed) (tagDec : Decidabl
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _
     (((noteSpendNullifierRomTamper D tagDec).game).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrFun hc noteSpendNullifierLane), heq⟩
 

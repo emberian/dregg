@@ -166,7 +166,8 @@ theorem enc_adv_le (F : KeyedHashFamily) (α : Type) (enc : ∀ l, F.Key l → �
     gameAdv (encBreakGame F α enc) A l
       ≤ gameAdv (hashGame F) (encBreakToFinder F α enc A) l := by
   refine @winProb_le_of_imp _ (F.keyFintype l) _ _ (fun k hk => ?_)
-  rw [Adversary.hit_eq_true] at hk ⊢
+  replace hk := (Adversary.hit_eq_true _ _ _).mp hk
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact enc_wins_imp F α enc A l k hk
 
 /-- **⚑ THE HEADLINE BINDING, AS A SECURITY REDUCTION.**
@@ -340,7 +341,7 @@ theorem chained_adv_le {F : KeyedHashFamily} (P : KeyedForgery F) (α β : Type)
       ≤ gameAdv (encBreakGame F α enc₁) B₁ l + gameAdv (encBreakGame F β enc₂) B₂ l := by
   refine @Dregg2.Crypto.HermineHashCRRegrounded.winProb_le_add_of_imp _ (F.keyFintype l)
     _ _ _ (fun k hk => ?_)
-  rw [Adversary.hit_eq_true] at hk
+  replace hk := (Adversary.hit_eq_true _ _ _).mp hk
   rcases himp l k hk with h | h
   · exact Or.inl ((B₁.hit_eq_true l k).mpr h)
   · exact Or.inr ((B₂.hit_eq_true l k).mpr h)

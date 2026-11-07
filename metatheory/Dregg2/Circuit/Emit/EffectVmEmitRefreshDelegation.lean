@@ -454,7 +454,8 @@ theorem delegRoot_binds_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag) (m : 
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _
     (((delegRootRomTamper D tagDec m).game).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrFun hc delegIdx), heq⟩
 

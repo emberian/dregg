@@ -160,7 +160,8 @@ theorem effectVmCommit_binds_record_digest_rom (D : SpongeKeyed) (tagDec : Decid
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _ ((recordDigestRomTamper D tagDec).game.instFin l) _ _
     (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  refine (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrArg Prod.snd hc), heq⟩
 
@@ -200,7 +201,8 @@ theorem effectVmCommit_binds_cap_root_rom (D : SpongeKeyed) (tagDec : DecidableE
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _ ((capRootRomTamper D tagDec).game.instFin l) _ _
     (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  refine (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrArg (fun v : NarrowRomVal => v.1.2.2 3) hc), heq⟩
 

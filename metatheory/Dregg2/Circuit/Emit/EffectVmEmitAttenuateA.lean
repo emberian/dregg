@@ -1353,7 +1353,8 @@ theorem cap_runnable_rejects_cap_root_slot_tamper_rom (D : SpongeKeyed)
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _ ((capRootWideRomTamper D tagDec).game.instFin l) _ _
     (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  refine (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrArg (fun v : WideRomVal => v.1.2.2 3) hc), heq⟩
 

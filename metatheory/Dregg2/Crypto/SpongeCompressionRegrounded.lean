@@ -439,7 +439,8 @@ theorem mdPeel_adv_le {State : Type} (D : SpongeDeployment State)
     gameAdv (mdPeelGame D) A l
       ≤ gameAdv (compressionCollisionGame D) (mdPeelToCompressionFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact mdPeel_wins_imp D hSep A l t ht
 
 /-- **THE REDUCTION, AS A MAP OF ADVERSARIES (final state).** A final-state collider becomes a
@@ -485,7 +486,8 @@ theorem finalState_adv_le {State : Type} (D : SpongeDeployment State)
     gameAdv (finalStateCollisionGame D) A l
       ≤ gameAdv (compressionCollisionGame D) (finalStateToCompressionFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact finalState_wins_imp D hSep A l t ht
 
 /-- **THE TRUNCATION LEG.** A sponge DIGEST collider is a FINAL-STATE collider — under the honest
@@ -511,7 +513,8 @@ theorem spongeToFinalState_adv_le {State : Type} (D : SpongeDeployment State)
     gameAdv (spongeCollisionGame D) A l
       ≤ gameAdv (finalStateCollisionGame D) (spongeToFinalStateAdv D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact spongeToFinalState_wins_imp D hSq A l t ht
 
 /-- **⚑ THE HEADLINE EXTRACTOR.** A sponge DIGEST collider becomes a compression-collision finder:
@@ -541,7 +544,8 @@ theorem sponge_adv_le {State : Type} (D : SpongeDeployment State)
     gameAdv (spongeCollisionGame D) A l
       ≤ gameAdv (compressionCollisionGame D) (spongeToCompressionFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact sponge_wins_imp D hSq hSep A l t ht
 
 /-! ## §5 — the RE-GROUNDED CONSUMERS.

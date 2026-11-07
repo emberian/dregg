@@ -207,7 +207,8 @@ def spongeAnsSize (D : SpongeKeyed) : AnsSize (hashGame (spongeFamily D)) :=
 theorem rootsEnc_width (D : SpongeKeyed) (l : ℕ)
     (t : (spongeFamily D).Key l) (sr : SysRoots) :
     (rootsEnc D l t sr).length ≤ N_SYSTEM_ROOTS := by
-  simp [rootsEnc, rootList, N_SYSTEM_ROOTS]
+  show (List.ofFn sr).length ≤ N_SYSTEM_ROOTS
+  exact Nat.le_of_eq List.length_ofFn
 
 /-- The deployed cell absorbs `rest` plus ONE digest limb — the commitment-layer width fact. -/
 theorem commitEnc_width (D : SpongeKeyed) (rest : List FieldElem) (l : ℕ)
@@ -724,7 +725,7 @@ theorem cellRoots_binds_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag) (m : 
       = (((A.run l H).1, ()), (A.run l H).2.2.1, (A.run l H).2.2.2) := by
     show (chainRomComp₁ D tagDec m M l).eval H = _
     unfold chainRomComp₁
-    rw [OracleComp.mapOut_eval, ← hrun l H]
+    erw [OracleComp.mapOut_eval, ← hrun l H]
     rfl
   have hB₂run : (romCarrierAdv _ _ (chainRomComp₂ D tagDec m M)).run l H
       = (((A.run l H).1, (A.run l H).2.1),
@@ -732,7 +733,7 @@ theorem cellRoots_binds_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag) (m : 
           H ((A.run l H).1, Sum.inl (A.run l H).2.2.2)) := by
     show (chainRomComp₂ D tagDec m M l).eval H = _
     unfold chainRomComp₂
-    rw [OracleComp.bindComp_eval, ← hrun l H]
+    erw [OracleComp.bindComp_eval, ← hrun l H]
     rfl
   obtain ⟨hne, heq⟩ := hwin
   by_cases hdig : H ((A.run l H).1, Sum.inl (A.run l H).2.2.1)

@@ -206,7 +206,8 @@ theorem code_adv_le (D : DomainSeparatedSponge) (A : Type) (code : A → List �
     gameAdv (codeForgeGame D A code) adv l
       ≤ gameAdv (hashGame (poseidon2KeyedFamily D)) (codeForgeToFinder D A code adv) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact code_wins_imp D A code adv l t ht
 
 /-! ## §3 — THE REDUCED BINDING, at an arbitrary adversary class. -/

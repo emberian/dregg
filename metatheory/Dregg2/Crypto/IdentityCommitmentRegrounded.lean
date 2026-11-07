@@ -176,7 +176,8 @@ theorem enroll_adv_le {Ed MlDsa Pre Id : Type} [DecidableEq Pre] [DecidableEq Id
     gameAdv (enrollGame cr frame) A n
       ≤ gameAdv (hashGame (idCommitFamily cr)) (enrollToFinder cr frame A) n := by
   refine @winProb_le_of_imp _ ((enrollGame cr frame).instFin n) _ _ (fun k hk => ?_)
-  rw [Adversary.hit_eq_true] at hk ⊢
+  replace hk := (Adversary.hit_eq_true _ _ _).mp hk
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact enroll_wins_imp cr frame hframe A n k hk
 
 /-- **⚑ RE-GROUNDED `IdentityCommitment.id_commitment_binds` — from the id-commit hash's collision floor,

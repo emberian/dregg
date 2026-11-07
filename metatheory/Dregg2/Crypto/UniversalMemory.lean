@@ -328,7 +328,9 @@ theorem memcheck_pins_final {init : Addr → Val} {fin : Addr → Val × Nat}
       · rw [if_neg hb, opsAt_nil_of_closure hb hcl]
         exact rfl)
     (fun _ => rfl) a
-  simpa only [if_pos ha] using h
+  rw [if_pos ha] at h
+  simp only [finEntry] at h
+  exact h
 
 end FinalPin
 

@@ -592,7 +592,7 @@ theorem facetOfLeaf_canonical_permits (c : FacetCap) (n : Nat) (hn : n < 32)
   -- the limb split recomposes `canonMask c.facet` (a Nat `< 2^32`), so the decoded facet is its `.toNat`.
   have hrecomp : maskOfLimbs (canonicalLeaf c).mask_lo (canonicalLeaf c).mask_hi = canonMask c.facet := by
     simp only [canonicalLeaf, maskOfLimbs]
-    have h := Int.emod_add_ediv' (canonMask c.facet) 65536
+    have h := Int.emod_add_ediv_mul (canonMask c.facet) 65536
     linarith [h]
   have hfacet : facetOfLeaf (canonicalLeaf c) = some (canonMask c.facet).toNat := by
     simp only [facetOfLeaf, hrecomp]
@@ -687,7 +687,7 @@ theorem deployedFaithfulEff_canonical {State : Type} (S : CapHashScheme State)
             have hrecomp : maskOfLimbs (canonicalLeaf c).mask_lo (canonicalLeaf c).mask_hi
                 = canonMask c.facet := by
               simp only [canonicalLeaf, maskOfLimbs]
-              have h := Int.emod_add_ediv' (canonMask c.facet) 65536
+              have h := Int.emod_add_ediv_mul (canonMask c.facet) 65536
               linarith [h]
             have hfacetEq : facetOfLeaf (canonicalLeaf c) = some (canonMask c.facet).toNat := by
               simp only [facetOfLeaf, hrecomp]
@@ -1101,7 +1101,7 @@ theorem deployedFaithfulEff_canonical8
             have hrecomp : maskOfLimbs (canonicalLeaf c).mask_lo (canonicalLeaf c).mask_hi
                 = canonMask c.facet := by
               simp only [canonicalLeaf, maskOfLimbs]
-              have h := Int.emod_add_ediv' (canonMask c.facet) 65536
+              have h := Int.emod_add_ediv_mul (canonMask c.facet) 65536
               linarith [h]
             have hfacetEq : facetOfLeaf (canonicalLeaf c) = some (canonMask c.facet).toNat := by
               simp only [facetOfLeaf, hrecomp]

@@ -568,7 +568,8 @@ theorem state_adv_le (D : WideKeyed) (S : CommitSurface) (hash : List ℤ → �
     gameAdv (stateCommitBreakGame D S hash t) A l
       ≤ gameAdv (wireCommitBreakGame D) (stateBreakToWireBreak D S hash t A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun tag ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact state_wins_imp D S hash t A l tag ht
 
 /-- **⚑ THE REDUCED ANCHOR BINDING — from the wide permutation's collision floor, VIA the reduction.**

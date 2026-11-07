@@ -449,7 +449,7 @@ theorem forgery_adv_le {Entry : Type} (D : QueueDeployment Entry)
       gameAdv (rootCollisionGame D) (forgeryToRootFinder D A) n +
         gameAdv (leafCollisionGame D) (forgeryToLeafFinder D A) n := by
   refine @winProb_le_add_of_imp _ (D.tagFintype) _ _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
   rcases forgery_wins_imp D A n t ht with hr | hl
   · exact Or.inl ((Adversary.hit_eq_true (forgeryToRootFinder D A) n t).mpr hr)
   · exact Or.inr ((Adversary.hit_eq_true (forgeryToLeafFinder D A) n t).mpr hl)
@@ -802,13 +802,13 @@ theorem dequeue_proof_pins_binds_rom {Entry : Type} (D : QueueDeployment Entry)
           (H ((A.run l H).1, Sum.inr (A.run l H).2.2.1), (A.run l H).2.2.2)) := by
     show (dequeueRomComp₁ D entryFin entryNe tagDec m M l).eval H = _
     unfold dequeueRomComp₁
-    rw [bindComp_eval, ← hrun l H]
+    erw [bindComp_eval, ← hrun l H]
     rfl
   have hB₂run : (romCarrierAdv _ _ (dequeueRomComp₂ D entryFin entryNe tagDec m M)).run l H
       = (((A.run l H).1, ()), (A.run l H).2.1.1, (A.run l H).2.2.1) := by
     show (dequeueRomComp₂ D entryFin entryNe tagDec m M l).eval H = _
     unfold dequeueRomComp₂
-    rw [mapOut_eval, ← hrun l H]
+    erw [mapOut_eval, ← hrun l H]
     rfl
   obtain ⟨hne, heq⟩ := hwin
   by_cases hwin' : (H ((A.run l H).1, Sum.inr (A.run l H).2.1.1), (A.run l H).2.1.2)

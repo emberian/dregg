@@ -120,7 +120,7 @@ def DomainSeparatedSponge.deployedHash (D : DomainSeparatedSponge) (xs : List �
 `HashFloorHonesty.KeyedHashFamily`, keyed by its domain-separation tag: `H n t xs = sponge (tagCode t ++
 xs)`. Input domain `List ℤ` (the sponge domain), output `ℤ` (the BabyBear field element). This is the
 object `FloorRegroundedConsumers`'s keyed collision floor is realized at for the real hash. -/
-def poseidon2KeyedFamily (D : DomainSeparatedSponge) : KeyedHashFamily where
+@[reducible] def poseidon2KeyedFamily (D : DomainSeparatedSponge) : KeyedHashFamily where
   Key := fun _ => D.Tag
   Input := List ℤ
   Out := ℤ

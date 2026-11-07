@@ -360,7 +360,8 @@ theorem narrowRow_adv_le (D : SpongeKeyed) (E : NarrowRowSpec)
     gameAdv (narrowRowBreakGame D E) A l
       ≤ gameAdv (carrierBreakGame D group4Carrier) (narrowRowToCarrier D E A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact narrowRow_wins_imp D E A l t ht
 
 /-- **⚑ THE REDUCED NARROW ROW BINDING — the headline that replaces the `_binds_block_or_collides` /
@@ -491,7 +492,8 @@ theorem wideRow_adv_le (D : SpongeKeyed) (E : WideRowSpec)
     gameAdv (wideRowBreakGame D E) A l
       ≤ gameAdv (carrierBreakGame D wideStateCarrier) (wideRowToCarrier D E A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact wideRow_wins_imp D E A l t ht
 
 /-- **⚑ THE REDUCED WIDE FULL-STATE BINDING — the headline that replaces
@@ -577,7 +579,8 @@ theorem stateTamper_adv_le (D : SpongeKeyed) (E : WideRowSpec)
     gameAdv (wideStateTamperGame D E) A l
       ≤ gameAdv (wideRowBreakGame D E) (stateTamperToWide D E A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact stateTamper_wins_imp D E A l t ht
 
 theorem rootTamper_adv_le (D : SpongeKeyed) (E : WideRowSpec)
@@ -585,7 +588,8 @@ theorem rootTamper_adv_le (D : SpongeKeyed) (E : WideRowSpec)
     gameAdv (wideRootTamperGame D E) A l
       ≤ gameAdv (wideRowBreakGame D E) (rootTamperToWide D E A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact rootTamper_wins_imp D E A l t ht
 
 /-- **⚑ THE REDUCED STATE-BLOCK TAMPER TOOTH — replaces `_rejects_state_tamper_or_collides`.** An
@@ -806,7 +810,7 @@ theorem wideRow_binds_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag)
       (fun l => OracleComp.mapOut (wideInnerSelect D tagDec l) (M l))).run l H
       = wideInnerSelect D tagDec l a := by
     show (OracleComp.mapOut (wideInnerSelect D tagDec l) (M l)).eval H = _
-    rw [OracleComp.mapOut_eval, ← hArun]
+    erw [OracleComp.mapOut_eval, ← hArun]
   have hB₂run : (romCarrierAdv _ _ (wideOuterComp D tagDec M)).run l H
       = ((a.1, ()),
           (H (a.1, Sum.inl a.2.1.1.1), H (a.1, Sum.inl a.2.1.1.2.1),
@@ -815,7 +819,7 @@ theorem wideRow_binds_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag)
            H (a.1, Sum.inl a.2.2.1.2.2), H (a.1, Sum.inr (Sum.inl a.2.2.2)))) := by
     show (wideOuterComp D tagDec M l).eval H = _
     unfold wideOuterComp
-    rw [OracleComp.bindComp_eval, ← hArun]
+    erw [OracleComp.bindComp_eval, ← hArun]
     rfl
   by_cases hT :
       ((H (a.1, Sum.inl a.2.1.1.1), H (a.1, Sum.inl a.2.1.1.2.1),
@@ -902,7 +906,8 @@ theorem wide_state_tamper_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag)
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _
     (((effectVmWideRomStateTamper D tagDec).game).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrArg Prod.fst hc), heq⟩
 
@@ -923,7 +928,8 @@ theorem wide_root_tamper_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag)
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _
     (((effectVmWideRomRootTamper D tagDec).game).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrArg Prod.snd hc), heq⟩
 
@@ -1052,7 +1058,7 @@ theorem narrowRow_binds_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag)
       (fun l => OracleComp.mapOut (narrowInnerSelect D tagDec l) (M l))).run l H
       = narrowInnerSelect D tagDec l a := by
     show (OracleComp.mapOut (narrowInnerSelect D tagDec l) (M l)).eval H = _
-    rw [OracleComp.mapOut_eval, ← hArun]
+    erw [OracleComp.mapOut_eval, ← hArun]
   have hB₂run : (romCarrierAdv _ _ (narrowOuterComp D tagDec M)).run l H
       = ((a.1, ()),
           ((H (a.1, Sum.inl a.2.1.1.1), H (a.1, Sum.inl a.2.1.1.2.1),
@@ -1061,7 +1067,7 @@ theorem narrowRow_binds_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag)
             H (a.1, Sum.inl a.2.2.1.2.2)), a.2.2.2)) := by
     show (narrowOuterComp D tagDec M l).eval H = _
     unfold narrowOuterComp
-    rw [OracleComp.bindComp_eval, ← hArun]
+    erw [OracleComp.bindComp_eval, ← hArun]
     rfl
   by_cases hT :
       (((H (a.1, Sum.inl a.2.1.1.1), H (a.1, Sum.inl a.2.1.1.2.1),

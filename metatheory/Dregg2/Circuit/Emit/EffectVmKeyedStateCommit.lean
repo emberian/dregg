@@ -405,7 +405,8 @@ theorem break_adv_le (sites : List VmHashSite) (hsites : sites = transferHashSit
     gameAdv (narrowBreakGame sites) A l
       ≤ gameAdv (keyedRomGame vmSpongeFamily) (breakFinder sites A) l := by
   refine @winProb_le_of_imp _ ((narrowBreakGame sites).instFin l) _ _ (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  refine (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr ?_
   exact break_wins_imp sites hsites A l H hH
 
 /-- **THE EFFICIENCY DISCHARGE, PRESERVING THE QUERY BOUND**: the peel is a `mapOut` post-map, so a
@@ -418,7 +419,7 @@ theorem breakFinder_in_romEff (sites : List VmHashSite) (Q : ℕ → ℕ)
     fun l => OracleComp.mapOut_queryBounded _ (hMQ l), ?_⟩
   intro l H
   show stateColl l (A.run l H).1 (A.run l H).2 = _
-  rw [OracleComp.mapOut_eval, hrun l H]
+  erw [OracleComp.mapOut_eval, hrun l H]
   rfl
 
 /-- **⚑⚑ THE KEYSTONE — the per-effect state-commit binding, CLOSED on the PROVED floor.** In the

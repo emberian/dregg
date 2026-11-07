@@ -229,7 +229,8 @@ theorem cfEquivRom_hard (A₀ : M →ₗ[Rq] N) (t₀ : N) (i₀ : Idx) (wH : N)
     intro l
     refine @winProb_le_of_imp _
       ((cfEquivGame (cfRomFamily Idx A₀ t₀ i₀ wH β₀)).instFin l) _ _ (fun H hH => ?_)
-    rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
+    replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+    refine (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr ?_
     obtain ⟨hne, heq⟩ := hH
     exact ⟨fun hc => hne (congrArg Prod.snd hc), heq⟩
   have hB : RomEff (crRomFamily Idx N).toRomFamily Q B := by
@@ -237,7 +238,7 @@ theorem cfEquivRom_hard (A₀ : M →ₗ[Rq] N) (t₀ : N) (i₀ : Idx) (wH : N)
       fun l => OracleComp.mapOut_queryBounded _ (hMQ l), ?_⟩
     intro l H
     show ((i₀, (A.run l H).1), (i₀, (A.run l H).2)) = _
-    rw [OracleComp.mapOut_eval, hrun l H]
+    erw [OracleComp.mapOut_eval, hrun l H]
     rfl
   exact negl_of_le
     (fun l => (gameAdv_mem_unit (cfEquivGame (cfRomFamily Idx A₀ t₀ i₀ wH β₀)) A l).1)

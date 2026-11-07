@@ -576,13 +576,14 @@ theorem wideKeysTamper_binds_rom (Q : ℕ → ℕ)
       (romCarrierAdv _ _ (wideKeysExtract M))
       ⟨wideKeysExtract M, fun l => OracleComp.mapOut_queryBounded _ (hM l), fun _ _ => rfl⟩)
   refine @winProb_le_of_imp _ (wideKeysTamper.game.instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hproj, heq⟩ := hH
   have hBrun : (romCarrierAdv _ _ (wideKeysExtract M)).run l H
       = (((), ()), (A.run l H).1, (A.run l H).2) := by
     show (wideKeysExtract M l).eval H = _
     unfold wideKeysExtract
-    rw [OracleComp.mapOut_eval, hrun l H]
+    erw [OracleComp.mapOut_eval, hrun l H]
     rfl
   rw [hBrun]
   refine ⟨fun hc => ?_, heq⟩

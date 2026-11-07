@@ -284,7 +284,8 @@ theorem forgery_adv_le {Key : Type} (D : KeySetDeployment Key) (cur : D.Tag → 
     gameAdv (rotationForgeryGame D cur) A n
       ≤ gameAdv (keySetCollisionGame D) (forgeryToCollisionFinder D cur A) n := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact forgery_wins_imp D cur A n t ht
 
 /-! ## §5 — the RE-GROUNDED CONSUMERS.

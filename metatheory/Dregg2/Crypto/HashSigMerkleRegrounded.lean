@@ -259,7 +259,8 @@ theorem keySwap_adv_le (D : SpongeDeployment) (H : ℤ → ℤ) (ℓ N : ℕ)
     gameAdv (keySwapGame D H ℓ N) A n
       ≤ gameAdv (hashGame (spongeFamily D)) (keySwapToFinder D H ℓ N A) n := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact keySwap_wins_imp D H ℓ N A n t ht
 
 /-- **⚑ RE-GROUNDED `HashSigMerkle.merkle_ots_binds_index` — from the sponge's collision floor, VIA the
@@ -513,7 +514,8 @@ theorem ksRom_adv_le (m ℓ N : ℕ) (HH : ℤ → ℤ)
       ≤ gameAdv (keyedRomGame (ksRomFamily D tagDec m)) (ksRomToFinder D tagDec m ℓ N HH A) l := by
   refine @winProb_le_of_imp _ ((ksRomForgery D tagDec m ℓ N HH).game.instFin l) _ _
     (fun Hor hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact ksRom_wins_imp D tagDec m ℓ N HH A l Hor hH
 
 /-- **THE EXTRACTED FINDER IS QUERY-BOUNDED** — the extractor is a `mapOut` post-composition, which
@@ -533,7 +535,7 @@ theorem ksRomToFinder_in_romEff (m ℓ N : ℕ) (HH : ℤ → ℤ) (Q : ℕ → 
         ((a.1, intListBVec m (pkEncode a.2.s.pk)),
           (a.1, intListBVec m (pkEncode (publicKey HH (a.2.sks a.2.i))))))
       = _
-    rw [OracleComp.mapOut_eval, hrun l Hor]
+    erw [OracleComp.mapOut_eval, hrun l Hor]
     rfl
 
 /-- **⚑⚑ THE RE-GROUNDED KEY-SWAP BINDING — floor PROVED, nothing refutable carried.** Every
