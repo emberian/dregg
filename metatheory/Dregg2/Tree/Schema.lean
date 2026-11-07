@@ -433,7 +433,7 @@ theorem compile_correct : ∀ v : JVal, (compile S).eval v = some (bitsOf S v)
     simp only [Nat.zero_add, Bool.true_and]
     have hm : decide ((defAt S d).minItems ≤ min xs.length (cap (defAt S d))) =
         decide ((defAt S d).minItems ≤ xs.length) := by
-      simp only [cap, decide_eq_decide]; omega
+      exact decide_eq_decide.mpr (by simp only [cap]; omega)
     have hx : maxOk (defAt S d) (min xs.length (cap (defAt S d))) = maxOk (defAt S d) xs.length := by
       unfold maxOk cap; cases hmx : (defAt S d).maxItems <;> simp <;> omega
     rw [hm, hx]
