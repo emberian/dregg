@@ -98,3 +98,39 @@ The gap is below it.
     content.
   - The page states this. Widening it is the felt-width programme (`WOUND-felt-width-*`), not this
     lane.
+
+## Refocus (2026-11-06, ember via root)
+
+ember dropped "a stranger verifies it" as the bar: "if they care about our system they'll just run
+it themselves; focus on features and functionality and maturity and performance". The
+initiative is now three things:
+
+1. SET_FIELD graduated properly into `CUTOVER_READY_SELECTORS`.
+2. R3 holding over real multi-turn grain sessions on main (the threaded fold).
+3. `cv hook receipt` working as a feature.
+
+The microsite, the stranger-mintable VK rehearsal and the publication work are dropped. The
+`grain-session` verifier stays as the end-to-end consumer of the ladder.
+
+What the probes established on bb2 (debug test profile, workspace deps at opt-level 3):
+
+- **Why SET_FIELD was refused.** `verify_descriptor_participant` refused every setField leg because
+  SET_FIELD was not cutover-ready. Even the `#[ignore]`d single-turn `r3_grain_adapter` failed on
+  main. Graduation is now done:
+  - SET_FIELD is in the list.
+  - Per-slot names resolve to it.
+  - `every_setfield_slot_member_carries_exactly_one_selector_gate` covers all 8 slots in both
+    registries.
+  - The existing gate-alone forgery tooth still holds.
+- **Threading the fold.** It needed three things:
+  - one receipt context (`iroot`) for the whole session;
+  - continued turns witnessed over the pre-cell with the model nonce and the turn-0 balance;
+  - cumulative full-width cell witnesses per cohort run. A second grain turn witnessed over its
+    untouched pre-cell fails fields-canonicity constraints #87-#93 and #118.
+- **Two turns: 10 legs and 0 seam breaks** (the naive chaining breaks once).
+  - Finalize takes about 18 s per leg.
+  - The fold takes 454 s and produces a 799 KB aggregate.
+  - Verification takes 0.43 s.
+- **The head opens.** The aggregate's `final_root` equals the chip-faithful 8-felt commitment of
+  the last ledger cell, under the session receipt context, with the model nonce and the turn-0
+  balance. Of six candidates measured, it is the only one that matches.

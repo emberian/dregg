@@ -222,7 +222,9 @@ theorem decodedVmTrace_envAt_loc {n numCols : ℕ}
     rw [decodedVmTrace_rows_length]; exact i.isLt
   simp only [envAt]
   rw [List.getD_eq_getElem _ _ hlen]
-  simp only [decodedVmTrace, List.getElem_ofFn, Fin.eta, decodedRow, Fin.isLt, dite_true]
+  show ((List.ofFn fun i : Fin n => decodedRow T i)[(i : ℕ)]'(by simp)) (j : ℕ) = _
+  rw [List.getElem_ofFn]
+  simp only [Fin.eta, decodedRow, Fin.isLt, dite_true]
 
 /-- The readout round-trips: casting the trace's ℤ entry back to BabyBear recovers the decoded
 field value — the ℤ-lift carries no information loss. -/

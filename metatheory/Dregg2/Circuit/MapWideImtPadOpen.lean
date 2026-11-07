@@ -1034,8 +1034,9 @@ theorem aafi8R1_eq : aafi8R1
     = perfectRoot oddSponge MAP_TREE_DEPTH
         (padTo MAP_TREE_DEPTH [imtLeafHash8Of oddSponge ⟨keyLo, 7, keyE⟩]
           (one_le_two_pow_depth _)) := by
-  show padImtRoot8 keyE oddSponge MAP_TREE_DEPTH [(keyLo, 7)] bite8Heap_sz = _
-  rw [padImtRoot8, padImtRootE_unfold,
+  show padImtRootE wideEnc keyE oddSponge MAP_TREE_DEPTH [(keyLo, 7)]
+    (one_le_two_pow_depth (keyLo, (7 : ℤ))) = _
+  rw [padImtRootE_unfold,
     padTo_congr (bite8_chain_map keyLo keyE 7) _ (one_le_two_pow_depth _)]
 
 /-- The two-entry relinked WIDE chain, at the LIST level (cheap `rfl`; nothing folds). -/

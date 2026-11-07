@@ -276,8 +276,8 @@ theorem merkleOpen_adv_le (Key : Type) (kF : Fintype Key) (kD : DecidableEq Key)
       ≤ gameAdv (keyedRomGame (merkleRomFamily Key kF kD kN))
           (merkleOpenFinder Key kF kD kN d A) l := by
   refine @winProb_le_of_imp _ ((merkleOpenRomGame Key kF kD kN d).instFin l) _ _ (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
-  exact merkleOpen_wins_imp Key kF kD kN d A l H hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  exact (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr (merkleOpen_wins_imp Key kF kD kN d A l H hH)
 
 /-- **⚑ THE EXTRACTED FINDER IS QUERY-BOUNDED, WITH THE WALK'S QUERIES PAID.** A `Q`-query opening
 forger yields a `(Q + 2·d)`-query collision finder — the forger's own tree (`bindComp`) plus the
@@ -295,7 +295,8 @@ theorem merkleOpenFinder_in_romEff (Key : Type) (kF : Fintype Key) (kD : Decidab
       (fun p => openExtract_queryBounded Key kF kD kN d l p)
   · show (openExtract Key kF kD kN d l (A.run l H)).eval H
       = (OracleComp.bindComp (M l) (openExtract Key kF kD kN d l)).eval H
-    rw [OracleComp.bindComp_eval, hrun l H]
+    exact (congrArg (fun p => (openExtract Key kF kD kN d l p).eval H) (hrun l H)).trans
+      (OracleComp.bindComp_eval (M l) (openExtract Key kF kD kN d l) H).symm
 
 /-- **⚑⚑ THE MERKLE-OPENING BINDING — from the KEYED, QUERY-COUNTED floor, WHICH IS PROVED.**
 
@@ -393,7 +394,8 @@ theorem constOpenAdv_gameAdv_pos (Key : Type) (kF : Fintype Key) (kD : Decidable
     rw [List.length_ofFn] at hlen
     simp at hlen
     omega
-  rw [chainEval_const_of_ne_nil _ r₀ hne (v l), chainEval_const_of_ne_nil _ r₀ hne (w l)]
+  exact (chainEval_const_of_ne_nil _ r₀ hne (v l)).trans
+    (chainEval_const_of_ne_nil _ r₀ hne (w l)).symm
 
 /-- **(TOOTH — the admitted refuter-shape is DEFANGED, not excluded.)** The constant answerer is in
 the class and the binding applies to it: positive advantage where the game is winnable, NEGLIGIBLE

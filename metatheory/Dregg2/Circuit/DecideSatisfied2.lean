@@ -324,6 +324,7 @@ theorem decideSatisfied2_empty_accepts (hash : List ℤ → ℤ) :
     MemoryChecking.initSet, MemoryChecking.finalSet, MemoryChecking.readSet,
     MemoryChecking.writeSetFrom, MemoryChecking.boundarySet, MemoryChecking.Disciplined,
     MemoryChecking.DisciplinedFrom, emptyTrace]
+  exact decide_eq_true trivial
 
 /-- A one-range descriptor: a single 30-bit range tooth on column 0. -/
 def oneRangeDescriptor2 : EffectVmDescriptor2 :=

@@ -467,7 +467,8 @@ with a genuine macaroon token + a verifying, admitting macaroon chain COMMITS ov
 theorem pv_token_good_commits :
     (execFullForestG ballot0 (castNodeWithChain goodTokenCred pvGoodChain voterNullB 9)).isSome := by
   rw [pv_token_good_cast_runs_write ballot0 voterNullB 9 pv_ballot0_token_gate_ok]
-  simpa using pv_ballot0_token_write_commits
+  have hres : reservedField voterNullB = false := by simp [reservedField, voterNullB]
+  simpa [stateStepDev, hres] using pv_ballot0_token_write_commits
 
 -- The gate passes for the genuine credential on `ballot0` (credential ∧ revocation legs are the live legs):
 #guard (gateOK (mkAuth goodCred []) ballot0)                       --  true  (genuine + not revoked)

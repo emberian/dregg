@@ -200,7 +200,6 @@ theorem schema_sound (hH : HashFits H) (st : SchemaStmt) (r : SchemaReceipt)
         have hr := TreeAut.checkRun_sound (compile S) r.tree r.run hm.1
         rw [compile_correct] at hr
         have hb := congrArg (fun l => getBit l S.root) (Option.some.inj hr)
-        simp only at hb
         rw [← e1, ← hm.2, ← getBit_bitsOf S r.tree S.root, hb]
     · exact Or.inr (Or.inr e2)
   · exact Or.inr (Or.inl e1)

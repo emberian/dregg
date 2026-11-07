@@ -494,7 +494,7 @@ the monoidal coherence of the trivial monoid `𝟙_` (`one = 𝟙`, `mul = (λ_)
 def escrowMonadHom : escrowMonad (𝟙_ C) ⟶ (Adjunction.id (C := C)).toMonad where
   toNatTrans :=
     { app := fun A => (ρ_ A).hom
-      naturality := by intro A B f; simp [escrowMonad] }
+      naturality := by intro A B f; simp [escrowMonad, Adjunction.toMonad, Adjunction.id] }
   app_η := by
     intro A
     -- Lemma 3.9: `unit ≫ lproj = id ⊗ lax₀`; here `η = (ρ).inv ≫ A ◁ 𝟙`, so `η ≫ ρ = id`.

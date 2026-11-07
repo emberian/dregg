@@ -387,7 +387,7 @@ theorem effCapRemoveV3_tombstoneSpine (base : EffectVmDescriptor2) (name : Strin
     simpa [VmConstraint2.holdsAt] using h
   · intro lvl hlvl
     have := hdir lvl hlvl
-    simpa [afterSpineCols_dir] using this
+    exact this
   · intro k
     have hin : VmConstraint2.base (.gate (rootPinGate (afterSpineCols base.traceWidth) k))
         ∈ removeTombstoneConstraints base.traceWidth := by

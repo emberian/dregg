@@ -224,6 +224,14 @@ theorem cell_satisfied_to_base_satisfied
       (constTrace a pis tf)) :
     Satisfied2 hash privateGraphRewriteDescriptor ppM0 ppF0 []
       (constTrace a (cellCorePis pis) tf) := by
+  -- The two descriptors declare the same memory and map ops and the traces share their rows,
+  -- so the logs coincide; stated once and closed by rfl, not re-simplified per leg.
+  have hmem : Dregg2.Circuit.DescriptorIR2.memLog privateGraphRewriteDescriptor
+      (constTrace a (cellCorePis pis) tf) =
+      Dregg2.Circuit.DescriptorIR2.memLog privateGraphRewriteCellDescriptor (constTrace a pis tf) := rfl
+  have hmap : Dregg2.Circuit.DescriptorIR2.mapLog privateGraphRewriteDescriptor
+      (constTrace a (cellCorePis pis) tf) =
+      Dregg2.Circuit.DescriptorIR2.mapLog privateGraphRewriteCellDescriptor (constTrace a pis tf) := rfl
   constructor
   · intro i hi constraint hc
     change constraint ∈ hashLookups ++ (rangeLookups ++
@@ -266,20 +274,17 @@ theorem cell_satisfied_to_base_satisfied
               VmConstraint.holdsVm] using h
   · intro i hi
     simpa [privateGraphRewriteDescriptor, privateGraphRewriteCellDescriptor,
-      constTrace] using hsat.rowHashes i (by simpa [constTrace] using hi)
+      constTrace, Dregg2.Circuit.Emit.EffectVmEmit.siteHoldsAll,
+      Dregg2.Circuit.Emit.EffectVmEmit.siteHoldsAll.go]
+      using hsat.rowHashes i (by simpa [constTrace] using hi)
   · intro i hi r hr
     simp [privateGraphRewriteDescriptor] at hr
   · exact hsat.memAddrsNodup
-  · simpa [privateGraphRewriteDescriptor, privateGraphRewriteCellDescriptor]
-      using hsat.memClosed
-  · simpa [privateGraphRewriteDescriptor, privateGraphRewriteCellDescriptor]
-      using hsat.memDisciplined
-  · simpa [privateGraphRewriteDescriptor, privateGraphRewriteCellDescriptor]
-      using hsat.memBalanced
-  · simpa [privateGraphRewriteDescriptor, privateGraphRewriteCellDescriptor,
-      constTrace] using hsat.memTableFaithful
-  · simpa [privateGraphRewriteDescriptor, privateGraphRewriteCellDescriptor,
-      constTrace] using hsat.mapTableFaithful
+  · rw [hmem]; exact hsat.memClosed
+  · rw [hmem]; exact hsat.memDisciplined
+  · rw [hmem]; exact hsat.memBalanced
+  · rw [hmem]; exact hsat.memTableFaithful
+  · rw [hmap]; exact hsat.mapTableFaithful
 
 /-- Structural no-second-semantics theorem: every hash lookup authored by the
 base relation is literally enforced by the cell wrapper. -/

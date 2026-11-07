@@ -63,7 +63,8 @@ def fieldNat (x : ℤ) : Nat := (x % (FIELD_MODULUS : ℤ)).toNat
 def rootBlock (root : Root8) : List ℤ := List.ofFn root
 
 @[simp] theorem rootBlock_length (root : Root8) : (rootBlock root).length = 8 := by
-  simp [rootBlock, Dregg2.Circuit.ExactNullifierAafiPlan.ROOT_LANES]
+  rw [rootBlock, List.length_ofFn]
+  try rfl
 
 /-- The exact deployed full-state sponge, exposed at all eight squeezed lanes. -/
 def fullStateHash8 (inputs : List ℤ) : Root8 :=
@@ -124,7 +125,8 @@ theorem accumulatorStateBlock_count_eq_of_eq {leftRoot rightRoot : Root8}
       accumulatorStateBlock rightRoot rightCount) : leftCount = rightCount := by
   apply rawValueBlock_injective
   have hd := congrArg (fun xs : List ℤ => xs.drop 9) h
-  simpa [accumulatorStateBlock, rootBlock] using hd
+  simpa [accumulatorStateBlock, List.drop_left' (rootBlock_length leftRoot),
+    List.drop_left' (rootBlock_length rightRoot)] using hd
 
 /-- A changed authenticated cursor under an unchanged state commitment is exactly a concrete
 full-state sponge collision, not an assumed impossibility. -/

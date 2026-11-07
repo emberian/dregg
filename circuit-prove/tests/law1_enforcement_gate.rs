@@ -62,11 +62,14 @@
 //! (algebra originates here — authoring) or **destructuring** (algebra arrived from somewhere else and is
 //! being read — lowering / interpreting). `classify_site` decides it syntactically:
 //!
-//! * a `..` rest inside the braces is pattern-only (a struct-update base in an expression must be
-//!   `..expr`, never bare `..`),
-//! * a following `=>` (optionally through an `if` guard) or a following `|` is a match arm,
-//! * `matches!(`, `if let`, `while let`, `let .. =` in binding position are patterns,
-//! * anything else constructs.
+//! * balanced match-arm headers up to `=>` (stopping before any `if` guard) are patterns,
+//!   including nested tuple/or-patterns and trailing commas,
+//! * only the SECOND `matches!` argument is a pattern; its scrutinee and guard construct,
+//! * `if let`, `while let`, `let .. =` before the binding `=` are patterns,
+//! * inline `const` blocks are expressions even inside patterns; anything else constructs.
+//!
+//! Pattern contexts are computed once per file. The innermost explicit context wins; no
+//! filename is exempted and `#[cfg(test)]` attribution never changes the count.
 //!
 //! This is the *only* exclusion in the gate and it is a property of the source text, not a list of
 //! forgiven filenames. It takes `custom_leaf_lowering.rs` from 46 phantom violations to 0 — while still
@@ -244,11 +247,13 @@
 //! * INTERPRETERS (the law WORKING — they evaluate Lean-authored constraints): `descriptor_ir2.rs`,
 //!   `descriptor_ir2_canonical.rs`, `dsl/dsl_p3_air.rs`, `lean_lookup_air.rs` (the proven range gadget).
 //!   Their *pattern* halves are now free; the residual is the IR they construct while translating.
-//! * PROVED-FAITHFUL LOWERINGS: `custom_leaf_adapter.rs` / `custom_leaf_lowering.rs` —
-//!   `CustomLeafEncoding.lean::cell_to_descriptor_faithful` proves the encoding preserves semantics.
-//! * DRIFT-DETECTORS, deliberately kept: `dsl/derivation.rs`, `dsl/note_spending.rs` — the EMITTED paths
-//!   walk these v1 descriptors as their SOURCE, so "a drift in the deployed circuit is a build-time
-//!   refusal, never a silent divergence" (`note_spend_witness.rs:225-227`).
+//! * LOWERING DEBT: `custom_leaf_adapter.rs` / `custom_leaf_lowering.rs` —
+//!   `CustomLeafEncoding.lean::cell_to_descriptor_faithful` explicitly covers the Lean mirror,
+//!   not the deployed Rust lowerer. That citation does not discharge compiler refinement.
+//! * LEGACY SOURCE DESCRIPTORS: `dsl/derivation.rs`, `dsl/note_spending.rs` remain Rust-authored
+//!   DSL constraints. Note-spend consumers now parse the repaired Lean artifact directly;
+//!   the DSL remains the witness recipe's source, not a proof of descriptor equivalence.
+//!   The removed lowerers checked supported kinds/layout, not arbitrary semantic drift.
 //! * THE USER-PROGRAM GRAMMAR: `dsl/predicates/*`, `dsl/descriptors.rs` — the host-trusted smart-contract
 //!   surface users deploy programs against; interpreted, fails closed on an unknown vk_hash.
 //! * THE ONE TEST-ONLY TOY AIR: `dregg_outer_config.rs` (8) — `toy_fib_air::ToyFibAir`, the p3
@@ -440,82 +445,165 @@ fn skip_ws(b: &[u8], mut i: usize) -> usize {
     i
 }
 
-/// `name_end` points just past the `Type::Variant` path. Decide what it is.
-fn classify_site(b: &[u8], path_start: usize, name_end: usize) -> Site {
-    let n = b.len();
-    let j = skip_ws(b, name_end);
-    let after = if j < n && (b[j] == b'{' || b[j] == b'(') {
-        let k = matching(b, j);
-        let group = &b[j + 1..k.saturating_sub(1).max(j + 1)];
-        // A bare `..` rest is pattern-only: a struct-update base must be `..expr`.
-        let mut t = 0usize;
-        while t + 1 < group.len() {
-            if group[t] == b'.' && group[t + 1] == b'.' {
-                let after_dots = skip_ws(group, t + 2);
-                if after_dots >= group.len()
-                    || matches!(group[after_dots], b',' | b'}' | b')' | b']')
-                {
-                    return Site::Pattern;
+/// An explicitly delimited syntactic context. The innermost context wins: a `matches!`
+/// pattern inside a guard is a pattern, but the guard and the macro's scrutinee are expressions.
+#[derive(Debug)]
+struct SiteContext {
+    start: usize,
+    end: usize,
+    site: Site,
+}
+
+/// Walk balanced groups, recording the PATTERN portion of match arms / bindings / `matches!`.
+/// Unlike looking at the byte after a constructor, this handles a tuple's first component,
+/// nested or-patterns and trailing commas without mistaking siblings for new constraints.
+/// No filename/type-variant exemption: every RHS, guard and scrutinee remains construction.
+fn site_contexts(b: &[u8]) -> Vec<SiteContext> {
+    fn walk(b: &[u8], lo: usize, hi: usize, out: &mut Vec<SiteContext>) {
+        let mut i = lo;
+        let mut arm_start = lo;
+        let mut guard = None;
+        let mut in_rhs = false;
+        let mut binder = None;
+        while i < hi {
+            if matches!(b[i], b'(' | b'[' | b'{') {
+                let after = matching(b, i).min(hi);
+                if after <= i + 1 {
+                    break;
+                }
+                walk(b, i + 1, after - 1, out);
+                // A block-valued arm need not have a comma before the next arm. Never do
+                // this before `=>`: the group may be a STRUCT PATTERN or a guard block.
+                if in_rhs && b[i] == b'{' {
+                    arm_start = after;
+                    guard = None;
+                    in_rhs = false;
+                }
+                i = after;
+                continue;
+            }
+            if b[i..].starts_with(b"=>") {
+                let pattern_end = guard.unwrap_or(i);
+                out.push(SiteContext {
+                    start: arm_start,
+                    end: pattern_end,
+                    site: Site::Pattern,
+                });
+                if let Some(g) = guard {
+                    out.push(SiteContext {
+                        start: g,
+                        end: i,
+                        site: Site::Construct,
+                    });
+                }
+                in_rhs = true;
+                binder = None;
+                i += 2;
+                continue;
+            }
+            if b[i] == b',' || b[i] == b';' {
+                arm_start = i + 1;
+                guard = None;
+                in_rhs = false;
+                binder = None;
+            }
+            if b[i] == b'='
+                && b.get(i + 1) != Some(&b'=')
+                && b.get(i.wrapping_sub(1)) != Some(&b'=')
+            {
+                if let Some(start) = binder.take() {
+                    out.push(SiteContext {
+                        start,
+                        end: i,
+                        site: Site::Pattern,
+                    });
                 }
             }
-            t += 1;
-        }
-        k
-    } else {
-        j
-    };
-    // Patterns nest inside other patterns: `Some(LeanExpr::Const(v)) => ..`. Step out of
-    // the enclosing pattern's parens/brackets before looking for the arm arrow. `}` is NOT
-    // skipped — that would step out of a block and read the NEXT match arm's arrow.
-    let mut j = skip_ws(b, after);
-    while j < n && matches!(b[j], b')' | b']') {
-        j = skip_ws(b, j + 1);
-    }
-    if j + 1 < n && b[j] == b'=' && b[j + 1] == b'>' {
-        return Site::Pattern; // match arm
-    }
-    if j < n && b[j] == b'|' && !(j + 1 < n && b[j + 1] == b'|') {
-        return Site::Pattern; // or-pattern
-    }
-    // `Variant { .. } if guard => ..`
-    if j + 3 <= n && &b[j..j + 3] == b"if " {
-        let end = (j + 300).min(n);
-        let seg = &b[j..end];
-        if let Some(p) = find(seg, 0, b"=>") {
-            if !seg[..p].contains(&b';') {
-                return Site::Pattern;
+            if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+                let end = ident_at(b, i);
+                let word = &b[i..end];
+                if word == b"let" {
+                    binder = Some(end);
+                }
+                if word == b"if" && !in_rhs && guard.is_none() {
+                    guard = Some(i);
+                }
+                if word == b"matches" {
+                    let bang = skip_ws(b, end);
+                    let open = skip_ws(b, bang + 1);
+                    if b.get(bang) == Some(&b'!') && b.get(open) == Some(&b'(') {
+                        let close = matching(b, open).saturating_sub(1).min(hi);
+                        let mut k = open + 1;
+                        let mut pattern_start = None;
+                        let mut pattern_end = close;
+                        while k < close {
+                            if matches!(b[k], b'(' | b'[' | b'{') {
+                                k = matching(b, k);
+                                continue;
+                            }
+                            if b[k] == b',' && pattern_start.is_none() {
+                                pattern_start = Some(k + 1);
+                            }
+                            if b[k].is_ascii_alphabetic() || b[k] == b'_' {
+                                let e = ident_at(b, k);
+                                if pattern_start.is_some() && &b[k..e] == b"if" {
+                                    pattern_end = k;
+                                    break;
+                                }
+                                k = e;
+                            } else {
+                                k += 1;
+                            }
+                        }
+                        // The first argument is an expression, NEVER a pattern. No blanket
+                        // "inside matches!" exception (which hid real constructors there).
+                        if let Some(start) = pattern_start {
+                            out.push(SiteContext {
+                                start: open + 1,
+                                end: start,
+                                site: Site::Construct,
+                            });
+                            out.push(SiteContext {
+                                start,
+                                end: pattern_end,
+                                site: Site::Pattern,
+                            });
+                            out.push(SiteContext {
+                                start: pattern_end,
+                                end: close,
+                                site: Site::Construct,
+                            });
+                        }
+                    }
+                }
+                // Inline const expressions in patterns can themselves BUILD an IR node.
+                if word == b"const" {
+                    let open = skip_ws(b, end);
+                    if b.get(open) == Some(&b'{') {
+                        out.push(SiteContext {
+                            start: open + 1,
+                            end: matching(b, open) - 1,
+                            site: Site::Construct,
+                        });
+                    }
+                }
+                i = end;
+            } else {
+                i += 1;
             }
         }
     }
-    // Binding-position patterns: look back to the start of the statement.
-    let stmt_start = b[..path_start]
+    let mut out = Vec::new();
+    walk(b, 0, b.len(), &mut out);
+    out
+}
+
+fn classify_site(contexts: &[SiteContext], path_start: usize) -> Site {
+    contexts
         .iter()
-        .rposition(|&c| c == b';' || c == b'{' || c == b'}')
-        .map_or(0, |p| p + 1);
-    let pre = &b[stmt_start..path_start];
-    // `matches!(expr, PATTERN)` — only when the site is genuinely INSIDE the macro's
-    // parens. A bare "there was a matches! earlier in this statement" test would
-    // misclassify `matches!(a, X::Y{..}) && v.contains(&LeanExpr::Var(3))` as lowering.
-    {
-        let mut m = 0usize;
-        while let Some(p) = find(b, m, b"matches!(") {
-            if p >= path_start {
-                break;
-            }
-            let open = p + b"matches!".len();
-            if matching(b, open) > path_start {
-                return Site::Pattern;
-            }
-            m = p + 1;
-        }
-    }
-    let binder = find(pre, 0, b"if let ").is_some()
-        || find(pre, 0, b"while let ").is_some()
-        || find(pre, 0, b"let ").is_some();
-    if binder && j < n && b[j] == b'=' && !(j + 1 < n && b[j + 1] == b'=') {
-        return Site::Pattern; // `if let X::Y { .. } = expr` / `let X::Y(v) = expr else`
-    }
-    Site::Construct
+        .filter(|c| c.start <= path_start && path_start < c.end)
+        .min_by_key(|c| c.end - c.start)
+        .map_or(Site::Construct, |c| c.site)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -721,6 +809,7 @@ fn count_sites_explained(raw: &str, mut explain: Option<&mut Vec<SiteRecord>>) -
     let b = code.as_bytes();
     let mut c = Counts::default();
     let regions = cfg_test_regions(b);
+    let contexts = site_contexts(b);
     let in_cfg_test = |p: usize| regions.iter().any(|&(s, e)| p >= s && p < e);
     let line_of = |p: usize| b[..p].iter().filter(|&&x| x == b'\n').count() + 1;
 
@@ -784,7 +873,7 @@ fn count_sites_explained(raw: &str, mut explain: Option<&mut Vec<SiteRecord>>) -
             let vstart = end + 2;
             let vend = ident_at(b, vstart);
             if vend > vstart && b[vstart].is_ascii_uppercase() {
-                let site = classify_site(b, i, vend);
+                let site = classify_site(&contexts, i);
                 match site {
                     Site::Construct => {
                         c.ir_constructed += 1;
@@ -972,10 +1061,10 @@ fn scan_tree(root: &Path, tracked: Option<&BTreeSet<String>>) -> BTreeMap<String
 // ─────────────────────────────────────────────────────────────────────────────
 #[rustfmt::skip]
 const BASELINE: &[(&str, usize)] = &[
+    // 2026-11-06: native scanner confirms zero authored sites after generated
+    // solvency, caveat, DECO, membership and sovereign leaf cutovers; no slack rows.
     ("circuit-prove/src/carrier_pin_twin.rs", 6),
-    ("circuit-prove/src/caveat_admission_leaf_adapter.rs", 32),
     ("circuit-prove/src/custom_leaf_adapter.rs", 3),
-    ("circuit-prove/src/deco_leaf_adapter.rs", 21),
     // ⚑ THE CRATE'S ONE TEST-ONLY TOY AIR lives here, and all 8 sites are it:
     // `toy_fib_air::ToyFibAir`, the p3 uni-stark 2-column Fibonacci, `#[cfg(test)]`-gated,
     // shared by `dregg_outer_config`, `gpu_backend` and `dregg_mina_config`. It constrains
@@ -984,7 +1073,7 @@ const BASELINE: &[(&str, usize)] = &[
     ("circuit-prove/src/dregg_outer_config.rs", 8),
     ("circuit-prove/src/dsl_leaf_adapter.rs", 3),
     ("circuit-prove/src/effect_vm_p3_air.rs", 11),
-    ("circuit-prove/src/factory_leaf_adapter.rs", 5),
+    ("circuit-prove/src/factory_leaf_adapter.rs", 2), // generated tuple; only test comparisons remain
     // ── `circuit-prove/src/gpu_backend.rs` (was 8) is GONE from this ledger, 2026-07-30.
     //    Its 8 sites were a second private copy of the toy Fibonacci AIR above; the copy is
     //    deleted and `gpu_backend::tests` imports `toy_fib_air` instead, so the file now
@@ -993,12 +1082,12 @@ const BASELINE: &[(&str, usize)] = &[
     //    gate noticing (the same reason `descriptor_ir2.rs` was re-pinned 298 -> 283).
     //    A byproduct worth naming: the GPU/CPU byte-identity test now proves literally the
     //    same `Air` impl under both configs, so a byte difference cannot be the AIR's.
-    ("circuit-prove/src/hatchery_leaf_adapter.rs", 5),
+    ("circuit-prove/src/hatchery_leaf_adapter.rs", 2), // generated tuple; only test comparisons remain
     ("circuit-prove/src/joint_turn_recursive.rs", 28),
     ("circuit-prove/src/lean_lookup_air.rs", 3),
-    ("circuit-prove/src/membership_leaf_adapter.rs", 3),
     ("circuit-prove/src/mpt_holding_leaf.rs", 8),
-    ("circuit-prove/src/note_spend_leaf_adapter.rs", 41),
+    // Note-spend adapter: 41 -> 0 (2026-11-06), shared Lean artifact consumer.
+    // No slack row: its remaining VmConstraint matches only inspect generated IR.
     ("circuit-prove/src/private_book_bfv_terminal/fused.rs", 24),
     ("circuit-prove/src/private_graph_rewrite_cell.rs", 2),
     ("circuit-prove/src/private_preference_cell.rs", 2),
@@ -1050,8 +1139,6 @@ const BASELINE: &[(&str, usize)] = &[
     //    the FSI2 transfer cutover. RE-AUTHORING RING CLEARING IS LEAN-SIDE WORK: there is no
     //    `Emit/ShieldedRingClear*.lean` in the tree, and that absence — not these Rust files — is
     //    the open item.
-    ("circuit-prove/src/solvency_leaf_adapter.rs", 27),
-    ("circuit-prove/src/sovereign_leaf_adapter.rs", 3),
     ("circuit-prove/src/zkoracle_leaf_adapter.rs", 16),
     ("circuit/src/bilateral_aggregation_air.rs", 16),
     // 5 -> 7, 2026-08-01, membership `node8` cutover. The reason, as this gate demands: NONE of
@@ -1268,7 +1355,11 @@ const BASELINE: &[(&str, usize)] = &[
     ("circuit/src/effect_vm/burn_avail_weld.rs", 1),
     ("circuit/src/effect_vm/carrier_floor_weld.rs", 11),
     ("circuit/src/effect_vm/discharge_weld.rs", 5),
-    ("circuit/src/effect_vm/satisfaction_weld.rs", 2),
+    // 2 -> 3, 2026-11-07, classifier repair (match guards are expressions). No new algebra: the
+    // third site is `LeanExpr::Var(ESCROW_SEL_COL)` on the right of `==` in a match-arm GUARD
+    // inside `#[cfg(test)]` (:247), which READS the Lean-emitted escrow gates to compare them
+    // byte for byte. The old classifier skipped it as part of the arm header; guards construct.
+    ("circuit/src/effect_vm/satisfaction_weld.rs", 3),
     ("circuit/src/effect_vm/transfer_avail_weld.rs", 1),
     ("circuit/src/effect_vm/transfer_fee_avail_weld.rs", 1),
     ("circuit/src/effect_vm/vault_weld.rs", 5),
@@ -1301,9 +1392,11 @@ const BASELINE: &[(&str, usize)] = &[
     ("circuit/src/effect_vm_descriptors.rs", 26),
     ("circuit/src/lean_descriptor_air.rs", 47),
     ("circuit/src/membership_descriptor_4ary.rs", 1),
-    ("circuit/src/membership_descriptor_general.rs", 39),
+    // 2026-11-06: 247ebb4b9 moves binary membership to the Lean-generated artifact.
+    // Native integration scan at f2b9e86f: 0 authored / 2 pattern sites; no slack row.
     ("circuit/src/merkle_types.rs", 4),
-    ("circuit/src/note_spend_witness.rs", 41),
+    // Note-spend core: 41 -> 0 (2026-11-06), noteSpendLeafDescFixed authors the AIR.
+    // Witness generation and production-evaluator mutants construct no constraints.
     ("circuit/src/plonky3_prover.rs", 7),
     ("circuit/src/plonky3_recursion.rs", 6),
     // ⚑ THE LAW WON HERE (2026-08-06). `circuit/src/presentation.rs`'s row was 1 — the closure
@@ -1679,6 +1772,145 @@ mod teeth {
         let c = count_sites(lowering);
         assert_eq!(c.ir_constructed, 0, "a lowering authored nothing: {c:?}");
         assert_eq!(c.ir_lowered, 7, "all seven sites are destructuring: {c:?}");
+    }
+
+    /// The real flat-interpreter and Mina sites: tuple siblings and trailing commas are
+    /// syntax inside a pattern, not constructors. These are synthetic; production stays intact.
+    #[test]
+    fn nested_tuple_or_and_trailing_comma_patterns_are_lowering() {
+        let fixtures = [
+            (
+                r#"match (k, ck) {
+                (VmConstraint2::Base(VmConstraint::Gate(_)), CompiledK::Body(f)) => read(f),
+                (VmConstraint2::Base(VmConstraint::PiBinding { row, col, pi_index }), _) => read(col),
+                (VmConstraint2::Lookup(_) | VmConstraint2::MemOp(_), _,) => skip(),
+            }"#,
+                6,
+            ),
+            (
+                r#"match body {
+                LeanExpr::Add(l, r) => match (&**l, &**r) {
+                    (LeanExpr::Var(c), LeanExpr::Const(k)) if *c == col => Some(-*k),
+                    (LeanExpr::Const(k), LeanExpr::Var(c)) if *c == col => Some(-*k),
+                    _ => None,
+                },
+                LeanExpr::Var(c) if *c == col => Some(0),
+                _ => None,
+            }"#,
+                6,
+            ),
+            (
+                r#"match c {
+                VmConstraint2::Base(
+                    VmConstraint::PiBinding { row, col, pi_index },
+                ) if *pi_index == pi => Some((*row, *col)),
+                _ => None,
+            }"#,
+                2,
+            ),
+            (
+                r#"match (k, ck) {
+                (VmConstraint2::Base(VmConstraint::Gate(_) | VmConstraint::Boundary { .. })
+                    | VmConstraint2::WindowGate(_) | VmConstraint2::ChalGate(_), _,) => refuse(),
+            }"#,
+                5,
+            ),
+        ];
+        for (src, expected) in fixtures {
+            let c = count_sites(src);
+            assert_eq!(
+                c.ir_constructed, 0,
+                "a pattern builds no algebra: {src} {c:?}"
+            );
+            assert_eq!(
+                c.ir_lowered, expected,
+                "every nested node is classified: {src} {c:?}"
+            );
+        }
+    }
+
+    /// Patterns must not swallow neighboring expressions. In particular the old blanket
+    /// `matches!` / following `|` / bare `..` heuristics silently hid these constructors.
+    #[test]
+    fn pattern_contexts_keep_guards_scrutinees_and_rhs_constructed() {
+        let fixtures = [
+            (
+                r#"match value {
+                LeanExpr::Var(c) if predicate(LeanExpr::Const(7), *c) => LeanExpr::Var(*c),
+                _ => LeanExpr::Const(0),
+            }"#,
+                3,
+                1,
+            ),
+            (
+                r#"matches!(LeanExpr::Const(7), LeanExpr::Const(x) if check(LeanExpr::Var(x)))"#,
+                2,
+                1,
+            ),
+            (
+                r#"let result = LeanExpr::Const(1) | LeanExpr::Var(2);"#,
+                2,
+                0,
+            ),
+            (
+                r#"let result = VmConstraint::Custom { values: (0..), ..base };"#,
+                1,
+                0,
+            ),
+            (
+                r#"match value { const { LeanExpr::Const(1) } => accept(), _ => refuse() }"#,
+                1,
+                0,
+            ),
+            (
+                r#"match value {
+                LeanExpr::Var(c) => { consume(LeanExpr::Const(3)); }
+                LeanExpr::Const(c) => consume(LeanExpr::Var(c)),
+            }"#,
+                2,
+                2,
+            ),
+            (
+                r#"let (LeanExpr::Var(a), LeanExpr::Const(b)) =
+                (LeanExpr::Var(3), LeanExpr::Const(5)) else { return; };"#,
+                2,
+                2,
+            ),
+        ];
+        for (src, constructed, patterns) in fixtures {
+            let c = count_sites(src);
+            assert_eq!(
+                c.ir_constructed, constructed,
+                "real construction must remain visible: {src} {c:?}"
+            );
+            assert_eq!(
+                c.ir_lowered, patterns,
+                "only pattern positions are free: {src} {c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_pattern_contexts_use_the_innermost_role() {
+        let src = r#"
+            matches!(match value {
+                LeanExpr::Var(c) => LeanExpr::Const(c),
+                _ => LeanExpr::Const(0),
+            }, LeanExpr::Const(k));
+            match value {
+                LeanExpr::Var(c) if matches!(value, LeanExpr::Const(v)) => accept(),
+                _ => refuse(),
+            }
+        "#;
+        let c = count_sites(src);
+        assert_eq!(
+            c.ir_constructed, 2,
+            "only the inner match RHSs construct: {c:?}"
+        );
+        assert_eq!(
+            c.ir_lowered, 4,
+            "nested match/macro patterns remain patterns: {c:?}"
+        );
     }
 
     #[test]

@@ -30,6 +30,7 @@ there — it is `rfl`, and its `#assert_compiled` census line reflects the resid
 reaches through.
 -/
 import Dregg2.Games.PathOfAngels.CrewFieldMission
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.CrewFieldMission
 

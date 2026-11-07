@@ -422,23 +422,23 @@ def runExtMulTampered (a b : ExtV) : Bool :=
 
 theorem bbAdd_eq_mod {a b : ℕ} (ha : a < pBB) (hb : b < pBB) :
     bbAdd a b = (a + b) % pBB := by
-  simp only [bbAdd, pBB] at *
-  split <;> omega
+  simp only [bbAdd]
+  split <;> simp only [pBB] at * <;> omega
 
 theorem bbSub_eq_mod {a b : ℕ} (ha : a < pBB) (hb : b < pBB) :
     bbSub a b = (pBB + a - b) % pBB := by
-  simp only [bbSub, pBB] at *
-  split <;> omega
+  simp only [bbSub]
+  split <;> simp only [pBB] at * <;> omega
 
 theorem bbMul_eq_mod (a b : ℕ) : bbMul a b = a * b % pBB := rfl
 
 theorem bbAdd_lt {a b : ℕ} (ha : a < pBB) (hb : b < pBB) : bbAdd a b < pBB := by
-  simp only [bbAdd, pBB] at *
-  split <;> omega
+  simp only [bbAdd]
+  split <;> simp only [pBB] at * <;> omega
 
 theorem bbSub_lt {a b : ℕ} (ha : a < pBB) (hb : b < pBB) : bbSub a b < pBB := by
-  simp only [bbSub, pBB] at *
-  split <;> omega
+  simp only [bbSub]
+  split <;> simp only [pBB] at * <;> omega
 
 theorem bbMul_lt (a b : ℕ) : bbMul a b < pBB := Nat.mod_lt _ (by decide)
 

@@ -405,12 +405,30 @@ theorem squeeze_eq (rate : Nat) (s0 : Array UInt64) (outLen : Nat) :
     squeeze rate s0 outLen =
       (((List.range' 0 ((outLen + rate - 1) / rate)).foldl
           (sqStep rate ((outLen + rate - 1) / rate)) ⟨#[], s0⟩).fst.toList).take outLen := by
-  unfold squeeze sqStep
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+  -- v4.35 threads the loop state as the `Prod` `(state, out)`; `sqStep` is the `MProd ⟨out, state⟩`.
+  have H : ∀ (x : MProd (Array UInt8) (Array UInt64)) (blk : Nat),
+      (fun (st : Array UInt64 × Array UInt8) (blk : Nat) =>
+          if blk + 1 < (outLen + rate - 1) / rate then
+            (keccakF st.1, (List.range' 0 rate).foldl
+              (fun o a => o.push (st.1[a / 8]! >>> (8 * (a % 8)).toUInt64).toUInt8) st.2)
+          else
+            (st.1, (List.range' 0 rate).foldl
+              (fun o a => o.push (st.1[a / 8]! >>> (8 * (a % 8)).toUInt64).toUInt8) st.2))
+        ((fun p : MProd (Array UInt8) (Array UInt64) => ((p.2, p.1) : Array UInt64 × Array UInt8)) x)
+        blk
+      = (fun p : MProd (Array UInt8) (Array UInt64) => ((p.2, p.1) : Array UInt64 × Array UInt8))
+          (sqStep rate ((outLen + rate - 1) / rate) x blk) := by
+    intro x blk
+    by_cases h : blk + 1 < (outLen + rate - 1) / rate <;> simp [sqStep, h]
+  unfold squeeze
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure, pure_bind,
     Std.Legacy.Range.size, Nat.sub_zero, Nat.add_sub_cancel, Nat.div_one,
-    ← apply_ite (f := fun (p : MProd (Array UInt8) (Array UInt64)) => ForInStep.yield p),
-    ← apply_ite (f := fun (p : ForInStep (MProd (Array UInt8) (Array UInt64))) => (pure p : Id _)),
+    ← apply_ite (f := fun (p : Array UInt64 × Array UInt8) => ForInStep.yield p),
+    ← apply_ite (f := fun (p : ForInStep (Array UInt64 × Array UInt8)) => (pure p : Id _)),
     List.forIn_pure_yield_eq_foldl]
+  rw [List.foldl_hom
+    (fun p : MProd (Array UInt8) (Array UInt64) => ((p.2, p.1) : Array UInt64 × Array UInt8))
+    (init := ⟨#[], s0⟩) H]
   rfl
 
 /-- The bytes the executable squeezes out of `n` blocks (permuting between blocks). -/

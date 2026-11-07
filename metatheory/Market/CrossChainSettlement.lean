@@ -323,7 +323,7 @@ theorem demo_fill_settles_cross_chain :
       ∧ S'.provenHeight = 2 := by
   obtain ⟨S', hset, hroot, hheight, _⟩ :=
     drex_fill_cross_chain_settleable demoRoot demoProven demoFill (by decide)
-  exact ⟨S', hset, hroot, by simpa using hheight⟩
+  exact ⟨S', hset, hroot, hheight.trans (by decide)⟩
 
 /-- **The proven root genuinely ADVANCES** — the DrEX fill's post-state root `(0, 0)` (both cells'
 holdings moved) is DIFFERENT from the pre-anchor `(7, 5)`. So settling the fill is a real state change

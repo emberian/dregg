@@ -180,7 +180,7 @@ makes response-conservation a one-liner rather than an invariant to carry. -/
 theorem share_split (o : Offer) (r : Response) :
     takerShare o r + cutterShare o r = o.cards := by
   cases o <;> cases r <;> rename_i k <;> fin_cases k <;>
-    simp only [takerShare, cutterShare, Offer.cards, zero_add, add_zero] <;> ac_rfl
+    simp only [Fin.isValue, Fin.reduceFinMk, takerShare, cutterShare, Offer.cards, zero_add, add_zero] <;> ac_rfl
 
 /-! ### The card-movement decomposition (destinations of an action's cards) -/
 

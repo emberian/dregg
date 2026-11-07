@@ -196,7 +196,7 @@ theorem decodeFieldElems_encode :
       have ha32 : a < 4294967296 := by
         have hp : babybearP = 2013265921 := rfl
         omega
-      simp only [encodeFieldElems, List.append_assoc, decodeFieldElems,
+      simp only [encodeFieldElems, List.append_assoc, List.length_cons, decodeFieldElems,
         readU32le_u32le a ha32, decodeFieldElems_encode as has rest]
       rw [Nat.mod_eq_of_lt ha]
 

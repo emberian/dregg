@@ -52,4 +52,16 @@ pub const CUTOVER_READY_SELECTORS: &[usize] = &[
     // is live (record-pin8 + rc); the Sovereign fold arm binds the KEY_COMMIT claim pins
     // (`sovereign_binding_deployed_tooth.rs`). Same host-admission rationale as factory.
     crate::effect_vm::columns::sel::MAKE_SOVEREIGN,
+    // SET_FIELD (2): admitted 2026-11-06 (initiative 10) so a grain session's legs, which are all
+    // setField, can be admitted to the whole-history fold. The evidence (NOT the differential
+    // descriptor-versus-hand-AIR equivalence the header names: the hand AIR is deleted, and no
+    // per-slot semantic anti-ghost suite exists yet): every per-slot member `setFieldVmDescriptor2-{0..7}R24` carries exactly ONE appended
+    // `selectorGate SET_FIELD` (`effect_vm_selector_gate_forgery.rs`
+    // `every_setfield_slot_member_carries_exactly_one_selector_gate`, both registries), the
+    // foreign-selector-tail forgery is UNSAT under it with the gate as the sole refuser
+    // (`foreign_selector_tail_is_refused_by_the_gate_alone`), and a real grain session folds
+    // and a forged post-state does not (`grain-turn/tests/r3_grain_adapter.rs`). SetField is keyed
+    // PER SLOT and all eight share one display name, so `joint_turn_aggregation::
+    // rotated_descriptor_selector` admits it by descriptor CONTENT (equal to a committed member).
+    crate::effect_vm::columns::sel::SET_FIELD,
 ];

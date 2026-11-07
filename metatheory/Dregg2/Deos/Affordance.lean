@@ -115,7 +115,7 @@ theorem fireGate_iff_subset (required held : List Auth) :
 /-- **The gate is REFLEXIVE** — an agent holding exactly the required rights may fire (`fireGate r r`).
 An affordance is always fireable by the holder of precisely its rights. -/
 theorem fireGate_refl (required : List Auth) : fireGate required required = true := by
-  rw [fireGate_iff_subset]; exact fun a ha => ha
+  rw [fireGate_iff_subset]
 
 /-- **The gate is TRANSITIVE along projection** — if `held₁ ⊆ held₂` (a viewer holds less than a
 grantor) and the viewer can fire (`fireGate required held₁`), the grantor can too. So the fireable set

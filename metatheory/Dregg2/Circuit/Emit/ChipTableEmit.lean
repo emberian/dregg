@@ -553,6 +553,7 @@ is here.
 `Nat.Prime 2013265921` is what makes "a product vanishes ⇒ a factor vanishes" available at all, and
 every `exactly` below rests on it. It is discharged, not assumed. -/
 
+set_option maxRecDepth 8192 in
 /-- BabyBear is prime, discharged by `norm_num`. -/
 theorem P_prime : Nat.Prime 2013265921 := by norm_num
 
@@ -750,7 +751,7 @@ theorem big_high_iff_arity_seven {env : TRowEnv} {f l : Bool}
   rw [show gBigForce = TExpr.mul (eProdMinus eArity P7_ROOTS) (eOneMinus (v CHIP_BIG))
         from rfl, gForce_eval] at hforce
   refine flag_exact (q := 15120) hpin hforce (fun hA => ?_) (not_dvd_small (by norm_num) (by norm_num))
-  simpa [P7_ROOTS, show prodMinus (7 : ℤ) P7_ROOTS = 15120 from by decide] using
+  simpa [P7_ROOTS, show prodMinus (7 : ℤ) [0, 2, 3, 4, 11, 16] = 15120 from by decide] using
     prodMinus_congr6 hA 0 2 3 4 11 16
 
 /-- `wide` is high EXACTLY on arity 11. -/
@@ -764,7 +765,7 @@ theorem wide_high_iff_arity_eleven {env : TRowEnv} {f l : Bool}
         from rfl, gForce_eval] at hforce
   refine flag_exact (q := -110880) hpin hforce (fun hA => ?_)
     (not_dvd_small (by norm_num) (by norm_num))
-  simpa [P11_ROOTS, show prodMinus (11 : ℤ) P11_ROOTS = -110880 from by decide] using
+  simpa [P11_ROOTS, show prodMinus (11 : ℤ) [0, 2, 3, 4, 7, 16] = -110880 from by decide] using
     prodMinus_congr6 hA 0 2 3 4 7 16
 
 /-- `node8` is high EXACTLY on arity 16. -/
@@ -779,7 +780,7 @@ theorem node8_high_iff_arity_sixteen {env : TRowEnv} {f l : Bool}
         from rfl, gForce_eval] at hforce
   refine flag_exact (q := 1572480) hpin hforce (fun hA => ?_)
     (not_dvd_small (by norm_num) (by norm_num))
-  simpa [P16_ROOTS, show prodMinus (16 : ℤ) P16_ROOTS = 1572480 from by decide] using
+  simpa [P16_ROOTS, show prodMinus (16 : ℤ) [0, 2, 3, 4, 7, 11] = 1572480 from by decide] using
     prodMinus_congr6 hA 0 2 3 4 7 11
 
 /-! ### §7.3 — The arity membership: TRUE over residues, REFUTED over the integers.
@@ -823,14 +824,14 @@ theorem seed456_is_boolean {env : TRowEnv} {f l : Bool}
     (h : chipSelectorTable.RowHolds env f l) :
     (eSeed456.evalWith #[] env ≡ 0 [ZMOD 2013265921]) ∨
     (eSeed456.evalWith #[] env ≡ 1 [ZMOD 2013265921]) := by
-  have hbb := bool_of_gate (by
-    simpa [gBool_eval] using
+  have hbb := bool_of_gate (x := env.loc CHIP_BIG) (by
+    simpa [gBigBool, gBool_eval] using
       (sel_gate h (b := gBigBool) (by simp [chipSelectorBodies])))
-  have hwb := bool_of_gate (by
-    simpa [gBool_eval] using
+  have hwb := bool_of_gate (x := env.loc CHIP_WIDE) (by
+    simpa [gWideBool, gBool_eval] using
       (sel_gate h (b := gWideBool) (by simp [chipSelectorBodies])))
-  have hnb := bool_of_gate (by
-    simpa [gBool_eval] using
+  have hnb := bool_of_gate (x := env.loc CHIP_NODE8) (by
+    simpa [gNode8Bool, gBool_eval] using
       (sel_gate h (b := gNode8Bool) (by simp [chipSelectorBodies])))
   have hbp := sel_gate h (b := gBigPin) (by simp [chipSelectorBodies])
   have hwp := sel_gate h (b := gWidePin) (by simp [chipSelectorBodies])
@@ -892,7 +893,7 @@ theorem q01_guard_vanishes_on_fact_rows {env : TRowEnv} {f l : Bool}
   have hA := fact_row_has_arity_zero h hf
   rw [eQ01Guard_eval]
   have h1 : prodMinus (env.loc CHIP_ARITY) Q01_ROOTS ≡ Q01_PAD [ZMOD 2013265921] := by
-    simpa [Q01_ROOTS, show prodMinus (0 : ℤ) Q01_ROOTS = Q01_PAD from by decide] using
+    simpa [Q01_ROOTS, show prodMinus (0 : ℤ) [2, 3, 4, 7, 11, 16] = Q01_PAD from by decide] using
       prodMinus_congr6 hA 2 3 4 7 11 16
   have h2 : Q01_PAD * env.loc CHIP_IS_FACT ≡ Q01_PAD * 1 [ZMOD 2013265921] :=
     Int.ModEq.mul_left _ hf
@@ -908,7 +909,7 @@ theorem pad_row_zeroes_in0_and_in1 {env : TRowEnv} {f l : Bool}
   have hguard : eQ01Guard.evalWith #[] env ≡ Q01_PAD [ZMOD 2013265921] := by
     rw [eQ01Guard_eval]
     have h1 : prodMinus (env.loc CHIP_ARITY) Q01_ROOTS ≡ Q01_PAD [ZMOD 2013265921] := by
-      simpa [Q01_ROOTS, show prodMinus (0 : ℤ) Q01_ROOTS = Q01_PAD from by decide] using
+      simpa [Q01_ROOTS, show prodMinus (0 : ℤ) [2, 3, 4, 7, 11, 16] = Q01_PAD from by decide] using
         prodMinus_congr6 hA 2 3 4 7 11 16
     have h2 : Q01_PAD * env.loc CHIP_IS_FACT ≡ Q01_PAD * 0 [ZMOD 2013265921] :=
       Int.ModEq.mul_left _ hf
@@ -959,7 +960,7 @@ theorem forged_out_lane_is_unsat {env : TRowEnv} {f l : Bool} (i : Nat) (hi : i 
       = v (CHIP_AUX0 + 336 + i) from rfl] at this
   simp only [eSub, v, TExpr.evalWith] at this
   have := (Int.modEq_zero_iff_dvd).mp this
-  exact modEq_of_dvd_sub (by simpa using this)
+  exact modEq_of_dvd_sub (by simpa [sub_eq_add_neg] using this)
 
 /-! ### §7.7 — The `ChipState16` pin, and ⚑ THE DEAD MULTIPLICITY FACTOR. -/
 
@@ -996,10 +997,10 @@ theorem state16_bus_guard_is_dead {env : TRowEnv} {f l : Bool}
     (TExpr.mul (v CHIP_MULT_STATE16) (eOneMinus eIsFact)).evalWith #[] env
       ≡ env.loc CHIP_MULT_STATE16 [ZMOD 2013265921] := by
   have h16 := state16_nonzero_mult_forces_arity_sixteen h hm
-  have hfb := bool_of_gate (by
-    simpa [gBool_eval] using
-      (h (gAll gIsFactBool) (List.mem_map_of_mem (by simp [chipSelectorBodies]))
-        : gIsFactBool.evalWith #[] env ≡ 0 [ZMOD 2013265921]))
+  have hfb0 : gIsFactBool.evalWith #[] env ≡ 0 [ZMOD 2013265921] :=
+    h (gAll gIsFactBool) (List.mem_map_of_mem (by simp [chipSelectorBodies]))
+  have hfb := bool_of_gate (x := env.loc CHIP_IS_FACT) (by
+    simpa [gIsFactBool, gBool_eval] using hfb0)
   have hf0 : env.loc CHIP_IS_FACT ≡ 0 [ZMOD 2013265921] := by
     rcases hfb with h0 | h1
     · exact h0

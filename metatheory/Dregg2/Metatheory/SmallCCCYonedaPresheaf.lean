@@ -113,6 +113,8 @@ def representableExponentialIso (A B : C) [Closed A] :
       ext h Z f g
       dsimp [representableExponentialEquiv, CategoryTheory.Functor.functorHom,
         CategoryTheory.Functor.homObjFunctor]
+      change lift g f.unop ≫ uncurry (k.unop ≫ h) =
+        lift g (f.unop ≫ k.unop) ≫ uncurry h
       rw [uncurry_natural_left]
       change lift g f.unop ≫ (A ◁ k.unop) ≫ uncurry h =
         lift g (f.unop ≫ k.unop) ≫ uncurry h

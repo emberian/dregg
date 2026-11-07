@@ -246,8 +246,8 @@ parameter — both play over the SAME sampled key space. Unconditional: no adver
 theorem open_adv_le (F : KeyedHashFamily) (A : Adversary (commitOpenGame F)) (l : ℕ) :
     gameAdv (commitOpenGame F) A l ≤ gameAdv (hashGame F) (openToFinder F A) l := by
   refine @winProb_le_of_imp _ (F.keyFintype l) _ _ (fun k hk => ?_)
-  rw [Adversary.hit_eq_true] at hk ⊢
-  exact open_wins_imp F A l k hk
+  replace hk := (Adversary.hit_eq_true _ _ _).mp hk
+  exact (Adversary.hit_eq_true _ _ _).mpr (open_wins_imp F A l k hk)
 
 /-- **⚑ RE-GROUNDED `HermineHintMLWE.commitment_binding` — from the commit hash's collision floor, VIA
 the reduction.** Under the collision floor at the class `Eff`, an equivocating opener whose extracted
@@ -539,7 +539,7 @@ theorem forgery_adv_le (F : ConcurrentForgeryFamily) (A : Adversary (concurrentF
       gameAdv (msisGame (cfMsisFamily F)) (forgeryToMsisSolver F A) l +
         gameAdv (cfEquivGame F) (forgeryToEquivFinder F A) l := by
   refine @winProb_le_add_of_imp _ (F.instFin l) _ _ _ (fun i hi => ?_)
-  rw [Adversary.hit_eq_true] at hi
+  replace hi := (Adversary.hit_eq_true _ _ _).mp hi
   rcases forgery_wins_imp F A l i hi with hm | he
   · exact Or.inl ((Adversary.hit_eq_true (forgeryToMsisSolver F A) l i).mpr hm)
   · exact Or.inr ((Adversary.hit_eq_true (forgeryToEquivFinder F A) l i).mpr he)

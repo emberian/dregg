@@ -2,7 +2,7 @@
 # Dregg2.Tree.Value: the JSON value model, its canonical CBOR encoding, and `canon_injective`
 
 `JVal` is a JSON value after projection (`Dregg2.Tree.Json`): strings are their decoded UTF-8
-bytes (escapes resolved, so `"p"` and `"p"` are one leaf), numbers are exact decimals with
+bytes (escapes resolved, so `"\u0070"` and `"p"` are one leaf), numbers are exact decimals with
 one representative per value, and objects are lists of `(key, value)` entries.
 
 **Numbers.** `int n` is an integer value; `dec m e` is the non-integer `m · 10^e` with `e < 0` and
@@ -29,6 +29,11 @@ import Dregg2.Tree.Cbor
 namespace Dregg2.Tree
 
 open Cbor
+
+/- v4.35 core gives `UInt8`/`Int` a `Std.LinearOrderPackage` whose `BEq` outranks
+`instBEqOfDecidableEq` and is built with `Classical.choice`; keep `==` on the
+decidable-equality instance so the checker reader stays choice-free. -/
+attribute [local instance high] instBEqOfDecidableEq
 
 /-- A JSON value in the projected model. -/
 inductive JVal where

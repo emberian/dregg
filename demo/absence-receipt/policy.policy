@@ -1,0 +1,2 @@
+pattern secrets = "AKIA" [0-9A-Z]{16} | "-----BEGIN " [A-Z ]* "PRIVATE KEY-----";
+policy p { forbid pattern secrets in body; }

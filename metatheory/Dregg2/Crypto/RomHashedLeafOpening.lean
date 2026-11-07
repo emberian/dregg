@@ -241,8 +241,8 @@ theorem hlPath_adv_le (d : ℕ → ℕ)
           (hlPathFinder Key kF kD kN Leaf lF lD d A) l := by
   refine @winProb_le_of_imp _ ((hlPathForgery Key kF kD kN Leaf lF lD d).game.instFin l) _ _
     (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
-  exact hlPath_wins_imp Key kF kD kN Leaf lF lD d A l H hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  exact (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr (hlPath_wins_imp Key kF kD kN Leaf lF lD d A l H hH)
 
 /-- The extracted finder is query-bounded, the walk's queries PAID: `Q + 2·d`. -/
 theorem hlPathFinder_in_romEff (d : ℕ → ℕ) (Q : ℕ → ℕ)
@@ -257,7 +257,8 @@ theorem hlPathFinder_in_romEff (d : ℕ → ℕ) (Q : ℕ → ℕ)
   · exact OracleComp.bindComp_queryBounded (hMQ l)
       (fun p => hlPathExtract_queryBounded Key kF kD kN Leaf lF lD d l p)
   · show (hlPathExtract Key kF kD kN Leaf lF lD d l (A.run l H)).eval H = _
-    rw [OracleComp.bindComp_eval, hrun l H]
+    exact (congrArg (fun p => (hlPathExtract Key kF kD kN Leaf lF lD d l p).eval H) (hrun l H)).trans
+      (OracleComp.bindComp_eval (M l) (hlPathExtract Key kF kD kN Leaf lF lD d l) H).symm
 
 /-- **⚑⚑ THE PATH BINDING, FROM THE PROVED FLOOR** — the ROM successor shape for
 `recomposeUp8_binds_or_collides`: a query-bounded forger that folds two DISTINCT starting digests
@@ -403,8 +404,8 @@ theorem hlOpen_adv_le (d : ℕ → ℕ)
           (hlOpenFinder Key kF kD kN Leaf lF lD d A) l := by
   refine @winProb_le_of_imp _ ((hlOpenForgery Key kF kD kN Leaf lF lD d).game.instFin l) _ _
     (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
-  exact hlOpen_wins_imp Key kF kD kN Leaf lF lD d A l H hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  exact (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr (hlOpen_wins_imp Key kF kD kN Leaf lF lD d A l H hH)
 
 /-- The extracted finder is query-bounded, its queries PAID: `Q + (2·d + 2)`. -/
 theorem hlOpenFinder_in_romEff (d : ℕ → ℕ) (Q : ℕ → ℕ)
@@ -419,7 +420,8 @@ theorem hlOpenFinder_in_romEff (d : ℕ → ℕ) (Q : ℕ → ℕ)
   · exact OracleComp.bindComp_queryBounded (hMQ l)
       (fun p => hlOpenExtract_queryBounded Key kF kD kN Leaf lF lD d l p)
   · show (hlOpenExtract Key kF kD kN Leaf lF lD d l (A.run l H)).eval H = _
-    rw [OracleComp.bindComp_eval, hrun l H]
+    exact (congrArg (fun p => (hlOpenExtract Key kF kD kN Leaf lF lD d l p).eval H) (hrun l H)).trans
+      (OracleComp.bindComp_eval (M l) (hlOpenExtract Key kF kD kN Leaf lF lD d l) H).symm
 
 /-- **⚑⚑ THE HASHED-LEAF OPENING BINDING, FROM THE PROVED FLOOR** — the ROM successor shape for
 `capOpen8_binds_leaf_or_collides` / `fieldsOpen8_binds_leaf_or_collides` /
@@ -461,8 +463,8 @@ def hlOpenRootForgery (d : ℕ → ℕ) : RomForgery (hlFam Key kF kD kN Leaf lF
           (H (hlLeafPt Key kF kD kN Leaf lF lD l p.1.1 p.2.2.2)) (List.ofFn p.1.2) = p.2.1
   winsDec := fun l _ _ => by
     letI := lD l
-    letI := ((hlFam Key kF kD kN Leaf lF lD).toRomFamily).rDec l
-    exact instDecidableAnd
+    letI hR := ((hlFam Key kF kD kN Leaf lF lD).toRomFamily).rDec l
+    exact @instDecidableAnd _ _ inferInstance (@instDecidableAnd _ _ (hR _ _) (hR _ _))
 
 /-- The root-dropping map of adversaries into the opening forgery. -/
 def hlRootToOpen (d : ℕ → ℕ)
@@ -488,8 +490,8 @@ theorem hlRoot_adv_le (d : ℕ → ℕ)
           (hlRootToOpen Key kF kD kN Leaf lF lD d A) l := by
   refine @winProb_le_of_imp _
     ((hlOpenRootForgery Key kF kD kN Leaf lF lD d).game.instFin l) _ _ (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
-  exact hlRoot_wins_imp Key kF kD kN Leaf lF lD d A l H hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  exact (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr (hlRoot_wins_imp Key kF kD kN Leaf lF lD d A l H hH)
 
 /-- **⚑⚑ THE PUBLISHED-ROOT OPENING BINDING** — the ROM successor shape for
 `membersAt8_functional_on_path_or_collides` and the `deployed_…Open8_binds_leaf_or_collides`
@@ -510,7 +512,8 @@ theorem hlOpenRootRom_binds (d Q Q' : ℕ → ℕ)
       ⟨fun l => OracleComp.mapOut (fun p => (p.1, p.2.2)) (M l),
         fun l => OracleComp.mapOut_queryBounded _ (hMQ l), fun l H => ?_⟩
     show (let p := A.run l H; (p.1, p.2.2)) = _
-    rw [OracleComp.mapOut_eval, hrun l H]
+    exact (congrArg (fun p => (p.1, p.2.2)) (hrun l H)).trans
+      (OracleComp.mapOut_eval (fun p => (p.1, p.2.2)) (M l) H).symm
   refine negl_of_le
     (fun l => (gameAdv_mem_unit (hlOpenRootForgery Key kF kD kN Leaf lF lD d).game A l).1)
     (hlRoot_adv_le Key kF kD kN Leaf lF lD d A) hopen
@@ -547,7 +550,7 @@ theorem hlConstOpenAdv_gameAdv_pos (d : ℕ → ℕ)
     ((hlOpenForgery Key kF kD kN Leaf lF lD d).game.instFin l) _ (fun _ => r₀) ?_
   refine ((hlConstOpenAdv Key kF kD kN Leaf lF lD d c v w).hit_eq_true l _).mpr ?_
   refine ⟨hvw, ?_⟩
-  rw [chainEval_const]
+  exact (chainEval_const _ r₀ _).trans (chainEval_const _ r₀ _).symm
 
 /-- **(TOOTH — the admitted refuter-shape is DEFANGED, not excluded.)** The constant answerer is in
 the class, wins at the constant oracle, and its advantage is NEGLIGIBLE — where against the FIXED

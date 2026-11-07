@@ -145,7 +145,7 @@ def P : ℤ := 2013265921
 
 /-- Felts per digest group. This is the DEPLOYED `DeployedCapOpen.CAP_W = 8` — the cap tree's native
 8-felt digest — reused, not a new width. -/
-def W : Nat := 8
+@[reducible] def W : Nat := 8
 
 /-- Bits carried by one message block: a BabyBear felt is `< p < 2³¹`, so 31 bits with an in-AIR
 canonicality gate pins the canonical representative exactly. -/

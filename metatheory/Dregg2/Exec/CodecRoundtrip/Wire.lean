@@ -38,7 +38,10 @@ theorem parseWState_encode (w : WState) (rest : PState) (hwf : WfCells w.cells) 
   unfold parseWState
   -- unfold `encodeWState` in BOTH `hf` and the goal (so the width hypothesis expands to the SAME
   -- field-length sum the per-field fuel obligations reference; `unfold` alone misses `hf`).
-  simp only [encodeWState, String.toList_append, List.append_assoc] at hf ⊢
+  -- v4.35: `simp only [encodeWState]` runs past the heartbeat budget in `whnf` (the string-literal
+  -- appends); unfolding first and then simplifying the `toList` is instant.
+  unfold encodeWState at hf ⊢
+  simp only [String.toList_append, List.append_assoc] at hf ⊢
   -- open `{"cells":`, then the cells store (the ONLY fuel-dependent leaf; outer fuel ≥ width).
   rw [lit_append, some_bind, parseCellsW_encode cells _ hwf fuel (by
     -- the cells-leaf width is `hf`'s sum MINUS the leading `{"cells":` literal, so it follows by

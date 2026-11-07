@@ -289,7 +289,7 @@ theorem chained_rom_adv_le {F : KeyedRomFamily} (P : RomForgery F)
       ≤ gameAdv (romCarrierGame F C₁) B₁ l + gameAdv (romCarrierGame F C₂) B₂ l := by
   refine @Dregg2.Crypto.HermineHashCRRegrounded.winProb_le_add_of_imp _
     ((romCollisionGame F.toRomFamily).instFin l) _ _ _ (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
   rcases himp l H hH with h | h
   · exact Or.inl ((B₁.hit_eq_true l H).mpr h)
   · exact Or.inr ((B₂.hit_eq_true l H).mpr h)
@@ -426,8 +426,8 @@ theorem romOpen_adv_le (F : KeyedRomFamily) (C : RomCarrier F)
     (A : Adversary (romOpenGame F C)) (l : ℕ) :
     gameAdv (romOpenGame F C) A l ≤ gameAdv (romCarrierGame F C) (openToEquiv F C A) l := by
   refine @winProb_le_of_imp _ ((romOpenGame F C).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
-  exact romOpen_wins_imp F C A l H hH
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  exact (Adversary.hit_eq_true _ _ _).mpr (romOpen_wins_imp F C A l H hH)
 
 /-- **THE EXTRACTED EQUIVOCATOR IS QUERY-BOUNDED** — the extractor is a `mapOut` post-composition,
 which adds no queries.  This is what replaces the `poly_time` answer-size discharges. -/
@@ -440,7 +440,8 @@ theorem openToEquiv_in_carrierEff (F : KeyedRomFamily) (C : RomCarrier F) (Q : �
   · intro l H
     show (let p := A.run l H; (p.2.1, p.2.2.1, p.2.2.2))
       = (OracleComp.mapOut (fun p => (p.2.1, p.2.2.1, p.2.2.2)) (M l)).eval H
-    rw [OracleComp.mapOut_eval, hrun l H]
+    exact (congrArg (fun p => (p.2.1, p.2.2.1, p.2.2.2)) (hrun l H)).trans
+      (OracleComp.mapOut_eval (fun p => (p.2.1, p.2.2.1, p.2.2.2)) (M l) H).symm
 
 /-- **⚑⚑ THE OPENING BINDING, FROM THE PROVED FLOOR.** A query-bounded opening forger has NEGLIGIBLE
 advantage: the published commitment opens to ONE payload except with negligible probability, in the

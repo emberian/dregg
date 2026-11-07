@@ -1090,6 +1090,7 @@ an ∃-over-a-witness in disguise.
 sixteen numbers (`roundOutVal r xs = evalSt (valEnv xs) (roundOut r varState)`). They are the
 emitted algebra's own denotation, not a second transcription of the round. -/
 
+set_option maxRecDepth 8192 in
 /-- BabyBear is prime, discharged by `norm_num`. -/
 theorem P_prime : Nat.Prime 2013265921 := by norm_num
 /-- …and prime over ℤ, the form `Prime.dvd_mul` needs. -/
@@ -1163,7 +1164,7 @@ theorem narrow_internal_gate_is_the_whole_wide_round
     rw [wide_internal_lane_is_a_unit_multiple r s y sv env hr j hj]
     by_cases hj0 : j = 0
     · subst hj0
-      simpa only [if_pos rfl] using (lane_zero_multiplier_is_a_unit _).mpr h
+      simpa only [if_pos rfl, if_true] using (lane_zero_multiplier_is_a_unit _).mpr h
     · simpa only [if_neg hj0, one_mul] using h
 #assert_axioms narrow_internal_gate_is_the_whole_wide_round
 

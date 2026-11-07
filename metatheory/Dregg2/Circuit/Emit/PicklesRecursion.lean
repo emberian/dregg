@@ -639,7 +639,7 @@ theorem msm_batchScalars (r : F) (xs : List A) :
   induction xs with
   | nil => simp [batchScalars]
   | cons a rest ih =>
-    simp only [batchScalars, msm_cons, one_smul, horner_cons]
+    simp only [List.length_cons, batchScalars, msm_cons, one_smul, horner_cons]
     rw [msm_map_smul, ih]
 
 /-- **`srsScalars`** — the SRS-slot half of `scalars`, exactly `urs_utils.rs:40-65`: start at `n`

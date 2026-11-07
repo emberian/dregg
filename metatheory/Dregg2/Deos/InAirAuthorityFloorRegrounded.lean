@@ -390,7 +390,8 @@ theorem alternate_adv_le (D : FloorDigestDeployment) (A : Adversary (alternateFl
     gameAdv (alternateFloorGame D) A n
       ≤ gameAdv (floorCollisionGame D) (alternateFloorToCollisionFinder D A) n := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact alternate_wins_imp D A n t ht
 
 /-! ## §5 — the RE-GROUNDED CONSUMERS.

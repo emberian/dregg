@@ -541,8 +541,10 @@ theorem demoNegationLaw_true (x : Rat) :
         (.lookup .neg demoInputRow .index) +
       Term.denote demoValuation (columnNode j)
         (.lookup .neg demoOutputRow .index) = 1
-  rw [Term.denote_lookup_index_column, Term.denote_lookup_index_column]
-  simpa [demoValuation, demoInputRow, demoOutputRow] using demoMatrix_rows_sum j
+  refine (congrArg₂ (· + ·)
+    (Term.denote_lookup_index_column demoValuation DemoSymbol.neg demoInputRow j)
+    (Term.denote_lookup_index_column demoValuation DemoSymbol.neg demoOutputRow j)).trans ?_
+  exact demoMatrix_rows_sum j
 
 /-- The direct unrolling has two equality atoms and one sum operation. -/
 theorem demoNegationLaw_cost :

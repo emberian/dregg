@@ -71,8 +71,8 @@ in none of them and contributes nothing — `the_padding_contributes_nothing`.
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`/`admit`/
-`native_decide`. Named theorems, not `#guard`s. NEW file; not imported by the `Dregg2` root, per
+General theorems are `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}). Facts
+about concrete data are `native_decide`, pinned `#assert_compiled` (since 2026-11-06). No `sorry`/`admit`. Named theorems, not `#guard`s. NEW file; not imported by the `Dregg2` root, per
 house practice for gates. Import line:
 `import Dregg2.Circuit.Emit.MinaWrapXiAggregateMsm`
 -/
@@ -131,21 +131,21 @@ def SCAL : List Nat :=
 def GENS : List Pt :=
   COMBINE_POINTS ++ List.replicate (N_PAD - N_REAL) (COMBINE_POINTS.getD 0 Oproj)
 
-theorem lists_are_the_padded_length : SCAL.length = N_PAD ∧ GENS.length = N_PAD := by decide
+theorem lists_are_the_padded_length : SCAL.length = N_PAD ∧ GENS.length = N_PAD := by native_decide
 
 /-- ⚑ **THE HEIGHT IS A POWER OF TWO**, which is what the whole padding exists for: the deployed
 prover refuses a non-power-of-two base trace, AND an `exactPublicRows` manifest is a PERMUTATION,
 so its length IS the trace height. `128` windows of `64` rows. -/
 theorem the_height_is_eight_thousand_one_hundred_ninety_two :
     bucketedRows N_PAD NBITS C = 8192
-      ∧ windowsOf NBITS C = 128 ∧ winLen N_PAD C = 64 ∧ levelsOf C = 3 := by decide
+      ∧ windowsOf NBITS C = 128 ∧ winLen N_PAD C = 64 ∧ levelsOf C = 3 := by native_decide
 
-theorem the_height_is_a_power_of_two : bucketedRows N_PAD NBITS C = 2 ^ 13 := by decide
+theorem the_height_is_a_power_of_two : bucketedRows N_PAD NBITS C = 2 ^ 13 := by native_decide
 
 /-- ⚑ **AND THE WINDOWS COVER THE WHOLE SCALAR.** `128 · 2 = 256 ≥ 255`. This is the check that a
 window count silently dropping a 255-bit scalar's top bits would fail — the digits are declared, so
 nothing else would have noticed. -/
-theorem the_windows_cover_the_whole_scalar : NBITS ≤ windowsOf NBITS C * C := by decide
+theorem the_windows_cover_the_whole_scalar : NBITS ≤ windowsOf NBITS C * C := by native_decide
 
 /-! ## §2 — WHAT THE DESCRIPTOR DECLARES, welded to the block's own numbers. -/
 
@@ -190,7 +190,7 @@ def basisPIs : List ℤ := BASIS.flatMap (fun v => (List.range SK).map (limbAt v
 theorem the_basis_is_six_values_and_one_hundred_ninety_two_felts :
     BASIS.length = NCHAL ∧ basisPIs.length = NC ∧ NC = 192
       ∧ BASIS.eraseDups.length = NCHAL := by
-  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND EACH IS THE SQUARE OF ITS SUCCESSOR, ENDING ON ξ.** The basis is FIVE squarings from the
 one value this cone publishes — `the_polyscale_is_the_endo_lift_of_the_squeeze`'s ξ — and not six
@@ -200,7 +200,7 @@ theorem the_basis_is_five_squarings_of_the_polyscale :
       (fun j => decide (BASIS.getD j 0 = qmul (BASIS.getD (j + 1) 0) (BASIS.getD (j + 1) 0))))
         = true
       ∧ BASIS.getD (NCHAL - 1) 0 = XI := by
-  refine ⟨?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **THE EMITTED ARTIFACT — WIDENED.** `bucketedRowDesc`'s 91 constraints verbatim, plus 192
 first-row PI pins and 192 threads over the 192 fresh columns `612 … 803`.
@@ -224,12 +224,12 @@ window count the descriptor actually has. Without it, "the digits are declared" 
 "the digits are the declared scalars' LOW 254 bits", which is a different MSM with the same
 descriptor shape and no green anywhere would move. -/
 theorem the_declared_digits_recompose :
-    ((List.range N_PAD).all (fun i => decide (recompose i = SCAL.getD i 0))) = true := by decide
+    ((List.range N_PAD).all (fun i => decide (recompose i = SCAL.getD i 0))) = true := by native_decide
 
 /-- ⚑ **AND THE DECLARED SCALARS ARE THE REAL ξ POWERS.** The first 47 entries are `ξ⁰ … ξ⁴⁶` at
 the block's own challenge, in `q`. -/
 theorem the_declared_scalars_are_the_xi_powers :
-    ((List.range N_REAL).all (fun i => decide (SCAL.getD i 0 = qpow XI i))) = true := by decide
+    ((List.range N_REAL).all (fun i => decide (SCAL.getD i 0 = qpow XI i))) = true := by native_decide
 
 /-- ⚑ **AND THE PADDING IS INERT.** Every padding term carries scalar `0`, hence digit `0` in every
 window; the fused identity's inner sums range over `d ≥ 1`, so a zero-digit term is in none of them.
@@ -239,18 +239,18 @@ theorem the_padding_contributes_nothing :
       (fun k => decide (SCAL.getD (N_REAL + k) 0 = 0)
         && ((List.range (windowsOf NBITS C)).all
               (fun w => decide (scalarDigitC SCAL NBITS C w (N_REAL + k) = 0))))) = true := by
-  decide
+  native_decide
 
 /-- ⚑ **AND THE DECLARED GENERATORS ARE THE BLOCK'S OWN COMMITMENTS.** The first 47 entries of
 `GENS` are `MinaWrapAggregationGate.COMBINE_POINTS` — the 2 recursion, `public_comm`, `ft_comm`,
 `Z`, 6 index, 15 witness, 15 coefficient and 6 sigma commitments of Mina devnet block 539508. -/
 theorem the_declared_generators_are_the_block_commitments :
     ((List.range N_REAL).all
-      (fun i => decide (GENS.getD i Oproj = COMBINE_POINTS.getD i Oproj))) = true := by decide
+      (fun i => decide (GENS.getD i Oproj = COMBINE_POINTS.getD i Oproj))) = true := by native_decide
 
 /-- Every declared generator is a real Pallas point. -/
 theorem every_declared_generator_is_on_pallas :
-    (GENS.all (projOnCurveM pN curveB)) = true := by decide
+    (GENS.all (projOnCurveM pN curveB)) = true := by native_decide
 
 /-! ## §3 — ⚑ THE WELD TO `COMBINED_GOLD`, AS A NAMED THEOREM.
 
@@ -277,11 +277,11 @@ forms a power of ξ at all. This one forms all 47 powers explicitly and multipli
 generator. Two different computations, one point: that is a gate, where a constant checked against
 its own definition would have been decoration. -/
 theorem the_declared_msm_is_o1_labs_aggregate :
-    projEqM pN declaredMsm COMBINED_GOLD = true := by decide
+    projEqM pN declaredMsm COMBINED_GOLD = true := by native_decide
 
 /-- ⚑ …and it is a FINITE point on Pallas, so `projEqM` is not agreeing about the identity. -/
 theorem the_aggregate_is_a_real_finite_pallas_point :
-    projOnCurveM pN curveB COMBINED_GOLD = true ∧ isInfM pN COMBINED_GOLD = false := by decide
+    projOnCurveM pN curveB COMBINED_GOLD = true ∧ isInfM pN COMBINED_GOLD = false := by native_decide
 
 /-- ⚑ **AND THE WELD IS REFUTABLE.** One added to the challenge gives a different aggregate — so
 `the_declared_msm_is_o1_labs_aggregate` is a claim the block's data can falsify, not a tautology
@@ -289,12 +289,12 @@ about whatever `declaredMsm` happens to be. -/
 theorem a_perturbed_challenge_misses_the_aggregate :
     projEqM pN
       (msmComm ((((List.range N_REAL).map (qpow (XI + 1)))
-        ++ List.replicate (N_PAD - N_REAL) 0).zip GENS)) COMBINED_GOLD = false := by decide
+        ++ List.replicate (N_PAD - N_REAL) 0).zip GENS)) COMBINED_GOLD = false := by native_decide
 
 /-- ⚑ **AND A DROPPED TERM MISSES IT TOO.** The last real commitment's scalar zeroed — the shape a
 prover that quietly omitted one generator would produce. -/
 theorem a_dropped_term_misses_the_aggregate :
-    projEqM pN (msmComm ((SCAL.set (N_REAL - 1) 0).zip GENS)) COMBINED_GOLD = false := by decide
+    projEqM pN (msmComm ((SCAL.set (N_REAL - 1) 0).zip GENS)) COMBINED_GOLD = false := by native_decide
 
 /-! ## §3b — ⚑⚑ THE WIRE SURFACE, AS FACTS ABOUT THE EMITTED ARTIFACT. -/
 
@@ -310,7 +310,7 @@ theorem the_aggregate_publishes_the_basis_on_its_wire :
       ∧ xiAggMsmDesc.traceWidth = WK + NC
       ∧ xiAggMsmDesc.traceWidth = 804
       ∧ CHB = WK := by
-  refine ⟨rfl, by decide, rfl, by decide, rfl⟩
+  refine ⟨rfl, by native_decide, rfl, by native_decide, rfl⟩
 
 /-- ⚑ **AND THE BLOCK IS PINNED AND THREADED, 192 OF EACH.** The pins put the basis on the wire;
 the threads make it ONE vector for the whole 8 192-row trace. Without the threads a prover may pick
@@ -338,7 +338,7 @@ defect `PastaMsmBucketed` §4b renamed the family to kill: two AIRs, one identif
 theorem the_widened_artifact_has_its_own_name :
     xiAggMsmDesc.name = "dregg-pasta-msm-bucketed-pallas-n59b255-c2-w192::v1"
       ∧ xiAggMsmDesc.name ≠ (bucketedRowDesc N_PAD NBITS C GENS SCAL).name := by
-  refine ⟨rfl, by decide⟩
+  refine ⟨rfl, by native_decide⟩
 
 /-! ## §4 — WHAT STILL HOLDS A VALUE NOTHING COMPUTES, at CURRENT resolution.
 
@@ -398,7 +398,7 @@ theorem the_manifests_fit_the_deployed_caps :
     bucketedRows N_PAD NBITS C ≤ MAX_EP_ROWS
       ∧ SCHED_TUP < MAX_EP_ARITY ∧ COVER_TUP < MAX_EP_ARITY ∧ SRS_TUP < MAX_EP_ARITY
       ∧ bucketedRows N_PAD NBITS C * (SCHED_TUP + COVER_TUP + SRS_TUP) ≤ MAX_EP_CELLS := by
-  decide
+  native_decide
 
 /-- ⚑ **THE PRICE OF THE WIRE BLOCK, SAID OUT LOUD.** 192 columns over 8 192 rows is 1 572 864 more
 committed cells — a `31.4%` rise on the row template's own 5 013 504, and FRI pays for committed
@@ -408,41 +408,41 @@ theorem the_wire_block_costs_thirty_one_percent_more_area :
     bucketedRows N_PAD NBITS C * NC = 1572864
       ∧ bucketedRows N_PAD NBITS C * WK = 5013504
       ∧ 100 * (bucketedRows N_PAD NBITS C * NC) < 32 * (bucketedRows N_PAD NBITS C * WK) := by
-  refine ⟨by decide, by decide, by decide⟩
+  refine ⟨by native_decide, by native_decide, by native_decide⟩
 
 /-- ⚑ **THE TERM ROWS ARE 92% OF THE TRACE**, and the rest is the fused collapse — the census that
 says the padding is a rounding error and the object is really doing 7 552 conditional adds. -/
 theorem the_term_rows_dominate :
     termRows N_PAD NBITS C = 7552 ∧ 100 * termRows N_PAD NBITS C > 92 * bucketedRows N_PAD NBITS C
-      := by decide
+      := by native_decide
 
 /-- ⚑ **AND THE REAL WORK IS 47/59 OF THAT.** The 12 padding terms occupy 1 536 of the 7 552 term
 rows; a reader pricing this object should price the real content. -/
 theorem the_real_terms_are_forty_seven_fifty_ninths :
-    windowsOf NBITS C * N_REAL = 6016 ∧ windowsOf NBITS C * (N_PAD - N_REAL) = 1536 := by decide
+    windowsOf NBITS C * N_REAL = 6016 ∧ windowsOf NBITS C * (N_PAD - N_REAL) = 1536 := by native_decide
 
-#assert_axioms lists_are_the_padded_length
-#assert_axioms the_height_is_eight_thousand_one_hundred_ninety_two
-#assert_axioms the_height_is_a_power_of_two
-#assert_axioms the_windows_cover_the_whole_scalar
-#assert_axioms the_declared_digits_recompose
-#assert_axioms the_declared_scalars_are_the_xi_powers
-#assert_axioms the_padding_contributes_nothing
-#assert_axioms the_declared_generators_are_the_block_commitments
-#assert_axioms every_declared_generator_is_on_pallas
-#assert_axioms the_declared_msm_is_o1_labs_aggregate
-#assert_axioms the_aggregate_is_a_real_finite_pallas_point
-#assert_axioms a_perturbed_challenge_misses_the_aggregate
-#assert_axioms a_dropped_term_misses_the_aggregate
-#assert_axioms the_basis_is_six_values_and_one_hundred_ninety_two_felts
-#assert_axioms the_basis_is_five_squarings_of_the_polyscale
-#assert_axioms the_aggregate_publishes_the_basis_on_its_wire
+#assert_compiled lists_are_the_padded_length
+#assert_compiled the_height_is_eight_thousand_one_hundred_ninety_two
+#assert_compiled the_height_is_a_power_of_two
+#assert_compiled the_windows_cover_the_whole_scalar
+#assert_compiled the_declared_digits_recompose
+#assert_compiled the_declared_scalars_are_the_xi_powers
+#assert_compiled the_padding_contributes_nothing
+#assert_compiled the_declared_generators_are_the_block_commitments
+#assert_compiled every_declared_generator_is_on_pallas
+#assert_compiled the_declared_msm_is_o1_labs_aggregate
+#assert_compiled the_aggregate_is_a_real_finite_pallas_point
+#assert_compiled a_perturbed_challenge_misses_the_aggregate
+#assert_compiled a_dropped_term_misses_the_aggregate
+#assert_compiled the_basis_is_six_values_and_one_hundred_ninety_two_felts
+#assert_compiled the_basis_is_five_squarings_of_the_polyscale
+#assert_compiled the_aggregate_publishes_the_basis_on_its_wire
 #assert_axioms the_wire_block_is_pinned_and_threaded
 #assert_axioms the_widening_did_not_move_a_manifest
-#assert_axioms the_widened_artifact_has_its_own_name
-#assert_axioms the_manifests_fit_the_deployed_caps
-#assert_axioms the_wire_block_costs_thirty_one_percent_more_area
-#assert_axioms the_term_rows_dominate
-#assert_axioms the_real_terms_are_forty_seven_fifty_ninths
+#assert_compiled the_widened_artifact_has_its_own_name
+#assert_compiled the_manifests_fit_the_deployed_caps
+#assert_compiled the_wire_block_costs_thirty_one_percent_more_area
+#assert_compiled the_term_rows_dominate
+#assert_compiled the_real_terms_are_forty_seven_fifty_ninths
 
 end Dregg2.Circuit.Emit.MinaWrapXiAggregateMsm

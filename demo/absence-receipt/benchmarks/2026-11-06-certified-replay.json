@@ -1,0 +1,128 @@
+{
+  "date": "2026-11-06",
+  "evidence": "MEASURED",
+  "scope": "Certified native policyc compilation on bb2; complete public corpus hashed and scanned on Mac; new tuple signed by the existing demo key; final route-bound record proof passed in the pinned-nightly real-served harness on bb2. The local compiler override loaded benchmark-exported JSON after byte comparison of the policy source. The four-field layout matches the native benchmark digest. Full-crate bootstrap and an unsplit default replay remain unvalidated.",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "shared_machine": true,
+  "policy_source": "policy.policy",
+  "policy_sha256": "a2ec89106dedfafe79b6e91781ddfb8c0daaa0beda44418046941cf78aa0c1c1",
+  "table_json_bytes": 200146,
+  "table_states": 129,
+  "table_accepting": 128,
+  "table_transitions": 33024,
+  "table_start": 64,
+  "compiler": {
+    "implementation": "Lean policyc: cached derivatives + certified union + checked reachability trim + exact factor successor optimization",
+    "native_bb2": {
+      "status": "ok",
+      "states": 129,
+      "transitions": 33024,
+      "seconds": 28.858509,
+      "phases": [
+        "policyc profile: whole-word states=48 milliseconds=661",
+        "policyc profile: absence states=129 milliseconds=28059"
+      ],
+      "semantic_checks": 12,
+      "table_layout_sha256": "e61f7621be8f2ce4f019dfd57b73613fb79bb2f0abb261a1c9f65569d8a0adca"
+    }
+  },
+  "runner_sha256": "0c6b88d116809131b5528bb4530bf468b95054d53a36ed3a38e5531d16176e09",
+  "counts": {
+    "accepted": 100000,
+    "bytes": 1770996081,
+    "count": 0,
+    "dead_state_is_sink": true,
+    "documents": 100000,
+    "num_states": 129,
+    "rejected_indices": [],
+    "table_well_formed": true
+  },
+  "mmr": {
+    "documents": 100000,
+    "bytes": 1770996081,
+    "mmr_nodes": 199994,
+    "mmr_peaks": 6,
+    "root": "17d69bbfa284b201d354dc3c9ae35a291d79d291c0bcfb78364e62fefcf2d6b7"
+  },
+  "mac_wall_seconds": {
+    "select": 13.702,
+    "hashes": 24.026,
+    "mmr": 0.102,
+    "dfa-run": 33.908,
+    "rust-count": 25.907,
+    "emit-record": 22.796,
+    "receipt": 0.461,
+    "load_precompiled_native_table": 0.054
+  },
+  "signed_tuple": {
+    "v": "absence-receipt-v1",
+    "policy_blake3": "9ed0fa106e4b3e1804757f6ce55c451101294c09127ea5b17e3636d78b68d4fe",
+    "table_blake3": "21d0cd70c028d2bd2e86fb57e2295044fab4271498804f85b60bad1de723a9bd",
+    "corpus_mmr_root": "17d69bbfa284b201d354dc3c9ae35a291d79d291c0bcfb78364e62fefcf2d6b7",
+    "corpus_pin": "681f94fc638e5a7639aa410c34b984a12bcd8dfe",
+    "n": 100000,
+    "count": 0
+  },
+  "signed_tuple_matches": true,
+  "signer_changed": false,
+  "corpus_hash_list_changed": false,
+  "controls": {
+    "aws": "REJECT",
+    "pem": "REJECT",
+    "near_miss": "ACCEPT"
+  },
+  "record": {
+    "path": "3/c/cxr",
+    "index": 1598,
+    "rows": 2048,
+    "width": 20,
+    "public_inputs": 11,
+    "constraints": 32,
+    "tables": 2,
+    "start": 64,
+    "final": 64,
+    "descriptor_sha256": "f6de9e57e8ffa6653608c55d03df070ea21ecce0f0620c1af36cc76bbda3045b",
+    "stark_validation": {
+      "status": "pass",
+      "scope": "Actual served assembly prover/verifier in a standalone harness against the normal circuit library, using the final certified table, route-bound descriptor and public record fixture. This is not a full-crate bootstrap verdict.",
+      "host": "bb2",
+      "toolchain": "nightly-2026-06-21",
+      "nextest_version": "0.9.151",
+      "memory_cap_gib": 4,
+      "instances": 3,
+      "prove_ms": 12371.0,
+      "verify_ms": 26.0,
+      "proof_bytes": 147909,
+      "negative_checks": "Changed final state, route root, public length, and explicit record under the same proof/public inputs refused.",
+      "served_suite": {
+        "passed": 7,
+        "selected": 7
+      },
+      "source": "9773903d3 plus named final absence files",
+      "test_source_sha256": "b53c7a3b91eb519e10ef7788ad24b7387e00c345468b479f8a59bc9126e98d47",
+      "script": "/home/build/astra-integration-control/rust-served3.sh",
+      "log": "/home/build/astra-integration-control/rust-served3.log"
+    },
+    "lean_table_accepts_record": true
+  },
+  "table_file_sha256": "f03425bde3de6748203d4daf4e3a3a16bf6687beabf68231e5fc1cd53093f03e",
+  "table_layout_sha256": "e61f7621be8f2ce4f019dfd57b73613fb79bb2f0abb261a1c9f65569d8a0adca",
+  "hash_formats": {
+    "table_file_sha256": {
+      "input": "Complete absence-table.json file bytes, including all metadata, duplicated row/flat layouts and final newline.",
+      "bytes": 200146,
+      "serialization": "scripts/benchmarks/policy-compile.py --table-output writes json.dumps(parsed_native_stdout, separators=(',', ':')) + '\\n'. This identifies the exported file, not an independently retained raw native stdout stream."
+    },
+    "table_layout_sha256": {
+      "input": "UTF-8 JSON projection to num_states, transitions, start, accepting; json.dumps(projection, sort_keys=True, separators=(',', ':')); no final newline.",
+      "bytes": 99887,
+      "scope": "Preserves state numbering and array order; this is a serialized table-layout digest, not a language-equivalence canonical form.",
+      "native_profile_field": "docs/automata/policy-compile-union-benchmark-2026-11-06.json: cases[0].cached.table_sha256"
+    }
+  },
+  "default_replay_validation": {
+    "status": "pending",
+    "scope": "The full-crate Cargo bootstrap and unsplit run.sh replay command still need a passing verdict. Recorded evidence combines the native compiler benchmark, Mac generation/signature checks and real-served harness."
+  }
+}

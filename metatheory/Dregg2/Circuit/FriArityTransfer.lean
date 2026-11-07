@@ -355,7 +355,7 @@ theorem arity8_good_card_le {Φ : ℕ → Fin (2 ^ 6) → BabyBear}
   have h := good_card_le_of_phase_injective hΦ Good c (s := 2) hS
   have hc : Fintype.card (Fin (2 ^ 6)) = 64 := by simp
   rw [hc] at h
-  simpa using h
+  simpa [Nat.choose_two_right] using h
 
 /-! ## §4. THE DEPLOYED PER-FOLD SOUNDNESS AT ARITY 8 — and the honest comparison to ~112.6. -/
 

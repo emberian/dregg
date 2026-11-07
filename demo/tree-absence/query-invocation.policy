@@ -1,0 +1,28 @@
+# Query (B), conjunct 1: `pkill -f` at command position in a Bash call's `input.command`.
+# The certificate's table is compiled from the same expression by dregg-dfa
+# (src/invocation.rs: invocation_re, derivatives + minimization) and checked against a `regex`
+# oracle over every Bash command of the corpus plus hand cases (`tree-cert diff-invocation`).
+# policyc parses this file (`policyc check`) but does not finish compiling `.* ... .*` patterns.
+#
+# Limits (no shell parsing; the claim's scope is exactly this byte pattern):
+# - missed: `bash -c 'pkill -f x'` (quoted payload of another shell), aliases and functions,
+#   `kill $(pgrep -f x)` (a different command), `pkill --full x`, a non-flag argument before
+#   `-f` (`pkill -u ember -f x`), and wrappers outside WRAP (`env FOO=1 pkill -f x`).
+# - over-counted: any `pkill -f` after a BOUNDARY byte that the shell would not execute, e.g. a
+#   heredoc line starting with `pkill -f`, or a markdown code span `` `pkill -f ...` `` inside a
+#   heredoc or quoted string (the backtick boundary). Over-counting is the safe direction for an
+#   absence claim; the misses are the claim's stated scope.
+pattern invocation =
+  (.* [\n;&|(`])? [ \t]* (("sudo" | "env" | "xargs" | "nohup" | "exec" | "command" | "time"
+  | "timeout" [ \t]+ [0-9]+ [smh]?) [ \t]+)* "pkill" ([ \t]+ "-" [A-Za-z0-9]+)* [ \t]+ "-"
+  [A-Za-z0-9]* "f" .*;
+
+# Query (C), the absence receipt: (B) with the backtick removed from BOUNDARY, nothing else
+# changed (src/invocation.rs: invocation_re(false); table tables/invocation-nobacktick.json).
+# Its scope is (B)'s limits plus: `` `pkill -f x` `` command substitution is MISSED. The reason
+# for the cut: on this corpus every (B) match without a command behind it (records 123, 139,
+# 1086, 1337, 2544, 2633, 2650) is a markdown code span in heredoc or quoted prose.
+pattern invocation_nobacktick =
+  (.* [\n;&|(])? [ \t]* (("sudo" | "env" | "xargs" | "nohup" | "exec" | "command" | "time"
+  | "timeout" [ \t]+ [0-9]+ [smh]?) [ \t]+)* "pkill" ([ \t]+ "-" [A-Za-z0-9]+)* [ \t]+ "-"
+  [A-Za-z0-9]* "f" .*;

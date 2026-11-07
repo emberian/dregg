@@ -233,8 +233,8 @@ preimage-finder's, at every parameter, over the SAME sampled tag space. -/
 theorem recover_adv_le (A : Adversary (D.spanRecoverGame)) (l : ℕ) :
     gameAdv (D.spanRecoverGame) A l ≤ gameAdv (D.widePreimageGame) (D.recoverToPreimage A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
-  exact D.recover_wins_imp A l t ht
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  exact (Adversary.hit_eq_true _ _ _).mpr (D.recover_wins_imp A l t ht)
 
 /-- **⚑ SPAN HIDING FROM THE PREIMAGE FLOOR — the general-`Eff` reduction (THE HEADLINE).** Under the
 named preimage floor at a class `Eff`, a span-recoverer whose EXTRACTED preimage-finder is in `Eff` has
@@ -294,7 +294,7 @@ theorem widePreimageFloor_polyTime_inhabited :
       (idAdv (G := D.widePreimageGame) (O := Unit) (Q := fun _ => Unit) (R := fun _ => Unit)
         (fun _ t => D.honestPreimage t)).toAdversary :=
   isPolyTime_inhabited (D.preAnsSize) (fun _ t => D.honestPreimage t)
-    ⟨11, 0, fun _ t => by simp [preAnsSize]⟩
+    ⟨11, 0, fun _ t => by simp [preAnsSize, D.honestPreimage_length t]⟩
 
 /-- **⚑ THE PRICE, PROVED — `WidePreimageFloor D (IsPolyTime …)` IS FALSE.** The constant finder that
 HARDCODES the honest preimage of the (fixed, published) commitment is `IsPolyTime` (answer size `11`) and

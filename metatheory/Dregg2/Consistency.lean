@@ -87,8 +87,8 @@ example (m m' : Int) :
 (`ref_member_at`). Here `1` and `2` are authorized members of root `3`. -/
 example : MemberOf discriminatingAnon.compress 3 1 ∧ MemberOf discriminatingAnon.compress 3 2 := by
   refine ⟨?_, ?_⟩
-  · have := BlindedSet.Reference.ref_member_at (x := 1) (s := 2); simpa using this
-  · have := BlindedSet.Reference.ref_member_at (x := 2) (s := 1); simpa using this
+  · have := BlindedSet.Reference.ref_member_at (x := 1) (s := 2); simpa [HolderAnonymity.compress] using this
+  · have := BlindedSet.Reference.ref_member_at (x := 2) (s := 1); simpa [HolderAnonymity.compress] using this
 
 /-- Tooth 4 — the full non-vacuous statement: members `1` and `2` of root `3` are authorized
 and have indistinguishable views at the discriminating witness. -/
@@ -96,9 +96,9 @@ example :
     discriminatingAnon.ViewIndistinguishable
       (discriminatingAnon.view 1 3) (discriminatingAnon.view 2 3) := by
   have h1 : MemberOf discriminatingAnon.compress 3 1 := by
-    have := BlindedSet.Reference.ref_member_at (x := 1) (s := 2); simpa using this
+    have := BlindedSet.Reference.ref_member_at (x := 1) (s := 2); simpa [HolderAnonymity.compress] using this
   have h2 : MemberOf discriminatingAnon.compress 3 2 := by
-    have := BlindedSet.Reference.ref_member_at (x := 2) (s := 1); simpa using this
+    have := BlindedSet.Reference.ref_member_at (x := 2) (s := 1); simpa [HolderAnonymity.compress] using this
   exact @blindedset_hides_holder Int discriminatingAnon 3 1 2 h1 h2
 
 /-! ## §2 — Reused system-level witnesses, re-exhibited with teeth.
@@ -308,9 +308,9 @@ theorem cluster_anonymity_membership_consistent :
       ∧ discriminatingAnon.ViewIndistinguishable
           (discriminatingAnon.view 1 3) (discriminatingAnon.view 2 3) := by
   have h1 : MemberOf discriminatingAnon.compress 3 1 := by
-    have := BlindedSet.Reference.ref_member_at (x := 1) (s := 2); simpa using this
+    have := BlindedSet.Reference.ref_member_at (x := 1) (s := 2); simpa [HolderAnonymity.compress] using this
   have h2 : MemberOf discriminatingAnon.compress 3 2 := by
-    have := BlindedSet.Reference.ref_member_at (x := 2) (s := 1); simpa using this
+    have := BlindedSet.Reference.ref_member_at (x := 2) (s := 1); simpa [HolderAnonymity.compress] using this
   exact ⟨⟨h1, h2⟩, @blindedset_hides_holder Int discriminatingAnon 3 1 2 h1 h2⟩
 
 /-! ## §4 — Crypto-standard carriers (necessarily Lean-trivial — isolated, not counted).

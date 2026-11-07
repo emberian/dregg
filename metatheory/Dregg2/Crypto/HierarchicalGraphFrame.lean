@@ -780,7 +780,8 @@ theorem frame_binds_rom (Q : ℕ → ℕ)
           (by show Q l + 20 ≤ Q l + 2 + 2 + 2 + 2 + 2 + 2 + 2 + 2 + 2 + 2; omega),
         fun _ _ => rfl⟩)
   refine @winProb_le_of_imp _ (frameBreakGame.instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hb, haf, hbreak⟩ := hH
   have hArun : A.run l H = (M l).eval H := hrun l H
   set a := A.run l H with ha
@@ -802,7 +803,7 @@ theorem frame_binds_rom (Q : ℕ → ℕ)
         (romLeftPair l H a.afterGraph) (romRightPair l H a.afterGraph) := by
     show (frameExtractComp M l).eval H = _
     unfold frameExtractComp
-    rw [OracleComp.bindComp_eval, ← hArun]
+    erw [OracleComp.bindComp_eval, ← hArun]
     rfl
   rw [hBrun]
   exact frameSelect_wins l H a hb haf hbreak
@@ -1121,12 +1122,12 @@ theorem frame_object_break_is_win (l : ℕ) (H : frameBreakGame.Inst l)
   have hb : romRootFromPath l H upd.index (romLeaf l H upd.index (slotEnc upd.before))
       (toRomPath l upd.path) = hgcRomRoot l H (graphEnc g₁) := by
     apply embedDig_injective l
-    rw [← romHash_rootFromPath_leaf, ← romHash_semanticRoot]
+    erw [← romHash_rootFromPath_leaf, ← romHash_semanticRoot]
     exact h1
   have ha : romRootFromPath l H upd.index (romLeaf l H upd.index (slotEnc upd.after))
       (toRomPath l upd.path) = hgcRomRoot l H (graphEnc g₂) := by
     apply embedDig_injective l
-    rw [← romHash_rootFromPath_leaf, ← romHash_semanticRoot]
+    erw [← romHash_rootFromPath_leaf, ← romHash_semanticRoot]
     exact h2
   unfold objFrameAns
   split_ifs with hidx
@@ -1192,7 +1193,8 @@ which the extracted ROM forger wins, so its advantage is dominated. -/
 theorem objFrame_adv_le (B : Adversary objFrameGame) (l : ℕ) :
     gameAdv objFrameGame B l ≤ gameAdv frameBreakGame (objFrameToRom B) l := by
   refine @winProb_le_of_imp _ (objFrameGame.instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hcheck, hbreak⟩ := hH
   exact frame_object_break_is_win l H _ _ _ hcheck hbreak
 
@@ -1214,7 +1216,7 @@ theorem objFrameToRom_eff (Q : ℕ → ℕ) (B : Adversary objFrameGame) (hB : O
       (fun a => QueryBounded.pure 0 _)).mono (by omega),
     fun l H => ?_⟩
   show objFrameAns l (B.run l H).1 (B.run l H).2.1 (B.run l H).2.2 = _
-  rw [OracleComp.bindComp_eval, hrun l H]
+  erw [OracleComp.bindComp_eval, hrun l H]
   rfl
 
 /-- **⚑⚑ THE FRAME CONVERSE ON THE DEPLOYED OBJECTS, DISCHARGED ON THE PROVED KEYED-ROM FLOOR.**

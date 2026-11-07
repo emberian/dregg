@@ -248,7 +248,7 @@ def rungMatches (n : String) (k : Rung) : Bool :=
 silently falling back to all nine is the same lie the shape docblock above names — the run would
 cost ten hours while reporting that it honoured a one-rung request. -/
 def parseRungs (spec : String) : Except String (List Rung) := do
-  let names := ((spec.splitOn ",").map String.trim).filter (· != "")
+  let names := ((spec.splitOn ",").map (fun s => s.trimAscii.copy)).filter (· != "")
   if names.isEmpty then throw s!"DREGG_SM_RUNGS={spec} names no rung"
   names.foldlM (fun acc n =>
     match allRungs.find? (rungMatches n) with

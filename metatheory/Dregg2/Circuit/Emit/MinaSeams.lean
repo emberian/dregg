@@ -546,16 +546,16 @@ theorem honestConj_says : ConjLeafSays honestConjClaim := by
   · show Renders honestConjClaim (2 * SK) ZETAW_N
     have h : Renders honestConjClaim (SK + (SK + 0)) ZETAW_N :=
       renders_shift _ (renders_shift _ (renders_head _ (by decide)))
-    simpa using h
+    exact h
   · show Renders honestConjClaim (3 * SK) R_N
     have h : Renders honestConjClaim (SK + (SK + (SK + 0))) R_N :=
       renders_shift _ (renders_shift _ (renders_shift _ (renders_head _ (by decide))))
-    simpa using h
+    exact h
   · show Renders honestConjClaim (4 * SK) B0_N
     have h : Renders honestConjClaim (SK + (SK + (SK + (SK + 0)))) B0_N :=
       renders_shift _ (renders_shift _ (renders_shift _ (renders_shift _
         (renders_last (by decide)))))
-    simpa using h
+    exact h
   · obtain ⟨hz, hzw, hr⟩ := casts_roundtrip
     rw [hz, hzw, hr, bEval_eq_bPoly, bEval_eq_bPoly]
     exact Dregg2.Circuit.Emit.MinaWrapOpeningGate.b0_is_the_b_polynomial.symm
@@ -609,16 +609,16 @@ theorem forgedConj_says : ConjLeafSays forgedConjClaim := by
   · show Renders forgedConjClaim (2 * SK) 0
     have h : Renders forgedConjClaim (SK + (SK + 0)) 0 :=
       renders_shift _ (renders_shift _ (renders_head _ (by decide)))
-    simpa using h
+    exact h
   · show Renders forgedConjClaim (3 * SK) 3
     have h : Renders forgedConjClaim (SK + (SK + (SK + 0))) 3 :=
       renders_shift _ (renders_shift _ (renders_shift _ (renders_head _ (by decide))))
-    simpa using h
+    exact h
   · show Renders forgedConjClaim (4 * SK) 4
     have h : Renders forgedConjClaim (SK + (SK + (SK + (SK + 0)))) 4 :=
       renders_shift _ (renders_shift _ (renders_shift _ (renders_shift _
         (renders_last (by decide)))))
-    simpa using h
+    exact h
   · simp only [Nat.cast_zero, bEval_zero]
     norm_num
 
@@ -699,7 +699,7 @@ theorem v_prime_seam_certifies :
   obtain ⟨hpins, -, hzr⟩ := hseam
   have hout0 : Renders cv CHAIN_OUT_LANE0 (outSt.getD 0 0) := by
     have h := hout 0 (by omega)
-    simpa using h
+    exact h
   refine ⟨outSt.getD 0 0, v', hout0, hv, ?_⟩
   have h128 : (2 : Nat) ^ 128 = 2 ^ (SB * V_PRIME_LIMBS) := by decide
   rw [h128]
@@ -806,7 +806,7 @@ theorem realChain_says : ChainRootSays realChainClaim := by
       have h : Renders realChainClaim (SK + (SK + 0))
           ((Dregg2.Circuit.Emit.MinaPhase2Chain.chainState 0).getD 2 0) :=
         renders_shift _ (renders_shift _ (renders_head _ (by decide)))
-      simpa using h
+      exact h
   · have hb : ∀ k, k < 3 →
         (Dregg2.Circuit.Emit.MinaPhase2Chain.chainState 46).getD k 0 < 2 ^ (SB * SK) := by
       intro k hk
@@ -820,19 +820,19 @@ theorem realChain_says : ChainRootSays realChainClaim := by
       have h : Renders realChainClaim (SK + (SK + (SK + 0)))
           ((Dregg2.Circuit.Emit.MinaPhase2Chain.chainState 46).getD 0 0) :=
         renders_shift _ (renders_shift _ (renders_shift _ (renders_head _ (hb 0 (by omega)))))
-      simpa using h
+      exact h
     · show Renders realChainClaim (CHAIN_STATE_WIDTH + 1 * SK) _
       have h : Renders realChainClaim (SK + (SK + (SK + (SK + 0))))
           ((Dregg2.Circuit.Emit.MinaPhase2Chain.chainState 46).getD 1 0) :=
         renders_shift _ (renders_shift _ (renders_shift _ (renders_shift _
           (renders_head _ (hb 1 (by omega))))))
-      simpa using h
+      exact h
     · show Renders realChainClaim (CHAIN_STATE_WIDTH + 2 * SK) _
       have h : Renders realChainClaim (SK + (SK + (SK + (SK + (SK + 0)))))
           ((Dregg2.Circuit.Emit.MinaPhase2Chain.chainState 46).getD 2 0) :=
         renders_shift _ (renders_shift _ (renders_shift _ (renders_shift _ (renders_shift _
           (renders_head _ (hb 2 (by omega)))))))
-      simpa using h
+      exact h
 
 /-- ⚑⚑ **THE `v′` REFUTER.** Drop `SeamEq` and the implication is FALSE on the real block's own
 chain claim against a zero `v′`: the composed sentence would force `0 = WRAP_V_CHAL`. Compiled
@@ -850,7 +850,7 @@ theorem v_prime_seam_S2_needs_the_seam :
     have h' : Renders realChainClaim (SK + (SK + (SK + 0)))
         ((Dregg2.Circuit.Emit.MinaPhase2Chain.chainState 46).getD 0 0) :=
       renders_shift _ (renders_shift _ (renders_shift _ (renders_head _ hb0)))
-    simpa using h'
+    exact h'
   have hlane : outLane0 = (Dregg2.Circuit.Emit.MinaPhase2Chain.chainState 46).getD 0 0 :=
     Renders.eq_of_weld hout hreal (fun _ _ => rfl)
   have hv0 : v' = 0 := Renders.eq_of_weld hv zeroFinalize_renders (fun _ _ => rfl)

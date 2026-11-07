@@ -280,7 +280,10 @@ theorem denote_finAllocCell (n : RecordKernelState → CellId) (f : FinKernelSta
        CanonMap.get_filterErase]
     show (if decide (c = n (denote f)) then (0 : ℤ) else f.bal.get (toLex (c, a)))
         = (createCellIntoAsset (denote f) (n (denote f))).bal c a
-    by_cases hc : c = n (denote f) <;> simp [hc, createCellIntoAsset, bornEmptyCellSlots, denote]
+    by_cases hc : c = n (denote f)
+    · simp [hc, createCellIntoAsset, bornEmptyCellSlots, denote]
+    · simp only [hc, decide_false, Bool.false_eq_true, ↓reduceIte, createCellIntoAsset,
+        bornEmptyCellSlots] <;> rfl
   all_goals rfl
 
 /-! ## §7 — coverage note (extends `FinInterp`'s `Pure`/`denote_finInterp` classification).

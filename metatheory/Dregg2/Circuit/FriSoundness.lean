@@ -572,7 +572,7 @@ theorem fFar_not_mem : fFar ∉ rsSetup.C := by
 ![3+3α, 0]` is constant (in `C'`) for EXACTLY ONE challenge (`α = 4`, giving `![0,0]`). -/
 theorem fFar_good_alpha : Fold rsSetup.geom 4 fFar ∈ rsSetup.C' := by
   rw [show rsSetup.C' = rsC' from rfl, mem_rsC']
-  exact ⟨0, by funext y; fin_cases y <;> decide⟩
+  exact ⟨0, by funext y; fin_cases y <;> decide +kernel⟩
 
 /-- At a DIFFERENT challenge (`α = 0`) the fold is non-constant — it LEAVES the code. This is
 the KEY LEMMA biting: a far `f` folds close for at most one `α`. -/
@@ -582,7 +582,7 @@ theorem fFar_bad_alpha : Fold rsSetup.geom 0 fFar ∉ rsSetup.C' := by
   have h0 := congrFun h 0
   have h1 := congrFun h 1
   have hbad : Fold rsSetup.geom 0 fFar 0 = Fold rsSetup.geom 0 fFar 1 := h0.trans h1.symm
-  revert hbad; decide
+  revert hbad; decide +kernel
 
 /-- **The KEY LEMMA fires on concrete data**: the exceptional set of `fFar` is a
 subsingleton, and `α = 4` is in it while `α = 0` is not — exactly ONE good challenge,

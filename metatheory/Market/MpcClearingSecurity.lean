@@ -234,7 +234,7 @@ private theorem ceilLog2Go_covers (n : ℕ) :
       n ≤ 2 ^ ceilLog2Go n fuel x d := by
   intro fuel
   induction fuel with
-  | zero => intro x d _ h; simpa using h
+  | zero => intro x d _ h; simpa [ceilLog2Go] using h
   | succ f ih =>
     intro x d hx h
     show n ≤ 2 ^ (if x < n then ceilLog2Go n f (2 * x) (d + 1) else d)

@@ -191,7 +191,7 @@ theorem trivial_grade_stays (G : Game.{u}) (B : Nat) (w : G.World) (m : G.Move) 
 So the Boolean game is recovered: the energy floor degenerates to `base.floor`. -/
 theorem trivial_floor_collapse (G : Game.{u}) (B : Nat) (w : G.World) :
     (EGame (trivialCost G B)).floor (w, 0) ↔ G.floor w := by
-  rw [egame_floor]
+  refine (egame_floor (trivialCost G B) w 0).trans ?_
   constructor
   · exact fun h => h.1
   · exact fun h => ⟨h, Nat.zero_le B⟩
@@ -252,7 +252,7 @@ instance : DecidablePred cutsFloor := fun g => inferInstanceAs (Decidable (g ≤
 
 /-- `cutsFloor` IS the energy floor on the `Unit` slice (base floor `True` drops out). -/
 theorem cutsFloor_eq (g : Nat) : (EGame cutsGame).floor ((), g) ↔ cutsFloor g := by
-  rw [egame_floor]; exact ⟨fun h => h.2, fun h => ⟨trivial, h⟩⟩
+  refine (egame_floor cutsGame () g).trans ?_; exact ⟨fun h => h.2, fun h => ⟨trivial, h⟩⟩
 
 /-- Accumulate `n` cuts from grade `0` via the energy step's `bump`. -/
 def cutGrade : Nat → Nat

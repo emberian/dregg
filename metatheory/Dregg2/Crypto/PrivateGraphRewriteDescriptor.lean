@@ -393,6 +393,15 @@ def constTrace (a pis : Assignment) (tf : TraceFamily) :
   pub := pis
   tf := tf
 
+@[simp] theorem constTrace_pub0 (a pis : Assignment) (tf : TraceFamily) :
+    (Dregg2.Circuit.DescriptorIR2.envAt (constTrace a pis tf) 0).pub = pis := rfl
+
+@[simp] theorem constTrace_tf (a pis : Assignment) (tf : TraceFamily) :
+    (constTrace a pis tf).tf = tf := rfl
+
+@[simp] theorem constTrace_rows_length (a pis : Assignment) (tf : TraceFamily) :
+    (constTrace a pis tf).rows.length = 4 := rfl
+
 def CanonicalAssignment (a : Assignment) : Prop :=
   ∀ col, 0 ≤ a col ∧ a col < 2013265921
 
@@ -607,47 +616,47 @@ theorem privateGraphRewrite_wide_hashes
     (hsat : Satisfied2 hash privateGraphRewriteDescriptor ppM0 ppF0 []
       (constTrace a pis tf)) : WideHashFacts permOut a := by
   constructor
-  · simpa [digestExprs, graphCoreLookup] using
+  · simpa [digestExprs, graphCoreLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := stageFieldExprs OLD_STAGE_BASE 6)
         (outCols := (List.range 8).map (OLD_CORE_BASE + ·))
         (by decide) (by simp [hashLookups, graphCoreLookup]))
-  · simpa [digestExprs, hashLookup] using
+  · simpa [digestExprs, hashLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := graphRootInputExprs OLD_CORE_BASE OLD_BLIND_BASE GRAPH_STATE_TAG)
         (outCols := (List.range 8).map (OLD_ROOT_BASE + ·))
         (by decide) (by simp [hashLookups, hashLookup]))
-  · simpa [digestExprs, graphCoreLookup] using
+  · simpa [digestExprs, graphCoreLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := stageFieldExprs NEW_STAGE_BASE 0)
         (outCols := (List.range 8).map (NEW_CORE_BASE + ·))
         (by decide) (by simp [hashLookups, graphCoreLookup]))
-  · simpa [digestExprs, hashLookup] using
+  · simpa [digestExprs, hashLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := graphRootInputExprs NEW_CORE_BASE NEW_BLIND_BASE GRAPH_STATE_TAG)
         (outCols := (List.range 8).map (NEW_ROOT_BASE + ·))
         (by decide) (by simp [hashLookups, hashLookup]))
-  · simpa [digestExprs, hashLookup] using
+  · simpa [digestExprs, hashLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := ruleFieldExprs 0)
         (outCols := (List.range 8).map (RULE0_CORE_BASE + ·))
         (by decide) (by simp [hashLookups, hashLookup]))
-  · simpa [digestExprs, hashLookup] using
+  · simpa [digestExprs, hashLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := ruleLeafInputExprs RULE0_CORE_BASE 0)
         (outCols := (List.range 8).map (RULE0_LEAF_BASE + ·))
         (by decide) (by simp [hashLookups, hashLookup]))
-  · simpa [digestExprs, hashLookup] using
+  · simpa [digestExprs, hashLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := ruleFieldExprs 1)
         (outCols := (List.range 8).map (RULE1_CORE_BASE + ·))
         (by decide) (by simp [hashLookups, hashLookup]))
-  · simpa [digestExprs, hashLookup] using
+  · simpa [digestExprs, hashLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := ruleLeafInputExprs RULE1_CORE_BASE 1)
         (outCols := (List.range 8).map (RULE1_LEAF_BASE + ·))
         (by decide) (by simp [hashLookups, hashLookup]))
-  · simpa [digestExprs, hashLookup] using
+  · simpa [digestExprs, hashLookup, v, Function.comp_def, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] using
       (wide_hash_lookup_sound permOut hChip hsat
         (inputs := rulesetInputExprs)
         (outCols := (List.range 8).map (RULESET_ROOT_BASE + ·))

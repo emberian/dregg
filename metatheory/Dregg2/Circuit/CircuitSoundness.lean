@@ -1276,7 +1276,9 @@ theorem turnDecodeChain_refines_turnSpec
         | cons d' rest' =>
             have heq : (d :: d' :: rest').getLast? = (d' :: rest').getLast? := by
               simp [List.getLast?_cons_cons]
-            simpa [heq] using lastPost
+            rw [heq, List.getLast?_eq_getLast (List.cons_ne_nil d' rest')] at lastPost
+            rw [List.getLast?_eq_getLast (List.cons_ne_nil d' rest')]
+            exact lastPost
       have hrefRest : ∀ d'' ∈ rest, ∃ e' : EffectIdx, d''.descr = R e' ∧
           dispatchArm e' d''.pre d''.post := fun d'' hd'' => href d'' (List.mem_cons_of_mem _ hd'')
       obtain ⟨acts, htail⟩ := ih d.post hseamRest hheadRest hlastRest hrefRest
@@ -1337,7 +1339,9 @@ theorem turnDecodeChain_refines_turnSpec_gen
         | cons d' rest' =>
             have heq : (d :: d' :: rest').getLast? = (d' :: rest').getLast? := by
               simp [List.getLast?_cons_cons]
-            simpa [heq] using lastPost
+            rw [heq, List.getLast?_eq_getLast (List.cons_ne_nil d' rest')] at lastPost
+            rw [List.getLast?_eq_getLast (List.cons_ne_nil d' rest')]
+            exact lastPost
       have hrefRest : ∀ d'' ∈ rest, ∃ e' : EffectIdx, d''.descr = R e' ∧
           arm e' d''.pre d''.post := fun d'' hd'' => href d'' (List.mem_cons_of_mem _ hd'')
       obtain ⟨acts, htail⟩ := ih d.post hseamRest hheadRest hlastRest hrefRest

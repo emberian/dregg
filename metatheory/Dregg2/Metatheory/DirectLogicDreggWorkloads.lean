@@ -106,12 +106,14 @@ theorem source_iff_admissible (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState)
     Formula.Holds (truth ctx h s) source ↔ admissible ctx h s = true := by
   cases hv : h.validUntil with
   | none =>
-      simp [source, common, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9,
-        a10, a11, truth, Formula.Holds, admissible, hv]
+      simp only [source, common, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, Formula.Holds]
+      simp only [truth]
+      simp [admissible, hv]
       aesop
   | some vu =>
-      simp [source, common, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9,
-        a10, a11, truth, Formula.Holds, admissible, hv]
+      simp only [source, common, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, Formula.Holds]
+      simp only [truth]
+      simp [admissible, hv]
       aesop
 
 def certificate : PublicLiveCertificate 12 := certifyPublic source
@@ -153,12 +155,14 @@ theorem source_iff_authorizedUpgrade (caps : Dregg2.Authority.Caps) (t : Upgrade
     Formula.Holds (truth caps t) source ↔ AuthorizedUpgrade caps t := by
   cases ha : t.auth with
   | byProof v =>
-      simp [source, authorityPrefix, a0, a1, a2, a3, truth, Formula.Holds,
-        AuthorizedUpgrade, setProgramAdmissible, ha]
+      simp only [source, authorityPrefix, a0, a1, a2, a3, Formula.Holds]
+      simp only [truth]
+      simp [AuthorizedUpgrade, setProgramAdmissible, ha]
       aesop
   | bySignature =>
-      simp [source, authorityPrefix, a0, a1, a2, a3, truth, Formula.Holds,
-        AuthorizedUpgrade, setProgramAdmissible, ha]
+      simp only [source, authorityPrefix, a0, a1, a2, a3, Formula.Holds]
+      simp only [truth]
+      simp [AuthorizedUpgrade, setProgramAdmissible, ha]
 
 def certificate : PublicLiveCertificate 4 := certifyPublic source
 
@@ -197,12 +201,14 @@ theorem source_iff_clearance_admits (c : Clearance) (r : Request) :
     Formula.Holds (truth c r) source ↔ c.admits r = true := by
   cases hc : c.confined? with
   | false =>
-      simp [source, clearancePrefix, a0, a1, a2, a3, truth, Formula.Holds,
-        Clearance.admits, hc]
+      simp only [source, clearancePrefix, a0, a1, a2, a3, Formula.Holds]
+      simp only [truth]
+      simp [Clearance.admits, hc]
       aesop
   | true =>
-      simp [source, clearancePrefix, a0, a1, a2, a3, truth, Formula.Holds,
-        Clearance.admits, hc]
+      simp only [source, clearancePrefix, a0, a1, a2, a3, Formula.Holds]
+      simp only [truth]
+      simp [Clearance.admits, hc]
 
 def certificate : PublicLiveCertificate 4 := certifyPublic source
 
@@ -238,7 +244,9 @@ def truth (fed : AdmissionState) (strand : AuthorId) : Fin 3 → Prop
 /-- Exact all-input equivalence to the gate that filters finality leaders. -/
 theorem source_iff_strand_admitted (fed : AdmissionState) (strand : AuthorId) :
     Formula.Holds (truth fed strand) source ↔ admitted fed strand = true := by
-  simp [source, a0, a1, a2, truth, Formula.Holds, admitted, Bool.or_eq_true]
+  simp only [source, a0, a1, a2, Formula.Holds]
+  simp only [truth]
+  simp [admitted, Bool.or_eq_true]
 
 def certificate : PublicLiveCertificate 3 := certifyPublic source
 

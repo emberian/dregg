@@ -146,6 +146,14 @@ theorem sdd_implies_psd {P : Matrix ι ι ℚ}
 def liftInt {n : Nat} (P : Matrix (Fin n) (Fin n) Int) :
     Matrix (Fin n) (Fin n) ℚ := fun i j => P i j
 
+/-- Symmetry of an integer matrix is decidable entrywise. Stated for `Matrix` so instance search
+does not have to abstract `P i j` over the (non-reducible) `Matrix` synonym. -/
+instance decidableSymmEntries {n : Nat} (P : Matrix (Fin n) (Fin n) Int) :
+    Decidable (∀ i j, P i j = P j i) :=
+  @Fintype.decidableForallFintype (Fin n) (fun i => ∀ j, P i j = P j i)
+    (fun i => @Fintype.decidableForallFintype (Fin n) (fun j => P i j = P j i)
+      (fun j => Int.decEq (P i j) (P j i)) _) _
+
 def sddCheck {n : Nat} (P : Matrix (Fin n) (Fin n) Int) : Bool :=
   decide (
     (∀ i j, P i j = P j i) ∧

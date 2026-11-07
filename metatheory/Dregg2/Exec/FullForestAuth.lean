@@ -802,7 +802,6 @@ theorem lowerForestG_actions_eq_eraseG
   obtain ⟨na, a, kids⟩ := f
   show (((na, a) :: lowerChildrenG (targetOf a) kids).map Prod.snd)
       = a :: lowerChildrenA (targetOf a) (eraseChildrenG kids)
-  rw [List.map_cons]
   exact congrArg (a :: ·) (lowerChildrenG_actions_eq_eraseG (targetOf a) kids)
 
 theorem lowerChildrenG_actions_eq_eraseG (delegator : Dregg2.Exec.CellId)

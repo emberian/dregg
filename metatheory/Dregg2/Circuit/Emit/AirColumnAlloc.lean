@@ -491,6 +491,11 @@ theorem sharingRel_symm :
   rw [LiveRange.interferes_comm]
   exact h hslot.symm
 
+/-- The same symmetry as the `Std.Symm` instance Mathlib's `List.Pairwise.forall` takes. -/
+instance sharingRel_isSymm :
+    Std.Symm (fun p q : LiveRange × Nat => p.2 = q.2 → p.1.interferes q.1 = false) :=
+  ⟨fun _ _ h => sharingRel_symm h⟩
+
 theorem disjointSharing_nil : DisjointSharing [] := List.Pairwise.nil
 
 /-- The step preserves it: the appended element's slot was chosen free of every interfering
@@ -534,7 +539,7 @@ theorem shared_column_means_disjoint_live_ranges (rs : List LiveRange)
     (p q : LiveRange × Nat) (hp : p ∈ allocate rs) (hq : q ∈ allocate rs)
     (hne : p ≠ q) (hsame : p.2 = q.2) :
     p.1.hi < q.1.lo ∨ q.1.hi < p.1.lo := by
-  have h := (alloc_disjoint rs).forall sharingRel_symm hp hq hne hsame
+  have h := (alloc_disjoint rs).forall hp hq hne hsame
   simp only [LiveRange.interferes, Bool.and_eq_false_iff, decide_eq_false_iff_not] at h
   omega
 
@@ -618,7 +623,7 @@ theorem all_interfering_forces_distinct_slots (pl : List (LiveRange × Nat))
     (hall : ∀ p ∈ pl, ∀ q ∈ pl, p.1.interferes q.1 = true) :
     ∀ p ∈ pl, ∀ q ∈ pl, p ≠ q → p.2 ≠ q.2 := by
   intro p hp q hq hne hslot
-  have hfalse := hd.forall sharingRel_symm hp hq hne hslot
+  have hfalse := hd.forall hp hq hne hslot
   rw [hall p hp q hq] at hfalse
   exact Bool.noConfusion hfalse
 

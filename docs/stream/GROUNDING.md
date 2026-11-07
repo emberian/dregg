@@ -39,7 +39,7 @@ Tags: [READ] seen at file:line; [MEASURED] a run or pinned `#guard`; [RECALLED] 
 - **IVC / PCD**: collaborative IVC (ePrint 2026/410) [SNIPPET]. The weld leg (§4) is where a window receipt becomes an IVC step; not claimed at L2.
 - I searched for a "proof of correct monitoring" ePrint (2025-2026) and found none [two searches, no hit]. No hit is not "none exists", and nothing here claims a first.
 
-**What the receipt adds over all of the above**: (1) *non-omission, when anchored*: if the chain's final root equals the root published for the source log, the monitored entries ARE that log (`anchored_is_genuine`), and any auditor holding only that root gets, by `server_cannot_omit_position`, the same entries at every position. Without an anchor, the chain check ties the receipts only to the windows it was shown (a producer that drops a line before windowing and recomputes every receipt passes the chain check; the demo shows the anchor refusing it); (2) *third-party checkability*: the receipt chain is checked by a Lean predicate, not trusted; (3) *incrementality*: checking window k needs only the follower's own state after window k−1, not the prefix.
+**What the receipt adds over all of the above**: (1) *non-omission, when anchored*: if the chain's final root equals the root published for the source log, the monitored committed values ARE that log's (`anchored_is_genuine`), and the monitored entries and their symbols ARE its entries unless an entry-digest collision is named at a position (`anchored_entries_genuine`), and any auditor holding only that root gets, by `server_cannot_omit_position`, the same entries at every position. Without an anchor, the chain check ties the receipts only to the windows it was shown (a producer that drops a line before windowing and recomputes every receipt passes the chain check; the demo shows the anchor refusing it); (2) *third-party checkability*: the receipt chain is checked by a Lean predicate, not trusted; (3) *incrementality*: checking window k needs only the follower's own state after window k−1, not the prefix.
 
 ## 3. The bar, restated (peer correction)
 
@@ -49,8 +49,8 @@ liveness property true** (every prefix of `□(prompt → ◇reply)` extends to 
 reply again). What the receipts can and do certify:
 
 1. **safety half**: ⊥ is final (`verdict_monotone`) and sound (`verdict_viol_sound`: every infinite extension is rejected by the Büchi condition);
-2. **liveness half**: the Büchi visit count `k` over positions `(0, n]` is exact, and `buchi_iff_count_unbounded` ties it to the ω-semantics: the infinite stream is accepted iff the receipts' counters are unbounded. A receipt chain is therefore a finite approximant of the acceptance condition, not a verdict on it, and the verdict stays ? until the safety half fires;
-3. **obligation age**: the receipt also carries `lastMark`, the last position at which the run was in an accepting state (`lastMark_spec`, `lastMark_marked`; 0 = none), so `n − lastMark` is certified as the length of the current unaccepting stretch: an upper bound on the age of the oldest open prompt (and, after a trip, the time since the trip).
+2. **liveness half**: the Büchi visit count `k` over positions `(0, n]` is exact, and `buchi_iff_count_unbounded_along` ties it to the ω-semantics: if the chain's window endpoints are cofinal, the infinite stream is accepted iff the receipts' counters are unbounded (without cofinality, infinitely many empty windows would freeze the counter). A receipt chain is therefore a finite approximant of the acceptance condition, not a verdict on it, and the verdict stays ? until the safety half fires;
+3. **obligation age**: the receipt also carries `lastMark`, the last position at which the run was in an accepting state (`lastMark_spec`, `lastMark_marked`; 0 = none), so `n − lastMark` is certified as the length of the current unaccepting stretch: an upper bound on the age of the oldest open prompt. After a trip it keeps growing, but it is not the time since the trip (the stretch can start well before it).
 
 And the verifier's cost is O(w + log n) hash evaluations for a window of w entries at log height n (the
 frontier has popcount(n) ≤ log₂ n + 1 peaks; the carry is amortized O(1) per append), not "independent
@@ -93,3 +93,42 @@ transcript with receipts every 100 events, a follower, and a microsite with the 
   `windows_compose`; `reach_once_not_buchi` on `other, prompt^ω` (counter 1 forever, rejected);
   prefix-free tags `…:mmr:n` / `…:mmr:w`; a tokenizing classifier (wrappers peeled, `git -C`, option
   clusters, `pkill -x`, `ssh host '…'`) with 13 new `#guard`s; the vacuity of `sat` at the demo stated.
+- Standing policy (2026-11-06, from ember via the coordinator): facts about concrete data are checked
+  by compiled evaluation. The six toy-stream falsifiers in `Window.lean` are `native_decide` pinned with
+  `#assert_compiled`; every general theorem stays kernel-proved under `#assert_axioms`.
+- L3 runs (2026-11-06): this lane's own live session (5,300 lines, 53 windows, re-verified from genesis
+  against a root computed independently from the source file, `verify --anchor`); the largest local
+  session replayed (27,775 lines, 44.9 MB, 278 windows, hash calls 301-311 per full window, anchored);
+  a real violation (`git add -A`, window 6 of 6, `viol`, anchored). Page: `dregg-microsites/so-far/`
+  (local commit; publication is ember's call).
+- Cross-model round 1 (gpt-6-astra, fresh Codex account, 2026-11-06; answer in the codex session record):
+  no blocker; 4 MAJOR (anchoring bound values not entries/symbols; `verify` accepted an incomplete or
+  missing directory; producer and follower disagreed on an unterminated tail; a reused output directory
+  could overwrite published windows), 4 MINOR (classifier: `env X=1 git stash` missed and
+  `echo "x; git stash"` falsely flagged; wide-form framing lengths wrapped at 2^64; the counter link
+  needs cofinal endpoints; "time since trip" wrong), 3 OK (composition binds every receipt field and is
+  inhabited; verdict and indexing attacks fail; the mutants separate). Repairs: `anchored_entries_genuine`
+  (named entry-digest collision); `verify` exits 0 only for a completed run (DONE names the count, no
+  gaps; 3 = accepted prefix, 2 = bad input); both sides commit only newline-terminated lines and the
+  follower refuses a window with a tail; the producer refuses an existing run's state and publishes
+  windows atomically; a quote-aware classifier that re-reads `bash -c` / `ssh` strings and peels
+  `NAME=value`; LEB128 lengths in the wide form; `buchi_iff_count_unbounded_along`; wording fixed;
+  classifier facts are named `native_decide` theorems under `#assert_compiled`.
+- Cross-model round 2 (gpt-6-astra, 2026-11-06, at 6cb710ba2): statements pass (anchoring binds a
+  named position; cofinality correct; windows_compose and verdict_monotone survive); 1 MAJOR open
+  (`verify` probed only 64 positions past a gap, so a distant stale window escaped) and 4 MINOR (Rust
+  audit kept the old EOF rule; classifier: positional args after `bash -c` re-read, `sudo -u`,
+  `env -u`, `$( )` missed, `git add -- -A` false positive; publication races; one `#guard` left).
+  Repairs: `verify` enumerates both directories and refuses any file that is not one of the checked
+  pairs; the audit refuses unterminated windows; `RUN.lock` (create-new) owns a run, windows are
+  published by hard link (never replacing), `DONE` by rename; the classifier keeps the `-c` string
+  boundary, drops wrapper option operands and `--`, and re-reads `$( )` / backquote bodies; the hash
+  moved to the core module `Stream.Hash` so its concrete fact is the pinned theorem
+  `streamHash_forms_differ`.
+- Cross-model round 3 (gpt-6-astra, 2026-11-06, at 59563d6ca): **gate closed.** The MAJOR and the
+  EOF, publication and hash-pin repairs confirmed; the five headline statements (window_sound,
+  windows_compose, anchored_is_genuine, anchored_entries_genuine, verdict_monotone) byte-identical
+  since round 2. Two MINOR classifier gaps stay open and are stated, not fixed: substitution extraction
+  ignores double-quote/escape context (`echo "'$(git stash)'"` missed, `echo "\$(git stash)"` falsely
+  flagged), and `env -S 'git stash'` / `sudo --user root git stash` are missed. The classifier is a
+  syntactic reading of command text; the theorems are about it as defined.

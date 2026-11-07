@@ -257,13 +257,28 @@ pub async fn run_notary_session<S>(socket: S, signing_key: &k256::ecdsa::Signing
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
+    run_notary_session_with_roots(socket, signing_key, &[]).await
+}
+
+/// [`run_notary_session`] with extra trust roots (DER) added to the Mozilla set — for a server
+/// whose self-signed certificate the VERIFIER pins out of band (the call-tree tool server).
+pub async fn run_notary_session_with_roots<S>(
+    socket: S,
+    signing_key: &k256::ecdsa::SigningKey,
+    extra_roots: &[Vec<u8>],
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
+{
     let session = Session::new(socket.compat());
     let (driver, mut handle) = session.split();
     let driver_task = tokio::spawn(driver);
 
-    let verifier_config = VerifierConfig::builder()
-        .root_store(RootCertStore::mozilla())
-        .build()?;
+    let mut roots = RootCertStore::mozilla();
+    for der in extra_roots {
+        roots.roots.push(tlsn::webpki::CertificateDer(der.clone()));
+    }
+    let verifier_config = VerifierConfig::builder().root_store(roots).build()?;
 
     let verifier = match handle.new_verifier(verifier_config)?.commit().await? {
         VerifierCommitStart::Mpc(verifier) => verifier.accept().await?.run().await?,

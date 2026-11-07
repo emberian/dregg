@@ -179,7 +179,7 @@ def marksBoardOfRS (rs : Dregg2.Games.AutomataflRules.RoundState) : MarksBoard :
 theorem marksBoardOf_markAt_iff (n : Nat) (marks : List Coord) (c : Coord)
     (hx : c.x < n) (hy : c.y < n) :
     (marksBoardOf n marks).markAt c = true ↔ c ∈ marks := by
-  simp only [MarksBoard.markAt, marksBoardOf, if_pos (And.intro hx hy), decide_eq_true_iff]
+  simp [MarksBoard.markAt, marksBoardOf, hx, hy]
 
 /-- **THE CORRESPONDENCE (felt form)**: the packed cell code at linear index `y·n + x` is `1`
 exactly when `(x,y)` is a marked coordinate, `0` exactly when it is not. This is the statement the
@@ -346,7 +346,8 @@ membership gate `x·(x−1)` vanishes mod `p` is `0` or `1` — the marks twin o
 theorem mem2_of_gate {a : Assignment} {c : Nat}
     (h : (memberExpr c [0, 1]).eval a ≡ 0 [ZMOD 2013265921]) (hc : Canon (a c)) :
     a c = 0 ∨ a c = 1 := by
-  simp only [memberExpr, List.foldl, EmittedExpr.eval] at h
+  have e : (memberExpr c [0, 1]).eval a = a c * (a c + -1) := rfl
+  rw [e] at h
   have hd : (2013265921 : ℤ) ∣ a c * (a c + -1) := Int.modEq_zero_iff_dvd.mp (by simpa using h)
   obtain ⟨hc0, hc1⟩ := hc
   rcases pPrimeInt.dvd_mul.mp hd with h1 | h1
@@ -371,8 +372,7 @@ theorem marksCode_decode_eqAt (n : Nat) (cellCol : Nat → Nat) (e : VmRowEnv) (
     have hidx : (idx / n) * n + idx % n = idx := by rw [Nat.mul_comm]; exact Nat.div_add_mod idx n
     have hmark : (marksDecodeAt n cellCol e).markAt ⟨idx % n, idx / n⟩
         = bitToBool (e.loc (cellCol idx)) := by
-      simp only [MarksBoard.markAt, marksDecodeAt]
-      rw [if_pos ⟨hxlt, hylt⟩, hidx]
+      simp [MarksBoard.markAt, marksDecodeAt, hxlt, hylt, hidx]
     rw [hmark, markBit_bitToBool (hmem hlt)]
   · rw [if_neg hlt, if_neg hlt]
 

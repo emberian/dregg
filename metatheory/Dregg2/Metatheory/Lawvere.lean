@@ -578,7 +578,7 @@ theorem relExists_eq_compl_relForall_converse_compl (R : Ω → Ω → Prop) (S 
     relExists R S = (relForall (converse R) Sᶜ)ᶜ := by
   have h := relExists_converse_eq_compl_relForall_compl (converse R) S
   -- converse (converse R) = R definitionally.
-  simpa [converse] using h
+  exact h
 
 /-- **The box as the de Morgan dual of the diamond: `□_R = ¬◇_{Rᵒᵖ}¬`, PROVED.** The mate read the
 other direction: `relForall R T = (relExists (Rᵒᵖ) Tᶜ)ᶜ`. -/

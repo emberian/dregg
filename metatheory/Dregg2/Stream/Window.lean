@@ -20,7 +20,8 @@ what an accepted window, and an accepted chain of windows, means.
   final root, is exactly the monitored log's range with every position present
   (`Lightclient.MMR.server_cannot_omit_position`), unless the server found the named sponge collision.
 * **`anchored_is_genuine`**: if the final root equals a root published for a log `L`, the monitored
-  values ARE `L` (modulo `MRootColl`). The chain check alone ties receipts to the windows it is shown;
+  values ARE `L` (modulo `MRootColl`). **`anchored_entries_genuine`**: for genuine entries `G`, the
+  monitored entries and their symbols ARE `G`'s, modulo `MRootColl` or a named entry-digest collision. The chain check alone ties receipts to the windows it is shown;
   this is what ties them to the source.
 * `chain_append` (prefix monotonicity: a chain's prefix is an accepted chain, and its windows' ranges
   stay verbatim in the longer log), `chain_verdict_final` (a `viol` window is followed only by `viol`).
@@ -226,6 +227,38 @@ theorem anchored_is_genuine [DecidableEq Q] (P : Policy E Q Sym) {W : List (List
   have ht : Tracks P (W.flatMap Prod.fst) acc := by simpa using chain_tracks P W (genesis_tracks P) hc
   exact (mroot_binds_or_collides P.hash (ht.2.2.symm.trans hR.symm)).resolve_right hno
 
+/-- Two lists with equal images under `f` are equal, or a position NAMES two distinct elements `f`
+identifies. -/
+theorem map_eq_or_coll {α : Type} (f : α → ℤ) :
+    ∀ (l g : List α), l.map f = g.map f →
+      l = g ∨ ∃ (i : ℕ) (a b : α), l[i]? = some a ∧ g[i]? = some b ∧ a ≠ b ∧ f a = f b
+  | [], [], _ => Or.inl rfl
+  | [], _ :: _, h => by simp at h
+  | _ :: _, [], h => by simp at h
+  | a :: l, b :: g, h => by
+    simp only [List.map_cons, List.cons.injEq] at h
+    by_cases hab : a = b
+    · subst hab
+      rcases map_eq_or_coll f l g h.2 with he | ⟨i, x, y, hx, hy, hne, hf⟩
+      · exact Or.inl (by rw [he])
+      · exact Or.inr ⟨i + 1, x, y, by simpa using hx, by simpa using hy, hne, hf⟩
+    · exact Or.inr ⟨0, a, b, rfl, rfl, hab, h.1⟩
+
+/-- **Anchored, at the level of entries and symbols.** If the chain's final root is the root published
+for the genuine entries `G`, then the monitored entries ARE `G`, so the monitored symbols are `G`'s
+symbols, unless one of two NAMED residuals holds: the MMR collision `MRootColl`, or an entry-digest
+collision at a named position (two distinct entries with the same committed value, a blake3 collision
+for the deployed `entryVal`). -/
+theorem anchored_entries_genuine [DecidableEq Q] (P : Policy E Q Sym) {W : List (List E × WindowCert Q)}
+    {acc : Acc Q} (hc : P.checkChain P.genesis W = some acc) {G : List E}
+    (hR : mroot P.hash (G.map P.val) = acc.root)
+    (hno : ¬ MRootColl P.hash ((W.flatMap Prod.fst).map P.val) (G.map P.val)) :
+    (W.flatMap Prod.fst = G ∧ (W.flatMap Prod.fst).map P.sym = G.map P.sym) ∨
+      ∃ (i : ℕ) (a b : E), (W.flatMap Prod.fst)[i]? = some a ∧ G[i]? = some b ∧ a ≠ b ∧ P.val a = P.val b := by
+  rcases map_eq_or_coll P.val _ _ (anchored_is_genuine P hc hR hno) with he | hcoll
+  · exact Or.inl ⟨he, by rw [he]⟩
+  · exact Or.inr hcoll
+
 /-- **A `viol` window is followed only by `viol` windows**: if the chain's prefix ends `viol`, so does
 the whole chain. -/
 theorem chain_verdict_final [DecidableEq Q] (P : Policy E Q Sym) {cond : Cond} (hv : P.vc.Valid P.A cond)
@@ -254,12 +287,17 @@ theorem window_range_persists (L M : List ℤ) {lo hi : ℕ} (hhi : hi < L.lengt
 #assert_axioms windows_compose
 #assert_axioms chain_verdict_final
 #assert_axioms anchored_is_genuine
+#assert_axioms map_eq_or_coll
+#assert_axioms anchored_entries_genuine
 
 /-! ## Falsifiers at a toy policy
 
 `toyP`: entries are integers, committed as themselves; the automaton trips on `9` (a safety monitor:
 state `true` = tripped, absorbing, unmarked; Büchi over "not tripped"). The hash is a toy polynomial;
-the falsifiers do not need it to be collision-free, only to be computed. -/
+the falsifiers do not need it to be collision-free, only to be computed. Facts about these concrete
+streams and their hashes are checked by compiled evaluation (`native_decide`, pinned with
+`#assert_compiled`, so `Lean.ofReduceBool` is in their axiom set and nowhere else); the general
+theorems above stay kernel-proved. -/
 
 def toyHash (l : List ℤ) : ℤ := l.foldl (fun a x => a * 1000003 + x) (l.length + 17 : ℤ)
 
@@ -285,12 +323,12 @@ theorem toyP_valid : toyP.vc.Valid toyP.A .buchi := by
 def cHonest : WindowCert Bool := toyP.produce toyP.genesis [1, 2, 3]
 
 /-- **Dropped position, refused**: the server ships `[1, 3]` against the honest receipt. -/
-theorem falsifier_dropped_refused : toyP.checkWindow toyP.genesis [1, 3] cHonest = false := by decide
+theorem falsifier_dropped_refused : toyP.checkWindow toyP.genesis [1, 3] cHonest = false := by native_decide
 
 /-- **Dropped position, self-consistent receipt**: a receipt recomputed over `[1, 3]` is internally
 fine but ends at a different root, so a follower anchored to the published root refuses it. -/
 theorem falsifier_dropped_moves_root :
-    (toyP.produce toyP.genesis [1, 3]).rootOut ≠ cHonest.rootOut := by decide
+    (toyP.produce toyP.genesis [1, 3]).rootOut ≠ cHonest.rootOut := by native_decide
 
 /-- **Dropping the violating entry would flip the verdict**, which is exactly why the root must catch
 it: the honest window `[1, 9, 2]` is `viol`, the window without `9` is `unknown`, and their roots
@@ -299,7 +337,7 @@ theorem falsifier_dropped_violation :
     (toyP.produce toyP.genesis [1, 9, 2]).verdict = .viol ∧
     (toyP.produce toyP.genesis [1, 2]).verdict = .unknown ∧
     (toyP.produce toyP.genesis [1, 2]).rootOut ≠ (toyP.produce toyP.genesis [1, 9, 2]).rootOut := by
-  decide
+  native_decide
 
 def w1 : List ℤ := [1, 2]
 def w2 : List ℤ := [3]
@@ -308,23 +346,23 @@ def c2 : WindowCert Bool := toyP.produce (toyP.advance toyP.genesis w1) w2
 
 /-- The honest chain is accepted (non-vacuity of `windows_compose`'s hypothesis). -/
 theorem honest_chain_accepted : (toyP.checkChain toyP.genesis [(w1, c1), (w2, c2)]).isSome = true := by
-  decide
+  native_decide
 
 /-- **Swapped windows, refused.** -/
-theorem falsifier_swapped_refused : toyP.checkChain toyP.genesis [(w2, c2), (w1, c1)] = none := by decide
+theorem falsifier_swapped_refused : toyP.checkChain toyP.genesis [(w2, c2), (w1, c1)] = none := by native_decide
 
 /-- **Re-chunking is not a different log**: the same entries in other window boundaries end at the same
 root and state (the receipts are about the log, not about the chunking). -/
 theorem rechunk_same_root :
     (toyP.advance toyP.genesis [1, 2, 3]).root = (toyP.advance (toyP.advance toyP.genesis w1) w2).root := by
-  decide
+  native_decide
 
 #assert_axioms toyP_valid
-#assert_axioms falsifier_dropped_refused
-#assert_axioms falsifier_dropped_moves_root
-#assert_axioms falsifier_dropped_violation
-#assert_axioms honest_chain_accepted
-#assert_axioms falsifier_swapped_refused
-#assert_axioms rechunk_same_root
+#assert_compiled falsifier_dropped_refused
+#assert_compiled falsifier_dropped_moves_root
+#assert_compiled falsifier_dropped_violation
+#assert_compiled honest_chain_accepted
+#assert_compiled falsifier_swapped_refused
+#assert_compiled rechunk_same_root
 
 end Dregg2.Stream

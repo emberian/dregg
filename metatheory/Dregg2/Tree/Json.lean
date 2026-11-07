@@ -29,6 +29,10 @@ import Dregg2.Tree.Value
 
 namespace Dregg2.Tree.Json
 
+/- v4.35: keep `==` on `UInt8` on instBEqOfDecidableEq rather than core's choice-built
+`Std.LinearOrderPackage` BEq (see Tree/Value.lean). -/
+attribute [local instance high] instBEqOfDecidableEq
+
 /-! ## Numbers -/
 
 /-- Strip trailing decimal zeros of `m` while the exponent is negative (`k` bounds the steps). -/

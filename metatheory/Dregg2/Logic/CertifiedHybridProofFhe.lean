@@ -210,7 +210,8 @@ theorem rawBooleanProgram_eval {variableCount atomCount : Nat}
       positiveEval (equalityBits schema opening) formula := by
   induction formula <;>
     simp [rawBooleanProgram, BooleanProgram.evalBool, positiveEval,
-      equalityBits, atomTruth, *]
+      equalityBits, atomTruth, *] <;>
+    congr
 
 theorem positiveEval_source_iff {variableCount atomCount : Nat}
     (schema : EqualitySchema variableCount atomCount)

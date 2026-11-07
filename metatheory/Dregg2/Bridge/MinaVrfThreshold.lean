@@ -143,10 +143,10 @@ integers is the check that neither side invented a number. -/
 (`block.rs:317-328`), signs alternating `Pos, Neg, …` from `i = 1`. -/
 theorem derivedCoefficients_are_the_deployed_ones :
     derivedCoefficients =
-      [405058, 1007582, 465602, 161365, 44739, 10337, 2047, 354, 54, 7, 0] := by decide
+      [405058, 1007582, 465602, 161365, 44739, 10337, 2047, 354, 54, 7, 0] := by decide +kernel
 
 /-- The linear whole part is `1` — openmina's `CoeffIntegerPart::One` (`block.rs:345`). -/
-theorem linearTermIntegerPart_is_one : linearTermIntegerPart = 1 := by decide
+theorem linearTermIntegerPart_is_one : linearTermIntegerPart = 1 := by decide +kernel
 
 /-- `bit_params` maximises `k` subject to `(n+1)·(⌈log₂ n⌉ + k) < field_size_in_bits`
 (`snarky_taylor.ml:143`). At the deployed `terms_needed = 11` and `field_size_in_bits = 255` the
@@ -155,7 +155,7 @@ chosen `k = 16` satisfies the guard and `k = 17` does not — which is what pins
 theorem bit_params_is_maximal :
     termsNeeded * perTermPrecision + perTermPrecision < 255 ∧
     ¬ (12 * 21 + 21 < 255) ∧
-    perTermPrecision = 4 + totalPrecision := by decide
+    perTermPrecision = 4 + totalPrecision := by decide +kernel
 
 /-! ## §3 — The threshold predicate.
 
@@ -205,6 +205,16 @@ little-endian (`consensus_vrf.ml:228-234`); `myStake` is the winner account's ba
 def isSatisfied (vrfOutput myStake totalStake : Nat) : Bool :=
   (vrfOutput : Int) ≤ thresholdNumerator myStake totalStake * 2 ^ 13
 
+/-- `isSatisfied` as a function equation. Proofs `rw` with this, never `simp [isSatisfied]`:
+since v4.35 `Decidable.decide` is a structure projection, and the kernel checking
+`isSatisfied v s t ≡ decide (…)` pointwise (the equation lemma `simp`/`unfold` generate, or a
+`simpa` closing step) unfolds the projection first and whnfs `Int.decLe` over the symbolic
+degree-10 polynomial: deep recursion after minutes and tens of GB. The function-level equation is
+closed by unfolding `isSatisfied` once. -/
+theorem isSatisfied_def :
+    isSatisfied = fun (vrfOutput myStake totalStake : Nat) =>
+      decide ((vrfOutput : Int) ≤ thresholdNumerator myStake totalStake * 2 ^ 13) := rfl
+
 /-- The VRF output is 253 bits, so this is its exclusive upper bound
 (`consensus_vrf.ml:208`, openmina `block.rs:765`). -/
 def vrfOutputBound : Nat := 2 ^ 253
@@ -217,14 +227,16 @@ sandwich so it cannot rot. -/
 theorem threshold_at_one_percent_is_near_the_closed_form :
     137662 * (2:Int) ^ 240 < polyNumerator 10485 * 10 ^ 7 ∧
     polyNumerator 10485 * 10 ^ 7 < 137673 * (2:Int) ^ 240 := by
-  refine ⟨?_, ?_⟩ <;> · simp only [polyNumerator]; norm_num; omega
+  refine ⟨?_, ?_⟩ <;> · simp only [polyNumerator]; norm_num
 
 /-- **A smaller VRF output never loses a slot a larger one wins.** Immediate, but it is the
 direction that makes the rule a threshold at all. -/
 theorem isSatisfied_antitone_in_output (v v' s t : Nat) (h : v ≤ v')
     (hw : isSatisfied v' s t = true) : isSatisfied v s t = true := by
-  simp only [isSatisfied, decide_eq_true_eq] at *
-  exact le_trans (Int.ofNat_le.mpr h) hw
+  have hw' : (v' : Int) ≤ thresholdNumerator s t * 2 ^ 13 := by
+    rw [isSatisfied_def] at hw; exact of_decide_eq_true hw
+  rw [isSatisfied_def]
+  exact decide_eq_true (le_trans (Int.ofNat_le.mpr h) hw')
 
 /-- The quantised stake fraction is monotone in stake. -/
 theorem stakeQuantum_monotone (s s' t : Nat) (h : s ≤ s') :
@@ -283,7 +295,7 @@ theorem polyNumerator_step (j : Nat) (hj : j ≤ 2 ^ 20) :
     polyNumerator (j : Int) ≤ polyNumerator ((j : Int) + 1) := by
   have hd : j + (2 ^ 20 - j) = 2 ^ 20 := by omega
   have hid := polyNumerator_diff_bernstein j (2 ^ 20 - j) hd
-  have hpos : (0:Int) < 2 ^ 180 := by decide
+  have hpos : (0:Int) < 2 ^ 180 := by decide +kernel
   have hnn : (0:Int) ≤ (2:Int) ^ 180 * (polyNumerator ((j : Int) + 1) - polyNumerator (j : Int)) := by
     rw [hid]; exact Int.natCast_nonneg _
   have hsub : (0:Int) ≤ polyNumerator ((j : Int) + 1) - polyNumerator (j : Int) :=
@@ -309,12 +321,14 @@ theorem polyNumerator_monotone (n m : Nat) (h : n ≤ m) (hm : m ≤ 2 ^ 20) :
 delegator with less stake would have won, on the same VRF output and the same epoch ledger. -/
 theorem more_stake_never_loses (v s s' t : Nat) (hs : s ≤ s') (hs' : s' ≤ t) (ht : 0 < t)
     (hw : isSatisfied v s t = true) : isSatisfied v s' t = true := by
-  simp only [isSatisfied, thresholdNumerator, decide_eq_true_eq] at *
-  refine le_trans hw ?_
-  have hmono := polyNumerator_monotone (stakeQuantum s t) (stakeQuantum s' t)
-    (stakeQuantum_monotone s s' t hs) (stakeQuantum_le s' t hs' ht)
+  have hw' : (v : Int) ≤ thresholdNumerator s t * 2 ^ 13 := by
+    rw [isSatisfied_def] at hw; exact of_decide_eq_true hw
+  have hmono : thresholdNumerator s t ≤ thresholdNumerator s' t :=
+    polyNumerator_monotone (stakeQuantum s t) (stakeQuantum s' t)
+      (stakeQuantum_monotone s s' t hs) (stakeQuantum_le s' t hs' ht)
   have h13 : (0:Int) ≤ 2 ^ 13 := by norm_num
-  exact Int.mul_le_mul_of_nonneg_right hmono h13
+  rw [isSatisfied_def]
+  exact decide_eq_true (le_trans hw' (Int.mul_le_mul_of_nonneg_right hmono h13))
 
 /-! ## §5 — TEETH: the stake cliff, and what leader election needs that a light client lacks. -/
 
@@ -330,11 +344,16 @@ EXCLUSION, not a small probability: such a stake is not merely unlikely to win, 
 theorem below_the_quantum_cannot_win (v s t : Nat) (h : 2 ^ perTermPrecision * s < t) :
     isSatisfied v s t = (v == 0) := by
   have h0 : stakeQuantum s t = 0 := Nat.div_eq_of_lt h
-  simp only [isSatisfied, thresholdNumerator, h0, polyNumerator]
-  norm_num
+  have hp : thresholdNumerator s t = 0 := by simp [thresholdNumerator, h0, polyNumerator]
+  rw [isSatisfied_def]
+  show decide ((v : Int) ≤ thresholdNumerator s t * 2 ^ 13) = (v == 0)
+  rw [hp]
   cases v with
   | zero => simp
-  | succ k => simp
+  | succ k =>
+      have hpos : ¬ (((k + 1 : Nat) : Int) ≤ 0 * 2 ^ 13) := by rw [Int.zero_mul]; omega
+      rw [decide_eq_false hpos]
+      simp
 
 /-- Devnet's `total_currency` at block 539768, verbatim from the block
 (`metatheory/fixtures/samasika-density/devnet_window_run.json`). -/
@@ -345,7 +364,7 @@ on devnet today, a delegation at or below that can never produce a block, and on
 can. The two `decide`s are the two sides of the cliff. -/
 theorem devnet_stake_cliff :
     2 ^ perTermPrecision * 1510919197082 < DEVNET_TOTAL_CURRENCY ∧
-    ¬ (2 ^ perTermPrecision * 1510919197083 < DEVNET_TOTAL_CURRENCY) := by decide
+    ¬ (2 ^ perTermPrecision * 1510919197083 < DEVNET_TOTAL_CURRENCY) := by decide +kernel
 
 /-- Non-vacuity, both polarities: a real-sized stake DOES clear a real-sized VRF output, and a
 maximal VRF output does NOT. Without this pair the theorems above could all hold of a predicate
@@ -353,7 +372,7 @@ that is constantly `false`. -/
 theorem isSatisfied_discriminates :
     isSatisfied 0 (DEVNET_TOTAL_CURRENCY / 100) DEVNET_TOTAL_CURRENCY = true ∧
     isSatisfied (2 ^ 253 - 1) (DEVNET_TOTAL_CURRENCY / 100) DEVNET_TOTAL_CURRENCY = false := by
-  decide
+  decide +kernel
 
 /-- The whole-stake case: with all the stake the bound is `1 − 1/4 = 3/4` of the output space, so
 a delegator holding everything still loses roughly a quarter of the slots. Samasika's `f = 3/4` is
@@ -361,7 +380,7 @@ the *active slot coefficient*, and this is it. -/
 theorem full_stake_is_three_quarters :
     749990 * (2:Int) ^ 240 < polyNumerator 1048576 * 10 ^ 6 ∧
     polyNumerator 1048576 * 10 ^ 6 < 750010 * (2:Int) ^ 240 := by
-  refine ⟨?_, ?_⟩ <;> · simp only [polyNumerator]; norm_num; omega
+  refine ⟨?_, ?_⟩ <;> · simp only [polyNumerator]; norm_num
 
 /-! ### §5.1 — What a light client would additionally need. STATED, not footnoted.
 

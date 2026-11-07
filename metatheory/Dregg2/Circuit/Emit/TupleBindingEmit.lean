@@ -141,22 +141,22 @@ theorem first_only_allows_distinct_next (name : String) (width : Nat) :
 /-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.constraint_count' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms constraint_count
-/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.copy_semantics' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.copy_semantics' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms copy_semantics
-/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.tuple_semantics' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.tuple_semantics' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms tuple_semantics
-/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.honest_tuple' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.honest_tuple' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms honest_tuple
-/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.changed_public_refused' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.changed_public_refused' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms changed_public_refused
-/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.changed_next_refused' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.changed_next_refused' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms changed_next_refused
-/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.all_rows_bound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.all_rows_bound' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms all_rows_bound
 /-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.no_mem_ops' depends on axioms: [propext, Quot.sound] -/
@@ -171,9 +171,7 @@ theorem first_only_allows_distinct_next (name : String) (width : Nat) :
 /-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.zero_ne_one_mod' does not depend on any axioms -/
 #guard_msgs in
 #print axioms zero_ne_one_mod
-/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.first_only_allows_distinct_next' depends on axioms: [propext,
- Classical.choice,
- Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.TupleBindingEmit.first_only_allows_distinct_next' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms first_only_allows_distinct_next
 

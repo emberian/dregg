@@ -188,7 +188,9 @@ instance : AddCommMonoid Interval where
     change add a b = add b a
     simp only [add, Interval.mk.injEq]; exact ⟨add_comm _ _, add_comm _ _⟩
   nsmul n I := ⟨n • I.lo, n • I.hi⟩
-  nsmul_zero I := by simp only [zero_smul]; rfl
+  nsmul_zero I := by
+    change (⟨0 • I.lo, 0 • I.hi⟩ : Interval) = pt 0
+    simp only [zero_smul]; rfl
   nsmul_succ n I := by
     change (⟨(n+1) • I.lo, (n+1) • I.hi⟩ : Interval) = add ⟨n • I.lo, n • I.hi⟩ I
     simp only [add, succ_nsmul]
@@ -242,7 +244,9 @@ instance : AddCommMonoid CInterval where
     change cadd a b = cadd b a
     simp only [cadd, CInterval.mk.injEq]; exact ⟨add_comm _ _, add_comm _ _⟩
   nsmul n Z := ⟨n • Z.re, n • Z.im⟩
-  nsmul_zero Z := by simp only [zero_smul]; rfl
+  nsmul_zero Z := by
+    change (⟨0 • Z.re, 0 • Z.im⟩ : CInterval) = ⟨0, 0⟩
+    simp only [zero_smul]
   nsmul_succ n Z := by
     change (⟨(n + 1) • Z.re, (n + 1) • Z.im⟩ : CInterval) = cadd ⟨n • Z.re, n • Z.im⟩ Z
     simp only [cadd, succ_nsmul]
@@ -301,8 +305,9 @@ def cpow (Z : CInterval) : ℕ → CInterval
   | n + 1 => cmul Z (cpow Z n)
 
 theorem cone_ccontains : CContains (cpt 1 0) (1 : ℂ) := by
-  have h := cpt_ccontains 1 0
-  simpa using h
+  have h1 : (1 : ℂ) = ⟨1, 0⟩ := Complex.ext (by simp) (by simp)
+  rw [h1]
+  exact_mod_cast cpt_ccontains 1 0
 
 theorem cpow_ccontains {Z : CInterval} {z : ℂ} (hz : CContains Z z) :
     ∀ n, CContains (cpow Z n) (z ^ n)
@@ -559,8 +564,8 @@ def zetaSeed4 : CInterval := cpt 0 1
 theorem zetaSeed4_contains : CContains zetaSeed4 (zeta 4) := by
   rw [zetaSeed4, zeta4_eq_I]
   refine ⟨?_, ?_⟩
-  · rw [Complex.I_re]; simpa using pt_rcontains (0 : ℚ)
-  · rw [Complex.I_im]; simpa using pt_rcontains (1 : ℚ)
+  · rw [Complex.I_re]; simpa [cpt] using pt_rcontains (0 : ℚ)
+  · rw [Complex.I_im]; simpa [cpt] using pt_rcontains (1 : ℚ)
 
 /-- The full certified root table for `N = 4` (exact, no analytic residual). -/
 theorem zetaSeed4_root_table : ∀ m, CContains (cpow zetaSeed4 m) ((zeta 4) ^ m) :=
@@ -608,11 +613,13 @@ theorem sin_rcontains_of {θ : ℝ} {a b : ℚ} (ha : 0 ≤ a) (hb : b ≤ 1)
   have hθ3 : θ ^ 3 ≤ (b : ℝ) ^ 3 := pow_le_pow_left₀ hθ0 hhi 3
   have ha3 : (a : ℝ) ^ 3 ≤ θ ^ 3 := pow_le_pow_left₀ haR hlo 3
   have hθ4 : θ ^ 4 ≤ (b : ℝ) ^ 4 := pow_le_pow_left₀ hθ0 hhi 4
+  -- Mathlib's `Real.sin_bound` remainder is `|θ|⁵/100`; on `[0,1]` it is below `θ⁴·5/96`.
+  have hθ54 : θ ^ 5 ≤ θ ^ 4 := pow_le_pow_of_le_one hθ0 (le_trans hhi hbR) (by norm_num)
   refine ⟨?_, ?_⟩
   · show ((a - b ^ 3 / 6 - b ^ 4 * (5 / 96) : ℚ) : ℝ) ≤ Real.sin θ
-    push_cast; nlinarith [hbnd.1, hθ3, hθ4, hlo]
+    push_cast; nlinarith [hbnd.1, hθ3, hθ4, hθ54, hlo]
   · show Real.sin θ ≤ ((b - a ^ 3 / 6 + b ^ 4 * (5 / 96) : ℚ) : ℝ)
-    push_cast; nlinarith [hbnd.2, ha3, hθ4, hhi]
+    push_cast; nlinarith [hbnd.2, ha3, hθ4, hθ54, hhi]
 
 /-! ## §6.3 — the bridge back to `CertifiedInterval.Interval` ℚ-`Contains`
 

@@ -1,64 +1,80 @@
-/* shim.c: the Lean embedding ritual and the byte-level wrappers around the exports of
- * minidregg Selvage/AuditFlashProveDecide.lean. No decision logic lives here: every wrapper
- * hands its arguments to one @[export]ed Lean function and returns its byte. */
+/* shim.c: the Lean embedding ritual and the byte-level wrappers around the exports of minidregg's
+ * Selvage/AuditDecideCore.lean, Selvage/AuditFlashProveDecide.lean and Selvage/AuditExactDecide.lean.
+ * No decision logic lives here: every wrapper hands its arguments to one @[export]ed Lean function
+ * and returns its byte. */
 #include <stdint.h>
 #include <stddef.h>
 #include <lean/lean.h>
 
 extern void lean_initialize_runtime_module(void);
 extern lean_object *initialize_Selvage_AuditFlashProveDecide(uint8_t builtin);
-extern uint8_t minidregg_fp_audit_fires(uint64_t, uint64_t);
+extern lean_object *initialize_Selvage_AuditExactDecide(uint8_t builtin);
+extern uint8_t minidregg_audit_fires(uint64_t, uint64_t);
+extern uint8_t minidregg_audit_alarm(uint8_t, uint8_t);
+extern uint8_t minidregg_audit_alarm_open(uint8_t, uint8_t);
+extern uint8_t minidregg_audit_opening_ok(uint8_t, uint8_t, lean_object *, lean_object *, lean_object *,
+                                          lean_object *, uint8_t, lean_object *, uint8_t, lean_object *);
+extern uint8_t minidregg_audit_round_ok(uint64_t, uint64_t);
+extern uint64_t minidregg_audit_pnum_of_ppm(uint64_t);
 extern uint8_t minidregg_fp_audit_verdict(uint8_t, lean_object *, uint8_t, uint32_t, lean_object *,
                                           lean_object *, uint32_t, uint32_t, uint8_t);
-extern uint8_t minidregg_fp_audit_alarm(uint8_t, uint8_t);
-extern uint8_t minidregg_fp_audit_opening_ok(uint8_t, uint8_t, lean_object *, lean_object *, lean_object *,
-                                             lean_object *, uint8_t, lean_object *, uint8_t, lean_object *);
-extern uint8_t minidregg_fp_audit_round_ok(uint64_t, uint64_t);
-extern uint64_t minidregg_fp_audit_pnum_of_ppm(uint64_t);
-extern uint8_t minidregg_fp_audit_alarm_open(uint8_t, uint8_t);
+extern uint8_t minidregg_exact_audit_verdict(uint8_t, lean_object *, uint8_t, uint32_t, lean_object *,
+                                             lean_object *, lean_object *, uint32_t, lean_object *);
 
-int fpaudit_init(void) {
-  lean_initialize_runtime_module();
-  lean_object *res = initialize_Selvage_AuditFlashProveDecide(1);
+static int init_one(lean_object *res) {
   if (!lean_io_result_is_ok(res)) {
     lean_io_result_show_error(res);
     lean_dec_ref(res);
     return 1;
   }
   lean_dec_ref(res);
+  return 0;
+}
+
+int fpaudit_init(void) {
+  lean_initialize_runtime_module();
+  /* Each initializer initializes its imports (AuditDecideCore) once. */
+  if (init_one(initialize_Selvage_AuditFlashProveDecide(1))) return 1;
+  if (init_one(initialize_Selvage_AuditExactDecide(1))) return 1;
   lean_io_mark_end_initialization();
   return 0;
 }
 
-uint8_t fpaudit_fires(uint64_t coin, uint64_t p_num) { return minidregg_fp_audit_fires(coin, p_num); }
+static lean_object *mk(const char *p, size_t n) { return lean_mk_string_from_bytes(p, n); }
+
+uint8_t fpaudit_fires(uint64_t coin, uint64_t p_num) { return minidregg_audit_fires(coin, p_num); }
 
 uint8_t fpaudit_verdict(uint8_t open_ok, const char *out, size_t out_len, uint8_t has_exit, uint32_t exit_code,
                         const char *id, size_t id_len, const char *build, size_t build_len,
                         uint32_t r, uint32_t e, uint8_t accept_work) {
   /* Each String is owned by the callee (Lean's @[export] convention), so no dec_ref here. */
-  return minidregg_fp_audit_verdict(open_ok, lean_mk_string_from_bytes(out, out_len), has_exit, exit_code,
-                                    lean_mk_string_from_bytes(id, id_len),
-                                    lean_mk_string_from_bytes(build, build_len), r, e, accept_work);
+  return minidregg_fp_audit_verdict(open_ok, mk(out, out_len), has_exit, exit_code, mk(id, id_len),
+                                    mk(build, build_len), r, e, accept_work);
 }
 
-uint8_t fpaudit_alarm(uint8_t fired, uint8_t verdict) { return minidregg_fp_audit_alarm(fired, verdict); }
-
-uint8_t fpaudit_alarm_open(uint8_t fired, uint8_t verdict) {
-  return minidregg_fp_audit_alarm_open(fired, verdict);
+uint8_t fpaudit_exact_verdict(uint8_t open_ok, const char *out, size_t out_len, uint8_t has_exit,
+                              uint32_t exit_code, const char *spec, size_t spec_len, const char *params,
+                              size_t params_len, const char *weights, size_t weights_len,
+                              uint32_t prompt_len, const char *output, size_t output_len) {
+  return minidregg_exact_audit_verdict(open_ok, mk(out, out_len), has_exit, exit_code, mk(spec, spec_len),
+                                       mk(params, params_len), mk(weights, weights_len), prompt_len,
+                                       mk(output, output_len));
 }
 
-static lean_object *mk(const char *p, size_t n) { return lean_mk_string_from_bytes(p, n); }
+uint8_t fpaudit_alarm(uint8_t fired, uint8_t verdict) { return minidregg_audit_alarm(fired, verdict); }
+
+uint8_t fpaudit_alarm_open(uint8_t fired, uint8_t verdict) { return minidregg_audit_alarm_open(fired, verdict); }
 
 uint8_t fpaudit_opening_ok(uint8_t stage_ok, uint8_t mmr_ok, const char *req_c, size_t req_c_len,
                            const char *y_c, size_t y_c_len, const char *req_s, size_t req_s_len,
                            const char *y_s, size_t y_s_len, uint8_t has_proof_c, const char *proof_c,
                            size_t proof_c_len, uint8_t has_proof_s, const char *proof_s,
                            size_t proof_s_len) {
-  return minidregg_fp_audit_opening_ok(stage_ok, mmr_ok, mk(req_c, req_c_len), mk(y_c, y_c_len),
-                                       mk(req_s, req_s_len), mk(y_s, y_s_len), has_proof_c,
-                                       mk(proof_c, proof_c_len), has_proof_s, mk(proof_s, proof_s_len));
+  return minidregg_audit_opening_ok(stage_ok, mmr_ok, mk(req_c, req_c_len), mk(y_c, y_c_len),
+                                    mk(req_s, req_s_len), mk(y_s, y_s_len), has_proof_c,
+                                    mk(proof_c, proof_c_len), has_proof_s, mk(proof_s, proof_s_len));
 }
 
-uint8_t fpaudit_round_ok(uint64_t seen, uint64_t round) { return minidregg_fp_audit_round_ok(seen, round); }
+uint8_t fpaudit_round_ok(uint64_t seen, uint64_t round) { return minidregg_audit_round_ok(seen, round); }
 
-uint64_t fpaudit_pnum_of_ppm(uint64_t ppm) { return minidregg_fp_audit_pnum_of_ppm(ppm); }
+uint64_t fpaudit_pnum_of_ppm(uint64_t ppm) { return minidregg_audit_pnum_of_ppm(ppm); }

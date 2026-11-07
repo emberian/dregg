@@ -420,7 +420,8 @@ theorem merkle_adv_le {F : Type} (D : CompressDeployment F)
     gameAdv (merkleForgeryGame D) A n
       ≤ gameAdv (compressCollisionGame D) (merkleToCollisionFinder D A) n := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact merkle_wins_imp D A n t ht
 
 /-! ## §5 — the RE-GROUNDED CONSUMER.

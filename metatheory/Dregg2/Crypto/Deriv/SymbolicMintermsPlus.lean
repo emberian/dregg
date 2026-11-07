@@ -231,7 +231,8 @@ theorem der_desugarRE (a : Value) : ∀ R : PredRE, der a (desugarRE R) = desuga
   | ε => rfl
   | sym φ =>
       simp only [desugarRE, der, leaf, desugarPred_eval]
-      split <;> rfl
+      by_cases h : φ.eval (PredRE.symbolOld a) a = true <;>
+        simp only [h, if_true, if_false, ite_true, ite_false, Bool.false_eq_true] <;> rfl
   | alt l r ihl ihr => simp only [desugarRE, der, ihl, ihr]
   | inter l r ihl ihr => simp only [desugarRE, der, ihl, ihr]
   | cat l r ihl ihr =>

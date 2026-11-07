@@ -1,6 +1,6 @@
 # Initiative 9 — attested transport composed with receipts (call-tree certificates)
 
-Register row (2026-11-06): `| 9 | Attested transport + receipts (MPC-TLS call-tree certificates) | lane 9 (Opus 5.5) | breadstuffs | L1 | one real HTTPS call tree certified end to end, a receipt per hop, dataflow edges checked, offline one-command verify | L2: Rust recorder + extract-only tlsn verifier feeding `calltree-check`; root anchored in a grain turn; encoding injectivity | 2026-11-06 |`
+Register row (2026-11-06): `| 9 | Attested transport + receipts (MPC-TLS call-tree certificates) | lane 9 (Opus 5.5) | breadstuffs | L3 | one real HTTPS call tree certified end to end, a receipt per hop, dataflow edges checked, offline one-command verify | typed JSON-field edges keyed by call id; verifier challenge; independent notary; renter-anchored root | 2026-11-06 |`
 
 Ember's target: "combine with tlsnotary and you can certify entire distributed api call trees."
 
@@ -89,3 +89,50 @@ Verdict: the binding extractor is meaningful (`treeFind` follows the trees' own 
 | 7 | No premise authenticates `root` as this run's root; replay/duplication of valid hops into a fresh tree is accepted; no freshness. | **Open (L2 gate)**: the root is read from the committed grain turn (ATTESTATION_SLOT of the turn whose history grain-verify checks), and the policy bounds connection time per hop against the turn; a uniqueness check rejects one presentation used twice. Stated as composition theorems, not as `verify` itself. |
 | 8 | Dataflow and partial disclosure are not in `verify`. | **Open (L3 gate)**: dataflow check over authenticated bytes as a second Lean decision; partial disclosure via MMR openings (`MMR.server_cannot_omit_position`). |
 | 9 | Bypass (unrecorded calls) and recorder completeness cannot come from tree binding. | **Accepted as a limit** (§6); dataflow edges bound what a bypass can hide, nothing more. |
+
+## 10. L2 construction (2026-11-06/07)
+
+Reversible defaults per the root, then ember's answers: the LLM hop is **GLM `glm-5.3-flash` on the Z.AI coding-plan endpoint** (`api.z.ai/api/coding/paas/v4/chat/completions`, key at `~/.zai-key`, never printed; no Bedrock). Probed: `api.z.ai` negotiates TLS 1.2 `ECDHE-RSA-AES128-GCM-SHA256`, the suite tlsn implements; a plain non-streaming tool-call request returns `tool_calls` with the URL verbatim in `arguments`. Tool server: a **self-signed root pinned by the verifier** (`--extra-root`), no public name. Notary: **the bb2 notary as its own process**; its operator and key are recorded in every recording, and the verifier's policy (not the recording) pins the key.
+
+| Piece | Where | What it does |
+|---|---|---|
+| hop prover | `zkoracle-live/src/tlsn_hop.rs` | `prove_hop_blocking(HopRequest, notary_addr)`: any method/headers/body, header VALUES in `redact_headers` hidden (names shown), connect address separate from SNI, extra roots. Same lock and stack as the Bedrock path. |
+| extractor | `zkoracle-live/src/tlsn_hop.rs::extract_presentation` | `presentation.verify()` and nothing else: server name, `alg:hex` notary key, notary time, authenticated sent/recv (`X` where hidden). No pin, no policy. |
+| notary | `zkoracle-live/src/bin/tlsn-notary.rs` | durable key, `--extra-root`, one session per connection, PID file. |
+| recorder | `calltree/src/main.rs record` | GLM hop (tool_use) → tool hop (kind 2) → GLM hop (tool_result); refuses to record if a redacted header value is visible in the disclosed bytes; builds edges; mints every node post-order as a grain turn through `ToolGatewayMinter::bind_attestation` + `mint_turn` (public API only; the other lane's uncommitted `grain-turn` edits are not touched). |
+| tool server | `calltree/src/main.rs tool-serve` | HTTPS (self-signed) `POST /fetch {url}`: an attested GET of the page through the same notary, returns a verbatim safe-character span of the authenticated page bytes plus its subtree root; the subtree file is fetched out of band (bound by the root inside the attested response). |
+| verifier | `calltree/src/main.rs verify` | extract each presentation → bundle → `lake exe calltree-check`; exit code is Lean's. Reports the grain anchor separately (`ATTESTATION_SLOT` = root and `verify_grain_history` = Bound). |
+| Lean | `CallTreeDeploy.lean` | `deployedVerify` now also requires: notary time inside the policy window; no presentation used by two hops (`nodupB (atts t)`); every listed dataflow edge holds over authenticated bytes (kind 0 response→later request, kind 1 callee response→caller response, ≥ 16 bytes, both ends in the tree) and every policy-required (kind, host, host) edge is witnessed. `deployedVerify_verify` transfers every `CallTree` theorem. |
+| bridge | `CallTreeDeploy.lean`, `CallTree.lean §5` | `encList_injective`, `ofBE_injective_of_size`, `Blake3.hash_size`, `treeHash_coll_is_blake3_coll`, `deployed_coll_is_blake3_coll`: a `SpongeColl treeHash` at a `treeFind` pair is a BLAKE3-256 collision on distinct messages (bounds: < 2^32 elements, < 2^32 bytes each). Closes §9 item 6. |
+
+## 11. Cross-model round 2 (gpt-6-astra, recorder bypass and verifier trust), adjudicated
+
+Verdict: "the claimed property fails" as first built. Findings and actions:
+
+| # | Finding | Action |
+|---|---|---|
+| 1 | **Critical**: the grain anchor is recording-supplied; a copied cell with a new ATTESTATION slot passes `verify_grain_history`. | **Demoted, not hidden**: the anchor is now reported as `host_asserted_grain_anchor` and is NOT part of the exit code. The root a stranger trusts comes from `--root` (obtained out of band: the signed commit that lands the fixture, the microsite); without it the verdict says `root_source: recording (self-asserted)`. A real anchor needs grain-verify's renter-anchored / R3 path: **open (L3+)**. |
+| 2 | **High**: `X`-masked bytes let an edge be made of masked positions. | **Fixed**: the extractor masks with `0x00`; every Lean byte check (`inBody`) refuses a span containing `0x00`, so spans match authenticated bytes only. |
+| 3 | **High**: substring edges can use header boilerplate (`application/json`) and match any two calls to the right hosts. | **Partly fixed**: spans must lie in the authenticated HTTP BODY on both sides; kind-0 edges must go forward in tree order; kind-1 edges must go child → parent. **Open (L3)**: typed JSON-field edges keyed by tool-call id. |
+| 4 | **High**: relabel kind 2 → 1 keeps children unchecked; any response containing a hex string satisfies kind 2. | **Fixed**: kind 1 must be a leaf (`kr = mrootC treeHash []`); kind 2 only for policy-listed `recorders`, and the root must sit in the designated field `"subtree_root":"<hex>"` inside the authenticated body. Residual: a listed recorder can still return a root for a subtree it did not execute; its own hops are each attested, so what it can fake is the *assignment* of hops to the call, not the hops. |
+| 5 | **High**: bincode 1.3 tolerates trailing bytes, so `P‖00`, `P‖01` are distinct `att` digests for one presentation; different disclosures of one session also evade `nodupB`. | **Fixed**: `reject_trailing_bytes()`; and Lean requires the signed SESSIONS (hex of the attestation header: id, version, field root) behind the hops to be distinct. |
+| 6 | Checker invocation: shared temp path, verdict not bound to the root. | **Fixed**: the bundle goes over stdin (`calltree-check -`); the CLI accepts only if the checker's echoed `root` equals the trusted root. The checker binary is whatever the stranger built (`lake build calltree-check`). |
+| 7 | Recorder completeness; root prompt/answer unattested; redaction checks sent bytes only. | **Limit, restated** (§6). Root `req`/`resp` digests are the recorder's claim. |
+| 8 | Extra roots were global CAs. | **Fixed**: `--extra-root host=path` pins are host-scoped — tried only after Mozilla refuses, and must authenticate exactly that host. Freshness/challenge: **open**. |
+
+## 12. The real tree (2026-11-06, bb2)
+
+Notary `k256:02dffefb…c0f925` (`fixtures/notary.pin`) as its own process on bb2, bound to localhost; the tool server and the recorder as separate processes on the same box (one operator: ember). The recorder and tool server link the Lean-built executor archive (`libdregg_lean.a` copied from a same-day bb2 clone); without it the verified admission oracle refuses every grain turn fail-closed (measured), which is the right behaviour.
+
+| Recording | Hops | Record wall | Per-hop MPC-TLS (ms) | Verify wall (extract + Lean) |
+|---|---|---|---|---|
+| `fixtures/glm.recording.json` — GLM `glm-5.3-flash` asks for `fetch_page`, the tool fetches `https://example.com/` through its own attested hop, GLM answers "This page exists as a domain reserved for use in documentation examples, without needing permission." | 4 (2 × api.z.ai, tool, example.com) | 36.4 s | 7712, 6473, 3314, 5442 | 0.06 s (extract 4 ms, Lean 57 ms) |
+| `fixtures/free.recording.json` — free mode (example.com direct; tool → en.wikipedia.org REST summary) | 3 | 29.2 s | — | 0.06 s |
+
+Edges in the GLM tree: kind 0 `https://example.com/` (GLM response → tool request); kind 1 the page's text span (example.com response → tool response, child → parent); kind 0 the same span (tool response → GLM's second request). No key material: the `Authorization` value is hidden in every LLM presentation (checked by the recorder, and the raw key bytes and their hex occur 0 times in the decoded presentations and the recording; the key file was shredded after the run).
+
+Falsifiers run against both real recordings (`run/falsify.py` on bb2): honest ACCEPT; dropped child, reordered children, tool relabelled 2→1, tool subtree dropped, a flipped presentation byte, a trailing presentation byte, a header-boilerplate edge span, a masked (`0x00`) edge span, a missing required edge, a wrong trusted root: each REJECT, with the failing component named (`tree_and_hops` / `edges_ok`).
+
+Stranger path: `calltree/verify/run.sh` (the light `dregg-calltree-verify` crate links only the tlsn extraction, not the grain executor; the Lean checker is core-only). Policy says facts about concrete data are compiled evaluations: the demo falsifiers are `native_decide` + `#assert_compiled`; the general theorems stay kernel-proved.
+
+Stranger rehearsal (bb2, 2026-11-06): a fresh `--sparse --filter=blob:none` clone of github.com/emberian/dregg (19 s; only metatheory, calltree, zkoracle-live, zkoracle-prove, circuit, dfa, dregg-codec, dregg-dsl, vendor), the Mathlib package store symlinked from an existing clone (the checker is core-only and builds no Mathlib module), then `calltree/verify/run.sh`: 57 s wall, 1.58 GB peak RSS, ACCEPT on `fixtures/glm.recording.json` (extract 7 ms, Lean check 92 ms). Page: dregg-microsites `call-tree/` (local commit; publication is a separate step).

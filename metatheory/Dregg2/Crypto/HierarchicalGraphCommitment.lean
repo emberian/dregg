@@ -102,9 +102,9 @@ theorem nodeInputs_injective (tag : Int) :
     Function.Injective (fun p : Digest8 × Digest8 => nodeInputs tag p.1 p.2) := by
   intro a b h
   have hleft : digestFields a.1 = digestFields b.1 := by
-    simpa [nodeInputs] using congrArg (fun xs => (xs.drop 1).take 8) h
+    simpa [nodeInputs, digestFields] using congrArg (fun xs => (xs.drop 1).take 8) h
   have hright : digestFields a.2 = digestFields b.2 := by
-    simpa [nodeInputs] using congrArg (fun xs => xs.drop 9) h
+    simpa [nodeInputs, digestFields] using congrArg (fun xs => xs.drop 9) h
   exact Prod.ext (digestFields_injective hleft) (digestFields_injective hright)
 
 def leafDigest (H : Hash) (index : Fin 4) (slot : HostEdgeSlot) : Digest8 :=
@@ -240,7 +240,8 @@ theorem openRedex2_checks (H : Hash) (g : BoundedGraph) (first second : Fin 4)
   rw [Redex2Opening.check]
   simp only [openRedex2]
   rw [openInterface_checks H g first hfirst, openInterface_checks H g second hsecond]
-  simpa [openInterface, openLeaf] using hdistinct
+  simp [openInterface, openLeaf]
+  exact decide_eq_true hdistinct
 
 /-! ## Same-path authenticated ancestor updates -/
 
@@ -503,7 +504,8 @@ theorem semanticRoot_binds_rom (Q : ℕ → ℕ)
           (by show Q l + 12 ≤ Q l + 2 + 2 + 2 + 2 + 2 + 2; omega),
         fun _ _ => rfl⟩)
   refine @winProb_le_of_imp _ (hgcRomBreakGame.instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   have hArun : A.run l H = (M l).eval H := hrun l H
   set a := A.run l H with ha
@@ -523,7 +525,7 @@ theorem semanticRoot_binds_rom (Q : ℕ → ℕ)
             (H (hgcLeafRole, Sum.inl (2, a.2 2)), H (hgcLeafRole, Sum.inl (3, a.2 3))))) := by
     show (hgcExtractComp M l).eval H = _
     unfold hgcExtractComp
-    rw [OracleComp.bindComp_eval, ← hArun]
+    erw [OracleComp.bindComp_eval, ← hArun]
     rfl
   rw [hBrun]
   unfold hgcSelect

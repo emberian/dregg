@@ -1,0 +1,18 @@
+# veil-bridge: breadstuffs' branching-time logics over Veil's transition systems, in one Lean build.
+# Requires breadstuffs' metatheory (Dregg2) by path and Veil 2.0 by exact revision. Both sit on
+# Lean v4.35.0, and Mathlib 56a00585's batteries/aesop/Qq/proofwidgets are Veil's own revisions, so
+# the two dependency sets merge without a version fight (see docs/upgrade-4.35/GROUNDING.md).
+name = "VeilBridge"
+defaultTargets = ["VeilBridge"]
+
+[[require]]
+name = "Dregg2"
+path = "../metatheory"
+
+[[require]]
+name = "veil"
+git = "https://github.com/verse-lab/veil.git"
+rev = "4eaf93e9b7d0a4f850244db956e5f2d1e1bf9a71"
+
+[[lean_lib]]
+name = "VeilBridge"

@@ -377,8 +377,9 @@ private theorem abs_le_sum_abs {x : Int} : ∀ {l : List Int}, x ∈ l →
 
 theorem le_sourceValue {n : Nat} (x : Fin n → Int) (i : Fin n) : x i ≤ sourceValue x := by
   apply le_trans (le_abs_self (x i))
-  simpa [sourceValue] using
-    (abs_le_sum_abs (x := x i) (l := List.ofFn x) (List.mem_ofFn.mpr ⟨i, rfl⟩))
+  refine le_trans
+    (abs_le_sum_abs (x := x i) (l := List.ofFn x) (List.mem_ofFn.mpr ⟨i, rfl⟩)) (le_of_eq ?_)
+  simp [sourceValue, Function.comp_def]
 
 /-- Extend a potential to the super-source. -/
 def extendPotential {n : Nat} (x : Fin n → Int) : Fin (n + 1) → Int :=
@@ -2030,7 +2031,9 @@ theorem differenceLeaves?_append {xs ys : List Pred} {A B : DifferenceSpec}
   | nil =>
       simp [differenceLeaves?] at hA
       subst A
-      simpa [differenceLeaves?, DifferenceSpec.empty, DifferenceSpec.append] using hB
+      have hE : DifferenceSpec.empty ++ B = B := by cases B; rfl
+      have hE' : ({} : DifferenceSpec) ++ B = B := by cases B; rfl
+      simpa [differenceLeaves?, DifferenceSpec.empty, DifferenceSpec.append, hE, hE'] using hB
   | cons p ps ih =>
       simp only [differenceLeaves?] at hA
       cases hp : predDifference? p with

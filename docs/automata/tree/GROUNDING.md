@@ -73,7 +73,7 @@ corpus whose per-record evidence discloses only the opened path.
    projection refuses written exponents beyond `±4096` (counted, never silently rounded).
 2. **Unicode is not normalized.** NFC `é` and NFD `e◌́` are two trees (JCS and CBOR agree). A
    byte pattern over the decoded leaf is evaded by a homoglyph; that is the pattern's meaning, not a
-   soundness gap, and the demo says so. Escapes **are** decoded: `"pkill -f"` is the leaf
+   soundness gap, and the demo says so. Escapes **are** decoded: `"\u0070kill -f"` is the leaf
    `pkill -f`. A flat byte scan of the raw JSON misses it and the tree certificate does not; that
    pair is the flagship falsifier for "flat-string claim vs tree certificate". Lone surrogates are
    refused (CBOR text must be UTF-8).

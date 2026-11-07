@@ -20,6 +20,7 @@ fully-qualified names are unchanged.
 Named residue in the parent: NONE — no construction there demands a proof as data.
 -/
 import Dregg2.Games.PathOfAngels.NetworkGenesis
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.NetworkGenesis
 

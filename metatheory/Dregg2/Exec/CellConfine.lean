@@ -120,7 +120,7 @@ theorem recCRevoke_confine {U : List Auth} {s : RecChainedState} {holder t : Cel
   simp only [recKRevokeTarget]
   by_cases hl : l = holder
   · subst hl; rw [if_pos rfl]; intro d hd; exact List.mem_of_mem_filter hd
-  · rw [if_neg hl]; exact fun d hd => hd
+  · rw [if_neg hl]
 
 /-- A committed `createCellChainA` resets the fresh id's cap slot to `[]` and frames every other slot. -/
 theorem createCellChainA_caps_frame {s s' : RecChainedState} {actor newCell : CellId}

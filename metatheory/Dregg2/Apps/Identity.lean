@@ -296,7 +296,7 @@ registry; wiring it into a `FullActionA` arm (the Rust effect-layer step) is a l
 point this frame relaxes from `=` to a genuine `⊂` on the revoke arm. -/
 theorem execFullForestA_revoked_grow (s s' : RecChainedState) (f : FullForestA)
     (h : execFullForestA s f = some s') : s.kernel.revoked ⊆ s'.kernel.revoked := by
-  rw [execFullForestA_revoked_eq s s' f h]; exact List.Subset.refl _
+  rw [execFullForestA_revoked_eq s s' f h]
 
 /-- **`capRevoke_revoked_strict_grow` — THE REAL GROWTH THEOREM (kills the reflexivity lie).** The
 `⊆` above was proved by REFLEXIVITY because no effect grew `revoked`. `RecordKernel.capRevoke` now GROWS

@@ -223,7 +223,8 @@ theorem bucket_adv_le (D : SpongeDeployment) (A : Adversary (bucketBreakGame D))
     gameAdv (bucketBreakGame D) A l
       ≤ gameAdv (hashGame (spongeFamily D)) (bucketBreakToFinder D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact bucket_wins_imp D A l t ht
 
 /-- **⚑ THE REPAIRED STORAGE KEYSTONE, ON THE GAME FLOOR.**

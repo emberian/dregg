@@ -611,8 +611,6 @@ theorem collisionAdv_eq_gameAdv {F : KeyedHashFamily} (A : CollisionFinder F) :
   funext l
   unfold collisionAdv gameAdv
   congr 1
-  funext k
-  exact (finderToAdv_hit A l k).symm
 
 /-- **`HashCRHardQuant F Eff` — THE HASH-CR FLOOR, RESTATED.** Every `Eff`-adversary finds a collision of
 the keyed family under a uniformly sampled key only with negligible probability. -/

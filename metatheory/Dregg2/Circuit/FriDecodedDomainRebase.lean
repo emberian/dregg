@@ -499,12 +499,18 @@ theorem rowVanishing_natDegree :
     (Lagrange.nodal (Finset.range (2 ^ 21)) interpPt).natDegree = 2 ^ 21 := by
   rw [Lagrange.natDegree_nodal, Finset.card_range]
 
+/-- Divisibility by the nodal polynomial of the first `n` modeler rows, `n` generic (so the
+kernel never meets the concrete `Finset.range (2 ^ 21)`). -/
+private theorem rowVanishing_dvd_of_rows_zero_gen {n : ℕ} (hn : n ≤ domainSize)
+    (f : Polynomial BabyBear) (hf : ∀ i < n, f.eval (interpPt i) = 0) :
+    Lagrange.nodal (Finset.range n) interpPt ∣ f :=
+  nodal_dvd_of_eval_eq_zero (interpPt_injOn hn) (fun i hi => hf i (Finset.mem_range.mp hi))
+
 /-- Divisibility by the row-vanishing polynomial, generic in `f`. -/
 theorem rowVanishing_dvd_of_rows_zero (f : Polynomial BabyBear)
     (hf : ∀ i < 2 ^ 21, f.eval (interpPt i) = 0) :
     Lagrange.nodal (Finset.range (2 ^ 21)) interpPt ∣ f :=
-  nodal_dvd_of_eval_eq_zero (interpPt_injOn (by norm_num [domainSize]))
-    (fun i hi => hf i (Finset.mem_range.mp hi))
+  rowVanishing_dvd_of_rows_zero_gen (by norm_num [domainSize]) f hf
 
 /-- The re-base difference vanishes at every modeler trace-row point. -/
 theorem rebase64_sub_colPoly_isRoot {numCols : ℕ}

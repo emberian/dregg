@@ -479,11 +479,13 @@ encoder discriminates on. -/
 theorem q1_eq : q1 = .neg (.alt
     (.cat (.cat .ε (.star PredRE.any)) (.cat (.sym braceP) (.star PredRE.any)))
     (.cat PredRE.bot (.star PredRE.any))) := by
+  have htt : Pred.tt.eval (PredRE.symbolOld dataVal) dataVal = true := leaf_tt_data
+  have hbr : braceP.eval (PredRE.symbolOld dataVal) dataVal = false := leaf_braceP_data
   simp only [q1, noBraceRE, containsB]
   simp
   constructor
-  · exact leaf_tt_data
-  · exact leaf_braceP_data
+  · simp [htt]
+  · simp [hbr]
 
 /-- The LOCAL state encoder: constructor-shape discrimination (`neg∘cat ↦ 0`, else `1`). NO
 global injectivity, NO `PredRE` decidable equality — the run-local weld needs only the two
@@ -535,7 +537,9 @@ theorem hS_demo : ∀ q ∈ runStates guardTd guardTd.start [dataVal], decSd (en
   intro q hq
   rcases List.mem_cons.mp hq with rfl | hq'
   · rfl
-  · have hq1 : q = q1 := by simpa [runStates] using hq'
+  · have hq1 : q = q1 := by
+      simp only [runStates, List.mem_cons, List.not_mem_nil, or_false] at hq'
+      exact hq'
     subst hq1
     rw [encSd_q1]
     rfl

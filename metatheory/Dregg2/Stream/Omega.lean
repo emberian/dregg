@@ -12,7 +12,9 @@ meaning and proves what a finite prefix may say about it.
   `coBuchi_iff_count_bounded` dually. `lastMark_spec`: no marked state after `lastMark`, and
   `lastMark_marked`: a positive `lastMark` is itself marked. So `n − lastMark` is exactly the length of
   the current unmarked stretch (for the demo policy: an upper bound on the age of the oldest open
-  prompt, and after a trip, the time since the trip).
+  prompt; after a trip it keeps growing, but it is not the time since the trip).
+  `buchi_iff_count_unbounded_along`: the same equivalence at a chain's window endpoints, provided the
+  endpoints are cofinal.
 * **Verdicts.** `VCert.Valid`: `dead` and `good` are closed under every transition, and (Büchi) `dead`
   avoids `F` and `good` is inside `F` (co-Büchi: the reverse). `verdict_viol_sound`: a `viol` verdict on
   a prefix means every infinite extension is rejected (the prefix is a bad prefix);
@@ -130,6 +132,7 @@ theorem scan_prefix (σ : OWord Sym) (n : ℕ) :
   | succ n ih =>
     rw [prefixOf_succ, scan_append, ih]
     simp [scan, scanStep, run, runFrom, marks]
+    split_ifs <;> simp [*]
 
 /-- Every finite word the follower has seen yields the run of every extension. -/
 theorem scan_extends {σ : OWord Sym} {u : List Sym} (h : Extends σ u) :
@@ -212,6 +215,22 @@ theorem buchi_iff_count_unbounded (σ : OWord Sym) :
     obtain ⟨n, hn⟩ := h (A.marks σ N + 1)
     have := hconst n
     omega
+
+/-- **The receipt form**: the counters a receipt chain reports at its window endpoints `n k`. If the
+endpoints are cofinal (the chain keeps covering new positions), Büchi acceptance is exactly those
+counters being unbounded. Without cofinality it is not: infinitely many empty windows report the
+same counter for ever. -/
+theorem buchi_iff_count_unbounded_along (σ : OWord Sym) (n : ℕ → ℕ) (hcof : ∀ N, ∃ k, N ≤ n k) :
+    A.Accepts .buchi σ ↔ ∀ m, ∃ k, m ≤ A.marks σ (n k) := by
+  rw [A.buchi_iff_count_unbounded]
+  constructor
+  · intro h m
+    obtain ⟨j, hj⟩ := h m
+    obtain ⟨k, hk⟩ := hcof j
+    exact ⟨k, le_trans hj (A.marks_mono σ hk)⟩
+  · intro h m
+    obtain ⟨k, hk⟩ := h m
+    exact ⟨n k, hk⟩
 
 /-- **Co-Büchi acceptance IS the receipts' counter being bounded.** -/
 theorem coBuchi_iff_count_bounded (σ : OWord Sym) :
@@ -412,6 +431,7 @@ theorem prodVCert_valid {S L : Type} (M : SafetyMon S Sym) (A : DOmega L Sym) (h
 #assert_axioms DOmega.lastMark_marked
 #assert_axioms DOmega.buchi_iff_count_unbounded
 #assert_axioms DOmega.coBuchi_iff_count_bounded
+#assert_axioms DOmega.buchi_iff_count_unbounded_along
 #assert_axioms dead_rejects
 #assert_axioms good_accepts
 #assert_axioms verdict_viol_sound

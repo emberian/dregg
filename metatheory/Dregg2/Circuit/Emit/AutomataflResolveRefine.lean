@@ -303,8 +303,8 @@ theorem decodedOld_auto_holds_automaton
   obtain ⟨X, Y, hX, hY, hAX, hAY, hcell⟩ := autoPinR_of_sat hsat hc i hi
   have hxn : ((envAt t i).loc AX_C).toNat = X := by rw [hAX]; simp
   have hyn : ((envAt t i).loc AY_C).toNat = Y := by rw [hAY]; simp
-  simp only [Board.cellAt, boardDecodeOld]
-  rw [hxn, hyn, hcell, if_pos ⟨hX, hY⟩]
+  simp only [Board.cellAt, boardDecodeOld, hxn, hyn]
+  rw [hcell, if_pos ⟨hX, hY⟩]
   simp [codeToParticle, AUTO_CODE]
 
 end AutoPin
@@ -1181,8 +1181,8 @@ theorem srcNonVac_of_sat (hsat : Satisfied2 hash automataflResolveDesc minit mfi
       = codeToParticle (e.loc (cFp (mvBase which))) := by
     have hxn : (e.loc (cFx (mvBase which))).toNat = X := by rw [hfx]; simp
     have hyn : (e.loc (cFy (mvBase which))).toNat = Y := by rw [hfy]; simp
-    simp only [Board.cellAt, boardDecodeOld, moveDecode]
-    rw [hxn, hyn, if_pos ⟨by simpa [NN] using hX, by simpa [NN] using hY⟩, hfp]
+    simp only [Board.cellAt, boardDecodeOld, moveDecode, hxn, hyn]
+    rw [if_pos ⟨by simpa [NN] using hX, by simpa [NN] using hY⟩, hfp]
   rw [hcell]
   have hfpv : e.loc (cFp (mvBase which)) = 0 ∨ e.loc (cFp (mvBase which)) = 1
       ∨ e.loc (cFp (mvBase which)) = 2 ∨ e.loc (cFp (mvBase which)) = 3 := by
@@ -2871,7 +2871,7 @@ theorem srcNonVacN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) min
   rw [← he] at hfxE hfyE hfp
   have hXY : Y * n + X < NGen.KK n := by
     simp only [NGen.KK]
-    have hle : (Y + 1) * n ≤ n * n := mul_le_mul_right' (by omega : Y + 1 ≤ n) n
+    have hle : (Y + 1) * n ≤ n * n := Nat.mul_le_mul (by omega : Y + 1 ≤ n) (le_refl n)
     have hexp : (Y + 1) * n = Y * n + n := by ring
     omega
   have hcellAlpha : e.loc (NGen.old n (Y * n + X)) = 0 ∨ e.loc (NGen.old n (Y * n + X)) = 1

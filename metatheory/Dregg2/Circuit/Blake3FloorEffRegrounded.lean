@@ -281,7 +281,8 @@ theorem opening_adv_le (D : Blake3Deployment) (A : Adversary (commitOpeningGame 
     gameAdv (commitOpeningGame D) A n
       ≤ gameAdv (blake3CollisionGame D) (openingToCollisionFinder D A) n := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact opening_wins_imp D A n t ht
 
 /-! ## §5 — the RE-GROUNDED CONSUMER. -/

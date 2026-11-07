@@ -598,14 +598,11 @@ theorem select_ties_only_on_equal_keys (C : Constants) (e c : ConsensusState) (e
     have hlen : x.blockchainLength = y.blockchainLength := by omega
     have hx2' := hx2.resolve_left (by simp [hlen])
     have hy2' := hy2.resolve_left (by simp [hlen.symm])
-    simp only [Bool.or_eq_false_iff, Bool.and_eq_false_iff, decide_eq_false_iff_not,
-      Bool.not_eq_true'] at hx2' hy2'
     obtain ⟨hxv, hxh⟩ := hx2'
     obtain ⟨hyv, hyh⟩ := hy2'
     have hvrf : x.lastVrfHash = y.lastVrfHash := lexLt_total _ _ hxv hyv
     have hxh' := hxh.resolve_left (by simp [hvrf])
     have hyh' := hyh.resolve_left (by simp [hvrf.symm])
-    simp only [decide_eq_false_iff_not] at hxh' hyh'
     exact ⟨hlen, hvrf, by omega⟩
   unfold select at h1 h2
   rw [← isShortRange_symm C e c] at h2

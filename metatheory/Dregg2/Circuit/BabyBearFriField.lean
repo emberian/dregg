@@ -32,6 +32,7 @@ namespace Dregg2.Circuit.BabyBearFriField
 in the v2 descriptor, `DescriptorIR2.lean:1521`). -/
 abbrev babyBearP : ℕ := 2013265921
 
+set_option maxRecDepth 8192 in
 /-- **BabyBear is prime.** (`norm_num`'s Pratt-certificate primality extension.) -/
 theorem babyBearP_prime : Nat.Prime babyBearP := by norm_num
 

@@ -826,8 +826,8 @@ theorem offpathS_ne_honest : offpathS ≠ honestStrategy (sigFold fold8) ⟨0, f
   have hfst : (offpathS [0, 0]).1
       = (honestStrategy (sigFold fold8) ⟨0, f0⟩ [(0 : BabyBear), 0]).1 :=
     congrArg Sigma.fst (congrFun h [0, 0])
-  rw [honest_sig_layer] at hfst
-  simp [offpathS] at hfst
+  have h2 : (offpathS [0, 0]).1 = 2 := hfst.trans (honest_sig_layer fold8 f0 _)
+  simp [offpathS] at h2
 
 /-- `offpathS` IS fold-consistent along the 1-round path (it agrees with the honest fold there),
 under every oracle — so the gate admits it. -/

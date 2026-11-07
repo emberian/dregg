@@ -176,10 +176,38 @@ fn finalize_grain_turn_from(
     }
     let n_runs = runs.len();
 
+    // The full-width writes, one per projected VM effect, in the same order. A rotated block
+    // takes each field's lane 0 from the EffectVM state and lanes 1..8 from the cell witness, and
+    // the fields-canonicity gadget ties the nine together, so the cell witness on each side of a
+    // run must carry the SAME values the EffectVM state does: the pre-cell with the earlier runs'
+    // writes applied (measured on bb2: a second grain turn witnessed over its unmodified pre-cell
+    // fails row-0 constraints #87-#93, #118, while a first turn, whose pre-fields are zero, passes).
+    let writes: Vec<(u64, [u8; 32])> = record
+        .effects
+        .iter()
+        .filter_map(|e| match e {
+            dregg_sdk::Effect::SetField { cell, index, value } if *cell == actor => {
+                Some((*index, *value))
+            }
+            _ => None,
+        })
+        .collect();
+    if writes.len() != vm_effects.len() {
+        return Err(format!(
+            "finalize_grain_turn: {} actor SetField writes but {} projected VM effects",
+            writes.len(),
+            vm_effects.len()
+        ));
+    }
     let mut legs = Vec::with_capacity(n_runs);
     let mut s_k = initial_state;
+    let mut cell_k = before_cell.clone();
     for (i, run) in runs.iter().enumerate() {
         let run_effects = &vm_effects[run.clone()];
+        let mut cell_next = cell_k.clone();
+        for (index, value) in &writes[run.clone()] {
+            cell_next.state.set_field_ext(*index, *value);
+        }
         // The after-block cell: the real pre-cell for INTERIOR runs (before == after, the
         // turn-invariant limbs; the state block rides the welds), the real POST-cell only
         // for the FINAL run (mirrors `prove_cohort_run_chain`). `cells_root` folds the cell
@@ -189,12 +217,12 @@ fn finalize_grain_turn_from(
         let after_cell = if i + 1 == n_runs {
             &record.after_cell
         } else {
-            &before_cell
+            &cell_next
         };
         let leg = mint_rotated_participant_leg(
             &s_k,
             run_effects,
-            &before_cell,
+            &cell_k,
             after_cell,
             &nullifier_root,
             &commitments_root,
@@ -205,6 +233,7 @@ fn finalize_grain_turn_from(
         s_k = apply_run(&s_k, run_effects)
             .map_err(|e| format!("finalize_grain_turn: run {i} state threading: {e}"))?;
         legs.push(FinalizedTurn::new(DescriptorParticipant::rotated(leg)));
+        cell_k = cell_next;
     }
     Ok((legs, s_k))
 }
@@ -312,6 +341,17 @@ pub fn finalize_session(records: &[GrainTurnRecord]) -> Result<Vec<FinalizedTurn
 ///
 /// Every leg uses ONE receipt context, the ordered turn hashes of the whole session, so the
 /// wide anchors' `iroot` is the same across every turn boundary.
+///
+/// ## What the aggregate attests, and what it does not
+///
+/// A continuous EffectVM MODEL execution of the session's setField writes, from turn 0's real
+/// pre-cell to the model head. It does NOT attest that the executor committed those transitions:
+/// the per-turn fee debit and the per-turn nonce tick are absent from the model, the records'
+/// adjacency is not checked here, and the receipt context's root enters the anchors through
+/// `iroot`, which the rotation witness carries as ONE felt (`rotation_witness::iroot`, lane 0 of
+/// the 8-lane receipt root), so the turn-hash list is bound at about 31 bits, not 124. Written
+/// slot values are published full-width (the deployed setField members free the written slot's
+/// completion lanes), so R3 binds the bytes chosen, not their BLAKE3 provenance.
 /// The faithful fix is the single-nonce-tick multi-field grain descriptor named in
 /// [`finalize_session`] (a circuit + VK change, ember-gated); this function does not claim it.
 pub fn finalize_session_threaded(
@@ -344,9 +384,9 @@ pub fn finalize_session_threaded(
 }
 
 /// **Open the folded head.** The 8-felt commitment of the session's LAST committed grain cell
-/// under the session receipt context [`finalize_session_threaded`] uses, as `u32` lanes, for two
-/// nonces: the ledger's (`.0`) and the EffectVM model's (`.1`: the first record's pre-nonce plus
-/// the total number of field writes). A verifier holding the published last cell and the ordered
+/// under the session receipt context [`finalize_session_threaded`] uses, as `u32` lanes: as the
+/// ledger committed it (`.0`), and as the EffectVM model carries it (`.1`: the first record's
+/// pre-nonce plus the total number of field writes, and the first record's pre-balance). A verifier holding the published last cell and the ordered
 /// turn hashes recomputes these WITHOUT proving and compares them to the aggregate's committed
 /// head: equality joins the head to that cell's fields (the last action commit, the turn counter,
 /// the history root) and, through the context root, to the exact ordered list of turn hashes.
@@ -354,24 +394,36 @@ pub fn session_head_openings(
     last_after_cell: &dregg_cell::Cell,
     turn_hashes: &[[u8; 32]],
     model_nonce: u64,
+    model_balance: i64,
 ) -> Result<([u32; 8], [u32; 8]), String> {
+    // Exactly the witness the last leg's AFTER block is built from (`mint_rotated_participant_leg`:
+    // `produce` over a single-cell ledger, the empty heap / commitments / revoked roots, the
+    // session receipt context, zero carrier material), then the 8-felt chained commitment over
+    // its limbs and context root.
     let at = |cell: &dregg_cell::Cell| -> Result<[u32; 8], String> {
         let mut ledger = dregg_cell::Ledger::new();
         ledger
             .insert_cell(cell.clone())
             .map_err(|e| format!("session_head_openings: ledger seed failed: {e:?}"))?;
-        let ctx = dregg_turn::rotation_witness::sovereign_turn_ctx(
+        let w = produce(
+            cell,
             &ledger,
+            &empty_heap_root_8(),
+            &dregg_circuit::heap_root::empty_heap_root_8(),
+            &empty_revoked_root_8(),
             turn_hashes,
-            dregg_cell::commitment::RotationCarrierMaterial::default(),
+            &dregg_cell::commitment::RotationCarrierMaterial::default(),
         );
-        let f8 = ctx.commitment_felt8(cell);
+        // The CHIP-faithful chained commitment: the byte-twin of the deployed wide trace's
+        // `fill_wide_block` absorption, which is what the wide leg publishes as its anchors.
+        let f8 = dregg_circuit::Faithful8::from_wire_commit_chip(&w.pre_limbs, w.iroot);
         let lanes: &[dregg_circuit::field::BabyBear; 8] = f8.as_ref();
         Ok(core::array::from_fn(|i| lanes[i].as_u32()))
     };
     let real = at(last_after_cell)?;
     let mut model = last_after_cell.clone();
     model.state.set_nonce(model_nonce);
+    model.state.set_balance(model_balance);
     Ok((real, at(&model)?))
 }
 

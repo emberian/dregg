@@ -64,6 +64,7 @@ import Dregg2.Circuit.Emit.FieldDeltaRangeEmit
 import Dregg2.Circuit.Emit.MerkleMembership4aryEmit
 import Dregg2.Circuit.Emit.MerkleMembership4aryWideEmit
 import Dregg2.Circuit.Emit.MerkleMembershipEmit
+import Dregg2.Circuit.Emit.BinaryMembershipEmit
 import Dregg2.Circuit.Emit.MinaFixtureEmit
 import Dregg2.Circuit.Emit.LightClientMinaAir
 import Dregg2.Circuit.Emit.LightClientMinaLinkAir
@@ -173,9 +174,10 @@ Three notes the mechanical reader needs:
 * `blindedMembership4aryDesc` is depth-PARAMETERIZED in Lean; the two checked-in artifacts are its
   `depth := 2` and `depth := 8` instances. (The constraint block is depth-uniform — only the `name`
   field differs — but both are checked in, so both are emitted.)
-* `NoteSpendingLeafEmit` carries a DECOY: `noteSpendLeafDescFixed` shares `noteSpendLeafDesc`'s
-  exact `name` and `trace_width` (149) while emitting different bytes. The deployed artifact is
-  `noteSpendLeafDesc`; matching on the header alone would pick the wrong one.
+* `NoteSpendingLeafEmit.noteSpendLeafDescFixed` is served: six last-row boundaries repair
+  the earlier 27-constraint artifact. Width149 and the seven PIs stay unchanged, but the
+  canonical descriptor bytes (and derived verification key) change. The original descriptor
+  remains a theorem-level counterexample; matching its name alone would miss the repair.
 * `mina-fixture.json` is EMITTED but not DISPATCHED, and never will be: it is not a predicate
   descriptor. `circuit/src/bin/mina_stark_fixture.rs` `include_str!`s it directly to mint the
   fixture proof `bridge/mina-zkapp` verifies. It is routed here for the same reason everything
@@ -281,10 +283,12 @@ def byNameDescriptors : List (String × EffectVmDescriptor2) :=
       Dregg2.Circuit.Emit.MerkleMembership4aryWideEmit.merkleMembership4aryWideDesc)
   , ("merkle-membership-depth2.json",
       Dregg2.Circuit.Emit.MerkleMembershipEmit.merkleMembershipDesc)
+  , ("merkle-membership-binary-general.json",
+      Dregg2.Circuit.Emit.BinaryMembershipEmit.templateDesc)
   , ("mina-fixture.json",
       Dregg2.Circuit.Emit.MinaFixtureEmit.minaFixtureDesc)
   , ("note-spend-leaf.json",
-      Dregg2.Circuit.Emit.NoteSpendingLeafEmit.noteSpendLeafDesc)
+      Dregg2.Circuit.Emit.NoteSpendingLeafEmit.noteSpendLeafDescFixed)
   , ("poseidon2-hash-arity2.json",
       Dregg2.Circuit.Emit.Poseidon2HashEmit.poseidon2HashDesc)
   -- The two Pasta ALU descriptors are the shared fp/fq modular-arithmetic
@@ -835,7 +839,7 @@ Both directions are gated outside Lean:
 -- the same edit as the row, which is the discipline the six notes above were each paid for.
 -- ⚑ 133 = 132 + `attested-automaton-map-committed-weld8-v1.json`. Rows and pin are one atom.
 set_option maxRecDepth 8000 in
-theorem byNameDescriptors_length : byNameDescriptors.length = 144 := rfl
+theorem byNameDescriptors_length : byNameDescriptors.length = 145 := rfl
 
 def main : IO Unit := do
   for (file, d) in byNameDescriptors do

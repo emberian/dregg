@@ -21,7 +21,7 @@ FILES = [
     ".github/workflows/ci.yml",
     ".github/workflows/feature-surface.yml",
 ]
-MATHLIB_REV = "1c2b90b13009c65b090d95a83c98e248deafb6f1"
+MATHLIB_REV = "56a005855ea17e0b0958f73ec801ae140b0a1679"
 OLD = "0a4a554e144f4e60107555ea7a11cd9969d6208b"
 NEW = "fc3c6dfac26e2082653d2a617a1740446ce33f05"
 

@@ -815,7 +815,8 @@ theorem sysDigest_adv_le (D : SpongeKeyed) (A : Adversary (noteCreateSysDigestBr
     gameAdv (noteCreateSysDigestBreakGame D) A l
       ≤ gameAdv (carrierBreakGame D group4Carrier) (sysDigestToCarrier D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact sysDigest_wins_imp D A l t ht
 
 /-- **⚑ `noteCreate_binds_sysdigest_advantage_bound` — the REDUCED sys-digest binding (successor of
@@ -891,7 +892,8 @@ theorem commitRoot_adv_le (D : SpongeKeyed) (A : Adversary (noteCreateCommitRoot
     gameAdv (noteCreateCommitRootBreakGame D) A l
       ≤ gameAdv (carrierBreakGame D wideStateCarrier) (commitRootToCarrier D A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact commitRoot_wins_imp D A l t ht
 
 /-- **⚑ `noteCreate_binds_commitments_root_advantage_bound` — the REDUCED commitments-root binding
@@ -952,7 +954,8 @@ theorem noteCreate_binds_sysdigest_rom (D : SpongeKeyed) (tagDec : DecidableEq D
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _
     (((noteCreateSysDigestRomTamper D tagDec).game).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrArg (fun p : NarrowRomVal => p.2) hc), heq⟩
 
@@ -988,7 +991,8 @@ theorem noteCreate_binds_commitments_root_rom (D : SpongeKeyed) (tagDec : Decida
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _
     (((noteCreateCommitRootRomTamper D tagDec).game).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨⟨i, hi⟩, heq⟩ := hH
   exact ⟨fun hc => hi (congrFun hc i), heq⟩
 

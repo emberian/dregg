@@ -571,7 +571,8 @@ theorem nested_cost_exact :
       { addressDepth := 1, publicInputs := 6, traceColumns := 6,
         linearPiConstraints := 6, hashSites := 2, absorbedFelts := 6,
         maxArithmeticGateDegree := 1 } := by
-  simpa [nestedLayout, nestedStep, layout] using cost_exact 1
+  rw [nested_layout_exact]
+  exact cost_exact 1
 
 #guard emitVmJson2 nestedDescriptor ==
   "{\"name\":\"dregg-intensional-ccc-local-receipt-v2-depth-1\",\"ir\":2,\"trace_width\":6,\"public_input_count\":6,\"challenges\":0,\"tables\":[{\"id\":0,\"name\":\"main\",\"arity\":6,\"sem\":\"main\"}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":0,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":1,\"pi_index\":1},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":2},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":3,\"pi_index\":3},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":4},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":5,\"pi_index\":5}],\"hash_sites\":[{\"digest_col\":4,\"arity\":3,\"inputs\":[{\"t\":\"col\",\"c\":2},{\"t\":\"col\",\"c\":0},{\"t\":\"col\",\"c\":1}]},{\"digest_col\":5,\"arity\":3,\"inputs\":[{\"t\":\"col\",\"c\":3},{\"t\":\"col\",\"c\":0},{\"t\":\"col\",\"c\":1}]}],\"ranges\":[]}"
@@ -596,9 +597,8 @@ theorem binder_side_tamper_refused (hash : List Int -> Int) :
       simp [nestedDescriptor, descriptor, nestedStep, descriptorAtDepth,
         publicPins, pathCol, traceWidth])
   have hmod : (10 : Int) ≡ 9 [ZMOD 2013265921] := by
-    simpa [VmConstraint2.holdsAt, tamperedTrace, rowOf, nestedLayout,
-      nestedStep, layout, tamperedPathPublic, pathCol, publicOf, PathTag.code,
-      envAt] using h
+    simpa [VmConstraint2.holdsAt, tamperedTrace, rowOf, nested_layout_exact,
+      tamperedPathPublic, pathCol, publicOf, PathTag.code, envAt] using h
   obtain ⟨k, hk⟩ := Int.modEq_iff_dvd.mp hmod
   omega
 

@@ -22,6 +22,7 @@ module.
 so all twelve pins moved.
 -/
 import Dregg2.Games.PathOfAngels.WorldActivation
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.WorldActivation
 

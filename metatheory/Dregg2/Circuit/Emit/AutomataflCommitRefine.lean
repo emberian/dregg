@@ -222,8 +222,7 @@ theorem boardCode_decode_eqAt (n : Nat) (cellCol : Nat → Nat) (e : VmRowEnv) (
     have hidx : (idx / n) * n + idx % n = idx := by rw [Nat.mul_comm]; exact Nat.div_add_mod idx n
     have hcell : (boardDecodeCommitAt n cellCol e).cellAt ⟨idx % n, idx / n⟩
         = codeToParticle (e.loc (cellCol idx)) := by
-      simp only [Board.cellAt, boardDecodeCommitAt]
-      rw [if_pos ⟨hxlt, hylt⟩, hidx]
+      simp only [Board.cellAt, boardDecodeCommitAt, hxlt, hylt, and_self, ↓reduceIte, hidx]
     rw [hcell, particleCode_codeToParticle (hmem hlt)]
   · rw [if_neg hlt, if_neg hlt]
 
@@ -264,7 +263,10 @@ theorem cell_mem_of_sat (hsat : Satisfied2 hash (automataflCommitDesc n) minit m
     apply List.mem_append_left
     exact List.mem_map.mpr ⟨idx, List.mem_range.mpr hidx, rfl⟩
   have hg := commit_gate hsat 0 (by omega) hmem
-  simp only [PACK_CELL, memberExpr, List.foldl, EmittedExpr.eval] at hg
+  have e : (memberExpr (PACK_CELL idx) [0, 1, 2, 3]).eval (envAt t 0).loc
+      = (envAt t 0).loc idx * ((envAt t 0).loc idx + -1) * ((envAt t 0).loc idx + -2)
+        * ((envAt t 0).loc idx + -3) := rfl
+  rw [e] at hg
   have hd : (2013265921 : ℤ) ∣
       ((((envAt t 0).loc idx + -0) * ((envAt t 0).loc idx + -1)) * ((envAt t 0).loc idx + -2))
         * ((envAt t 0).loc idx + -3) :=
@@ -765,7 +767,7 @@ theorem astep_boardDecode_cellAt (e : VmRowEnv) (x y : Nat) (hx : x < NN) (hy : 
     (Dregg2.Circuit.Emit.AutomataflStepRefine.boardDecode e).cellAt ⟨x, y⟩
       = (boardDecodeCommitAt NN (NGen.old NN) e).cellAt ⟨x, y⟩ := by
   simp only [Board.cellAt, Dregg2.Circuit.Emit.AutomataflStepRefine.boardDecode,
-    boardDecodeCommitAt, NGen.old, AutomataflStepEmit.old]
+    boardDecodeCommitAt, NGen.old, AutomataflStepEmit.old, hx, hy, and_self, ↓reduceIte]
 
 end LegA
 

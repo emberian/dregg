@@ -130,7 +130,7 @@ theorem toSumnodup_equiv {xs ys : List PredRE}
     ∃ us : List PredRE, Nodup us ∧ us ≠ [] ∧ us ⊆ ys ∧ Sim (toSum xs) (toSum us) :=
   have ⟨xs', xs'_ys, xs'_ne, xs_xs'⟩ := subset_sim_toSum ne h
   have ⟨us, nd, us_xs', p, xs'_us⟩ := nodup_equiv xs' xs'_ne
-  ⟨us, nd, us_xs', subset_trans p xs'_ys, Sim.trans xs_xs' xs'_us⟩
+  ⟨us, nd, us_xs', fun _ hx => xs'_ys (p hx), Sim.trans xs_xs' xs'_us⟩
 
 /-! ## The erase / permutation block — `nodup_subset_to_neSubsets` (a NODUP subset is in `neSubsets`). -/
 

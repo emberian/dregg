@@ -466,8 +466,8 @@ the genuine DLog opening-uniqueness shape (PROVED at `refCommit_binding`, REFUTE
     intro v r lo hi h
     obtain ⟨hlo, hhi⟩ := h
     -- commit v r = v, so verifyRange = decide (lo ≤ v ∧ v ≤ hi), true by the InRange hypothesis.
-    simp only [refCommit, decide_eq_true_eq]
-    exact ⟨hlo, hhi⟩
+    show decide (lo ≤ v ∧ v ≤ hi) = true
+    exact decide_eq_true ⟨hlo, hhi⟩
 
 /-- **THE REFERENCE `extractable` HOLDS** — a theorem: an accepted bound really does carry a
 satisfying range trace whose value is the commitment. -/
@@ -549,7 +549,7 @@ the inequality reading only the commitment and the proof. -/
 example : InRange 10 20 15 :=
   committed_inequality_via_range (K := refKernel) refKernel_extractable refCommit_binding
     15 0 10 20 0
-    (by intro v' r' h; simpa only [refCommit] using h)
+    (by intro v' r' h; exact h)
     (by decide)
 
 /-- **Non-vacuity #5 (full cascade).** An accepted proof both `Discharged`s the registry predicate

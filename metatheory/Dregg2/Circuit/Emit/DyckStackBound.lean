@@ -99,7 +99,8 @@ theorem entry_eq {i : Nat} (hi : i < t.rows.length) :
   rw [hwire] at h0
   have h := chip_lookup_narrow_sound_of_wide_table hash (t.tf .poseidon2) hchip (t.rows[i]'hi)
     _ _ (by decide) h0
-  simpa only [List.map_cons, List.map_nil, EmittedExpr.eval, pre] using h
+  simp only [List.map_cons, List.map_nil, EmittedExpr.eval, pre] at h
+  exact h
 
 include hsat hchip hwire in
 theorem running_eq {i : Nat} (hi : i < t.rows.length) :
@@ -834,7 +835,7 @@ theorem fullForged_strong_refuses :
   have h := hs.rowConstraints 7 (by decide) _ mem_route
   have hf : (7 + 1 == fullForged.rows.length) = true := by decide
   have bad : (0 : ℤ) ≡ 1 [ZMOD 2013265921] := h hf
-  norm_num [Int.ModEq] at bad
+  exact absurd bad (by decide)
 
 /-- The refusal does not escape through an unsatisfied chip/canonicality envelope. -/
 theorem fullForged_envelopes : ChipTableSound zeroHash (fullForged.tf .poseidon2) ∧

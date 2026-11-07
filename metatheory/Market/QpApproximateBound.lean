@@ -101,7 +101,10 @@ theorem approximate_kkt_distance_bound {n mc : Nat}
       (prob.p *ᵥ x + prob.q) ⬝ᵥ (x' - x) =
         residual ⬝ᵥ (x' - x) -
           y ⬝ᵥ ((prob.a *ᵥ x') - (prob.a *ᵥ x)) := by
-    rw [hdecomp, sub_dotProduct, ← dotProduct_mulVec, mulVec_sub]
+    rw [hdecomp, sub_dotProduct]
+    exact congrArg (residual ⬝ᵥ (x' - x) - ·)
+      ((dotProduct_mulVec y prob.a (x' - x)).symm.trans
+        (congrArg (y ⬝ᵥ ·) (mulVec_sub prob.a x' x)))
   have hres : ∀ j, |residual j| ≤ epsilon := by
     intro j
     exact cert.stationarity j
@@ -245,7 +248,10 @@ theorem residual_objective_bound {n mc : Nat}
       (prob.p *ᵥ x + prob.q) ⬝ᵥ (x' - x) =
         residual ⬝ᵥ (x' - x) -
           y ⬝ᵥ ((prob.a *ᵥ x') - (prob.a *ᵥ x)) := by
-    rw [hdecomp, sub_dotProduct, ← dotProduct_mulVec, mulVec_sub]
+    rw [hdecomp, sub_dotProduct]
+    exact congrArg (residual ⬝ᵥ (x' - x) - ·)
+      ((dotProduct_mulVec y prob.a (x' - x)).symm.trans
+        (congrArg (y ⬝ᵥ ·) (mulVec_sub prob.a x' x)))
   have hres : ∀ j, |residual j| ≤ dualTolerance := by
     intro j
     exact cert.stationarity j

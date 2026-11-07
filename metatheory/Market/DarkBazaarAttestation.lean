@@ -280,7 +280,7 @@ theorem honest_end_to_end_join {C : OrderCommitmentCarrier}
     have hq' : q < att.clearing.K := by simpa [att.clearing_K] using hq
     have hopt := att.clearing.vStar_optimal hq'
     rw [att.output_exact]
-    simpa [att.clearing_book] using hopt
+    simpa [att.clearing_book, MpcClearing.leakage] using hopt
   · exact exact_settlement_receipt_settles att.receipt_exact
       att.price_pos att.volume_pos
 

@@ -189,6 +189,46 @@ theorem map_leafOf_inj {H : List UInt8 → Digest} {n : Nat} (hl : HashLen H n) 
 
 /-! ## ⚑ Corpus absence -/
 
+/-- ⚑ **`corpus_count_mmr`** — an accepted corpus certificate, any count: for any named
+records (admitted, whose digests' MMR root is the statement's) and named tables (committed by the
+statement), exactly `count` of them match the query; or the MMR collides at the pair `mrootFind` names; or an
+opening inside some record, or some table encoding, collides at a computed pair. -/
+theorem corpus_count_mmr {H F : List UInt8 → Digest} (hH : HashFits H) (hl : HashLen H 32)
+    (hash : List Int → Int) (st : CorpusStmt) (r : CorpusReceipt)
+    (acc : corpusCheck H F hash st r = true)
+    (L : List JVal) (hL : ∀ t ∈ L, TreeAdm t)
+    (hroot : Dregg2.Lightclient.MMR.mroot hash (L.map fun t => leafOf (digest H t)) = st.mmrRoot)
+    (tabs : List JVal) (htabs : ∀ x ∈ tabs, Admitted x)
+    (htd : tabs.map (flatDigest F) = st.query.map (·.tableDigest)) :
+    (∃ Ts, optMap tableOfJVal tabs = some Ts ∧ (L.filter (matchesQ Ts st.query)).length = st.count) ∨
+      Dregg2.Lightclient.MMR.MRootColl hash (L.map fun t => leafOf (digest H t))
+        (r.records.map fun ev => leafOf ev.root) ∨
+      (∃ (i : Nat) (t : JVal) (ev : RecEvidence), L[i]? = some t ∧ r.records[i]? = some ev ∧
+        EvColl H st.query t ev) ∨
+      (∃ (i : Nat) (a b : JVal), r.tables[i]? = some a ∧ tabs[i]? = some b ∧
+        Coll F (encode a, encode b)) := by
+  have acc' := acc
+  unfold corpusCheck at acc'
+  simp only [Bool.and_eq_true, beq_iff_eq] at acc'
+  obtain ⟨_, hm⟩ := acc'
+  split at hm
+  · cases hm
+  · simp only [Bool.and_eq_true, beq_iff_eq] at hm
+    obtain ⟨⟨⟨_, hall⟩, hmr⟩, _⟩ := hm
+    have hrlen : ∀ ev ∈ r.records, ev.root.length = 32 := by
+      intro ev hev; simpa using List.all_eq_true.mp hall ev hev
+    rw [mrootC_eq] at hmr
+    rcases Dregg2.Lightclient.MMR.mroot_binds_or_collides hash (hroot.trans hmr.symm) with e | e
+    · have hds : L.map (digest H) = r.records.map (·.root) := by
+        apply map_leafOf_inj hl L _ (by simpa using hrlen)
+        rw [e, List.map_map]; rfl
+      rcases corpus_count_sound hH hash st r acc L hL hds tabs htabs htd with
+        ⟨Ts, hTs, hc⟩ | e2 | e2
+      · exact Or.inl ⟨Ts, hTs, hc⟩
+      · exact Or.inr (Or.inr (Or.inl e2))
+      · exact Or.inr (Or.inr (Or.inr e2))
+    · exact Or.inr (Or.inl e)
+
 /-- **`corpus_absence`** — an accepted corpus certificate claiming `count = 0`: for any named
 records (admitted, whose digests' MMR root is the statement's) and named tables (committed by the
 statement), no record matches the query; or the MMR collides at the pair `mrootFind` names; or an
@@ -382,5 +422,8 @@ theorem wf_unique_obj {a b : List (List UInt8 × JVal)} (ha : keysSorted a = tru
 #guard_msgs (whitespace := lax) in #print axioms corpus_absence_shake
 /-- info: 'Dregg2.Tree.Spec.mmrHash_coll' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs (whitespace := lax) in #print axioms mmrHash_coll
+
+/-- info: 'Dregg2.Tree.Spec.corpus_count_mmr' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs (whitespace := lax) in #print axioms corpus_count_mmr
 
 end Dregg2.Tree.Spec

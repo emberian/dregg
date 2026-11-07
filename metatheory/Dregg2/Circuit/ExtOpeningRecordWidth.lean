@@ -301,10 +301,10 @@ theorem wideOfTable_ok_of_tableOk (E : Type*) [Field E] [Algebra BabyBear E]
   refine ⟨hdeg, ?_, ?_⟩
   · show algebraMap BabyBear E t.vanishingAtZeta + 1
       = algebraMap BabyBear E ζ₀ ^ (2 ^ t.degreeBits)
-    rw [← map_one (algebraMap BabyBear E), ← map_add, ← map_pow, hvan]
+    rw [← map_one (algebraMap BabyBear E), ← map_add, ← map_pow, of_decide_eq_true hvan]
   · show algebraMap BabyBear E t.constraintEval
       = algebraMap BabyBear E t.vanishingAtZeta * algebraMap BabyBear E t.quotientAtZeta
-    rw [← map_mul, hquot]
+    rw [← map_mul, of_decide_eq_true hquot]
 
 /-- The bus sum transports too, so the whole batch check lifts. -/
 theorem wideBusSum_map (E : Type*) [Field E] [Algebra BabyBear E]
@@ -393,12 +393,12 @@ theorem wideOfSingleAir_ok_of_singleAirOk (E : Type*) [Field E] [Algebra BabyBea
   refine ⟨hdeg, ?_, ?_, ?_⟩
   · show algebraMap BabyBear E o.vanishing + 1
       = algebraMap BabyBear E o.zeta ^ (2 ^ o.degreeBits)
-    rw [← map_one (algebraMap BabyBear E), ← map_add, ← map_pow, hvan]
+    rw [← map_one (algebraMap BabyBear E), ← map_add, ← map_pow, of_decide_eq_true hvan]
   · show algebraMap BabyBear E o.vanishing * algebraMap BabyBear E o.invVanishing = 1
-    rw [← map_mul, hinv, map_one]
+    rw [← map_mul, of_decide_eq_true hinv, map_one]
   · rw [wideFolded_wideOfSingleAir, wideRecomposed_wideOfSingleAir]
     show algebraMap BabyBear E _ * algebraMap BabyBear E o.invVanishing = _
-    rw [← map_mul, hid]
+    rw [← map_mul, of_decide_eq_true hid]
 
 end Lift
 

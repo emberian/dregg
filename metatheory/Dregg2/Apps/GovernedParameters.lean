@@ -324,7 +324,7 @@ theorem honest_update_admits (importedFee : Int) (ctx : TurnCtx) (m : Nat) (o n 
     show evalConstraint (.affineEq [(1, feeF)] importedFee) o n = true
     have : evalConstraint (paramBinding ⟨feeF, "src", importedFee, ⟨0, 0, 0, 0⟩⟩) o n = true :=
       (paramBinding_iff ⟨feeF, "src", importedFee, ⟨0, 0, 0, 0⟩⟩ o n).mpr (by simpa using hfee)
-    simpa [paramBinding] using this
+    simpa [paramBinding, ImportedEq.toConstraint] using this
   have c5 : evalConstraintCtx ctx (.anyOf [.immutable approveFeeF, .senderMemberOf constitutionBoard]) o n = true := by
     have himm : evalSimpleCtx ctx (.immutable approveFeeF) o n = true := by
       rw [show evalSimpleCtx ctx (.immutable approveFeeF) o n = evalSimple (.immutable approveFeeF) o n from rfl]

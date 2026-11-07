@@ -494,8 +494,8 @@ theorem settle_descriptor_refines_air
   have hv7 := h (aggVkBind 7) (by simp [selfSettlementDescriptor, settleConstraints])
   have hbe := h heightBeforeBind (by simp [selfSettlementDescriptor, settleConstraints])
   simp only [genesisPin, aggBinds, certBinds, heightIsCount, strictAdvance, selBoolean_eq,
-    VmConstraint2.holdsAt, WindowConstraint.holdsAt, WindowExpr.eval, if_false, neg_mul,
-    one_mul] at hg ha hc hh hs hb
+    VmConstraint2.holdsAt, WindowConstraint.holdsAt, WindowExpr.eval, if_false,
+    Bool.false_eq_true, ↓reduceIte, neg_mul, one_mul] at hg ha hc hh hs hb
   simp only [registrationFrozen, settledRootBind, settledHeightBind, heightBeforeBind,
     VmConstraint2.holdsAt, VmConstraint.holdsVm] at hr hro hhe hbe
   simp only [aggCommitBind, VmConstraint2.holdsAt,

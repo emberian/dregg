@@ -233,7 +233,7 @@ theorem effAccumWriteV3_afterCore (groupCol : Nat → Fin 8 → Nat) (keyCol val
     simpa [VmConstraint2.holdsAt] using h
   · intro lvl hlvl
     have := hdir lvl hlvl
-    simpa [afterSpineColsA_dir] using this
+    exact this
   · intro k
     have hin : VmConstraint2.base (.gate (rootPinGate (afterSpineColsA groupCol base.traceWidth) k))
         ∈ afterSpineConstraintsA groupCol keyCol valueCol base.traceWidth := by

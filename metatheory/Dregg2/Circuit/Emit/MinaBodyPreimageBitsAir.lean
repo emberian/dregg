@@ -407,13 +407,14 @@ def bodyBitsAir : EffectAir :=
         ++ (fieldIdx.map fun p => fieldPin p.1 p.2)
         ++ (limbIdx.map fun p => limbPin p.1 p.2) }
 
--- `decide +kernel` here and in §3: the kernel evaluates the 4 239-leg list once. `rfl` evaluated it
--- in the elaborator's `whnf` first, which cost 3.1 GB of this module's peak (8.7 → 5.6 GB).
-theorem bodyBitsAir_leg_count : bodyBitsAir.legs.length = 4239 := by decide +kernel
+-- Counts over the concrete 4 239-leg list and the emitted descriptor are checked by compiled
+-- evaluation (`native_decide`, pinned `#assert_compiled`). `mainRailOk` stays a kernel check because
+-- the `TiedAir` certificate below is built from it.
+theorem bodyBitsAir_leg_count : bodyBitsAir.legs.length = 4239 := by native_decide
 
 theorem bodyBitsAir_mainRailOk : bodyBitsAir.mainRailOk = true := by decide +kernel
 
-theorem bodyBitsAir_pinsFit : bodyBitsAir.pinsFit BODY_BITS_PI_COUNT = true := by decide +kernel
+theorem bodyBitsAir_pinsFit : bodyBitsAir.pinsFit BODY_BITS_PI_COUNT = true := by native_decide
 
 /-- ⚑⚑ **THE WHOLE LOOKUP BILL IS THE FELT GATE, AND NOTHING ELSE MOVED.** Decided on the source:
 the 819 chunks still cost ZERO range lookups (a booleanity assertion is a degree-2 window gate, not
@@ -427,7 +428,7 @@ theorem the_field_gates_are_the_whole_lookup_bill :
       ∧ bodyBitsAir.ranges = []
       ∧ bodyBitsAir.tables = [bodyLimbTable]
       ∧ bodyBitsAir.maxLimbedCapacityBits = SK * SB := by
-  refine ⟨?_, ?_, ?_, rfl, rfl, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_, ?_, rfl, rfl, ?_⟩ <;> native_decide
 
 /-- ⚑⚑ **THE TIE VERDICT, BY EXHIBITING THE READER — not by scanning for one.**
 
@@ -461,8 +462,8 @@ theorem bodyBitsAir_pinsTied : bodyBitsAir.pinsTied = true := by
       refine List.any_eq_true.mpr ⟨fieldLimbsLeg f, ?_, ?_⟩
       · simp only [bodyBitsAir, List.mem_append, List.mem_map, List.mem_range]
         exact Or.inl (Or.inl (Or.inl (Or.inl ⟨f, hf, rfl⟩)))
-      · simp only [fieldLimbsLeg, AirLeg.readCols, fieldCols, decide_eq_true_eq]
-        exact List.mem_map.mpr ⟨k, List.mem_range.mpr hk, rfl⟩
+      · simp only [fieldLimbsLeg, AirLeg.readCols, fieldCols]
+        exact decide_eq_true (List.mem_map.mpr ⟨k, List.mem_range.mpr hk, rfl⟩)
     · -- a limb pin: its reader is `limbLeg q.1 q.2`, whose body's first leaf is `loc (PLIMB …)`
       simp only [limbPin, AirLeg.pin.injEq] at h
       subst h
@@ -505,7 +506,7 @@ theorem bodyBitsDesc_tables : bodyBitsDesc.tables = [bodyLimbTable] := rfl
 theorem bodyBitsDesc_ranges : bodyBitsDesc.ranges = [] := rfl
 theorem bodyBitsDesc_hashSites : bodyBitsDesc.hashSites = [] := rfl
 theorem bodyBitsDesc_constraint_count : bodyBitsDesc.constraints.length = 5417 := by
-  decide +kernel
+  native_decide
 
 /-- ⚑⚑ **THE COMMITTED WIDTH IS NO LONGER THE DECLARED WIDTH, AND HERE IS THE BILL.**
 `MainLayout::build` appends `decomp_cols(bits)` columns per RANGE lookup and `2 · SUBMASK_BITS` per
@@ -523,7 +524,7 @@ theorem the_lookup_bill_is_exactly_the_field_gate :
     ∧ bodyBitsDesc.tables = [bodyLimbTable]
     ∧ bodyBitsDesc.traceWidth = 3899 := by
   refine ⟨?_, rfl, rfl⟩
-  decide +kernel
+  native_decide
 
 /-! ### §3b — decided on the emitted bytes. -/
 
@@ -561,7 +562,7 @@ the only columns under a product are the bit columns squaring themselves. A non-
 multiply would put two DIFFERENT indices in one gate; none does. -/
 theorem bodyBits_products_are_only_the_bits :
     (bodyBitsDesc.constraints.all fun c =>
-      (constraintProdCols c).eraseDups.length ≤ 1) = true := by decide +kernel
+      (constraintProdCols c).eraseDups.length ≤ 1) = true := by native_decide
 
 /-! ## §4 — ⚑ THE ROW PREDICATE, AND IT IS THE THREE LEG FAMILIES. -/
 
@@ -906,18 +907,18 @@ and their AGREEMENT, not their CONTENT.** The one object that would speak to con
 #assert_axioms bitBoolLeg_eq
 #assert_axioms the_field_gate_is_a_limbs_leg
 #assert_axioms fieldIdx_length
-#assert_axioms bodyBitsAir_leg_count
+#assert_compiled bodyBitsAir_leg_count
 #assert_axioms bodyBitsAir_mainRailOk
-#assert_axioms bodyBitsAir_pinsFit
-#assert_axioms the_field_gates_are_the_whole_lookup_bill
+#assert_compiled bodyBitsAir_pinsFit
+#assert_compiled the_field_gates_are_the_whole_lookup_bill
 #assert_axioms bodyBitsDesc_name
 #assert_axioms bodyBitsDesc_width
 #assert_axioms bodyBitsDesc_piCount
 #assert_axioms bodyBitsDesc_tables
-#assert_axioms bodyBitsDesc_constraint_count
-#assert_axioms the_lookup_bill_is_exactly_the_field_gate
+#assert_compiled bodyBitsDesc_constraint_count
+#assert_compiled the_lookup_bill_is_exactly_the_field_gate
 #assert_axioms the_field_gate_bounds_every_whole_element_limb
-#assert_axioms bodyBits_products_are_only_the_bits
+#assert_compiled bodyBits_products_are_only_the_bits
 #assert_axioms the_row_gates_force_boolean_bits
 #assert_axioms the_eleven_packed_elements_pin_the_2381_bits
 

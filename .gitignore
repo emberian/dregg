@@ -154,3 +154,4 @@ wasm/pkg-mwt/
 #
 # ⚠ Ignoring it stops the double-scan. DELETING it is whoever created it's call.
 headver/
+metatheory/.iter-check/

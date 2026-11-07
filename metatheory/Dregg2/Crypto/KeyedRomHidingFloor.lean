@@ -524,8 +524,6 @@ theorem winProb_pin_dev (M : R → OracleComp (Msg × B) R Bool) (d : Msg × B) 
         -- `instBEqProd`. Propositionally the same event; bridge the `decide` instances.
         refine le_trans h (le_of_eq ?_)
         congr 1
-        funext H
-        exact decide_eq_decide.mpr Iff.rfl
 
 /-- **THE PER-WORLD HYBRID DISTANCE:** in world `b`, the accept probability is within `Q/|B|` of
 the `b`-INDEPENDENT hybrid `(∑_c Pr[M c accepts])/|R|`. The union bound over the hidden uniform

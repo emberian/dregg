@@ -671,7 +671,8 @@ theorem attWit_satisfies (hash : List ℤ → ℤ) (d : TableDfa Nat Nat) (R : �
         (envAt (attWit d R q w) i).loc NEXT
           ≡ (envAt (attWit d R q w) i).pub PI_FINAL [ZMOD 2013265921]
       intro hl
-      have hlast : i + 1 = (attRows d (R) q w).length := by simpa using hl
+      have hlast : i + 1 = (attRows d (R) q w).length :=
+        (by simpa using hl : i + 1 = (attWit d R q w).rows.length)
       rw [hloc, attRows_last_next d (R) w q i hi' hlast]
       exact Int.ModEq.refl _
     · -- B3: the FIRST row's root IS `pi[automaton_root]` — the attestation's public face

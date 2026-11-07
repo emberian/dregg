@@ -509,8 +509,9 @@ theorem publicBindingSlots_src :
 theorem publicBindingSlots_rw :
     publicBindingSlots (rwDescriptor pub sec atoms terms a rest) =
       (publicPins pub sec atoms).filterMap bindingSlot? := by
-  simp [publicBindingSlots, rwDescriptor, rwConstraints, List.filterMap_append,
-    atomLinks_bindingSlot_nil, midConstraints, nodes_bindingSlot_nil, directGate, restAccept]
+  simp only [publicBindingSlots, rwDescriptor, rwConstraints, List.filterMap_append,
+    atomLinks_bindingSlot_nil, midConstraints, nodes_bindingSlot_nil]
+  simp [directGate, restAccept]
 
 /-! ## 5. The witness rebuild — the elided postorder region, as canonical values.
 
@@ -957,11 +958,12 @@ noncomputable def goodInput : Fin (1 + 1) → ZMod 2013265921 := fun _ => 0
 
 theorem good_holds : (rootProgram terms a0 rest).Holds goodInput := by
   constructor
-  · show (terms a0).evalField goodInput = 0
-    simp [terms, a0, goodInput, AffineTerm.evalField]
+  · show (AffineTerm.add (.input ⟨0, by omega⟩) (.neg (.input ⟨1, by omega⟩))).evalField
+      goodInput = 0
+    simp [goodInput, AffineTerm.evalField]
   · left
-    show (terms ⟨1, by omega⟩).evalField goodInput = 0
-    simp [terms, goodInput, AffineTerm.evalField]
+    show (AffineTerm.input ⟨1, by omega⟩ : AffineTerm (1 + 1)).evalField goodInput = 0
+    simp [goodInput, AffineTerm.evalField]
 
 theorem demo_source_satisfiable (hash : List ℤ → ℤ) :
     ∃ s, Satisfied2 hash (descriptor (rootProgram terms a0 rest))

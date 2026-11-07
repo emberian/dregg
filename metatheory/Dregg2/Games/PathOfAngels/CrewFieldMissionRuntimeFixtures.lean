@@ -20,6 +20,7 @@ fully-qualified names are unchanged. The construction proofs `fixture_activation
 `rekeyed_crew_activation_is_valid` moved with the activations they build.
 -/
 import Dregg2.Games.PathOfAngels.CrewFieldMissionRuntime
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.CrewFieldMissionRuntime
 

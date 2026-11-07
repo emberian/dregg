@@ -467,8 +467,8 @@ theorem chained_adv_le (F : KeyedRomFamily) (C : RomChainedCarrier F)
     (A : Adversary (romChainedGame F C)) (l : ℕ) :
     gameAdv (romChainedGame F C) A l ≤ gameAdv (keyedRomGame F) (chainedFinder F C A) l := by
   refine @winProb_le_of_imp _ ((romChainedGame F C).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
-  exact chained_wins_imp F C A l H hH
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  exact (Adversary.hit_eq_true _ _ _).mpr (chained_wins_imp F C A l H hH)
 
 /-- **⚑ THE EXTRACTED FINDER IS QUERY-BOUNDED, WITH THE WALK'S QUERIES PAID.** A `Q`-query chained
 forger yields a `(Q + 2·len + 2)`-query collision finder: the forger's own tree (`bind`) plus the
@@ -483,7 +483,8 @@ theorem chainedFinder_in_romEff (F : KeyedRomFamily) (C : RomChainedCarrier F) (
   · exact OracleComp.bind_queryBounded (hMQ l) (fun p => breakFinderComp_queryBounded C l p)
   · show (breakFinderComp C l (A.run l H)).eval H
       = (OracleComp.bind (M l) (breakFinderComp C l)).eval H
-    rw [OracleComp.bind_eval, hrun l H]
+    exact (congrArg (fun p => (breakFinderComp C l p).eval H) (hrun l H)).trans
+      (OracleComp.bind_eval (M l) (breakFinderComp C l) H).symm
 
 /-! ## §4 — the binding, from the PROVED floor; and the counterexample dying at this layer. -/
 

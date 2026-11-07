@@ -298,7 +298,8 @@ theorem dedup_append_length_lt {marks cs : List Coord}
     · exact List.mem_append_right _ hc
     · exact List.mem_append_left _ h
   have := (List.subperm_of_subset hnd' hsub).length_le
-  simpa using this
+  simp only [List.length_cons] at this
+  omega
 
 /-- ⚑ **M3 (1): A CLASH ROUND STRICTLY GROWS `marks`.** -/
 theorem roundStep_marks_strict_growth {cfg : GameConfig} {g : GoalAssignment}

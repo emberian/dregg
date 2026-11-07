@@ -237,6 +237,17 @@ theorem realRow_vals :
       state.BALANCE_HI, state.NONCE, state.CAP_ROOT, state.RESERVED, param.AMOUNT,
       param.DIRECTION] <;> norm_num
 
+/-- Off the nine named columns (`1, 54, 76, 78, 68, 69, 189, 440, 441`), `realRow` is `0`. -/
+theorem realRow_zero_of {v : Nat} (h1 : v ≠ 1) (h54 : v ≠ 54) (h76 : v ≠ 76)
+    (h78 : v ≠ 78) (h68 : v ≠ 68) (h69 : v ≠ 69) (h188 : v ≠ 189) (h239 : v ≠ 440)
+    (h240 : v ≠ 441) : realRow v = 0 := by
+  unfold realRow
+  rw [if_neg (show ¬ v = sel.TRANSFER from h1), if_neg (show ¬ v = sbCol state.BALANCE_LO from h54),
+    if_neg (show ¬ v = saCol state.BALANCE_LO from h76),
+    if_neg (show ¬ v = saCol state.NONCE from h78),
+    if_neg (show ¬ v = prmCol param.AMOUNT from h68),
+    if_neg (show ¬ v = prmCol param.DIRECTION from h69), if_neg h188, if_neg h239, if_neg h240]
+
 /-! ## §4 — `realRow` is a transfer row realizing the transfer intent. -/
 
 /-- The row environment used throughout (the ACTIVE/first window of `realTransferTrace`): `nxt` is the
@@ -264,54 +275,25 @@ theorem transferRowIntent_envReal : TransferRowIntent envReal := by
     refine modEq_of_eq ?_
     show realRow (saCol (state.FIELD_BASE + i)) = realRow (sbCol (state.FIELD_BASE + i))
     have ha : realRow (saCol (state.FIELD_BASE + i)) = 0 := by
-      simp only [realRow, sel.TRANSFER, sbCol, saCol, prmCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
+      apply realRow_zero_of <;>
+        simp only [sel.TRANSFER, sbCol, saCol, prmCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
         PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.NONCE,
-        state.FIELD_BASE, param.AMOUNT, param.DIRECTION]
-      have e1 : ¬ (76 + (3 + i) = 1) := by omega
-      have e2 : ¬ (76 + (3 + i) = 54) := by omega
-      have e3 : ¬ (76 + (3 + i) = 76) := by omega
-      have e4 : ¬ (76 + (3 + i) = 78) := by omega
-      have e5 : ¬ (76 + (3 + i) = 68) := by omega
-      have e6 : ¬ (76 + (3 + i) = 69) := by omega
-      have e7 : ¬ (76 + (3 + i) = 189) := by omega
-      have e8 : ¬ (76 + (3 + i) = 440) := by omega
-      have e9 : ¬ (76 + (3 + i) = 441) := by omega
-      simp only [if_neg e1, if_neg e2, if_neg e3, if_neg e4, if_neg e5, if_neg e6, if_neg e7,
-        if_neg e8, if_neg e9]
+        state.FIELD_BASE, param.AMOUNT, param.DIRECTION] <;> omega
     have hb : realRow (sbCol (state.FIELD_BASE + i)) = 0 := by
-      simp only [realRow, sel.TRANSFER, sbCol, saCol, prmCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
+      apply realRow_zero_of <;>
+        simp only [sel.TRANSFER, sbCol, saCol, prmCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
         PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.NONCE,
-        state.FIELD_BASE, param.AMOUNT, param.DIRECTION]
-      have e1 : ¬ (54 + (3 + i) = 1) := by omega
-      have e2 : ¬ (54 + (3 + i) = 54) := by omega
-      have e3 : ¬ (54 + (3 + i) = 76) := by omega
-      have e4 : ¬ (54 + (3 + i) = 78) := by omega
-      have e5 : ¬ (54 + (3 + i) = 68) := by omega
-      have e6 : ¬ (54 + (3 + i) = 69) := by omega
-      have e7 : ¬ (54 + (3 + i) = 189) := by omega
-      have e8 : ¬ (54 + (3 + i) = 440) := by omega
-      have e9 : ¬ (54 + (3 + i) = 441) := by omega
-      simp only [if_neg e1, if_neg e2, if_neg e3, if_neg e4, if_neg e5, if_neg e6, if_neg e7,
-        if_neg e8, if_neg e9]
+        state.FIELD_BASE, param.AMOUNT, param.DIRECTION] <;> omega
     rw [ha, hb]
 
 /-! ## §5 — `realRow` is `0` off the seven named columns (the bulk evaluator). -/
 
-/-- Off the nine named columns (`1, 54, 76, 78, 68, 69, 189, 440, 441`), `realRow` is `0`. -/
-theorem realRow_zero_of {v : Nat} (h1 : v ≠ 1) (h54 : v ≠ 54) (h76 : v ≠ 76)
-    (h78 : v ≠ 78) (h68 : v ≠ 68) (h69 : v ≠ 69) (h188 : v ≠ 189) (h239 : v ≠ 440)
-    (h240 : v ≠ 441) : realRow v = 0 := by
-  simp only [realRow, sel.TRANSFER, sbCol, saCol, prmCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
-    PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.NONCE, param.AMOUNT,
-    param.DIRECTION]
-  rw [if_neg h1, if_neg h54, if_neg h76, if_neg h78, if_neg h68, if_neg h69, if_neg h188,
-    if_neg h239, if_neg h240]
-
 /-- Off the two named columns (`54, 56` — the carried after-state), `lastRow` is `0`. The wrap row
 carries row 0's after-state in its before block: `sbCol BALANCE_LO (54) = 90`, `sbCol NONCE (56) = 1`. -/
 theorem lastRow_zero_of {v : Nat} (h54 : v ≠ 54) (h56 : v ≠ 56) : lastRow v = 0 := by
-  simp only [lastRow, sbCol, STATE_BEFORE_BASE, NUM_EFFECTS, state.BALANCE_LO, state.NONCE]
-  rw [if_neg h54, if_neg h56]
+  unfold lastRow
+  rw [if_neg (show ¬ v = sbCol state.BALANCE_LO from h54),
+    if_neg (show ¬ v = sbCol state.NONCE from h56)]
 
 /-- The named-column values of `lastRow`: it carries row 0's after-state in its before block. -/
 theorem lastRow_vals :

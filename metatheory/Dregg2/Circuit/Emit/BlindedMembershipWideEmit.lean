@@ -954,7 +954,8 @@ theorem wideFold4_binds_rom (Key : Type) (kF : Fintype Key) (kD : DecidableEq Ke
       = fold4InnerSelect Key kF kD kN l a := by
     show (Dregg2.Crypto.RomBindingReduction.OracleComp.mapOut
       (fold4InnerSelect Key kF kD kN l) (M l)).eval H = _
-    rw [Dregg2.Crypto.RomBindingReduction.OracleComp.mapOut_eval, ← hArun]
+    erw [Dregg2.Crypto.RomBindingReduction.OracleComp.mapOut_eval]
+    rw [← hArun]
   have hB₂run : (romCarrierAdv _ _ (fold4OuterComp Key kF kD kN M)).run l H
       = ((a.1, ()),
           (H (a.1, Sum.inr (a.2.1.1, a.2.1.2.1)), H (a.1, Sum.inr (a.2.1.2.2.1, a.2.1.2.2.2))),
@@ -962,7 +963,8 @@ theorem wideFold4_binds_rom (Key : Type) (kF : Fintype Key) (kD : DecidableEq Ke
             H (a.1, Sum.inr (a.2.2.2.2.1, a.2.2.2.2.2)))) := by
     show (fold4OuterComp Key kF kD kN M l).eval H = _
     unfold fold4OuterComp
-    rw [Dregg2.Crypto.RomCarrierSites.OracleComp.bindComp_eval, ← hArun]
+    erw [Dregg2.Crypto.RomCarrierSites.OracleComp.bindComp_eval]
+    rw [← hArun]
     rfl
   by_cases hT :
       ((H (a.1, Sum.inr (a.2.1.1, a.2.1.2.1)), H (a.1, Sum.inr (a.2.1.2.2.1, a.2.1.2.2.2)))

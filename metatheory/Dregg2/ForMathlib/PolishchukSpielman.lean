@@ -429,7 +429,7 @@ theorem isCoprime_map_of_isRelPrime {R : Type*} [CommRing R] [IsDomain R]
       rwa [(Polynomial.isUnit_C.mpr (isUnit_iff_ne_zero.mpr hwcont)).dvd_mul_left] at h5
     have h7 : p₁.primPart ∣ w.primPart :=
       Polynomial.IsPrimitive.dvd_of_fraction_map_dvd_fraction_map
-        (Polynomial.isPrimitive_primPart p₁) (Polynomial.isPrimitive_primPart w) h4
+        (Polynomial.isPrimitive_primPart p₁) h4
     exact h7.trans (Dvd.intro_left _ (Polynomial.eq_C_content_mul_primPart w).symm)
   have hg0 : g ≠ 0 ∨ p₁.primPart ∣ g := by
     rcases eq_or_ne g 0 with rfl | hg

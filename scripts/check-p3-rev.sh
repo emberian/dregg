@@ -151,7 +151,7 @@ done
 # by the gate whose entire job is that sentence. A gate that reports OK while naming four of
 # seven mirrors is the same failure as one that greps nothing: it just fails later.
 #
-# They cannot join blind_files: `ci.yml` also carries MATHLIB_REV (`1c2b90b1…`), an unrelated
+# They cannot join blind_files: `ci.yml` also carries MATHLIB_REV (`56a00585…`), an unrelated
 # 40-hex pin a blind grep would report as fork drift. So match the ASSIGNMENT form these steps
 # actually use — `REV=<hex>` — which is exactly the token the clone consumes, and nothing else.
 # 7--40 hex here too: an abbreviated REV= is the same trap the authoritative pin just sprang.

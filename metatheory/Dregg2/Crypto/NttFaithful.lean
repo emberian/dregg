@@ -1784,6 +1784,7 @@ def inttScale (a0 : Poly) : Poly := Id.run do
     a := a.set! j (mulModQ nInv a[j]!)
   return a
 
+set_option maxRecDepth 8192 in
 /-- `intt = inttScale ∘ inttStages` (the two sequential loops of `intt`, split). -/
 theorem intt_eq_scale_stages (w : Poly) : intt w = inttScale (inttStages w) := by
   unfold intt inttScale inttStages gsSweep; rfl

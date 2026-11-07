@@ -541,14 +541,14 @@ theorem accumulatorStateBlock_root_eq_of_eq {leftRoot rightRoot : Root8}
       [EXACT_STATE_DOMAIN] ++ rootBlock leftRoot := by
     unfold accumulatorStateBlock
     rw [List.take_append_of_le_length]
-    · simp [rootBlock, Dregg2.Circuit.ExactNullifierAafiPlan.ROOT_LANES]
-    · simp [rootBlock, Dregg2.Circuit.ExactNullifierAafiPlan.ROOT_LANES]
+    · simp [rootBlock_length]
+    · simp [rootBlock_length]
   have hright : (accumulatorStateBlock rightRoot rightCount).take 9 =
       [EXACT_STATE_DOMAIN] ++ rootBlock rightRoot := by
     unfold accumulatorStateBlock
     rw [List.take_append_of_le_length]
-    · simp [rootBlock, Dregg2.Circuit.ExactNullifierAafiPlan.ROOT_LANES]
-    · simp [rootBlock, Dregg2.Circuit.ExactNullifierAafiPlan.ROOT_LANES]
+    · simp [rootBlock_length]
+    · simp [rootBlock_length]
   change (accumulatorStateBlock leftRoot leftCount).take 9 =
     (accumulatorStateBlock rightRoot rightCount).take 9 at ht
   rw [hleft, hright] at ht

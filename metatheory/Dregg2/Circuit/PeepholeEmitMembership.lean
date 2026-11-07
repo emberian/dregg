@@ -464,7 +464,7 @@ theorem andGate_mem_nodes {n : Nat} (b : Nat) (F : Formula n) (out l r : Nat)
           have := congrArg (fun cc => match cc with
             | VmConstraint2.windowGate w => w.body
             | _ => WindowExpr.const 0) hc
-          simpa [gate] using this
+          simpa [gate, andGate] using this
         simp only [subW, negW, Wire.expr, WindowExpr.add.injEq, WindowExpr.mul.injEq,
           WindowExpr.loc.injEq] at hbody
         obtain ⟨ho, -, hl, hr⟩ := hbody
@@ -486,7 +486,7 @@ theorem andGate_mem_descriptor {pub sec atoms : Nat} (p : Program pub sec atoms)
       have := congrArg (fun cc => match cc with
         | VmConstraint2.windowGate w => w.body
         | _ => WindowExpr.const 0) ha
-      simpa [gate, atomLink] using this
+      simpa [gate, andGate, atomLink] using this
     simp only [atomLinkBody, subW, negW, Wire.expr, WindowExpr.add.injEq,
       WindowExpr.mul.injEq] at hbody
     exact toWindowAt_ne_mul_loc (rawBase atoms) (p.atomTerms a) l r hbody.2.2.symm
@@ -497,7 +497,7 @@ theorem andGate_mem_descriptor {pub sec atoms : Nat} (p : Program pub sec atoms)
       have := congrArg (fun cc => match cc with
         | VmConstraint2.windowGate w => w.body
         | _ => WindowExpr.const 0) hacc
-      simpa [gate, acceptConstraintAt] using this
+      simpa [gate, andGate, acceptConstraintAt] using this
     simp only [subW, negW, Wire.expr, WindowExpr.add.injEq, WindowExpr.mul.injEq] at hbody
     exact absurd hbody.2.2 (by simp)
 
@@ -704,7 +704,7 @@ open Dregg2.Crypto.Arith.FieldDeltaRangePilot (prog source andAll boolAtom)
 /-- A conjunct list with an op-node last entry folds to an op formula. -/
 theorem isOp_andAll : ∀ (l : List (Formula 62)), l ≠ [] → OpLast l → IsOp (andAll l)
   | [], h, _ => absurd rfl h
-  | [f], _, h => by simpa [andAll] using h
+  | [f], _, h => by simp only [andAll]; exact h
   | _ :: _ :: _, _, _ => by simp [andAll, IsOp]
 
 /-- THE SPINE LEMMA: `andAll` of conjuncts that are individually `AndRightOp`, with an op-node LAST

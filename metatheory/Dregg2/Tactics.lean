@@ -158,16 +158,6 @@ Read the label literally: `#assert_compiled foo` says **"`foo` is true by compil
 am saying so out loud."** It is strictly more honest than the `#guard` it replaces and strictly
 weaker than `#assert_axioms`. Never write it under a fact that `decide`/`rfl` closes. -/
 
-/-- The two axioms LEAN ITSELF declares for proof-by-compiled-evaluation (`Lean.ofReduceBool`,
-`Lean.ofReduceNat`, both `Init.Core`). Recognising THESE by name is sound in the way a name
-*pattern* never is: both names are already occupied by the prelude, so no other declaration can
-ever bear them and a second one cannot be declared. The equality test is an IDENTITY test, not a
-spelling test. Their claim lives in the proof term (via `Lean.reduceBool`), not in the axiom, so
-there is nothing here to re-run — accepting them IS accepting compiler trust, which is exactly
-what this command's label announces. -/
-def Dregg2.isCoreReduceAxiom (a : Lean.Name) : Bool :=
-  a == ``Lean.ofReduceBool || a == ``Lean.ofReduceNat
-
 /-- The Boolean claim a `native_decide`/`bv_decide` oracle axiom makes, if its type has the shape
 that machinery emits. `Lean.Meta.nativeEqTrue` builds the axiom type as
 `mkApp3 (mkConst ``Eq [1]) (mkConst ``Bool) e (mkConst ``Bool.true)` for a CLOSED `e : Bool` it has
@@ -184,9 +174,10 @@ def Dregg2.nativeOracleClaim? (type : Lean.Expr) : Option Lean.Expr :=
 
 open Lean Elab Command in
 /-- `#assert_compiled foo` — see the section note above. For every axiom `foo` rests on that is not
-kernel-clean, this command requires either (a) one of Lean's own two `reduce*` axioms, whose names
-cannot be forged because they are taken, or (b) an axiom asserting `<closed Bool expr> = true` whose
-expression this command RE-RUNS through the compiled evaluator and watches return `true`. Anything
+kernel-clean, this command requires an axiom asserting `<closed Bool expr> = true` whose
+expression this command RE-RUNS through the compiled evaluator and watches return `true` (Lean
+v4.35 removed `Lean.ofReduceBool`/`Lean.ofReduceNat`, so this per-theorem oracle axiom is the only
+form compiled evaluation takes). Anything
 else is a hard ERROR. It ALSO errors if `foo` rests on no oracle at all (then `#assert_axioms` is
 the correct, stronger pin). A name is never the test — see the `⚑ WHY A NAME CANNOT BE THE TEST`
 note above, which records the forgery this command used to accept. -/
@@ -194,14 +185,10 @@ elab "#assert_compiled" id:ident : command => do
   let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
   let axs ← Lean.collectAxioms name
   let env ← getEnv
-  let mut coreOracles : Array Name := #[]
   let mut candidates : Array (Name × Expr) := #[]
   let mut refusals : Array MessageData := #[]
   for a in axs do
     if Dregg2.cleanAxioms.contains a then continue
-    if Dregg2.isCoreReduceAxiom a then
-      coreOracles := coreOracles.push a
-      continue
     match env.find? a with
     | none =>
       refusals := refusals.push m!"{a} — not present in the environment, so its claim cannot be \
@@ -242,7 +229,7 @@ elab "#assert_compiled" id:ident : command => do
     throwError "compiled-pin FAIL: {name} rests on {refusals.size} axiom(s) this command REFUSES \
       to certify as compiled evaluation:{Lean.indentD (MessageData.joinSep refusals.toList m!"\n")}\
       \nA compiled-evaluation pin certifies a FACT re-run through the evaluator, never a name."
-  if coreOracles.isEmpty && candidates.isEmpty then
+  if candidates.isEmpty then
     throwError "compiled-pin REFUSED: {name} rests on NO compiled-evaluation oracle — it is \
       kernel-clean, so pin it with the STRONGER `#assert_axioms {name}`. Labelling a \
       kernel-clean fact 'compiled' throws away its real pin"

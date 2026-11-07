@@ -98,7 +98,8 @@ theorem oneHotHeadN_of_sat (hsat : Satisfied2 hash d minit mfin maddrs t)
     rw [headToExpr_eval, evalH_foldl_addLin, evalH_c, List.map_map] at hg
     have hEq : (-1 + ((List.range n).map ((fun j => e.loc (sel j)))).sum)
         ≡ 0 [ZMOD 2013265921] := by
-      simpa [Function.comp] using hg
+      rw [← he] at hg
+      simpa [Function.comp_def] using hg
     have hmod : ((List.range n).map (fun j => e.loc (sel j))).sum ≡ 1 [ZMOD 2013265921] :=
       (gate_modEq_iff (by ring)).mp hEq
     obtain ⟨hlo, hhi⟩ := sum_bool_bounds hb
@@ -626,7 +627,7 @@ theorem resolveFactsN_of_sat (hsat : Satisfied2 hash (automataflResolveDescN n) 
       simp only [moveDecodeN, hfxE, hfyE, Int.toNat_natCast]
     rw [hfrm, hfp]
     simp only [boardDecodeOldN, Board.cellAt]
-    rw [if_pos (⟨hX, hY⟩ : (⟨X, Y⟩ : Coord).x < n ∧ (⟨X, Y⟩ : Coord).y < n)]
+    exact if_pos (⟨hX, hY⟩ : X < n ∧ Y < n)
   obtain ⟨hpaV, hpaA⟩ := hsrc 0 (by norm_num)
   obtain ⟨hpbV, hpbA⟩ := hsrc 1 (by norm_num)
   refine

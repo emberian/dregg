@@ -296,11 +296,12 @@ noncomputable def secondGoodInput : Fin (1 + 1) → ZMod 2013265921 := fun _ => 
 
 theorem second_good_holds : (rootProgram secondTerms secondA secondRest).Holds secondGoodInput := by
   refine ⟨?_, ?_⟩
-  · show (secondTerms secondA).evalField secondGoodInput = 0
-    simp [secondTerms, secondA, secondGoodInput, AffineTerm.evalField]
+  · show (AffineTerm.add (.input ⟨0, by omega⟩) (.neg (.input ⟨1, by omega⟩)) :
+        AffineTerm (1 + 1)).evalField secondGoodInput = 0
+    simp [secondGoodInput, AffineTerm.evalField]
   · left
-    show (secondTerms ⟨1, by omega⟩).evalField secondGoodInput = 0
-    simp [secondTerms, secondGoodInput, AffineTerm.evalField]
+    show (AffineTerm.input ⟨1, by omega⟩ : AffineTerm (1 + 1)).evalField secondGoodInput = 0
+    simp [secondGoodInput, AffineTerm.evalField]
 
 open Dregg2.Metatheory.TypedLinearPredicateDescriptorIR2 (canonicalTrace canonical_complete)
 

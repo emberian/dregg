@@ -575,3 +575,36 @@ fn policyc_tables_minimize_to_the_crate_tables() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The receipt's table is policyc's output for the whole policy (`policy.policy`, one pattern
+// `secrets` with both alternatives). It must be the crate's table up to state numbering: its
+// minimization equals `absence_table(POLICY)` cell for cell, and it agrees with the scanner.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn receipt_table_is_the_crate_table_after_minimize() {
+    let path = format!("{}/absence-table.json", env!("CARGO_MANIFEST_DIR"));
+    let receipt: Dfa = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let table = absence_table(POLICY).unwrap();
+    assert_eq!(receipt.num_states, 129, "policyc emits the minimal table");
+    let min = receipt.minimize();
+    assert_eq!(min.num_states, table.num_states);
+    assert_eq!(min.start, table.start);
+    assert_eq!(min.transitions, table.transitions);
+    assert_eq!(min.accepting, table.accepting);
+    for (w, expect) in random_words()
+        .into_iter()
+        .map(|w| {
+            let e = oracle_accepts(&w);
+            (w, e)
+        })
+        .chain(controls())
+    {
+        assert_eq!(
+            receipt.matches(&w),
+            expect,
+            "receipt table vs scanner on {w:?}"
+        );
+    }
+}

@@ -1,0 +1,1 @@
+{"notaries":["k256:02dffefb075e8f4c9555b0c675fdf378ffddc28c9d042279d4f97ac69746c0f925"],"hosts":["api.z.ai","example.com","tool.calltree.invalid"],"recorders":["tool.calltree.invalid"],"time_lo":1793914003,"time_hi":1794086803,"require_edges":[[0,"api.z.ai","tool.calltree.invalid"],[1,"example.com","tool.calltree.invalid"],[0,"tool.calltree.invalid","api.z.ai"]]}

@@ -173,7 +173,11 @@ inductive Mode where
   | booleanGraph
   | interactionNet
   | naturalResidual
-  deriving DecidableEq, Fintype, Repr
+  deriving DecidableEq, Repr
+
+instance : Fintype Mode :=
+  Fintype.ofList [.densePolynomial, .booleanGraph, .interactionNet, .naturalResidual]
+    (by intro x; cases x <;> simp)
 
 /-- One already-constructed backend fragment.  `semanticCertificate` is
 proof-relevant assurance at the boundary; `resources` is the materialized

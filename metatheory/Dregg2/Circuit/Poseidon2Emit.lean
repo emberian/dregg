@@ -103,9 +103,9 @@ theorem emit_faithful_poseidon2_compress (compress : Digest → Digest → Diges
     (rows : List (Row Digest)) (root leaf : Digest) :
     satisfiedEmittedPoseidon2Compress compress rows root leaf
       ↔ Satisfies compress ⟨rows⟩ root leaf := by
-  dsimp [satisfiedEmittedPoseidon2Compress, satisfiedEmittedMerkle]
-  simpa [emitted_poseidon2_eq_merkle_constraints] using
-    (emit_faithful_merkle compress rows root leaf)
+  unfold satisfiedEmittedPoseidon2Compress satisfiedEmittedMerkle
+  rw [emitted_poseidon2_eq_merkle_constraints]
+  exact emit_faithful_merkle compress rows root leaf
 
 /-- Emitted sponge step relation (for refinement composition). -/
 def poseidon2CompressEmittedStep (compress : Digest → Digest → Digest) :

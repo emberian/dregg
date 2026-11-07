@@ -1,30 +1,9 @@
-//! # The emit-from-Lean EQUALITY GATE — the note-spend recursion leaf.
+//! Consumer integration for the Lean-authored, last-row-repaired note-spend AIR.
 //!
-//! Validates the `emit-from-Lean` pattern on the `note_spending` family: the descriptor whose
-//! constraint SEMANTICS are now authored in `metatheory/Dregg2/Circuit/Emit/NoteSpendingLeafEmit.lean`
-//! (`noteSpendLeafDesc`) and byte-pinned there (`emitVmJson2` `#guard`). This test READS those EXACT
-//! bytes ([`GOLDEN_JSON`]) and:
-//!
-//!   1. DECODES it via [`parse_vm_descriptor2`] and asserts the decode EQUALS the PRODUCTION Rust
-//!      lowering [`note_spend_to_descriptor2`] — the independently-built descriptor `circuit-prove`
-//!      ships. A byte drift on either side breaks this OR the Lean `#guard`. (Every constraint the
-//!      hand AIR enforces — the 7-site full-width commitment chain, the two-step nullifier, position
-//!      validity, the position-aware Merkle membership + chain continuity, the boundary pins, and the
-//!      in-AIR mint-hash recompute — is carried; this asserts the Lean emit reproduces them ALL.)
-//!   2. proves an HONEST note-spend witness (real spending key + 28-limb commitment + Merkle path)
-//!      through the REAL [`prove_vm_descriptor2`], asserts ACCEPT, and re-verifies with
-//!      [`verify_vm_descriptor2`];
-//!   3. the MUTATION CANARY — a forged nullifier / merkle-root / mint-hash public input, and a
-//!      tampered Merkle co-path in the trace, each asserts the prove-or-verify REFUSES (real UNSAT),
-//!      biting a specific descriptor tooth (PiBinding pins and the C6 Poseidon2 membership lookup).
-//!
-//! The canaries are NON-VACUOUS: the honest witness proves (step 2) and each negative first re-asserts
-//! that the honest statement is ACCEPTED before asserting the tampered one is REFUSED.
-//!
-//! Prove-THEN-verify is the faithful gate: `prove_vm_descriptor2` self-verifies only under
-//! `cfg!(debug_assertions)` (`descriptor_ir2.rs`), so in a `--release` run the eager replay alone does
-//! not check the first-row `PiBinding` against the public inputs — the CONSUMER's
-//! `verify_vm_descriptor2` is the real check (the production posture).
+//! The core and recursion adapters consume `noteSpendLeafDescFixed`; equality below
+//! checks that wiring, not independent refinement. Honest proofs and hostile PIs
+//! exercise the real prover/verifier. Semantic theorems are in NoteSpendingLeafServed
+//! and retain explicit path-shape, canonicality and faithful-chip assumptions.
 
 use std::panic::AssertUnwindSafe;
 
@@ -44,18 +23,8 @@ use dregg_circuit_prove::note_spend_leaf_adapter::{
     note_spend_leaf_public_inputs, note_spend_to_descriptor2,
 };
 
-/// The BYTE-IDENTICAL wire string `emitVmJson2 noteSpendLeafDesc` emits (pinned by the `#guard` in
-/// `NoteSpendingLeafEmit.lean`). If Lean's emitter drifts, that `#guard` fails; if this literal
-/// drifts, the `decoded == note_spend_to_descriptor2()` assertion fails. Neither can silently diverge.
-/// ⚑ **THE EMITTED ARTIFACT ITSELF, NOT A COPY OF IT (2026-08-06).** This was an inline
-/// `r#"…"#` transcription of the Lean `#guard` bytes, and the `challenges` flag day
-/// (2026-08-05) broke it along with 27 siblings: the artifact under
-/// `circuit/descriptors/` was re-emitted, the literal was not, and
-/// `parse_vm_descriptor2` refused it with `ir:2 descriptor missing "challenges"`. An
-/// inline golden is a copy that no re-emit reaches, so every flag day breaks exactly
-/// that set again — the fix is to have no copy. `check-emit-gate-weld.py` still gates
-/// the literals that remain (the descriptors with no checked-in artifact to name), and
-/// `check-descriptor-drift.sh` gates this file against its Lean author.
+/// The directly consumed artifact. The emitter routing/drift gate checks its Lean
+/// origin; consumer equality here checks wiring and is not a refinement proof.
 const GOLDEN_JSON: &str = include_str!("../../circuit/descriptors/by-name/note-spend-leaf.json");
 
 // Mint-extension columns (from `note_spend_leaf_adapter`): the 3 columns appended past the source
@@ -142,19 +111,19 @@ fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]
     }
 }
 
-/// STEP 1 — the Lean-emitted descriptor decodes and EQUALS the production `note_spend_to_descriptor2`
-/// lowering (Lean emit ≡ Rust semantics), with the expected shape.
+/// Both consumer entry points select the repaired emitted artifact.
 #[test]
-fn note_spend_emit_decodes_to_production_lowering() {
+fn note_spend_emit_consumers_select_repaired_artifact() {
     let decoded = parse_vm_descriptor2(GOLDEN_JSON).expect("the Lean-emitted golden JSON decodes");
     let production =
-        note_spend_to_descriptor2().expect("the production note-spend lowering builds");
+        note_spend_to_descriptor2().expect("the production note-spend artifact parses");
     assert_eq!(
         decoded, production,
-        "the Lean-emitted descriptor must equal the production note_spend_to_descriptor2() lowering"
+        "the recursion adapter must consume the emitted artifact"
     );
 
     // Shape pins (mirror the Lean `#guard`s): width 149, 7 PIs, 12 chip lookups, 8 pins, 1 window.
+    assert_eq!(decoded.constraints.len(), 33);
     assert_eq!(decoded.trace_width, 149);
     assert_eq!(decoded.public_input_count, 7);
     let chip_lookups = decoded

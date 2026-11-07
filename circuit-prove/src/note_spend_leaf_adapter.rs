@@ -28,16 +28,14 @@
 //! claim is welded (through the FRI-bound descriptor PIs) to a genuine
 //! key-knowledge + membership + full-width-commitment execution.
 //!
-//! ## The constraint lowering (`dregg-note-spending-dsl-v3` → `EffectVmDescriptor2`)
+//! ## The consumed Lean AIR
 //!
-//! The source descriptor's kinds and their IR-v2 carriers:
-//!
-//! | source constraint                                | carrier                                                        |
-//! |--------------------------------------------------|----------------------------------------------------------------|
-//! | `Binary` / `Polynomial` / `Equality` (± gates)   | `Base(Gate(body))` (the same local-gate lowering custom uses)  |
-//! | `Transition { CURRENT, PARENT }` (C7)            | `WindowGate(Nxt − Loc)` on the transition domain               |
-//! | `(Inverted)Gated { Hash }` (C2a..g, C3, C4, C6)  | a SELECTOR-MUXED arity-7 `TID_P2` chip lookup (see below)      |
-//! | boundary `PiBinding` (First/Last)                | `Base(PiBinding{row, col, pi})` — row-tag exact                |
+//! `noteSpendLeafDescFixed` in `NoteSpendingLeafEmit.lean` authors the 149-column,
+//! seven-PI, 33-constraint artifact. This adapter shares both descriptor parsing
+//! and validated witness assembly with `dregg_circuit::note_spend_witness`.
+//! Six last-row boundaries close the transition-gate gap proved in
+//! `NoteSpendingLeafRung2`. `NoteSpendingLeafServed` composes the existing semantic
+//! bridges, retaining explicit chip-table, canonicality and path-shape premises.
 //!
 //! **The fact-sponge carrier (the piece `cellprogram_to_descriptor2` refuses).** A DSL
 //! `ConstraintExpr::Hash` is `hash_fact(pred, terms)`: ONE Poseidon2 permutation
@@ -145,18 +143,14 @@
 //! This leaf is its light-client-witnessable twin — WIRED, not connected.
 
 use dregg_circuit::descriptor_ir2::{
-    CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, MemBoundaryWitness,
-    TID_P2, UMemBoundaryWitness, VmConstraint2, WindowExpr, WindowGateSpec,
-    prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, prove_vm_descriptor2_for_config,
 };
-use dregg_circuit::dsl::circuit::{BoundaryDef, BoundaryRow, CircuitDescriptor, ConstraintExpr};
-use dregg_circuit::dsl::note_spending::{
-    generate_note_spending_trace, note_spending_circuit_descriptor,
-};
+pub use dregg_circuit::dsl::note_spending::note_spend_mint_hash_felt;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
-use dregg_circuit::note_spending_witness::{NOTE_SPENDING_WIDTH, NoteSpendingWitness, col, pi};
-use dregg_circuit::poseidon2::hash_fact;
+pub use dregg_circuit::note_spend_witness::{
+    NOTE_SPEND_CLAIM_LEN, NOTE_SPEND_MINT_HASH_PI, note_spend_leaf_public_inputs,
+};
+use dregg_circuit::note_spending_witness::NoteSpendingWitness;
 
 use p3_recursion::{ProveNextLayerParams, RecursionOutput};
 
@@ -170,396 +164,9 @@ use crate::plonky3_recursion_impl::recursive::DreggRecursionConfig;
 /// Extension degree of the recursion config's PCS (the BabyBear-quartic stack).
 const D: usize = 4;
 
-/// The `hash_fact` domain-separation marker (`poseidon2::hash_fact` state[5]).
-/// Kept file-local (the descriptor_ir2 twin is private); the KAT test
-/// `fact_arity7_chip_absorb_matches_hash_fact` pins the two against divergence.
-const NS_FACT_MARK: u32 = 0xFACF;
-
-/// The exposed claim width: the 6 note-spend PIs + the felt-domain mint_hash.
-/// Lanes: `[nullifier, merkle_root, value_lo, asset_type, destination_federation,
-/// value_hi, mint_hash]`.
-pub const NOTE_SPEND_CLAIM_LEN: usize = 7;
-
-/// PI slot of the felt-domain mint identity (appended after the source
-/// descriptor's 6 PIs).
-pub const NOTE_SPEND_MINT_HASH_PI: usize = 6;
-
-// The three extension columns appended past the source trace width (62), BEFORE the
-// per-site chip lane columns.
-/// Row-0 copy of the Merkle root, pinned to `pi[1]` (`PiBinding{First}`). The root's
-/// canonical carrier is the LAST row's `CURRENT` (also pinned to `pi[1]`), so both
-/// are anchored to the same PI — this column just makes the root readable on the
-/// commitment row for the mint-hash absorb.
-const MINT_ROOT_COL: usize = NOTE_SPENDING_WIDTH;
-/// The mint-hash chain intermediate `hash_fact(nullifier, [root, dest, asset, value])`.
-const MINT_M1_COL: usize = NOTE_SPENDING_WIDTH + 1;
-/// The felt-domain mint identity, pinned to `pi[6]`.
-const MINT_HASH_COL: usize = NOTE_SPENDING_WIDTH + 2;
-/// Base width of the extended trace (source 62 + the 3 mint columns); chip lane
-/// columns are allocated past this.
-const EXT_BASE_WIDTH: usize = NOTE_SPENDING_WIDTH + 3;
-
-/// `x − y` as a `LeanExpr` (no subtraction node: `x + (−1)·y`).
-fn sub(x: LeanExpr, y: LeanExpr) -> LeanExpr {
-    LeanExpr::add(x, LeanExpr::mul(LeanExpr::Const(-1), y))
-}
-
-/// **THE FELT-DOMAIN MINT IDENTITY** — the in-circuit-recomputable bridge-mint
-/// `mint_hash`. The canonical definition now lives beside the verifier it binds
-/// to ([`dregg_circuit::dsl::note_spending::note_spend_mint_hash_felt`] — the
-/// STEP-1 executor re-align moved it there so the executor/SDK projectors and
-/// this leaf share ONE function); re-exported here so the leaf's claim-lane
-/// vocabulary is unchanged.
-///
-/// `hash_fact(hash_fact(nullifier, [merkle_root, destination_federation,
-/// asset_type]), [value_lo, value_hi])` over the SAME compressed felts the
-/// executor's `verify_note_spend_dsl_full` call binds. The leaf recomputes this
-/// IN-AIR from its PI-pinned row-0 columns and exposes it at claim lane
-/// [`NOTE_SPEND_MINT_HASH_PI`]; the deployed `mintV3` row publishes the SAME
-/// felt (the executor-derived `VmEffect::BridgeMint.mint_hash`) at its
-/// mint-hash PI slot.
-pub use dregg_circuit::dsl::note_spending::note_spend_mint_hash_felt;
-
-/// Row-gating selector for a chip site.
-#[derive(Clone, Copy)]
-enum SiteSel {
-    /// Fires when the selector column is 1 (`Gated`).
-    When(usize),
-    /// Fires when the selector column is 0 (`InvertedGated`).
-    Unless(usize),
-}
-
-impl SiteSel {
-    /// `(fire, hold)` — the firing indicator and its complement, both boolean on
-    /// trace rows (the selector column carries a `Binary` gate).
-    fn exprs(self) -> (LeanExpr, LeanExpr) {
-        match self {
-            SiteSel::When(c) => (LeanExpr::Var(c), sub(LeanExpr::Const(1), LeanExpr::Var(c))),
-            SiteSel::Unless(c) => (sub(LeanExpr::Const(1), LeanExpr::Var(c)), LeanExpr::Var(c)),
-        }
-    }
-}
-
-/// Build the SELECTOR-MUXED arity-7 `TID_P2` chip lookup carrying one row-gated
-/// `hash_fact` site: `input_cols[0]` is the predicate, `input_cols[1..]` (≤ 4) the
-/// terms. On a firing row the tuple is the genuine fact absorb
-/// `[7, pred, t0..t3, 0xFACF, 1, 0…, out, lanes…]`; on a non-firing row every value
-/// lane muxes to zero and the digest lane to the constant `K₀ = hash_fact(0, [])`, so
-/// the send degenerates to the satisfiable zero-fact permutation row.
-fn gated_fact_site(
-    sel: SiteSel,
-    output_col: usize,
-    input_cols: &[usize],
-    lane_base: usize,
-) -> Result<VmConstraint2, String> {
-    if input_cols.is_empty() || input_cols.len() > 5 {
-        return Err(format!(
-            "fact site expects 1..=5 input columns (pred + ≤4 terms), got {}",
-            input_cols.len()
-        ));
-    }
-    let (fire, hold) = sel.exprs();
-    // K₀: the zero-fact digest the non-firing rows degenerate to.
-    let k0 = hash_fact(BabyBear::ZERO, &[]).as_u32() as i64;
-
-    let mut tuple: Vec<LeanExpr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-    tuple.push(LeanExpr::Const(7));
-    for i in 0..CHIP_RATE {
-        let e = match i {
-            // pred + terms: muxed value lanes (zero-padded past the given inputs).
-            0..=4 => match input_cols.get(i) {
-                Some(&c) => LeanExpr::mul(fire.clone(), LeanExpr::Var(c)),
-                None => LeanExpr::Const(0),
-            },
-            // The hash_fact domain separation (state[5]/state[6]), constant on
-            // every row — the zero-fact degenerate row keeps them too.
-            5 => LeanExpr::Const(NS_FACT_MARK as i64),
-            6 => LeanExpr::Const(1),
-            _ => LeanExpr::Const(0),
-        };
-        tuple.push(e);
-    }
-    // out0: the digest lane — the site's output column when firing, K₀ when not.
-    tuple.push(LeanExpr::add(
-        LeanExpr::mul(fire, LeanExpr::Var(output_col)),
-        LeanExpr::mul(hold, LeanExpr::Const(k0)),
-    ));
-    // lanes 1..7: the genuine permutation lanes, witnessed columns the chip AIR
-    // EQUALITY-binds (`fill_chip_lanes` writes them from the muxed inputs).
-    for j in 0..(CHIP_OUT_LANES - 1) {
-        tuple.push(LeanExpr::Var(lane_base + j));
-    }
-    debug_assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
-    Ok(VmConstraint2::Lookup(LookupSpec {
-        table: TID_P2,
-        tuple,
-    }))
-}
-
-/// Lower a PURE-LOCAL `ConstraintExpr` to its vanishing gate body — the same
-/// lowering discipline as `custom_leaf_adapter`'s private `gate_body` (duplicated
-/// file-locally per the new-files-only lane discipline). Hash/lookup/cross-row kinds
-/// are handled — or refused — by [`note_spend_to_descriptor2`]'s top level.
-fn local_gate_body(expr: &ConstraintExpr) -> Result<LeanExpr, String> {
-    Ok(match expr {
-        ConstraintExpr::Equality { col_a, col_b } => {
-            sub(LeanExpr::Var(*col_a), LeanExpr::Var(*col_b))
-        }
-        ConstraintExpr::Binary { col } => LeanExpr::mul(
-            LeanExpr::Var(*col),
-            LeanExpr::add(LeanExpr::Var(*col), LeanExpr::Const(-1)),
-        ),
-        ConstraintExpr::Polynomial { terms } => {
-            let mut acc: Option<LeanExpr> = None;
-            for term in terms {
-                let mut prod = LeanExpr::Const(term.coeff.as_u32() as i64);
-                for &ci in &term.col_indices {
-                    prod = LeanExpr::mul(prod, LeanExpr::Var(ci));
-                }
-                acc = Some(match acc {
-                    None => prod,
-                    Some(a) => LeanExpr::add(a, prod),
-                });
-            }
-            acc.unwrap_or(LeanExpr::Const(0))
-        }
-        ConstraintExpr::Gated {
-            selector_col,
-            inner,
-        } => LeanExpr::mul(LeanExpr::Var(*selector_col), local_gate_body(inner)?),
-        ConstraintExpr::InvertedGated {
-            selector_col,
-            inner,
-        } => LeanExpr::mul(
-            sub(LeanExpr::Const(1), LeanExpr::Var(*selector_col)),
-            local_gate_body(inner)?,
-        ),
-        other => {
-            return Err(format!(
-                "note-spend lowering: constraint kind {other:?} is not a local gate body"
-            ));
-        }
-    })
-}
-
-/// Adapt the REAL deployed note-spend descriptor
-/// ([`note_spending_circuit_descriptor`], `dregg-note-spending-dsl-v3`) into the
-/// IR-v2 [`EffectVmDescriptor2`], appending the in-AIR mint-hash recompute (2 more
-/// gated fact sites + the [`NOTE_SPEND_MINT_HASH_PI`] pin). The lowering walks the
-/// SOURCE descriptor (not a transcription), so a drift in the deployed circuit is a
-/// build-time refusal here, never a silent divergence.
+/// Consume the same Lean-emitted, last-row-repaired AIR as the name-dispatched prover.
 pub fn note_spend_to_descriptor2() -> Result<EffectVmDescriptor2, String> {
-    let src: CircuitDescriptor = note_spending_circuit_descriptor();
-    if src.name != "dregg-note-spending-dsl-v3" || src.public_input_count != 6 {
-        return Err(format!(
-            "note-spend lowering is pinned to dregg-note-spending-dsl-v3 (6 PIs); \
-             got {} ({} PIs) — re-ground the lowering against the new descriptor",
-            src.name, src.public_input_count
-        ));
-    }
-    if src.trace_width != NOTE_SPENDING_WIDTH {
-        return Err(format!(
-            "note-spend source width {} != NOTE_SPENDING_WIDTH {NOTE_SPENDING_WIDTH}",
-            src.trace_width
-        ));
-    }
-
-    let mut constraints: Vec<VmConstraint2> = Vec::new();
-    // Chip lane columns are appended past the extended base width, 7 per site.
-    let mut width = EXT_BASE_WIDTH;
-    let mut alloc_lanes = || {
-        let base = width;
-        width += CHIP_OUT_LANES - 1;
-        base
-    };
-
-    for expr in &src.constraints {
-        let c2 = match expr {
-            // The Merkle-chain continuity C7: the two-row carrier on rows 0..n−2.
-            ConstraintExpr::Transition {
-                next_col,
-                local_col,
-            } => VmConstraint2::WindowGate(WindowGateSpec {
-                body: WindowExpr::Add(
-                    Box::new(WindowExpr::Nxt(*next_col)),
-                    Box::new(WindowExpr::Mul(
-                        Box::new(WindowExpr::Const(-1)),
-                        Box::new(WindowExpr::Loc(*local_col)),
-                    )),
-                ),
-                on_transition: true,
-            }),
-            // The row-gated fact-sponge sites: C2a..C2g + C3 + C4 (commitment row,
-            // `InvertedGated{is_merkle}`) and C6 (Merkle rows, `Gated{is_merkle}`).
-            ConstraintExpr::Gated {
-                selector_col,
-                inner,
-            } if matches!(**inner, ConstraintExpr::Hash { .. }) => {
-                let ConstraintExpr::Hash {
-                    output_col,
-                    input_cols,
-                } = &**inner
-                else {
-                    unreachable!()
-                };
-                gated_fact_site(
-                    SiteSel::When(*selector_col),
-                    *output_col,
-                    input_cols,
-                    alloc_lanes(),
-                )?
-            }
-            ConstraintExpr::InvertedGated {
-                selector_col,
-                inner,
-            } if matches!(**inner, ConstraintExpr::Hash { .. }) => {
-                let ConstraintExpr::Hash {
-                    output_col,
-                    input_cols,
-                } = &**inner
-                else {
-                    unreachable!()
-                };
-                gated_fact_site(
-                    SiteSel::Unless(*selector_col),
-                    *output_col,
-                    input_cols,
-                    alloc_lanes(),
-                )?
-            }
-            // Everything else in this descriptor is a pure-local algebraic gate
-            // (C1 Binary, C5 position validity, the C2 equality links).
-            local => VmConstraint2::Base(VmConstraint::Gate(local_gate_body(local)?)),
-        };
-        constraints.push(c2);
-    }
-
-    // Boundary pins graduate to the row-tagged IR-v2 carriers (First/Last exact).
-    for b in &src.boundaries {
-        let vmrow = |row: &BoundaryRow| -> Result<VmRow, String> {
-            match row {
-                BoundaryRow::First => Ok(VmRow::First),
-                BoundaryRow::Last => Ok(VmRow::Last),
-                BoundaryRow::Index(i) => Err(format!(
-                    "boundary at absolute row {i} has no IR-v2 row-tag carrier"
-                )),
-            }
-        };
-        let c2 = match b {
-            BoundaryDef::PiBinding { row, col, pi_index } => {
-                VmConstraint2::Base(VmConstraint::PiBinding {
-                    row: vmrow(row)?,
-                    col: *col,
-                    pi_index: *pi_index,
-                })
-            }
-            BoundaryDef::Fixed { row, col, value } => VmConstraint2::Base(VmConstraint::Boundary {
-                row: vmrow(row)?,
-                body: sub(LeanExpr::Var(*col), LeanExpr::Const(value.as_u32() as i64)),
-            }),
-        };
-        constraints.push(c2);
-    }
-
-    // ---- The mint-hash extension: recompute `note_spend_mint_hash_felt` IN-AIR over
-    //      the PI-pinned row-0 columns and pin it to PI 6. ----
-    //
-    // MINT_ROOT is the root's row-0 copy, anchored to the SAME pi[1] the last-row
-    // CURRENT boundary anchors — both PI-pinned, so the absorb reads the genuine root.
-    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::First,
-        col: MINT_ROOT_COL,
-        pi_index: pi::MERKLE_ROOT,
-    }));
-    // m1 = hash_fact(nullifier, [root, dest_fed, asset]) — every input column is
-    // itself First-row PI-pinned by the source boundaries (nullifier pi0, dest pi4,
-    // asset pi3) or by the MINT_ROOT pin above (pi1).
-    constraints.push(gated_fact_site(
-        SiteSel::Unless(col::IS_MERKLE),
-        MINT_M1_COL,
-        &[
-            col::NULLIFIER,
-            MINT_ROOT_COL,
-            col::DESTINATION_FEDERATION,
-            col::ASSET_TYPE,
-        ],
-        alloc_lanes(),
-    )?);
-    // mint_hash = hash_fact(m1, [value_lo, value_hi]) — both value limbs PI-pinned
-    // (pi2/pi5), so the identity binds the FULL u64 amount.
-    constraints.push(gated_fact_site(
-        SiteSel::Unless(col::IS_MERKLE),
-        MINT_HASH_COL,
-        &[MINT_M1_COL, col::VALUE, col::VALUE_HI],
-        alloc_lanes(),
-    )?);
-    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::First,
-        col: MINT_HASH_COL,
-        pi_index: NOTE_SPEND_MINT_HASH_PI,
-    }));
-
-    Ok(EffectVmDescriptor2 {
-        name: format!("note-spend-leaf::{}", src.name),
-        trace_width: width,
-        public_input_count: NOTE_SPEND_CLAIM_LEN,
-        challenges: 0,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    })
-}
-
-/// The HONEST 7-slot claim tuple for a witness: the source circuit's 6 PIs
-/// (`generate_note_spending_trace`'s vector) + the felt-domain mint identity.
-pub fn note_spend_leaf_public_inputs(witness: &NoteSpendingWitness) -> Vec<BabyBear> {
-    let (_, pis) = generate_note_spending_trace(witness);
-    let mint = mint_hash_from_pis(&pis);
-    let mut out = pis;
-    out.push(mint);
-    out
-}
-
-/// The mint identity from a 6-slot note-spend PI vector — [`note_spend_mint_hash_felt`]
-/// over the PI slots.
-fn mint_hash_from_pis(pis: &[BabyBear]) -> BabyBear {
-    note_spend_mint_hash_felt(
-        pis[pi::NULLIFIER],
-        pis[pi::MERKLE_ROOT],
-        pis[pi::VALUE],
-        pis[pi::ASSET_TYPE],
-        pis[pi::DESTINATION_FEDERATION],
-        pis[pi::VALUE_HI],
-    )
-}
-
-/// Extend the source trace with the three mint columns (row 0; Merkle/padding rows
-/// stay zero — the mint sites are row-gated). Chip lane columns are filled by the
-/// general prover's descriptor-driven weld (`trace_with_chip_lanes`).
-fn note_spend_leaf_base_trace(
-    witness: &NoteSpendingWitness,
-) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    let (mut trace, pis) = generate_note_spending_trace(witness);
-    for row in &mut trace {
-        row.resize(EXT_BASE_WIDTH, BabyBear::ZERO);
-    }
-    let m1 = hash_fact(
-        pis[pi::NULLIFIER],
-        &[
-            pis[pi::MERKLE_ROOT],
-            pis[pi::DESTINATION_FEDERATION],
-            pis[pi::ASSET_TYPE],
-        ],
-    );
-    let mint = hash_fact(m1, &[pis[pi::VALUE], pis[pi::VALUE_HI]]);
-    debug_assert_eq!(mint, mint_hash_from_pis(&pis));
-    trace[0][MINT_ROOT_COL] = pis[pi::MERKLE_ROOT];
-    trace[0][MINT_M1_COL] = m1;
-    trace[0][MINT_HASH_COL] = mint;
-    let mut full_pis = pis;
-    full_pis.push(mint);
-    (trace, full_pis)
+    dregg_circuit::note_spend_witness::note_spend_leaf_descriptor()
 }
 
 /// Prove a REAL note-spend as a RECURSION-FOLDABLE IR-v2 leaf.
@@ -610,7 +217,7 @@ pub fn prove_note_spend_leaf_with_claim(
     .map_err(|e| format!("note-spend claim leaf expose-wrap failed: {e}"))
 }
 
-/// The shared inner IR-v2 prove (descriptor lowering + trace extension + batch mint
+/// The shared inner IR-v2 prove (emitted descriptor + validated witness + batch mint
 /// under the recursion config type).
 fn prove_note_spend_inner(
     witness: &NoteSpendingWitness,
@@ -630,7 +237,7 @@ fn prove_note_spend_inner(
         ));
     }
     let desc2 = note_spend_to_descriptor2()?;
-    let (base_trace, _honest_pis) = note_spend_leaf_base_trace(witness);
+    let (base_trace, _honest_pis) = dregg_circuit::note_spend_witness::note_spend_witness(witness)?;
 
     let inner = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
         &desc2,
@@ -942,7 +549,14 @@ mod tests {
     use super::*;
     use crate::binding_tooth::report_refusal;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
-    use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
+    use dregg_circuit::descriptor_ir2::{
+        CHIP_OUT_LANES, TID_P2, VmConstraint2, chip_absorb_all_lanes,
+    };
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+    use dregg_circuit::note_spending_witness::{NOTE_SPENDING_WIDTH, pi};
+    use dregg_circuit::poseidon2::hash_fact;
+    const NS_FACT_MARK: u32 = 0xFACF;
+    const EXT_BASE_WIDTH: usize = NOTE_SPENDING_WIDTH + 3;
     use dregg_circuit::note_spending_witness::test_spending_key;
     use dregg_circuit::poseidon2::hash_many;
     use dregg_circuit::refusal::{assert_violated_constraint_not_bus, must_refuse_or_unsat_panic};
@@ -1006,12 +620,27 @@ mod tests {
         );
     }
 
-    /// The lowering consumes the REAL deployed descriptor and produces the expected
+    /// The shared emitted artifact has the expected
     /// shape: 12 chip sites (7 commitment-chain + 2 nullifier + 1 Merkle + 2 mint),
     /// the C7 WindowGate, and 8 PiBindings (6 source + MINT_ROOT + MINT_HASH).
     #[test]
     fn note_spend_descriptor_lowers() {
-        let desc2 = note_spend_to_descriptor2().expect("the real note-spend descriptor lowers");
+        let desc2 = note_spend_to_descriptor2().expect("the emitted note-spend descriptor parses");
+        assert_eq!(desc2.constraints.len(), 33);
+        assert_eq!(
+            desc2
+                .constraints
+                .iter()
+                .filter(|c| matches!(
+                    c,
+                    VmConstraint2::Base(VmConstraint::Boundary {
+                        row: VmRow::Last,
+                        ..
+                    })
+                ))
+                .count(),
+            6
+        );
         assert_eq!(desc2.public_input_count, NOTE_SPEND_CLAIM_LEN);
         let sites = desc2
             .constraints

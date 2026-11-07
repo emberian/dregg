@@ -385,7 +385,7 @@ private theorem delegRoot_binds_under_commit_or_collides
     ∨ RootsColl compressN (withDelegRoot D others k₁) (withDelegRoot D others k₂) := by
   rcases cellCommitS_binds_systemRoots_or_collides compressN rest _ _ hcommit with hdig | hcoll
   · rcases systemRootsDigest_binds_pointwise_or_collides compressN _ _ hdig with hpt | hrcoll
-    · exact Or.inl (by simpa only [withDelegRoot, if_pos rfl] using hpt delegIdx)
+    · exact Or.inl (by simpa only [withDelegRoot, if_pos rfl, if_true] using hpt delegIdx)
     · exact Or.inr (Or.inr hrcoll)
   · exact Or.inr (Or.inl hcoll)
 
@@ -454,7 +454,8 @@ theorem delegRoot_binds_rom (D : SpongeKeyed) (tagDec : DecidableEq D.Tag) (m : 
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _
     (((delegRootRomTamper D tagDec m).game).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrFun hc delegIdx), heq⟩
 

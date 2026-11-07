@@ -330,6 +330,32 @@ theorem accFold (g : Nat → Nat) (D : Nat) :
     simp only [Nat.zero_add, Finset.sum_range_succ, pow_succ, MProd.mk.injEq]
     exact ⟨by ring, by ring⟩
 
+/-! ### The v4.35 `do`-notation state shapes
+
+Lean v4.35 threads a `for` loop's mutable variables as a `Prod` in declaration order (it was an `MProd`
+in reverse order). These bridges move each fold back to the `MProd` form the specs above are stated over. -/
+
+theorem accFold_prod (g : Nat → Nat) (D n A m : Nat) :
+    List.foldl (fun (st : Nat × Nat) (a : Nat) => (st.1 + g a * st.2, st.2 * D))
+        (A, m) (List.range' 0 n 1)
+      = (A + m * ∑ i ∈ Finset.range n, g i * D ^ i, m * D ^ n) := by
+  have h := List.foldl_hom (fun s : MProd Nat Nat => ((s.1, s.2) : Nat × Nat))
+    (g₁ := fun (st : MProd Nat Nat) (a : Nat) => (⟨st.1 + g a * st.2, st.2 * D⟩ : MProd Nat Nat))
+    (g₂ := fun (st : Nat × Nat) (a : Nat) => (st.1 + g a * st.2, st.2 * D))
+    (l := List.range' 0 n 1) (init := ⟨A, m⟩) (fun _ _ => rfl)
+  rw [accFold] at h
+  exact h
+
+theorem divPushFold_prod {β} (f : Nat → β) (D n : Nat) (init : Array β) (c0 : Nat) :
+    List.foldl (fun (st : Array β × Nat) (_ : Nat) => (st.1.push (f (st.2 % D)), st.2 / D))
+        (init, c0) (List.range' 0 n 1)
+      = ((List.foldl (fun (st : MProd Nat (Array β)) (_ : Nat) =>
+            ⟨st.1 / D, st.2.push (f (st.1 % D))⟩) ⟨c0, init⟩ (List.range' 0 n 1)).2,
+         (List.foldl (fun (st : MProd Nat (Array β)) (_ : Nat) =>
+            ⟨st.1 / D, st.2.push (f (st.1 % D))⟩) ⟨c0, init⟩ (List.range' 0 n 1)).1) :=
+  List.foldl_hom (fun s : MProd Nat (Array β) => ((s.2, s.1) : Array β × Nat))
+    (init := ⟨c0, init⟩) (fun _ _ => rfl)
+
 /-- `bytesToNatLE` as an explicit positional sum. -/
 theorem bytesToNatLE_eq (b : Array UInt8) (off len : Nat) :
     bytesToNatLE b off len = ∑ i ∈ Finset.range len, (b[off + i]!).toNat * 256 ^ i := by
@@ -337,7 +363,7 @@ theorem bytesToNatLE_eq (b : Array UInt8) (off len : Nat) :
   simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp,
     map_pure, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
     Nat.add_one_sub_one, Nat.div_one]
-  rw [accFold (fun i => (b[off + i]!).toNat) 256 len 0 1]
+  rw [accFold_prod (fun i => (b[off + i]!).toNat) 256 len 0 1]
   simp only [Nat.zero_add, Nat.one_mul]; rfl
 
 theorem getElem!_push_lt {β} [Inhabited β] (arr : Array β) (x : β) (i : Nat) (h : i < arr.size) :
@@ -388,12 +414,15 @@ theorem size_mkEmpty {β} (n : Nat) : (Array.mkEmpty (α := β) n).size = 0 :=
 theorem packBits_size (coeffs : Array Nat) (cbits : Nat) :
     (packBits coeffs cbits).size = coeffs.size * cbits / 8 := by
   unfold packBits
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+  simp only [Id.run_pure, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
     Nat.div_one]
-  rw [accFold (fun i => coeffs[i]! % 2 ^ cbits) (2 ^ cbits) coeffs.size 0 1,
+  rw [accFold_prod (fun i => coeffs[i]! % 2 ^ cbits) (2 ^ cbits) coeffs.size 0 1,
     show (0 + 1 * ∑ i ∈ Finset.range coeffs.size, coeffs[i]! % 2 ^ cbits * (2 ^ cbits) ^ i)
-       = packNat coeffs cbits from by rw [Nat.zero_add, Nat.one_mul]; rfl]
+       = packNat coeffs cbits from by rw [Nat.zero_add, Nat.one_mul]; rfl,
+    divPushFold_prod UInt8.ofNat 256 (coeffs.size * cbits / 8)]
+  -- reduce the pair projection syntactically (`exact` would otherwise whnf the fold)
+  dsimp only
   have hspec := divPushFold_spec UInt8.ofNat 256 (coeffs.size * cbits / 8)
     (Array.mkEmpty (coeffs.size * cbits / 8)) (packNat coeffs cbits)
   have hsz := hspec.2.1
@@ -404,12 +433,15 @@ theorem packBits_getElem (coeffs : Array Nat) (cbits : Nat) (m : Nat)
     (hm : m < coeffs.size * cbits / 8) :
     (packBits coeffs cbits)[m]! = UInt8.ofNat (packNat coeffs cbits / 256 ^ m % 256) := by
   unfold packBits
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+  simp only [Id.run_pure, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
     Nat.div_one]
-  rw [accFold (fun i => coeffs[i]! % 2 ^ cbits) (2 ^ cbits) coeffs.size 0 1,
+  rw [accFold_prod (fun i => coeffs[i]! % 2 ^ cbits) (2 ^ cbits) coeffs.size 0 1,
     show (0 + 1 * ∑ i ∈ Finset.range coeffs.size, coeffs[i]! % 2 ^ cbits * (2 ^ cbits) ^ i)
-       = packNat coeffs cbits from by rw [Nat.zero_add, Nat.one_mul]; rfl]
+       = packNat coeffs cbits from by rw [Nat.zero_add, Nat.one_mul]; rfl,
+    divPushFold_prod UInt8.ofNat 256 (coeffs.size * cbits / 8)]
+  -- reduce the pair projection syntactically (`exact` would otherwise whnf the fold)
+  dsimp only
   have hspec := divPushFold_spec UInt8.ofNat 256 (coeffs.size * cbits / 8)
     (Array.mkEmpty (coeffs.size * cbits / 8)) (packNat coeffs cbits)
   have hkey := hspec.2.2.2 m hm
@@ -495,9 +527,11 @@ theorem extract_digit (b : Nat) (hb : 0 < b) (d : Nat → Nat) (hd : ∀ i, d i 
 theorem unpackBits_size (b : Array UInt8) (off count cbits : Nat) :
     (unpackBits b off count cbits).size = count := by
   unfold unpackBits
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+  simp only [Id.run_pure, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
     Nat.div_one]
+  rw [divPushFold_prod (β := Nat) (fun x => x) (2 ^ cbits) count]
+  dsimp only
   have hspec := divPushFold_spec (β := Nat) id (2 ^ cbits) count
     (Array.mkEmpty count) (bytesToNatLE b off (count * cbits / 8))
   have hsz := hspec.2.1
@@ -508,9 +542,11 @@ theorem unpackBits_getElem (b : Array UInt8) (off count cbits j : Nat) (hj : j <
     (unpackBits b off count cbits)[j]!
       = bytesToNatLE b off (count * cbits / 8) / (2 ^ cbits) ^ j % 2 ^ cbits := by
   unfold unpackBits
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+  simp only [Id.run_pure, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
     Nat.div_one]
+  rw [divPushFold_prod (β := Nat) (fun x => x) (2 ^ cbits) count]
+  dsimp only
   have hspec := divPushFold_spec (β := Nat) id (2 ^ cbits) count
     (Array.mkEmpty count) (bytesToNatLE b off (count * cbits / 8))
   have hkey := hspec.2.2.2 j hj

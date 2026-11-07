@@ -81,7 +81,6 @@ theorem bodies_sound (B : Int) (n : Nat) (x y d : Nat → Nat) (borrow : Nat →
   have hi := chain_identity B n (fun j => a (x j)) (fun j => a (y j))
     (fun j => a (d j)) (fun j => (borrow j).eval a) eqn htop
   have hn := value_nonneg B (by omega) n (fun j => a (d j)) (fun j hj => (hr j hj).2.2.1)
-  dsimp only at hi
   omega
 
 /-- Removing the top-borrow condition would admit an underflow (base10, one limb). -/

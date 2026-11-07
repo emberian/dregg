@@ -88,7 +88,10 @@ pub fn replay(
     // key is never here.
     let mut sess =
         Session::open_seeded(random32(), "cc-session", spec).map_err(|e| format!("{e:?}"))?;
-    let mut minter = ToolGatewayMinter::open("cc-session", budget).map_err(|e| format!("{e:?}"))?;
+    // The executor signs every grain turn's receipt (a fresh host key), so the LAST receipt,
+    // which no history root covers, is authenticated too.
+    let mut minter = ToolGatewayMinter::open_signed("cc-session", budget, Some(random32()))
+        .map_err(|e| format!("{e:?}"))?;
     let report = sess.run_goal_minted(
         "replay the recorded session",
         &mut PlannedBrain::new(plan.clone()),
@@ -210,7 +213,17 @@ pub fn produce(
             .after_cell
             .clone(),
         model_nonce: session_model_nonce(minter.records())?,
-        executor_receipts: minter.receipt_log().iter().map(hex::encode).collect(),
+        model_balance: minter
+            .records()
+            .first()
+            .ok_or("no committed turn")?
+            .before_cell
+            .state
+            .balance(),
+        executor_receipts: minter.turn_receipts().to_vec(),
+        executor_pubkey: minter
+            .executor_pubkey()
+            .ok_or("the minter signs no receipts")?,
     };
     Ok((bundle, stats))
 }

@@ -545,7 +545,7 @@ theorem mapLeafFind_spec (hash : List ℤ → ℤ) :
           by_cases hab : a = b
           · subst hab
             have htne : as ≠ bs := fun hc => hne (by rw [hc])
-            simpa only [mapLeafFind, if_pos rfl] using ih bs htne htail
+            simpa only [mapLeafFind, if_pos rfl, ↓reduceIte] using ih bs htne htail
           · rw [mapLeafFind, if_neg hab]
             refine ⟨fun hcon => ?_, hleaf⟩
             simp only [List.cons.injEq, and_true] at hcon

@@ -490,7 +490,7 @@ theorem obj_pi_bound {hash : List ℤ → ℤ} {p : CertFProg} {a : Assignment}
     simp only [certFCoreConstraints]
     apply List.mem_append_right; exact List.mem_cons_of_mem _ (List.mem_singleton.mpr rfl)
   have h := hsat.rowConstraints 0 (by simp) _ hmem
-  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
+  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt, constTrace] using h
 
 /-! ### Membership helpers for the constraint families (byte-position bookkeeping). -/
 

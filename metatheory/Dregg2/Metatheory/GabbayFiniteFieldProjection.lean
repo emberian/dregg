@@ -231,6 +231,7 @@ def successorResidual : Rat :=
 @[simp] theorem successorResidual_eq_zero : successorResidual = 0 := by
   exact successorTable_compiles_to_zero 0
 
+set_option maxRecDepth 8192 in
 /-- BabyBear, the STARK field used elsewhere in dregg, is prime. -/
 theorem babyBear_prime : Nat.Prime 2013265921 := by
   norm_num

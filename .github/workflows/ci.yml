@@ -1499,14 +1499,14 @@ jobs:
     if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 330
-    # Pin the Lean toolchain via metatheory/lean-toolchain (leanprover/lean4:v4.30.0).
+    # Pin the Lean toolchain via metatheory/lean-toolchain (leanprover/lean4:v4.35.0).
     # mathlib is a PORTABLE `git`+`rev` require (metatheory/lakefile.toml) that lake resolves
     # into `metatheory/.lake/packages/mathlib`; scripts/ci-mathlib-cache.sh pulls mathlib's
     # PREBUILT oleans into that same tree, so this job compiles the dregg2 corpus and never
     # mathlib itself. MATHLIB_REV is not decoration: the script FAILS if it disagrees with the
     # rev in the lakefile.
     env:
-      MATHLIB_REV: 1c2b90b13009c65b090d95a83c98e248deafb6f1
+      MATHLIB_REV: 56a005855ea17e0b0958f73ec801ae140b0a1679
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
@@ -1887,7 +1887,7 @@ jobs:
     # measure it, do not raise the number.
     timeout-minutes: 150
     env:
-      MATHLIB_REV: 1c2b90b13009c65b090d95a83c98e248deafb6f1
+      MATHLIB_REV: 56a005855ea17e0b0958f73ec801ae140b0a1679
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         # NO `lfs: true` (2026-07-29): this job never reads circuit/descriptors/*staged*.tsv.
@@ -2067,7 +2067,7 @@ jobs:
     # self-consistent FP passes the round-trip while the Lean emission has moved).
     # Same elan + pinned-mathlib setup as the zero-sorry job (it needs `lake`).
     env:
-      MATHLIB_REV: 1c2b90b13009c65b090d95a83c98e248deafb6f1
+      MATHLIB_REV: 56a005855ea17e0b0958f73ec801ae140b0a1679
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

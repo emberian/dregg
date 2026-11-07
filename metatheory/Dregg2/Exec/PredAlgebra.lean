@@ -29,6 +29,12 @@ import Dregg2.Exec.EffectsState
 
 namespace Dregg2.Exec.PredAlgebra
 
+/- v4.35: core's `Std.LinearOrderPackage Int` supplies a choice-built `BEq`; keep `==` on `Int`
+on its decidable equality so `Pred.eval` (and every pin downstream of it) stays choice-free, as
+under 4.30 (see Tree/Value.lean). Narrowed to `Int` so `Option`/`List` BEq instances still
+resolve as before. -/
+local instance (priority := high) intBEqOfDecEq : BEq Int := instBEqOfDecidableEq
+
 open Dregg2.Exec
 open Dregg2.Exec.EffectsState (fieldOf stateStep)
 open Dregg2.Authority.ClearanceGraph (ClearanceGraph Label)

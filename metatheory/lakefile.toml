@@ -1,8 +1,8 @@
 name = "Dregg2"
 defaultTargets = ["Dregg2", "Metatheory", "Polis", "Market", "Bfv", "PicklesSynthesis", "MinaBridgeGuards", "CommitBindsGuards", "TurnAuthGuards", "PicklesEmitDrivers", "DivergenceToothGuards", "PathOfAngelsGuards", "GameFixtureGuards", "ZkmlSuiteGuards", "CallTreeGuards"]
 
-# Pin mathlib to the exact revision matching v4.30.0
-# (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). This is a PORTABLE `git`+`rev`
+# Pin mathlib to the exact revision matching v4.35.0
+# (rev 56a005855ea17e0b0958f73ec801ae140b0a1679). This is a PORTABLE `git`+`rev`
 # require: `lake` fetches mathlib itself into `.lake/packages/mathlib` on any host,
 # with NO assumption about where the repo was cloned. (It replaced a host-fragile
 # `path = "../../../src/mathlib4"` local require that only resolved when breadstuffs
@@ -17,7 +17,7 @@ defaultTargets = ["Dregg2", "Metatheory", "Polis", "Market", "Bfv", "PicklesSynt
 [[require]]
 name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4"
-rev = "1c2b90b13009c65b090d95a83c98e248deafb6f1"
+rev = "56a005855ea17e0b0958f73ec801ae140b0a1679"
 
 [[lean_lib]]
 name = "Dregg2"

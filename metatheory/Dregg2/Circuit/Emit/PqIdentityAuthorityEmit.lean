@@ -190,7 +190,7 @@ structure RotationReadout (a : Assignment) (c : RotationClaim) : Prop where
     a (NEW_POSSESSION_EVIDENCE + i.1) =
       (commitmentToLanes16 c.newPossessionEvidence i).1
 
-private def firstRow (t : VmTrace) : Assignment := t.rows.getD 0 (fun _ => 0)
+private def firstRow (t : VmTrace) : Assignment := t.rows.getD 0 Dregg2.Circuit.DescriptorIR2.zeroAsg
 
 private theorem first_body_holds
     {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}

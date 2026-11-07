@@ -1,0 +1,112 @@
+# dregg-calltree — initiative 9: certified HTTPS call trees (recorder, tool server, verifier CLI).
+#
+# Its OWN workspace (the empty [workspace] table below), like dregg-lean-ffi: the root
+# Cargo.toml carries other lanes' uncommitted edits, and this crate is not a default-member
+# concern. Path deps reuse zkoracle-live (the MPC-TLS transport) and grain-turn (the kernel
+# turn every hop is minted as) unchanged. Cargo.lock is seeded from the root lock so versions
+# match the workspace's.
+[package]
+name = "dregg-calltree"
+version = "0.1.0"
+edition = "2024"
+description = "Certified HTTPS call trees: every hop an MPC-TLS (TLSNotary) presentation, the tree a Merkle commitment minted into grain turns, accepted only by the Lean checker calltree-check."
+
+[workspace]
+
+[[bin]]
+name = "dregg-calltree"
+path = "src/main.rs"
+
+[dependencies]
+dregg-zkoracle-live = { path = "../zkoracle-live" }
+grain-turn = { path = "../grain-turn", default-features = false }
+dregg-agent = { path = "../dregg-agent" }
+dregg-cell = { path = "../cell" }
+blake3 = "1"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+rcgen = "0.14"
+tokio = { version = "1.38", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "time"] }
+futures-rustls = "0.25"
+hyper = { version = "1.1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+tokio-util = { version = "0.7", features = ["compat"] }
+
+# ── [patch] sections copied VERBATIM from the root Cargo.toml (paths re-rooted to ../);
+# [patch] applies only from the workspace root, and this crate is its own workspace.
+[patch."https://github.com/o1-labs/proof-systems"]
+poly-commitment = { git = "https://github.com/emberian/proof-systems", rev = "c5305e63df5474c8cca81f7951264ea6aafe81db" }
+mina-poseidon = { git = "https://github.com/emberian/proof-systems", rev = "c5305e63df5474c8cca81f7951264ea6aafe81db" }
+mina-curves = { git = "https://github.com/emberian/proof-systems", rev = "c5305e63df5474c8cca81f7951264ea6aafe81db" }
+# ─────────────────────────────────────────────────────────────────────────────
+[patch."https://github.com/Plonky3/Plonky3"]
+# Exact 82cfad73 `p3-fri` source with one additive backend-injection seam.  All
+# other p3 crates remain pinned to that same git revision; the local crate's
+# manifest repeats those pins so the field/MMCS types cannot split by source.
+p3-fri = { path = "../vendor/plonky3-fri-82cfad73" }
+# ⚑ THE PROVER IS BYTE-DETERMINISTIC AGAIN. Exact 82cfad73 `p3-challenger` source with ONE
+# delta: the five PoW `grind` sites take rayon's ORDERED finders (`find_first` /
+# `find_map_first`) instead of the unordered `find_any` / `find_map_any`.
+#
+# Upstream returns whichever worker chunk finishes first, so two runs of the same binary on the
+# same transcript pick different (equally valid) PoW witnesses. The witness is absorbed into
+# Fiat-Shamir BEFORE the query indices are drawn, so the whole proof — opened values, varint
+# lengths, total bytes — moves run to run. Measured 2026-07-31: three rayon runs, three distinct
+# apex/terminal/shrink lengths; the serial fallback (which implements `find_any` as
+# `Iterator::find`) reproduced its own bytes exactly. Two live byte-parity tests assumed
+# determinism and flaked (`gpu_outer_config_synthetic_stark_byte_identical_to_cpu` 3/8;
+# `decider_experiments::d3` 7/10), plus several `#[ignore]`d GPU parity gates.
+#
+# NOT a flag day and NOT a soundness change: no PoW knob moves, the verifier still checks only
+# `check_witness` VALIDITY, and `recursion_vk_fingerprint` hashes circuit SHAPE (it excludes the
+# pow witness, opened values and query proofs) so the VK was already invariant — verified
+# identical across serial and both rayon runs in that measurement. What changes is that the
+# emitted PROOF BYTES are now reproducible, and that rayon-on now agrees with rayon-off.
+p3-challenger = { path = "../vendor/plonky3-challenger-82cfad73" }
+# ─────────────────────────────────────────────────────────────────────────────
+[patch.crates-io]
+# Exact fhe 0.1.1 source with ONE additive, feature-gated seam: a canonical wire
+# codec for `mbfv::RelinKeyShare` (`mbfv-share-codec`). Upstream makes the
+# multiparty relinearization share fully opaque — `pub(crate)` fields, no
+# accessor, no Serialize impl anywhere in `mbfv` — so the relin ceremony
+# physically cannot cross a process boundary, and the dregg committee runs its
+# parties as SEPARATE PROCESSES. The seam adds no cryptography: polynomials ride
+# `fhe_math::rq::Poly`'s own public exact round-trip codec and the rebuilt share
+# is the struct the in-process path already builds. All BFV/mbfv protocol code is
+# byte-identical to 0.1.1. See vendor/fhe-dregg/Cargo.toml for the full delta.
+fhe = { path = "../vendor/fhe-dregg" }
+# Exact curve25519-dalek 4.1.3 source with one additive, feature-gated
+# qualification API for canonical extended-coordinate GPU parity. All normal
+# dalek arithmetic and encodings remain upstream-identical.
+curve25519-dalek = { path = "../vendor/curve25519-dalek-dregg" }
+# ark-serialize fork — the `serde_with` feature `dregg-hints` needs (emberian/algebra).
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+# The two zed-forked async-* crates the gpui dep tree's `[patch.crates-io]` pins
+# (gpui's vendored `util` calls `smol::process::Child::adopt_raw_pid`, present only
+# on these forks). Inert when the gpui-bearing crates are not in the build graph.
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+# Vendored pathfinder_simd 0.5.6 (gpui → font-kit → pathfinder): scalar-path build
+# (the nightly portable-SIMD intrinsics were removed from current toolchains). The
+# one canonical vendored copy lives under starbridge-v2.
+pathfinder_simd = { path = "../starbridge-v2/vendor/pathfinder_simd" }
+# stylo `ToCss`-derive fork (emberian/stylo@ember-nightly-fix) — pins the `?`
+# residual error type to `core::fmt::Error`, defeating the serde_fmt ambiguity in
+# the full cockpit graph (web-shell → servo → stylo). Inert outside that graph.
+stylo_derive = { git = "https://github.com/emberian/stylo", rev = "abc53ac61" }
+# servo-paint SWGL fork (servo-render's libservo path): WebRenderOptions
+# `clear_caches_with_quads: false` so SWGL's DepthFunc assert does not SIGABRT.
+servo-paint = { path = "../servo-render/vendor/servo-paint" }
+# servo-net forbidden-schemes fork (servo-render's libservo path): allow an
+# embedder ProtocolHandler for http/https (the cap-gated byte socket).
+servo-net = { path = "../servo-render/vendor/servo-net" }
+
+# The gpui fork (emberian/zed) resolves directly from git at the rev pinned in
+# starbridge-v2/Cargo.toml (the offscreen/headless wgpu renderer the render-capture
+# bakes need is on that pushed rev) — no local-path [patch] override.
+
+

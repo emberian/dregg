@@ -153,7 +153,7 @@ theorem the_two_partitions_cover_the_same_bits :
       ∧ (∀ l < NLANE, laneStart l + laneWidth l = laneStart (l + 1) ∨ l + 1 = NLANE)
       ∧ byteWidth (NBYTE - 1) = 6 ∧ laneWidth (NLANE - 1) = TOP_LB
       ∧ SB * (NBYTE - 1) + 6 = NBIT ∧ LB * (NLANE - 1) + TOP_LB = NBIT := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑⚑ **AND THEY DO NOT REFINE ONE ANOTHER — the fact the whole file turns on.** `LB % SB ≠ 0`,
 so seven lane boundaries fall strictly INSIDE a byte. Those seven interior boundaries are exactly
@@ -163,7 +163,7 @@ theorem the_lane_boundaries_fall_inside_bytes :
     LB % SB ≠ 0
       ∧ ((List.range NLANE).filter fun l => 0 < l && decide (laneStart l % SB ≠ 0)) = [1,2,3,4,5,6,7]
       ∧ laneStart 1 = 29 ∧ laneStart 1 / SB = 3 ∧ (NBIT - 1) / SB = NBYTE - 1 := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-! ### §1a — the index facts every proof below leans on, named once.
 
@@ -177,8 +177,8 @@ theorem byteWidth_eq_SB {i : Nat} (hi : i + 1 < NBYTE) : byteWidth i = SB := by
 theorem laneWidth_eq_LB {l : Nat} (hl : l + 1 < NLANE) : laneWidth l = LB := by
   unfold laneWidth; simp [hl]
 
-theorem byteWidth_top : byteWidth (NBYTE - 1) = 6 := by decide
-theorem laneWidth_top : laneWidth (NLANE - 1) = TOP_LB := by decide
+theorem byteWidth_top : byteWidth (NBYTE - 1) = 6 := by native_decide
+theorem laneWidth_top : laneWidth (NLANE - 1) = TOP_LB := by native_decide
 
 /-- Byte `i`'s run stays inside the bit block. -/
 theorem byte_run_inside {i t : Nat} (hi : i < NBYTE) (ht : t < byteWidth i) : SB * i + t < NBIT := by
@@ -235,7 +235,7 @@ theorem the_layout_is_wellformed :
       ∧ LANE 0 = 286 ∧ LANE 8 = 294
       ∧ BYTE 31 < RELIMB_WIDTH ∧ LANE 8 < RELIMB_WIDTH
       ∧ PI_BYTE 31 < RELIMB_PI_COUNT ∧ PI_LANE 8 < RELIMB_PI_COUNT := by
-  refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-! ## §3 — ⚑ THE BIT-RUN ARITHMETIC. The vocabulary both spellings are read in.
 
@@ -489,7 +489,7 @@ theorem the_gate_coefficients_are_in_field :
       ∧ ((List.range NLANE).all fun l => (laneTerms l).all fun t => decide (t.1 ≤ 2 ^ 28)) = true
       ∧ 2 ^ 28 < 2013265921 ∧ 2 ^ 29 < 2013265921
       ∧ ¬ (2 ^ 248 < 2013265921) := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **NO PUBLISHED COLUMN IS INERT.** Every byte and every lane has at least one bit column under
 it, so its gate names TWO columns and the emitted `pi_binding`'s column sits in a component larger
@@ -497,7 +497,7 @@ than itself — `LightClientAnchorConnectivity.decorativeAnchors = []` decided o
 theorem no_published_column_is_inert :
     ((List.range NBYTE).all fun i => !(byteTerms i).isEmpty) = true
       ∧ ((List.range NLANE).all fun l => !(laneTerms l).isEmpty) = true := by
-  refine ⟨?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **THE SOURCE.** 32 byte gates, 9 lane gates, 254 booleanity gates, then the 41 pins.
 
@@ -513,7 +513,7 @@ def relimbAir : EffectAir :=
         ++ ((List.range NBYTE).map bytePin)
         ++ ((List.range NLANE).map lanePin) }
 
-theorem relimbAir_leg_count : relimbAir.legs.length = 336 := by rfl
+theorem relimbAir_leg_count : relimbAir.legs.length = 336 := by native_decide
 
 theorem relimbAir_mainRailOk : relimbAir.mainRailOk = true := by rfl
 
@@ -559,7 +559,7 @@ theorem relimbDesc_piCount : relimbDesc.piCount = 41 := rfl
 theorem relimbDesc_tables : relimbDesc.tables = [] := rfl
 theorem relimbDesc_ranges : relimbDesc.ranges = [] := rfl
 theorem relimbDesc_hashSites : relimbDesc.hashSites = [] := rfl
-theorem relimbDesc_constraint_count : relimbDesc.constraints.length = 336 := rfl
+theorem relimbDesc_constraint_count : relimbDesc.constraints.length = 336 := by native_decide
 
 /-- ⚑⚑⚑ **THE COMMITTED WIDTH IS THE DECLARED WIDTH, DECIDED ON THE COMPILER'S OUTPUT.**
 `MainLayout::build` appends `decomp_cols(bits)` columns per RANGE lookup and `2 · SUBMASK_BITS` per
@@ -573,7 +573,7 @@ theorem the_lookup_constraint_count_is_zero :
     ∧ relimbDesc.tables = []
     ∧ relimbDesc.traceWidth = 295 := by
   refine ⟨?_, rfl, rfl⟩
-  rfl
+  native_decide
 
 /-! ### §5a — decided on the emitted bytes. -/
 
@@ -610,7 +610,7 @@ that had welded bytes to lanes directly would put two different indices under on
 does. -/
 theorem relimb_products_are_only_the_bits :
     (relimbDesc.constraints.all fun c =>
-      (constraintProdCols c).eraseDups.length ≤ 1) = true := by rfl
+      (constraintProdCols c).eraseDups.length ≤ 1) = true := by native_decide
 
 /-! ## §6 — ⚑⚑⚑ THE ROW PREDICATE, THE REGROUPING, THE INJECTIVITY, AND THE ALIAS. -/
 
@@ -751,7 +751,7 @@ falsifier died. -/
 theorem the_alias_pair_straddles_a_lane_boundary_inside_one_byte :
     28 / SB = 3 ∧ 29 / SB = 3 ∧ laneStart 1 = 29
       ∧ 28 < laneStart 1 ∧ laneStart 1 ≤ 29 ∧ 29 < laneStart 2 := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑⚑⚑ **THE BOOLEANITY HYPOTHESIS IS LOAD-BEARING — THE ALIAS, EXHIBITED.** All thirty-two byte
 readings agree; two of the nine lane readings do not. So a re-limbing whose bits were not gated
@@ -990,9 +990,9 @@ theorem relimb_discriminates :
    descriptor's.
 -/
 
-#assert_axioms the_two_partitions_cover_the_same_bits
-#assert_axioms the_lane_boundaries_fall_inside_bytes
-#assert_axioms the_layout_is_wellformed
+#assert_compiled the_two_partitions_cover_the_same_bits
+#assert_compiled the_lane_boundaries_fall_inside_bytes
+#assert_compiled the_layout_is_wellformed
 #assert_axioms bitSumAt_succ
 #assert_axioms bitSumAt_split
 #assert_axioms bitSumAt_congr
@@ -1004,9 +1004,9 @@ theorem relimb_discriminates :
 #assert_axioms digitsValW_of_runs
 #assert_axioms bitBoolLeg_eq
 #assert_axioms termValue_runTerms
-#assert_axioms the_gate_coefficients_are_in_field
-#assert_axioms no_published_column_is_inert
-#assert_axioms relimbAir_leg_count
+#assert_compiled the_gate_coefficients_are_in_field
+#assert_compiled no_published_column_is_inert
+#assert_compiled relimbAir_leg_count
 #assert_axioms relimbAir_mainRailOk
 #assert_axioms relimbAir_pinsFit
 #assert_axioms the_relimbing_has_no_lookup_bill
@@ -1014,13 +1014,13 @@ theorem relimb_discriminates :
 #assert_axioms relimbDesc_width
 #assert_axioms relimbDesc_piCount
 #assert_axioms relimbDesc_tables
-#assert_axioms relimbDesc_constraint_count
-#assert_axioms the_lookup_constraint_count_is_zero
-#assert_axioms relimb_products_are_only_the_bits
+#assert_compiled relimbDesc_constraint_count
+#assert_compiled the_lookup_constraint_count_is_zero
+#assert_compiled relimb_products_are_only_the_bits
 #assert_axioms the_row_gates_force_boolean_bits
 #assert_axioms the_two_spellings_denote_one_value
 #assert_axioms the_relimbing_is_injective
-#assert_axioms the_alias_pair_straddles_a_lane_boundary_inside_one_byte
+#assert_compiled the_alias_pair_straddles_a_lane_boundary_inside_one_byte
 #assert_axioms bitSumAt_bitOf
 #assert_axioms every_canonical_value_has_an_accepted_row
 #assert_axioms the_accepted_row_denotes_its_value
@@ -1034,4 +1034,6 @@ theorem relimb_discriminates :
 #assert_compiled a_lane_that_is_not_its_bits_is_refused
 #assert_compiled a_claim_that_is_not_its_column_is_refused
 
+#assert_compiled laneWidth_top
+#assert_compiled byteWidth_top
 end Dregg2.Circuit.Emit.MinaBodyHashRelimbAir

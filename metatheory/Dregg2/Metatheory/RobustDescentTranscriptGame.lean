@@ -280,7 +280,8 @@ theorem mod_miss_event_eq {N m k : ℕ} (hm : 0 < m) (bad : Finset (Fin m)) :
         ∀ i, (seed i).val % m ∈ goodResidues bad) := by
   classical
   ext seed
-  simp only [eventSeeds, Finset.mem_filter, Finset.mem_univ, true_and, Misses, modQueries]
+  simp only [eventSeeds, Finset.mem_filter, Finset.mem_univ, true_and]
+  simp only [Misses, modQueries]
   exact forall_congr' (fun i => (mem_goodResidues_iff hm bad (seed i)).symm)
 
 /-- Exact query-miss numerator under modularly reduced transcript seeds. -/

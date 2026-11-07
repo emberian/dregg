@@ -135,7 +135,7 @@ theorem attenuate_subset (keep : List Auth) (c : Cap) :
       -- authority is `nodeFacets.filter keep ⊆ nodeFacets`.
       simp only [attenuate]
       by_cases hall : nodeFacets.all (fun a => keep.contains a) = true
-      · rw [if_pos hall]; exact fun a h => h
+      · rw [if_pos hall]
       · rw [if_neg hall]
         simp only [capAuthConferred]
         intro a ha
@@ -191,7 +191,7 @@ theorem revoke_subset (caps : Caps) (holder l : Label) (c : Cap) :
   simp only [revoke]
   rcases eq_or_ne l holder with h | h
   · subst h; rw [if_pos rfl]; intro d hd; exact List.mem_of_mem_filter hd
-  · rw [if_neg h]; exact fun d hd => hd
+  · rw [if_neg h]
 
 /-! ## Bridge: `Kernel.exec`'s authority check ⟶ `Authority.Integrity`
 

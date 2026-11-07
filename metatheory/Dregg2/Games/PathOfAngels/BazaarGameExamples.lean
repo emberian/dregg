@@ -291,7 +291,7 @@ theorem option_eq_some_get {T : Type} {value : Option T}
 theorem judged_available : optionSomeB judged? = true := by native_decide
 
 theorem judged_isSome : judged?.isSome = true := by
-  simpa [optionSomeB] using judged_available
+  exact judged_available
 
 def judged : JudgedRun := judged?.get judged_isSome
 
@@ -432,7 +432,7 @@ def evidence? : Option (VerifiedSettlementEvidence claim) :=
 theorem evidence_available : optionSomeB evidence? = true := by native_decide
 
 theorem evidence_isSome : evidence?.isSome = true := by
-  simpa [optionSomeB] using evidence_available
+  exact evidence_available
 
 def evidence : VerifiedSettlementEvidence claim := evidence?.get evidence_isSome
 
@@ -441,7 +441,7 @@ def marketAfter? : Option BazaarState := applySettlement claim evidence marketBe
 theorem settlement_applies : optionSomeB marketAfter? = true := by native_decide
 
 theorem marketAfter_isSome : marketAfter?.isSome = true := by
-  simpa [optionSomeB] using settlement_applies
+  exact settlement_applies
 
 def marketAfter : BazaarState := marketAfter?.get marketAfter_isSome
 
@@ -576,7 +576,7 @@ omit fixture in theorem authorization_available :
   native_decide
 
 omit fixture in theorem authorization_isSome : authorization?.isSome = true := by
-  simpa [optionSomeB] using authorization_available
+  exact authorization_available
 
 def authorization : V1.Authorization claim :=
   authorization?.get authorization_isSome
@@ -745,7 +745,9 @@ theorem settled_story_and_custody_are_exact :
         lot.key ∈ settleCandidate.request.replacement.inventory.taker ∧
         lot.key ∉ settleCandidate.request.replacement.inventory.escrow ∧
         claim.spec.key ∈ settleCandidate.request.replacement.consumedSettlements := by
-    simpa [closed_pending_lot_exact] using custody
+    -- v4.35: simp no longer unfolds `receipt.claim` to `claim`; the identity is definitional.
+    have hclaim : receipt.claim.spec.key = claim.spec.key := rfl
+    simpa [closed_pending_lot_exact, hclaim] using custody
   rw [keyExact]
   exact ⟨rfl, custodyExact.1, custodyExact.2.1, custodyExact.2.2.1,
     custodyExact.2.2.2, rfl, rfl⟩

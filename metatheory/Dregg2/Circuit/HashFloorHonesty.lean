@@ -266,7 +266,7 @@ theorem brokenFinder_adv_one : collisionAdv brokenFamily brokenFinder = fun _ =>
   exact @winProb_top (brokenFamily.Key n) (brokenFamily.keyFintype n) (brokenFamily.keyNonempty n)
 
 /-- The **injective identity** family — `H n k x = x`, no collisions exist at all. -/
-def idFamily : KeyedHashFamily where
+@[reducible] def idFamily : KeyedHashFamily where
   Key := fun _ => Unit
   Input := ℤ
   Out := ℤ

@@ -478,6 +478,9 @@ theorem romAdv_hit (F : RomFamily) (M : RomComp F) (l : ℕ) (H : (romCollisionG
   letI := F.dDec l; letI := F.rDec l
   unfold Adversary.hit collWin romAdv
   simp only [romCollisionGame, Bool.decide_and]
+  rw [Bool.eq_iff_iff]
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  exact decide_eq_true_iff
 
 /-- **A `Q`-QUERY ADVERSARY'S ADVANTAGE AT PARAMETER `l` IS AT MOST `(Q² + 1)/|R l|`.** The
 `birthday_bound` transported onto the game's advantage. -/

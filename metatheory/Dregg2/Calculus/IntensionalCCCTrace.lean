@@ -239,7 +239,8 @@ theorem compile_nodeCount (term : Tm Γ A) :
 /-- Semantic compiler correctness for all open terms and environments. -/
 theorem compile_denote (term : Tm Γ A) (env : Env Γ) :
     (compile term).denote env = term.denote env := by
-  induction term <;> simp [compile, Net.denote, Tm.denote, *]
+  induction term <;> simp [compile, Net.denote, Tm.denote, *] <;> (try funext x) <;>
+    apply_assumption
 
 /-! ## Typed local rewrite evidence -/
 
@@ -337,7 +338,9 @@ theorem localStep_denote {before after : Net Γ A}
   | appArg _ _ ih => simp only [Net.denote, ih]
   | underLift _ ih => simp only [Net.denote, ih]
   | shareValue _ _ ih => simp only [Net.denote, ih]
-  | shareBody _ _ ih => simp only [Net.denote, ih]
+  | shareBody _ _ ih =>
+      simp only [Net.denote]
+      exact ih _
 
 /-- A finite sequence of local certificates. -/
 inductive Trace : Net Γ A -> Net Γ A -> Type where

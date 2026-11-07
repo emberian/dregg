@@ -24,6 +24,11 @@ import Dregg2.Authority.ClearanceGraph
 
 namespace Dregg2.Exec
 
+/- v4.35: core's `Std.LinearOrderPackage Int` supplies a choice-built `BEq`; keep `==` on `Int`
+on its decidable equality so the evaluators (`evalConstraint` and everything built on it) stay
+choice-free as under 4.30 (see Tree/Value.lean, PredAlgebra.lean). -/
+local instance (priority := high) intBEqOfDecEq : BEq Int := instBEqOfDecidableEq
+
 open Dregg2.Authority.ClearanceGraph (ClearanceGraph Label dominatesD)
 
 /-! ## Field access into a record `Value`. -/

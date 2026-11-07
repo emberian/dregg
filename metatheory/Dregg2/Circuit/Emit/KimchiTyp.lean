@@ -119,7 +119,7 @@ inductive Typ where
   deriving DecidableEq, Repr, Inhabited
 
 /-- The host type a `Typ` denotes. -/
-def El : Typ → Type
+@[reducible] def El : Typ → Type
   | .unit => Unit
   | .felt _ => Nat
   | .word w => Fin (2 ^ w)
@@ -273,7 +273,6 @@ theorem read_store : ∀ (t : Typ) (x : El t) (rest : List Int),
       rw [List.append_assoc, read, iha]
       dsimp only
       rw [ihb]
-      rfl
   | tag s t ih => intro x rest; exact ih x rest
 
 /-- The whole-vector corollary. -/

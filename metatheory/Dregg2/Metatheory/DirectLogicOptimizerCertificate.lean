@@ -406,7 +406,7 @@ theorem equations_nonincrease {n : Nat} (r : Rule n) (hguard : r.Guard) :
     r.target.graphCost.equations ≤ r.source.graphCost.equations := by
   cases r with
   | fanoutAnd p qs =>
-      have hmap : qs.map Formula.toGraph ≠ [] := by simpa using hguard
+      have hmap : qs.map Formula.toGraph ≠ [] := by simpa [Guard] using hguard
       have hs :=
         Dregg2.Metatheory.DirectLogicOptimization.CommonFactor.sharedAndMany_exact_saving
           p.toGraph (qs.map Formula.toGraph) hmap
@@ -436,7 +436,7 @@ theorem multiplications_nonincrease {n : Nat} (r : Rule n) (hguard : r.Guard) :
     r.target.graphCost.multiplications ≤ r.source.graphCost.multiplications := by
   cases r with
   | fanoutAnd p qs =>
-      have hmap : qs.map Formula.toGraph ≠ [] := by simpa using hguard
+      have hmap : qs.map Formula.toGraph ≠ [] := by simpa [Guard] using hguard
       have hs :=
         Dregg2.Metatheory.DirectLogicOptimization.CommonFactor.sharedAndMany_exact_saving
           p.toGraph (qs.map Formula.toGraph) hmap
@@ -466,7 +466,7 @@ theorem witnesses_nonincrease {n : Nat} (r : Rule n) (hguard : r.Guard) :
     r.target.graphCost.witnesses ≤ r.source.graphCost.witnesses := by
   cases r with
   | fanoutAnd p qs =>
-      have hmap : qs.map Formula.toGraph ≠ [] := by simpa using hguard
+      have hmap : qs.map Formula.toGraph ≠ [] := by simpa [Guard] using hguard
       have hs :=
         Dregg2.Metatheory.DirectLogicOptimization.CommonFactor.sharedAndMany_exact_saving
           p.toGraph (qs.map Formula.toGraph) hmap

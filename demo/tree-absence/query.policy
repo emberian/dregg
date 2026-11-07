@@ -1,0 +1,6 @@
+# tree-absence demo query tables. `bash` is conjunct 0 (name is exactly `Bash`). `pkill_absent`
+# is the absence form of conjunct 1; policyc does not finish the whole-word `.* "pkill -f" .*`
+# in 15 minutes, so the conjunct-1 table comes from dregg-dfa and run.sh checks that it is the
+# exact complement of this one (product search over all reachable state pairs).
+pattern bash = "Bash";
+pattern pkill_absent = "pkill -f";

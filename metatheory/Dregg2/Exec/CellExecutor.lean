@@ -142,7 +142,7 @@ theorem production_erases_kernelForest (Good : RecChainedState → Prop)
     (hpresA : ∀ s cf, Good s → Good (cellNextA s cf)) :
     ∀ s cg, Good s → Good (production.next s cg) := by
   intro s cg h
-  rw [production_next_eq]
+  rw [production_next_eq s cg]
   exact hpresG_of_kernelForest Good hpresA s cg h
 
 theorem production_forever (Good : RecChainedState → Prop)

@@ -385,7 +385,7 @@ theorem wrap_correlatedAgreementLine :
           hnorich (E G f y₀) (O G f y₀)
         exact le_trans (Finset.card_le_card hsub) (by omega)
       have hABcard : A.card + B.card = (S α).card :=
-        Finset.filter_card_add_filter_neg_card_eq_card _
+        Finset.card_filter_add_card_filter_not _
       have hBpos : 1 ≤ B.card := by omega
       -- Every cross pair (`A`-endpoint, `B`-endpoint), both directions, is a distinct-`Φ` pair: an
       -- `A`-endpoint has `Φ = Φ y₀`, a `B`-endpoint has `Φ ≠ Φ y₀`, so the two disagree.
@@ -410,7 +410,7 @@ theorem wrap_correlatedAgreementLine :
         rw [Finset.mem_union, Finset.mem_product, Finset.mem_product] at hp
         exact hcross p (hp.imp id id)
       have hABdisj : Disjoint A B :=
-        Finset.disjoint_filter_filter_neg (S α) (S α)
+        Finset.disjoint_filter_filter_not (S α) (S α)
           (fun y => E G f y = E G f y₀ ∧ O G f y = O G f y₀)
       have hdisjAB : Disjoint (A ×ˢ B) (B ×ˢ A) := by
         rw [Finset.disjoint_left]
@@ -672,7 +672,7 @@ theorem wrap_correlatedAgreementLine_interior :
           hnorich (E G f y₀) (O G f y₀)
         exact le_trans (Finset.card_le_card hsub) (by omega)
       have hABcard : A.card + B.card = (S α).card :=
-        Finset.filter_card_add_filter_neg_card_eq_card _
+        Finset.card_filter_add_card_filter_not _
       have hBpos : 1 ≤ B.card := by omega
       have mkPair : ∀ q : Fin (2 ^ 6) × Fin (2 ^ 6), q.1 ∈ S α → q.2 ∈ S α →
           (E G f q.1 = E G f y₀ ∧ O G f q.1 = O G f y₀) →
@@ -694,7 +694,7 @@ theorem wrap_correlatedAgreementLine_interior :
         rw [Finset.mem_union, Finset.mem_product, Finset.mem_product] at hp
         exact hcross p (hp.imp id id)
       have hABdisj : Disjoint A B :=
-        Finset.disjoint_filter_filter_neg (S α) (S α)
+        Finset.disjoint_filter_filter_not (S α) (S α)
           (fun y => E G f y = E G f y₀ ∧ O G f y = O G f y₀)
       have hdisjAB : Disjoint (A ×ˢ B) (B ×ˢ A) := by
         rw [Finset.disjoint_left]

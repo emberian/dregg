@@ -9,6 +9,7 @@ checked by Lean; the Python gate checks source identity and evidence coverage on
 -/
 import Dregg2.Datalog.SafeCoincidence
 import Dregg2.Automata.TableRunSpec
+import Dregg2.Automata.DfaBoundReference
 
 set_option maxRecDepth 4096
 

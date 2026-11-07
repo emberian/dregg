@@ -462,6 +462,7 @@ theorem capGoodRow_isAttenRow : IsAttenRow capGoodRow := by
     STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT,
     paramA.CAP_DIGEST_NEW]
 
+set_option backward.isDefEq.respectTransparency false in
 /-- **NON-VACUITY (witness TRUE).** `capGoodRow` REALIZES the cap-graph intent: post `cap_root = 77` =
 the param digest, balance/nonce/reserved/fields frozen at `0`. -/
 theorem capGoodRow_realizes_intent : AttenRowIntent capGoodRow := by
@@ -1353,7 +1354,8 @@ theorem cap_runnable_rejects_cap_root_slot_tamper_rom (D : SpongeKeyed)
     (fun l => ?_) hgen
   refine @winProb_le_of_imp _ ((capRootWideRomTamper D tagDec).game.instFin l) _ _
     (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  refine (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, heq⟩ := hH
   exact ⟨fun hc => hne (congrArg (fun v : WideRomVal => v.1.2.2 3) hc), heq⟩
 

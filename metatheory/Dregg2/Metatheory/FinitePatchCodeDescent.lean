@@ -88,6 +88,8 @@ theorem completeOverlap_rejectedWeight_eq_badCount
   classical
   simp [completeOverlapTester, wholeOverlapQueryModel,
     WeightedQueryModel.rejectedWeight, weightedCount, overlapBadCount, overlapBadEdges]
+  convert (Finset.card_filter _ _).symm
+  split_ifs <;> simp [*]
 
 /-- Zero rejection by the complete finite tester reconstructs a unique global codeword. -/
 theorem reconstruct_codeword_of_zero_completeOverlap
@@ -113,7 +115,11 @@ inductive PatchId where
   | left
   | right
   | hub
-  deriving DecidableEq, Fintype
+  deriving DecidableEq
+
+instance : Fintype PatchId where
+  elems := {.left, .right, .hub}
+  complete := by intro x; cases x <;> simp
 
 def patch : PatchId → Finset Bool
   | .left => {false}

@@ -5,12 +5,13 @@
     policyc fmt     <file>                          the canonical print (`Policy.print`)
     policyc compile <file> --pattern NAME [--absence]
                                                     the determinized 256-column byte table, JSON
+    POLICYC_PROFILE=1 policyc compile ...            phase counts and clocks on stderr
     policyc rules   <file>                          the rules as a stratified program, JSON
 
 Every function this calls is the Lean definition the theorems are about: `parse`
 (`parse_print_roundtrip`), `elabRe`/`absenceOf` (`elabRe_semantics`, `absenceOf_semantics`),
-`certify` (`Certified.hdec`, from `compiled_decides` through the checked minimization) and, for
-`--absence`, `certifyAbsence` (`Factor.absence_decides`, the checked factor construction over the
+`certifySurface` (`Certified.hdec`, from `compiled_decides` through the checked minimization) and, for
+`--absence`, `certifySurfaceAbsence` (`Factor.absence_decides`, the checked factor construction over the
 whole-word table), `elabProgram`/`strataOf`
 (stratification re-checked by `StratifiedCert.stratifiedB` before printing). JSON rendering and
 argument handling are the untheorem'd shell.
@@ -34,7 +35,7 @@ only after `Compile.simCheck` verifies the simulation, so `Certified.hdec` (from
      "predNames": [name, …]}        ATOM = {"pred": n, "args": [{"var": i} | {"const": z}, …]}
 -/
 import Dregg2.Policy.Theorems
-import Dregg2.Policy.Factor
+import Dregg2.Policy.Compositional
 
 open Lean (Json)
 open Dregg2.Policy
@@ -91,9 +92,32 @@ def compileCmd (path name : String) (absence : Bool) : IO UInt32 := do
     | none => IO.eprintln s!"{path}: no pattern `{name}`"; pure 1
     | some r =>
       let t0 ← IO.monoMsNow
-      let res : Except String (Table × List String) :=
-        if absence then (certifyAbsence r).map (fun p => (p.1.t, p.2))
-        else (certify (elabRe r)).map (fun p => (p.1.t, p.2))
+      let profile := (← IO.getEnv "POLICYC_PROFILE") == some "1"
+      let res : Except String (Table × List String) ←
+        if profile then do
+          match certifySurface r with
+          | .error e => pure (.error e)
+          | .ok (c, notes) =>
+            let wholeTime ← IO.monoMsNow
+            IO.eprintln s!"policyc profile: whole-word states={c.t.n} milliseconds={wholeTime - t0}"
+            if absence then
+              if closedB c.t then
+                match explore c.t 100000 with
+                | some (labels, _) =>
+                  let exploreTime ← IO.monoMsNow
+                  IO.eprintln s!"policyc profile: factor exploration states={labels.size} milliseconds={exploreTime - wholeTime} (repeated below)"
+                | none => pure ()
+              let wholeTime ← IO.monoMsNow
+              let result := (certifyAbsenceFrom r c notes).map (fun p => (p.1.t, p.2))
+              match result with
+              | .ok (t, _) =>
+                let factorTime ← IO.monoMsNow
+                IO.eprintln s!"policyc profile: absence states={t.n} milliseconds={factorTime - wholeTime}"
+              | .error _ => pure ()
+              pure result
+            else pure (.ok (c.t, notes))
+        else pure <| if absence then (certifySurfaceAbsence r).map (fun p => (p.1.t, p.2))
+          else (certifySurface r).map (fun p => (p.1.t, p.2))
       match res with
       | .error e => IO.eprintln s!"{path}: pattern `{name}`: {e}"; pure 1
       | .ok (t, notes) =>

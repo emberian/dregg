@@ -14,11 +14,11 @@ use dregg_query::mmr::{Blake3Mmr, Mmr, RangeOpening, verify_range};
 use serde::{Deserialize, Serialize};
 
 use crate::beacon::{self, DrandRound};
-use crate::decide::{self, Expect, Verdict};
-use crate::record::{self, Policy, RequestRecord};
+use crate::decide::{self, ExactExpect, Expect, Verdict};
+use crate::record::{self, Checker, Policy, RequestRecord};
 use crate::runner::{self, CallFiles, CallOutcome, Staged};
 
-pub const RECEIPT_VERSION: &str = "fpaudit-receipt-v2";
+pub const RECEIPT_VERSION: &str = "fpaudit-receipt-v3";
 
 /// What a re-checker pins for itself, never taking it from the receipt.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,6 +46,9 @@ pub struct Receipt {
     /// The Lean opening check (when fired).
     pub open_ok: Option<bool>,
     pub call: Option<CallOutcome>,
+    /// Exact checker: the committed output tokens as staged (when fired and staged); its SHA-256
+    /// is the staged token digest the opening check compared with the record.
+    pub committed_output: Option<String>,
     pub verdict: Option<Verdict>,
     pub alarm: bool,
 }
@@ -126,6 +129,38 @@ fn expect_of(pins: &Pins, rec: &RequestRecord) -> Expect {
     }
 }
 
+/// The checker's verdict through the compiled Lean the policy names.
+fn verdict_of(
+    pins: &Pins,
+    rec: &RequestRecord,
+    open_ok: bool,
+    c: &CallOutcome,
+    committed_output: Option<&str>,
+) -> Verdict {
+    match &pins.policy.checker {
+        Checker::CpVerify => {
+            decide::verdict(open_ok, c.stdout.as_bytes(), c.exit, &expect_of(pins, rec))
+        }
+        Checker::Exact { spec, params } => decide::exact_verdict(
+            open_ok,
+            c.stdout.as_bytes(),
+            c.exit,
+            &ExactExpect {
+                spec: spec.clone(),
+                params: params.clone(),
+                weights: pins.policy.commitment_id.clone(),
+                prompt_len: rec.r,
+                output: committed_output.unwrap_or("").to_string(),
+            },
+        ),
+    }
+}
+
+fn sha256_hex(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(b))
+}
+
 fn ensure(cond: bool, what: &str) -> Result<(), String> {
     if cond {
         Ok(())
@@ -174,7 +209,8 @@ fn admit(
 }
 
 /// Decide one audit and build its receipt. `run` is called only if the audit fires; it stages the
-/// provider's files and, if staging succeeded, calls `cp_verify` on the staged copies.
+/// provider's files and, if staging succeeded, calls the checker on the staged copies. It returns
+/// the staged token file's contents too (the exact checker compares the recompute with them).
 pub fn audit(
     rec: &RequestRecord,
     root: [u8; 32],
@@ -182,18 +218,21 @@ pub fn audit(
     countersig: String,
     beacon: DrandRound,
     pins: &Pins,
-    run: impl FnOnce() -> (Staged, CallOutcome),
+    run: impl FnOnce() -> (Staged, CallOutcome, Option<String>),
 ) -> Result<Receipt, String> {
     let coin = admit(rec, &root, &countersig, &beacon, pins)?;
     let fired = decide::fires(coin, pins.policy.p_num);
     let expect = expect_of(pins, rec);
-    let (staged, open_ok, call, verdict) = if fired {
-        let (st, c) = run();
+    let (staged, open_ok, call, committed_output, verdict) = if fired {
+        let (st, c, out) = run();
+        // The output the exact checker compares against is the staged one, and only if its digest
+        // is the staged digest the opening check compares with the record.
+        let out = out.filter(|o| st.y_sha256.as_deref() == Some(sha256_hex(o.as_bytes()).as_str()));
         let ok = opening_ok(rec, &st, &root, &opening);
-        let v = decide::verdict(ok, c.stdout.as_bytes(), c.exit, &expect);
-        (Some(st), Some(ok), Some(c), Some(v))
+        let v = verdict_of(pins, rec, ok, &c, out.as_deref());
+        (Some(st), Some(ok), Some(c), out, Some(v))
     } else {
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
     let alarm = decide::alarm(fired, verdict.unwrap_or(Verdict::NoVerdict));
     Ok(Receipt {
@@ -211,6 +250,7 @@ pub fn audit(
         staged,
         open_ok,
         call,
+        committed_output,
         verdict,
         alarm,
     })
@@ -263,15 +303,35 @@ pub fn recheck(r: &Receipt, pins: &Pins) -> Result<RecheckReport, String> {
                 st.fault.is_none() || c.exit.is_none(),
                 "a failed stage cannot carry a call result",
             )?;
+            if let Some(o) = &r.committed_output {
+                ensure(
+                    st.y_sha256.as_deref() == Some(sha256_hex(o.as_bytes()).as_str()),
+                    "the committed output is not the staged token file",
+                )?;
+            }
             let ok = opening_ok(&r.record, st, &root, &r.opening);
             (
                 Some(ok),
-                Some(decide::verdict(ok, c.stdout.as_bytes(), c.exit, &expect)),
+                Some(verdict_of(
+                    pins,
+                    &r.record,
+                    ok,
+                    c,
+                    r.committed_output.as_deref(),
+                )),
             )
         }
-        (None, None, false) => (None, None),
+        (None, None, false) => {
+            ensure(
+                r.committed_output.is_none(),
+                "an unfired audit carries no output",
+            )?;
+            (None, None)
+        }
         _ => {
-            return Err("recheck: a call and staged digests are present iff the audit fired".into());
+            return Err(
+                "recheck: a call and staged digests are present iff the audit fired".into(),
+            );
         }
     };
     ensure(open_ok == r.open_ok, "opening check")?;
@@ -288,12 +348,18 @@ pub fn recheck(r: &Receipt, pins: &Pins) -> Result<RecheckReport, String> {
     })
 }
 
+/// How a re-checker calls the checker again: `cp_verify` at a path, or the recompute command.
+pub enum RerunWith<'a> {
+    CpVerify(&'a std::path::Path),
+    Recompute(&'a [String]),
+}
+
 /// Acceptance evidence: stage the files the re-checker holds, check them against the record, call
-/// `cp_verify` again, and return the verdict the compiled Lean gives on the fresh output.
+/// the checker again, and return the verdict the compiled Lean gives on the fresh output.
 pub fn rerun(
     r: &Receipt,
     pins: &Pins,
-    bin: &std::path::Path,
+    with: RerunWith<'_>,
     f: &CallFiles,
     scratch: &std::path::Path,
 ) -> Result<Verdict, String> {
@@ -303,20 +369,22 @@ pub fn rerun(
         .map_err(|_| "root".to_string())?;
     let (files, st) = runner::stage(f, scratch);
     let ok = opening_ok(&r.record, &st, &root, &r.opening);
-    let c = match files {
-        Some(sf) => runner::run_cp_verify(
+    let out = files
+        .as_ref()
+        .and_then(|sf| std::fs::read_to_string(&sf.y).ok())
+        .filter(|o| st.y_sha256.as_deref() == Some(sha256_hex(o.as_bytes()).as_str()));
+    let c = match (files, with) {
+        (Some(sf), RerunWith::CpVerify(bin)) => runner::run_cp_verify(
             bin,
             &sf,
             &pins.policy.commitment_id,
             std::time::Duration::from_secs(600),
             16 << 30,
         ),
-        None => CallOutcome::not_made(st.fault.clone().unwrap_or_default()),
+        (Some(sf), RerunWith::Recompute(argv)) => {
+            runner::run_recompute(argv, &sf, std::time::Duration::from_secs(1800), 192 << 30)
+        }
+        (None, _) => CallOutcome::not_made(st.fault.clone().unwrap_or_default()),
     };
-    Ok(decide::verdict(
-        ok,
-        c.stdout.as_bytes(),
-        c.exit,
-        &expect_of(pins, &r.record),
-    ))
+    Ok(verdict_of(pins, &r.record, ok, &c, out.as_deref()))
 }

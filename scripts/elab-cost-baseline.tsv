@@ -186,10 +186,6 @@ Dregg2.Circuit.Emit.MinaWrapOpeningGate	4000000	20000000	0
 Dregg2.Circuit.Emit.MinaWrapOpeningSched	400000000	1000000	0
 Dregg2.Circuit.Emit.MinaWrapOpeningWeld	8000000	20000000	0
 Dregg2.Circuit.Emit.MinaWrapPublicCommGate	4000000	20000000	0
-Dregg2.Circuit.Emit.MinaWrapSgChunk0	0	4000000	0
-Dregg2.Circuit.Emit.MinaWrapSgChunk1	0	4000000	0
-Dregg2.Circuit.Emit.MinaWrapSgChunk2	0	4000000	0
-Dregg2.Circuit.Emit.MinaWrapSgChunk3	0	4000000	0
 Dregg2.Circuit.Emit.MinaWrapSgCore	0	4000000	0
 Dregg2.Circuit.Emit.MinaWrapVerifierAir	8000000	100000	0
 Dregg2.Circuit.Emit.MinaWrapVerifierProgram	0	100000	0

@@ -836,7 +836,7 @@ theorem step_preserves_consistency (v : Vein) (t : FloodTape) (s s' : State)
     · subst ht
       simp only [consistentB, haulSuccessor, decide_eq_true_eq]
       simp only [decide_eq_true_eq] at hc
-      simp only [Vein.carriedAt, hc]
+      simp only [Vein.carriedAt, hc, decide_true]
   · simp only [transitionB, bankSuccessor] at ht
     subst ht
     rfl

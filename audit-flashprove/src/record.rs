@@ -42,10 +42,25 @@ pub fn sha256_file(p: &std::path::Path) -> std::io::Result<String> {
     Ok(hex::encode(Sha256::digest(std::fs::read(p)?)))
 }
 
+/// Which checker a fired audit runs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Checker {
+    /// FlashProve's `cp_verify`; `Policy::commitment_id` is the FlashProve commitment ID and
+    /// `Policy::build` the `cp_verify` build digest.
+    CpVerify,
+    /// An exact recompute of gptoss-int v0: `spec` and `params` are the recompute's pins, and
+    /// `Policy::commitment_id` is the weights' registry commitment. A record's `r` is the prompt
+    /// length and `e` the prompt plus output length; its request file holds the prompt tokens and
+    /// its token file the committed output tokens, `t1,t2,...`; there is no proof file.
+    Exact { spec: String, params: String },
+}
+
 /// The audit policy the requester agrees to: what the auditor will pin, at what rate.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Policy {
     pub session: String,
+    pub checker: Checker,
     pub commitment_id: String,
     pub build: String,
     pub accept_work: bool,
@@ -55,7 +70,7 @@ pub struct Policy {
 impl Policy {
     pub fn digest(&self) -> [u8; 32] {
         let j = serde_json::to_vec(self).expect("policy serializes");
-        *blake3::Hasher::new_derive_key("dregg audit-flashprove 2026-11-06 policy v1")
+        *blake3::Hasher::new_derive_key("dregg audit-flashprove 2026-11-06 policy v2")
             .update(&j)
             .finalize()
             .as_bytes()

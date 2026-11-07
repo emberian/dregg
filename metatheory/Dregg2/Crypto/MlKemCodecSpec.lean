@@ -137,6 +137,42 @@ theorem setFold_spec {β} [Inhabited β] (g : Nat → β) (D : Nat) :
     · intro j hj
       rw [getElem!_set!_ne _ _ _ _ (by omega), hhi j (by omega)]
 
+/-! ### The v4.35 `do`-notation state shapes
+
+Lean v4.35 threads a `for` loop's mutable variables as a `Prod` in declaration order (it was an `MProd`
+in reverse order). These bridges move each fold back to the `MProd` form the specs above are stated over. -/
+
+theorem accFold_prod (g : Nat → Nat) (D n A m : Nat) :
+    List.foldl (fun (st : Nat × Nat) (a : Nat) => (st.1 + g a * st.2, st.2 * D))
+        (A, m) (List.range' 0 n 1)
+      = (A + m * ∑ i ∈ Finset.range n, g i * D ^ i, m * D ^ n) := by
+  have h := List.foldl_hom (fun s : MProd Nat Nat => ((s.1, s.2) : Nat × Nat))
+    (g₁ := fun (st : MProd Nat Nat) (a : Nat) => (⟨st.1 + g a * st.2, st.2 * D⟩ : MProd Nat Nat))
+    (g₂ := fun (st : Nat × Nat) (a : Nat) => (st.1 + g a * st.2, st.2 * D))
+    (l := List.range' 0 n 1) (init := ⟨A, m⟩) (fun _ _ => rfl)
+  rw [accFold] at h
+  exact h
+
+theorem divPushFold_prod {β} (f : Nat → β) (D n : Nat) (init : Array β) (c0 : Nat) :
+    List.foldl (fun (st : Array β × Nat) (_ : Nat) => (st.1.push (f (st.2 % D)), st.2 / D))
+        (init, c0) (List.range' 0 n 1)
+      = ((List.foldl (fun (st : MProd Nat (Array β)) (_ : Nat) =>
+            ⟨st.1 / D, st.2.push (f (st.1 % D))⟩) ⟨c0, init⟩ (List.range' 0 n 1)).2,
+         (List.foldl (fun (st : MProd Nat (Array β)) (_ : Nat) =>
+            ⟨st.1 / D, st.2.push (f (st.1 % D))⟩) ⟨c0, init⟩ (List.range' 0 n 1)).1) :=
+  List.foldl_hom (fun s : MProd Nat (Array β) => ((s.2, s.1) : Array β × Nat))
+    (init := ⟨c0, init⟩) (fun _ _ => rfl)
+
+theorem setFold_prod {β} (g : Nat → β) (D n : Nat) (P0 : Array β) (c0 : Nat) :
+    List.foldl (fun (st : Array β × Nat) (i : Nat) => (st.1.set! i (g (st.2 % D)), st.2 / D))
+        (P0, c0) (List.range' 0 n 1)
+      = ((List.foldl (fun (st : MProd Nat (Array β)) (i : Nat) =>
+            ⟨st.1 / D, st.2.set! i (g (st.1 % D))⟩) ⟨c0, P0⟩ (List.range' 0 n 1)).2,
+         (List.foldl (fun (st : MProd Nat (Array β)) (i : Nat) =>
+            ⟨st.1 / D, st.2.set! i (g (st.1 % D))⟩) ⟨c0, P0⟩ (List.range' 0 n 1)).1) :=
+  List.foldl_hom (fun s : MProd Nat (Array β) => ((s.2, s.1) : Array β × Nat))
+    (init := ⟨c0, P0⟩) (fun _ _ => rfl)
+
 /-- **Digit reconstruction**: the base-`b` digits of `N` up to position `n` reassemble `N % bⁿ`. -/
 theorem digit_reconstruct (b : Nat) : ∀ (n N : Nat),
     ∑ m ∈ Finset.range n, (N / b ^ m % b) * b ^ m = N % b ^ n := by
@@ -235,9 +271,10 @@ theorem byteEncode_toArray (d : Nat) (f : Poly) :
   simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
     Nat.div_one]
-  rw [accFold (fun i => f[i]! % 2 ^ d) (2 ^ d) 256 0 1,
+  rw [accFold_prod (fun i => f[i]! % 2 ^ d) (2 ^ d) 256 0 1,
     show (0 + 1 * ∑ i ∈ Finset.range 256, f[i]! % 2 ^ d * (2 ^ d) ^ i) = packNatKem f d from by
-      rw [Nat.zero_add, Nat.one_mul]; rfl]
+      rw [Nat.zero_add, Nat.one_mul]; rfl,
+    divPushFold_prod UInt8.ofNat 256 (polyBytes d)]
   rfl
 
 theorem byteEncode_size (d : Nat) (f : Poly) : (byteEncode d f).toArray.size = polyBytes d := by
@@ -264,7 +301,7 @@ theorem bytesToNatLE_eq (b : Array UInt8) (off len : Nat) :
   simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp,
     map_pure, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
     Nat.add_one_sub_one, Nat.div_one]
-  rw [accFold (fun i => (b[off + i]!).toNat) 256 len 0 1]
+  rw [accFold_prod (fun i => (b[off + i]!).toNat) 256 len 0 1]
   simp only [Nat.zero_add, Nat.one_mul]; rfl
 
 /-- **`packNatKem` is `< 256^{polyBytes d}`** — its digits are `< 2ᵈ` and `polyBytes d = 32·d`, so it fits in
@@ -297,13 +334,16 @@ def decMod (d : Nat) : Nat := if d == 12 then q else 2 ^ d
 theorem byteDecodeAt_size (d : Nat) (b : Array UInt8) (off : Nat) :
     (byteDecodeAt d b off).size = 256 := by
   unfold byteDecodeAt
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+  simp only [Id.run_pure, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
     Nat.div_one]
+  rw [setFold_prod (β := Nat) (fun v => if d == 12 then v % q else v) (2 ^ d) 256 zeroPoly]
   have hspec := setFold_spec (β := Nat) (fun v => if d == 12 then v % q else v) (2 ^ d) 256 zeroPoly
     (bytesToNatLE b off (polyBytes d))
   have hsz := hspec.2.1
   rw [show zeroPoly.size = 256 from by simp [zeroPoly]] at hsz
+  -- reduce the `Prod.fst` of the pair syntactically (`exact` would whnf the 256-step fold instead)
+  dsimp only
   exact hsz
 
 /-- **`byteDecodeAt`'s `j`-th coefficient** is the base-`2ᵈ` digit `j` of `bytesToNatLE`, reduced mod `q` when
@@ -313,12 +353,14 @@ theorem byteDecodeAt_getElem (d : Nat) (b : Array UInt8) (off j : Nat) (hj : j <
       = (if d == 12 then bytesToNatLE b off (polyBytes d) / (2 ^ d) ^ j % 2 ^ d % q
          else bytesToNatLE b off (polyBytes d) / (2 ^ d) ^ j % 2 ^ d) := by
   unfold byteDecodeAt
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+  simp only [Id.run_pure, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
     Nat.div_one]
+  rw [setFold_prod (β := Nat) (fun v => if d == 12 then v % q else v) (2 ^ d) 256 zeroPoly]
   have hspec := setFold_spec (β := Nat) (fun v => if d == 12 then v % q else v) (2 ^ d) 256 zeroPoly
     (bytesToNatLE b off (polyBytes d))
   have hkey := hspec.2.2.1 j hj (by rw [show zeroPoly.size = 256 from by simp [zeroPoly]]; exact hj)
+  dsimp only
   exact hkey
 
 /-- **THE ML-KEM CODEC ROUND-TRIP** (the `byteDecode ∘ byteEncode = id` the `DecapsCoreSpec` /

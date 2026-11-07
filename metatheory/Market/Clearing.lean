@@ -252,7 +252,7 @@ theorem clearing_conserves_per_asset {book : Book DemoRes B reg stmtOf}
   have h := converts_refines_toBal C.balanced
   have ha := congrFun h a
   rw [pool_toBal, pool_toBal] at ha
-  simpa [offersOf, List.map_map, Function.comp] using ha
+  simpa [offersOf, List.map_map, Function.comp_def] using ha
 
 /-! ## 4. Exact books — clearability IS Σ-balance (the characterization). -/
 

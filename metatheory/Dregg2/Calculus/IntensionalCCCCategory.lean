@@ -451,7 +451,8 @@ def compTerm (f : ClosedTm X Y) (g : ClosedTm Y Z) : ClosedTm X Z :=
 @[simp] theorem termSem_compTerm (f : ClosedTm X Y) (g : ClosedTm Y Z) :
     termSem (compTerm f g) = fun x => termSem g (termSem f x) := by
   funext x
-  simp [termSem, compTerm, Tm.denote, denote_closedLift, lookup]
+  simp [termSem, compTerm, Tm.denote, lookup,
+    denote_closedLift (Γ := [X.ty]) (env := (x, PUnit.unit))]
 
 def idHom (X : Obj) : Hom X X := ofTerm (idTerm X)
 
@@ -496,12 +497,15 @@ def uncurryTerm (g : ClosedTm Z (exponential X Y)) : ClosedTm (product Z X) Y :=
 @[simp] theorem termSem_pairTerm (f : ClosedTm Z X) (g : ClosedTm Z Y) :
     termSem (pairTerm f g) = fun z => (termSem f z, termSem g z) := by
   funext z
-  simp [termSem, pairTerm, Tm.denote, denote_closedLift, lookup]
+  simp [termSem, pairTerm, Tm.denote, lookup,
+    denote_closedLift (Γ := [Z.ty]) (env := (z, PUnit.unit))]
+  rfl
 
 @[simp] theorem termSem_curryTerm (f : ClosedTm (product Z X) Y) :
     termSem (curryTerm f) = fun z x => termSem f (z, x) := by
   funext z x
-  simp [termSem, curryTerm, Tm.denote, denote_closedLift, lookup]
+  simp [termSem, curryTerm, Tm.denote, lookup,
+    denote_closedLift (Γ := [X.ty, Z.ty]) (env := (x, z, PUnit.unit))]
 
 @[simp] theorem termSem_uncurryTerm (g : ClosedTm Z (exponential X Y)) :
     termSem (uncurryTerm g) = fun zx => termSem g zx.1 zx.2 := by

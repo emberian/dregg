@@ -462,7 +462,6 @@ theorem signalRulesCell_decodes_to_the_kernel_bit
   have h := signalRulesTable_cells_decode_to_the_kernel_bit
   simp only [List.all_eq_true] at h
   have hrow := h target (signalAllCodes_complete target)
-  simp only [List.all_eq_true] at hrow
   simpa using hrow guess (signalAllCodes_complete guess)
 
 /-- ⚑ **The emitted cell IS the rule.**  What a client reads out of `rules.table` at

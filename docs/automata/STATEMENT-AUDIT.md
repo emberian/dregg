@@ -3,82 +3,143 @@
 Initiative register row **1**, parser/language excellence (policy language, demos, perf,
 Lean-first AIR generator, build), breadstuffs, L2–L3. Register acceptance remains: policy
 language elaboration and compilation proved; two public demos; generator replaces handwritten
-AIR; `make check-fast` under two minutes. This audit advances its proof-engineering gate; it does
-not mark that whole initiative complete.
+AIR; `make check-fast` under two minutes. This gate advances proof engineering without declaring
+the whole initiative complete.
 
-[READ] `statement-audit.json` records **eight scoped reviews** of the positive exact-count,
-stratified receipt, optimized join, safe unrestricted receipt, integer budget, content-bound DFA,
-table count, and table validation statements. Each names its statement, positive witness,
-falsifier and limitations. The reviewer followed the actual predicates and the named collision
-pair, not just theorem names or compilation. The local import closure is hashed to detect changed
-definitions; hashing a dependency does **not** claim its entire contents were semantically audited.
-The review approach follows the existing forensics distinction between mechanical extraction and
-source-bound statement judgment, and the certificate statement audit's distinction between a
-well-typed proposition, an inhabited conditional theorem, and an implemented cryptographic claim.
+[READ] The manifest covers the Datalog exact-count/stratified/join/safe/budget statements, generic
+content-bound DFA kernel, table interpretation boundaries, committed LRAT and bisimulation,
+full-width route binding, the **actual table/weld/Dyck record consumers**, cached compilation,
+certified union, the actual whole-word/absence compiler wrappers, and generated range, borrow, tuple, solvency, caveat and payment AIR, plus the served note-spend wrapper and binary membership. Each scoped review names its
+statement, witness, falsifier and limitations. All local module roots participate in dependency
+identity checks, including `Metatheory`; a dependency hash does **not** claim a semantic review of
+every theorem in that file.
 
-[MEASURED] The targeted gate passed on a warm Mac: **one file, 23 exact axiom pins, zero guards,
-zero failures**, 34.5 seconds for its Lean/report phase. Source identity checks add approximately a
-second, not a dependency build. Exact axiom output is checked with `#guard_msgs`; no new proof uses
-`native_decide`. The standalone Python gate rejected all four copy-only mutations: changed reviewed
-source, removed pin (even after refreshing that copy's digest), missing falsifier, and changed
-Lean toolchain identity. Run from the repository root:
+The approach follows forensics' separation of mechanical extraction from source-bound statement
+judgment, and the certificate statement audit's distinction between a well-typed proposition, an
+inhabited conditional theorem, and an implemented cryptographic claim. The machine gate checks
+identity and evidence coverage; Lean checks exact axiom sets; reviewers check what consumers can
+actually conclude.
+
+## Running the gates
 
 ```sh
 python3 scripts/check-automata-statements.py --self-test
 bash metatheory/scripts/automata-check.sh --statements-only
-# Optional direct negative check: inject an axiom into a temporary copy of one proof.
+# Optional negative kernel check: inject an axiom into a temporary copy of one proof.
 python3 scripts/check-automata-statements.py --kernel-self-test
+# Actual consumer compiler execution; outputs are checked, and returned tables carry hdec.
+cd metatheory && lake env lean --run scripts/automata-compiler-smoke.lean
 ```
 
-`--statements-only` deliberately uses existing dependency artifacts; it does not establish that
-all imports were rebuilt. The full family gate still builds dependencies before checking Lean.
-After shared Lean interface changes, the whole-tree build on the designated build host remains
-required. This change adds proofs only and does not change a shared structure.
+`--statements-only` checks all review identities and the four small audit modules on warm imports;
+it does not rebuild every imported family. The full family gate builds dependencies and checks the
+owning modules' exact axiom pins. After shared Lean interface changes, the designated-host whole-tree
+build remains required. The presentation-type kernel change is such an interface change.
 
-## Evidence added
+[MEASURED] The initial one-module gate passed with 23 exact pins, zero guards and zero failures in
+34.5 seconds on a warm Mac. Its copy-only tests rejected changed source, removed axiom pin (even
+with that copy's digest refreshed), missing falsifier and changed toolchain identity. The direct
+kernel mutation was rejected specifically because the unchanged `#guard_msgs` report detected the
+injected custom axiom. The expanded four-module gate passed in **26.2 seconds** at four jobs on the warm Mac:
+52 checked axiom pins, zero guards, zero failures. Its source preflight covered 25 reviews and
+172 exact pins; the later note-spend review adds one review and eight owning-module pins without
+changing those four audit modules. Five copy-only mutations now pass, including removal of an
+owning-family pin after refreshing the copy's digest. The final injected-axiom check also passed.
 
-- `FixpointCert.Reference.honest_verifies` inhabits the exact-count premise with the complete
-  three-round path certificate. `open_trace_separation` proves the same statement/certificate is
-  accepted without closure and refused with closure. The false count is the partial database's
-  own count, so the separator isolates closure rather than a mismatched count.
-- `StatementAudit.runStrataJ_domain_congr` proves that membership-equivalent domains give the same
-  optimized replay. The join and optimized-budget acceptance witnesses use it to avoid evaluating
-  well-founded sorting during kernel reduction. This is a general theorem, not a new trusted
-  evaluator or an assumption about a particular domain.
-- The budget witnesses include a refunded charge and a positive sum. The weak comparator accepts
-  the tampered final accumulator; the real verifier rejects it.
-- The table evidence covers the empty-word boundary and supplies a tiny explicit malformed-table
-  counterexample: the total runner accepts while `wellFormed` refuses. A separate omission example
-  changes the count when a rejected record is removed. Neither is advertised as compiler output.
+## Evidence and repairs
 
-## Remaining boundaries
+- Positive Datalog now has `honest_verifies` and `open_trace_separation`: the complete three-round
+  path certificate accepts; removing only closure accepts the partial database at its own count,
+  while the real checker refuses that same statement/certificate.
+- `StatementAudit.runStrataJ_domain_congr` proves membership-equivalent domains give identical
+  optimized replay. Positive join and budget witnesses use this general fact instead of trying
+  to kernel-evaluate the well-founded sorting implementation. The budget separation preserves the
+  accepted EDB and tampers only with the accumulator.
+- `DfaBoundVerifierKernel` separates executable input presentation from its interpretation as a
+  `BoundStatement`. `DfaBoundReference` supplies an actual Boolean-table checker, proves extraction,
+  and instantiates **the generic theorem** on two symbols. Identity commitment rules out its exact
+  collision branch. A wrong record is refused, and a rejecting word has no accepting trace. No
+  classical decision oracle is presented as executable verification.
+- The table examples expose the empty-word boundary, missing-table validation, and omission of a
+  rejected record. They are deliberately small semantic counterexamples, not compiler outputs.
+- The committed LRAT evidence includes an accepted PHP certificate and a false-UNSAT separator
+  with a concrete satisfying assignment. The bisimulation separator targets a false inclusion
+  with an explicit violating word, plus independent root-membership/closure comparators.
+- Table and weld route consumers use eight-lane commitments and public lengths. Their residuals
+  name distinct **canonical arity-16 inputs on the actual two routes**. Full descriptor witnesses
+  instantiate the respective soundness statements and refute their exact residuals. The weld
+  review caught a remaining opening-inequality-only falsifier; it was repaired with generic
+  `WeakAccepts`/`StrongAccepts`, a soundness theorem consuming the latter, and refusal on the same
+  proof, endpoints and substituted record.
+- Dyck's record wrapper fixes the word-derived padded route and row count. Its full witness
+  includes the chip table, canonicality and initial grammar symbol; first-done/live conditions are
+  derived rather than supplied as an honest reference trace.
+- Compiler review covers exact cached-worklist equivalence and proof-carrying union/absence
+  construction. `compiler-wrapper-smoke.json` records execution of the actual `certifySurface` and
+  `certifySurfaceAbsence` wrappers on `byte7|byte9`, with five words each. Every returned table has
+  `Certified.hdec`; successful wrapper execution is labelled runtime evidence, not a theorem
+  proved by a native evaluator. The code and result are both source-bound in the manifest.
+  Reachable trimming treats its BFS as an untrusted candidate builder: reverse simulation is
+  checked before restriction. Its named three-row/six-row embedding and rejected shifted embedding
+  exercise that checker; failure retains the original certified table.
 
-[READ] No new false core soundness theorem was identified in the reviewed statements. That is a
-scoped review verdict, not an automatic semantic guarantee.
+- Generated arithmetic review invokes the actual range and borrow theorems and the full-premise
+  solvency commitment, caveat public-operand and payment identity theorems. Reconstruction and
+  final-borrow counterexamples execute the generated expressions. Consumer falsifiers retain the
+  old modular insolvency acceptance and final-row range bypass. The tuple generator binds rows
+  modulo the field; canonical integer equality remains a separate premise.
 
-1. `Dfa.dfa_bound_identifies_record_or_collides` is conditional on a verifier kernel's extraction
-   obligation. Its `aab_accepts` witness inhabits the language relation, **not all kernel premises**.
-   The manifest labels this `relation-only`; a concrete full-premise bound kernel remains open.
-2. Positive/stratified Datalog use active-domain semantics. Unrestricted coincidence requires dense
-   range restriction, which `verifyJ` enforces. Counts are by predicate, not predicate-and-arity;
-   budget values are signed mathematical integers, and missing arguments contribute zero.
-3. The exact stratified model is for the strata named in the statement. Independence from another
-   valid stratification is not proved here. Collision alternatives name the two participating EDBs
-   through `mrootFind`; they do not prove collision resistance of the toy reference hash.
-4. Table agreement does not prove the table is well formed, denotes the intended policy, or covers
-   an external corpus. Those are separate consumer obligations.
-5. This first manifest covers the named core statements above. It does not silently certify every
-   automata-family theorem, the emitter families, LRAT/bisimulation, policy compilation, a compiler
-   extraction pipeline, or any deployed hash implementation. Those reviews should be added with
-   their actual positive premises and falsifiers as their owning lanes land them.
+- The served note-spend wrapper retains the earlier proof envelopes and adds a joint full-premise
+  witness invoking its member theorem. The same one-row forge accepts under the old descriptor
+  and is refused by the consumed fixed descriptor. Its positive path has depth zero; the abstract
+  permutation and scalar Merkle fold are not a deployed Faithful8-tree security claim.
+
+- Binary membership review covers the actual ten-constraint descriptor and its complete
+  SAT-to-path refinement: Boolean directions, ordered children and the hash lookup hold on every
+  row, including the final row. Continuity and the two public pins yield the fold over exactly the
+  trace's path. A nonconstant reference hash supplies a full-premise mixed-direction two-level
+  witness (leaf 3, root 33). The same canonical attack with sound chip rows passes a deliberately
+  weakened seven-constraint control, advertises root 27 for that unchanged path, and fails the
+  full descriptor. The migrated Rust already enforced all ten constraints; this preserves semantics,
+  rather than repairing a newly discovered runtime omission. A named depth-eight/two-row witness preserves the distinction between the
+  descriptor label and actual path length; neither depth admission nor full-width security follows.
+
+## Boundaries retained
+
+[READ] These are scoped review verdicts, not automatic semantic guarantees.
+
+1. Datalog's unrestricted coincidence requires dense range restriction. Counts are by predicate,
+   budgets use signed mathematical integers with missing arguments contributing zero, and
+   independence from another valid stratification is not proved.
+2. The generic DFA reference is a public-trace checker with identity commitments. It does not
+   instantiate production STARK extraction, hiding, or a deployed hash-security bound.
+3. Table agreement does not establish intended policy language, table validation, external corpus
+   coverage or provenance. The compiler's certificate and the caller's corpus obligations are
+   separate.
+4. Route proofs retain their explicit canonicality, chip soundness and height-admission premises.
+   A raw descriptor verifier does not by itself perform the record-opening comparison. Row-heap
+   existence in the weld is denotational, not a proved efficient extraction algorithm.
+5. Dyck's route remains a **single 31-bit field element**, not the eight-lane security claim of the
+   new table/weld variants. Its abstract collision residual and native codec/extraction bridges
+   must be priced and instantiated accordingly.
+6. LRAT is RUP-only; its Std checker is a cross-check. Bisimulation admits its specified decidable
+   predicate fragment, with encoding injectivity over integers rather than a proved deployed
+   byte/felt codec.
+7. Generated payment identity proves arithmetic and chip-output wiring, not external transcript
+   authentication. Solvency and payment interfaces retain scalar hash heads; these statements do
+   not confer the eight-lane route binding claim.
+8. The manifest reviews named claims and consumers, not every helper theorem in every dependency.
+   New consumers need their own scoped entry and actual premise/falsifier evidence.
 
 ## Updating a stale review
 
-A changed source, local imported definition, toolchain, or Lake package manifest makes the gate
-fail. Inspect the diff and follow its semantic effect through the named statement and evidence;
-then update the review scope, pins and source digests together. Do not refresh hashes merely to
-make the gate green. The JSON has no automatic approval operation. Proof refactors and comment-only
-edits still invalidate byte identity; reviewers may record why the prior semantic judgment survives.
+A changed reviewed source, imported local definition, toolchain, package manifest, or execution
+artifact invalidates the snapshot. Inspect the diff and its semantic effect through the named
+statement and evidence; update scope, pins and digests together. Do not refresh hashes merely to
+make the gate green. The JSON has no automatic approval operation. Comment-only edits still
+invalidate byte identity; a reviewer can record why the previous semantic judgment survives.
 
-The Python gate checks identity and evidence coverage. Lean checks the evidence and exact transitive
-axiom reports. A human/model review still checks whether the theorem says what its consumer needs.
+Exact axiom pins may live in the family that owns the theorem rather than being duplicated in a
+central import-heavy module. The targeted warm audit gate and full dependency-building family gate
+have distinct coverage, stated above. This keeps ordinary checks cheap without claiming that
+source inspection executes Lean or that compilation determines statement meaning.

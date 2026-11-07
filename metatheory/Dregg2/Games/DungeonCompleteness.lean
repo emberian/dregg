@@ -2023,23 +2023,26 @@ theorem modelProgram_unlock_admitted {s s' : DState} {w : Nat}
           simp [Case.toExec, Guard.toExec, methodIdx, TransitionGuard.matches,
             Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, verbs, moveIdx] at hmatch
         · first
+          | (exfalso
+             simp [Case.toExec, Guard.toExec, methodIdx, TransitionGuard.matches,
+               Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, verbs, moveIdx,
+               hlegal] at hmatch
+             done)
           | exact hWay
-          | exfalso
-            simp [Case.toExec, Guard.toExec, methodIdx, TransitionGuard.matches,
-              Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, verbs, moveIdx,
-              hlegal] at hmatch
         · first
+          | (exfalso
+             simp [Case.toExec, Guard.toExec, methodIdx, TransitionGuard.matches,
+               Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, verbs, moveIdx,
+               hlegal] at hmatch
+             done)
           | exact hWay
-          | exfalso
-            simp [Case.toExec, Guard.toExec, methodIdx, TransitionGuard.matches,
-              Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, verbs, moveIdx,
-              hlegal] at hmatch
         · first
+          | (exfalso
+             simp [Case.toExec, Guard.toExec, methodIdx, TransitionGuard.matches,
+               Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, verbs, moveIdx,
+               hlegal] at hmatch
+             done)
           | exact hWay
-          | exfalso
-            simp [Case.toExec, Guard.toExec, methodIdx, TransitionGuard.matches,
-              Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, verbs, moveIdx,
-              hlegal] at hmatch
         · exfalso
           simp [Case.toExec, Guard.toExec, methodIdx, TransitionGuard.matches,
             Dregg2.Exec.allMatch, Dregg2.Exec.anyMatch, verbs, moveIdx,
@@ -2811,7 +2814,6 @@ private theorem take_hungTotal_drop {s s' : DState} {r : Nat}
             beq_eq_false_iff_ne.mpr (by omega)
           have h2 : ((CARRIED : Nat) == HUNG + e) = false :=
             beq_eq_false_iff_ne.mpr (by omega)
-          simp only []
           rw [h1, h2])).symm
     have hd : s.depth = 1 ∨ s.depth = 2 ∨ s.depth = 3 ∨ s.depth = 4 := by omega
     have := hungTotal_eq_of (s := s) (s' := s') (j := 1) (k := 0)

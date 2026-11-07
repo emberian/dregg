@@ -10729,6 +10729,7 @@ dependencies = [
  "dregg-cell",
  "dregg-circuit-prove",
  "dregg-query",
+ "dregg-turn",
  "getrandom 0.3.4",
  "grain-turn",
  "grain-verify",

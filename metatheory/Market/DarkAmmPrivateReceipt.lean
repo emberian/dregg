@@ -102,12 +102,13 @@ def canonicalBlindCheck (blind : Fin DIGEST_WIDTH → Int) : Bool :=
 
 theorem canonicalBlindCheck_iff (blind : Fin DIGEST_WIDTH → Int) :
     canonicalBlindCheck blind = true ↔ CanonicalBlind blind := by
-  simp [canonicalBlindCheck, CanonicalBlind, DIGEST_WIDTH]
+  simp only [canonicalBlindCheck, CanonicalBlind, List.all_eq_true, List.mem_ofFn,
+    decide_eq_true_eq]
   constructor
-  · rintro ⟨h0, h1, h2, h3, h4, h5, h6, h7⟩ i
-    fin_cases i <;> assumption
-  · intro h
-    exact ⟨h 0, h 1, h 2, h 3, h 4, h 5, h 6, h 7⟩
+  · intro h i
+    exact h _ ⟨i, rfl⟩
+  · rintro h _ ⟨i, rfl⟩
+    exact h i
 
 /-- Exact fixed-family relation for the future hiding descriptor. -/
 def Accepts (hash8 : List Int → List Int)

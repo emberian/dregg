@@ -189,8 +189,8 @@ theorem carrier_adv_le (F : KeyedRomFamily) (C : RomCarrier F)
     (A : Adversary (romCarrierGame F C)) (l : ℕ) :
     gameAdv (romCarrierGame F C) A l ≤ gameAdv (keyedRomGame F) (carrierFinder F C A) l := by
   refine @winProb_le_of_imp _ ((romCarrierGame F C).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
-  exact carrier_wins_imp F C A l H hH
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  exact (Adversary.hit_eq_true (carrierFinder F C A) l H).mpr (carrier_wins_imp F C A l H hH)
 
 /-- **⚑ THE EXTRACTED FINDER IS QUERY-BOUNDED — the efficiency discharge, PRESERVING THE QUERY BOUND.**
 A `Q`-query carrier forger yields a `Q`-query collision finder, because the extractor is a `mapOut`
@@ -207,7 +207,8 @@ theorem carrierFinder_in_romEff (F : KeyedRomFamily) (C : RomCarrier F) (Q : ℕ
   · intro l H
     show (let p := A.run l H; (C.encode l p.1 p.2.1, C.encode l p.1 p.2.2))
       = (OracleComp.mapOut (fun p => (C.encode l p.1 p.2.1, C.encode l p.1 p.2.2)) (M l)).eval H
-    rw [OracleComp.mapOut_eval, hrun l H]
+    exact (congrArg (fun p => (C.encode l p.1 p.2.1, C.encode l p.1 p.2.2)) (hrun l H)).trans
+      (OracleComp.mapOut_eval (fun p => (C.encode l p.1 p.2.1, C.encode l p.1 p.2.2)) (M l) H).symm
 
 /-- **⚑⚑ THE RE-GROUNDED BINDING — from the KEYED, QUERY-COUNTED floor, WHICH IS PROVED.**
 

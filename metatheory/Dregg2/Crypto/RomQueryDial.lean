@@ -147,9 +147,9 @@ theorem bruteAdv_hit (F : RomFamily)
       Fintype.card (F.R l) < Fintype.card (F.D l))
     (l : ℕ) (H : (romCollisionGame F).Inst l) :
     (romAdv F (bruteComp F)).hit l H = true := by
-  rw [Adversary.hit_eq_true]
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   show (romCollisionGame F).wins l H ((bruteComp F l).eval H)
-  rw [bruteComp_eval]
+  erw [bruteComp_eval]
   exact pickColl_wins F hc l H
 
 /-- **ITS ADVANTAGE IS THE CONSTANT `1`.** Winning on every instance makes the win fraction `1`

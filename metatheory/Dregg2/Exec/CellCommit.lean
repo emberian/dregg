@@ -51,7 +51,7 @@ open Dregg2.Tactics
 unchanged (`k'.commitments = k.commitments`), the grow-only `⊆` holds by reflexivity. The uniform
 closer the framing arms of `execFullA_commitments_grow` use (the non-`noteCreate` effects). -/
 theorem subset_of_commitments_eq {k k' : RecordKernelState} (h : k'.commitments = k.commitments) :
-    k.commitments ⊆ k'.commitments := by rw [h]; exact List.Subset.refl _
+    k.commitments ⊆ k'.commitments := by rw [h]
 
 /-! ## Step 0 — per-mutator COMMITMENTS frames: each kernel mutator leaves `commitments` UNCHANGED.
 

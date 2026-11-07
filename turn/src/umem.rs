@@ -1337,16 +1337,71 @@ fn admit_value_v2(
     }
 }
 
-/// [`umem_proving_inputs_v1`] over an explicit `(pre projection, op trace)` — the form callers use
-/// to append the caller-owned index-domain receipt write ([`receipt_op`]) to the witness ops
-/// before lowering. **This is the function the deployed cohort generators route through**
-/// ([`umem_cohort_proving_inputs_from`], [`umem_cohort_multidomain_proving_inputs_from`]), reached
-/// in production from `sdk/src/full_turn_proof.rs` and `turn-prover/src/rotation_witness.rs`, so
-/// both injectivity gates below sit on every umem leg the deployed prover is handed.
+/// Compatibility producer over an explicit pre-state projection and op trace.
+/// This preserves the arbitrary-domain descriptor API. Production fixed-cohort adapters
+/// instead consume the shared checked witness metadata directly, without constructing AIR.
+/// Address/value admission and row/boundary construction are identical on both paths.
 pub fn umem_proving_inputs_from_v1(
     pre: &UProjection,
     ops: &[UmemOp],
 ) -> Result<UmemProvingInputsV1, String> {
+    let UmemWitnessInputsV1 {
+        domains,
+        rows,
+        boundary,
+    } = umem_witness_inputs_from_v1(pre, ops)?;
+    // Preserve the arbitrary-domain write-form descriptor. A disciplined read is a
+    // same-value write (val == prev_val) under this journal-derived trace convention.
+    let constraints: Vec<VmConstraint2> = domains
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            VmConstraint2::UMemOp(UMemOpSpec {
+                guard: LeanExpr::Var(6 + i),
+                domain: *d,
+                key: LeanExpr::Var(0),
+                present: LeanExpr::Var(1),
+                value: LeanExpr::Var(2),
+                prev_present: LeanExpr::Var(3),
+                prev_value: LeanExpr::Var(4),
+                prev_serial: LeanExpr::Var(5),
+                kind: MemKind::Write,
+            })
+        })
+        .collect();
+
+    let descriptor = EffectVmDescriptor2 {
+        name: "umem-turn-boundary".to_string(),
+        trace_width: 6 + domains.len(),
+        public_input_count: 0,
+        challenges: 0,
+        tables: vec![],
+        constraints,
+        hash_sites: vec![],
+        ranges: vec![],
+    };
+
+    Ok(UmemProvingInputsV1 {
+        descriptor,
+        rows,
+        boundary,
+    })
+}
+
+/// Checked witness data shared by the compatibility producer and emitted-cohort adapters.
+/// `domains[i]` names guard column `6 + i`; codes are sorted and unique.
+struct UmemWitnessInputsV1 {
+    domains: Vec<u32>,
+    rows: Vec<Vec<BabyBear>>,
+    boundary: UMemBoundaryWitness,
+}
+
+/// Derive witness data without authoring a descriptor. Both address and value admission
+/// remain on every cohort path, including the pre-state cells in the boundary.
+fn umem_witness_inputs_from_v1(
+    pre: &UProjection,
+    ops: &[UmemOp],
+) -> Result<UmemWitnessInputsV1, String> {
     if ops.is_empty() {
         return Err("umem producer: empty op trace (no boundary to derive)".into());
     }
@@ -1384,9 +1439,8 @@ pub fn umem_proving_inputs_from_v1(
         admit_value_v2(&mut by_cell, (*d, *key), pre.get(k))?;
     }
 
-    // One `UMemOp::Write` constraint per touched domain, guarded by its own indicator column.
-    // (A disciplined read folds identically to a same-value write — `val == prev_val` — so the
-    // write-kind constraint is sound over the executor's journal-derived write trace.)
+    // Sorted metadata determines guard columns for the existing emitted cohort shapes.
+    // The compatibility wrapper alone turns these domains into UMemOp constraints.
     let mut domains: Vec<u32> = touched.values().map(|(d, _)| *d).collect();
     domains.sort_unstable();
     domains.dedup();
@@ -1396,34 +1450,6 @@ pub fn umem_proving_inputs_from_v1(
         .map(|(i, d)| (*d, 6 + i))
         .collect();
     let width = 6 + domains.len();
-
-    let constraints: Vec<VmConstraint2> = domains
-        .iter()
-        .map(|d| {
-            VmConstraint2::UMemOp(UMemOpSpec {
-                guard: LeanExpr::Var(guard_col[d]),
-                domain: *d,
-                key: LeanExpr::Var(0),
-                present: LeanExpr::Var(1),
-                value: LeanExpr::Var(2),
-                prev_present: LeanExpr::Var(3),
-                prev_value: LeanExpr::Var(4),
-                prev_serial: LeanExpr::Var(5),
-                kind: MemKind::Write,
-            })
-        })
-        .collect();
-
-    let descriptor = EffectVmDescriptor2 {
-        name: "umem-turn-boundary".to_string(),
-        trace_width: width,
-        public_input_count: 0,
-        challenges: 0,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    };
 
     // One main row per Blum op (in execution order), padded to a power of two with guards off.
     let mut rows: Vec<Vec<BabyBear>> = Vec::with_capacity(ops.len());
@@ -1466,8 +1492,8 @@ pub fn umem_proving_inputs_from_v1(
         init_vals: addrs.iter().map(|(_, _, v)| *v).collect(),
     };
 
-    Ok(UmemProvingInputsV1 {
-        descriptor,
+    Ok(UmemWitnessInputsV1 {
+        domains,
         rows,
         boundary,
     })
@@ -1496,9 +1522,9 @@ pub fn umem_proving_inputs_from_v1(
 //
 // ⚑ V2 HAS A PRODUCTION CALLER AS OF 2026-08-06, AND IT IS NOT THE WIRE.
 //
-// `admit_value_v2` (above) is it: the deployed producer `umem_proving_inputs_from_v1` — the ONE
-// function both deployed cohort generators call — now decides "are these two sources the same
-// value?" by `UValV2` equality, and REFUSES a trace in which two distinct V2 sources land on one
+// `admit_value_v2` (above) is it: the shared checked witness derivation
+// `umem_witness_inputs_from_v1`, called by both cohort generators and the compatibility producer,
+// decides "are these two sources the same value?" by `UValV2` equality, and REFUSES a trace in which two distinct V2 sources land on one
 // `(address, present, value)` felt cell. Until then V2 was a faithful codec with no caller, i.e.
 // it was protecting nothing; the test file that says so in its own docblock is
 // `turn/tests/umem_v2_faithful_codec.rs`.
@@ -2223,15 +2249,11 @@ pub struct UmemCohortProvingInputs {
 /// **THE FIXED-COHORT TRACE GENERATOR** — bridge one effect-leg's umem op trace into the FIXED
 /// per-effect cohort form the deployed-form umem prover ([`prove_vm_descriptor2_umem`]) accepts.
 ///
-/// The producer's per-turn form ([`umem_proving_inputs_from_v1`]) yields a variable-width
-/// (`6 + #domains`) descriptor with one guard column per domain — which CANNOT back a single
-/// committed VK. The FIXED cohort is single-domain width-7. This generator reuses the producer's
-/// row + boundary derivation (so the cohort rows are byte-identical to the single-domain
-/// producer rows) and FAILS CLOSED when the leg touches more than one domain: a single fixed
-/// cohort descriptor cannot witness two domains, so a multi-domain leg is NOT silently dropped
-/// onto a single-domain descriptor — it is refused, and such effects stay on the per-map path
-/// until their own cohort design. The single domain is read off the producer's lone constraint
-/// so the caller can verify it against the resolved cohort descriptor's baked-in domain.
+/// Shares checked row and boundary derivation with the arbitrary-domain compatibility
+/// producer. The single domain comes from explicit sorted metadata, not from inspecting a
+/// temporary Rust-authored descriptor. Multi-domain legs fail closed here and use the
+/// multi-domain adapter. The domain remains available to callers for cohort selection,
+/// shape checks and weld construction.
 ///
 /// `Err` if the leg is empty, the address codec collides, or the leg is multi-domain.
 ///
@@ -2240,21 +2262,16 @@ pub fn umem_cohort_proving_inputs_from(
     pre: &UProjection,
     ops: &[UmemOp],
 ) -> Result<UmemCohortProvingInputs, String> {
-    let inputs = umem_proving_inputs_from_v1(pre, ops)?;
-    // SINGLE-DOMAIN gate: the producer's width is `6 + #domains`; the fixed cohort is width 7
-    // (one domain). A wider leg cannot reconcile to ONE fixed cohort descriptor — fail closed.
-    if inputs.descriptor.trace_width != 7 {
+    let inputs = umem_witness_inputs_from_v1(pre, ops)?;
+    if inputs.domains.len() != 1 {
         return Err(format!(
             "umem cohort generator: leg touches {} domains (producer width {}); the fixed cohort \
              descriptor is single-domain (width 7) — multi-domain effects stay on the per-map path",
-            inputs.descriptor.trace_width.saturating_sub(6),
-            inputs.descriptor.trace_width
+            inputs.domains.len(),
+            6 + inputs.domains.len()
         ));
     }
-    let domain = match inputs.descriptor.constraints.first() {
-        Some(VmConstraint2::UMemOp(spec)) => spec.domain,
-        _ => return Err("umem cohort generator: producer emitted no umem-op constraint".into()),
-    };
+    let domain = inputs.domains[0];
     Ok(UmemCohortProvingInputs {
         domain,
         rows: inputs.rows,
@@ -2288,11 +2305,10 @@ pub struct UmemCohortMultiProvingInputs {
 /// **THE FIXED MULTI-DOMAIN COHORT TRACE GENERATOR** — bridge one effect-leg's multi-domain umem op
 /// trace into the FIXED per-effect multi-domain cohort form the deployed-form umem prover
 /// ([`prove_vm_descriptor2_umem`]) accepts. Unlike [`umem_cohort_proving_inputs_from`] (which fails
-/// closed on a multi-domain leg), this generator yields the producer's multi-domain rows + boundary
-/// directly (the producer already emits the FIXED shape per effect — width `6 + #domains`, one
-/// guarded `umemOp` per domain in sorted-code order, the byte-pinned multi-domain cohort
-/// descriptor's twin) and reports the column-ordered domain set so the caller can verify it against
-/// the resolved descriptor's baked-in domains.
+/// closed on a multi-domain leg), this generator yields checked rows and boundary directly.
+/// The sorted domain metadata fixes guard columns `6 + i` without constructing a temporary
+/// descriptor. The ordered domain set remains available to callers for cohort selection,
+/// shape checks and weld construction.
 ///
 /// `Err` if the leg is empty, the address codec collides, or the leg touches FEWER than two domains
 /// (a single-domain leg belongs on the width-7 cohort — [`umem_cohort_proving_inputs_from`]).
@@ -2302,31 +2318,24 @@ pub fn umem_cohort_multidomain_proving_inputs_from(
     pre: &UProjection,
     ops: &[UmemOp],
 ) -> Result<UmemCohortMultiProvingInputs, String> {
-    let inputs = umem_proving_inputs_from_v1(pre, ops)?;
-    // The producer emits one UMemOp constraint per touched domain, in sorted-code order, each
-    // guarded at column 6 + i — exactly the multi-domain cohort descriptor's shape.
-    let domains: Vec<u32> = inputs
-        .descriptor
-        .constraints
-        .iter()
-        .filter_map(|c| match c {
-            VmConstraint2::UMemOp(spec) => Some(spec.domain),
-            _ => None,
-        })
-        .collect();
+    let UmemWitnessInputsV1 {
+        domains,
+        rows,
+        boundary,
+    } = umem_witness_inputs_from_v1(pre, ops)?;
     if domains.len() < 2 {
         return Err(format!(
             "umem multi-domain cohort generator: leg touches {} domain(s) (producer width {}); the \
              multi-domain cohort is for effects spanning >1 domain — a single-domain leg uses the \
              width-7 cohort (umem_cohort_proving_inputs_from)",
             domains.len(),
-            inputs.descriptor.trace_width
+            6 + domains.len()
         ));
     }
     Ok(UmemCohortMultiProvingInputs {
         domains,
-        rows: inputs.rows,
-        boundary: inputs.boundary,
+        rows,
+        boundary,
     })
 }
 

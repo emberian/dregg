@@ -320,9 +320,9 @@ theorem pair_knows_secret :
   intro w' hall
   -- agent false's edge: w'.1 = actual.1 ; agent true's edge: w'.2 = actual.2.
   have h1 : w'.1 = baseF.actual.1 := by
-    have := hall false trivial; simpa [baseF] using this
+    exact hall false trivial
   have h2 : w'.2 = baseF.actual.2 := by
-    have := hall true trivial; simpa [baseF] using this
+    exact hall true trivial
   show secretOf w' = secretOf baseF.actual
   unfold secretOf; rw [h1, h2]
 

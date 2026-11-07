@@ -400,15 +400,10 @@ theorem capAmplifyForestG_gate_rejects : gateOK capAmplifyForestG.auth fma0 = fa
 
 /-- Hence the amplifying forest does NOT commit (`execFullForestG = none`). -/
 theorem capAmplifyForestG_rolls_back : execFullForestG fma0 capAmplifyForestG = none := by
-  unfold capAmplifyForestG
-  show (match execFullAGated fma0 _ (.emitEventA 0 0 0 0) with
-        | some s' => execFullChildrenG _ s' ([] : List DChild)
-        | none    => none) = none
-  rw [execFullAGated]
-  have : gateOK capAmplifyForestG.auth fma0 = false := capAmplifyForestG_gate_rejects
-  unfold capAmplifyForestG at this
-  simp only [this]
-  rfl
+  show execFullForestG fma0
+    (⟨capAmplifyForestG.auth, .emitEventA 0 0 0 0, []⟩ : DForest) = none
+  simp only [execFullForestG_leaf, execFullAGated, capAmplifyForestG_gate_rejects,
+    Bool.false_eq_true, ite_false]
 
 #assert_axioms capAmplifyForestG_what_rejects
 #assert_axioms capOkForestG_what_admits

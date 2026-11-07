@@ -1016,7 +1016,7 @@ theorem rows_track_the_interpreter {N : Nat} {pl : Nat → ℤ} {prog : List Ins
     ∀ t, t ≤ n → Tracks (tr t) (runProgAt N st0 (prog.take t)) := by
   intro t
   induction t with
-  | zero => intro _; simpa using h0
+  | zero => intro _; exact h0
   | succ k ih =>
       intro hk
       have hkn : k < n := by omega

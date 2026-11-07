@@ -53,7 +53,8 @@ It is **one rung**. The Wrap group check also needs the 40-term `public_comm` La
 `2^15`-scalar MSM over the SRS and is **deferred by design** (K4c / P10). See
 `docs/MINA-REAL-BLOCK-GATE.md` §6. Nothing here discharges the P10 opening floor.
 
-Axiom-clean: `by decide` only; no `sorry`, no `native_decide`. NEW file; imports read-only
+Facts about concrete data are `native_decide`, pinned `#assert_compiled` (since 2026-11-06);
+no `sorry`. NEW file; imports read-only
 (`PastaScalarMul`, transitively `PastaCurveComplete`/`PastaCurve`/`PastaField`). NOT imported by
 the `Dregg2` root, per house practice for gates.
 
@@ -88,12 +89,12 @@ real Pallas curve at the real prime. -/
 /-- **`real_inputs_are_on_pallas`** — the block's own `t_comm` chunks and the verifier index's
 `sigma_comm[6]` are on `y^2 = x^3 + 5` over `Fp`. -/
 theorem real_inputs_are_on_pallas :
-    (TCHUNKS.all (projOnCurveM pN curveB) && projOnCurveM pN curveB SIGMA6) = true := by decide
+    (TCHUNKS.all (projOnCurveM pN curveB) && projOnCurveM pN curveB SIGMA6) = true := by native_decide
 
 /-- **`gold_outputs_are_on_pallas`** — and so are the three values o1-labs' code produced. -/
 theorem gold_outputs_are_on_pallas :
     (projOnCurveM pN curveB CHUNKED_T_GOLD && projOnCurveM pN curveB F_COMM_GOLD
-      && projOnCurveM pN curveB FT_COMM_GOLD) = true := by decide
+      && projOnCurveM pN curveB FT_COMM_GOLD) = true := by native_decide
 
 /-- **`gold_outputs_are_distinct_affine_points`** — and they are three DIFFERENT finite points,
 so an assembly that collapsed to a constant could not pass all three checks in §5. -/
@@ -101,34 +102,34 @@ theorem gold_outputs_are_distinct_affine_points :
     (projEqM pN CHUNKED_T_GOLD F_COMM_GOLD || projEqM pN F_COMM_GOLD FT_COMM_GOLD
       || projEqM pN CHUNKED_T_GOLD FT_COMM_GOLD
       || isInfM pN CHUNKED_T_GOLD || isInfM pN F_COMM_GOLD || isInfM pN FT_COMM_GOLD)
-      = false := by decide
+      = false := by native_decide
 
 /-! ## §5 — THE RUNG: the assembly reproduces o1-labs' values on the real block -/
 
 /-- **`chunkedT_reproduces_kimchi`** — the Horner fold of the block's **7 real `t_comm` Pallas
 points** with `zeta^(2^15)`, over the RCB complete add, IS `PolyComm::chunk_commitment`'s output.
 Six 255-bit ladders and seven complete adds on real group elements. -/
-theorem chunkedT_reproduces_kimchi : projEqM pN chunkedT CHUNKED_T_GOLD = true := by decide
+theorem chunkedT_reproduces_kimchi : projEqM pN chunkedT CHUNKED_T_GOLD = true := by native_decide
 
 /-- **`fComm_reproduces_kimchi`** — the linearization MSM (`perm_scalars * sigma_comm[6]`) IS
 `PolyComm::multi_scalar_mul`'s output. -/
-theorem fComm_reproduces_kimchi : projEqM pN fComm F_COMM_GOLD = true := by decide
+theorem fComm_reproduces_kimchi : projEqM pN fComm F_COMM_GOLD = true := by native_decide
 
 /-- **`ftComm_reproduces_kimchi`** — and the whole Maller assembly reproduces the `ft_comm` that
 o1-labs' own `SRS::verify` accepts against this block's opening proof. This is the first check in
 the campaign whose value depends on a group element. -/
-theorem ftComm_reproduces_kimchi : projEqM pN ftComm FT_COMM_GOLD = true := by decide
+theorem ftComm_reproduces_kimchi : projEqM pN ftComm FT_COMM_GOLD = true := by native_decide
 
 /-- **`ftComm_is_a_finite_point`** — and the result is not the point at infinity, so
 `projEqM`'s `Z = 0` degeneracy cannot be what made the previous theorem true. -/
-theorem ftComm_is_a_finite_point : isInfM pN ftComm = false := by decide
+theorem ftComm_is_a_finite_point : isInfM pN ftComm = false := by native_decide
 
 /-- **`fComm_chunking_is_a_no_op`** — `chunk_commitment` on the one-chunk `f_comm` is the
 identity, which is WHY `zeta^srs_len` reaches `ft_comm` only through `t_comm`. The group-side
 counterpart of `PicklesFinalize.ftComm_srs_length_unused_at_one_chunk`; stated on the real
 value rather than assumed. -/
 theorem fComm_chunking_is_a_no_op :
-    projEqM pN (chunkedComm ZETA_SRS [F_COMM_GOLD]) F_COMM_GOLD = true := by decide
+    projEqM pN (chunkedComm ZETA_SRS [F_COMM_GOLD]) F_COMM_GOLD = true := by native_decide
 
 /-! ## §6 — tamper poles
 
@@ -137,41 +138,57 @@ Without these, §5 would be consistent with an assembly that ignores its inputs.
 
 /-- **`tamper_perm_scalar`** — one added to the linearization scalar. -/
 theorem tamper_perm_scalar :
-    projEqM pN (msmComm [(PERM_SCALAR + 1, SIGMA6)]) F_COMM_GOLD = false := by decide
+    projEqM pN (msmComm [(PERM_SCALAR + 1, SIGMA6)]) F_COMM_GOLD = false := by native_decide
 
 /-- **`tamper_msm_base_point`** — the same scalar against a DIFFERENT real Pallas point from the
 same block (`t_comm[0]` in place of `sigma_comm[6]`). -/
 theorem tamper_msm_base_point :
-    projEqM pN (msmComm [(PERM_SCALAR, TCHUNKS.headD Oproj)]) F_COMM_GOLD = false := by decide
+    projEqM pN (msmComm [(PERM_SCALAR, TCHUNKS.headD Oproj)]) F_COMM_GOLD = false := by native_decide
 
 /-- **`tamper_zeta_to_srs_length`** — one added to `zeta^(2^15)`. At 7 chunks the SRS-length
 scalar IS read (the counterpart of `ftComm_srs_length_used_at_two_chunks`). -/
 theorem tamper_zeta_to_srs_length :
-    projEqM pN (chunkedComm (ZETA_SRS + 1) TCHUNKS) CHUNKED_T_GOLD = false := by decide
+    projEqM pN (chunkedComm (ZETA_SRS + 1) TCHUNKS) CHUNKED_T_GOLD = false := by native_decide
 
 /-- **`tamper_chunk_order`** — the same 7 points folded the other way round. Horner is not
 symmetric, so a fold that got the chunk order wrong is caught. -/
 theorem tamper_chunk_order :
-    projEqM pN (chunkedComm ZETA_SRS TCHUNKS.reverse) CHUNKED_T_GOLD = false := by decide
+    projEqM pN (chunkedComm ZETA_SRS TCHUNKS.reverse) CHUNKED_T_GOLD = false := by native_decide
 
 /-- **`tamper_zeta_to_domain_size`** — one added to the Maller scale factor `zeta^n - 1`. -/
 theorem tamper_zeta_to_domain_size :
     projEqM pN (ftCommOf ZETA_SRS (ZETA_DOM_M1 + 1) F_TERMS TCHUNKS) FT_COMM_GOLD
-      = false := by decide
+      = false := by native_decide
 
 /-- **`tamper_drop_maller_term`** — dropping the `- (zeta^n - 1) * chunk(t_comm)` subtraction
 entirely, i.e. claiming `ft_comm = f_comm`. This is the pole that says the `t_comm` points are
 load-bearing in `ft_comm` and not merely computed alongside it. -/
 theorem tamper_drop_maller_term :
-    projEqM pN (chunkedComm ZETA_SRS [fComm]) FT_COMM_GOLD = false := by decide
+    projEqM pN (chunkedComm ZETA_SRS [fComm]) FT_COMM_GOLD = false := by native_decide
 
 /-- **`tamper_add_instead_of_subtract`** — and the SIGN of the Maller term is load-bearing:
 `f_comm + (zeta^n - 1) * chunk(t_comm)` is not `ft_comm`. -/
 theorem tamper_add_instead_of_subtract :
     projEqM pN (padd (chunkedComm ZETA_SRS [msmComm F_TERMS])
                      (smul ZETA_DOM_M1 (chunkedComm ZETA_SRS TCHUNKS)))
-               FT_COMM_GOLD = false := by decide
+               FT_COMM_GOLD = false := by native_decide
 
-#assert_namespace_axioms Dregg2.Circuit.Emit.MinaWrapGroupGate
+-- Every theorem in this file is a fact about block 539508's data, checked by compiled evaluation and
+-- pinned `#assert_compiled` (since 2026-11-06), so there is no kernel-clean namespace to pin.
 
+#assert_compiled tamper_add_instead_of_subtract
+#assert_compiled tamper_drop_maller_term
+#assert_compiled tamper_zeta_to_domain_size
+#assert_compiled tamper_chunk_order
+#assert_compiled tamper_zeta_to_srs_length
+#assert_compiled tamper_msm_base_point
+#assert_compiled tamper_perm_scalar
+#assert_compiled fComm_chunking_is_a_no_op
+#assert_compiled ftComm_is_a_finite_point
+#assert_compiled ftComm_reproduces_kimchi
+#assert_compiled fComm_reproduces_kimchi
+#assert_compiled chunkedT_reproduces_kimchi
+#assert_compiled gold_outputs_are_distinct_affine_points
+#assert_compiled gold_outputs_are_on_pallas
+#assert_compiled real_inputs_are_on_pallas
 end Dregg2.Circuit.Emit.MinaWrapGroupGate

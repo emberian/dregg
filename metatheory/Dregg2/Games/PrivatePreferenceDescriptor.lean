@@ -508,6 +508,12 @@ def constTrace (a pis : Assignment) (tf : TraceFamily) : VmTrace where
   funext col
   simp [envAt, constTrace]
 
+@[simp] theorem constTrace_pub0 (a pis : Assignment) (tf : TraceFamily) :
+    (envAt (constTrace a pis tf) 0).pub = pis := rfl
+
+@[simp] theorem constTrace_tf (a pis : Assignment) (tf : TraceFamily) :
+    (constTrace a pis tf).tf = tf := rfl
+
 def CanonicalAssignment (a : Assignment) : Prop :=
   ∀ col, 0 ≤ a col ∧ a col < BABYBEAR_MODULUS
 
@@ -904,7 +910,7 @@ theorem rule_column_exact
     a RULE = RULE_ID := by
   have hgate := semantic_gate_vanishes hsat rule_body_mem
   have hres : a RULE - RULE_ID ≡ 0 [ZMOD BABYBEAR_MODULUS] := by
-    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval] using hgate
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval, ← sub_eq_add_neg] using hgate
   have hcong : a RULE ≡ RULE_ID [ZMOD BABYBEAR_MODULUS] := by
     simpa using hres.add_right RULE_ID
   exact eq_of_modEq_of_canonical hcong (hcanon RULE) (by

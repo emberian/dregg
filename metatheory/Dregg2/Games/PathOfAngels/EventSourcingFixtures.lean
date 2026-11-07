@@ -18,6 +18,7 @@ fully-qualified names are unchanged. The hostile checks pin the EXACT refusal er
 subsumes the old `fail_if_success` "not accepted" harness. Named residue: none.
 -/
 import Dregg2.Games.PathOfAngels.EventSourcing
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.EventSourcing
 

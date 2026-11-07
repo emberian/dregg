@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     # Same elan + pinned-mathlib setup as ci.yml's metatheory-no-sorry job (the canary needs `lake`).
     env:
-      MATHLIB_REV: 1c2b90b13009c65b090d95a83c98e248deafb6f1
+      MATHLIB_REV: 56a005855ea17e0b0958f73ec801ae140b0a1679
     # The gate's VERDICT LINES, handed to page-on-red below. The canary already prints exactly which
     # leg decayed (`⛔ LEDGER-SPEC-DROP: GREEN — …`); a link to a run is not the same thing as the
     # sentence, and the sentence is what a human needs to act. Carried as a job output rather than an

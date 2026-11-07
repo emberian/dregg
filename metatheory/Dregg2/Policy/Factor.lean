@@ -34,11 +34,67 @@ abbrev Bits := List Bool
 
 def memB (S : Bits) (q : Nat) : Bool := S.getD q false
 
-/-- Successor set: every state stepped by `b`, plus `D.start` (the empty suffix). -/
-def nextSet (D : Table) (S : Bits) (b : Nat) : Bits :=
-  (List.range D.n).map fun q => q == D.start || (List.range D.n).any (fun p => memB S p && D.step p b == q)
+/-- Membership read from the array copy of the bitmap (constant time, not `O(q)`). -/
+theorem memB_toArray (S : Bits) (q : Nat) : S.toArray.getD q false = memB S q := by
+  simp [memB, Array.getD, List.getD]
+  by_cases h : q < S.length <;> simp [h]
 
-def anyAcc (D : Table) (S : Bits) : Bool := (List.range D.n).any (fun q => memB S q && D.acc q)
+/-- One source's contribution to the successor image. -/
+def imgStep (D : Table) (Sa : Array Bool) (b : Nat) (acc : Array Bool) (p : Nat) : Array Bool :=
+  if Sa.getD p false then acc.setIfInBounds (D.step p b) true else acc
+
+theorem imgStep_size (D : Table) (Sa : Array Bool) (b : Nat) (acc : Array Bool) (p : Nat) :
+    (imgStep D Sa b acc p).size = acc.size := by
+  unfold imgStep; split <;> simp
+
+theorem imgStep_getD (D : Table) (S : Bits) (b q p : Nat) (acc : Array Bool) (hq : q < acc.size) :
+    (imgStep D S.toArray b acc p).getD q false = (acc.getD q false || (memB S p && D.step p b == q)) := by
+  unfold imgStep
+  rw [memB_toArray S p]
+  cases memB S p
+  · simp
+  · by_cases he : D.step p b = q
+    · subst he; simp [Array.getD, hq]
+    · simp [Array.getD, Array.getElem_setIfInBounds, he, hq]
+
+theorem img_getD (D : Table) (S : Bits) (b q : Nat) :
+    ∀ (L : List Nat) (acc : Array Bool), q < acc.size →
+      (L.foldl (imgStep D S.toArray b) acc).getD q false =
+        (acc.getD q false || L.any (fun p => memB S p && D.step p b == q)) := by
+  intro L
+  induction L with
+  | nil => intro acc _; simp
+  | cons p L ih =>
+    intro acc hq
+    simp only [List.foldl_cons, List.any_cons]
+    rw [ih _ (by rw [imgStep_size]; exact hq), imgStep_getD D S b q p acc hq, Bool.or_assoc]
+
+/-- Successor set: every state stepped by `b`, plus `D.start` (the empty suffix). The image is
+collected into an array in one pass over the active sources. -/
+def nextSet (D : Table) (S : Bits) (b : Nat) : Bits :=
+  let img := (List.range D.n).foldl (imgStep D S.toArray b) (Array.replicate D.n false)
+  (List.range D.n).map fun q => q == D.start || img.getD q false
+
+/-- The array image is exactly the original pointwise set semantics, for every table, bitmap
+and byte. Membership and stepping are computed once per source, rather than once per destination. -/
+theorem nextSet_spec (D : Table) (S : Bits) (b : Nat) :
+    nextSet D S b = (List.range D.n).map (fun q => q == D.start ||
+      (List.range D.n).any (fun p => memB S p && D.step p b == q)) := by
+  unfold nextSet
+  apply List.map_congr_left
+  intro q hq
+  rw [List.mem_range] at hq
+  rw [img_getD D S b q _ _ (by simpa using hq)]
+  simp [Array.getD, hq]
+
+/-- Some state of the bitmap accepts (the bitmap read through its array copy). -/
+def anyAcc (D : Table) (S : Bits) : Bool :=
+  let Sa := S.toArray
+  (List.range D.n).any (fun q => Sa.getD q false && D.acc q)
+
+theorem anyAcc_spec (D : Table) (S : Bits) :
+    anyAcc D S = (List.range D.n).any (fun q => memB S q && D.acc q) := by
+  simp only [anyAcc, memB_toArray]
 
 def absInit (D : Table) : Bits × Bool :=
   let S := (List.range D.n).map (· == D.start)
@@ -134,7 +190,7 @@ theorem absRun_spec (D : Table) (hD : closedB D = true) :
         obtain ⟨-, rfl⟩ := List.append_eq_nil_iff.mp h.symm
         exact ⟨hst, rfl⟩
     refine ⟨?_, fun _ => hS⟩
-    simp only [absRun, List.foldl_nil, absInit, anyAcc, List.any_eq_true, List.mem_range,
+    simp only [absRun, List.foldl_nil, absInit, anyAcc_spec, List.any_eq_true, List.mem_range,
       Bool.and_eq_true]
     constructor
     · rintro ⟨q, hq, hm, ha⟩
@@ -170,7 +226,7 @@ theorem absRun_spec (D : Table) (hD : closedB D = true) :
       have hS' : ∀ q, memB (nextSet D (absRun D w).1 b) q = true ↔
           ∃ u v, w ++ [b] = u ++ v ∧ D.run D.start v = q := by
         intro q
-        simp only [nextSet, memB_map_range, Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true,
+        simp only [nextSet_spec, memB_map_range, Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true,
           beq_iff_eq, List.any_eq_true, List.mem_range]
         constructor
         · rintro ⟨-, rfl | ⟨p, hp, hm, rfl⟩⟩
@@ -191,7 +247,7 @@ theorem absRun_spec (D : Table) (hD : closedB D = true) :
               simp only [List.all_append, Bool.and_eq_true] at hw; exact hw.1.2
             exact closed_run hD v' this _ hst
       refine ⟨?_, fun _ => by simpa [absStep, hf] using hS'⟩
-      simp only [absStep, hf, Bool.false_eq_true, if_false, anyAcc, List.any_eq_true,
+      simp only [absStep, hf, Bool.false_eq_true, if_false, anyAcc_spec, List.any_eq_true,
         List.mem_range, Bool.and_eq_true]
       rw [factor_snoc (fun y => D.acc (D.run D.start y) = true)]
       constructor
@@ -235,6 +291,58 @@ theorem labCheck_run {D E : Table} {lab : Nat → Bits × Bool} (h : labCheck D 
     · rw [run_append_single, h2, i1]; simp [absRun, List.foldl_append]
     · rw [run_append_single]; exact h1
 
+/-! ## Byte classes: checking one byte per column class. -/
+
+/-- Bytes with equal `D`-columns have equal abstract successors. -/
+theorem absStep_col (D : Table) (x : Bits × Bool) (b c : Nat)
+    (h : ∀ p, p < D.n → D.step p b = D.step p c) : absStep D x b = absStep D x c := by
+  have hs : nextSet D x.1 b = nextSet D x.1 c := by
+    rw [nextSet_spec, nextSet_spec]
+    apply List.map_congr_left
+    intro q _
+    congr 1
+    apply Bool.eq_iff_iff.mpr
+    simp only [List.any_eq_true, List.mem_range, Bool.and_eq_true, beq_iff_eq]
+    constructor
+    · rintro ⟨p, hp, hm, he⟩; exact ⟨p, hp, hm, by rw [← h p hp]; exact he⟩
+    · rintro ⟨p, hp, hm, he⟩; exact ⟨p, hp, hm, by rw [h p hp]; exact he⟩
+  unfold absStep
+  rw [hs]
+
+/-- `rep` maps every byte to a byte `< 256` with the same `D`-column, and is idempotent. -/
+def colCheck (D : Table) (rep : Nat → Nat) : Bool :=
+  (List.range 256).all fun b => decide (rep b < 256) && rep (rep b) == rep b &&
+    (List.range D.n).all fun p => D.step p b == D.step p (rep b)
+
+/-- `labCheck`, comparing labels only at class representatives: any other byte must step to the
+same numbered state as its representative. -/
+def labCheckRep (D : Table) (E : Table) (lab : Nat → Bits × Bool) (rep : Nat → Nat) : Bool :=
+  colCheck D rep && decide (E.start < E.n) && lab E.start == absInit D &&
+  (List.range E.n).all (fun k => E.acc k == !(lab k).2 &&
+    (List.range 256).all (fun b => decide (E.step k b < E.n) &&
+      if rep b == b then lab (E.step k b) == absStep D (lab k) b
+      else E.step k b == E.step k (rep b)))
+
+/-- The representative check implies the full check. -/
+theorem labCheckRep_sound {D E : Table} {lab : Nat → Bits × Bool} {rep : Nat → Nat}
+    (h : labCheckRep D E lab rep = true) : labCheck D E lab = true := by
+  simp only [labCheckRep, colCheck, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq,
+    List.all_eq_true, List.mem_range] at h
+  obtain ⟨⟨⟨hcol, hs⟩, hl⟩, hall⟩ := h
+  simp only [labCheck, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq, List.all_eq_true,
+    List.mem_range]
+  refine ⟨⟨hs, hl⟩, fun k hk => ⟨(hall k hk).1, fun b hb => ?_⟩⟩
+  obtain ⟨hlt, hb'⟩ := (hall k hk).2 b hb
+  refine ⟨hlt, ?_⟩
+  obtain ⟨⟨hr, hrr⟩, hc⟩ := hcol b hb
+  by_cases he : rep b = b
+  · simpa [he] using hb'
+  · simp only [he, if_false, beq_iff_eq] at hb'
+    have hrep := ((hall k hk).2 (rep b) hr).2
+    simp only [hrr, if_true, beq_iff_eq, beq_self_eq_true] at hrep
+    rw [hb', hrep]
+    exact (absStep_col D (lab k) b (rep b) (fun p hp => hc p hp)).symm
+
 /-- ⚑ **`factor_decides`** — a label-checked table accepts exactly the words with no factor
 accepted by `D`. -/
 theorem factor_decides {D E : Table} {lab : Nat → Bits × Bool} (hD : closedB D = true)
@@ -275,53 +383,49 @@ def Certified.ofFactor (r : Re) (D : Certified (elabRe r)) (hD : closedB D.t = t
 
 /-- Breadth-first exploration of the reachable abstract states; returns the labels and the
 numbered transition rows, or `none` when `limit` states are exceeded. -/
-def explore (D : Table) (limit : Nat) : Option (Array (Bits × Bool) × Array (Array Nat)) := Id.run do
-  let mut labels : Array (Bits × Bool) := #[absInit D]
-  let mut index : Std.HashMap (Bits × Bool) Nat := ({} : Std.HashMap (Bits × Bool) Nat).insert (absInit D) 0
-  let mut rows : Array (Array Nat) := #[]
-  let mut k := 0
-  for _ in [0:limit] do
-    if k ≥ labels.size then break
-    let x := labels[k]!
-    let mut row : Array Nat := #[]
-    for b in [0:256] do
-      let y := absStep D x b
-      match index.get? y with
-      | some j => row := row.push j
-      | none =>
-        let j := labels.size
-        labels := labels.push y
-        index := index.insert y j
-        row := row.push j
-    rows := rows.push row
-    k := k + 1
-  if k < labels.size then return none
-  return some (labels, rows)
+def explore (D : Table) (limit : Nat) : Option (Array (Bits × Bool) × Array (Array Nat)) :=
+  exploreStatesRep (absInit D) (absStep D) (byteReps D) limit
 
-/-- **`certifyAbsence r`** — whole-word table by derivatives (`certify`), then the checked factor
-construction, then minimization (checked again). -/
-def certifyAbsence (r : Re) (limit : Nat := 100000) :
-    Except String (Certified (absenceOf (elabRe r)) × List String) := do
-  let (D, notes) ← certify (elabRe r)
+/-- Checked absence construction from any certified whole-word table. This lets compositional
+compilers reuse the factor theorem without repeating derivative determinization. -/
+def certifyAbsenceFrom (r : Re) (D : Certified (elabRe r)) (notes : List String := [])
+    (limit : Nat := 100000) : Except String (Certified (absenceOf (elabRe r)) × List String) := do
   if hD : closedB D.t = true then
-    match explore D.t limit with
+    let reps := byteReps D.t
+    match exploreStatesRep (absInit D.t) (absStep D.t) reps limit with
     | none => .error s!"factor construction exceeded {limit} states"
     | some (labels, rows) =>
       let E : Table := ⟨labels.size, fun k b => (rows.getD k #[]).getD b 0,
         fun k => !(labels.getD k ([], false)).2, 0⟩
       let lab := fun k => labels.getD k ([], false)
-      if h : labCheck D.t E lab = true then
-        let c0 := Certified.ofFactor r D hD E lab h
-        let (t1, m1) := minimize c0.t
-        let (c1, notes1) := if h1 : simCheck c0.t t1 m1 = true then (c0.along t1 m1 h1, notes)
-          else (c0, notes ++ ["absence minimization check failed; unminimized"])
-        let (t2, m2) := relabelDead c1.t
-        if h2 : simCheck c1.t t2 m2 = true then pure (c1.along t2 m2 h2, notes1)
-        else pure (c1, notes1 ++ ["dead-state relabelling check failed"])
+      if h : labCheckRep D.t E lab (fun b => reps.getD b b) = true then
+        let c0 := Certified.ofFactor r D hD E lab (labCheckRep_sound h)
+        pure (c0.optimize notes)
       else .error "factor table failed its label check"
   else .error "whole-word table is not closed"
 
-#assert_all_clean [suffix_snoc, factor_snoc, absRun_spec, labCheck_run, factor_decides, absence_decides,
+/-- Whole-word compilation followed by the checked factor construction. -/
+def certifyAbsence (r : Re) (limit : Nat := 100000) :
+    Except String (Certified (absenceOf (elabRe r)) × List String) := do
+  let (D, notes) ← certify (elabRe r)
+  certifyAbsenceFrom r D notes limit
+
+/-- The image includes active successors and excludes inactive ones. -/
+theorem nextSet_discriminates :
+    nextSet ⟨3, fun s _ => if s = 0 then 1 else 2, fun _ => false, 0⟩
+      [true, false, false] 7 = [true, true, false] ∧
+    nextSet ⟨3, fun s _ => if s = 0 then 1 else 2, fun _ => false, 0⟩
+      [false, true, false] 7 = [true, false, true] := by constructor <;> rfl
+
+/-- info: 'Dregg2.Policy.nextSet_discriminates' does not depend on any axioms -/
+#guard_msgs in
+#print axioms nextSet_discriminates
+
+/-- info: 'Dregg2.Policy.nextSet_spec' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms nextSet_spec
+
+#assert_all_clean [absStep_col, labCheckRep_sound, nextSet_spec, anyAcc_spec, imgStep_getD, img_getD, memB_toArray, nextSet_discriminates, suffix_snoc, factor_snoc, absRun_spec, labCheck_run, factor_decides, absence_decides,
   closed_run]
 
 end Dregg2.Policy

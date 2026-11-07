@@ -349,6 +349,12 @@ def constTrace (a pis : Assignment) (tf : TraceFamily) : VmTrace where
   funext col
   simp [envAt, constTrace]
 
+@[simp] theorem constTrace_pub0 (a pis : Assignment) (tf : TraceFamily) :
+    (envAt (constTrace a pis tf) 0).pub = pis := rfl
+
+@[simp] theorem constTrace_tf (a pis : Assignment) (tf : TraceFamily) :
+    (constTrace a pis tf).tf = tf := rfl
+
 def CanonicalAssignment (a : Assignment) : Prop :=
   ∀ col, 0 ≤ a col ∧ a col < BABYBEAR_MODULUS
 

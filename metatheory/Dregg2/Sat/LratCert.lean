@@ -89,6 +89,10 @@ import Dregg2.Tactics
 
 namespace Dregg2.Sat.LratCert
 
+/- v4.35: core's `Std.LinearOrderPackage Int` supplies a choice-built `BEq`; keep `==`/`!=` on
+instBEqOfDecidableEq so the reference pins stay choice-free (see Tree/Value.lean). -/
+attribute [local instance high] instBEqOfDecidableEq
+
 open Dregg2.Lightclient.MMR (mroot MRootColl mroot_binds_or_collides)
 
 set_option autoImplicit false
@@ -271,7 +275,8 @@ theorem checkLrat_sound (f : Cnf) (p : List Step) (h : checkLrat f p = true) : U
 one back), polarity the sign. -/
 def toStdLit (l : Int) : Std.Sat.Literal Nat := (l.natAbs - 1, decide (0 < l))
 
-def toStd (f : Cnf) : Std.Sat.CNF Nat := { clauses := (f.map fun c => c.map toStdLit).toArray }
+def toStd (f : Cnf) : Std.Sat.CNF Nat :=
+  { clauses := (f.map fun c => Std.Sat.CNF.Clause.ofLiterals (c.map toStdLit)).toArray }
 
 /-- Zero-free: the translation is faithful only on DIMACS literals. -/
 def wf (f : Cnf) : Bool := f.all fun c => c.all (· != 0)
@@ -287,7 +292,8 @@ def checkStd (f : Cnf) (p : List Step) : Bool :=
 
 theorem toStd_eval_of_satisfies {a : Nat → Bool} {f : Cnf} (hw : wf f = true)
     (hs : Satisfies a f) : (toStd f).eval (fun v => a (v + 1)) = true := by
-  simp only [Std.Sat.CNF.eval, toStd, Std.Sat.CNF.Clause.eval, List.all_toArray, List.all_map,
+  simp only [Std.Sat.CNF.eval, toStd, Std.Sat.CNF.Clause.eval,
+    Std.Sat.CNF.Clause.literals_ofLiterals, List.all_toArray, List.all_map,
     List.all_eq_true, Function.comp_def, List.any_map, List.any_eq_true, beq_iff_eq]
   intro c hc
   obtain ⟨l, hl, hlv⟩ := hs c hc
@@ -529,10 +535,10 @@ end Reference
   Reference.dropHint_separation, Reference.noRup_not_superset, Reference.php3_counts]
 
 /-! Exact axiom sets for the soundness boundary and the new separation/count terms. -/
-/-- info: 'Dregg2.Sat.LratCert.checkLrat_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Dregg2.Sat.LratCert.checkLrat_sound' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms checkLrat_sound
-/-- info: 'Dregg2.Sat.LratCert.verify_sound' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+/-- info: 'Dregg2.Sat.LratCert.verify_sound' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms verify_sound
 /-- info: 'Dregg2.Sat.LratCert.refutes_intended_or_collides' depends on axioms: [propext, Classical.choice, Quot.sound] -/

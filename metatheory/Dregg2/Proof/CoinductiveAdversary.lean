@@ -543,8 +543,14 @@ def sumEqv : StateEqv swapCoalg swapCoalg where
   eqS_refl _ := rfl
   obsI_congr h := h
   obsS_congr h := h
-  nextI_congr _ h := by simp only [sumEq, swapCoalg_next] at h ⊢; omega
-  nextS_congr _ h := by simp only [sumEq, swapCoalg_next] at h ⊢; omega
+  nextI_congr {a a'} _ h := by
+    change a.1 + a.2 = a'.1 + a'.2 at h
+    change a.2 + a.1 = a'.2 + a'.1
+    omega
+  nextS_congr {a a'} _ h := by
+    change a.1 + a.2 = a'.1 + a'.2 at h
+    change a.2 + a.1 = a'.2 + a'.1
+    omega
 
 /-- The base relation of the demonstration: exactly the diagonal points sitting at state
 `((1,2),(1,2))` (any index). Its generator-successor SWAPS to `(2,1)` — leaving `R0` — but the

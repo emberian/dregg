@@ -253,7 +253,7 @@ theorem mixedDifference_zero_of_totalDegree_le_one
   rw [p.as_sum]
   have hsum : ∀ s : Finset ((X ⊕ Y) →₀ ℕ), s ⊆ p.support →
       mixedDifference
-          (∑ d ∈ s, MvPolynomial.monomial d (MvPolynomial.coeff d p))
+          (∑ d ∈ s, MvPolynomial.monomial d (p.coeff d))
           x₀ x₁ y₀ y₁ = 0 := by
     intro s hs
     induction s using Finset.induction_on with
@@ -265,7 +265,7 @@ theorem mixedDifference_zero_of_totalDegree_le_one
           intro e he
           exact hs (by simp [he])
         have hmono := mixedDifference_monomial_zero_of_sum_le_one
-          d (MvPolynomial.coeff d p)
+          d (p.coeff d)
           ((MvPolynomial.le_totalDegree hdmem).trans hdegree) x₀ x₁ y₀ y₁
         have hrest := ih hsmem
         dsimp [mixedDifference] at hmono hrest ⊢

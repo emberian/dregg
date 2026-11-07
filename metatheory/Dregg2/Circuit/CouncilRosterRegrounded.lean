@@ -384,7 +384,8 @@ theorem substitution_adv_le {Guardian : Type} (D : RosterDeployment Guardian)
     gameAdv (rosterSubstitutionGame D) A n
       ≤ gameAdv (rosterCollisionGame D) (substitutionToCollisionFinder D A) n := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact substitution_wins_imp D A n t ht
 
 /-! ## §5 — the RE-GROUNDED CONSUMER.

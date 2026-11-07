@@ -75,6 +75,21 @@ def powModQ (base e : Nat) : Nat := Id.run do
 def pstep (st : Nat × Nat × Nat) (_ : Nat) : Nat × Nat × Nat :=
   (mulModQ st.1 st.1, st.2.1 / 2, if st.2.1 % 2 == 1 then mulModQ st.2.2 st.1 else st.2.2)
 
+/-- The `forIn` body of `powModQ`, as a fold over the state `(result, b, ex)`, is `pstep` on the rotated
+state `(b, ex, result)`. -/
+private theorem foldl_body_eq_pstep (l : List Nat) (r b ex : Nat) :
+    List.foldl (fun (s : Nat × Nat × Nat) (_ : Nat) =>
+        if (s.2.2 % 2 == 1) = true then (mulModQ s.1 s.2.1, mulModQ s.2.1 s.2.1, s.2.2 / 2)
+        else (s.1, mulModQ s.2.1 s.2.1, s.2.2 / 2)) (r, b, ex) l =
+      ((List.foldl pstep (b, ex, r) l).2.2, (List.foldl pstep (b, ex, r) l).1,
+        (List.foldl pstep (b, ex, r) l).2.1) := by
+  induction l generalizing r b ex with
+  | nil => rfl
+  | cons a l ih =>
+    by_cases h : (ex % 2 == 1) = true
+    · simp only [List.foldl_cons, h, if_true, ih, pstep]
+    · simp only [List.foldl_cons, h, Bool.false_eq_true, if_false, ih, pstep]
+
 /-- **`powModQ` as the explicit 32-step ladder fold** (`result` is the third component). The `for _ in
 [0:32]` loop desugars to `Std.Range.forIn`, whose well-founded recursion the KERNEL cannot reduce — so
 concrete `powModQ` facts get stuck under `decide`. `List.foldl` over the concrete `List.range' 0 32 1`
@@ -83,10 +98,16 @@ DOES kernel-reduce; rewriting through this lemma is what lets `zeta_primitive_51
 theorem powModQ_eq_fold (base e : Nat) :
     powModQ base e = (List.foldl pstep (base % q, e, 1) (List.range' 0 32 1)).2.2 := by
   unfold powModQ
+  -- `← apply_ite` loops on v4.35; push the `if` through `pure (ForInStep.yield ·)` with this
+  -- one instance instead.
+  have hite : ∀ (c : Prop) [Decidable c] (a b : Nat × Nat × Nat),
+      (if c then (pure (ForInStep.yield a) : Id (ForInStep (Nat × Nat × Nat)))
+        else pure (ForInStep.yield b)) = pure (ForInStep.yield (if c then a else b)) :=
+    fun c _ a b => (apply_ite (fun x => (pure (ForInStep.yield x) : Id _)) c a b).symm
   simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
-    ← apply_ite, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
+    hite, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
     Nat.add_sub_cancel, Nat.div_one]
-  rfl
+  exact congrArg Prod.fst (foldl_body_eq_pstep (List.range' 0 32) 1 (base % q) e)
 
 /-! ## The negacyclic ring `R_q = ℤ_q[X]/(X²⁵⁶+1)` -/
 

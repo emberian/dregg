@@ -99,7 +99,7 @@ theorem recKRevokeTarget_correct (caps : Caps) (holder t : CellId) :
   refine ⟨?_, ?_⟩
   · intro cap hcap
     have hcap' : cap ∈ (caps holder).filter (fun cap => ¬ confersEdgeTo t cap) := by
-      simpa only [removeEdgeCaps, if_pos (rfl : holder = holder)] using hcap
+      simpa only [removeEdgeCaps, if_pos (rfl : holder = holder), if_true] using hcap
     have := (List.mem_filter.mp hcap').2
     simpa only [decide_eq_true_eq] using this
   · intro l hl

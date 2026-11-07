@@ -388,8 +388,9 @@ theorem commit_aggregate_under_common_key
     (cs : List (LocalContribution Party Session CollectiveKey KeyId Commitment (Opening M B))) :
     commit messageMap blindingMap (aggregateOpenings cs) =
       (cs.map (fun c => commit messageMap blindingMap c.opening)).sum := by
-  simpa [aggregateOpenings, List.map_map] using
-    commit_sum messageMap blindingMap (cs.map (fun c => c.opening))
+  rw [aggregateOpenings, commit_sum messageMap blindingMap (cs.map (fun c => c.opening)),
+    List.map_map]
+  rfl
 
 end Aggregate
 

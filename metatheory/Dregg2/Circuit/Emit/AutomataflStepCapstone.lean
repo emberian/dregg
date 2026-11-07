@@ -233,7 +233,8 @@ theorem raycast_of_hit (n : Nat) (e : VmRowEnv) (d : Dir) (K : Nat)
   have h := raycast_at_hit (boardDecodeN n e)
     ((boardDecodeN n e).automaton.x : Int) ((boardDecodeN n e).automaton.y : Int)
     d.delta.1 d.delta.2 K (n + 1) hK (by omega) hbefore
-  simpa only [Board.raycast, boardDecodeN_size] using h
+  simp only [Board.raycast, boardDecodeN_size] at h ⊢
+  exact h
 
 /-! ## §3 — PURE LIST/HEAD PLUMBING for the ray wiring.
 
@@ -257,9 +258,9 @@ theorem filterMap_bif_eq (L : List Nat) (P : Nat → Bool) (f : Nat → Nat) :
   | nil => rfl
   | cons a L ih =>
       by_cases h : P a = true
-      · simp [List.filterMap_cons, List.filter_cons, h, ih]
-      · simp only [Bool.not_eq_true] at h
-        simp [List.filterMap_cons, List.filter_cons, h, ih]
+      · rw [List.filterMap_cons_some (b := f a) (by simp [h]), List.filter_cons_of_pos h,
+          List.map_cons, ih]
+      · rw [List.filterMap_cons_none (by simp [h]), List.filter_cons_of_neg h, ih]
 
 /-- A sum over a FILTERED list is the total sum of the `if`-guarded summand. -/
 theorem sum_filter_eq_sum_ite (L : List Nat) (P : Nat → Bool) (g : Nat → ℤ) :
@@ -981,7 +982,7 @@ theorem raycast_xp_of_satN (n : Nat) (hn : (n : ℤ) < 2013265921)
       hcellAt (ax + j) ay (by omega) hayLt, hcell0]
     rfl
   rw [raycast_of_hit n e Dir.xp K hK1 (by omega) hbeforeRay, hAx, hAy, hdist]
-  simp only [Dir.delta]
+  rw [show (Dir.xp.delta).1 = (1 : ℤ) from rfl, show (Dir.xp.delta).2 = (0 : ℤ) from rfl]
   rw [show ((K : ℤ)).toNat = K from by omega]
   rcases hib01 with hK0 | hK1v
   · -- the hit is OUT of bounds: the reference reads the wall, the circuit's `what` is forced to 0.
@@ -1116,7 +1117,7 @@ theorem raycast_xn_of_satN (n : Nat) (hn : (n : ℤ) < 2013265921)
       hcellAt (ax - j) ay (by omega) hayLt, hcell0]
     rfl
   rw [raycast_of_hit n e Dir.xn K hK1 (by omega) hbeforeRay, hAx, hAy, hdist]
-  simp only [Dir.delta]
+  rw [show (Dir.xn.delta).1 = (-1 : ℤ) from rfl, show (Dir.xn.delta).2 = (0 : ℤ) from rfl]
   rw [show ((K : ℤ)).toNat = K from by omega]
   rcases hib01 with hK0 | hK1v
   · have hd : ¬ ((ax : ℤ) ≥ (K : ℤ)) := by
@@ -1250,7 +1251,7 @@ theorem raycast_yp_of_satN (n : Nat) (hn : (n : ℤ) < 2013265921)
       hcellAt ax (ay + j) haxLt (by omega), hcell0]
     rfl
   rw [raycast_of_hit n e Dir.yp K hK1 (by omega) hbeforeRay, hAx, hAy, hdist]
-  simp only [Dir.delta]
+  rw [show (Dir.yp.delta).1 = (0 : ℤ) from rfl, show (Dir.yp.delta).2 = (1 : ℤ) from rfl]
   rw [show ((K : ℤ)).toNat = K from by omega]
   rcases hib01 with hK0 | hK1v
   · have hd : ¬ ((ay : ℤ) ≤ (n : ℤ) - 1 - (K : ℤ)) := by
@@ -1383,7 +1384,7 @@ theorem raycast_yn_of_satN (n : Nat) (hn : (n : ℤ) < 2013265921)
       hcellAt ax (ay - j) haxLt (by omega), hcell0]
     rfl
   rw [raycast_of_hit n e Dir.yn K hK1 (by omega) hbeforeRay, hAx, hAy, hdist]
-  simp only [Dir.delta]
+  rw [show (Dir.yn.delta).1 = (0 : ℤ) from rfl, show (Dir.yn.delta).2 = (-1 : ℤ) from rfl]
   rw [show ((K : ℤ)).toNat = K from by omega]
   rcases hib01 with hK0 | hK1v
   · have hd : ¬ ((ay : ℤ) ≥ (K : ℤ)) := by

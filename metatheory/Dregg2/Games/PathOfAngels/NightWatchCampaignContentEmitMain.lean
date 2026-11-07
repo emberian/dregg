@@ -165,7 +165,7 @@ def outDir : IO System.FilePath := do
 def emitMode : IO Unit := do
   let some secretPath ← IO.getEnv "POA_NIGHT_WATCH_SECRET_FILE"
     | refuse "POA_NIGHT_WATCH_SECRET_FILE is not set; the commitment needs a curator-drawn secret"
-  let secretHex := (← IO.FS.readFile (System.FilePath.mk secretPath)).trim
+  let secretHex := (← IO.FS.readFile (System.FilePath.mk secretPath)).trimAscii.copy
   let some secretDigest := Emit.parseBytes32Hex? secretHex
     | refuse "the secret file is not 64 lowercase hex digits"
   let secret : HiddenInstance.SlotSecret := ⟨secretDigest⟩

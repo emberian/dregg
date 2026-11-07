@@ -244,6 +244,13 @@ theorem hood_of_oodColumnLayout
 /-! ## §4 — transferV3 RE-DERIVED: the hand-modeled layout is the SPECIALIZATION
 `oodColumnLayout_law transferV3` (subsumption, not a re-proof). -/
 
+/-- `oodColumnLayout_law` restated over the template's `arithList`/`Rfam`, at a generic
+descriptor (so the definitional unfolding never meets a concrete descriptor's body). -/
+private theorem columnLayout_law_template (d : EffectVmDescriptor2) (t : VmTrace) (ζ : BabyBear)
+    (qp : VmConstraint2 → Polynomial BabyBear) (j : Fin (arithList d).length) :
+    (batchResidual (Rfam d t ζ qp)).coeff (j : ℕ) = Rfam d t ζ qp j :=
+  oodColumnLayout_law d t ζ qp j
+
 /-- **The hand-model, subsumed.** The `transferV3` column-layout equation the template exhibits by
 hand — coefficient `j` of `batchResidual (Rfam transferV3 …)` is `Rfam transferV3 … j` — is exactly
 `oodColumnLayout_law` specialized at `d := transferV3`. (The statement is over the template's OWN
@@ -251,7 +258,7 @@ hand — coefficient `j` of `batchResidual (Rfam transferV3 …)` is `Rfam trans
 theorem transferV3_columnLayout_law (t : VmTrace) (ζ : BabyBear)
     (qp : VmConstraint2 → Polynomial BabyBear) (j : Fin (arithList transferV3).length) :
     (batchResidual (Rfam transferV3 t ζ qp)).coeff (j : ℕ) = Rfam transferV3 t ζ qp j :=
-  oodColumnLayout_law transferV3 t ζ qp j
+  columnLayout_law_template transferV3 t ζ qp j
 
 /-! ## §5 — NON-VACUITY: the modeler reads the REAL deployed descriptor. -/
 
@@ -291,6 +298,13 @@ theorem oodArithList_transferV3_length : (oodArithList transferV3).length = 155 
 theorem oodArithList_transferV3_pos : 0 < (oodArithList transferV3).length := by
   rw [oodArithList_transferV3_length]; omega
 
+/-- Coefficient `0` of the batched residual, at a generic descriptor with a nonempty layout. -/
+private theorem oodBatchResidual_coeff_zero (d : EffectVmDescriptor2)
+    (h : 0 < (oodArithList d).length) (t : VmTrace) (ζ : BabyBear)
+    (qp : VmConstraint2 → Polynomial BabyBear) :
+    (oodBatchResidual d t ζ qp).coeff 0 = oodRfam d t ζ qp ⟨0, h⟩ :=
+  batchResidual_coeff (oodRfam d t ζ qp) ⟨0, h⟩
+
 /-- **The law FIRES on the deployed descriptor**: coefficient `0` of `transferV3`'s batched residual
 is the residual of the FIRST column of its actual 155-column layout — the general law applied at a
 concrete real descriptor and a concrete index. -/
@@ -298,7 +312,7 @@ theorem oodColumnLayout_law_fires (t : VmTrace) (ζ : BabyBear)
     (qp : VmConstraint2 → Polynomial BabyBear) :
     (oodBatchResidual transferV3 t ζ qp).coeff 0
       = oodRfam transferV3 t ζ qp ⟨0, oodArithList_transferV3_pos⟩ :=
-  batchResidual_coeff (oodRfam transferV3 t ζ qp) ⟨0, oodArithList_transferV3_pos⟩
+  oodBatchResidual_coeff_zero transferV3 oodArithList_transferV3_pos t ζ qp
 
 /-- The RLC bad-Λ bound at the deployed descriptor, with the nonemptiness hypothesis DISCHARGED
 outright (the template's `rlc_lambda_is_bounded_fs_form` had to carry it): fewer than 155 bad

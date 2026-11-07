@@ -346,7 +346,8 @@ theorem c2_adv_le (F : Compress2Family) (A : Adversary (hashGame (c2NodeFamily F
     gameAdv (hashGame (c2NodeFamily F)) A l
       ≤ gameAdv (hashGame (c2Compress1Family F)) (nodeToCompress1Adv F A) l := by
   refine @Dregg2.Crypto.ProbCrypto.winProb_le_of_imp _ (F.instFin l) _ _ (fun i hi => ?_)
-  rw [Adversary.hit_eq_true] at hi ⊢
+  replace hi := (Adversary.hit_eq_true _ _ _).mp hi
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact c2_wins_imp F A l i hi
 
 /-- **⚑ RE-GROUNDED `CommitmentBinding.compressInjective_of_compress2` (and through it
@@ -472,7 +473,8 @@ theorem factory_adv_le (Inst : ℕ → Type) (instFin : ∀ l, Fintype (Inst l))
       ≤ gameAdv (hashGame (factoryHashFamily Inst instFin instNe))
           (forgerToFactoryHashAdv Inst instFin instNe A) l := by
   refine @Dregg2.Crypto.ProbCrypto.winProb_le_of_imp _ (instFin l) _ _ (fun i hi => ?_)
-  rw [Adversary.hit_eq_true] at hi ⊢
+  replace hi := (Adversary.hit_eq_true _ _ _).mp hi
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact factory_wins_imp Inst instFin instNe A l i hi
 
 /-- **⚑ RE-GROUNDED `Exec.Factory.vk_determines_invariants` / `vk_determines_program` — from COLLISION
@@ -608,7 +610,8 @@ theorem rebind_adv_le (F : BindingFamily) (A : Adversary (rebindGame F))
     gameAdv (rebindGame F) A l
       ≤ gameAdv (hashGame (bindingHashFamily F)) (rebinderToBindingAdv F A) l := by
   refine @Dregg2.Crypto.ProbCrypto.winProb_le_of_imp _ (F.instFin l) _ _ (fun i hi => ?_)
-  rw [Adversary.hit_eq_true] at hi ⊢
+  replace hi := (Adversary.hit_eq_true _ _ _).mp hi
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   exact rebind_wins_imp F A hmacInj l i hi
 
 /-- **⚑ RE-GROUNDED `MacaroonDischarge.rebinding_changes_replay` / `binding_body_distinguishes_roots` —

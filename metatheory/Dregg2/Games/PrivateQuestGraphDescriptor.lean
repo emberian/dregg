@@ -125,27 +125,30 @@ theorem privateQuest_satisfied_to_base_satisfied
       (constTrace a pis tf)) :
     Satisfied2 hash privateGraphRewriteDescriptor ppM0 ppF0 []
       (constTrace a pis tf) := by
+  -- The two descriptors declare the same memory and map ops and the traces share their rows,
+  -- so the logs coincide; stated once and closed by rfl, not re-simplified per leg.
+  have hmem : Dregg2.Circuit.DescriptorIR2.memLog privateGraphRewriteDescriptor
+      (constTrace a pis tf) =
+      Dregg2.Circuit.DescriptorIR2.memLog privateQuestGraphDescriptor (constTrace a pis tf) := rfl
+  have hmap : Dregg2.Circuit.DescriptorIR2.mapLog privateGraphRewriteDescriptor
+      (constTrace a pis tf) =
+      Dregg2.Circuit.DescriptorIR2.mapLog privateQuestGraphDescriptor (constTrace a pis tf) := rfl
   constructor
   · intro i hi constraint hc
     exact hsat.rowConstraints i hi constraint (base_constraint_mem_quest hc)
   · intro i hi
-    simpa [privateGraphRewriteDescriptor, privateQuestGraphDescriptor, constTrace]
+    simpa [privateGraphRewriteDescriptor, privateQuestGraphDescriptor, constTrace,
+      Dregg2.Circuit.Emit.EffectVmEmit.siteHoldsAll,
+      Dregg2.Circuit.Emit.EffectVmEmit.siteHoldsAll.go]
       using hsat.rowHashes i hi
   · intro i hi r hr
     simp [privateGraphRewriteDescriptor] at hr
   · exact hsat.memAddrsNodup
-  · simpa [privateGraphRewriteDescriptor, privateQuestGraphDescriptor]
-      using hsat.memClosed
-  · simpa [privateGraphRewriteDescriptor, privateQuestGraphDescriptor]
-      using hsat.memDisciplined
-  · simpa [privateGraphRewriteDescriptor, privateQuestGraphDescriptor]
-      using hsat.memBalanced
-  · simpa [privateGraphRewriteDescriptor, privateQuestGraphDescriptor, constTrace]
-      using hsat.memTableFaithful
-  · simpa [Dregg2.Circuit.DescriptorIR2.mapLog,
-      Dregg2.Circuit.DescriptorIR2.mapOpsOf, privateGraphRewriteDescriptor,
-      privateQuestGraphDescriptor, questSemanticBodies, constTrace]
-      using hsat.mapTableFaithful
+  · rw [hmem]; exact hsat.memClosed
+  · rw [hmem]; exact hsat.memDisciplined
+  · rw [hmem]; exact hsat.memBalanced
+  · rw [hmem]; exact hsat.memTableFaithful
+  · rw [hmap]; exact hsat.mapTableFaithful
 
 theorem fixed_rule_gate_mem {body : EmittedExpr} (hbody : body ∈ fixedRuleBodies) :
     VmConstraint2.base (.gate body) ∈ privateQuestGraphDescriptor.constraints := by

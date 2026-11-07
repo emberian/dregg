@@ -1,0 +1,26 @@
+# tree-absence: the Rust certificate PRODUCER for initiative 12 (tree automata over JSON/CBOR).
+# The verifier is the Lean executable `tree-check` (metatheory/TreeCheck.lean); nothing here
+# decides acceptance. Standalone: its own [workspace] table keeps it out of the root workspace.
+[package]
+name = "tree-absence"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "tree-cert"
+path = "src/main.rs"
+
+[dependencies]
+sha3 = "0.10"
+num-bigint = "0.4"
+num-traits = "0.2"
+serde_json = "1"
+hex = "0.4"
+# The differential oracle for query (B) (src/invocation.rs).
+regex = "1"
+# Fallback table compiler (derivatives + Moore minimization), used only when `policyc` cannot
+# compile the query pattern; see run.sh.
+dregg-dfa = { path = "../../dfa" }

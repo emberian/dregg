@@ -18,17 +18,21 @@ This module is the CROWN COROLLARY: a `Satisfied2` witness of the DEPLOYED E1-co
 availability keystone chain fires. The wrap-forgery teeth hold of the object the light client
 actually resolves.
 
-## The two side conditions, kernel-checked
+## The two side conditions, by compiled evaluation
 
 `compactE1Ok … = true` is discharged HERE from the cheap `transitionCeilingOk` (the only
 member-specific fact — every `.transition` face column `≤ 89 < 90`), via the GENERIC gate lemma
 `compactE1Ok_of_ceiling` (killability is unreferencedness by construction — no per-constraint
-kernel cross-product). `decide +kernel` (NOT `native_decide`, which would carry
-`Lean.ofReduceBool` and fail the `#assert_axioms` pin).
+kernel cross-product). `transitionCeilingOk` is a fact about the deployed bytes, so it is checked by
+compiled evaluation (`native_decide`; ember, 2026-11-06: concrete data by the compiler, general
+theorems by the kernel).
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem.
+`transferWide_ceilingOk` rests on its own `transferWide_ceilingOk._native.native_decide.ax_1_1`;
+the keystones also rest on the compact module's side conditions
+(`RotatedKernelRefinementAvailWideCompact`). Every pin below is therefore `#assert_compiled`, which
+re-runs each such claim and refuses any other axiom; `RotTableSideW_expandG` is not pinned here.
 -/
 import Dregg2.Circuit.RotatedKernelRefinementAvailWideCompact
 import Dregg2.Circuit.Emit.RotWideCompactE1
@@ -65,7 +69,7 @@ def transferWideDeployedE1 : EffectVmDescriptor2 :=
 /-- The E1 emit gate, kernel-checked via the cheap ceiling: every `.transition` in the S2-compact
 transfer row reads a face column below 90, so the DERIVED kill-set passes `compactE1Ok`. -/
 theorem transferWide_ceilingOk : transitionCeilingOk transferWideDeployedC E1_FLOOR = true := by
-  decide +kernel
+  native_decide
 
 /-- The whole E1 side-condition bundle, from the ceiling. -/
 theorem transferWide_compactE1Ok :
@@ -126,9 +130,9 @@ theorem deployedE1_rejects_overdebit (hash : List ℤ → ℤ) {permOut : List �
     pre post tr a henc).1
   omega
 
-#assert_axioms transferWide_ceilingOk
-#assert_axioms transferWide_compactE1Ok
-#assert_axioms availability_and_exact_move_forced_deployedE1
-#assert_axioms deployedE1_rejects_overdebit
+#assert_compiled transferWide_ceilingOk
+#assert_compiled transferWide_compactE1Ok
+#assert_compiled availability_and_exact_move_forced_deployedE1
+#assert_compiled deployedE1_rejects_overdebit
 
 end Dregg2.Circuit.RotatedKernelRefinementAvailWideCompactE1

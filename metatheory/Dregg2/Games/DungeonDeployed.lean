@@ -625,13 +625,14 @@ private theorem tr_fieldDelta {s s' : DState} {r : String} (hr : r ∈ registerN
     simpa [resultInRange] using hlt
   simp only [admits, baseInput]
   rw [if_neg (Nat.not_le.mpr hidx), if_true]
-  rw [if_neg (show ¬ ((dgSlots s').getD (dgRegIdx r) 0
-      ≠ fieldAdd ((dgSlots s).getD (dgRegIdx r) 0) d) from by
+  have hne : ¬ ((dgSlots s').getD (dgRegIdx r) 0
+      ≠ fieldAdd ((dgSlots s).getD (dgRegIdx r) 0) d) := by
     rw [hadd, hx]
-    exact not_not_intro rfl)]
-  rw [if_neg (show ¬ ¬ (resultInRange ((dgSlots s').getD (dgRegIdx r) 0) = true) from by
+    exact not_not_intro rfl
+  have hin : ¬ ¬ (resultInRange ((dgSlots s').getD (dgRegIdx r) 0) = true) := by
     rw [hx]
-    exact not_not_intro hrange)]
+    exact not_not_intro hrange
+  exact (if_neg hne).trans (if_neg hin)
 
 private theorem tr_strictMonotonic {s s' : DState} {r : String}
     (hr : r ∈ registerNames)
@@ -645,7 +646,8 @@ private theorem tr_strictMonotonic {s s' : DState} {r : String}
     have h := of_decide_eq_true hexec
     exact_mod_cast h
   simp only [admits, baseInput]
-  rw [if_neg (Nat.not_le.mpr hidx), if_true, if_pos hx]
+  rw [if_neg (Nat.not_le.mpr hidx), if_true]
+  exact if_pos hx
 
 private theorem tr_immutable {s s' : DState} {r : String} (hr : r ∈ registerNames)
     (hexec : evalConstraint (Constraint.immutable r).toExec
@@ -658,7 +660,8 @@ private theorem tr_immutable {s s' : DState} {r : String} (hr : r ∈ registerNa
     have h := Option.some.inj (beq_iff_eq.mp hexec)
     exact_mod_cast h
   simp only [admits, baseInput]
-  rw [if_neg (Nat.not_le.mpr hidx), if_true, if_pos hx]
+  rw [if_neg (Nat.not_le.mpr hidx), if_true]
+  exact if_pos hx
 
 /-- The Exec sum of register reads is the cast of the deployed slot-value sum. -/
 private theorem sum_corr (s' : DState) : ∀ (rs : List String),
@@ -936,7 +939,8 @@ private theorem branch_agree {s s' : DState} (v : Simple) (hok : simpleOK v = tr
       rw [hT, if_pos rfl]
       show admits (.immutable (dgRegIdx r)) (baseInput s s') = .ok
       simp only [admits, baseInput]
-      rw [if_neg (Nat.not_le.mpr hidx), if_true, if_pos h]
+      rw [if_neg (Nat.not_le.mpr hidx), if_true]
+      exact if_pos h
     · have hF : evalSimple (Simple.toExec (.immutable r))
           (encode s) (encode s') = false := by
         simp only [Simple.toExec, evalSimple, hvalO, hvalN]
@@ -946,7 +950,8 @@ private theorem branch_agree {s s' : DState} (v : Simple) (hok : simpleOK v = tr
       simp only [Bool.false_eq_true, if_false]
       show admits (.immutable (dgRegIdx r)) (baseInput s s') = .violated
       simp only [admits, baseInput]
-      rw [if_neg (Nat.not_le.mpr hidx), if_true, if_neg h]
+      rw [if_neg (Nat.not_le.mpr hidx), if_true]
+      exact if_neg h
   | heapField k a =>
     -- ⚑ NEVER LOWERED: `Simple.toBranch` is `none` here, so this branch cannot arrive.
     exact absurd hbv (by simp [Simple.toBranch])
@@ -1329,7 +1334,7 @@ theorem deployed_tooth_conserves (i : DInput)
     ([4, 5, 9, 10, 11, 12, 14].map (fun k => low64 (i.newRegs.getD k 0))).sum = RELICS := by
   simp only [admits, sumEqualsAdmit] at h
   have := sumGo_inv 8 i.newRegs [4, 5, 9, 10, 11, 12, 14] 0 h
-  simpa using this
+  simpa [low64_small (a := 8) (by decide)] using this
 
 /-- **Capacity inversion at deployed width**: ANY input the deployed `AffineLe`
 capacity tooth admits satisfies `pack-lane + depth-lane + harm-lane ≤ CAP`. ⚑ The

@@ -354,8 +354,7 @@ theorem goodRow_encodes_genuine : RowEncodes goodRow preWit postWit 0 0 30 1 := 
     have f6 : ¬ (54 + (3 + i) = 68) := by omega
     have f7 : ¬ (54 + (3 + i) = 69) := by omega
     have f2 : ¬ (54 + (3 + i) = 54) := by omega
-    simp only [if_neg e1, if_neg e2, if_neg e3, if_neg e4, if_neg e5, if_neg e6, if_neg e7,
-      if_neg f1, if_neg f2, if_neg f3, if_neg f4, if_neg f5, if_neg f6, if_neg f7]
+    simp only [e1, e2, e3, e4, e5, e6, e7, f1, f2, f3, f4, f5, f6, f7, ↓reduceIte]
 
 /-- **NON-VACUITY (witness TRUE).** The genuine transition `preWit → postWit` satisfies the abstract
 move (the bridge's RHS is inhabited), so `goodRow`'s gates accept it. -/

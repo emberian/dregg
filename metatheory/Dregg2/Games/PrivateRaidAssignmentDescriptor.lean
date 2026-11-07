@@ -337,8 +337,9 @@ theorem candidateRows_complete
   have hnVal :
       [(roles 0).val, (roles 1).val, (roles 2).val, (roles 3).val].Nodup := by
     simp_all
-  simpa [roleRow, List.ofFn] using
-    candidateRows_cover_values (roles 0) (roles 1) (roles 2) (roles 3) hnVal
+  have hrow : roleRow roles = [(roles 0).val, (roles 1).val, (roles 2).val, (roles 3).val] := rfl
+  rw [hrow]
+  exact candidateRows_cover_values (roles 0) (roles 1) (roles 2) (roles 3) hnVal
 
 theorem candidateRows_shape :
     candidateRows.length = 24 ∧
@@ -577,6 +578,12 @@ def constTrace (a pis : Assignment) (tf : TraceFamily) : VmTrace where
     (envAt (constTrace a pis tf) 0).loc = a := by
   funext col
   simp [envAt, constTrace]
+
+@[simp] theorem constTrace_pub0 (a pis : Assignment) (tf : TraceFamily) :
+    (envAt (constTrace a pis tf) 0).pub = pis := rfl
+
+@[simp] theorem constTrace_tf (a pis : Assignment) (tf : TraceFamily) :
+    (constTrace a pis tf).tf = tf := rfl
 
 def CanonicalAssignment (a : Assignment) : Prop :=
   ∀ col, 0 ≤ a col ∧ a col < BABYBEAR_MODULUS

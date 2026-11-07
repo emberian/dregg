@@ -142,7 +142,10 @@ def main():
   position, so the current wait is certified to be at most <code>n − last</code> events.</p>
 
   <h2>The receipts, <em>live.</em></h2>
-  <p>This lane's own session, followed while it wrote this page. The follower's last line:</p>
+  <p>This lane's own session transcript, tailed while the lane was still writing it: the producer
+  cut a window every hundred lines as they appeared and a Lean follower checked them as they
+  landed. When the producer was stopped the whole chain was checked once more, from genesis,
+  against an independently computed root. That run's last line:</p>
   <pre>{html.escape(live_accept)}</pre>
   <div class="tablewrap"><table>
     <tr><th>k</th><th>positions</th><th>verdict</th><th>tripped</th><th>waiting</th><th>marks</th><th>last mark</th><th>hashes</th><th>root</th></tr>
@@ -211,9 +214,10 @@ def main():
     no theorem lets it adopt a stranger's receipt k</p></div>
     <div class="nc"><div class="x">✗</div><p>first-order obligations · "every tool call gets its
     result" needs a register per open call; the alphabet here is four symbols</p></div>
-    <div class="nc"><div class="x">✗</div><p>a cross-model audit · the required rounds with a
-    second model are owed; a fresh-context audit found two major and seven minor issues, all
-    repaired before this run</p></div>
+    <div class="nc"><div class="x">✗</div><p>a perfect shell reader · three rounds of
+    adversarial audit by a second model (gpt-6-astra) closed every blocker and major finding; two
+    minor classifier gaps remain on record (quoting inside substitutions, <code>env -S</code> and
+    long <code>sudo</code> options)</p></div>
   </div>
 
   <div class="stance"><p><strong>Private by construction.</strong> This page shows roots, states,

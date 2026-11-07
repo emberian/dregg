@@ -18,6 +18,7 @@ fully-qualified names are unchanged. The hostile checks pin the EXACT refusal er
 which refutes acceptance by construction. Named residue: none.
 -/
 import Dregg2.Games.PathOfAngels.EventBatch
+import Batteries.Tactic.OpenPrivate
 
 namespace Dregg2.Games.PathOfAngels.EventBatch
 

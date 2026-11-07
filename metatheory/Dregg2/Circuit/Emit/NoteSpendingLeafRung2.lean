@@ -99,7 +99,7 @@ continuity pair and the terminal `(CURRENT, merkle_root)` — inhabited concrete
 private theorem thread_of_window (env : VmRowEnv) (hn : Canon (env.nxt 0)) (h5 : Canon (env.loc 5))
     (h : contBodyW.eval env ≡ 0 [ZMOD 2013265921]) : env.nxt 0 = env.loc 5 := by
   have hb : contBodyW.eval env = env.nxt 0 - env.loc 5 := by
-    simp only [contBodyW, WindowExpr.eval]; ring
+    simp only [contBodyW, GateExpr.gThread_window, WindowExpr.eval]; ring
   rw [hb, Int.modEq_zero_iff_dvd] at h
   obtain ⟨k, hk⟩ := h; obtain ⟨_, _⟩ := hn; obtain ⟨_, _⟩ := h5; omega
 

@@ -159,8 +159,8 @@ theorem interp_exerciseStmt_eq_kernel (s : RecChainedState) (actor target : Cell
   -- (`{ s with log := … }.kernel = s.kernel`), so its `.map (·.kernel)` is `some s.kernel`.
   unfold exerciseStepA
   by_cases hg : (s.kernel.caps actor).any (fun cap => confersEdgeTo target cap) = true
-  · rw [if_pos hg, if_pos hg]; rfl
-  · rw [if_neg hg, if_neg hg]; rfl
+  · simp only [hg, ↓reduceIte, Option.map_some] <;> rfl
+  · simp only [hg, Bool.false_eq_true, ↓reduceIte, Option.map_none]
 
 #assert_axioms interp_exerciseStmt_eq_kernel
 

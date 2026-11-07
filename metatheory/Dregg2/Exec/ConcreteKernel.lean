@@ -337,6 +337,9 @@ theorem toAbstract_balMap_transferAsset (cs : ConcreteKernelState) (turn : Turn)
     rw [if_neg (by rintro ⟨_, h⟩; exact hb h.symm),
         if_neg (by rintro ⟨_, h⟩; exact hb h.symm), if_neg hb]
 
+-- v4.35: the abstract gate's `if` is not type-correct at implicit transparency after the
+-- `toAbstract_*` rewrites, so neither `rw` nor `simp` can match it; the old unifier can.
+set_option backward.isDefEq.respectTransparency false in
 /-- **THE PER-ASSET TRANSFER SQUARE.** The `Option`-level commuting square: abstracting the
 concrete per-asset op equals the abstract `recKExecAsset`. Both the GATE and the COMMIT branch
 correspond — the gate because `toAbstract` is the identity on `caps`/`accounts` and `toAbstract_bal`

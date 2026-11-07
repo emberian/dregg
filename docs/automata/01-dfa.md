@@ -3,6 +3,39 @@
 Tags: [READ] seen at file:line; [MEASURED] a pinned `#guard` or a run; [CLAIM] asserted elsewhere;
 [INFERRED] derived here. Metatheory root `M = /Users/ember/dev/breadstuffs/metatheory/Dregg2`.
 
+## Current served record binding (2026-11-06, initiative #1)
+
+[READ] The original shape analysis below is historical. `bf583f317` adds served, record-bound
+variants of table routing and the full-eight-lane attested weld. `RouteChain8` supplies one
+shared indexed route: a domain tag, row index, current state, symbol, next state and previous
+eight digest lanes occupy 13 fields, padded to the deployed arity-16 chip. The decorator adds
+17 columns, 9 PIs, 28 constraints and one wide permutation per symbol.
+
+| served shape | columns | PIs | constraints | binding source |
+|---|---:|---:|---:|---|
+| ordered table routing | 20 | 11 | 32 | `DfaRoutingTableRoute8Bound.lean` |
+| ordered attested weld | 28 | 19 | 50 | `AttestedAutomatonRoute8.lean`, `AttestedAutomatonRoute8Witness.lean` |
+
+[READ] `route_chain8_witness::verify_route8_record` recomputes the record's endpoints,
+full-eight-lane route and length using the caller's transition function. It compares them to
+the proved public inputs and checks actual proof height. Honest and substituted records use
+the same proof and PIs in the refusal test. Initial supported heights are powers of two;
+other lengths are refused, not silently padded. The attested model still requires its exact
+opening/occupancy premises; the runtime sentinel constraint remains explicit below.
+
+[MEASURED] For the binary weld, 4 KiB means **32,768 symbol rows**, 524,288 map-path
+permutations and 32,768 route permutations, totaling 557,056. The new main trace has 917,504
+cells; the modeled wide chip trace has 196,083,712 cells. `COUNTS.md` is generated from the
+shared `space.py --certs` model; byte and binary-symbol rows must not be interchanged.
+
+[READ] The abstract bound kernel now separates executable `Input` from `interpret : Input →
+BoundStatement`. `Automata/DfaBoundReference.lean` instantiates the generic theorem with
+Boolean transition data and a checked trace/record pair; honest, rejecting-word and wrong-record
+witnesses have exact axiom pins. This reference is not a STARK extraction theorem. The legacy
+model statement printed below is its default presentation, not the only executable input type.
+The injection descriptor is now routed by name, and the explicit chain theorem and bound
+acceptance check requested in §5 have landed in `DfaRoutingChainBound.lean`.
+
 ## 1. Semantics object (Lean)
 
 Two objects, two uses.

@@ -170,6 +170,16 @@ theorem cell_satisfied_to_base_satisfied
       (constTrace a pis tf)) :
     Satisfied2 hash privatePreferenceN4K4Descriptor ppM0 ppF0 []
       (constTrace a (cellCorePis pis) tf) := by
+  -- The two descriptors declare the same (empty) memory and map ops and the traces share
+  -- their rows, so the logs coincide; stated once, by unfolding, not re-simplified per leg.
+  have hmem : Dregg2.Circuit.DescriptorIR2.memLog privatePreferenceN4K4Descriptor
+      (constTrace a (cellCorePis pis) tf) =
+      Dregg2.Circuit.DescriptorIR2.memLog privatePreferenceCellN4K4Descriptor
+        (constTrace a pis tf) := rfl
+  have hmap : Dregg2.Circuit.DescriptorIR2.mapLog privatePreferenceN4K4Descriptor
+      (constTrace a (cellCorePis pis) tf) =
+      Dregg2.Circuit.DescriptorIR2.mapLog privatePreferenceCellN4K4Descriptor
+        (constTrace a pis tf) := rfl
   constructor
   · intro i hi c hc
     change c ∈ hashLookups ++
@@ -207,65 +217,65 @@ theorem cell_satisfied_to_base_satisfied
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using facts.session
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using facts.session
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using facts.rule
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using facts.rule
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using
               facts.ballotRoot 0 (by decide)
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using
               facts.ballotRoot 1 (by decide)
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using
               facts.ballotRoot 2 (by decide)
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using
               facts.ballotRoot 3 (by decide)
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using
               facts.ballotRoot 4 (by decide)
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using
               facts.ballotRoot 5 (by decide)
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using
               facts.ballotRoot 6 (by decide)
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using
               facts.ballotRoot 7 (by decide)
           · intro hi0
             simp at hi0
             subst i
             simpa [constTrace, cellCorePis, Dregg2.Circuit.DescriptorIR2.envAt,
-              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE] using facts.winner
+              VmConstraint2.holdsAt, VmConstraint.holdsVm, CELL_APP_PI_BASE, BABYBEAR_MODULUS, ROOT] using facts.winner
         · rcases List.mem_map.mp hbound with ⟨body, hbody, rfl⟩
           have hcell : VmConstraint2.base (.boundary .last body) ∈
               privatePreferenceCellN4K4Descriptor.constraints := by
@@ -281,20 +291,17 @@ theorem cell_satisfied_to_base_satisfied
             VmConstraint2.holdsAt, VmConstraint.holdsVm] using h
   · intro i hi
     simpa [privatePreferenceN4K4Descriptor, privatePreferenceCellN4K4Descriptor,
-      constTrace] using hsat.rowHashes i (by simpa [constTrace] using hi)
+      constTrace, Dregg2.Circuit.Emit.EffectVmEmit.siteHoldsAll,
+      Dregg2.Circuit.Emit.EffectVmEmit.siteHoldsAll.go]
+      using hsat.rowHashes i (by simpa [constTrace] using hi)
   · intro i hi r hr
     simp [privatePreferenceN4K4Descriptor] at hr
   · exact hsat.memAddrsNodup
-  · simpa [privatePreferenceN4K4Descriptor, privatePreferenceCellN4K4Descriptor]
-      using hsat.memClosed
-  · simpa [privatePreferenceN4K4Descriptor, privatePreferenceCellN4K4Descriptor]
-      using hsat.memDisciplined
-  · simpa [privatePreferenceN4K4Descriptor, privatePreferenceCellN4K4Descriptor]
-      using hsat.memBalanced
-  · simpa [privatePreferenceN4K4Descriptor, privatePreferenceCellN4K4Descriptor,
-      constTrace] using hsat.memTableFaithful
-  · simpa [privatePreferenceN4K4Descriptor, privatePreferenceCellN4K4Descriptor,
-      constTrace] using hsat.mapTableFaithful
+  · rw [hmem]; exact hsat.memClosed
+  · rw [hmem]; exact hsat.memDisciplined
+  · rw [hmem]; exact hsat.memBalanced
+  · rw [hmem]; exact hsat.memTableFaithful
+  · rw [hmap]; exact hsat.mapTableFaithful
 
 /-- **The cell door carries the closed semantic relation.** Satisfaction of the
 27-PI wrapper implies the base descriptor's exact `Accepts` theorem for the

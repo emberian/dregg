@@ -143,7 +143,7 @@ theorem flatten_width : ∀ (t : Ty) (v : Value), (flatten t v).length = width t
   | .symbol, v => by cases v <;> simp [flatten, width]
   | .record fs, v => by
       cases v with
-      | record vs => simpa only [flatten] using flattenFields_width fs vs
+      | record vs => simpa only [flatten, width] using flattenFields_width fs vs
       | int _ => simp [flatten, width, List.length_replicate]
       | dig _ => simp [flatten, width, List.length_replicate]
       | sym _ => simp [flatten, width, List.length_replicate]

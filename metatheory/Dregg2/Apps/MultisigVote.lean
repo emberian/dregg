@@ -191,6 +191,7 @@ theorem revote_tally_unchanged {p : Proposal} {k : RecordKernelState} {voter : C
   -- `enfranchisedB` reads `caps`/`registry`, both unchanged by the nullifier re-insert.
   simp only [enfranchisedB] at *
   rw [hset]
+  rfl
 
 /-! ## 5. KEYSTONE — CORRECTNESS: the proposal PASSES iff the threshold is met (an IFF, both ways). -/
 

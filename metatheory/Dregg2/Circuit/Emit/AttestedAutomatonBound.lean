@@ -219,7 +219,10 @@ theorem rowHeaps_nonempty
   have hopen := fun i : Fin t.rows.length =>
     lanes8_row_opens_public S8 hash name minit mfin maddrs t h hcan i i.isLt
   choose heap hs hl hr hg using hopen
-  exact ⟨⟨heap, hs, hl, hr, fun i => by simpa only [envAt_loc i.isLt] using hg i⟩⟩
+  exact ⟨⟨heap, hs, hl, hr, fun i => by
+    have := hg i
+    simp only [envAt_loc i.isLt] at this
+    exact this⟩⟩
 
 /-- The bad edge and collision use the SAME row's supplied heap, retaining every opening fact. -/
 def RowCollision (S8 : Heap8Scheme) (t : VmTrace) (d : TableDfa Nat Nat)

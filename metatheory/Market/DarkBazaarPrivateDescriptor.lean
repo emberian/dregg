@@ -499,6 +499,12 @@ def constTrace (a pis : Assignment) (tf : TraceFamily) : VmTrace where
   funext col
   simp [envAt, constTrace]
 
+@[simp] theorem constTrace_pub0 (a pis : Assignment) (tf : TraceFamily) :
+    (envAt (constTrace a pis tf) 0).pub = pis := rfl
+
+@[simp] theorem constTrace_tf (a pis : Assignment) (tf : TraceFamily) :
+    (constTrace a pis tf).tf = tf := rfl
+
 def CanonicalAssignment (a : Assignment) : Prop :=
   ∀ col, 0 ≤ a col ∧ a col < BABYBEAR_MODULUS
 
@@ -1049,7 +1055,7 @@ theorem rule_column_exact
     a RULE = RULE_ID := by
   have hgate := semantic_gate_vanishes hsat rule_body_mem
   have hres : a RULE - RULE_ID ≡ 0 [ZMOD BABYBEAR_MODULUS] := by
-    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval] using hgate
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval, ← sub_eq_add_neg] using hgate
   have hcong : a RULE ≡ RULE_ID [ZMOD BABYBEAR_MODULUS] := by
     simpa using hres.add_right RULE_ID
   exact eq_of_modEq_of_canonical hcong (hcanon RULE) (by
@@ -1304,7 +1310,7 @@ theorem kind_selector_decoded
     simpa using bit_bounds (hbits.kind order (7 : Fin 8))
   rcases hsel with hsel | hsel | hsel | hsel | hsel | hsel | hsel | hsel <;>
     fin_cases kind <;>
-    simp only [kindColumnValue] <;> split <;> omega
+    simp only [kindColumnValue] <;> split_ifs <;> omega
 
 theorem fin8_cases (x : Fin 8) :
     x = 0 ∨ x = 1 ∨ x = 2 ∨ x = 3 ∨ x = 4 ∨ x = 5 ∨ x = 6 ∨ x = 7 := by

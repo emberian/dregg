@@ -60,6 +60,7 @@ private theorem eq_zero_of_dvd_of_abs_lt {d : ℤ} (hdvd : p ∣ d)
   rw [hp] at hk hlo hhi
   omega
 
+set_option maxRecDepth 8192 in
 /-- `p` is prime (used to split booleanity products). -/
 theorem p_prime : Prime p := by
   have : p = 2013265921 := rfl

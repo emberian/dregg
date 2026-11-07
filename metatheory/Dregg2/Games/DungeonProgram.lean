@@ -1149,7 +1149,7 @@ theorem way_flip_exhibits_key (w : Nat) (hw : w = 2 ∨ w = 3 ∨ w = 4)
       [((CARRIED : Int), ((HUNG + 1 : Nat) : Int)), ((CARRIED : Int), ((HUNG + 2 : Nat) : Int)),
        ((CARRIED : Int), ((HUNG + 3 : Nat) : Int)), ((CARRIED : Int), ((HUNG + 4 : Nat) : Int))])
       o n = true := by
-    simpa [Constraint.toExec, hangFloors, FLOORS, List.range'] using hkey
+    simpa [Constraint.toExec, HeapAtom.toExec, HeapKeyRef.field, hangFloors, FLOORS, List.range'] using hkey
   have hpair : o.scalar (relicName (keyFor w)) = some (CARRIED : Int)
       ∧ (∃ d : Nat, 1 ≤ d ∧ d ≤ FLOORS
           ∧ n.scalar (relicName (keyFor w)) = some ((HUNG + d : Nat) : Int)) := by

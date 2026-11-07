@@ -272,8 +272,12 @@ Both halves are measured here, on the emitted object, and neither is inferred fr
 -- refuse the substitution, because the prover solves for `G`. (`assert_on_curve` reads `x` three
 -- times and `y` twice; segment D's absorb row reads each once; §19's `add_fast` reads each once.
 -- Equalities, so a lost consumer reds here rather than passing a floor.)
-#guard (classCells posS (vGx shapeSmoke)).length == 5
-#guard (classCells posS (vGy shapeSmoke)).length == 4
+-- ⚑ **MOVED 2026-08-11 (`16b6d9b8a`)**: segment D now absorbs its OWN `G` (`vGaX`/`vGaY`, the
+-- accumulator the record publishes), not §19's solve, so the absorb cell left this class: `x` is
+-- its three halves plus `add_fast`, `y` its two halves plus `add_fast`.
+-- The verdict below is unchanged.
+#guard (classCells posS (vGx shapeSmoke)).length == 4
+#guard (classCells posS (vGy shapeSmoke)).length == 3
 -- …whereas the fold's `~init` — a commitment this file DOES consume — spans four row families.
 #guard (classCells posS (ipx shapeSmoke (qInit shapeSmoke))).length ≥ 5
 
@@ -288,9 +292,11 @@ Both halves are measured here, on the emitted object, and neither is inferred fr
 --        make (e) a refusal is neither of these two: it is the accumulator check's OPENING leg
 --        (`per_proof_witness.ml:12-32`), i.e. #11.
 -- What IS pinned is that the two hashes are the two ENDS of that chain and are wired to the two
--- different objects upstream wires them to: segment C to `sg_old`, segment D to `G`.
+-- different objects upstream wires them to: segment C to `sg_old`, segment D to `G` — since
+-- `16b6d9b8a` segment D's OWN `G` (`vGaX`), and NOT §19's solved one, which no sponge reads.
 #guard sgOldVar shapeSmoke 0 0 == ipx shapeSmoke (qInit shapeSmoke)
-#guard (tS.specD.ws.getD (N_IDX_WORDS + N_HM_APP) (xv 0, 0)).1 == vGx shapeSmoke
+#guard (tS.specD.ws.getD (N_IDX_WORDS + N_HM_APP) (xv 0, 0)).1 == vGaX shapeSmoke
+#guard (tS.specD.ws.map (·.1)).all (fun v => v != vGx shapeSmoke && v != vGy shapeSmoke)
 #guard (tS.specC.ws.map (·.1)).all (fun v => v != vGx shapeSmoke && v != vGy shapeSmoke)
 #guard (tS.specD.ws.map (·.1)).all (fun v =>
   v != ipx shapeSmoke (qInit shapeSmoke) && v != ipx shapeSmoke (qT shapeSmoke 0))

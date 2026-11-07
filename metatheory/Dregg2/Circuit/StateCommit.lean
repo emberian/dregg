@@ -413,11 +413,15 @@ def encodeS (k : RecordKernelState) (t : Turn) (k' : RecordKernelState) : Assign
 `t*_iff` gate lemmas apply to `encodeS` verbatim. -/
 theorem encodeS_agrees_encodeT (k : RecordKernelState) (t : Turn) (k' : RecordKernelState)
     (v : Var) (hv : v < 11) : encodeS CH RH cmb compress compressN k t k' v = encodeT k t k' v := by
-  unfold encodeS Var at *
-  simp only [vPreRoot, vPostRoot, vRestDigPre, vRestDigPost, vFrameDigPre, vFrameDigPost,
-    vMovedDigPre, vMovedDigPost, vMovedDigExpected]
+  unfold encodeS
   -- every new wire index is ≥ 11, so under `v < 11` all the `if`s take their `else`.
-  split_ifs with h₁ h₂ h₃ h₄ h₅ h₆ h₇ h₈ <;> first | rfl | (exfalso; omega)
+  have hne : ∀ w : Var, 11 ≤ w → v ≠ w := fun w hw h => by
+    subst h; exact absurd hv (Nat.not_lt.mpr hw)
+  rw [if_neg (hne vPreRoot (by decide)), if_neg (hne vPostRoot (by decide)),
+    if_neg (hne vRestDigPre (by decide)), if_neg (hne vRestDigPost (by decide)),
+    if_neg (hne vFrameDigPre (by decide)), if_neg (hne vFrameDigPost (by decide)),
+    if_neg (hne vMovedDigPre (by decide)), if_neg (hne vMovedDigPost (by decide)),
+    if_neg (hne vMovedDigExpected (by decide))]
 
 #assert_axioms encodeS_agrees_encodeT
 

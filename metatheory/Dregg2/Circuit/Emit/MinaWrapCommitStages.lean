@@ -73,8 +73,12 @@ affine coordinates cannot represent — `offset_is_a_real_pallas_point`.
 
 ## Axiom hygiene
 
-`#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); no `sorry`/`admit`/
-`native_decide`. Facts are NAMED THEOREMS — this file adds zero `#guard`s.
+General theorems (the machine, the traces, the tie verdict, the lowering) are kernel-proved and
+`#assert_axioms`-clean. Facts about block 539508's concrete data (field values, curve points, the
+folds against o1-labs' goldens, the ξ chain) are checked by compiled evaluation, `native_decide`,
+and pinned `#assert_compiled` (they rest on `Lean.ofReduceBool`). Until 2026-11-06 they were
+kernel `decide`s, which recomputed the same scalar multiplications per theorem and put this module
+at 15.7 GB; see `metatheory/docs/MINA-PICKLES-RESCUE.md`. No `sorry`/`admit`; zero `#guard`s.
 -/
 import Dregg2.Circuit.Emit.MinaWrapCommitMachine
 import Dregg2.Circuit.Emit.MinaWrapAggregationData
@@ -128,7 +132,7 @@ because every witnessed slope in this file is a quotient and a wrong `finv` woul
 trace refuse for a reason no refusal message would explain. -/
 theorem finv_is_an_inverse :
     fmul (MinaWrapAggregationGate.XI) (finv MinaWrapAggregationGate.XI) = 1
-      ∧ fmul 7 (finv 7) = 1 := by decide +kernel
+      ∧ fmul 7 (finv 7) = 1 := by native_decide
 
 /-! ⚑ **THE SCALARS LIVE IN THE SCALAR FIELD `q`, THE COORDINATES IN THE BASE FIELD `p`.** Reading
 one for the other is the classic Pasta error; these three are `q`-arithmetic and nothing else in
@@ -172,11 +176,11 @@ def PT_A : Aff := affOf (MinaWrapAggregationGate.COMBINE_POINTS.getD 0 (0, 0, 1)
 def PT_B : Aff := affOf (MinaWrapAggregationGate.COMBINE_POINTS.getD 1 (0, 0, 1))
 
 theorem slope_pin_holds_on_real_block_points :
-    fmul (slopeAdd PT_A PT_B) (fsub PT_A.1 PT_B.1) = fsub PT_A.2 PT_B.2 := by decide +kernel
+    fmul (slopeAdd PT_A PT_B) (fsub PT_A.1 PT_B.1) = fsub PT_A.2 PT_B.2 := by native_decide
 
 theorem tangent_pin_holds_on_a_real_block_point :
     fadd (fmul (slopeDbl PT_A) PT_A.2) (fmul (slopeDbl PT_A) PT_A.2)
-      = fadd (fadd (fmul PT_A.1 PT_A.1) (fmul PT_A.1 PT_A.1)) (fmul PT_A.1 PT_A.1) := by decide +kernel
+      = fadd (fadd (fmul PT_A.1 PT_A.1) (fmul PT_A.1 PT_A.1)) (fmul PT_A.1 PT_A.1) := by native_decide
 
 /-- The Pallas curve equation `y² = x³ + 5`, affine. -/
 def onPallas (Pt1 : Aff) : Bool :=
@@ -187,7 +191,7 @@ makes an accumulator a group element rather than a pair of field values. -/
 theorem chord_law_stays_on_pallas :
     onPallas PT_A = true ∧ onPallas PT_B = true
       ∧ onPallas (addAffine PT_A PT_B) = true
-      ∧ onPallas (dblAffine PT_A) = true := by decide +kernel
+      ∧ onPallas (dblAffine PT_A) = true := by native_decide
 
 /-! ## §2 — THE REGISTER ALLOCATION.
 
@@ -341,7 +345,7 @@ the identity would be unrepresentable at its first step. The offset is the first
 block's own aggregate list, and the closing subtraction of `2^planes · Ω` removes it. -/
 def OMEGA : Aff := PT_A
 
-theorem offset_is_a_real_pallas_point : onPallas OMEGA = true := by decide +kernel
+theorem offset_is_a_real_pallas_point : onPallas OMEGA = true := by native_decide
 
 /-- `−P`. -/
 def negA (Pt1 : Aff) : Aff := (Pt1.1, fsub 0 Pt1.2)
@@ -450,7 +454,7 @@ def COMBINE_AFF : List Aff :=
 theorem combine_aff_is_47_long : COMBINE_AFF.length = 47 := by decide +kernel
 
 theorem every_combine_base_is_on_pallas :
-    COMBINE_AFF.all onPallas = true := by decide +kernel
+    COMBINE_AFF.all onPallas = true := by native_decide
 
 /-! ### §6a — OBLIGATION (1): THE ξ SCALAR VECTOR, at full fidelity.
 
@@ -534,13 +538,13 @@ theorem xi_chain_starts_at_one_and_walks_by_xi :
     qpow XI 0 = 1 ∧ qpow XI 1 = XI ∧ qpow XI 47 = qmul XI_46 XI := by
   refine ⟨rfl, ?_, rfl⟩
   show qmul 1 XI = XI
-  decide +kernel
+  native_decide
 
 /-- ⚑ **AND THE TWO REDUCTIONS REALLY DO DISAGREE**, on the block's own challenge — so the choice
 above is a decision the data can refute, not a convention. Reading `ξ²` in the base field gives a
 different scalar, and the aggregate it produces is not the block's. -/
 theorem the_base_field_reduction_of_xi_squared_is_a_different_scalar :
-    qmul XI XI ≠ fmul XI XI := by decide +kernel
+    qmul XI XI ≠ fmul XI XI := by native_decide
 
 /-! ### §6b — OBLIGATION (2): THE GROUP FOLD AT FULL TERM COUNT.
 
@@ -570,99 +574,6 @@ def PUBLIC_TERMS_NOMINAL : List Aff :=
         (MinaWrapPublicCommGate.LAGRANGE.getD i (0, 0, 1)))))
   ++ [toAff MinaWrapPublicCommGate.SRS_H]
 
-/-- `PUBLIC_TERMS_NOMINAL`, evaluated once and written out. Six theorems below are about this list;
-each used to re-run the forty 255-bit scalar multiplications behind it inside its own `decide`, and
-that repetition was most of this module's 15.7 GB. They now rewrite with
-`PUBLIC_TERMS_NOMINAL_eq_value`, which the kernel checks once. The definitions the descriptors are
-built from are unchanged. -/
-def PUBLIC_TERMS_NOMINAL_VALUE : List Aff :=
-  [
-    (1084040299729950649644999282429434912039400613867051888613495514004890133583,
-     21391000948094004084903877176749787425745335407112480161193559903092359794853),
-    (14107971244127454908846497597813498498361334362732809509991133670235205775520,
-     898406716905510083380865934571927352276180375102084448688248325942061533907),
-    (749727410405115683080057973910228552461451466375306747574938698489910037960,
-     14978227111212851463636165556331859279113911920672264816373873974438130561833),
-    (14523278745034634594573289774008870728110824198284850218175605540048351537284,
-     15712992678697831891085645355260496236897275609109061962867833402685402742744),
-    (694039302746290046453347840503645235347483530330861428322178374086133429204,
-     6844293544433936837135250847996876236404831196161309685318774107770836547965),
-    (25322500785907726637491440392592851781156149155855485915678224747259467807384,
-     15728996304751202453142259359837737445522411524883714991283608872960048565968),
-    (27862238569359493227821946628844572308468970447310734228460751089470866172350,
-     13034273323955190104819751873745890640806868815084990174833303574167236844766),
-    (10085007640535381493434446602445596130492649164196642103461143729614078267203,
-     8473389661939461004915348672172964687270019267916397868714948210769886393109),
-    (11285906743695029305273081770718072324337523327860141848139691024715587244554,
-     11118740012886957374075551528532313002658245153666869120460815461738708071904),
-    (13864639832610750097158430021079018408302824632893050991388384412322860603623,
-     20405385873337122982342137884804931249506927588108386158367837754840845535992),
-    (9392268842558900309904547577443711163259211421844387970406586952053499682692,
-     12022460758308553864590897638817356158053937732152485200264065599947684466084),
-    (20474734850234930005836099005702885573344634341493129613153926556193732956818,
-     4941091097911725859518668937682453486620332717758670944321527925797395403630),
-    (8880206379682178027303394850496713866638091529940527776121290065167286797875,
-     25649573218675486109503743140757258691736258088357370177127865901023038161260),
-    (3330051261355414989954078337085876221295900361158146713243727091937186812520,
-     24453069570387117007492946195415567412348772392819272761728684093057388836965),
-    (8146570640908201817128887392658341004402227825294404562336406508545590463276,
-     637094042004158160235475016448426741576211220495125046923108639711952588482),
-    (23278762748374063337624041022783873335371956688403116181796339848565471616179,
-     2793522993477394511926043700436479229013212891619224455598798722192761135395),
-    (9543786167231275791773441864893576216413429062420995339976846088141913838244,
-     6564658715273618352999683812364882320654455362856464428372863744003379653995),
-    (10976324064140279506611641504028440035827875742567319550698813744515781907816,
-     15949007602548914094120854285908108505586362795166834522487872498313153072603),
-    (6720284473668513258146816183309556741124566591490026765315540176253725340153,
-     24662668950700237820594332106745694502071128421005361115341748830701021538806),
-    (9694819821253526551535108470369877874515136429129891526613061607471642632051,
-     11893985500680739891237656257820909974610895599357899040771675400987927540122),
-    (17523718306294188018191925165245384308054234549896356653314760224771169477562,
-     28921488588689296779159577544268831727947272532678363979947579470707015579032),
-    (21388983891317168555971996541031542542239658297522242406230996103194975784014,
-     11410764584041891323731736522199485607372123598312672220596192995554689136697),
-    (10386878998161151232276615132588193934694576004593849300255771255895130769608,
-     4704548521343891122373125276563027603891099738916625445331977498698229139062),
-    (13553438475924875936931013118209765493655459490677059330268085320502557801455,
-     1285620850979159490235606440554296705303187980004987109823418718211941379390),
-    (8872358146816956975755475473752200400851972930834762422014676767782400111833,
-     15821677250559072543301283272329492880157235711034897272188392798957515766900),
-    (11375204882464056348598793962846013135238661905476850007038242578796813778315,
-     23948437780043436516048497832674503583502540753164791804914875856082183215256),
-    (26278498801532546934184144724237674844776537695862241700005443206112450606862,
-     16544003681964820891248191696260918803918502362594512862008116139555452427248),
-    (7487262288650936059953246316364851940180206885480154945136398093750807185585,
-     415159483652976261165440896520855814667273501810345797828216159471239838514),
-    (27025064218883434753506045855844670136159944945241945220373795019512576136219,
-     1864370238281108039561072348945985622583550670062828583360016870594019680562),
-    (11370557015876773244954974361404422957675918970188548713818308321058898802926,
-     1721300737467787999711150562274961462355423664033766454261157521203346985474),
-    (0,
-     0),
-    (0,
-     0),
-    (0,
-     0),
-    (0,
-     0),
-    (0,
-     0),
-    (0,
-     0),
-    (0,
-     0),
-    (0,
-     0),
-    (0,
-     0),
-    (0,
-     0),
-    (15427374333697483577096356340297985232933727912694971579453397496858943128065,
-     2509910240642018366461735648111399592717548684137438645981418079872989533888)]
-
-theorem PUBLIC_TERMS_NOMINAL_eq_value : PUBLIC_TERMS_NOMINAL = PUBLIC_TERMS_NOMINAL_VALUE := by
-  decide +kernel
-
 /-! ### ⚑ THE IDENTITY CANNOT RIDE IN AN AFFINE TERM LIST — found 2026-08-05, on the wire.
 
 TEN of the block's forty public inputs are **zero**. `smul 0 P` is the point at infinity, and
@@ -683,13 +594,13 @@ now forced by the data rather than by the shape of `verifier.rs`. -/
 def AFF_IDENTITY : Aff := (0, 0)
 
 /-- ⚑ **AND IT IS NOT ON THE CURVE**, which is the whole reason it cannot be a fold term. -/
-theorem the_affine_identity_is_not_on_pallas : onPallas AFF_IDENTITY = false := by decide +kernel
+theorem the_affine_identity_is_not_on_pallas : onPallas AFF_IDENTITY = false := by native_decide
 
 /-- ⚑ **ONE OF THEM TAKES THE FOLD OFF PALLAS; TWO OF THEM CANCEL.** The mechanism, on the block's
 own point — this is the coincidence the filter removes, stated so it cannot be rediscovered. -/
 theorem the_identity_term_leaves_the_curve_and_pairs_cancel :
     onPallas (addAffine PT_A AFF_IDENTITY) = false
-      ∧ addAffine (addAffine PT_A AFF_IDENTITY) AFF_IDENTITY = PT_A := by decide +kernel
+      ∧ addAffine (addAffine PT_A AFF_IDENTITY) AFF_IDENTITY = PT_A := by native_decide
 
 /-- ⚑ **THE MEANINGFUL TERMS — 31 of 41.** -/
 def PUBLIC_TERMS : List Aff :=
@@ -698,18 +609,18 @@ def PUBLIC_TERMS : List Aff :=
 /-- ⚑ **THE CENSUS: 41 nominal, 31 meaningful, 10 dropped.** -/
 theorem the_public_term_census :
     PUBLIC_TERMS_NOMINAL.length = 41 ∧ PUBLIC_TERMS.length = 31 := by
-  unfold PUBLIC_TERMS; rw [PUBLIC_TERMS_NOMINAL_eq_value]; decide +kernel
+  native_decide
 
 /-- ⚑ **AND EVERYTHING DROPPED WAS THE IDENTITY** — nothing with a real scalar left the fold. -/
 theorem only_identity_terms_were_dropped :
     ((PUBLIC_TERMS_NOMINAL.filter (fun p => decide (p.1 = 0) && decide (p.2 = 0))).all
       (fun p => decide (p = AFF_IDENTITY))) = true := by
-  rw [PUBLIC_TERMS_NOMINAL_eq_value]; decide +kernel
+  native_decide
 
 /-- ⚑ **AND EVERY SURVIVING TERM IS A REAL PALLAS POINT.** -/
 theorem every_meaningful_public_term_is_on_pallas :
     PUBLIC_TERMS.all onPallas = true := by
-  unfold PUBLIC_TERMS; rw [PUBLIC_TERMS_NOMINAL_eq_value]; decide +kernel
+  native_decide
 
 /-- ⚑ The 8 terms of `ft_comm`: `chunk(f_comm, ζ^srs)` — one chunk on the wrap side, so `f_comm`
 itself — minus each of the seven `t_comm` chunks at `ζ^(srs·j) · (ζⁿ − 1)`. **9 nominal, 7
@@ -743,19 +654,19 @@ multiplication actually happens inside a descriptor. -/
 
 /-- ⚑ **THE ξ-AGGREGATE FOLD REACHES o1-LABS' AGGREGATE.** -/
 theorem the_xi_fold_is_o1_labs_aggregate :
-    sumOut XI_TERMS = toAff MinaWrapAggregationGate.COMBINED_GOLD := by decide +kernel
+    sumOut XI_TERMS = toAff MinaWrapAggregationGate.COMBINED_GOLD := by native_decide
 
 /-- ⚑ **THE `public_comm` FOLD REACHES o1-LABS' `public_comm`** — the 31 Lagrange terms with a
 non-zero public input, plus the `mask_custom` blinder, which is a TERM and not a decoration. -/
 theorem the_public_fold_is_o1_labs_public_comm :
     sumOut PUBLIC_TERMS = toAff MinaWrapPublicCommGate.PUBLIC_COMM_GOLD := by
-  unfold PUBLIC_TERMS; rw [PUBLIC_TERMS_NOMINAL_eq_value]; decide +kernel
+  native_decide
 
 /-- ⚑ **AND THE 41-TERM FOLD REACHED IT TOO — BY PARITY, NOT BY CONSTRUCTION.** Kept as the record
 of what was actually shipped before 2026-08-05: the nominal fold agrees. -/
 theorem the_nominal_fold_also_agreed :
     sumOut PUBLIC_TERMS_NOMINAL = toAff MinaWrapPublicCommGate.PUBLIC_COMM_GOLD := by
-  rw [PUBLIC_TERMS_NOMINAL_eq_value]; decide +kernel
+  native_decide
 
 /-- ⚑ **…AND ONE MORE IDENTITY BREAKS IT.** This is the refutation that makes the theorem above a
 COINCIDENCE rather than a result: append a single further point at infinity — the shape a block with
@@ -764,7 +675,7 @@ an odd number of zero public inputs would produce — and the fold misses o1-lab
 theorem an_odd_identity_count_misses_the_golden :
     sumOut (PUBLIC_TERMS_NOMINAL ++ [AFF_IDENTITY])
       ≠ toAff MinaWrapPublicCommGate.PUBLIC_COMM_GOLD := by
-  rw [PUBLIC_TERMS_NOMINAL_eq_value]; decide +kernel
+  native_decide
 
 /-- ⚑ …and the filtered fold IS insensitive: the same appended identity is dropped, so the answer
 does not move. -/
@@ -772,16 +683,16 @@ theorem the_filtered_fold_is_insensitive_to_an_appended_identity :
     sumOut ((PUBLIC_TERMS_NOMINAL ++ [AFF_IDENTITY]).filter
       (fun p => !(decide (p.1 = 0) && decide (p.2 = 0))))
       = toAff MinaWrapPublicCommGate.PUBLIC_COMM_GOLD := by
-  rw [PUBLIC_TERMS_NOMINAL_eq_value]; decide +kernel
+  native_decide
 
 /-- ⚑ **THE `ft_comm` FOLD REACHES o1-LABS' `ft_comm`.** -/
 theorem the_ft_fold_is_o1_labs_ft_comm :
-    sumOut FT_TERMS = toAff MinaWrapGroupGate.FT_COMM_GOLD := by decide +kernel
+    sumOut FT_TERMS = toAff MinaWrapGroupGate.FT_COMM_GOLD := by native_decide
 
 /-- ⚑ **THE `f_comm` FOLD REACHES o1-LABS' `f_comm`** — one term, because
 `linearization.index_terms` is empty on the wrap side. -/
 theorem the_f_fold_is_o1_labs_f_comm :
-    sumOut [toAff MinaWrapGroupGate.fComm] = toAff MinaWrapGroupGate.F_COMM_GOLD := by decide +kernel
+    sumOut [toAff MinaWrapGroupGate.fComm] = toAff MinaWrapGroupGate.F_COMM_GOLD := by native_decide
 
 /-- ⚑ **AND THE FOUR GOLDENS ARE FOUR DIFFERENT POINTS.** Without this, four theorems of the form
 `sumOut X = toAff G` would all be satisfied by a cone in which every `G` had collapsed to the same
@@ -790,7 +701,7 @@ theorem the_four_goldens_are_distinct :
     toAff MinaWrapAggregationGate.COMBINED_GOLD ≠ toAff MinaWrapPublicCommGate.PUBLIC_COMM_GOLD
       ∧ toAff MinaWrapGroupGate.FT_COMM_GOLD ≠ toAff MinaWrapGroupGate.F_COMM_GOLD
       ∧ toAff MinaWrapAggregationGate.COMBINED_GOLD ≠ toAff MinaWrapGroupGate.FT_COMM_GOLD := by
-  decide +kernel
+  native_decide
 
 /-! ## §7 — THE CENSUS: what a full-width stage costs on this machine. -/
 
@@ -909,7 +820,7 @@ theorem the_pinned_blocks_tile_the_public_inputs :
             decide ((pinXiChain.filter
                       (fun l => match l with | .pin p => p.idx == k | _ => false)).length = 1)))
           = true := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- The initial register file of every stage: all zero except the pinned inputs. -/
 def initRegs (r : Nat) (v : Nat) : RegFile := fun k => if k = r then v else 0
@@ -984,7 +895,7 @@ trace refuse against its own descriptor, so this is checked rather than trusted.
 theorem qLimbFast_agrees_below_80 :
     ((List.range 80).all
       fun j => decide (qLimbFast j = Dregg2.Circuit.Emit.PastaFieldSound.qLimb j)) = true := by
-  decide +kernel
+  native_decide
 
 /-- ⚑ **THE ξ TRACE, on the STRICT register file.** `runRowsVecAt` threads an `NREG`-entry
 `List Nat` where `runRowsAt` threaded a closure; the closure generator is `Theta(d^2)` in the
@@ -1015,14 +926,14 @@ theorem the_basis_is_the_squaring_orbit :
           (fun j => decide (XI_BASIS.getD j 0
                       = qmul (XI_BASIS.getD (j + 1) 0) (XI_BASIS.getD (j + 1) 0)))) = true
       ∧ XI_BASIS.getD (NBASIS - 1) 0 = XI := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **THE WIDENED PI VECTOR — 256 FELTS IN EIGHT BLOCKS.** `ξ`, `ξ⁴⁶`, then the squaring basis. -/
 def xiPIs : List ℤ := piPair XI XI_46 ++ XI_BASIS.flatMap piBlock
 
 theorem the_chain_publishes_two_hundred_and_fifty_six_felts :
     xiPIs.length = PI_XI ∧ xiDesc.piCount = PI_XI := by
-  refine ⟨?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_⟩ <;> native_decide
 
 /-- ⚑ **AND THE BASIS BLOCK IS SIX DISTINCT FIELD ELEMENTS.** Without this the elementwise weld
 downstream would be equally green over a basis that had collapsed to six copies of one value — the
@@ -1031,7 +942,7 @@ theorem the_published_basis_is_six_distinct_values :
     XI_BASIS.eraseDups.length = NBASIS
       ∧ (xiPIs.drop (2 * SK)).length = NBASIS * SK
       ∧ XI_BASIS.all (fun v => decide (2 ^ 240 < v ∧ v < PastaField.qN)) = true := by
-  refine ⟨?_, ?_, ?_⟩ <;> decide +kernel
+  refine ⟨?_, ?_, ?_⟩ <;> native_decide
 
 /-! ### §8b — STAGE (G2): the group folds, at FULL term count. -/
 
@@ -1123,7 +1034,28 @@ publish `TX`/`TY`'s limb columns, which the routing gates and the register windo
 `by decide`; a blank field re-derives, inside the elaborator's `whnf`, a fact this file already
 carries — and for `ok` that fact is `commitAir_mainRailOk` APPLIED, not a `decide` over the
 assembled ladder at all. -/
-theorem ladderAir_pinsTied : ladderAir.pinsTied = true := by decide +kernel
+theorem ladderAir_pinsTied : ladderAir.pinsTied = true := by
+  unfold ladderAir
+  apply EffectAir.pinsTied_append
+  · refine EffectAir.pinsTied_of_no_pins _ fun p hp => ?_
+    simp [commitAir, selBoolLegs, regWindowLegs] at hp
+  · intro p hp
+    simp only [pinOutPoint, List.mem_append, List.mem_map, List.mem_range, AirLeg.pin.injEq] at hp
+    unfold EffectAir.readsCol
+    have key : ∀ r, r < NREG → ∀ i, i < Dregg2.Circuit.Emit.PastaFieldSound.SK →
+        ((commitAir Dregg2.Circuit.Emit.PastaFieldSound.pLimb (instrs ladderProg)).legs.any
+          fun m => decide (regCol r + i ∈ m.readCols)) = true := by
+      intro r hr i hi
+      refine List.any_eq_true.mpr ⟨AirLeg.window ⟨.transition, regWindowExpr r i⟩, ?_, ?_⟩
+      · simp [commitAir, regWindowLegs]
+        exact Or.inr (Or.inl ⟨r, hr, i, hi, rfl⟩)
+      · simp [AirLeg.readCols, regWindowExpr, Dregg2.Circuit.GateExpr.render,
+          Dregg2.Circuit.GateExpr.gEsub, Dregg2.Circuit.GateExpr.gMux,
+          Dregg2.Circuit.GateExpr.toWindow, Dregg2.Circuit.EffectAirIR.windowCols,
+          Dregg2.Circuit.GateExpr.WLeaf.expr]
+    rcases hp with ⟨i, hi, rfl⟩ | ⟨i, hi, rfl⟩
+    · exact key TX (by decide) i hi
+    · exact key TY (by decide) i hi
 
 /-- ⚑ **THE TIED SOURCE** — `ladderAir` carrying its two decidable verdicts in its TYPE:
 `mainRailOk` (main-rail expressible) and `pinsTied` (every published column is DERIVED by another
@@ -1168,18 +1100,18 @@ theorem ladderTrace_is_the_closure_trace :
 def ladderRef : Aff := termOut SIGMA6_AFF SIGMA6_AFF.1 SIGMA6_AFF.2 DEMO_SCALAR DEMO_PLANES
 def ladderPIs : List ℤ := piPair ladderRef.1 ladderRef.2
 
-#assert_axioms finv_is_an_inverse
-#assert_axioms slope_pin_holds_on_real_block_points
-#assert_axioms tangent_pin_holds_on_a_real_block_point
-#assert_axioms chord_law_stays_on_pallas
+#assert_compiled finv_is_an_inverse
+#assert_compiled slope_pin_holds_on_real_block_points
+#assert_compiled tangent_pin_holds_on_a_real_block_point
+#assert_compiled chord_law_stays_on_pallas
 #assert_axioms allocation_fits_the_register_file
 #assert_axioms plane_is_double_and_conditional_add
-#assert_axioms offset_is_a_real_pallas_point
+#assert_compiled offset_is_a_real_pallas_point
 #assert_axioms ladder_carries_the_offset
 #assert_axioms combine_aff_is_47_long
-#assert_axioms every_combine_base_is_on_pallas
-#assert_axioms xi_chain_starts_at_one_and_walks_by_xi
-#assert_axioms the_base_field_reduction_of_xi_squared_is_a_different_scalar
+#assert_compiled every_combine_base_is_on_pallas
+#assert_compiled xi_chain_starts_at_one_and_walks_by_xi
+#assert_compiled the_base_field_reduction_of_xi_squared_is_a_different_scalar
 #assert_axioms plane_and_term_costs
 #assert_axioms full_width_ladder_price
 #assert_axioms every_stage_fits_one_rom_at_full_width
@@ -1188,24 +1120,29 @@ def ladderPIs : List ℤ := piPair ladderRef.1 ladderRef.2
 #assert_axioms xiAir_mainRailOk
 #assert_axioms foldAir_mainRailOk
 #assert_axioms ladderAir_mainRailOk
-#assert_axioms qLimbFast_agrees_below_80
+#assert_compiled qLimbFast_agrees_below_80
 #assert_axioms regsOf_zeroVec
 #assert_axioms regsOf_pinVec
 #assert_axioms xiTrace_is_the_closure_trace
 #assert_axioms foldTrace_is_the_closure_trace
 #assert_axioms ladderTrace_is_the_closure_trace
-#assert_axioms the_xi_fold_is_o1_labs_aggregate
-#assert_axioms the_public_fold_is_o1_labs_public_comm
-#assert_axioms the_ft_fold_is_o1_labs_ft_comm
-#assert_axioms the_f_fold_is_o1_labs_f_comm
-#assert_axioms the_four_goldens_are_distinct
-#assert_axioms the_affine_identity_is_not_on_pallas
-#assert_axioms the_identity_term_leaves_the_curve_and_pairs_cancel
-#assert_axioms the_public_term_census
-#assert_axioms only_identity_terms_were_dropped
-#assert_axioms every_meaningful_public_term_is_on_pallas
-#assert_axioms the_nominal_fold_also_agreed
-#assert_axioms an_odd_identity_count_misses_the_golden
-#assert_axioms the_filtered_fold_is_insensitive_to_an_appended_identity
+#assert_compiled the_xi_fold_is_o1_labs_aggregate
+#assert_compiled the_public_fold_is_o1_labs_public_comm
+#assert_compiled the_ft_fold_is_o1_labs_ft_comm
+#assert_compiled the_f_fold_is_o1_labs_f_comm
+#assert_compiled the_four_goldens_are_distinct
+#assert_compiled the_affine_identity_is_not_on_pallas
+#assert_compiled the_identity_term_leaves_the_curve_and_pairs_cancel
+#assert_compiled the_public_term_census
+#assert_compiled only_identity_terms_were_dropped
+#assert_compiled every_meaningful_public_term_is_on_pallas
+#assert_compiled the_nominal_fold_also_agreed
+#assert_compiled an_odd_identity_count_misses_the_golden
+#assert_compiled the_filtered_fold_is_insensitive_to_an_appended_identity
 
+#assert_compiled the_basis_is_the_squaring_orbit
+#assert_compiled the_published_basis_is_six_distinct_values
+#assert_compiled the_chain_publishes_two_hundred_and_fifty_six_felts
+#assert_compiled the_pinned_blocks_tile_the_public_inputs
+#assert_axioms ladderAir_pinsTied
 end Dregg2.Circuit.Emit.MinaWrapCommitStages
