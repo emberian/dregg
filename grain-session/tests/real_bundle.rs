@@ -80,15 +80,15 @@ fn the_real_bundle_is_accepted_and_every_tamper_class_is_refused() {
 }
 
 #[test]
-#[ignore = "needs the cv exports (GRAIN_SESSION_EXPORTS) and demo (b)'s transcript.json"]
+#[ignore = "needs the cv exports (GRAIN_SESSION_EXPORTS) and a local demo (b) projection (GRAIN_SESSION_TRANSCRIPT)"]
 fn the_projection_is_demo_b_s_projection() {
     let dir = PathBuf::from(std::env::var("GRAIN_SESSION_EXPORTS").expect("GRAIN_SESSION_EXPORTS"));
     let calls = grain_session::project_exports(&dir).expect("project");
     let demo: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../demo/datalog-governance/data/transcript.json"
-        ))
+        // demo/datalog-governance/project_transcript.py output; session-derived, never committed.
+        &std::fs::read(
+            std::env::var("GRAIN_SESSION_TRANSCRIPT").expect("GRAIN_SESSION_TRANSCRIPT"),
+        )
         .expect("demo (b) transcript.json"),
     )
     .unwrap();

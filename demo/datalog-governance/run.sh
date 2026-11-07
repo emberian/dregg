@@ -9,7 +9,7 @@ META="$HERE/../../metatheory"
 CHECK="${CHECK:-$META/.lake/build/bin/datalog-check}"
 [[ -x "$CHECK" ]] || (cd "$META" && lake build datalog-check)
 MODE="${1:-reproduce}"
-case "$MODE" in verify|reproduce|--real) ;; *) echo 'usage: ./run.sh [verify|reproduce|--real]' >&2; exit 2 ;; esac
+case "$MODE" in verify|reproduce) ;; *) echo 'usage: ./run.sh [verify|reproduce]' >&2; exit 2 ;; esac
 WORK="${WORK:-$(mktemp -d "${TMPDIR:-/tmp}/datalog-governance.XXXXXX")}"
 mkdir -p "$WORK"
 # Refuse existing output files instead of replacing a prior run or repository artifacts.
@@ -45,11 +45,6 @@ falsifiers() {
   echo 'swapped valid receipt: REFUSE (count, root differ)'
 }
 
-if [[ "$MODE" = --real ]]; then
-  # Local opt-in; no export, signing, or mutation of the historical artifacts.
-  verify_one "$HERE/data/certificate.json" "$HERE/data/receipt.txt"
-  exit 0
-fi
 for v in violating fixed; do
   original="$HERE/data/synthetic/$v"
   if [[ "$MODE" = verify ]]; then

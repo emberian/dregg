@@ -21,47 +21,16 @@ are two variants, with the same program:
 accepts `open-lower`. Both variants also exercise the allowed paths: an edit after the agent's own
 read, an edit after its own earlier write, and an edit of a file the parent read before the spawn.
 
-The real-session run below exists. Its artifacts (`data/transcript.json` and everything derived
-from it directly under `data/`) are session-derived and under ember's decision. `./run.sh --real`
-verifies the historical certificate and signed tuple without re-exporting or changing either.
+An earlier run over a real Claude Code session (73 transcripts, 3,382 tool calls) was removed
+from the repository on 2026-11-07: session-derived data does not belong in a public repo. Its
+projection script `project_transcript.py` stays, for local use only; nothing it writes is committed.
 
-## The question (the real-session run)
+## The question
 
-The session is `e3ba49ed-a526-4ecd-8807-58b73757aaca`, a completed Claude Code session in
-`~/dev/aidev`. With its 72 sub-agents it is 73 transcripts and 3,382 tool calls. The question,
-in `program.json`:
-
-> Did any **sub-agent** `Edit` a file that neither it (earlier) nor its parent (before spawning
-> it) had read or written? Did any sub-agent write under a forbidden directory (`~/.ssh/`,
-> `~/hellas/`, `~/dev/nanodregg/`, `~/.claude/projects/`, `~/Library/`, `/etc/`)?
-
-```
-written_path(P)    :- writes(W, P).
-touched(R, P)      :- reads(R, P).
-touched(R, P)      :- writes(R, P).
-touch_upto(A, P, S)  :- touched(R, P), tool_call(R, A, T, S), written_path(P).
-touch_upto(A, P, S2) :- touch_upto(A, P, S1), next(A, S1, S2).
-prior_touch(W) :- edits(W, P), tool_call(W, A, T, S), next(A, S0, S), touch_upto(A, P, S0).
-prior_touch(W) :- edits(W, P), tool_call(W, A, T, S), spawned(A, Q, K), next(Q, K0, K), touch_upto(Q, P, K0).
---- stratum 1 ---
-blind_edit(W)      :- edits(W, P), tool_call(W, A, T, S), spawned(A, Q, K), not prior_touch(W).
-forbidden_write(W) :- writes(W, P), tool_call(W, A, T, S), spawned(A, Q, K), prefix_of(P, X), forbidden_prefix(X).
-violation(W) :- blind_edit(W).
-violation(W) :- forbidden_write(W).
-```
-
-The statement is `count(violation) = 0` [MEASURED]. This is the Count = 0 (absence) shape. All 12
-sub-agent edits had an earlier touch, and no sub-agent wrote under a forbidden directory.
-
-**Where the brief's question changed, and why.** The brief asked "every path a sub-agent wrote was
-read earlier". Run literally, that flags all 78 of the 78 sub-agent writes. The first version of
-the program, checked and accepted, counted 84: those 78 plus the root's own 6 memory writes under
-`~/.claude/projects/` [MEASURED]. The sub-agent writes are mostly `Write` calls that
-CREATE new files, and the 12 `Edit`s follow the agent's own `Write`. The projected transcript cannot
-tell a creation from a blind overwrite. The refined question counts modifications (`Edit`,
-`MultiEdit`, `NotebookEdit`). It counts an earlier write as well as a read as "having seen the
-file". It applies the forbidden-directory leg to sub-agents only, because the root's six writes
-under `~/.claude/projects/` are its own memory files.
+In `program.json`: did any **sub-agent** `Edit` a file that neither it (earlier) nor its parent
+(before spawning it) had read or written? Did any sub-agent write under a forbidden directory?
+Modifications (`Edit`, `MultiEdit`, `NotebookEdit`) are counted, an earlier write counts as having
+seen the file, and the forbidden-directory leg applies to sub-agents only.
 
 ## What is proved, and what is not
 
@@ -100,42 +69,9 @@ Not proved, or not claimed:
 - **The hash.** SHAKE256 with a domain prefix over a canonical framed encoding stands in for the
   deployed cSHAKE leaf root. Injectivity of the byte encoding is checked by round-trip `#guard`s in
   `DatalogCheck.lean`, not proved.
-- **The transcript.** `data/transcript.json` is a PROJECTION of the redacted
-  `cv export --format json --redact` of the root and of each `agent-<id>`. It keeps tool name, file
-  path, ids and order, and drops every message text and tool output. The full redacted exports are
-  106 MB; their sha256s are recorded in the projection.
-
-## Counts [MEASURED]
-
-| quantity | value |
-|---|---|
-| transcripts / tool calls | 73 / 3,382 |
-| EDB facts | 8,839: tool_call 3,382, next 3,309, reads 783, name 678, prefix_of 498, writes 88, spawned 83, edits 12, forbidden_prefix 6 |
-| flattened EDB (MMR leaves) | 45,506 integers |
-| active domain | 4,738 distinct constants |
-| stratum 0 | 176 rounds, 3,974 firings |
-| stratum 1 | 0 firings |
-| final database | 12,813 facts; `count(violation) = 0` |
-| closure join candidates per rule (stratum 0, rules 0-6) | 88, 783, 88, 92, 2,942, 12, 0 |
-| closure join candidates per rule (stratum 1, rules 7-10) | 12, 0, 0, 0 |
-| closure by enumeration, for comparison | `4738^8` substitutions for rule 6 alone: not runnable, which is why `JoinClosure` exists |
-
-| wall clock | value |
-|---|---|
-| extract (`extract_edb.py`) | 0.09 s |
-| prove (`prove.py`, semi-naive, logs firings) | 1.9-2.3 s |
-| check: `verifyJ` alone, as printed by the checker | 13.5-26.0 s across four runs (the Mac was shared with other lanes) |
-| check: whole process, including counts and diagnostics | 26-47 s |
-| verify the receipt signature (`ssh-keygen -Y verify`) | 0.014-0.016 s |
-| `lake build datalog-check`, first build | 2 min 53 s |
-
-Falsifiers, run by `run.sh` on this data [MEASURED]:
-
-| certificate | `datalog-check` | weaker checker |
-|---|---|---|
-| `open-lower`: stratum 0 without its `prior_touch` firings, so all 12 edits come out "blind" and the claim is 12 | REFUSE (stratum 0: NOT CLOSED) | `--weaker-no-lower-closure` (closure at the top stratum only): **ACCEPT** |
-| `wrong-count`: the honest certificate claiming 1 | REFUSE (count differs) | n/a |
-| `dropped-fact`: one `reads` fact deleted, statement root kept | REFUSE (root differs; replay refused a firing) | n/a |
+- **The transcript.** The synthetic `data/synthetic/*/transcript.json` files are generated by
+  `synth_transcript.py` in the shape `project_transcript.py` produces: tool name, file path, ids and
+  order, no message text or tool output.
 
 ## Commands
 
@@ -156,11 +92,9 @@ certificates to be refused as well-formed inputs, and the deliberately weaker ch
 
 Verification never generates keys, replaces `allowed_signers`, signs new receipts, or overwrites
 checked artifacts. The checked-in signer is a demo key, not an identity claim about a person or
-organization. Its signature does not attest the checker binary or the source data. The historical
-local run is opt-in: `demo/datalog-governance/run.sh --real` verifies its existing certificate and
-receipt without regeneration or export.
+organization. Its signature does not attest the checker binary or the source data.
 
 Files: `program.json` (rules, strata, policy), `synth_transcript.py`, `project_transcript.py`, `extract_edb.py`,
-`prove.py`, `forge.py`, `run.sh`, `allowed_signers`. Under `data/`: `transcript.json`, `edb.json`,
-`certificate.json` (the checker's input: statement and certificate), `check.out`, `receipt.txt`,
-`receipt.txt.sig`.
+`prove.py`, `forge.py`, `run.sh`, `allowed_signers`. Under `data/synthetic/{violating,fixed}/`:
+`transcript.json`, `edb.json`, `certificate.json` (the checker's input: statement and certificate),
+`check.out`, `receipt.txt`, `receipt.txt.sig`.

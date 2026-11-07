@@ -657,7 +657,7 @@ root = "MinaWrapOpeningSchedEmit"
 # target. Demo: ../demo/datalog-governance/run.sh
 #
 #     lake build datalog-check
-#     ./.lake/build/bin/datalog-check ../demo/datalog-governance/data/certificate.json
+#     ./.lake/build/bin/datalog-check ../demo/datalog-governance/data/synthetic/fixed/certificate.json
 [[lean_exe]]
 name = "datalog-check"
 root = "DatalogCheck"
