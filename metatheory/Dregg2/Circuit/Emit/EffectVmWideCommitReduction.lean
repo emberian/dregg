@@ -433,7 +433,8 @@ theorem wideFullFind_len_le (h : List ℤ → ℤ) (a b : WideFull) :
   split_ifs
   · unfold group4Find
     split_ifs <;> simp [WideCols.blkA, WideCols.blkB, WideCols.blkC]
-  · simp [rootsCollFind, rootList, N_SYSTEM_ROOTS]
+  · simp only [rootsCollFind,
+      Dregg2.Circuit.Emit.EffectVmRowCommitReduction.rootList_length_eight] <;> decide
 
 /-- **⚑ CARRIER 2 — the deployed wide `state_commit` over a FULL post-state, with its extractor.** -/
 def wideFullCarrier : SpongeCarrier where
