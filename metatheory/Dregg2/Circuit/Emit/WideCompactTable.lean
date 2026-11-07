@@ -31,7 +31,9 @@ def wideBBSpecial : List (String × Nat) :=
   , ("heapWriteVmDescriptor2R24",
       Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.heapWriteSpliceVmDescriptor.traceWidth)
   , ("supplyMintVmDescriptor2R24",
-      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintTickFace.traceWidth) ]
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintTickFace.traceWidth)
+    -- the single-tick grain turn (initiative 10): rotated at the 188-wide face, like setField.
+  , ("grainTurnVmDescriptor2R24", Dregg2.Circuit.Emit.EffectVmEmit.EFFECT_VM_WIDTH) ]
   ++ Dregg2.Circuit.Emit.CapOpenEmit.v3RegistryCapOpenWriteWideTable.map
       (fun e => (e.1, e.2.2))
 

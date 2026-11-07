@@ -2715,15 +2715,15 @@ def split_wide_umem_weld(stdout: str, written):
     lines = [ln for ln in stdout.splitlines() if ln.strip()]
     members = [ln for ln in lines if not ln.startswith("umemweld\t")]
     contract = [ln for ln in lines if ln.startswith("umemweld\t")]
-    if len(members) != 57:
+    if len(members) != 58:
         sys.exit(
             f"emit_descriptors: wide+umem weld emitter produced {len(members)} member lines "
-            "(expected 57)"
+            "(expected 58)"
         )
-    if len(contract) != 57:
+    if len(contract) != 58:
         sys.exit(
             f"emit_descriptors: wide+umem weld emitter produced {len(contract)} umemweld lines "
-            "(expected 57)"
+            "(expected 58)"
         )
 
     # ⚑ THE BARE HALF COMES FROM *THIS RUN*, NEVER FROM DISK.

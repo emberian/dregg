@@ -4459,18 +4459,18 @@ mod tests {
             );
         }
         assert_eq!(
-            n, 57,
-            "the welded set is a member-for-member 57/57 cover of the bare wide registry: all 45 \
+            n, 58,
+            "the welded set is a member-for-member 58/58 cover of the bare wide registry: all 45 \
              v3RegistryCapOpenWide emit-source members + the 9 §10 WRITE-bearing cap-open tail wrappers \
              (the write twins the wire routes cap WRITE turns to, minus grantCapWriteCapOpen which has \
-             no bare wide twin) + the 3 live-only wide members (transferCapOpenTB / heapWrite / \
-             supplyMint)"
+             no bare wide twin) + the 4 live-only wide members (transferCapOpenTB / heapWrite / \
+             supplyMint / grainTurn)"
         );
         let keys: std::collections::BTreeSet<&str> =
             UMEM_WELD_TABLE.iter().map(|r| r.key).collect();
         assert_eq!(
             keys.len(),
-            57,
+            58,
             "the contract table has no duplicate keys (a duplicate would make the derivation \
              order-dependent)"
         );

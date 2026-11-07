@@ -41,6 +41,7 @@ import Dregg2.Circuit.Emit.CarrierComposed
 import Dregg2.Circuit.Emit.AvailWideMembers
 import Dregg2.Circuit.Emit.AvailWideFeeMember
 import Dregg2.Circuit.RotatedKernelRefinementExercise
+import Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
 
@@ -158,7 +159,9 @@ def liveOnlyWideHosts : List (String × EffectVmDescriptor2) :=
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + B_SPAN)
   [ ("transferCapOpenTBVmDescriptor2R24", tbWide)
   , ("heapWriteVmDescriptor2R24", hwWide)
-  , ("supplyMintVmDescriptor2R24", smWide) ]
+  , ("supplyMintVmDescriptor2R24", smWide)
+    -- the single-tick grain turn (initiative 10), the fourth live-only tail member
+  , ("grainTurnVmDescriptor2R24", Dregg2.Circuit.Emit.EffectVmEmitGrainTurnRotated.grainTurnWide) ]
 
 /-- **The welded LIVE-ONLY tail (STAGED).** The 3 `liveOnlyWideHosts` welded with the heap domain each
 touches (`wideKeyUMemDomain` returns `heap` for all three — transfer / heap-splice / mint move
@@ -296,16 +299,17 @@ def weldedWideRegistry : List (String × EffectVmDescriptor2) :=
 is pinned; these `#guard`s pin the SHAPE the bytes realize). -/
 
 -- Cover: the 45 AUTHORITY-crown wide members + the 9 WRITE-tail wrappers (the §10 write tail MINUS
--- `grantCapWriteCapOpen`) + the 3 LIVE-ONLY wide members — a member-for-member 57/57 cover of the bare
+-- `grantCapWriteCapOpen`) + the 4 LIVE-ONLY wide members — a member-for-member 58/58 cover of the bare
 -- wide registry, name-stable on the keys with their bare wide twins.
-#guard weldedWideRegistry.length == 57
+#guard weldedWideRegistry.length == 58
 #guard weldedWriteTail.length == 9
-#guard weldedLiveOnlyTail.length == 3
+#guard weldedLiveOnlyTail.length == 4
 #guard (weldedWideRegistry.take 45).map (·.1) == v3RegistryCapOpenWide.map (·.1)
 #guard ((weldedWideRegistry.drop 45).take 9).map (·.1) ==
   (v3RegistryCapOpenWriteWide.filter (fun e => e.1 != grantCapWriteKey)).map (·.1)
 #guard (weldedWideRegistry.drop 54).map (·.1) ==
-  ["transferCapOpenTBVmDescriptor2R24", "heapWriteVmDescriptor2R24", "supplyMintVmDescriptor2R24"]
+  ["transferCapOpenTBVmDescriptor2R24", "heapWriteVmDescriptor2R24", "supplyMintVmDescriptor2R24",
+   "grainTurnVmDescriptor2R24"]
 -- Every welded member carries the staged weld marker + EXACTLY ONE welded umem op.
 #guard weldedWideRegistry.all (fun e => e.2.name.endsWith wideUMemWeldSuffix)
 #guard weldedWideRegistry.all (fun e => (umemOpsOf e.2).length == 1)
