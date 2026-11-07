@@ -64,7 +64,8 @@ theorem satisfying_state16_step
       have hall : v3PermutationSteps.all (fun s => s.input.length == 16) = true := by
         decide
       have hs := List.all_eq_true.mp hall step hstep
-      simpa using of_decide_eq_true hs)
+      have h16 : step.input.length = 16 := by simpa using of_decide_eq_true hs
+      exact h16)
     hc
 
 /-! ## 2. The two FNS3 plans, as an explicit reusable refinement boundary -/
@@ -124,7 +125,8 @@ theorem state16TableOf_sound (perm16 : List ℤ → List ℤ) (a : Assignment)
   have hall : v3PermutationSteps.all (fun s => s.input.length == 16) = true := by
     decide
   have hs := List.all_eq_true.mp hall step hstep
-  simpa [CHIP_STATE_LANES] using of_decide_eq_true hs
+  have h16 : step.input.length = 16 := by simpa using of_decide_eq_true hs
+  simpa using (h16.trans rfl : step.input.length = CHIP_STATE_LANES)
 
 /-- If the row's state columns contain the actual permutation outputs, every incremental lookup
 hits the genuine table built above.  This is the lookup half of an honest descriptor witness. -/

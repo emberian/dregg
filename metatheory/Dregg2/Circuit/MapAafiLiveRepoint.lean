@@ -380,7 +380,8 @@ theorem aafiImtGates_force_layout_or_resid (sent : ℤ) (hash : List ℤ → ℤ
       have hpost : newRoot = perfectRoot hash dep
           (aafiPostVec sent hash dep h hsz (pathPos steps1) (pathPos steps2) key value lowAddr
             lowValue lowNext) := by
-        rw [← hpd2, aafiPostVec]
+        rw [← hpd2]
+        unfold aafiPostVec
         have := hupd2 (imtLeafHash hash ⟨key, value, lowNext⟩)
         rwa [hsl2] at this
       have hp2lt : pathPos steps2 < 2 ^ dep := by
@@ -584,7 +585,8 @@ theorem aafiPostVec_perm_of_layout (sent : ℤ) (hash : List ℤ → ℤ) (dep :
   have hgoal : aafiPostVec sent hash dep h hsz p1 p2 key value lowAddr lowValue lowNext
       = (padTo dep (((imtChainOf sent h).set p1 (⟨lowAddr, lowValue, key⟩ : ImtLeaf)).map
           (imtLeafHash hash)) hMlen0).set p2 (imtLeafHash hash ⟨key, value, lowNext⟩) := by
-    rw [aafiPostVec, h1]
+    unfold aafiPostVec
+    rw [h1]
   have hPostFits : ((imtChainOf sent (Heap.set h key value)).map (imtLeafHash hash)).length
       ≤ 2 ^ dep := by
     rw [List.length_map, imtChainOf_length]; exact hsz2

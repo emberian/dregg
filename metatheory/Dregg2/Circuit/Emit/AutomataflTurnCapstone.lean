@@ -106,7 +106,7 @@ theorem boardDecodeN_cellAt (n : Nat) (e : VmRowEnv) (x y : Nat) (hx : x < n) (h
     (boardDecodeN n e).cellAt ⟨x, y⟩
       = codeToParticle (e.loc (Dregg2.Circuit.Emit.AutomataflStepEmit.NGen.old n (y * n + x))) := by
   simp only [Board.cellAt, boardDecodeN]
-  rw [if_pos ⟨hx, hy⟩]
+  exact if_pos ⟨hx, hy⟩
 
 /-- `boardDecodeCommitAt`'s in-bounds cell IS the felt-decode of its cell column. -/
 theorem boardDecodeCommitAt_cellAt (n : Nat) (cellCol : Nat → Nat) (e : VmRowEnv)
@@ -114,7 +114,7 @@ theorem boardDecodeCommitAt_cellAt (n : Nat) (cellCol : Nat → Nat) (e : VmRowE
     (boardDecodeCommitAt n cellCol e).cellAt ⟨x, y⟩
       = codeToParticle (e.loc (cellCol (y * n + x))) := by
   simp only [Board.cellAt, boardDecodeCommitAt]
-  rw [if_pos ⟨hx, hy⟩]
+  exact if_pos ⟨hx, hy⟩
 
 /-! ## §2 — THE WHOLE TURN (clean round), seam carried as the fold-enforced board agreement. -/
 
