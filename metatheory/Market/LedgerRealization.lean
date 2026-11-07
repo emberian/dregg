@@ -111,6 +111,8 @@ theorem legDelta_fullFill (a : AssetId) (n : MatchNode) (hne : (n.offerAmount : 
   unfold legDelta wantContrib offerContrib
   rw [hout]
   simp [fullFill, PricedOrder.ofMatchNode]
+  -- v4.35: the two sides' `if`s carry different `Decidable` instances; `congr` identifies them.
+  congr
 
 /-- `(l.map (fun x => f x − g x)).sum = (l.map f).sum − (l.map g).sum` over ℚ. The additive split that
 turns the batch's `netFlow` into (Σ credits) − (Σ debits). -/

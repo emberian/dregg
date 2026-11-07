@@ -204,7 +204,7 @@ def demoSched : PoolSched
   | _ + 2 => noopFill
 
 theorem poolStep_noop (p : Pool) : poolStep p noopFill = p := by
-  funext a; simp [poolStep, poolDelta, noopFill, noopOrder, Fill.filledOut]
+  funext a; simp [poolStep, poolDelta, noopFill, noopOrder, Fill.filledOut]; exact ite_self _
 
 /-- After the two real draws the schedule idles: the trajectory stabilizes at the state `poolTraj … 2`
 (gold 70, art 115). -/
