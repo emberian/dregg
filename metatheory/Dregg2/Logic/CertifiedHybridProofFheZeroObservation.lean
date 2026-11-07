@@ -191,7 +191,7 @@ theorem deployed_exact_zero_test_depth_at_least_twenty
       (by
         intro x hx
         simpa [CarrierExpr.eval_poly] using awayFromZero x hx)
-    simpa [bfvPlaintextModulus] using this
+    rwa [ZMod.card] at this
   have hupper := expr.natDegree_le_pow_depth
   by_contra hnot
   have hdepth : expr.mulDepth ≤ 19 := by omega

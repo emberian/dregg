@@ -392,7 +392,7 @@ theorem chainFind_self (hash : List ℤ → ℤ) (s : ℤ) (P : List (List ℤ))
   have hl : ∀ Q : List (List ℤ), (listFind Q Q).1 = (listFind Q Q).2 := by
     intro Q; induction Q with
     | nil => rfl
-    | cons p r ih => simpa only [listFind, if_pos rfl] using ih
+    | cons p r ih => simpa only [listFind, if_pos rfl, ↓reduceIte] using ih
   simp only [chainFind, foldFind_self, ne_eq, not_true_eq_false, if_false]
   exact hl P
 

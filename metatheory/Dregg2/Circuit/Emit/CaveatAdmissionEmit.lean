@@ -223,10 +223,10 @@ theorem honest_satisfies : Satisfied2 (fun _ => 0) descriptor
       TupleBindingEmit.pin, TupleBindingEmit.copy] at hop
   · simp [memLog, memOpsOf, descriptor, comparison, bodies, first, rangeLookup,
       TupleBindingEmit.pin, TupleBindingEmit.copy, honestTrace,
-      Dregg2.Crypto.MemoryChecking.Disciplined, Dregg2.Crypto.MemoryChecking.DisciplinedFrom]
+      Dregg2.Crypto.MemoryChecking.Disciplined, Dregg2.Crypto.MemoryChecking.DisciplinedFrom, Function.comp_def]
   · simp [Dregg2.Crypto.MemoryChecking.MemCheck, memLog, memOpsOf, descriptor,
       comparison, bodies, first, rangeLookup, TupleBindingEmit.pin, TupleBindingEmit.copy,
-      honestTrace, Dregg2.Crypto.MemoryChecking.initSet, Dregg2.Crypto.MemoryChecking.finalSet]
+      honestTrace, Dregg2.Crypto.MemoryChecking.initSet, Dregg2.Crypto.MemoryChecking.finalSet, Function.comp_def]
   · simp [honestTrace, honestTable, memLog, memOpsOf, descriptor, comparison, bodies,
       first, rangeLookup, TupleBindingEmit.pin, TupleBindingEmit.copy]
   · simp [honestTrace, honestTable, mapLog, mapOpsOf, descriptor, comparison, bodies,

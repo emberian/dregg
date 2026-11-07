@@ -516,7 +516,8 @@ theorem lanesKWit_satisfies (ds : Nat → TableDfa Nat Nat) (qs : Nat → Nat) (
         (envAt (lanesKWit ds qs k w) n).loc (laneNext i)
           ≡ (envAt (lanesKWit ds qs k w) n).pub (2 * i + 1) [ZMOD 2013265921]
       intro hl
-      have hlast : n + 1 = (lanesRows ds k qs w).length := by simpa using hl
+      have hlast : n + 1 = (lanesRows ds k qs w).length :=
+        (by simpa using hl : n + 1 = (lanesKWit ds qs k w).rows.length)
       rw [hloc, lanesRows_last ds k i hik w qs n hn' hlast]
       show Int.ofNat (classifyFrom (ds i) (qs i) w)
         ≡ lanesKPub k qs (fun i => classifyFrom (ds i) (qs i) w) (2 * i + 1) [ZMOD 2013265921]

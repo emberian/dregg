@@ -108,7 +108,7 @@ theorem sigRepsAux_covers (L : List Pred) : ∀ (l acc : List Value), ∀ x ∈ 
     ∃ d ∈ sigRepsAux L acc l, leafSig L d = leafSig L x := by
   intro l
   induction l with
-  | nil => intro acc x hx; exact ⟨x, by simpa using hx, rfl⟩
+  | nil => intro acc x hx; exact ⟨x, by simpa [sigRepsAux] using hx, rfl⟩
   | cons c cs ih =>
     intro acc x hx
     simp only [sigRepsAux]

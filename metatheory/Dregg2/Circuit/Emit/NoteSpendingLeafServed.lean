@@ -97,7 +97,7 @@ theorem repair_separates_same_trace :
  Quot.sound] -/
 #guard_msgs in
 #print axioms served_committed_note_member
-/-- info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_honest' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_honest' depends on axioms: [propext, Classical.choice, Quot.sound] -/
 #guard_msgs in
 #print axioms served_honest
 /-- info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_refuses_old_forge' depends on axioms: [propext,
@@ -105,7 +105,9 @@ theorem repair_separates_same_trace :
  Quot.sound] -/
 #guard_msgs in
 #print axioms served_refuses_old_forge
-/-- info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_inhabited' depends on axioms: [propext, Quot.sound] -/
+/-- info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_inhabited' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound] -/
 #guard_msgs in
 #print axioms served_member_inhabited
 /-- info: 'Dregg2.Circuit.Emit.NoteSpendingLeafServed.served_member_witness' depends on axioms: [propext,

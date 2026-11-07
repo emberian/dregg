@@ -51,6 +51,7 @@ theorem row_bits (h : Satisfied2 hash (membershipDesc depth) minit mfin maddrs t
   have hd := gate_all_rows h dirBody (by simp [membershipDesc, constraints, parentLookup, PI_LEAF, PI_ROOT])
     (by simp [membershipDesc, constraints, parentLookup, PI_LEAF, PI_ROOT]) hi
   convert hd using 1
+  simp [dirBody, EmittedExpr.eval, sub_eq_add_neg]
 
 theorem row_hash (h : Satisfied2 hash (membershipDesc depth) minit mfin maddrs t)
     (hchip : ChipTableSound hash (t.tf .poseidon2))
@@ -100,7 +101,9 @@ theorem initial_exact (h : Satisfied2 hash (membershipDesc depth) minit mfin mad
   have hh := h.rowConstraints 0 hi (.base (.piBinding .first CUR 0))
     (by simp [membershipDesc, constraints, parentLookup, PI_LEAF, PI_ROOT])
   apply eq_of_modEq_canon (hc.row 0 hi CUR) (hc.pub 0)
-  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi] using hh
+  simp [VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi,
+    (fun _ => rfl : ∀ j, (envAt t j).pub = t.pub)] at hh
+  exact hh
 
 theorem continuity_exact (h : Satisfied2 hash (membershipDesc depth) minit mfin maddrs t)
     (hc : Canonical t) {i : Nat} (hi : i+1 < t.rows.length) :
@@ -122,8 +125,10 @@ theorem final_exact (h : Satisfied2 hash (membershipDesc depth) minit mfin maddr
     (by simp [membershipDesc, constraints, parentLookup, PI_LEAF, PI_ROOT])
   rw [List.getLast_eq_getElem hne]
   apply eq_of_modEq_canon (hc.row _ hi PAR) (hc.pub 1)
-  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi,
-    show t.rows.length-1+1=t.rows.length by omega] using hh
+  simp [VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi,
+    (fun _ => rfl : ∀ j, (envAt t j).pub = t.pub),
+    show t.rows.length-1+1=t.rows.length by omega] at hh
+  exact hh
 
 /-- Acceptance binds the published leaf and root through every level of the
 actual trace. `depth` is a descriptor label, never a hidden height premise. -/

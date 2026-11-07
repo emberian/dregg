@@ -97,8 +97,10 @@ theorem length_exact (h : RowsHold c hash t) (hc : Canonical t)
   have hi : t.rows.length-1 < t.rows.length := by omega
   have hh := h (t.rows.length-1) hi (indexLast c) (by simp [constraints])
   have hm : t.rows[t.rows.length-1] (index c) ≡ t.pub (lengthPi c) [ZMOD 2013265921] := by
-    simpa [indexLast, VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi,
-      show t.rows.length - 1 + 1 = t.rows.length by omega] using hh
+    simp [indexLast, VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi,
+      (fun _ => rfl : ∀ j, (envAt t j).pub = t.pub),
+      show t.rows.length - 1 + 1 = t.rows.length by omega] at hh
+    exact hh
   have he := canonical_eq hm (hc.row _ hi _) (hc.pub _)
   rw [← he, index_exact h hc hheight _ hi]
   congr 1
@@ -118,7 +120,9 @@ theorem seed_exact (h : RowsHold c hash t) (hc : Canonical t)
     exact canonical_eq hm (hc.row 0 hi _) (by omega)
   | some k =>
     have hm : t.rows[0] (acc c j) ≡ t.pub (k+j) [ZMOD 2013265921] := by
-      simpa [seedPin, hs, VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi] using hh
+      simp [seedPin, hs, VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi,
+        (fun _ => rfl : ∀ j, (envAt t j).pub = t.pub)] at hh
+      exact hh
     exact canonical_eq hm (hc.row 0 hi _) (hc.pub _)
 
 theorem copy_exact (h : RowsHold c hash t) (hc : Canonical t)
@@ -145,8 +149,10 @@ theorem last_exact (h : RowsHold c hash t) (hc : Canonical t)
   intro j hj
   have hh := h (t.rows.length-1) hi (outputPin c j) (by simp [constraints]; aesop)
   have hm : t.rows[t.rows.length-1] (out c j) ≡ t.pub (routePi c j) [ZMOD 2013265921] := by
-    simpa [outputPin, VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi,
-      show t.rows.length - 1 + 1 = t.rows.length by omega] using hh
+    simp [outputPin, VmConstraint2.holdsAt, VmConstraint.holdsVm, envAt_loc hi,
+      (fun _ => rfl : ∀ j, (envAt t j).pub = t.pub),
+      show t.rows.length - 1 + 1 = t.rows.length by omega] at hh
+    exact hh
   exact canonical_eq hm (hc.row _ hi _) (hc.pub _)
 end Extraction
 

@@ -342,7 +342,8 @@ theorem dfaRouting_rung2 {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin :
     rw [← List.getLast_eq_getElem hne] at this; exact this
   have hentry_g : glast.entryHash = hash [glast.state, glast.sym, glast.next, 0] := by
     have := hg.entry glast hgmem
-    simpa only [entryHashOf, id_eq] using this
+    simp only [entryHashOf, id_eq, dfaPrims] at this
+    exact this
   have hcompressN : hash [alast CURRENT, alast SYMBOL, alast NEXT, alast ZERO_LANE]
       = hash [glast.state, glast.sym, glast.next, 0] := by
     rw [← hentry_a, ← hentry_g]; exact hlast_EH

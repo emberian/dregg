@@ -759,7 +759,8 @@ theorem weldWit_rowConstraints_nonmap (hash : List ℤ → ℤ) (tf : TraceFamil
       (envAt (weldWit d R8 q w) i).loc NEXT
         ≡ (envAt (weldWit d R8 q w) i).pub PI_FINAL [ZMOD 2013265921]
     intro hl
-    have hlast : i + 1 = (rowsW d R8 q w).length := by simpa using hl
+    have hlast : i + 1 = (rowsW d R8 q w).length :=
+      (by simpa using hl : i + 1 = (weldWit d R8 q w).rows.length)
     rw [hloc, rowsW_last_next d R8 w q i hi' hlast]
     exact Int.ModEq.refl _
   · -- the EIGHT lane constraints (constancy and the public pin, per lane), then the two lookups
