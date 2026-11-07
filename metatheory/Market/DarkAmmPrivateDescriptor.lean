@@ -174,6 +174,12 @@ def constTrace (a pis : Assignment) (tf : TraceFamily) : VmTrace where
   funext col
   simp [envAt, constTrace]
 
+@[simp] theorem constTrace_pub0 (a pis : Assignment) (tf : TraceFamily) :
+    (envAt (constTrace a pis tf) 0).pub = pis := rfl
+
+@[simp] theorem constTrace_tf (a pis : Assignment) (tf : TraceFamily) :
+    (constTrace a pis tf).tf = tf := rfl
+
 abbrev CanonicalAssignment :=
   Market.DarkBazaarPrivateDescriptor.CanonicalAssignment
 
@@ -198,7 +204,8 @@ theorem semantic_gate_vanishes
     {body : EmittedExpr} (hbody : body ∈ semanticBodies) :
     body.eval a ≡ 0 [ZMOD BABYBEAR_MODULUS] := by
   have h := hsat.rowConstraints 0 (by simp) _ (semantic_gate_mem hbody)
-  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, BABYBEAR_MODULUS] using h
+  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, BABYBEAR_MODULUS,
+    Market.DarkAmmPrivateReceipt.BABYBEAR_MODULUS] using h
 
 theorem public_pin_sound
     {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
@@ -208,7 +215,8 @@ theorem public_pin_sound
     (hpin : VmConstraint2.base (.piBinding .first col pi) ∈ publicPins) :
     a col ≡ pis pi [ZMOD BABYBEAR_MODULUS] := by
   have h := hsat.rowConstraints 0 (by simp) _ (public_pin_mem hpin)
-  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, BABYBEAR_MODULUS] using h
+  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, BABYBEAR_MODULUS,
+    Market.DarkAmmPrivateReceipt.BABYBEAR_MODULUS] using h
 
 theorem old_root_lookup_sound
     {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
@@ -446,8 +454,10 @@ theorem decoded_blinds_canonical (a : Assignment) (hcanon : CanonicalAssignment 
     Market.DarkAmmPrivateReceipt.CanonicalBlind (decodedWitness a).oldBlind ∧
       Market.DarkAmmPrivateReceipt.CanonicalBlind (decodedWitness a).newBlind := by
   constructor <;> intro lane
-  · simpa [decodedWitness, OLD_BLIND, BABYBEAR_MODULUS] using hcanon (OLD_BLIND lane.val)
-  · simpa [decodedWitness, NEW_BLIND, BABYBEAR_MODULUS] using hcanon (NEW_BLIND lane.val)
+  · simpa [decodedWitness, OLD_BLIND, BABYBEAR_MODULUS, Market.DarkAmmPrivateReceipt.BABYBEAR_MODULUS,
+      Market.DarkBazaarPrivateDescriptor.BABYBEAR_MODULUS] using hcanon (OLD_BLIND lane.val)
+  · simpa [decodedWitness, NEW_BLIND, BABYBEAR_MODULUS, Market.DarkAmmPrivateReceipt.BABYBEAR_MODULUS,
+      Market.DarkBazaarPrivateDescriptor.BABYBEAR_MODULUS] using hcanon (NEW_BLIND lane.val)
 
 theorem darkAmmPrivate_decoded_scalars_exact
     {hash : List Int → Int} {a pis : Assignment} {tf : TraceFamily}
@@ -489,7 +499,7 @@ theorem rule_column_exact
       (constTrace a pis tf)) : a RULE = RULE_ID := by
   have hgate := semantic_gate_vanishes hsat rule_body_mem
   have hres : a RULE - RULE_ID ≡ 0 [ZMOD BABYBEAR_MODULUS] := by
-    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval] using hgate
+    simpa [sub, neg, mul, add, v, c, EmittedExpr.eval, ← sub_eq_add_neg] using hgate
   have hcong : a RULE ≡ RULE_ID [ZMOD BABYBEAR_MODULUS] := by
     simpa using hres.add_right RULE_ID
   exact eq_of_modEq_of_canonical hcong (hcanon RULE) (by
@@ -784,7 +794,7 @@ theorem darkAmmPrivate_column_accepts
     rw [hy, hdy]
     omega
   refine ⟨holdBlind, hnewBlind, ?_, ?_, ?_, ?_, ?_, hoverNat, ?_, ?_⟩
-  · simpa [columnPublic] using rule_column_exact hcanon hsat
+  · simpa [columnPublic, RULE_ID] using rule_column_exact hcanon hsat
   · exact column_old_root_semantic permOut hcanon hChip hsat
   · exact column_new_root_semantic permOut hcanon hChip hsat
   · exact_mod_cast hdxPosInt
