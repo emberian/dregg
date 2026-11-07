@@ -101,6 +101,13 @@ def compileCmd (path name : String) (absence : Bool) : IO UInt32 := do
             let wholeTime ← IO.monoMsNow
             IO.eprintln s!"policyc profile: whole-word states={c.t.n} milliseconds={wholeTime - t0}"
             if absence then
+              if closedB c.t then
+                match explore c.t 100000 with
+                | some (labels, _) =>
+                  let exploreTime ← IO.monoMsNow
+                  IO.eprintln s!"policyc profile: factor exploration states={labels.size} milliseconds={exploreTime - wholeTime} (repeated below)"
+                | none => pure ()
+              let wholeTime ← IO.monoMsNow
               let result := (certifyAbsenceFrom r c notes).map (fun p => (p.1.t, p.2))
               match result with
               | .ok (t, _) =>

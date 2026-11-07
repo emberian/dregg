@@ -159,7 +159,7 @@ def fast(args):
             if 'incompatible header' in r.stdout + r.stderr:
                 print('iter-check fast: an olean has the wrong Lean header (the Mac mathlib problem): see BUILD doc'); return 2
             lim = int(os.environ.get('ITER_FAST_MAX_STALE', '40'))
-            print(f'iter-check fast: imports out of date (closure {len(stale)} in-tree modules)')
+            print(f'iter-check fast: imports out of date ({nst} stale job(s); import closure {len(stale)} in-tree modules)')
             if nst > lim and not os.environ.get('ITER_FAST_FORCE'):
                 print(f'iter-check fast: more than {lim} stale jobs: that is a box job, run `iter-check full` '
                       '(or ITER_FAST_FORCE=1 to build here)'); return 2

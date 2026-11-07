@@ -300,6 +300,51 @@ theorem simCheck_verdict {t t' : Table} {cls : Nat → Nat} (h : simCheck t t' c
   obtain ⟨e1, -, e3⟩ := simCheck_run h w hw t.start hs
   rw [hst, ← e1, e3]
 
+/-- Byte classes of a table: `byteReps t` maps each byte to the least byte with the same column
+(`t.step p b` for every state `p < t.n`). Untrusted: every consumer checks or does not depend on it. -/
+def byteReps (t : Table) : Array Nat := Id.run do
+  let mut seen : Std.HashMap (List Nat) Nat := {}
+  let mut out : Array Nat := #[]
+  for b in [0:256] do
+    let col := (List.range t.n).map (fun p => t.step p b)
+    match seen.get? col with
+    | some c => out := out.push c
+    | none => seen := seen.insert col b; out := out.push b
+  return out
+
+/-- The class representatives (least byte of each class), ascending. -/
+def repBytes (rep : Array Nat) : List Nat := (List.range 256).filter (fun b => rep.getD b b == b)
+
+/-- `exploreStates`, copying the row entry of a byte's representative instead of stepping when the
+representative is an earlier byte. Untrusted like `exploreStates`. -/
+def exploreStatesRep {α : Type} [BEq α] [Hashable α] (initial : α) (step : α → Nat → α)
+    (rep : Array Nat) (limit : Nat) : Option (Array α × Array (Array Nat)) := Id.run do
+  let mut labels := #[initial]
+  let mut index : Std.HashMap α Nat := ({} : Std.HashMap α Nat).insert initial 0
+  let mut rows : Array (Array Nat) := #[]
+  let mut k := 0
+  for _ in [0:limit] do
+    if k ≥ labels.size then break
+    let x := labels.getD k initial
+    let mut row : Array Nat := #[]
+    for b in [0:256] do
+      let c := rep.getD b b
+      if c < b then
+        row := row.push (row.getD c 0)
+      else
+        let y := step x b
+        match index.get? y with
+        | some j => row := row.push j
+        | none =>
+          let j := labels.size
+          labels := labels.push y
+          index := index.insert y j
+          row := row.push j
+    rows := rows.push row
+    k := k + 1
+  if k < labels.size then return none
+  return some (labels, rows)
+
 /-- Untrusted reachable-state exploration shared by table restriction and factor construction.
 The consumers check its labels/simulation before constructing a `Certified` value. -/
 def exploreStates {α : Type} [BEq α] [Hashable α] (initial : α) (step : α → Nat → α)
@@ -326,12 +371,12 @@ def exploreStates {α : Type} [BEq α] [Hashable α] (initial : α) (step : α �
   if k < labels.size then return none
   return some (labels, rows)
 
-/-- Moore partition refinement: class id = least state with the same signature. -/
-def refineStep (t : Table) (cls : Array Nat) : Array Nat := Id.run do
+/-- Moore partition refinement: class id = least state with the same signature over `bytes`. -/
+def refineStep (t : Table) (bytes : List Nat) (cls : Array Nat) : Array Nat := Id.run do
   let mut seen : Std.HashMap (Nat × List Nat) Nat := {}
   let mut out : Array Nat := #[]
   for s in [0:t.n] do
-    let key := (cls.getD s 0, (List.range 256).map (fun b => cls.getD (t.step s b) 0))
+    let key := (cls.getD s 0, bytes.map (fun b => cls.getD (t.step s b) 0))
     match seen.get? key with
     | some k => out := out.push k
     | none => seen := seen.insert key s; out := out.push s
@@ -343,8 +388,10 @@ def classesOf (t : Table) : Array Nat := Id.run do
   let firstAcc := (List.range t.n).find? t.acc
   let firstRej := (List.range t.n).find? (fun s => !t.acc s)
   cls := cls.map (fun k => if k = 1 then firstAcc.getD 0 else firstRej.getD 0)
+  -- signatures over one byte per column class: bytes with equal columns cannot split a class
+  let bytes := repBytes (byteReps t)
   for _ in [0:t.n + 1] do
-    let cls' := refineStep t cls
+    let cls' := refineStep t bytes cls
     if cls' == cls then break
     cls := cls'
   return cls
@@ -354,7 +401,11 @@ def minimize (t : Table) : Table × (Nat → Nat) :=
   let cls := classesOf t
   let reps := (List.range t.n).filter (fun s => cls.getD s 0 == s)
   let repsA := reps.toArray
-  let dense := fun (s : Nat) => reps.idxOf (cls.getD s 0)
+  -- position of each representative in `reps` (the class map is checked by `simCheck`, so this
+  -- array is untrusted; it replaces a linear `reps.idxOf` per lookup)
+  let pos : Array Nat := reps.zipIdx.foldl (fun a (r, i) => a.setIfInBounds r i)
+    (Array.replicate t.n reps.length)
+  let dense := fun (s : Nat) => pos.getD (cls.getD s 0) reps.length
   let rows : Array (Array Nat) := repsA.map (fun r => (Array.range 256).map (fun b => dense (t.step r b)))
   (⟨reps.length, fun k b => (rows.getD k #[]).getD b 0, fun k => t.acc (repsA.getD k 0), dense t.start⟩,
    dense)
@@ -367,6 +418,46 @@ def relabelDead (t : Table) : Table × (Nat → Nat) :=
   | none => (t, id)
   | some d => (⟨t.n, fun s b => swap0 d (t.step (swap0 d s) b), fun s => t.acc (swap0 d s), swap0 d t.start⟩,
                swap0 d)
+
+/-- Array-backed rows for any table: `stepRows` holds `step s b` at `s * 256 + b`, `accRow`
+holds `acc s`. Composed tables (union, trim, minimize, relabel) are otherwise closures that
+re-run the whole composition chain on every lookup. -/
+def Table.stepRows (t : Table) : Array Nat :=
+  (Array.range (t.n * 256)).map fun i => t.step (i / 256) (i % 256)
+
+def Table.accRow (t : Table) : Array Bool := (Array.range t.n).map t.acc
+
+def Table.stepWith (t : Table) (rows : Array Nat) (s b : Nat) : Nat :=
+  if h : b < 256 ∧ s * 256 + b < rows.size then rows[s * 256 + b] else t.step s b
+
+def Table.accWith (t : Table) (accs : Array Bool) (s : Nat) : Bool :=
+  if h : s < accs.size then accs[s] else t.acc s
+
+/-- The same table with its rows computed once (the arrays are bound outside the closures). -/
+def Table.materialize (t : Table) : Table :=
+  let r := t.stepRows
+  let a := t.accRow
+  ⟨t.n, fun s b => t.stepWith r s b, fun s => t.accWith a s, t.start⟩
+
+/-- Materializing changes no value: the array lookups equal the original functions everywhere,
+and out-of-range lookups fall back to them. -/
+theorem Table.materialize_eq (t : Table) : t.materialize = t := by
+  cases t with
+  | mk n step acc start =>
+    simp only [Table.materialize, Table.mk.injEq, true_and, and_true]
+    constructor
+    · funext s b
+      unfold Table.stepWith
+      split
+      · rename_i h
+        simp only [Table.stepRows, Array.getElem_map, Array.getElem_range]
+        congr 1 <;> omega
+      · rfl
+    · funext s
+      unfold Table.accWith
+      split
+      · simp [Table.accRow]
+      · rfl
 
 /-- A byte table certified to decide `R` on byte words. -/
 structure Certified (R : PredRE) where
@@ -406,16 +497,22 @@ def Certified.trim {R : PredRE} (c : Certified R) (limit : Nat := 100000) :
     if h : simCheck t c.t embedding = true then (c.restrict t embedding h, [])
     else (c, ["reachable-state simulation failed; original table retained"])
 
+/-- The same certificate over the materialized table (`Table.materialize_eq`). -/
+def Certified.materialize {R : PredRE} (c : Certified R) : Certified R :=
+  ⟨c.t.materialize, by rw [Table.materialize_eq]; exact c.hdec⟩
+
 /-- Optimize any certified table. Each transformation is retained only after its simulation
-check, so derivative and compositional compilers share one proof-preserving output pipeline. -/
+check, so derivative and compositional compilers share one proof-preserving output pipeline.
+The result is materialized, so consumers (union, trim, the factor construction) look rows up
+instead of re-running the minimize/relabel closures. -/
 def Certified.optimize {R : PredRE} (c0 : Certified R) (notes : List String := []) :
     Certified R × List String :=
   let (t1, m1) := minimize c0.t
   let (c1, notes) := if h : simCheck c0.t t1 m1 = true then (c0.along t1 m1 h, notes)
     else (c0, notes ++ ["minimization check failed; unminimized table emitted"])
   let (t2, m2) := relabelDead c1.t
-  if h : simCheck c1.t t2 m2 = true then (c1.along t2 m2 h, notes)
-  else (c1, notes ++ ["dead-state relabelling check failed; not relabelled"])
+  if h : simCheck c1.t t2 m2 = true then ((c1.along t2 m2 h).materialize, notes)
+  else (c1.materialize, notes ++ ["dead-state relabelling check failed; not relabelled"])
 
 /-- Compile derivatives, then use the shared checked output optimization. -/
 def certify (R : PredRE) : Except String (Certified R × List String) := do

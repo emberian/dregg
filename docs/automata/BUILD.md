@@ -82,6 +82,24 @@ Per-file seconds are dominated by loading the import closure (a lone `lake env l
 `SymbolicEquivalence.lean` is 17 s wall with 2 s user), so they rise with `-j` and with the other
 lanes' load; the wall is what to compare. Target was under five minutes; both runs are under two.
 
+### `make check-fast` [MEASURED, 2026-11-07, lane worktree, Lean 4.35]
+
+The bar is under 2 minutes. It holds. From `metatheory/` in a fresh lane worktree
+(`lean-packages link --mine`):
+
+| step | wall |
+|---|---:|
+| `iter-check fetch --box bb2` (one time per worktree: snapshot `abfe4f8dc`, 4 commits behind HEAD) | 318 s |
+| `make check-fast FILES=Dregg2/Policy/Compile.lean` (first run after the fetch) | 19.3 s |
+| `make check-fast FILES=Dregg2/Policy/Factor.lean`, its import `Compile` edited (one stale job rebuilt here) | 21.5 s |
+| `make check-fast FILES=Dregg2/Policy/Factor.lean`, imports current | 13.9 s |
+| `make check-fast FILES="Dregg2/Policy/Compile.lean Dregg2/Policy/Factor.lean"` | 19.9 s |
+
+The `lake lean` of each file takes 5-7 s. The rest is lake's `--no-build` probe and replaying
+the import closure. When an import is stale, `iter-check fast` now prints the number of stale
+jobs. The size of the import closure (164 in-tree modules for `Factor`) is printed separately;
+before, it was the only number shown, and it read like a reason to refuse.
+
 ### The Mac's mathlib [MEASURED, 2026-11-06]
 
 `metatheory/.lake/packages/mathlib` is a symlink to `~/src/mathlib4`, itself a symlink to
