@@ -67,6 +67,16 @@ Release notes: reference-manual `Manual/Releases/v4_3{1..5}_0.lean`.
   `uniformFinset`; MlKemDelta and ModelBridge use it. **Statement spelling change** (same object,
   the name moved): ModelBridge `pi_uniform_singleton`, `pi_uniform_finset`, `roMeasure_accept` now name
   `PMF.uniformFintype`.
+- **Functions matching on `⟨k, _⟩ : Fin n` stop reducing once simp has turned the argument into the
+  literal `k`** (`match 0 with | ⟨0, _⟩ => ..` is left in the goal; reproduced in core 4.35 without
+  Mathlib). Stage the simp: `simp only` the structure defs, then `simp only [f]`, then the rest
+  (DirectLogicDreggWorkloads had hit maxHeartbeats/maxRecDepth through it).
+- **`deriving Fintype` fails on some small enums** under 4.35 + this Mathlib: write the instance with
+  `Fintype.ofList` (CertifiedRepresentationSearch, CertifiedIndexedPresentationCompiler,
+  FinitePatchCodeDescent).
+- `String.trim` is gone (`trimAscii`); `List.Pairwise.forall` takes `[Std.Symm R]`; `open private`
+  needs an explicit `import Batteries.Tactic.OpenPrivate`; `MvPolynomial.coeff d p` -> `p.coeff d`;
+  `Int.emod_add_ediv'` -> `Int.emod_add_ediv_mul`.
 - **Core lemma renames (4.34)**: `if_pos/if_neg` -> `ite_eq_left/right`, `dif_pos/dif_neg`, `if_true`
   -> `ite_true` etc. Deprecated aliases remain (warnings only; not touched in this lane).
 - **`Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler`, `Lean.reduceBool` are removed**
