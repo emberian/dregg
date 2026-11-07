@@ -158,7 +158,8 @@ see [the reproducible comparison](policy-compile-performance.md). Surface altern
 now compile their branches separately and use the proved finite-table union product,
 followed by checked reachability restriction, the shared checked minimization and absence
 construction. The demo union compiles to 129 states / 33,024 transitions in 28.86 seconds
-on bb2, with twelve byte-language controls passing.
+on bb2, with twelve byte-language controls passing (0.83 s since 2026-11-07: see
+"Compile performance" below).
 
 - **Parser** [MEASURED, `#guard`]: the falsifiers below are `#guard`s in `Theorems.lean`.
   - An unbalanced `(` is reported at `1:23`, found `;`, expected `` `)` ``. On a second line it is reported at `2:17`.
@@ -201,6 +202,52 @@ instead builds the absence automaton from the whole-word table by a subset const
 output is label-checked. Counting classes still scale as roughly the cube of the count [MEASURED:
 `\w{16}` 1.5 s, `\w{32}` 21.7 s]. The cost is the derivative determinizer's `simDecide` against
 every seen state, not the table size.
+
+### Compile performance (2026-11-07)
+
+[MEASURED, bb2, native `policyc`, warm, wall including process start] The demo policy
+(`demo/absence-receipt/policy.policy`, `--pattern secrets --absence`) compiles in **0.83 s**
+(three runs: 0.83, 0.84, 0.83), down from 28.9 s (the 2026-11-06 measurement) and 21.9 s for
+the pre-change binary on the same box today. The Rust crate compiler takes 2.7 s on the same
+policy. The output is byte-identical to the checked-in `absence-table.json` (`cmp`, 200,146 bytes),
+and so are the `policyc/aws-absence.json` and `policyc/pem-absence.json` fixtures.
+
+`perf` on the 21.9 s binary showed three costs:
+
+1. Composed tables were closures. After union, trim, minimize and relabel, every `D.step`/`D.acc`
+   call re-ran that whole chain. `Table.materialize` puts the rows into arrays.
+   `Table.materialize_eq : t.materialize = t` is an equality of tables, so `Certified.optimize`
+   returns the materialized table under the same `hdec`.
+2. `nextSet`/`anyAcc` read the `List Bool` bitmap with `getD`, which is linear per lookup, and
+   scanned a target list once for each destination. Both now read through an array copy, and the
+   successor image is built in one pass. The new `nextSet_spec` proves it equal to the original
+   pointwise set expression, for every table, bitmap and byte. `anyAcc_spec` does the same for
+   `anyAcc`. `absRun_spec` goes through these two lemmas unchanged.
+3. The factor exploration visits 6,707 abstract states before minimization, and `labCheck`
+   recomputed `absStep` for all 256 bytes of each one. The whole-word table has few distinct byte
+   columns. `labCheckRep` computes `absStep` only at each column class's least byte. Every other
+   byte must step to the same numbered state as its representative, and `colCheck` verifies
+   that the class map really preserves columns. `labCheckRep_sound` (through `absStep_col`)
+   proves that `labCheckRep` implies `labCheck`, so `absence_decides` applies unchanged.
+   Exploration and the Moore refinement signatures use the same classes. Both are untrusted and
+   still checked by `labCheck`/`simCheck`.
+
+Phase clocks (`POLICYC_PROFILE=1`): whole-word 265 ms, factor exploration 158 ms (6,707
+states), the whole absence phase 481 ms.
+
+| pattern | mode | states | before | after | bytes |
+|---|---|---:|---:|---:|---|
+| demo union | absence | 129 | 21.9 s | 0.83 s | identical |
+| `"sk-" \w{16}` | absence | 48 | 157 ms | 75 ms | identical |
+| `"sk-" \w{32}` | absence | 96 | 729 ms | 361 ms | identical |
+| `"sk-" \w{20,64}` | absence | 60 | 2.13 s | 1.32 s | identical |
+| `"sk-" \w{64}` | absence | 192 | 6.28 s | 4.21 s | identical |
+| `"sk-" \w{20,64}` | whole-word | 69 | 1.72 s | 1.42 s | identical (benchmark digest) |
+| `"sk-" \w{64}` | whole-word | 69 | 5.03 s | 4.33 s | identical (benchmark digest) |
+
+"before" is the 2026-11-06 binary (normalization cache and factor-successor hoist already
+included), run on the same box. The counted-repeat cases are now dominated by the derivative
+determinizer (`simDecide` normalization), not by the factor construction.
 
 ## 5. What is NOT claimed
 

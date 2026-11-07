@@ -133,8 +133,9 @@ checks byte-language controls and records table digests; a different numbering o
 product states need not match a derivative compiler's numbering. Timed-out baselines
 supply neither tables nor equivalence evidence.
 
-Remaining performance scope: the absence phase is about 28 s, and the factor bitmap
-image is quadratic in its worst case. The measured output is usable by the demo now;
+Remaining performance scope (superseded 2026-11-07): the absence phase was about 28 s. Array-backed
+tables, an array successor image and byte-class label checking bring the whole compile to 0.83 s.
+See `POLICY-LANGUAGE.md`, "Compile performance". The measured output is usable by the demo now;
 this is not a claim that every surface expression has a fast compositional backend.
 Only alternatives at a surface root use the new product path; other roots retain the
 proved derivative compiler.
