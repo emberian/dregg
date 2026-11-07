@@ -159,11 +159,12 @@ set_option maxRecDepth 100000
 #guard ipaBaseOf shapeSmoke (stepBases shapeSmoke) FTC_ROUND
         == Dregg2.Bridge.MinaStepPrevCommitments.COMBINE_XY.getD 3 (0, 0)
 #guard tS.ftc.out != Dregg2.Bridge.MinaStepPrevCommitments.COMBINE_XY.getD 3 (0, 0)
--- …no pin row for it, and its class is the 32 `EndoMul` reads plus the add's output and the probe.
+-- …no pin row for it, and its class is the add's output, the probe, and — since §19d
+-- (`0047cb876`), where a combine commitment is a Horner ADDEND and no ladder's base — the fold add
+-- that takes it. It had the 32 `EndoMul` reads in place of that add before.
 #guard (ipaBaseRows shapeSmoke tS.ipa).all (fun r =>
   r.perm.headD none != some (ipx shapeSmoke (qT shapeSmoke FTC_ROUND)))
-#guard (classCells posS (ipx shapeSmoke (qT shapeSmoke FTC_ROUND))).length
-        == shapeSmoke.ipaBlocks + 4
+#guard (classCells posS (ipx shapeSmoke (qT shapeSmoke FTC_ROUND))).length == 3
 #guard ((classCells posS (ipx shapeSmoke (qT shapeSmoke FTC_ROUND))).filter
           (fun c => c.row < nTrans)).length == 0
 

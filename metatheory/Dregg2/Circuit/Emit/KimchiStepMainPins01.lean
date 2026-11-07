@@ -345,14 +345,22 @@ buys the same factor and costs each pin its own failure site. -/
         (tS.msm.terms.getD i default).accs.getLastD (0, 0))
    let tot := (pts.drop 1).foldl (fun acc p => jAdd acc (jOf p)) (jOf (pts.getD 0 (0, 0)))
    jacEqM pN (jOf (tS.msm.sums.getLastD (0, 0))) tot)
--- ⚑ …and R4's fold starts at `sg_old[0]` (`~init`, `step_verifier.ml:606`), so the Jacobian oracle
--- is seeded there and not at round 0's output. `ipaRounds` adds, one per round.
+-- ⚑ …and R4's fold is upstream's Horner fold (§19d, `0047cb876`; it was a round-robin sum,
+-- which is what this oracle checked until then): step `a`'s ladder runs over step `a−1`'s sum
+-- (step 0 over the LAST commitment, `combine_split_commitments`' `List.rev`), and its add takes
+-- commitment `nCombine−2−a` as the other operand, `sg_old[0]` (`~init`, `step_verifier.ml:606`)
+-- at the last step. Checked add by add with the Jacobian oracle. At `shapeSmoke` every round is a
+-- combine round.
 #guard
-  (let pts := (List.range shapeSmoke.ipaRounds).map (fun r =>
-        (tS.ipa.accs.getD r []).getLastD (0, 0))
-   let tot := pts.foldl (fun acc p => jAdd acc (jOf p))
-                (jOf Dregg2.Bridge.MinaStepPrevCommitments.SG_OLD0_XY)
-   jacEqM pN (jOf (tS.ipa.sums.getLastD (0, 0))) tot)
+  (let nc := nCombine shapeSmoke
+   nBulletPairs shapeSmoke == 0 && nc == shapeSmoke.ipaRounds
+   && (List.range nc).all (fun a =>
+     let B := if a == 0 then tS.ipa.bases.getD (nc - 1) (0, 0) else tS.ipa.sums.getD (a - 1) (0, 0)
+     let A := if a + 2 ≤ nc then tS.ipa.bases.getD (nc - 2 - a) (0, 0)
+              else Dregg2.Bridge.MinaStepPrevCommitments.SG_OLD0_XY
+     tS.ipa.ladderBases.getD a (0, 0) == B
+     && jacEqM pN (jOf (tS.ipa.sums.getD a (0, 0)))
+          (jAdd (jOf A) (jOf ((tS.ipa.accs.getD a []).getLastD (0, 0))))))
 #guard tS.ipa.sums.length == shapeSmoke.ipaRounds
 #guard tS.ipa.addCells.length == shapeSmoke.ipaRounds
 -- ⚑ …and `check_bulletproof`'s tail really computes `endo q c + delta`: the ladder's own counter

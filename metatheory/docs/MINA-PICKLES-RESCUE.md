@@ -78,25 +78,75 @@ definitions; all six (`mina-commit-pub`, `-f`, `-ft`, `-agg`, `-ladder`, `-xi`) 
 to `circuit/descriptors/by-name`. Not done: the 47-term `XI_TERMS` fold and the §8c ladder still
 cost about 2 GB above the floor; splitting them per term would bring the module near 6 GB.
 
+## Compiled evaluation (ember's policy, 2026-11-06)
+
+Ember: "we DO trust the lean system ... this present hybrid is the worst of both tradeoffs." Facts
+about concrete data (block 539508's values, leg lists, descriptor counts, scalar multiplications)
+are checked by compiled evaluation, `native_decide`, pinned `#assert_compiled` (they rest on
+`Lean.ofReduceBool`); general theorems stay kernel-proved and `#assert_axioms`-clean. Applied per
+module, one check after each fix (dregg-build2, deps warm, import floor 3.6 GB):
+
+- A theorem is switched only if it is closed (no hypotheses), its proof is a `decide`/`rfl`
+  evaluation, and no other declaration cites it; cited ones were switched only where the citing
+  proofs are themselves about concrete data, and then the axiom checks moved their pins. The
+  converter used is the lane's scratch `nativize.py`; every pin change was confirmed by the
+  `#assert_*` commands in the module, not by hand.
+- A descriptor whose `TiedAir` verdicts are compiled carries those proofs in its value, so its
+  shape theorems (width, PI count) and its `CertifiedRefines` certificate are pinned
+  `#assert_compiled` as well (`MinaWrapOpeningSched`). Where a module's every theorem is compiled,
+  the namespace pin (which refuses to pass vacuously) is replaced by a comment
+  (`MinaWrapAggregationGate`, `MinaWrapGroupGate`).
+- Evaluation is interpreted (the lib has no `precompileModules`), so memory falls to the floor but
+  wall time does not always fall: `MinaFinalizeScalarsWeld` takes 8 minutes at 3.7 GB.
+
 ## Landed (for the stamp rerun; the Codex deputy sequences it)
 
-| SHA | module | emitted bytes |
-|---|---|---|
-| `7c90a9b60` | `MinaBodyPreimageBitsAir` | identical |
-| `e4919780a` | `MinaWrapCommitStages` | identical (six descriptors) |
-| `5b89f003b` | `MinaWrapOpeningGate` (14.6 GiB → 7.9 GB) | no definition changed |
-| `f6c2e607e` | `PastaCurveScheduled` (11.9 GiB → 6.6 GB) | no definition changed |
+| SHA | module | after (peak, wall) | note |
+|---|---|---|---|
+| `7c90a9b60`, `5d4edcf75` | `MinaBodyPreimageBitsAir` | 4.4 GB, 0:08 (was 25.9 GB, 6:16) | structural `pinsTied`; counts compiled; descriptor bytes identical |
+| `e4919780a`, `e601f3b13` | `MinaWrapCommitStages` | 3.7 GB, 0:11 (was 15.7 GB, 5:22) | structural ladder tie; 26 block facts compiled; six descriptors identical |
+| `5b89f003b`, `3b93ccac4` | `MinaWrapOpeningGate` | 6.4 GB, 0:32 (iteration lane: 14.6 GiB) | `opening_relation_holds`, `b0_is_the_b_polynomial` stay kernel (cited by kernel proofs) |
+| `f6c2e607e`, `ff4ce647d` | `PastaCurveScheduled` | 4.0 GB, 0:18 (iteration lane: 11.9 GiB) | `mainRailOk`/`pinsTied` stay kernel (certificates) |
+| `367c5c694` | `MinaWrapPublicCommGate` | 7.3 GB, 1:09 | two cited theorems stay kernel |
+| `99afa2cd8` | `MinaFinalizeScalars` | 4.5 GB, 1:54 | |
+| `d023d84b5` | `MinaFinalizeScalarsWeld` | 3.7 GB, 8:03 | interpreted evaluation is the wall time |
+| `26e39b3e8` | `MinaWrapXiEndoLift` | 9.1 GB, 1:12 (was 9.5 GB) | the machine-run theorem and `endoAir_pinsTied` are cited, still kernel |
+| `90f5d3ebe` | `MinaWrapClosingScheduled` | 5.7 GB, 0:46 | 18 facts (the commit message says 19) |
+| `549e83ef9` | `MinaWrapVerifierAir` | 4.9 GB, 0:13 | |
+| `931e2aa52` | `MinaWrapXiAggregateMsm` | 3.8 GB, 0:08 | not in the default build |
+| `a697eaeb1` | `MinaWrapXiBasisWeld` | 5.1 GB, 0:14 | not in the default build |
+| `fe93cfdf2` | `MinaWrapXiScalarWeld` | 3.7 GB, 0:06 | not in the default build |
+| `9bfac8b7b` | `MinaPhase1TapeBinding` | 3.7 GB, 0:04 | |
+| `a8830db91` | `MinaWrapVkDigestChain` | 3.7 GB, 0:04 | |
+| `40f1db6fc` | `MinaBodyHashRelimbAir` | 4.0 GB, 0:06 | |
+| `9453dad41` | `MinaWrapAggregationGate` | 3.6 GB, 0:05 | every theorem compiled |
+| `a02093815` | `MinaWrapGroupGate` | 3.6 GB, 0:04 | every theorem compiled |
+| `afc144857` | `MinaAccumulatorAir` | 11.6 GB, 1:54 | §8a-§8b kernel defeq proofs over the routed block are the remaining 7.6 GB (the "12.0" in its commit title is an earlier failing variant, not a before) |
+| `03c611a8a` | `MinaAccumulatorAir` | 5.1 GB, 1:11 | the §8b cost was ONE kernel check, `routed_constraints_split` (92 s): definitional `[] ++ L ≡ L` steps at the concrete 4,800-constraint `L`, which lazy delta evaluated. Restated through `lowerAir_constraints` over a variable `air`; statement unchanged, still kernel-proved |
+| `392812d12` | `MinaWrapOpeningSched` | 3.8 GB, 0:41 | `TiedAir` verdicts compiled; certificate pinned `#assert_compiled` |
+| `28326f20b` | retired `MinaWrapSgChunk0`..`3` | | |
 
-## The later two (one check after the fix; "before" is the iteration lane's cold profile)
+## Downstream check (one `lake build` of every Lean importer of the changed modules, bb2, at `392812d12`)
 
-- `MinaWrapOpeningGate`: `opening_relation_holds` (34 RCB ladders) and nine tamper theorems that
-  each re-run a variant of the residual, all by `decide`. Every `decide` is now `decide +kernel`.
-  7.9 GB, 3:27 on a loaded bb2.
-- `PastaCurveScheduled`: not scalar multiplication. One theorem, `scheduled_columns_fit`, decided
-  a column bound over all 1,864 legs in one declaration (3.8 GB before it, 11.6 GB after it).
-  `decide +kernel` alone and `Elab.async false` left it at 11.7 GB. Splitting it into one kernel
-  check per leg family and eleven three-op slices of the schedule brought the module to 6.6 GB. The
-  statement of `scheduled_columns_fit` is unchanged.
+Green: `MinaWrapClosingAir`, `MinaWrapClosingScheduled`, `MinaAccumulatorSrsDemo`, `MinaWrapCommitMachine`,
+`PastaMsmBucketed`, `FtCommWeld`, `MinaWrapPublicCommData`, `Bridge.MinaStepPrevCommitments`,
+`MinaBodyHashRelimbSeams`, `MinaSeams`, `KimchiStepMainPins19d`, `MinaWrapXiScalarWeld`,
+`MinaWrapPublicInputFromHeader`, `MinaOpeningCheckWeld`, `MinaBodyPreimageSeams`, `AirCrossRow`,
+`AirSelectorForcing`, and every changed module itself (22:33 wall, 11.6 GB peak).
+
+Red at the time, not from this lane, now repaired by it (`0ad677396`): `KimchiStepMainPins01`, `03`, `05`,
+`10`, `12`, `14` failed their own value checks. The pins were stale against two deliberate Core changes,
+`0047cb876` (the R4 fold became upstream's Horner fold, so a combine commitment is an addend, not a ladder
+base) and `16b6d9b8a` (segment D absorbs its own `G`, `vGaX`; `nOnC` + 1). Each new value was evaluated
+and derived from the class listing by row kind; Pins01's round-robin sum oracle became a Horner oracle,
+checked add by add. `Dregg2.MinaBridgeGuards` then built green (3148 jobs, 3.8 GB).
+
+## Earlier steps, superseded by the above
+
+- `MinaWrapOpeningGate` at `5b89f003b`: every `decide` was `decide +kernel`, 7.9 GB.
+- `PastaCurveScheduled` at `f6c2e607e`: `scheduled_columns_fit` split into per-family and per-op
+  kernel checks, 6.6 GB; `decide +kernel` alone and `Elab.async false` had left it at 11.7 GB.
+  `ff4ce647d` replaced the split with one compiled check.
 
 ## Decisions only ember can make
 
