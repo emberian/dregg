@@ -582,6 +582,17 @@ def resumeCertified {State Payload : Type} (spec : EventSourcing.StreamSpec)
     Except EventSourcing.Error (EventSourcing.ReplayState State) :=
   EventSourcing.resumeSnapshot spec digests reduce snapshot.snapshot suffix
 
+/- `Except`'s bind and map on a constructor, as rewrite rules: under v4.35's transparency
+`simp` no longer unfolds the `Monad (Except ε)` instance to reach them. -/
+private theorem except_bind_error {ε α β : Type _} (e : ε) (f : α → Except ε β) :
+    (Except.error e >>= f) = Except.error e := rfl
+private theorem except_bind_ok {ε α β : Type _} (a : α) (f : α → Except ε β) :
+    (Except.ok a >>= f) = f a := rfl
+private theorem except_map_error {ε α β : Type _} (g : α → β) (e : ε) :
+    Except.map g (Except.error e : Except ε α) = Except.error e := rfl
+private theorem except_map_ok {ε α β : Type _} (g : α → β) (a : α) :
+    Except.map g (Except.ok a : Except ε α) = Except.ok (g a) := rfl
+
 theorem certify_then_resume_cache_equivalence {State Payload : Type}
     (spec : EventSourcing.StreamSpec)
     (digests : EventSourcing.DigestBoundary Payload)
@@ -597,12 +608,12 @@ theorem certify_then_resume_cache_equivalence {State Payload : Type}
       have exact := EventSourcing.snapshot_cache_equivalence spec digests reduce initial
         leading suffix
       rw [hprefix] at exact
-      simpa [certifySnapshot, hprefix] using exact
+      simpa [certifySnapshot, hprefix, except_bind_error, except_map_error] using exact
   | ok snapshot =>
       have exact := EventSourcing.snapshot_cache_equivalence spec digests reduce initial
         leading suffix
       rw [hprefix] at exact
-      simpa [certifySnapshot, hprefix, resumeCertified] using exact
+      simpa [certifySnapshot, hprefix, resumeCertified, except_bind_ok, except_map_ok] using exact
 
 abbrev AttendantCertifiedSnapshot {oracle : IdentityOracle}
     (boundary : Boundary) (template : Template) (genesis : Genesis template)

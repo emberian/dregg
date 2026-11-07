@@ -83,7 +83,9 @@ def permRankEquiv : (n : Nat) → Equiv.Perm (Fin n) ≃ Fin n.factorial
       , right_inv := by
           intro r
           apply Fin.ext
-          norm_num [Nat.factorial] }
+          have h : r.val < 1 := r.isLt
+          show 0 = r.val
+          omega }
   | n + 1 =>
       Equiv.Perm.decomposeFin.trans
         ((Equiv.prodCongr (Equiv.refl _) (permRankEquiv n)).trans
@@ -672,6 +674,12 @@ def constTrace (a pis : Assignment) (tf : TraceFamily) : VmTrace where
   funext col
   simp [envAt, constTrace]
 
+@[simp] theorem constTrace_pub0 (a pis : Assignment) (tf : TraceFamily) :
+    (envAt (constTrace a pis tf) 0).pub = pis := rfl
+
+@[simp] theorem constTrace_tf (a pis : Assignment) (tf : TraceFamily) :
+    (constTrace a pis tf).tf = tf := rfl
+
 def CanonicalAssignment (a : Assignment) : Prop :=
   ∀ col, 0 ≤ a col ∧ a col < BABYBEAR_MODULUS
 
@@ -821,7 +829,7 @@ theorem unrecorded_restart_reintroduces_choice :
       r0 ≠ r1 ∧ permutationOfRank r0 ≠ permutationOfRank r1 := by
   let r0 : Fin PERMUTATION_COUNT := ⟨0, by norm_num [PERMUTATION_COUNT]⟩
   let r1 : Fin PERMUTATION_COUNT := ⟨1, by norm_num [PERMUTATION_COUNT]⟩
-  refine ⟨r0, r1, by simp [r0, r1], ?_⟩
+  refine ⟨r0, r1, Fin.ne_of_val_ne (by simp [r0, r1]), ?_⟩
   exact (permutationOfRankEquiv.injective.ne (by decide))
 
 #guard ENTROPY_SPACE == 65536
