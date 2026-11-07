@@ -191,12 +191,10 @@ theorem oneHop_collapse {A C : R} (q : Match A C) : oneHop (collapse q) = q := b
     obtain ⟨B, a, b⟩ := p
     show oneHop (a ≫ b) = Quot.mk _ ⟨B, (a, b)⟩
     apply Quot.sound
-    rw [Types.coendRel_iff]
+    refine (Types.coendRel_iff (F := offerProf A C) _ _ _ _).mpr ?_
     refine ⟨a, (𝟙 A, b), ?_, ?_⟩
-    · rw [offer_leftLeg]
-    · rw [offer_rightLeg]
-      dsimp only
-      rw [Category.id_comp]
+    · exact offer_leftLeg A C a (𝟙 A, b)
+    · exact (offer_rightLeg A C a (𝟙 A, b)).trans (Prod.ext (Category.id_comp a) rfl)
 
 /-- **The co-Yoneda density `Equiv`** `Match A C ≃ (A ⟶ C)` — the underlying type-level bijection of the
 collapse: routes through an arbitrary intermediate are in canonical bijection with direct conversions. -/

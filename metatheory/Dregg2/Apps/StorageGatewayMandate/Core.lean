@@ -232,14 +232,11 @@ theorem sgm_over_debit_rejected (m : StorageMandate) (s : SgmRuntime) (req : Sto
   obtain ⟨op, key, blob⟩ := req
   cases op with
   | GET =>
-      simpa [opCost] using
-        sgm_over_debit_rejected_get m s key hop (by simpa [opCost] using hdeb)
+      exact sgm_over_debit_rejected_get m s key hop (by simpa [opCost] using hdeb)
   | PUT =>
-      simpa [opCost] using
-        sgm_over_debit_rejected_put m s key hop (hput rfl) (by simpa [opCost] using hdeb)
+      exact sgm_over_debit_rejected_put m s key hop (hput rfl) (by simpa [opCost] using hdeb)
   | LIST =>
-      simpa [opCost] using
-        sgm_over_debit_rejected_list m s key hop (by simpa [opCost] using hdeb)
+      exact sgm_over_debit_rejected_list m s key hop (by simpa [opCost] using hdeb)
 
 theorem sgmAdmitM_preserves_WF_get (m : StorageMandate) (s s' : SgmRuntime) (key : String)
     (hwf : s.WF) (hop : opAllowed m .GET = true) (hcl : getClearanceOK m = true)
