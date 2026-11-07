@@ -269,7 +269,7 @@ theorem cwm_revoked_rejected_forever (s : RecChainedState) (cred : Authorization
 noncomputable def cwmStepLegalContractKF : KFContract where
   Inv s := cwmWF s.kernel
   step_ob a cf h := by
-    rw [CellExecutor.kernelForest_next_eq]; unfold cellNextA
+    erw [CellExecutor.kernelForest_next_eq]; unfold cellNextA
     cases hc : execFullForestA a cf.1 with
     | none => simp only [Option.getD_none]; exact h
     | some a' => simp only [Option.getD_some]; exact cwmWF_traj_carries a a' cf.1 hc h

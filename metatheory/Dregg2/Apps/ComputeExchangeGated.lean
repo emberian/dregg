@@ -348,12 +348,16 @@ theorem cx_pay_conserved_forever (s0 : RecChainedState) (sched : SchedG) :
     ∀ n, cellObsA (trajG s0 sched n) payAsset = cellObsA s0 payAsset :=
   asset_conserved_forever_production s0 payAsset sched
 
+/-- The funded market's pay-asset observable is `100` (v4.35: stated once, so simp never unfolds
+`mkt0` inside a trajectory). -/
+private theorem cx_mkt0_pay_obs : cellObsA mkt0 payAsset = 100 := by
+  simp [mkt0, payAsset, cellObsA, recTotalAsset]
+
 /-- **`cx_mkt0_pay_conserved_forever` — the canonical funded-market production witness.** -/
 theorem cx_mkt0_pay_conserved_forever (sched : SchedG) :
     ∀ n, cellObsA (trajG mkt0 sched n) payAsset = 100 :=
-  fun n => by
-    have h := cx_pay_conserved_forever mkt0 sched n
-    simpa [mkt0, payAsset, cellObsA] using h
+  fun n =>
+    (cx_pay_conserved_forever mkt0 sched n).trans cx_mkt0_pay_obs
 
 /-- **`cx_revoked_rejected_forever` — APP SEMANTICS (revocation crown).** If nullifier `nul` is in the
 committed revocation registry initially, EVERY market op with that credential is rejected at EVERY
@@ -382,7 +386,7 @@ theorem cx_mkt0_revoked_pay_safety_forever (credNul : Nat)
          cellObsA (trajG mkt0 sched n) payAsset = 100 :=
   fun n => by
     have h := cx_revoked_pay_safety_forever credNul mkt0 hrev rfl sched n
-    simpa [mkt0, payAsset, cellObsA] using h
+    exact ⟨h.1, h.2.trans cx_mkt0_pay_obs⟩
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty pins). Every keystone depends ONLY on the three
 standard kernel axioms `{propext, Classical.choice, Quot.sound}`. -/
