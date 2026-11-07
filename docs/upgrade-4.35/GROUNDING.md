@@ -99,10 +99,29 @@ Gates around it (`metatheory/BUILD.md`): `make check-fast` (Mac, `lake lean` per
   `metatheory/lean-toolchain`. The seed is content-keyed by `scripts/lean-seed-key.sh`
   (toolchain + Mathlib rev + closure), so the new pin has no published seed until one is cut;
   `fetch-lean-seed.sh` 404s and a local `scripts/bootstrap.sh` (or the seed workflow) builds one.
-- Risk: `dregg-lean-ffi/src/lean_init_st.cpp` (STATIC mode) calls the runtime's individual internal
-  initializers in 4.30's order instead of `lean_initialize_runtime_module`. 4.34 reorganised runtime
-  initialization; this file must be re-derived against the 4.35 runtime before the static link is
-  trusted. The `Cargo.toml` comment on 4.30's bundled mimalloc TLS model must be re-checked too.
+- **The largest native risk (measured, not guessed).** Since 4.34 (#14505) every generated module
+  initializer starts by initializing Lean itself. `Lean/Compiler/LCNF/EmitC.lean` (v4.35.0, l.1018-1033):
+  a module whose environment uses any module of the `Lean` package (every breadstuffs module does,
+  through Mathlib) emits `lean_initialize();` at the top of `initialize_<Module>`; others emit
+  `lean_initialize_runtime_module();`. Seen in this tree's IR (`ir/Dregg2/Execution.c`: `void
+  lean_initialize(); ... _G_initialized = true; lean_initialize();`). `lean_initialize`
+  (`src/initialize/init.cpp`) runs the whole runtime init *including `initialize_libuv`*, the C++
+  util module, and `initialize_Init`, `initialize_Std` and `initialize_Lean` (the entire compiler and
+  elaborator). Consequences for `dregg-lean-ffi`:
+  - STATIC mode's `lean_init_st.cpp` deliberately runs the libuv-free prefix of the runtime init and
+    never pulls `init_module.cpp.o`. On 4.35 the first module initializer it calls re-runs the full
+    runtime init (the runtime's `g_initialized` flag was never set by the shim: double
+    `initialize_alloc`/`initialize_object`) and starts the libuv thread it was written to avoid.
+  - Every static link now references `lean_initialize`, so `libLean.a` is reachable from every
+    module initializer: the closure-completion / reachability-GC work (tree-shake) loses most of
+    its effect, and binary size and startup time grow by the compiler's.
+  - The fix belongs in `dregg-lean-ffi` (not in Lean sources): in STATIC mode define our own
+    idempotent `lean_initialize_runtime_module` (the libuv-free prefix, setting a flag) and
+    `lean_initialize` (that, plus `initialize_Init`/`initialize_Std`; the executor never elaborates,
+    which is the same argument Lean's own `LEAN_MINIMAL_CORE_INIT` build makes for `leanchecker`), so
+    neither `init_module.cpp.o` nor `init.cpp.o` is pulled. SHARED mode is unaffected (the exported
+    runtime init is idempotent in 4.35).
+  The bundled-mimalloc TLS note in `Cargo.toml` must be re-checked against the 4.35 `libleanrt.a`.
 
 ## Who depends on the 4.30 pin today
 
