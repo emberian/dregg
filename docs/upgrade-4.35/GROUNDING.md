@@ -229,3 +229,30 @@ not merged.
 - `scripts/check-guard-modules.py`: FAIL on the lane with 9 STALE + 3 GREW baseline rows
   (EffectActionBindingEmit/Refine, Dregg2.Claims). The identical findings come out of the merge
   base with origin/main: pre-existing, not from this upgrade.
+
+## Native side, measured on bb2 (v4.35 seed)
+
+- A v4.35 `libdregg_lean.a` seed was cut with `dregg-lean-ffi/scripts/seed-dregg2-closure.sh` in a
+  bb2 clone (9,483 objects: 387 Dregg2 + 9,096 dependency closure; 580 MB; ~25 min at 12 cores).
+  `cargo build -p dregg-lean-ffi --features lean-lib` splices 347 Dregg2 facets into it and links.
+  No seed for the new key is published yet: CI's `fetch-lean-seed.sh` will 404 until the seed
+  workflow (or a bootstrap) runs on the new pin.
+- GREEN on the v4.35 archive: `--test lean_init_lifecycle` (5/5: module-scoped init, ST owner and
+  mode exclusion, concurrent full/narrow init) and `--test direct_vs_json_differential` (the direct
+  executor path equals the JSON oracle over the whole corpus).
+- **RED, introduced by the upgrade: `embeddable_runtime_probe_linux` PROP-2.** STATIC
+  `dregg_ffi_init_st` now goes 2 -> 4 OS threads (4.30: 2 -> 2): the first generated module
+  initializer calls Lean's own `lean_initialize`, which runs the full runtime init including
+  libuv (see "The largest native risk" above). PROP-1 (glibc malloc) still holds.
+- Tried and reverted: defining `lean_initialize`/`lean_initialize_runtime_module` in the
+  whole-archive shim (`lean_init_st.cpp`). The link fails with duplicate symbols, because rustc
+  bundles the static toolchain archives into the rlib and `init_module.cpp.o` / `init.cpp.o` are
+  still pulled for other symbols they define. The workable fix is in `build.rs`: link copies of
+  `libleanrt.a` / `libleancpp.a` with those two symbols weakened (`llvm-objcopy --weaken-symbol=...`),
+  so the shim's strong definitions win, then the override above (idempotent runtime init, libuv only
+  when the default path asks, `lean_initialize` = runtime only, as 4.30 behaved). That is a change to
+  the FFI crate's link pipeline and belongs to its owner; the test is the probe above.
+- C codegen note: 4.35 emits large constant arrays as static objects whose 16-bit `m_cs_sz` header
+  field truncates (clang `-Wbitfield-constant-conversion` in `Games/PathOfAngels/CrewSigningVectors.c`,
+  98768 -> 33232). They are `m_rc = 0` (persistent) objects, so the field is not used to free them;
+  worth an upstream report.
