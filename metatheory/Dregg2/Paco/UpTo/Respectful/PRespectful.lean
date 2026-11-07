@@ -111,7 +111,7 @@ theorem prespectClosure_taggedUnion (F : MonoRel α) (clo : Rel α → Rel α)
     · -- inl/inl
       rename_i a b
       have hproj : projLeft (prespectClosure (tagMonoRel F) (tagClosure clo) (taggedUnion R S)) a b := by
-        simpa using h
+        exact h
       have h' : prespectClosure F clo R a b := by
         simpa [projLeft_prespectClosure, projLeft_taggedUnion] using hproj
       simpa [taggedUnion, tagLeft, tagRight] using h'
@@ -132,7 +132,7 @@ theorem prespectClosure_taggedUnion (F : MonoRel α) (clo : Rel α → Rel α)
     · -- inr/inr
       rename_i a b
       have hproj : projRight (prespectClosure (tagMonoRel F) (tagClosure clo) (taggedUnion R S)) a b := by
-        simpa using h
+        exact h
       have h' : prespectClosure F clo S a b := by
         simpa [projRight_prespectClosure, projRight_taggedUnion] using hproj
       simpa [taggedUnion, tagLeft, tagRight] using h'
@@ -144,7 +144,7 @@ theorem prespectClosure_taggedUnion (F : MonoRel α) (clo : Rel α → Rel α)
         simpa [taggedUnion, tagLeft, tagRight] using h
       have hproj : projLeft (prespectClosure (tagMonoRel F) (tagClosure clo) (taggedUnion R S)) a b := by
         simpa [projLeft_prespectClosure, projLeft_taggedUnion] using h'
-      simpa using hproj
+      exact hproj
     · -- inl/inr
       cases h with
       | inl hL => cases hL
@@ -159,7 +159,7 @@ theorem prespectClosure_taggedUnion (F : MonoRel α) (clo : Rel α → Rel α)
         simpa [taggedUnion, tagLeft, tagRight] using h
       have hproj : projRight (prespectClosure (tagMonoRel F) (tagClosure clo) (taggedUnion R S)) a b := by
         simpa [projRight_prespectClosure, projRight_taggedUnion] using h'
-      simpa using hproj
+      exact hproj
 
 /-- prespectClosure on a tag-closed relation splits by tag. --/
 
@@ -254,7 +254,7 @@ theorem prespect_compatible'_strong (F : MonoRel α) {clo : Rel α → Rel α}
           exact Rel.le_trans hR_le_K le_sup_left
         · -- F R ≤ K ⊔ paco F K
           exact Rel.le_trans hFR_le_paco le_sup_right
-      simpa [S] using hS_le
+      exact hS_le
     · -- clo S ≤ K ⊔ paco F K
       exact Rel.le_trans hcloS_le_paco le_sup_right
   have hpaco_le : paco F (S ⊔ clo S) ≤ paco F K := by

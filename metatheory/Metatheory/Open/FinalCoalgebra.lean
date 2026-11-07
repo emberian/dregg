@@ -132,7 +132,7 @@ theorem coalgHom_eq_anaMap (c : Cell Obs Adm) (g : CoalgHom c (nuF Obs Adm)) :
     -- first components equal:
     have h1 := congrArg Prod.fst this
     -- `Prod.fst (Fmap g.f (c.str x)) = c.obs x`  and  `Prod.fst ((nuF).str (g.f x)) = g.f x []`
-    simpa [Fmap, Cell.str, nuF, Cell.obs] using h1.symm
+    exact h1.symm
   -- shift: for all x a w, g.f x (a :: w) = g.f (c.next x a) w.
   have shift : ∀ (x : c.V) (a : Adm) (w : List Adm),
       g.f x (a :: w) = g.f (c.next x a) w := by
@@ -144,7 +144,7 @@ theorem coalgHom_eq_anaMap (c : Cell Obs Adm) (g : CoalgHom c (nuF Obs Adm)) :
     have h2a := congrFun h2 a
     have := congrFun h2a w
     -- `this : g.f (c.next x a) w = g.f x (a :: w)`
-    simpa [Fmap, nuF, Cell.next] using this.symm
+    exact this.symm
   -- Now `funext x; funext w` and induct on `w` generalizing `x`.
   funext x w
   induction w generalizing x with

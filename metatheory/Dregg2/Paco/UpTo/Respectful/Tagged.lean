@@ -150,7 +150,7 @@ information during case splits.
 -/
 
 /-- Tagged sum used to track guarded and unguarded branches. --/
-def Tag (α : Type*) := Sum α α
+@[reducible] def Tag (α : Type*) := Sum α α
 
 /-- Tag a relation on the left side of `Sum`. -/
 def tagLeft (R : Rel α) : Rel (Tag α) :=
@@ -308,10 +308,10 @@ theorem paco_closed (F : MonoRel α) (R : Rel (Tag α)) :
   constructor <;> intro a b h
   · rcases h with ⟨R', hR', hxy⟩
     have h' := hR' (Sum.inl a) (Sum.inr b) hxy
-    simpa using h'
+    simpa [tagMonoRel] using h'
   · rcases h with ⟨R', hR', hxy⟩
     have h' := hR' (Sum.inr a) (Sum.inl b) hxy
-    simpa using h'
+    simpa [tagMonoRel] using h'
 
 /-- Tag-closed holds for upaco when the parameter is tag-closed. --/
 theorem upaco_closed (F : MonoRel α) {R : Rel (Tag α)} (hR : TagClosed R) :
@@ -359,7 +359,7 @@ theorem tagClosure_mono {clo : Rel α → Rel α} (h_mono : CloMono clo) :
     refine ⟨projLeft R', ?_, hxy⟩
     intro a b hab
     have h' := hR' (Sum.inl a) (Sum.inl b) hab
-    simpa using h'
+    simpa [tagMonoRel] using h'
   · intro x y h
     rcases h with ⟨R', hR', hxy⟩
     refine ⟨tagLeft R', ?_, ?_⟩
@@ -369,7 +369,7 @@ theorem tagClosure_mono {clo : Rel α → Rel α} (h_mono : CloMono clo) :
       have hproj : projLeft (tagLeft R' ⊔ R) = R' ⊔ projLeft R := by
         ext x y; simp [projLeft, tagLeft]
       simpa [tagMonoRel, hproj] using h'
-    · simpa using hxy
+    · simpa [tagLeft] using hxy
 
 /-- Project paco on the right tag. --/
 @[simp] theorem projRight_paco (F : MonoRel α) (R : Rel (Tag α)) :
@@ -380,7 +380,7 @@ theorem tagClosure_mono {clo : Rel α → Rel α} (h_mono : CloMono clo) :
     refine ⟨projRight R', ?_, hxy⟩
     intro a b hab
     have h' := hR' (Sum.inr a) (Sum.inr b) hab
-    simpa using h'
+    simpa [tagMonoRel] using h'
   · intro x y h
     rcases h with ⟨R', hR', hxy⟩
     refine ⟨tagRight R', ?_, ?_⟩
@@ -390,7 +390,7 @@ theorem tagClosure_mono {clo : Rel α → Rel α} (h_mono : CloMono clo) :
       have hproj : projRight (tagRight R' ⊔ R) = R' ⊔ projRight R := by
         ext x y; simp [projRight, tagRight]
       simpa [tagMonoRel, hproj] using h'
-    · simpa using hxy
+    · simpa [tagRight] using hxy
 
 /-- Project upaco on the left tag. --/
 theorem projLeft_upaco (F : MonoRel α) (R : Rel (Tag α)) :
