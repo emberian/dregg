@@ -1332,7 +1332,6 @@ const BASELINE: &[(&str, usize)] = &[
     // parser's arm above: the ENCODER's `ChalGate` at :593 is a match pattern and stays free. No
     // polynomial, no column, no coefficient originates here — the node is rebuilt from bytes.
     ("circuit/src/descriptor_ir2_canonical.rs", 49),
-    ("circuit/src/direct_logic_frontend.rs", 3),
     ("circuit/src/dsl/accumulator.rs", 10),
     ("circuit/src/dsl/cap_membership.rs", 4),
     ("circuit/src/dsl/committed_threshold.rs", 7),

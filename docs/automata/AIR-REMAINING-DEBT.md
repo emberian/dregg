@@ -23,6 +23,20 @@ metadata carrier does not discharge those. Native integration is recorded separa
 binary/UMem reports and the deputy report. The original audit rows below remain a precise map
 of the source before these follow-through changes, not a claim that they are still untouched.
 
+[READ, MEASURED] 2026-11-07, direct-logic front end (lane G): `compile_logic_program` no longer
+authors a constraint. It sends canonical source bytes to `Dregg2.Logic.DirectLogicProgramIR2`
+(`lake exe direct_logic_compile`, or `metatheory/scripts/direct-logic-compile-interp.sh` without a
+native build) and parses the reply; the law1 row for `circuit/src/direct_logic_frontend.rs` went
+3 -> 0 and was deleted. The Lean source language now carries everything the Rust compiler added:
+one-hot enumeration gates, quantifier expansion with the same balanced folds, the BLAKE3 source
+name and the padding column. `program_sound` / `program_complete` are over that exact descriptor;
+`booleanOnly_accepts_twoHot` / `program_refuses_twoHot` are the control showing why replacing only
+the Boolean polynomial would have been weaker. Differential over the 18 existing test and benchmark
+programs: identical relations, widths, one-hot/accept gates, names and refusals; only the
+booleanity rendering changed. Open: a native build of the executable pulls the whole Mathlib C
+closure (no box holds those objects today), so the in-process route (an `@[export]` in the
+`dregg-lean-ffi` archive implementing `LogicCompiler`) versus a shipped executable is undecided.
+
 ## Count the right object
 
 [READ] The original `degg-research/experiments/air-census/air_census.sh` counts textual `EffectVmDescriptor2 {` occurrences. Its 111 hits in 51 files include return signatures, decoder code, comments and tests inside source files. A struct-expression count is better, but still omits modifications to an existing descriptor and other constraint dialects. The generator grounding note records the separate structural counts for that original 51-path set.
