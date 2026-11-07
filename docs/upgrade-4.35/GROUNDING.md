@@ -52,6 +52,14 @@ Release notes: reference-manual `Manual/Releases/v4_3{1..5}_0.lean`.
   only ever applied explicitly become `@[reducible] def`.
 - **`do` elaborator (4.32)**: needs `Pure`; `do match` arms non-dependent; `return` inside `(← do ..)`
   returns from the enclosing block.
+- **`do` loop state is now a `Prod` in declaration order** (it was a reversed `MProd`). Proofs that
+  `rfl`/`rw` against the old fold shape need a `List.foldl_hom` bridge (MlKemCodecSpec
+  `accFold_prod`/`setFold_prod`).
+- **Mathlib: `PMF.uniformOfFintype` became a deprecated alias of a `Measure`** (Mathlib 2026-10-04).
+  `Dregg2/ForMathlib/UniformPMF.lean` keeps the old PMF construction as `PMF.uniformFintype` /
+  `uniformFinset`; MlKemDelta and ModelBridge use it. **Statement spelling change** (same object,
+  the name moved): ModelBridge `pi_uniform_singleton`, `pi_uniform_finset`, `roMeasure_accept` now name
+  `PMF.uniformFintype`.
 - **Core lemma renames (4.34)**: `if_pos/if_neg` -> `ite_eq_left/right`, `dif_pos/dif_neg`, `if_true`
   -> `ite_true` etc. Deprecated aliases remain (warnings only; not touched in this lane).
 - **`Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler`, `Lean.reduceBool` are removed**
