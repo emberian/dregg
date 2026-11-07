@@ -173,13 +173,40 @@ private theorem ite_pure_yield {X : Type} {c : Prop} [Decidable c] (a b : X) :
       = (pure (ForInStep.yield (if c then a else b)) : Id (ForInStep X)) := by
   split <;> rfl
 
+/-- The v4.35 `do`-notation inner encode step: the loop state is the `Prod` `(y, index)` in
+declaration order (it was the `MProd ⟨index, y⟩` `encStep` is stated over). -/
+private def encStepP (p : Poly) (b : Array UInt8 × Nat) (j : Nat) : Array UInt8 × Nat :=
+  if p[j]! ≠ 0 then (b.1.set! b.2 (UInt8.ofNat j), b.2 + 1) else (b.1, b.2)
+
+private theorem encStepP_fold (p : Poly) (st : MProd Nat (Array UInt8)) (l : List Nat) :
+    List.foldl (encStepP p) (st.2, st.1) l
+      = ((List.foldl (encStep p) st l).2, (List.foldl (encStep p) st l).1) :=
+  List.foldl_hom (fun s : MProd Nat (Array UInt8) => ((s.2, s.1) : Array UInt8 × Nat))
+    (fun s j => by unfold encStep encStepP; split <;> rfl)
+
+/-- The v4.35 outer encode step over the `Prod` state. -/
+private def encOuterStepP (hs : Array Poly) (b : Array UInt8 × Nat) (i : Nat) : Array UInt8 × Nat :=
+  ((List.foldl (encStepP (hs[i]!)) (b.1, b.2) (List.range' 0 256 1)).1.set! (omega + i)
+      (UInt8.ofNat (List.foldl (encStepP (hs[i]!)) (b.1, b.2) (List.range' 0 256 1)).2),
+    (List.foldl (encStepP (hs[i]!)) (b.1, b.2) (List.range' 0 256 1)).2)
+
+private theorem encOuterStepP_fold (hs : Array Poly) (st : MProd Nat (Array UInt8)) (l : List Nat) :
+    List.foldl (encOuterStepP hs) (st.2, st.1) l
+      = ((List.foldl (encOuterStep hs) st l).2, (List.foldl (encOuterStep hs) st l).1) :=
+  List.foldl_hom (fun s : MProd Nat (Array UInt8) => ((s.2, s.1) : Array UInt8 × Nat))
+    (fun s i => by
+      show encOuterStepP hs (s.2, s.1) i = ((encOuterStep hs s i).2, (encOuterStep hs s i).1)
+      unfold encOuterStepP encOuterStep
+      rw [encStepP_fold])
+
 theorem encUnfold (hs : Array Poly) : hintEncode hs = candEnc hs := by
-  unfold hintEncode candEnc encOuterStep encStep
+  unfold hintEncode candEnc
   simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range',
     bind_pure_comp, map_pure,
     ite_pure_yield, List.forIn_pure_yield_eq_foldl,
     Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one, Nat.div_one]
-  rfl
+  exact congrArg Prod.fst
+    (encOuterStepP_fold hs ⟨0, Array.replicate (omega + paramK) 0⟩ (List.range' 0 paramK 1))
 
 theorem list_get!_append_left {α} [Inhabited α] {l1 l2 : List α} {i : Nat} (h : i < l1.length) :
     (l1 ++ l2)[i]! = l1[i]! := by simp only [getElem!_def, List.getElem?_append_left h]
@@ -400,12 +427,74 @@ theorem candDec_eq (b : Array UInt8) (hoff : Nat) :
             (List.range' 0 paramK 1)).2.2
         else none) := rfl
 
+/-! The v4.35 `do`-notation decode state is a `Prod` in declaration order: `(ok, p, prevIdx)` for the
+inner loop and `(index, ok, polys)` for the outer one, the same component order as the `MProd`s the
+steps above are stated over. These are the `Prod` steps and their fold bridges. -/
+
+private def decInStepP (b : Array UInt8) (hoff start : Nat) (s : Bool × Poly × Nat) (pos : Nat) :
+    Bool × Poly × Nat :=
+  if (decide (pos > start) && decide ((b[hoff + pos]!).toNat ≤ s.2.2)) then
+    (false, s.2.1.set! (b[hoff + pos]!).toNat 1, (b[hoff + pos]!).toNat)
+  else (s.1, s.2.1.set! (b[hoff + pos]!).toNat 1, (b[hoff + pos]!).toNat)
+
+private theorem decInStepP_fold (b : Array UInt8) (hoff start : Nat) (s : MProd Bool (MProd Poly Nat))
+    (l : List Nat) :
+    List.foldl (decInStepP b hoff start) (s.1, s.2.1, s.2.2) l
+      = ((List.foldl (decInStep b hoff start) s l).1, (List.foldl (decInStep b hoff start) s l).2.1,
+          (List.foldl (decInStep b hoff start) s l).2.2) :=
+  List.foldl_hom (fun s : MProd Bool (MProd Poly Nat) => ((s.1, s.2.1, s.2.2) : Bool × Poly × Nat))
+    (fun s j => by unfold decInStep decInStepP; split <;> rfl)
+
+private def decInFoldP (b : Array UInt8) (hoff start bound : Nat) (ok0 : Bool) : Bool × Poly × Nat :=
+  List.foldl (decInStepP b hoff start) (ok0, zeroPoly, 0) (List.range' start (bound - start) 1)
+
+private theorem decInFoldP_eq (b : Array UInt8) (hoff start bound : Nat) (ok0 : Bool) :
+    decInFoldP b hoff start bound ok0
+      = ((decInFold b hoff start bound ok0).1, (decInFold b hoff start bound ok0).2.1,
+          (decInFold b hoff start bound ok0).2.2) :=
+  decInStepP_fold b hoff start ⟨ok0, zeroPoly, 0⟩ _
+
+private def decOutStepP (b : Array UInt8) (hoff : Nat) (st : Nat × Bool × Array Poly) (i : Nat) :
+    Nat × Bool × Array Poly :=
+  let bound := (b[hoff + omega + i]!).toNat
+  if (decide (bound < st.1) || decide (bound > omega)) then
+    let inner := decInFoldP b hoff st.1 bound false
+    (bound, inner.1, st.2.2.push inner.2.1)
+  else
+    let inner := decInFoldP b hoff st.1 bound st.2.1
+    (bound, inner.1, st.2.2.push inner.2.1)
+
+private theorem decOutStepP_fold (b : Array UInt8) (hoff : Nat) (st : MProd Nat (MProd Bool (Array Poly)))
+    (l : List Nat) :
+    List.foldl (decOutStepP b hoff) (st.1, st.2.1, st.2.2) l
+      = ((List.foldl (decOutStep b hoff) st l).1, (List.foldl (decOutStep b hoff) st l).2.1,
+          (List.foldl (decOutStep b hoff) st l).2.2) :=
+  List.foldl_hom
+    (fun s : MProd Nat (MProd Bool (Array Poly)) => ((s.1, s.2.1, s.2.2) : Nat × Bool × Array Poly))
+    (fun s i => by
+      show decOutStepP b hoff (s.1, s.2.1, s.2.2) i
+        = ((decOutStep b hoff s i).1, (decOutStep b hoff s i).2.1, (decOutStep b hoff s i).2.2)
+      unfold decOutStepP decOutStep
+      by_cases h : (decide ((b[hoff + omega + i]!).toNat < s.1)
+          || decide ((b[hoff + omega + i]!).toNat > omega)) = true
+      · simp only [h, ↓reduceIte, decInFoldP_eq]
+      · simp only [h, Bool.false_eq_true, ↓reduceIte, decInFoldP_eq])
+
 theorem decUnfold (b : Array UInt8) (hoff : Nat) : hintDecode b hoff = candDec b hoff := by
-  unfold hintDecode candDec decPadOk decOutStep decInFold decInStep
+  unfold hintDecode
   simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range',
     pure_bind, bind_pure_comp, map_pure,
     ite_pure_yield, List.forIn_pure_yield_eq_foldl,
     Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one, Nat.div_one]
+  have hR := decOutStepP_fold b hoff ⟨0, true, Array.mkEmpty paramK⟩ (List.range' 0 paramK 1)
+  rw [candDec_eq, show List.foldl (decOutStep b hoff) ⟨0, true, Array.mkEmpty paramK⟩
+      (List.range' 0 paramK 1)
+    = ⟨(List.foldl (decOutStepP b hoff) (0, true, Array.mkEmpty paramK) (List.range' 0 paramK 1)).1,
+        (List.foldl (decOutStepP b hoff) (0, true, Array.mkEmpty paramK) (List.range' 0 paramK 1)).2.1,
+        (List.foldl (decOutStepP b hoff) (0, true, Array.mkEmpty paramK) (List.range' 0 paramK 1)).2.2⟩
+    from by rw [hR]]
+  unfold decPadOk decOutStepP decInFoldP decInStepP
+  dsimp only
   rfl
 
 /-- **Decode inner-loop characterisation.** If the bytes read over `[start, start+n)` are strictly

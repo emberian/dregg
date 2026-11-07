@@ -1468,7 +1468,7 @@ theorem customV2_binds_proof (hash : List ℤ → ℤ)
   have hm : customProofBind ∈ proofBindsOf customVmDescriptor2 := by
     rw [proofBindsOf_customVmDescriptor2]; exact List.mem_cons_self
   exact proofBind_bound hash E customVmDescriptor2 hsat hm i hi
-    (by simpa [customProofBind, customProofBindAt] using hactive)
+    (by exact hactive)
 
 /-- **The bound commitment is DETERMINED (anti-forgery, the Custom anti-ghost).** Under the named
 engine binding, the program VK a Custom row attests is FORCED by its `custom_proof_commitment`: a
@@ -1488,7 +1488,7 @@ theorem customV2_proof_determined (hash : List ℤ → ℤ)
   have hm : customProofBind ∈ proofBindsOf customVmDescriptor2 := by
     rw [proofBindsOf_customVmDescriptor2]; exact List.mem_cons_self
   exact proofBind_determined hash E hE customVmDescriptor2 hsat hm i hi
-    (by simpa [customProofBind, customProofBindAt] using hactive) q hq hqc
+    (by exact hactive) q hq hqc
 
 /-! ## §8 — NEWLY EXPRESSIBLE II: SetField with a DYNAMIC slot index.
 

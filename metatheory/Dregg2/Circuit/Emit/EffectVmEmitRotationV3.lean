@@ -7062,7 +7062,7 @@ theorem customV3_binds_proof (hash : List ℤ → ℤ)
   have hm : customV3ProofBind ∈ proofBindsOf customV3 := by
     rw [proofBindsOf_customV3]; exact List.mem_cons_self
   exact proofBind_bound hash E customV3 hsat hm i hi
-    (by simpa [customV3ProofBind, customProofBindAt] using hactive)
+    (by simpa [customV3ProofBind, customProofBindAt, EmittedExpr.eval] using hactive)
 
 #assert_axioms setFieldDynV3_memLog
 #assert_axioms setFieldDynV3_readback_genuine

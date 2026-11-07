@@ -800,7 +800,10 @@ theorem shortWideCollAdv_isPolyTime (D : WideKeyed)
   Dregg2.Crypto.CostAdversary.isPolyTime_inhabited _ _
     ⟨2, 0, fun l t => by
       have h := (exists_short_wide_collision D hb l t).choose_spec.2
-      simpa [hashAnsSize, shortWideCollAdv] using h.trans (by omega)⟩
+      show (exists_short_wide_collision D hb l t).choose.1.length
+          + (exists_short_wide_collision D hb l t).choose.2.length ≤ 2 * l ^ 0 + 2
+      rw [pow_zero]
+      omega⟩
 
 /-- **⚑ THE INSTANTIATED FLOOR IS FALSE AT THE DEPLOYED WIDE PERMUTATION** — the death certificate
 of the deleted `stateCommit_binds_from_polyTime`: its `hCR` hypothesis is refutable at deployed
