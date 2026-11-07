@@ -177,6 +177,46 @@ def admissionChecks (active : ActiveRunState) (carrier : FinalizedCarrier)
     active.playerCounters.lookup carrier.counterKey = carrier.currentPlayerCounter ∧
     carrier.currentPlayerCounter.val + 1 < PLAYER_COUNTER_MODULUS)
 
+
+/-- `admissionChecks` as a function equation, for `rw`. The pointwise equation lemma that
+`simp only [admissionChecks]` generates is checked by the kernel against `decide (…)`; since
+v4.35 `Decidable.decide` is a structure projection, the kernel unfolds it first and whnfs the
+whole conjunction's instance, Poseidon2 commitments included. This form is closed by unfolding
+`admissionChecks` once. -/
+theorem admissionChecks_def :
+    admissionChecks = fun (active : ActiveRunState) (carrier : FinalizedCarrier)
+        (claim : RunClaim) =>
+      decide (
+        claim.config = active.game.configClaim ∧
+        active.federationId = active.game.mission.federationId ∧
+        active.contentRoot = active.game.mission.contentRoot ∧
+        active.activationDigest = active.game.mission.activationDigest ∧
+        active.contentSession = active.game.mission.contentSession ∧
+        active.contentEpoch = active.game.mission.epoch ∧
+        active.runSeed = active.game.mission.runSeed ∧
+        carrier.federationId = active.federationId ∧
+        carrier.contentRoot = active.contentRoot ∧
+        carrier.activationDigest = active.activationDigest ∧
+        carrier.contentSession = active.contentSession ∧
+        carrier.contentEpoch = active.contentEpoch ∧
+        claim.federationId = carrier.federationId ∧
+        claim.contentRoot = carrier.contentRoot ∧
+        claim.activationDigest = carrier.activationDigest ∧
+        claim.contentSession = carrier.contentSession ∧
+        claim.contentEpoch = carrier.contentEpoch ∧
+        claim.slot = active.slot ∧
+        claim.slotCommitment = active.slotCommitment ∧
+        active.slotCommitment = HiddenInstance.commit active.slotSecret active.slot ∧
+        active.runSeed =
+          HiddenInstance.runSeedFor
+            { secret := active.slotSecret, slot := active.slot, playerKey := carrier.playerKey }
+            (HiddenInstance.MissionContext.ofMission active.game.mission) ∧
+        claim.actorRoot = carrier.actorRoot ∧
+        claim.playerKey = carrier.playerKey ∧
+        claim.claimedPreviousPlayerCounter = carrier.currentPlayerCounter.val ∧
+        active.playerCounters.lookup carrier.counterKey = carrier.currentPlayerCounter ∧
+        carrier.currentPlayerCounter.val + 1 < PLAYER_COUNTER_MODULUS) := rfl
+
 theorem admissionChecks_eq_true_iff (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) :
     admissionChecks active carrier claim = true ↔
@@ -209,7 +249,8 @@ theorem admissionChecks_eq_true_iff (active : ActiveRunState)
       claim.claimedPreviousPlayerCounter = carrier.currentPlayerCounter.val ∧
       active.playerCounters.lookup carrier.counterKey = carrier.currentPlayerCounter ∧
       carrier.currentPlayerCounter.val + 1 < PLAYER_COUNTER_MODULUS := by
-  simp only [admissionChecks, decide_eq_true_eq]
+  rw [admissionChecks_def]
+  exact decide_eq_true_iff
 
 private def signalContext (carrier : FinalizedCarrier) : SignalTriangulation.JudgeContext where
   actorRoot := carrier.actorRoot
@@ -417,7 +458,9 @@ theorem judgeActive_signal_of_exact {active : ActiveRunState}
     ∃ run : JudgedRun,
       judgeActive active carrier claim (.signal actions) = some run ∧
       run.receipt = raw.receipt := by
-  simp only [judgeActive, judgeAdmitted, hadmitted, ↓reduceDIte, hgame]
+  rw [judgeActive_eq_judgeAdmitted _ _ _ _ hadmitted]
+  unfold judgeAdmitted
+  simp only [hgame]
   split
   · rename_i found hfound
     rw [hfound] at hjudged
@@ -441,37 +484,49 @@ theorem judgeActive_wrong_activation_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.activationDigest ≠ carrier.activationDigest) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_wrong_config_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.config ≠ active.game.configClaim) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_inactive_activation_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : active.activationDigest ≠ active.game.mission.activationDigest) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_wrong_session_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.contentSession ≠ carrier.contentSession) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_wrong_epoch_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.contentEpoch ≠ carrier.contentEpoch) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_wrong_slot_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.slot ≠ active.slot) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 /-- A run played against a commitment the node did not publish for this slot is
 refused: the client's opening and the node's active state must be the same one. -/
@@ -479,7 +534,9 @@ theorem judgeActive_wrong_commitment_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.slotCommitment ≠ active.slotCommitment) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 /-- ⚑ **The commitment binds the secret that is actually judged.**  A node that
 published one commitment and then judged against a different slot secret is
@@ -489,7 +546,9 @@ theorem judgeActive_uncommitted_secret_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : active.slotCommitment ≠ HiddenInstance.commit active.slotSecret active.slot) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 /-- ⚑ **The played instance is the derived one.**  The active run seed — which is
 what every kernel binds its target, board or seed to — must be exactly
@@ -503,44 +562,60 @@ theorem judgeActive_underived_seed_refused (active : ActiveRunState)
         { secret := active.slotSecret, slot := active.slot, playerKey := carrier.playerKey }
         (HiddenInstance.MissionContext.ofMission active.game.mission)) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_wrong_player_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.playerKey ≠ carrier.playerKey) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_wrong_actor_root_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.actorRoot ≠ carrier.actorRoot) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_stale_counter_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : claim.claimedPreviousPlayerCounter ≠ carrier.currentPlayerCounter.val) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_wrong_current_counter_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : active.playerCounters.lookup carrier.counterKey ≠ carrier.currentPlayerCounter) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [h]
 
 theorem judgeActive_counter_exhausted_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim) (submitted : SubmittedRun)
     (h : PLAYER_COUNTER_MODULUS ≤ carrier.currentPlayerCounter.val + 1) :
     judgeActive active carrier claim submitted = none := by
-  simp [judgeActive, admissionChecks, Nat.not_lt.mpr h]
+  apply judgeActive_eq_none_of_not_admitted
+  rw [Ne, admissionChecks_eq_true_iff]
+  simp [Nat.not_lt.mpr h]
 
 theorem judgeActive_wrong_game_refused (active : ActiveRunState)
     (carrier : FinalizedCarrier) (claim : RunClaim)
     (config : SignalTriangulation.Config) (actions : List RelayRepair.Action)
     (hgame : active.game = .signal config) :
     judgeActive active carrier claim (.relay actions) = none := by
-  simp [judgeActive, judgeAdmitted, hgame]
+  unfold judgeActive
+  split
+  · unfold judgeAdmitted
+    simp only [hgame]
+  · rfl
 
 /-- The sixth arm is tag-checked like the other five: a vent-crawl transcript
 submitted against a descent game is refused before either judge runs, so the new
@@ -550,7 +625,11 @@ theorem judgeActive_vent_crawl_against_descent_refused (active : ActiveRunState)
     (config : DeckDescent.Config) (actions : List VentCrawl.Action)
     (hgame : active.game = .deckDescent config) :
     judgeActive active carrier claim (.ventCrawl actions) = none := by
-  simp [judgeActive, judgeAdmitted, hgame]
+  unfold judgeActive
+  split
+  · unfold judgeAdmitted
+    simp only [hgame]
+  · rfl
 
 /-- Every inhabitant retains an equality to one concrete executable judge. -/
 theorem JudgedRun.has_executable_origin (run : JudgedRun) :
