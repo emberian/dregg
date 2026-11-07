@@ -190,3 +190,32 @@ batteries, aesop, proofwidgets, plausible, and Lake's own clones of Veil's packa
 `lake build` in `veil-bridge/` (about 1,300 Veil jobs the first time, then only the bridge). The
 `../metatheory` path dependency builds into `metatheory/.lake`, so never run it while a whole-tree
 build runs in the same clone.
+
+## Package store and the switch (for the root, on merge)
+
+The Mac store for the upgraded manifest exists and is verified:
+`/Users/ember/tools/lean-packages/d11ceef8c941` (`lean-packages ensure` on this branch's
+`metatheory/`; every `.olean` header matches v4.35.0). On bb2 the manifest's packages are exactly
+the pool's `/srv/pool/packages-3a3779933df4` (minidregg's), which this lane's clones link to.
+
+Switch the shared Mac tree after merging (do not run lake in it before the link is in place):
+
+    cd /Users/ember/dev/breadstuffs
+    git merge --ff-only origin/main        # or however the root lands lane/lean-435
+    mv metatheory/.lake/packages metatheory/.lake/packages.v430.20261107
+    ln -s /Users/ember/tools/lean-packages/d11ceef8c941 metatheory/.lake/packages
+    ~/tools/lean-packages/lean-packages verify metatheory
+    # the old v4.30 oleans under metatheory/.lake/build are dead; a check-fast run rebuilds what it needs.
+    # (Optionally, before the first check-fast, copy a 4.35 snapshot in: scripts/iter-check fetch --box bb2.)
+
+Every other breadstuffs clone: the same `mv`/`ln` (Mac) or link to `/srv/pool/packages-3a3779933df4`
+(bb2). `scripts/iter-check` keys per-box stores by manifest key, so check-full on bb2/hbox/forge
+fills `packages-d11ceef8c941` once by `lake exe cache get` (on bb2 it can instead be a symlink to
+the pool's `packages-3a3779933df4`, same contents). The old key 856c40722ebb stays for lanes that have
+not merged.
+
+## Gates (status as measured)
+
+- `scripts/check-guard-modules.py`: FAIL on the lane with 9 STALE + 3 GREW baseline rows
+  (EffectActionBindingEmit/Refine, Dregg2.Claims). The identical findings come out of the merge
+  base with origin/main: pre-existing, not from this upgrade.
