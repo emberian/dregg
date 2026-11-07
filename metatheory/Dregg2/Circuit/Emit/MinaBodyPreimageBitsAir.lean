@@ -462,8 +462,8 @@ theorem bodyBitsAir_pinsTied : bodyBitsAir.pinsTied = true := by
       refine List.any_eq_true.mpr ⟨fieldLimbsLeg f, ?_, ?_⟩
       · simp only [bodyBitsAir, List.mem_append, List.mem_map, List.mem_range]
         exact Or.inl (Or.inl (Or.inl (Or.inl ⟨f, hf, rfl⟩)))
-      · simp only [fieldLimbsLeg, AirLeg.readCols, fieldCols, decide_eq_true_eq]
-        exact List.mem_map.mpr ⟨k, List.mem_range.mpr hk, rfl⟩
+      · simp only [fieldLimbsLeg, AirLeg.readCols, fieldCols]
+        exact decide_eq_true (List.mem_map.mpr ⟨k, List.mem_range.mpr hk, rfl⟩)
     · -- a limb pin: its reader is `limbLeg q.1 q.2`, whose body's first leaf is `loc (PLIMB …)`
       simp only [limbPin, AirLeg.pin.injEq] at h
       subst h

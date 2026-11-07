@@ -344,7 +344,7 @@ def main : IO Unit := do
   let rungs ← match (← IO.getEnv "DREGG_WM_RUNGS") with
     | none => pure all
     | some f =>
-        let want := (f.splitOn ",").map String.trim |>.filter (· != "")
+        let want := (f.splitOn ",").map (fun s => s.trimAscii.copy) |>.filter (· != "")
         let sel := all.filter (fun k => want.contains k.tag)
         if sel.isEmpty then
           throw (IO.userError s!"⚑ DREGG_WM_RUNGS={f} selected NO rung out of \

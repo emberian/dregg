@@ -479,7 +479,7 @@ theorem canonOk_from_gate (PK : PicklesSlot) (u : MinaUpdate (minaFoldLeaf PK))
   intro b hb
   obtain ⟨h1, h2, h3, h4⟩ := hgate b hb
   simp only [minaFoldLeaf, stateRow, Bool.and_eq_true, decide_eq_true_eq]
-  exact ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩
+  exact ⟨⟨⟨decide_eq_true h1, decide_eq_true h2⟩, decide_eq_true h3⟩, decide_eq_true h4⟩
 
 /-- **THE PAYOFF, POSEIDON-CARRIER-FREE: the fold-derived linkage and the emitted canonicality gate
 DISCHARGE THE WHOLE MINA GATE.** Given the depth arithmetic and the Pickles carrier, if the exhibited

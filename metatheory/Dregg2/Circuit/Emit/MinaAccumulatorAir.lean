@@ -963,7 +963,7 @@ theorem ridx_is_the_row_index (tr : Trace) (H : Nat)
     ∀ i, i < H → tr i RIDX = (i : ℤ) := by
   intro i
   induction i with
-  | zero => intro _; simpa using h0
+  | zero => intro _; simpa [IdxStarted] using h0
   | succ m ih =>
     intro hm
     have hstep : tr (m + 1) RIDX = tr m RIDX + 1 := h m hm
