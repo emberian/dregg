@@ -80,6 +80,14 @@ Release notes: reference-manual `Manual/Releases/v4_3{1..5}_0.lean`.
 - `String.trim` is gone (`trimAscii`); `List.Pairwise.forall` takes `[Std.Symm R]`; `open private`
   needs an explicit `import Batteries.Tactic.OpenPrivate`; `MvPolynomial.coeff d p` -> `p.coeff d`;
   `Int.emod_add_ediv'` -> `Int.emod_add_ediv_mul`.
+- More shapes from the last layers: simp unfolding a predicate before `Finset.mem_filter` leaves
+  the filter's (classical) Decidable instance out of step (apply `mem_filter` in a first `simp only`);
+  a general law checked at a big concrete descriptor hits max recursion (prove it for any
+  descriptor, then apply); `calc` steps at two types equal only by unfolding fail on `Trans Eq Eq`
+  (use `congrArg`/`.trans`); the elaborator's `decide` no longer reduces a `ZMod` inverse or very
+  deep packet gates (`decide +kernel`, still kernel-proved); `rw [lemma]` whose argument's type is a
+  synonym (`production.Conserving`, `Executor.Conserving`, a game's `Inst`) needs explicit arguments
+  or `erw`; `simpa` no longer identifies two `match`es that agree definitionally (`exact`).
 - **Core lemma renames (4.34)**: `if_pos/if_neg` -> `ite_eq_left/right`, `dif_pos/dif_neg`, `if_true`
   -> `ite_true` etc. Deprecated aliases remain (warnings only; not touched in this lane).
 - **`Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler`, `Lean.reduceBool` are removed**
