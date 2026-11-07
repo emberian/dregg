@@ -462,6 +462,7 @@ theorem capGoodRow_isAttenRow : IsAttenRow capGoodRow := by
     STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT,
     paramA.CAP_DIGEST_NEW]
 
+set_option backward.isDefEq.respectTransparency false in
 /-- **NON-VACUITY (witness TRUE).** `capGoodRow` REALIZES the cap-graph intent: post `cap_root = 77` =
 the param digest, balance/nonce/reserved/fields frozen at `0`. -/
 theorem capGoodRow_realizes_intent : AttenRowIntent capGoodRow := by

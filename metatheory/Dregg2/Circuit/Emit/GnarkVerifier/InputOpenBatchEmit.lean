@@ -486,9 +486,9 @@ theorem foldl_weave (a : Assignment) :
       | cons b bits' =>
           have hlen' : sibs'.length = bits'.length := by simpa using hlen
           have hev1 : (Wire.var base).eval a = sib := by
-            have h := hsib 0 (by simp); simpa using h
+            have h := hsib 0 (by simp); simpa [Wire.eval] using h
           have hev2 : (Wire.var (base + 1)).eval a = encB b := by
-            have h := hbit 0 (by simp); simpa using h
+            have h := hbit 0 (by simp); simpa [Wire.eval] using h
           have hsib' : ∀ i, i < sibs'.length → a (base + 2 + 2 * i) = sibs'.getD i 0 := by
             intro i hi
             have h := hsib (i + 1) (by simp only [List.length_cons]; omega)

@@ -385,7 +385,7 @@ private theorem delegRoot_binds_under_commit_or_collides
     ∨ RootsColl compressN (withDelegRoot D others k₁) (withDelegRoot D others k₂) := by
   rcases cellCommitS_binds_systemRoots_or_collides compressN rest _ _ hcommit with hdig | hcoll
   · rcases systemRootsDigest_binds_pointwise_or_collides compressN _ _ hdig with hpt | hrcoll
-    · exact Or.inl (by simpa only [withDelegRoot, if_pos rfl] using hpt delegIdx)
+    · exact Or.inl (by simpa only [withDelegRoot, if_pos rfl, if_true] using hpt delegIdx)
     · exact Or.inr (Or.inr hrcoll)
   · exact Or.inr (Or.inl hcoll)
 
