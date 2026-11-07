@@ -376,14 +376,14 @@ set_option maxHeartbeats 4000000 in
 each of two deployed moduli) pass through the actual odd-NTT computation. -/
 theorem two_modulus_packet_accepts :
     twoModulusPacketGate (honestClaim Q0 PSI0) (honestClaim Q1 PSI1) = true := by
-  decide
+  decide +kernel
 
 set_option maxRecDepth 100000 in
 set_option maxHeartbeats 4000000 in
 /-- Mutation tooth: changing modulus-1 coefficient three refuses the packet. -/
 theorem two_modulus_packet_refuses_mutation :
     twoModulusPacketGate (honestClaim Q0 PSI0) tamperedQ1Claim = false := by
-  decide
+  decide +kernel
 
 /-- The Boolean executor has an exact proposition-level interpretation. -/
 theorem twoModulusPacketGate_sound

@@ -688,11 +688,8 @@ theorem deployed_compose_event_nonempty (p : towerD 5 twSz BabyBear) :
       by rw [hammingDist_self]; omega⟩
   have hacc : Accepts (fun _ : Fin (twSz 1) => dfold farWord 0 ⟨0, hy⟩)
       (dfold farWord 0) (fun _ : Fin 38 => (⟨0, hy⟩ : Fin (twSz 1))) := fun _ => rfl
-  show (decide (closeN (towerV 1) 2275 (fun _ : Fin (twSz 1) => dfold farWord 0 ⟨0, hy⟩))
-      && decide (Accepts (fun _ : Fin (twSz 1) => dfold farWord 0 ⟨0, hy⟩)
-          (dfold farWord 0) (fun _ : Fin 38 => (⟨0, hy⟩ : Fin (twSz 1))))) = true
-  rw [decide_eq_true hclose, decide_eq_true hacc]
-  rfl
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  exact ⟨hclose, hacc⟩
 
 /-- BOTH addends are real: the query addend is a strictly positive, strictly sub-`1` mass. -/
 theorem deployed_query_addend_nondegenerate :

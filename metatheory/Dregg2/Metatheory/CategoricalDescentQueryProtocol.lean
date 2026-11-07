@@ -315,9 +315,11 @@ theorem obstructionPredicate_natural (A : PCA.{u}) (C : ChosenPairing A)
   by_cases hq : Q.bad family query
   · have hp : P.bad family (f.map query) := (f.bad_iff family query).mp hq
     simp [UFam.reindex, obstructionPredicate, hq, hp]
+    rfl
   · have hp : ¬ P.bad family (f.map query) :=
       fun h => hq ((f.bad_iff family query).mpr h)
     simp [UFam.reindex, obstructionPredicate, hq, hp]
+    rfl
 
 /-- The obstruction predicate is classified by the existing UFam generic predicate.
 This is the exact tripos-level statement available today; no tripos-to-topos
@@ -381,12 +383,8 @@ def comp (A : PCA.{u})
   hom := G.hom ≫ F.hom
   hom_eq_map := by
     funext query
-    calc
-      (G.hom ≫ F.hom).toFun query = F.hom.toFun (G.hom.toFun query) := rfl
-      _ = f.map (g.map query) := by
-        rw [congrFun G.hom_eq_map query,
-          congrFun F.hom_eq_map (g.map query)]
-      _ = (f ≫ g).map query := rfl
+    exact (congrArg F.hom.toFun (congrFun G.hom_eq_map query)).trans
+      (congrFun F.hom_eq_map (g.map query))
 
 @[simp]
 theorem id_toFun (A : PCA.{u}) (P : CoveragePresentation.{u, q} Family Invalid)

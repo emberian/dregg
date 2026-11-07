@@ -287,8 +287,9 @@ theorem publicBindingSlots_src :
 theorem publicBindingSlots_rw :
     publicBindingSlots (rwR2Descriptor pub sec atoms terms c0 c1 rest) =
       (publicPins pub sec atoms).filterMap bindingSlot? := by
-  simp [publicBindingSlots, rwR2Descriptor, rwR2Constraints, List.filterMap_append,
-    atomLinks_bindingSlot_nil, midConstraints, nodes_bindingSlot_nil, pairGateR2, restAccept]
+  simp only [publicBindingSlots, rwR2Descriptor, rwR2Constraints, List.filterMap_append,
+    atomLinks_bindingSlot_nil, midConstraints, nodes_bindingSlot_nil]
+  simp [pairGateR2, restAccept]
 
 end ABI
 
@@ -808,8 +809,8 @@ noncomputable def goodInput : Fin (1 + 1) → ZMod 2013265921 := fun _ => 0
 theorem good_holds : (rootProgramR2 terms c0 c1 rest).Holds goodInput := by
   refine ⟨?_, ?_⟩
   · left
-    show (terms c0).evalField goodInput = 0
-    simp [terms, c0, goodInput, AffineTerm.evalField]
+    show (AffineTerm.input ⟨1, by omega⟩ : AffineTerm (1 + 1)).evalField goodInput = 0
+    simp [goodInput, AffineTerm.evalField]
   · trivial
 
 theorem demo_source_satisfiable (hash : List ℤ → ℤ) :
