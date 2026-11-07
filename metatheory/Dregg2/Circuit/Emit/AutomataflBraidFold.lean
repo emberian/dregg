@@ -188,7 +188,7 @@ theorem writeBoard_cell_agree (hB : BoardAgrees b1 b2) (M : List Coord) (L : Coo
   · have hq1 : ¬ (q.x < b1.size ∧ q.y < b1.size) := by rw [hB.size]; exact hq
     unfold Board.cellAt
     simp only [writeBoard_size]
-    rw [if_neg hq1, if_neg hq]
+    exact (if_neg hq1).trans (if_neg hq).symm
 
 theorem resolveMoves_agree (hB : BoardAgrees b1 b2) (ms : List Move) :
     BoardAgrees (resolveMoves b1 ms) (resolveMoves b2 ms) := by

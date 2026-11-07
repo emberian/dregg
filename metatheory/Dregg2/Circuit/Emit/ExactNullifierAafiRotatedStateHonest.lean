@@ -194,7 +194,7 @@ theorem arithmetic_gates_hold (row : Nat) (hrow : row < arithmeticTrace.rows.len
       (row == 0) (row + 1 == arithmeticTrace.rows.length) := by
   have hlevel : row ∈ List.range TREE_DEPTH := by
     rw [List.mem_range]
-    simpa using hrow
+    simpa [arithmeticTrace] using hrow
   have hcheck :=
     List.all_eq_true.mp (List.all_eq_true.mp arithmeticGateChecks_true row hlevel) c hc
   have hsound := arithmeticConstraintCheck_sound arithmeticTrace.tf (envAt arithmeticTrace row)
@@ -261,7 +261,7 @@ theorem satisfied2_arithmetic_full_domain :
       arithmeticTrace where
   rowConstraints := by
     intro row hrow c hc
-    have hlevel : row < TREE_DEPTH := by simpa using hrow
+    have hlevel : row < TREE_DEPTH := by simpa [arithmeticTrace] using hrow
     simp only [arithmeticDescriptor, arithmeticConstraints, List.mem_append] at hc
     rcases hc with hrange | hgate
     · simp only [arithmeticRangeConstraints, List.mem_map] at hrange

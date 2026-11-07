@@ -649,7 +649,7 @@ theorem rmRoundStep_marks_outcomeBoard (W : BoardWindow n) (g : GoalAssignment) 
     (rm_fresh_keeps_both W hsat hc hlen seats hseat0) hres
   rw [hstep]
   simp only [rmRoundStateIn]
-  rw [if_pos hclean]
+  exact if_pos hclean
 
 /-- The board capstone at the deployed `n = 11`. -/
 theorem resolve_sat_imp_roundBoardMarks11
