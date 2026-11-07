@@ -227,18 +227,18 @@ theorem squeeze_length (rate : Nat) (hr : 0 < rate) (s0 : Array UInt64) (outLen 
   simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size,
     Nat.sub_zero, Nat.add_one_sub_one, Nat.div_one, bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl]
-  have hkey := forIn_id_measure (σ := MProd (Array UInt8) (Array UInt64)) (fun r => r.fst.size) rate
-      (fun blk r => (do
-        let r1 ← pure (List.foldl
-          (fun b a => b.push (r.snd[a / 8]! >>> (8 * (a % 8)).toUInt64).toUInt8) r.fst (List.range' 0 rate))
-        if blk + 1 < (outLen + rate - 1) / rate then pure (ForInStep.yield ⟨r1, keccakF r.snd⟩)
-          else pure (ForInStep.yield ⟨r1, r.snd⟩)))
-      (fun blk r => ⟨List.foldl
-          (fun b a => b.push (r.snd[a / 8]! >>> (8 * (a % 8)).toUInt64).toUInt8) r.fst (List.range' 0 rate),
-        if blk + 1 < (outLen + rate - 1) / rate then keccakF r.snd else r.snd⟩)
+  have hkey := forIn_id_measure (σ := Array UInt64 × Array UInt8) (fun r => r.2.size) rate
+      (fun blk __s => (do
+        let __s_1 ← pure (List.foldl
+          (fun b a => b.push (__s.1[a / 8]! >>> (8 * (a % 8)).toUInt64).toUInt8) __s.2 (List.range' 0 rate))
+        if blk + 1 < (outLen + rate - 1) / rate then pure (ForInStep.yield (keccakF __s.1, __s_1))
+          else pure (ForInStep.yield (__s.1, __s_1))))
+      (fun blk r => (if blk + 1 < (outLen + rate - 1) / rate then keccakF r.1 else r.1,
+        List.foldl
+          (fun b a => b.push (r.1[a / 8]! >>> (8 * (a % 8)).toUInt64).toUInt8) r.2 (List.range' 0 rate)))
       (by intro i s; by_cases h : i + 1 < (outLen + rate - 1) / rate <;> simp [h])
       (by intro i s; simp)
-      (List.range' 0 ((outLen + rate - 1) / rate)) ⟨#[], s0⟩
+      (List.range' 0 ((outLen + rate - 1) / rate)) (s0, #[])
   simp only [List.length_range', Array.size_empty, Nat.zero_add] at hkey
   rw [id_map_apply]
   simp only [List.length_take, Array.length_toList]
@@ -333,7 +333,7 @@ theorem power2round_t1_lt (r : Nat) : (power2round r).1 < 1024 := by
   unfold Dregg2.Crypto.MlDsaKeygen.power2round
   simp only [Dregg2.Crypto.MlDsaKeygen.twoD, Dregg2.Crypto.MlDsaKeygen.t0Half,
     Dregg2.Crypto.MlDsaRing.q]
-  split_ifs <;> simp <;> omega
+  by_cases h : r % 8380417 % 8192 ≤ 4096 <;> simp [h] <;> omega
 
 /-- **`t0` is centered.** For EVERY `r`, the `Power2Round` low part is in `[0, 2¹²] ∪ (q − 2¹², q)` —
 the canonical-`ℤ_q` picture of `(−2¹², 2¹²]`. -/
@@ -341,7 +341,7 @@ theorem power2round_t0_range (r : Nat) : t0Range (power2round r).2 := by
   unfold t0Range Dregg2.Crypto.MlDsaKeygen.power2round
   simp only [Dregg2.Crypto.MlDsaKeygen.twoD, Dregg2.Crypto.MlDsaKeygen.t0Half,
     Dregg2.Crypto.MlDsaRing.q]
-  split_ifs <;> simp <;> omega
+  by_cases h : r % 8380417 % 8192 ≤ 4096 <;> simp [h] <;> omega
 
 /-! ## §4 — the generic `Id`-monad `forIn` INVARIANT tool (for the branching rejection loop). -/
 

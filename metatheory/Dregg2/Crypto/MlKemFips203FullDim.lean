@@ -1102,22 +1102,22 @@ theorem cbdVal_eq (eta : Nat) (arr : Array UInt8) (i : Nat) :
   simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
     List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
     Nat.div_one]
-  -- the two-`let mut` inner loop desugars to a fold over `MProd Nat Nat`; each component is a `range η` bit-sum.
+  -- the two-`let mut` inner loop desugars (v4.35) to a fold over the `Prod` `Nat × Nat` in
+  -- declaration order; each component is a `range η` bit-sum.
   have hpair : ∀ (n : Nat),
-      List.foldl (fun (b : MProd Nat Nat) (a : Nat) =>
-          (⟨b.fst + MlKemSample.getBit arr (2 * i * eta + a),
-            b.snd + MlKemSample.getBit arr (2 * i * eta + eta + a)⟩ : MProd Nat Nat))
-          (⟨0, 0⟩ : MProd Nat Nat) (List.range' 0 n)
-        = (⟨∑ j ∈ Finset.range n, MlKemSample.getBit arr (2 * i * eta + j),
-            ∑ j ∈ Finset.range n, MlKemSample.getBit arr (2 * i * eta + eta + j)⟩ : MProd Nat Nat) := by
+      List.foldl (fun (b : Nat × Nat) (a : Nat) =>
+          ((b.1 + MlKemSample.getBit arr (2 * i * eta + a),
+            b.2 + MlKemSample.getBit arr (2 * i * eta + eta + a)) : Nat × Nat))
+          ((0, 0) : Nat × Nat) (List.range' 0 n)
+        = ((∑ j ∈ Finset.range n, MlKemSample.getBit arr (2 * i * eta + j),
+            ∑ j ∈ Finset.range n, MlKemSample.getBit arr (2 * i * eta + eta + j)) : Nat × Nat) := by
     intro n
     induction n with
     | zero => simp
     | succ k ih =>
       rw [List.range'_1_concat, List.foldl_concat, ih, Nat.zero_add, Finset.sum_range_succ,
         Finset.sum_range_succ]
-  rw [hpair eta]
-  rfl
+  (rw [hpair eta]) <;> rfl
 
 /-- `samplePolyCBD` unrolled to the indexed-`set!` fold whose per-index write value is `cbdVal`. -/
 theorem samplePolyCBD_fold (eta : Nat) (bytes : List UInt8) :
