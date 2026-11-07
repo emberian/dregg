@@ -243,6 +243,11 @@ not merged.
   say 5/4. Commit 0047cb876 (08-09) narrowed `KimchiStepMainCore`'s operand selection three days
   after the pins were last measured (fba84b9f5); nothing built the module since. Re-recording means
   changing numbers in theorem statements, so it is left for its owner.
+- Pre-existing red, same class: `Dregg2.Circuit.Emit.KimchiStepWrapChain`
+  `the_chain_stops_at_the_statements_derived_words`. Of its 8 conjuncts only
+  `prevWordVal PREV_MSG_NEXT_STEP ≠ WRAP_PUBLIC_INPUT_MEASURED.getD 12 0` evaluates false: commit
+  16b6d9b8a (08-11, "slot 12 CLOSES") closed slot 12 but did not flip this pin's `≠`. A statement
+  change for its owner.
 - `scripts/check-guard-modules.py`: FAIL on the lane with 9 STALE + 3 GREW baseline rows
   (EffectActionBindingEmit/Refine, Dregg2.Claims). The identical findings come out of the merge
   base with origin/main: pre-existing, not from this upgrade.
