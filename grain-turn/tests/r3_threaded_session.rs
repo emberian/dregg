@@ -83,9 +83,6 @@ fn a_three_turn_session_folds_when_threaded_and_not_otherwise() {
         real, leg_head,
         "the ledger head is NOT the folded head (the named residual)"
     );
-    if std::env::var("R3_SKIP_FOLD").is_ok() {
-        return;
-    }
 
     let selectors: Vec<usize> = threaded
         .iter()
@@ -94,11 +91,37 @@ fn a_three_turn_session_folds_when_threaded_and_not_otherwise() {
     let t1 = std::time::Instant::now();
     let proof = prove_turn_chain_recursive_without_host_gate(&threaded, &selectors).expect("folds");
     let fold = t1.elapsed();
-    let vk = proof.root_vk_fingerprint();
+    // The anchor is NOT taken from the proof under test: an independent session of the same shape
+    // (a fresh minter, different labels, costs and heap roots) is finalized and folded by the
+    // setup party, and its root fingerprint is the anchor the real aggregate must verify against.
+    let mut setup_minter = ToolGatewayMinter::open("grain-r3-threaded-setup", 64).expect("open");
+    for t in 0..turns {
+        setup_minter
+            .mint_turn(
+                &format!("setup-{t}"),
+                1,
+                (t + 1) as i64,
+                [0xA0 ^ t as u8; 32],
+            )
+            .expect("setup turn commits");
+    }
+    let setup_legs = finalize_session_threaded(setup_minter.records()).expect("setup finalize");
+    let setup_selectors: Vec<usize> = setup_legs
+        .iter()
+        .map(|t| verify_descriptor_participant(&t.participant).expect("setup leg admitted"))
+        .collect();
+    let vk = prove_turn_chain_recursive_without_host_gate(&setup_legs, &setup_selectors)
+        .expect("setup folds")
+        .root_vk_fingerprint();
+    assert_eq!(
+        vk,
+        proof.root_vk_fingerprint(),
+        "the VK is a function of the session's shape, not its content"
+    );
     let bytes = proof.to_bytes();
     let t2 = std::time::Instant::now();
     verify_whole_chain_proof_bytes(&bytes, &vk)
-        .expect("aggregate verifies against the setup anchor");
+        .expect("aggregate verifies against the independent setup anchor");
     let env =
         dregg_circuit_prove::ivc_turn_chain::WholeChainProofBytes::from_postcard(&bytes).unwrap();
     assert_eq!(

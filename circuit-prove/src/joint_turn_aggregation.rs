@@ -1403,7 +1403,7 @@ pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize,
     })?;
     // (2) Map the descriptor's wire name back to its effect selector through the staged
     //     R=24 registry (the cohort the leg is bound to).
-    rotated_descriptor_selector(&leg.descriptor.name).ok_or_else(|| {
+    rotated_descriptor_selector(&leg.descriptor).ok_or_else(|| {
         format!(
             "rotated descriptor participant carries descriptor '{}' which is not a known \
              R=24 cohort member",
@@ -1432,71 +1432,88 @@ pub fn verify_descriptor_participant(p: &DescriptorParticipant) -> Result<usize,
 /// byte-identical DISPLAY names in both registries — the 5 heap-open/fields-open flip members
 /// (`createCell`/`heapWrite`/`noteCreate`/`noteSpend`/`refusal`) have DIFFERENT wide display names,
 /// so their (wide-minted) legs were silently inadmissible through this gate.
-fn rotated_descriptor_selector(name: &str) -> Option<usize> {
+fn rotated_descriptor_selector(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+) -> Option<usize> {
+    // Admission by CONTENT: the carried descriptor must EQUAL a committed member of the WIDE
+    // staged registry (the registry the leg producer mints from) that belongs to a cutover-ready
+    // selector. Matching on the display name alone admitted any descriptor carrying a member's
+    // name, including a weakened copy re-proved under it, and all eight setField slots share one
+    // display name (codex gpt-6-astra round 2, initiative 10, 2026-11-06).
+    cutover_members()
+        .iter()
+        .find(|(_, member)| member == desc)
+        .map(|(s, _)| *s)
+}
+
+/// Every committed WIDE-registry member of a cutover-ready selector, with that selector, parsed
+/// once. SetField is keyed per slot (`setFieldVmDescriptor2-{k}R24`, the names the wide producer
+/// resolves through `rotated_set_field_descriptor_name`); every other selector by its own wire
+/// name (`rotated_descriptor_name`).
+fn cutover_members() -> &'static [(usize, dregg_circuit::descriptor_ir2::EffectVmDescriptor2)] {
+    use dregg_circuit::descriptor_ir2::parse_vm_descriptor2;
     use dregg_circuit::effect_vm::columns::sel;
     use dregg_circuit::effect_vm::trace_rotated::{
         rotated_descriptor_name, rotated_set_field_descriptor_name,
     };
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
-    // The DISPLAY name (field 1) of the registry row keyed by a WIRE name: the json-internal
-    // `name` the parsed descriptor carries.
-    let display_of = |wire: &str| {
-        WIDE_REGISTRY_STAGED_TSV.lines().find_map(|line| {
-            let mut it = line.splitn(3, '\t');
-            if it.next() == Some(wire) {
-                it.next()
-            } else {
-                None
-            }
-        })
-    };
-    for &s in dregg_circuit::proof_forest::CUTOVER_READY_SELECTORS {
-        // SetField is keyed PER SLOT (`setFieldVmDescriptor2-{k}R24`, the names the wide producer
-        // resolves through `rotated_set_field_descriptor_name`); the selector has no single wire
-        // name, so its rows are found slot by slot.
-        if s == sel::SET_FIELD {
-            if (0u32..8).any(|k| display_of(rotated_set_field_descriptor_name(k)) == Some(name)) {
-                return Some(s);
-            }
-            continue;
-        }
-        let wire = match rotated_descriptor_name(s) {
-            Some(w) => w,
-            None => continue,
+    static MEMBERS: std::sync::OnceLock<
+        Vec<(usize, dregg_circuit::descriptor_ir2::EffectVmDescriptor2)>,
+    > = std::sync::OnceLock::new();
+    MEMBERS.get_or_init(|| {
+        let json_of = |wire: &str| {
+            WIDE_REGISTRY_STAGED_TSV.lines().find_map(|line| {
+                let mut it = line.splitn(3, '\t');
+                (it.next() == Some(wire)).then(|| {
+                    let _ = it.next();
+                    it.next()
+                })?
+            })
         };
-        if display_of(wire) == Some(name) {
-            return Some(s);
+        let mut out = Vec::new();
+        for &s in dregg_circuit::proof_forest::CUTOVER_READY_SELECTORS {
+            let wires: Vec<&'static str> = if s == sel::SET_FIELD {
+                (0u32..8).map(rotated_set_field_descriptor_name).collect()
+            } else {
+                rotated_descriptor_name(s).into_iter().collect()
+            };
+            for w in wires {
+                if let Some(d) = json_of(w).and_then(|j| parse_vm_descriptor2(j).ok()) {
+                    out.push((s, d));
+                }
+            }
         }
-    }
-    None
+        out
+    })
 }
 
 #[cfg(test)]
 mod set_field_selector_tests {
-    use super::rotated_descriptor_selector;
+    use super::{cutover_members, rotated_descriptor_selector};
     use dregg_circuit::effect_vm::columns::sel;
-    use dregg_circuit::effect_vm::trace_rotated::rotated_set_field_descriptor_name;
-    use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 
-    /// Every per-slot setField member's display name resolves to SET_FIELD, and nothing else does.
+    /// Every committed cutover member resolves to its own selector BY CONTENT, the eight setField
+    /// slots included; a copy with one constraint removed (same display name) resolves to nothing.
     #[test]
-    fn every_setfield_slot_member_resolves_to_set_field() {
-        for k in 0u32..8 {
-            let wire = rotated_set_field_descriptor_name(k);
-            let display = WIDE_REGISTRY_STAGED_TSV
-                .lines()
-                .find_map(|line| {
-                    let mut it = line.splitn(3, '\t');
-                    (it.next() == Some(wire)).then(|| it.next()).flatten()
-                })
-                .unwrap_or_else(|| panic!("{wire} is in the WIDE registry"));
+    fn every_cutover_member_resolves_by_content_and_a_weakened_copy_does_not() {
+        let members = cutover_members();
+        assert_eq!(
+            members.iter().filter(|(s, _)| *s == sel::SET_FIELD).count(),
+            8,
+            "eight per-slot setField members parse"
+        );
+        for (s, m) in members {
+            assert_eq!(rotated_descriptor_selector(m), Some(*s), "{}", m.name);
+            let mut weakened = m.clone();
+            weakened.constraints.pop();
+            assert_eq!(weakened.name, m.name);
             assert_eq!(
-                rotated_descriptor_selector(display),
-                Some(sel::SET_FIELD),
-                "{wire}"
+                rotated_descriptor_selector(&weakened),
+                None,
+                "weakened {}",
+                m.name
             );
         }
-        assert_eq!(rotated_descriptor_selector("not-a-member"), None);
     }
 }
 

@@ -1032,18 +1032,28 @@ log below a `flatMap` of PAIRS and every pointwise conclusion false. -/
 theorem only_the_routing_leg_targets_the_addend_table :
     accFinalDesc.constraints.all notAddendLookup = true := by native_decide
 
+/-- A bare-AIR descriptor's constraints are its legs, lowered — stated over a VARIABLE `air`, so
+the kernel checks the `[] ++ _ ++ []` steps once, on a variable, and never on a concrete leg list
+(on `accFinalAir` it unfolded and compared all 4,800 lowered constraints: 92 s of kernel time). -/
+theorem lowerAir_constraints (nm : String) (w p : Nat) (air : EffectAir) :
+    (Dregg2.Circuit.Emit.EffectLower.lowerAir nm w p [] air).constraints
+      = air.legs.flatMap lowerLeg := by
+  simp only [Dregg2.Circuit.Emit.EffectLower.lowerAir, Dregg2.Circuit.Emit.EffectLower.assemble,
+    Dregg2.Circuit.Emit.EffectLower.lowerAirLegs, List.map_nil, List.nil_append, List.append_nil]
+
+/-- The routed block's legs are the final block's, then the three routing legs. -/
+theorem accRoutedAir_legs :
+    accRoutedAir.legs = accFinalAir.legs ++ [ridxStartLeg, ridxThreadLeg, addendLookupLeg] := by
+  rw [accRoutedAir]
+
 /-- The routed descriptor's constraints are the final descriptor's, then the three routing ones. -/
 theorem routed_constraints_split (As : List Pt3) :
     (accRoutedDesc As).constraints
       = accFinalDesc.constraints
           ++ [ridxStartLeg, ridxThreadLeg, addendLookupLeg].flatMap lowerLeg := by
-  have hr : (accRoutedDesc As).constraints = lowerAirLegs (accRoutedAirOn As) :=
-    List.append_nil _
-  have hf : accFinalDesc.constraints = lowerAirLegs accFinalAir := List.append_nil _
-  rw [hr, hf]
-  show (accFinalAir.legs ++ [ridxStartLeg, ridxThreadLeg, addendLookupLeg]).flatMap lowerLeg
-      = accFinalAir.legs.flatMap lowerLeg ++ _
-  simp [List.flatMap_append]
+  unfold accRoutedDesc accRoutedDescNamed accFinalDesc
+  rw [lowerAir_constraints, lowerAir_constraints, the_legs_do_not_depend_on_the_declared_addends,
+    accRoutedAir_legs, List.flatMap_append]
 
 /-- A `flatMap` of singletons IS a `map`. -/
 theorem flatMap_singleton_map {α β : Type} (f : α → List β) (g : α → β) (l : List α)
@@ -2270,6 +2280,8 @@ theorem the_head_seam_forces_the_declared_program (H : List ℤ) (C : Pt3)
 #assert_axioms addTupleOf_cons
 #assert_axioms addend_manifest_key_unique
 #assert_compiled only_the_routing_leg_targets_the_addend_table
+#assert_axioms lowerAir_constraints
+#assert_axioms accRoutedAir_legs
 #assert_axioms routed_constraints_split
 #assert_axioms routing_leg_filterMap
 #assert_compiled addend_lookupLog_is_rowMap

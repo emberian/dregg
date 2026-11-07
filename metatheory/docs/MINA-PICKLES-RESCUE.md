@@ -122,6 +122,7 @@ module, one check after each fix (dregg-build2, deps warm, import floor 3.6 GB):
 | `9453dad41` | `MinaWrapAggregationGate` | 3.6 GB, 0:05 | every theorem compiled |
 | `a02093815` | `MinaWrapGroupGate` | 3.6 GB, 0:04 | every theorem compiled |
 | `afc144857` | `MinaAccumulatorAir` | 11.6 GB, 1:54 | §8a-§8b kernel defeq proofs over the routed block are the remaining 7.6 GB (the "12.0" in its commit title is an earlier failing variant, not a before) |
+| `03c611a8a` | `MinaAccumulatorAir` | 5.1 GB, 1:11 | the §8b cost was ONE kernel check, `routed_constraints_split` (92 s): definitional `[] ++ L ≡ L` steps at the concrete 4,800-constraint `L`, which lazy delta evaluated. Restated through `lowerAir_constraints` over a variable `air`; statement unchanged, still kernel-proved |
 | `392812d12` | `MinaWrapOpeningSched` | 3.8 GB, 0:41 | `TiedAir` verdicts compiled; certificate pinned `#assert_compiled` |
 | `28326f20b` | retired `MinaWrapSgChunk0`..`3` | | |
 
@@ -133,10 +134,12 @@ Green: `MinaWrapClosingAir`, `MinaWrapClosingScheduled`, `MinaAccumulatorSrsDemo
 `MinaWrapPublicInputFromHeader`, `MinaOpeningCheckWeld`, `MinaBodyPreimageSeams`, `AirCrossRow`,
 `AirSelectorForcing`, and every changed module itself (22:33 wall, 11.6 GB peak).
 
-Red, not from this lane: `KimchiStepMainPins01`, `03`, `05`, `10`, `12`, `14` fail their own `#guard`s and
-`native_decide`s (values, e.g. `classCells posS (vGx shapeSmoke)).length == 5` is false). This lane
-changed proofs only, never a definition, so it cannot move an evaluated value; the reds block
-`Dregg2.MinaBridgeGuards`, which imports them. Reported to the root.
+Red at the time, not from this lane, now repaired by it (`0ad677396`): `KimchiStepMainPins01`, `03`, `05`,
+`10`, `12`, `14` failed their own value checks. The pins were stale against two deliberate Core changes,
+`0047cb876` (the R4 fold became upstream's Horner fold, so a combine commitment is an addend, not a ladder
+base) and `16b6d9b8a` (segment D absorbs its own `G`, `vGaX`; `nOnC` + 1). Each new value was evaluated
+and derived from the class listing by row kind; Pins01's round-robin sum oracle became a Horner oracle,
+checked add by add. `Dregg2.MinaBridgeGuards` then built green (3148 jobs, 3.8 GB).
 
 ## Earlier steps, superseded by the above
 
