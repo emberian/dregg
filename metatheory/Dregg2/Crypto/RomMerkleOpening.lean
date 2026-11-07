@@ -276,8 +276,8 @@ theorem merkleOpen_adv_le (Key : Type) (kF : Fintype Key) (kD : DecidableEq Key)
       ≤ gameAdv (keyedRomGame (merkleRomFamily Key kF kD kN))
           (merkleOpenFinder Key kF kD kN d A) l := by
   refine @winProb_le_of_imp _ ((merkleOpenRomGame Key kF kD kN d).instFin l) _ _ (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
-  exact merkleOpen_wins_imp Key kF kD kN d A l H hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  exact (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr (merkleOpen_wins_imp Key kF kD kN d A l H hH)
 
 /-- **⚑ THE EXTRACTED FINDER IS QUERY-BOUNDED, WITH THE WALK'S QUERIES PAID.** A `Q`-query opening
 forger yields a `(Q + 2·d)`-query collision finder — the forger's own tree (`bindComp`) plus the

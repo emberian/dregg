@@ -241,8 +241,8 @@ theorem hlPath_adv_le (d : ℕ → ℕ)
           (hlPathFinder Key kF kD kN Leaf lF lD d A) l := by
   refine @winProb_le_of_imp _ ((hlPathForgery Key kF kD kN Leaf lF lD d).game.instFin l) _ _
     (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
-  exact hlPath_wins_imp Key kF kD kN Leaf lF lD d A l H hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  exact (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr (hlPath_wins_imp Key kF kD kN Leaf lF lD d A l H hH)
 
 /-- The extracted finder is query-bounded, the walk's queries PAID: `Q + 2·d`. -/
 theorem hlPathFinder_in_romEff (d : ℕ → ℕ) (Q : ℕ → ℕ)
@@ -403,8 +403,8 @@ theorem hlOpen_adv_le (d : ℕ → ℕ)
           (hlOpenFinder Key kF kD kN Leaf lF lD d A) l := by
   refine @winProb_le_of_imp _ ((hlOpenForgery Key kF kD kN Leaf lF lD d).game.instFin l) _ _
     (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
-  exact hlOpen_wins_imp Key kF kD kN Leaf lF lD d A l H hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  exact (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr (hlOpen_wins_imp Key kF kD kN Leaf lF lD d A l H hH)
 
 /-- The extracted finder is query-bounded, its queries PAID: `Q + (2·d + 2)`. -/
 theorem hlOpenFinder_in_romEff (d : ℕ → ℕ) (Q : ℕ → ℕ)
@@ -488,8 +488,8 @@ theorem hlRoot_adv_le (d : ℕ → ℕ)
           (hlRootToOpen Key kF kD kN Leaf lF lD d A) l := by
   refine @winProb_le_of_imp _
     ((hlOpenRootForgery Key kF kD kN Leaf lF lD d).game.instFin l) _ _ (fun H hH => ?_)
-  rw [Dregg2.Crypto.FloorGames.Adversary.hit_eq_true] at hH ⊢
-  exact hlRoot_wins_imp Key kF kD kN Leaf lF lD d A l H hH
+  replace hH := (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mp hH
+  exact (Dregg2.Crypto.FloorGames.Adversary.hit_eq_true _ _ _).mpr (hlRoot_wins_imp Key kF kD kN Leaf lF lD d A l H hH)
 
 /-- **⚑⚑ THE PUBLISHED-ROOT OPENING BINDING** — the ROM successor shape for
 `membersAt8_functional_on_path_or_collides` and the `deployed_…Open8_binds_leaf_or_collides`
@@ -510,7 +510,8 @@ theorem hlOpenRootRom_binds (d Q Q' : ℕ → ℕ)
       ⟨fun l => OracleComp.mapOut (fun p => (p.1, p.2.2)) (M l),
         fun l => OracleComp.mapOut_queryBounded _ (hMQ l), fun l H => ?_⟩
     show (let p := A.run l H; (p.1, p.2.2)) = _
-    rw [OracleComp.mapOut_eval, hrun l H]
+    exact (congrArg (fun p => (p.1, p.2.2)) (hrun l H)).trans
+      (OracleComp.mapOut_eval (fun p => (p.1, p.2.2)) (M l) H).symm
   refine negl_of_le
     (fun l => (gameAdv_mem_unit (hlOpenRootForgery Key kF kD kN Leaf lF lD d).game A l).1)
     (hlRoot_adv_le Key kF kD kN Leaf lF lD d A) hopen

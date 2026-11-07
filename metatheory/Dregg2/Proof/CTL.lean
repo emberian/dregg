@@ -406,7 +406,7 @@ theorem livingAG_conserved (s : RecChainedState) :
     intro s' hs' t hst
     obtain ⟨cf, rfl⟩ := hst
     show cellObsA (cellNextA s' cf) = cellObsA s
-    rw [cellObsA_next]; exact hs'
+    exact (cellObsA_next s' cf).trans hs'
   · -- `s` is in `Inv` (reflexivity of the badge equality).
     show cellObsA s = cellObsA s; rfl
 

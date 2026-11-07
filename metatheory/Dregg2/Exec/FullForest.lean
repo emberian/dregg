@@ -741,7 +741,7 @@ example : ¬ confinedForest goodFullForest := by
   -- `confinedForest` unfolds to `confinedChildren …`; the head edge's target obligation is `0 = 1`.
   have htgt : targetOf (FullActionA.balanceA ⟨0, 0, 1, 30⟩ 0) = 1 := by
     have := h.1                       -- the head edge's `match capTarget (endpoint 1 …)` obligation
-    simpa using this
+    exact this
   exact absurd htgt (by decide)
 
 /-- **`confinedFullForest`** — `goodFullForest`'s confined twin: the root delegates `node 0`

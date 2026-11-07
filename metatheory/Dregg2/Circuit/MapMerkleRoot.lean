@@ -1453,7 +1453,8 @@ theorem heapTreeRoot_binds_rom (d : ℕ) (Q : ℕ → ℕ)
             omega),
         fun _ _ => rfl⟩)
   refine @winProb_le_of_imp _ ((heapRomBreakGame d).instFin l) _ _ (fun H hH => ?_)
-  rw [Adversary.hit_eq_true] at hH ⊢
+  replace hH := (Adversary.hit_eq_true _ _ _).mp hH
+  refine (Adversary.hit_eq_true _ _ _).mpr ?_
   obtain ⟨hne, hroot⟩ := hH
   have hBrun : (romCarrierAdv _ _ (heapExtractComp d M)).run l H
       = heapFindSpec l H d (A.run l H).1 (A.run l H).2 := by

@@ -222,7 +222,7 @@ theorem fixedPairAdv_hit (F : KeyedRomFamily) (l : ℕ) (x y : ∀ l, F.toRomFam
   letI := (F.toRomFamily).dDec l; letI := (F.toRomFamily).rDec l
   rw [romAdv_hit F.toRomFamily (fixedPairComp F x y) l H]
   show collWin (OracleComp.pure (x l, y l)) H = decide (H (x l) = H (y l))
-  rw [collWin_pure]
+  refine (collWin_pure (x l, y l) H).trans ?_
   simp [hxy]
 
 /-- **⚑ (b) THE FIXED ANSWERER'S ADVANTAGE IS EXACTLY `1/|R|`.** Over the SAMPLED oracle a fixed pair

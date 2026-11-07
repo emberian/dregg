@@ -297,8 +297,8 @@ theorem carrier_adv_le (D : SpongeKeyed) (C : SpongeCarrier)
     gameAdv (carrierBreakGame D C) A l
       ≤ gameAdv (hashGame (spongeFamily D)) (carrierBreakToFinder D C A) l := by
   refine @winProb_le_of_imp _ (D.tagFintype) _ _ (fun t ht => ?_)
-  rw [Adversary.hit_eq_true] at ht ⊢
-  exact carrier_wins_imp D C A l t ht
+  replace ht := (Adversary.hit_eq_true _ _ _).mp ht
+  exact (Adversary.hit_eq_true _ _ _).mpr (carrier_wins_imp D C A l t ht)
 
 /-- **⚑ THE REDUCED BINDING — the security conclusion, from the DEPLOYED sponge's collision floor.**
 

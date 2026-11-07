@@ -745,7 +745,8 @@ def bruteForce : CostAdversary expGame Unit (fun _ => Unit) (fun _ => Unit) wher
 answer), and ZERO oracle calls. -/
 theorem bruteForce_cost (l : ℕ) (i : expGame.Inst l) :
     cost (expSize l) (bruteForce.prog l i) = ⟨2 ^ l + l, fun _ => 0⟩ := by
-  refine Cost.ext' ?_ ?_ <;> simp [bruteForce, expSize]
+  refine Cost.ext' ?_ ?_ <;> simp [bruteForce, expSize,
+    cost_pure (Q := fun _ : Unit => Unit) (R := fun _ => Unit) (expSize l) (expWinner l)]
 
 /-- **⚑ THE ⊤ POLE — the brute-force solver is NOT `PolyTime`.** Its cost is `2^l + l`, which no
 `C·lᵏ + C` bounds (`ConcreteSecurity.expBound_not_ppt`, exp dominates poly). So at `Eff := PolyTime` the
@@ -766,6 +767,7 @@ theorem bruteForce_solves (l : ℕ) (i : expGame.Inst l) :
     expGame.wins l i (bruteForce.toAdversary.run l i) := by
   show bruteForce.toAdversary.run l i = expWinner l
   simp [CostAdversary.toAdversary, bruteForce, FreeOracle.denote_tickN, FreeOracle.denote, expWinner]
+  rfl
 
 /-- **THE ⊥ POLE AT THE SAME GAME, WITH NO HYPOTHESIS.** The return adversary that outputs the winner
 costs exactly `l` (the bits of its answer) — poly. So at the very game where the enumerator is excluded,
@@ -802,7 +804,9 @@ def queryHog : CostAdversary expGame Unit (fun _ => Unit) (fun _ => Unit) where
 /-- Its vector: `l` instructions (just writing the answer), and `2^l` calls. -/
 theorem queryHog_cost (l : ℕ) (i : expGame.Inst l) :
     cost (expSize l) (queryHog.prog l i) = ⟨l, fun _ => 2 ^ l⟩ := by
-  refine Cost.ext' ?_ (fun o => ?_) <;> simp [queryHog, expSize]
+  refine Cost.ext' ?_ (fun o => ?_) <;> simp [queryHog, expSize,
+    cost_probe (Q := fun _ : Unit => Unit) (R := fun _ => Unit) (expSize l) () () (2 ^ l)
+      (expWinner l)]
 
 /-- **⚑ THE INTRINSIC COMPONENT ALONE IS NOT ENOUGH.** The query hog's own instruction count is poly …
 -/
