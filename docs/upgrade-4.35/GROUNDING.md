@@ -70,7 +70,12 @@ Release notes: reference-manual `Manual/Releases/v4_3{1..5}_0.lean`.
   instances for the fixed-width integers (`Init/Data/UInt/Package.lean`); their `BEq` outranks
   `instBEqOfDecidableEq` and is built with choice, so a `[propext, Quot.sound]` pin over byte `==`
   gains `Classical.choice`. Fix: file-local `attribute [local instance high] instBEqOfDecidableEq`
-  (Tree.Value, Tree.Json).
+  (Tree.Value, Tree.Json). The same holds for `Int`, `Fin n` and `String.Pos.Raw`
+  (`Init/Data/{Int,Fin}/Package.lean`): Sat/LratCert, Datalog FixpointCert/StratifiedCert, Crypto/Deriv/
+  BisimCert got the same file-local attribute (and two LratCert pins shrank to `[propext, Quot.sound]`).
+  Follow-up after the upgrade lands: one `attribute [instance high] instBEqOfDecidableEq` in a base
+  module (Dregg2.Tactics) restores 4.30's resolution tree-wide, then the locals go.
+- `Std.Sat.CNF.Clause` is a structure now (atoms/polarities): build clauses with `Clause.ofLiterals`.
 - `alias` is a keyword (4.35); `constructor` warns when several constructors fit (4.35);
   `Lean.RBMap` deprecated (unused here); `mvcgen` deprecated (unused here); `letFun` deprecated (unused).
 - **Module system**: Mathlib 56a00585 is `module`-ized. Every non-module file importing it gets a
@@ -100,6 +105,10 @@ Gates around it (`metatheory/BUILD.md`): `make check-fast` (Mac, `lake lean` per
 
 ## Native side
 
+- Measured on 4.35 (bb2): `tree-check`, `calltree-check`, `dfa-run`, `stream-check` build and run;
+  `tree-check verify` accepts the demo field certificates, and `stream-check root` prints the same
+  MMR root byte for byte as the 4.30 binary. Binary size 118 MB vs 108 MB on 4.30 (Lake executables
+  already linked all of Lean).
 - Lean executables in the lakefile: `datalog-check`, `dfa-run`, `policyc`, `calltree-check`,
   `stream-check`, `tree-check`, `polis_governor`, the Mina emitters (`mina_*_emit`, `mina_sg_bench`),
   `emit_seam_specs`, `mina_wrap_opening_sched_emit`. Rebuilt by `lake build <exe>` on 4.35.
