@@ -746,7 +746,7 @@ theorem fire_deepQuot_eval_deployed :
   · rw [fireP0_eval_z]
     simp only [fireP0, Polynomial.eval_add, Polynomial.eval_mul, Polynomial.eval_pow,
       Polynomial.eval_X, Polynomial.eval_ofNat, firePts]
-    decide
+    decide +kernel
 
 /-- The committed matrix's columns ARE the interpolants' evaluations (the firing is a genuine
 codeword commitment, not an arbitrary table). -/
@@ -765,7 +765,7 @@ reduced opening is `11`. -/
 theorem fire_friInputWord : friInputWord firePts (2 : ZMod 17) 3 fireM fireVz 1 = 11 := by
   simp only [friInputWord, colQuotWord, deepTerm, MatrixOracle.row, fireM, fireVz, firePts,
     Algebra.algebraMap_self, RingHom.id_apply, Fin.sum_univ_two]
-  decide
+  decide +kernel
 
 theorem fireP0_natDegree_le : fireP0.natDegree ≤ 2 := by
   unfold fireP0; compute_degree

@@ -204,7 +204,7 @@ theorem embed1_lt (a b : ℤ) : embed1 a < embed1 b ↔ a < b := by
       simp only [e1, if_neg h0] at hlt'
       exact absurd hlt' (lt_irrefl 0)
   · intro h
-    exact ⟨0, fun j hj => absurd hj (Fin.not_lt_zero j), by simpa [e1] using h⟩
+    exact ⟨0, fun j hj => absurd hj (Fin.not_lt_zero j), show e1 a 0 < e1 b 0 by simpa [e1] using h⟩
 
 /-- The deployed narrow key is recovered by the lane-0 projection: the lift is lossless. -/
 theorem proj0_embed1 (k : ℤ) : proj0 (embed1 k) = k := by

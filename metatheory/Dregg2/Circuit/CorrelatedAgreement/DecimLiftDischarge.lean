@@ -267,7 +267,7 @@ theorem decimLift_of_tower : DecimLift twSz towerV 8 towerDec := by
         have hj : g j ∈ ((towerS 1 h1).C : Set (Fin (twSz 1) → BabyBear)) := hg j
         rw [← tower_link 0 h0 h1] at hj
         exact hj
-      exact setup_decimLift (towerS 0 h0) w g hg' e (by simpa using hagree)
+      exact setup_decimLift (towerS 0 h0) w g hg' e (by simp only [towerDec, Fintype.card_fin] at hagree ⊢; exact hagree)
   | 1 =>
       have h0 : (1 : ℕ) < 5 := by omega
       have h1 : (2 : ℕ) < 5 := by omega
@@ -276,7 +276,7 @@ theorem decimLift_of_tower : DecimLift twSz towerV 8 towerDec := by
         have hj : g j ∈ ((towerS 2 h1).C : Set (Fin (twSz 2) → BabyBear)) := hg j
         rw [← tower_link 1 h0 h1] at hj
         exact hj
-      exact setup_decimLift (towerS 1 h0) w g hg' e (by simpa using hagree)
+      exact setup_decimLift (towerS 1 h0) w g hg' e (by simp only [towerDec, Fintype.card_fin] at hagree ⊢; exact hagree)
   | 2 =>
       have h0 : (2 : ℕ) < 5 := by omega
       have h1 : (3 : ℕ) < 5 := by omega
@@ -285,7 +285,7 @@ theorem decimLift_of_tower : DecimLift twSz towerV 8 towerDec := by
         have hj : g j ∈ ((towerS 3 h1).C : Set (Fin (twSz 3) → BabyBear)) := hg j
         rw [← tower_link 2 h0 h1] at hj
         exact hj
-      exact setup_decimLift (towerS 2 h0) w g hg' e (by simpa using hagree)
+      exact setup_decimLift (towerS 2 h0) w g hg' e (by simp only [towerDec, Fintype.card_fin] at hagree ⊢; exact hagree)
   | 3 =>
       have h0 : (3 : ℕ) < 5 := by omega
       have h1 : (4 : ℕ) < 5 := by omega
@@ -294,11 +294,11 @@ theorem decimLift_of_tower : DecimLift twSz towerV 8 towerDec := by
         have hj : g j ∈ ((towerS 4 h1).C : Set (Fin (twSz 4) → BabyBear)) := hg j
         rw [← tower_link 3 h0 h1] at hj
         exact hj
-      exact setup_decimLift (towerS 3 h0) w g hg' e (by simpa using hagree)
+      exact setup_decimLift (towerS 3 h0) w g hg' e (by simp only [towerDec, Fintype.card_fin] at hagree ⊢; exact hagree)
   | 4 =>
       have h0 : (4 : ℕ) < 5 := by omega
       have hg' : ∀ j, g j ∈ (towerS 4 h0).C' := fun j => hg j
-      exact setup_decimLift (towerS 4 h0) w g hg' e (by simpa using hagree)
+      exact setup_decimLift (towerS 4 h0) w g hg' e (by simp only [towerDec, Fintype.card_fin] at hagree ⊢; exact hagree)
   | 5 => exact absurd (hg 0) (Set.notMem_empty _)
   | m + 6 => exact absurd (hg 0) (Set.notMem_empty _)
 

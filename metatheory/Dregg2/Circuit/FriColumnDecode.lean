@@ -568,7 +568,7 @@ chain (genuine `ZMod` divisions) at `β = 5` — both fibers bottom out at
 `P(5) = 2 + 3·5 = 17`, exactly what the keystone predicts. A drift anywhere in the chain
 wiring (pairing, points, challenge schedule, decode) fails the build. -/
 theorem chain_honest_concrete :
-    ∀ y : Fin 2, foldChain3 5 (decodeColumn honestColumn) y = 17 := by decide
+    ∀ y : Fin 2, foldChain3 5 (decodeColumn honestColumn) y = 17 := by decide +kernel
 
 #assert_axioms chain_honest_fires
 #assert_axioms chain_far_bites
