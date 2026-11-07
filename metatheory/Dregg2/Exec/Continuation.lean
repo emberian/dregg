@@ -108,7 +108,7 @@ theorem disciplinedFrom_drop :
     ∀ (k n : Nat) (tr : List (Op Addr Val)),
       DisciplinedFrom n tr → DisciplinedFrom (n + k) (tr.drop k)
   | 0, n, tr, h => by simpa using h
-  | _ + 1, _, [], h => by simpa using h
+  | _ + 1, _, [], _ => by simp [DisciplinedFrom]
   | k + 1, n, _ :: tr, h => by
     have hrest : DisciplinedFrom (n + 1) tr := h.2
     have hd := disciplinedFrom_drop k (n + 1) tr hrest
