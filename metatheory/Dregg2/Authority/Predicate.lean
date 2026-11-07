@@ -79,7 +79,7 @@ def registryVerify {Stmt Wit : Type}
 The predicate is the *statement-for-kind-`k`* and the witness is `Wit`; `Verify` is the dispatch at
 `k`. This is how the registry's per-kind checker becomes the seam's decidable `Verify` — exactly the
 move `Crypto.verifiableOfCryptoKernel` makes for the bare CryptoKernel, lifted through dispatch. -/
-instance verifiableOfRegistry {Stmt Wit : Type}
+@[reducible] def verifiableOfRegistry {Stmt Wit : Type}
     (reg : Registry Stmt Wit) (k : WitnessedKind) : Verifiable Stmt Wit where
   Verify stmt wit := registryVerify reg k stmt wit
 
