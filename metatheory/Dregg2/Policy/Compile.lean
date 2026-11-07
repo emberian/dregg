@@ -549,6 +549,10 @@ theorem cached_zero_fuel (V : List Value) (R : PredRE) :
 #guard_msgs in
 #print axioms cachedIdx_eq
 
+/-- info: 'Dregg2.Policy.Table.materialize_eq' depends on axioms: [propext, Classical.choice, Quot.sound] -/
+#guard_msgs in
+#print axioms Table.materialize_eq
+
 #assert_all_clean [cachedSeen_eq, reachCached_eq, cachedIdx_eq, Compiled.memo_eq,
   cachedIdx_distinguishes, cached_zero_fuel, Compiled.run_eq, Compiled.compiled_decides, Compiled.compiled_decides_surface,
   Compiled.compiled_decides_absence, sigRepsAux_covers, simCheck_run, simCheck_verdict, Compiled.fstep_eq, Compiled.facc_eq]

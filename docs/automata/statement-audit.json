@@ -212,10 +212,11 @@
       "witness": "Dregg2.Policy.UnionReference.either_decides",
       "falsifier": "Dregg2.Policy.UnionReference.union_choices",
       "witness_scope": "constructor-instance",
-      "scope": "Actual policyc whole-word wrapper recursively composes surface alternatives, retaining derivative compilation for other forms. Every returned table intrinsically carries Certified.hdec; reachable trimming and optimization are accepted only after checked simulation. The named witness covers the certified constructor. Success of the actual partial wrapper is separately executed in the source-bound smoke artifact on byte7|byte9, both branches, empty and rejecting words; runtime success is not claimed as a kernel-decided proposition.",
+      "scope": "Actual policyc whole-word wrapper recursively composes surface alternatives, retaining derivative compilation for other forms. Every returned table intrinsically carries Certified.hdec; reachable trimming and optimization are accepted only after checked simulation; the optimized table is then materialized into arrays under the same hdec by the table equality Table.materialize_eq (no simulation check needed). The named witness covers the certified constructor. Success of the actual partial wrapper is separately executed in the source-bound smoke artifact on byte7|byte9, both branches, empty and rejecting words; runtime success is not claimed as a kernel-decided proposition.",
       "supporting_evidence": [
         "Dregg2.Policy.Certified.hdec",
-        "Dregg2.Policy.Certified.union"
+        "Dregg2.Policy.Certified.union",
+        "Dregg2.Policy.Table.materialize_eq"
       ],
       "execution": {
         "source": "metatheory/scripts/automata-compiler-smoke.lean",
@@ -229,11 +230,14 @@
       "witness": "Dregg2.Policy.UnionReference.either_decides",
       "falsifier": "Dregg2.Policy.UnionReference.malformed_refused",
       "witness_scope": "constructor-instance",
-      "scope": "Actual policyc absence wrapper passes its certified whole-word table directly into certifyAbsenceFrom. Finite bounds and factor labelling are checked before Certified.ofFactor is returned; fuel exhaustion is an error. The returned hdec covers the padded complement language. Successful actual wrapper execution and five verdicts are recorded separately as runtime evidence; no native-evaluator theorem is introduced.",
+      "scope": "Actual policyc absence wrapper passes its certified whole-word table directly into certifyAbsenceFrom. Finite bounds and factor labelling are checked before Certified.ofFactor is returned: labCheckRep checks the abstract successor at one byte per whole-word column class (colCheck verifies the class map) and requires every other byte to step to its representative's state; labCheckRep_sound (via absStep_col) proves it implies the full 256-byte labCheck, so absence_decides applies unchanged. nextSet/anyAcc are array-backed and nextSet_spec/anyAcc_spec prove them equal to the original pointwise set expressions; fuel exhaustion is an error. The returned hdec covers the padded complement language. Successful actual wrapper execution and five verdicts are recorded separately as runtime evidence; no native-evaluator theorem is introduced.",
       "supporting_evidence": [
         "Dregg2.Policy.Certified.hdec",
         "Dregg2.Policy.nextSet_spec",
-        "Dregg2.Policy.nextSet_discriminates"
+        "Dregg2.Policy.nextSet_discriminates",
+        "Dregg2.Policy.anyAcc_spec",
+        "Dregg2.Policy.absStep_col",
+        "Dregg2.Policy.labCheckRep_sound"
       ],
       "execution": {
         "source": "metatheory/scripts/automata-compiler-smoke.lean",
@@ -945,12 +949,12 @@
     },
     "Dregg2.Policy.nextSet_discriminates": {
       "source": "metatheory/Dregg2/Policy/Factor.lean",
-      "report": "info: 'Dregg2.Policy.nextSet_discriminates' depends on axioms: [propext]",
+      "report": "info: 'Dregg2.Policy.nextSet_discriminates' does not depend on any axioms",
       "command": "nextSet_discriminates"
     },
     "Dregg2.Policy.nextSet_spec": {
       "source": "metatheory/Dregg2/Policy/Factor.lean",
-      "report": "info: 'Dregg2.Policy.nextSet_spec' depends on axioms: [propext, Quot.sound]",
+      "report": "info: 'Dregg2.Policy.nextSet_spec' depends on axioms: [propext, Classical.choice, Quot.sound]",
       "command": "nextSet_spec"
     },
     "Dregg2.Policy.Certified.restrict": {
@@ -1447,6 +1451,26 @@
       "source": "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean",
       "report": "info: 'Dregg2.Logic.DirectLogicProgramIR2.decodeProgram_canonical' depends on axioms: [propext, Classical.choice, Quot.sound]",
       "command": "decodeProgram_canonical"
+    },
+    "Dregg2.Policy.anyAcc_spec": {
+      "source": "metatheory/Dregg2/Policy/Factor.lean",
+      "report": "info: 'Dregg2.Policy.anyAcc_spec' depends on axioms: [propext, Quot.sound]",
+      "command": "anyAcc_spec"
+    },
+    "Dregg2.Policy.absStep_col": {
+      "source": "metatheory/Dregg2/Policy/Factor.lean",
+      "report": "info: 'Dregg2.Policy.absStep_col' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "absStep_col"
+    },
+    "Dregg2.Policy.labCheckRep_sound": {
+      "source": "metatheory/Dregg2/Policy/Factor.lean",
+      "report": "info: 'Dregg2.Policy.labCheckRep_sound' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "labCheckRep_sound"
+    },
+    "Dregg2.Policy.Table.materialize_eq": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.Table.materialize_eq' depends on axioms: [propext, Classical.choice, Quot.sound]",
+      "command": "Table.materialize_eq"
     }
   },
   "source_sha256": {
@@ -1655,10 +1679,10 @@
     "metatheory/Dregg2/Logic/CompilationCertificateBundle.lean": "3b42110957e3320f10cee27514bfa6eac7d070c02e61aa4b91b54ddaddfbac22",
     "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean": "f0e2a391cb92f1590d816b38373e879bc644293de0adb17a0e16a36d768afece",
     "metatheory/Dregg2/Logic/FiniteLogicDescriptorIR2.lean": "999ef0a00917d341b6c8802c57eb02b7552ff60ff96a1c3a541c0bcce1b2077c",
-    "metatheory/Dregg2/Policy/Compile.lean": "87ebd8962de9ed4f2714913c9748a964ab52499daf4fc01e6c8b5d4ec5fd56f5",
+    "metatheory/Dregg2/Policy/Compile.lean": "96cf43090202454de4e5f159a50524b7fa0348f0f36dfd581271732ab98795b4",
     "metatheory/Dregg2/Policy/Compositional.lean": "9663b51b5dd44986a04e9da2a94f1f0a1e00b0095e788997de9e1b9619132e34",
     "metatheory/Dregg2/Policy/Elab.lean": "429d78f09e0c3ae5e8f6d25a8477b5c1e8ebccdffcac50f077617fd130c8ee88",
-    "metatheory/Dregg2/Policy/Factor.lean": "6cf519bf32dc278b396df13bbbccc4c938c2d2d1c477e04c13b3a2a64be43151",
+    "metatheory/Dregg2/Policy/Factor.lean": "174084eef4a1c0e7fb4ef35e24c3a4348143f71982e75b44e44b3e38668cc067",
     "metatheory/Dregg2/Policy/LexRoundTrip.lean": "313461b17563b9554f38af25b4920159719007ab5eb253feb08d70252a95c7c8",
     "metatheory/Dregg2/Policy/Lexer.lean": "f9ef6eb5db9d6913444e3533be27287d9cf698844f770fcfe1194ebe25d457f3",
     "metatheory/Dregg2/Policy/ParseRoundTrip.lean": "93f184d14c3803ab50fda2da8eb973dcf0705c6ea0684e66702cbb0bb8251879",
@@ -1685,7 +1709,7 @@
     "metatheory/Metatheory/Dynamics/Substance.lean": "6996709fafffbc74d68d82d52f05b09415c1db1fa1465cfbd34f3d3531f3b473",
     "metatheory/Metatheory/Dynamics/VerbSignature.lean": "311c8b6885b2f1924f88db6ee355e6e7a42f5ad8f0114fca9a92008b99316142",
     "metatheory/Metatheory/EpistemicDial.lean": "6108a42f8db59be2066f35844134499c7b9ac1458f789ddc9cf9faadc85e312e",
-    "metatheory/Policyc.lean": "229fdd8f75f5179eb3fd8cc514e9b9ef7df8174715ecf26a5cc8604da71b334b",
+    "metatheory/Policyc.lean": "fe5315ded13f9a23aeabd0979bc242fbbeeff36bfd78c524b6d3485493007a32",
     "metatheory/lake-manifest.json": "b6047d289ce49af087d97fe5b2b352f9bdd7a74787e2e2305ae2f63793a0184b",
     "metatheory/lean-toolchain": "ca5f1f601d34c49079e38d7e7041eb0f2a9c227fbc1df0f404820069a052330c",
     "metatheory/scripts/automata-compiler-smoke.lean": "57297afcc82f6e780692e682eaa645ad20dda5b8ab17489724ffa5cc27f6da3a"
