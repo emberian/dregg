@@ -401,7 +401,7 @@ narrows further. The intermediate delegate `attenuateChain c δs` already bounds
 theorem chain_le_prefix (c : Clearance) (δs δs' : List Restriction) :
     attenuateChain c (δs ++ δs') ≼ attenuateChain c δs := by
   induction δs generalizing c with
-  | nil => simpa using chain_le c δs'
+  | nil => simpa [attenuateChain] using chain_le c δs'
   | cons δ rest ih => simpa [attenuateChain] using ih (attenuate c δ)
 
 /-! ## §10 — CONNECTION TO VERIFIED STATE.
