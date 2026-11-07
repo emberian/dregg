@@ -33,6 +33,7 @@ dregg-circuit-prove = { path = "../circuit-prove" }
 # The verifier opens the folded head with grain-turn's `session_head_openings` (no proving).
 grain-turn = { path = "../grain-turn", features = ["prover"] }
 dregg-cell = { path = "../cell" }
+dregg-turn = { path = "../turn" }
 blake3 = "1"
 hex = "0.4"
 getrandom = { workspace = true }

@@ -35,7 +35,7 @@ default = ["prover"]
 # fold (grain-verify::r3_verify) can fold. Pulls the STARK prover. Consumers that must keep
 # the R2 minter lean (no circuit/prover link on the commit path) take grain-turn with
 # `default-features = false`.
-prover = ["dep:dregg-turn", "dep:dregg-turn-prover", "dep:dregg-circuit", "dep:dregg-circuit-prove"]
+prover = ["dep:dregg-turn-prover", "dep:dregg-circuit", "dep:dregg-circuit-prove"]
 
 [dependencies]
 # The std-only agent runtime + the GrainTurnMinter seam we implement.
@@ -60,7 +60,7 @@ dregg-query = { path = "../dregg-query" }
 # rotated-leg MINT recipe (`mint_rotated_participant_leg`, moved out of `dregg-turn`'s deleted
 # `prover` feature in PR3); `dregg-circuit` the EffectVM `CellState`/`Effect`;
 # `dregg-circuit-prove` the `FinalizedTurn` shape.
-dregg-turn = { path = "../turn", optional = true }
+dregg-turn = { path = "../turn" }
 dregg-turn-prover = { path = "../turn-prover", optional = true }
 dregg-circuit = { path = "../circuit", optional = true }
 dregg-circuit-prove = { path = "../circuit-prove", optional = true }
