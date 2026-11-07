@@ -166,7 +166,9 @@ theorem rustExactKkt_optimal {n mc : Nat} (prob : RustQpProblem n mc)
   have hgrad :
       (prob.p *ᵥ x + prob.q) ⬝ᵥ (x' - x) =
         -(y ⬝ᵥ ((prob.a *ᵥ x') - (prob.a *ᵥ x))) := by
-    rw [hstatFun, neg_dotProduct, ← dotProduct_mulVec, mulVec_sub]
+    rw [hstatFun, neg_dotProduct, neg_inj]
+    exact (dotProduct_mulVec y prob.a (x' - x)).symm.trans
+      (congrArg (y ⬝ᵥ ·) (mulVec_sub prob.a x' x))
   let core : QP (Fin n) (Fin 0) :=
     { P := prob.p
       q := prob.q

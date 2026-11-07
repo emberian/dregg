@@ -54,10 +54,10 @@ deriving Repr, DecidableEq
 /-- The four request `view`s the reified caveat atoms read (`Caveat.pred p view` carries its own
 seam — so a single token chain evaluates atoms over DIFFERENT request fields, exactly the gadget's
 four operand pairs). -/
-def timeView   : ReqCtx → Time := fun c => c.time
-def heightView : ReqCtx → Time := fun c => c.height
-def valueView  : ReqCtx → Time := fun c => c.value
-def assetView  : ReqCtx → Time := fun c => c.asset
+@[reducible] def timeView   : ReqCtx → Time := fun c => c.time
+@[reducible] def heightView : ReqCtx → Time := fun c => c.height
+@[reducible] def valueView  : ReqCtx → Time := fun c => c.value
+@[reducible] def assetView  : ReqCtx → Time := fun c => c.asset
 
 /-! ## The gadget's arithmetic admission — the SLACK-nonneg conjunction the AIR range-checks. -/
 

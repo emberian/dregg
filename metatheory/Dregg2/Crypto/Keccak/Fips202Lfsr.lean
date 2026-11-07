@@ -143,7 +143,6 @@ theorem rcLaneOf_eq_rcLaneOfRec (ir : Nat) (z : Fin 64) : rcLaneOf ir z = rcLane
   unfold rcLaneOf rcLaneOfRec
   simp only [Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size, Nat.sub_zero,
     Nat.add_sub_cancel, Nat.div_one, rcBit_eq_rcBitRec]
-  rfl
 
 /-! ## The payoff: the 24 round constants, checked BY THE KERNEL. -/
 

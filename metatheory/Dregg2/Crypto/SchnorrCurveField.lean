@@ -445,9 +445,8 @@ FALSE. Concretely on `toyCurve` with `G = 1`, `s • 1 = s`, so `solve := Int.to
 be false), not a vacuous `True`. The real curve (prime order, ~124-bit) is conjectured to satisfy it;
 the toy curve provably does not. -/
 theorem toy_dl_not_hard : ¬ SchnorrDLHard toyCurve (1 : ℤ) := by
-  rw [dlHard_iff_no_solver, not_not]
   -- solve x = x.toNat recovers sk from sk • 1 = sk*1 = sk (a nonneg integer).
-  refine ⟨fun x => x.toNat, fun sk => ?_⟩
+  refine fun h => h ⟨fun (x : ℤ) => x.toNat, fun sk => ?_⟩
   show ((sk : ℤ) * 1).toNat = sk
   simp
 

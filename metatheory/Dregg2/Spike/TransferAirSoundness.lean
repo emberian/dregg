@@ -145,6 +145,7 @@ theorem transfer_in_sound
   have := eq_zero_of_dvd_of_abs_lt hd (by omega) (by omega)
   omega
 
+set_option maxRecDepth 8192 in
 /--
 **THEOREM `transfer_dir_boolean`.** The direction-boolean constraint (air.rs:484), together
 with the assumption that `dir` is given by its canonical field representative

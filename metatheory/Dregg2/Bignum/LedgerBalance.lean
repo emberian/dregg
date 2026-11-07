@@ -163,7 +163,7 @@ theorem deployedJoin_faithful_on_range (b : ℤ) (h0 : 0 ≤ b) (hb : b < limbBa
     exact Int.emod_eq_of_lt hge hp
   have hlo : deployedLo b = b % limbBase := by simp only [deployedLo, hw]
   simp only [deployedJoin, hhi, hlo]
-  have := Int.emod_add_ediv b limbBase
+  have := Int.mul_ediv_add_emod b limbBase
   linarith [this]
 
 /-! ## §3 — THE NON-INJECTIVITY.
