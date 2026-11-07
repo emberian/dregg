@@ -116,6 +116,7 @@ Dregg2/Circuit/Emit/NoteSpendingLeafServed.lean
 Dregg2/Circuit/Emit/BinaryMembershipEmit.lean
 Dregg2/Circuit/Emit/BinaryMembershipRefine.lean
 Dregg2/Circuit/Emit/BinaryMembershipWitness.lean
+Dregg2/Logic/DirectLogicProgramIR2.lean
 Dregg2/Circuit/Emit/TinyAutomataLanesK.lean
 Dregg2/Circuit/Emit/DerivationEmit.lean
 Dregg2/Datalog/FixpointCert.lean
