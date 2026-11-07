@@ -61,7 +61,10 @@ Release notes: reference-manual `Manual/Releases/v4_3{1..5}_0.lean`.
   returns from the enclosing block.
 - **`do` loop state is now a `Prod` in declaration order** (it was a reversed `MProd`). Proofs that
   `rfl`/`rw` against the old fold shape need a `List.foldl_hom` bridge (MlKemCodecSpec
-  `accFold_prod`/`setFold_prod`).
+  `accFold_prod`/`setFold_prod`). Recipe (MlDsaHintCodec): private Prod-step defs mirroring the old
+  MProd steps, bridged by `List.foldl_hom` with `fun s => (s.2, s.1)` (or `(s.1, s.2.1, s.2.2)`);
+  `dsimp only` the pair projection before `exact`, never a bare `rfl` over the whole loop (whnf
+  heartbeat limit).
 - **Mathlib: `PMF.uniformOfFintype` became a deprecated alias of a `Measure`** (Mathlib 2026-10-04).
   `Dregg2/ForMathlib/UniformPMF.lean` keeps the old PMF construction as `PMF.uniformFintype` /
   `uniformFinset`; MlKemDelta and ModelBridge use it. **Statement spelling change** (same object,
@@ -226,6 +229,12 @@ not merged.
 
 ## Gates (status as measured)
 
+- Pre-existing red, not from this upgrade: `Dregg2.Circuit.Emit.KimchiStepProverChoice`. Two
+  `native_decide` census pins (`the_opening_response_scalars_own_one_cell_each`,
+  `the_step_prover_choice_census`) evaluate to false: `vGx`/`vGy` have 4/3 readers where the pins
+  say 5/4. Commit 0047cb876 (08-09) narrowed `KimchiStepMainCore`'s operand selection three days
+  after the pins were last measured (fba84b9f5); nothing built the module since. Re-recording means
+  changing numbers in theorem statements, so it is left for its owner.
 - `scripts/check-guard-modules.py`: FAIL on the lane with 9 STALE + 3 GREW baseline rows
   (EffectActionBindingEmit/Refine, Dregg2.Claims). The identical findings come out of the merge
   base with origin/main: pre-existing, not from this upgrade.
