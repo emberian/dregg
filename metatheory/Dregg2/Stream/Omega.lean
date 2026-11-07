@@ -132,6 +132,7 @@ theorem scan_prefix (σ : OWord Sym) (n : ℕ) :
   | succ n ih =>
     rw [prefixOf_succ, scan_append, ih]
     simp [scan, scanStep, run, runFrom, marks]
+    split_ifs <;> simp [*]
 
 /-- Every finite word the follower has seen yields the run of every extension. -/
 theorem scan_extends {σ : OWord Sym} {u : List Sym} (h : Extends σ u) :

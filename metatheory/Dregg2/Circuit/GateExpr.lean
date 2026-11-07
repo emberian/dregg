@@ -623,6 +623,7 @@ theorem gFoldExprs_emitted (es : List EmittedExpr) :
 theorem gHeadExprs_emitted (h : Dregg2.Circuit.Emit.AirBuilder.Head) :
     gHeadExprs toEmitted (ofHead h) = Dregg2.Circuit.Emit.AirBuilder.headExprs h := by
   simp only [gHeadExprs, Dregg2.Circuit.Emit.AirBuilder.headExprs, ofHead, gTermToExpr_emitted]
+  congr
 
 /-- ⚑ **`AirBuilder.headToExpr` IS `gHeadToExpr toEmitted`** — for EVERY head, no fixture. -/
 theorem gHeadToExpr_emitted (h : Dregg2.Circuit.Emit.AirBuilder.Head) :

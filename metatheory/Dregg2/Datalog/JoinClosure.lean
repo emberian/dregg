@@ -46,6 +46,10 @@ import Dregg2.Datalog.Aggregates
 
 namespace Dregg2.Datalog.JoinClosure
 
+/- v4.35: core's `Std.LinearOrderPackage` (Int, Fin, UInt*) supplies a choice-built `BEq`; keep
+`==`/`!=` on instBEqOfDecidableEq so the choice-free axiom pins hold (see Tree/Value.lean). -/
+attribute [local instance high] instBEqOfDecidableEq
+
 open Dregg2.Datalog.FixpointCert
 open Dregg2.Datalog.StratifiedCert
 open Dregg2.Datalog.Aggregates

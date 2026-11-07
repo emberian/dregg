@@ -371,6 +371,7 @@ def nodbNoTailR : RigidSymbolicRE :=
 def nodbExactlyR : RigidSymbolicRE :=
   ⟨⟨nodbExactly, by rw [IsSymbolic]; rfl⟩, show rigidRE nodbExactly = true from rfl⟩
 
+set_option maxRecDepth 65536 in
 /-- **The POSITIVE rewrite is FAITHFUL — as a `Prop`.** The deployed brace-ban and its
 complement-free spelling accept EXACTLY the same `Value` words, at EVERY length, over the infinite
 alphabet. No hand proof relates these two machines; the fixpoint decision does, in 13 `≅`-classes.
@@ -383,6 +384,7 @@ deployed guard from refactor #1 (the `#guard`s exhibit `[{, {, data]`). -/
 theorem noTail_not_langEq : ¬ ∀ w, derives w noDoubleBraceRE = derives w nodbNoTail :=
   @of_decide_eq_false _ (predRE_equivalence_decidable_fix 256 nodbR nodbNoTailR) (by rfl)
 
+set_option maxRecDepth 65536 in
 /-- Refactor #2's separation, re-derived by the DECISION — the same statement
 `exactly_not_langEq` proves by hand from the exhibited word. Machine and theorem agree, in both
 directions this time (the hand proof exhibits a witness; the decision quantifies over all

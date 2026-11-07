@@ -440,7 +440,8 @@ theorem lowerLeg_forces_window (w : WindowLeg) (hok : w.mainRailOk = true)
           have hmem := h (VmConstraint2.windowGate ⟨w.body, false⟩)
             (by simp [lowerLeg, lowerWindowLeg, hs, hx])
           show w.body.eval env ≡ 0 [ZMOD PMOD]
-          simpa only [VmConstraint2.holdsAt, WindowConstraint.holdsAt, if_neg] using hmem
+          simpa only [VmConstraint2.holdsAt, WindowConstraint.holdsAt, if_neg, Bool.false_eq_true,
+            ↓reduceIte] using hmem
   | first =>
       have hnr : readsNext w.body = false := by
         simp only [WindowLeg.mainRailOk, hs, Bool.not_eq_true'] at hok; exact hok
@@ -490,7 +491,8 @@ theorem lowerLeg_forces_chal (c : ChalLeg) (hok : c.mainRailOk = true)
       have hmem := h (VmConstraint2.chalGate ⟨c.body, false⟩)
         (by simp [lowerLeg, lowerChalLeg, hs, hnr])
       show c.body.eval env ≡ 0 [ZMOD PMOD]
-      simpa only [VmConstraint2.holdsAt, ChalConstraint.holdsAt, if_neg] using hmem
+      simpa only [VmConstraint2.holdsAt, ChalConstraint.holdsAt, if_neg, Bool.false_eq_true,
+        ↓reduceIte] using hmem
   | first => show True; trivial
   | last => show True; trivial
 

@@ -1460,7 +1460,9 @@ theorem heapTreeRoot_binds_rom (d : ℕ) (Q : ℕ → ℕ)
       = heapFindSpec l H d (A.run l H).1 (A.run l H).2 := by
     show (heapExtractComp d M l).eval H = _
     unfold heapExtractComp
-    rw [OracleComp.bindComp_eval, ← hrun l H, OracleComp.mapOut_eval, heapFindComp_eval]
+    rw [hrun l H, OracleComp.bindComp_eval (M l) _ H]
+    refine (OracleComp.mapOut_eval _ _ H).trans ?_
+    exact congrArg (fun t => t.2.2) (heapFindComp_eval l H d _ _)
   rw [hBrun]
   exact heapFindSpec_wins l H d (A.run l H).1 (A.run l H).2 hne hroot
 

@@ -483,7 +483,8 @@ theorem chainedFinder_in_romEff (F : KeyedRomFamily) (C : RomChainedCarrier F) (
   · exact OracleComp.bind_queryBounded (hMQ l) (fun p => breakFinderComp_queryBounded C l p)
   · show (breakFinderComp C l (A.run l H)).eval H
       = (OracleComp.bind (M l) (breakFinderComp C l)).eval H
-    rw [OracleComp.bind_eval, hrun l H]
+    exact (congrArg (fun p => (breakFinderComp C l p).eval H) (hrun l H)).trans
+      (OracleComp.bind_eval (M l) (breakFinderComp C l) H).symm
 
 /-! ## §4 — the binding, from the PROVED floor; and the counterexample dying at this layer. -/
 

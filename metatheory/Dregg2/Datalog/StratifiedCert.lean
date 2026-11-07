@@ -107,6 +107,10 @@ import Dregg2.Datalog.FixpointCert
 
 namespace Dregg2.Datalog.StratifiedCert
 
+/- v4.35: core's `Std.LinearOrderPackage` (Int, Fin, UInt*) supplies a choice-built `BEq`; keep
+`==`/`!=` on instBEqOfDecidableEq so the choice-free axiom pins hold (see Tree/Value.lean). -/
+attribute [local instance high] instBEqOfDecidableEq
+
 open Dregg2.Datalog.FixpointCert
 open Dregg2.Lightclient.MMR (mroot MRootColl mroot_binds_or_collides)
 

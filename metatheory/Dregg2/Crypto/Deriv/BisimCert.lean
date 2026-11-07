@@ -96,6 +96,10 @@ import Dregg2.Tactics
 
 namespace Dregg2.Crypto.Deriv
 
+/- v4.35: core's `Std.LinearOrderPackage` (Int, Fin, UInt*) supplies a choice-built `BEq`; keep
+`==`/`!=` on instBEqOfDecidableEq so the choice-free axiom pins hold (see Tree/Value.lean). -/
+attribute [local instance high] instBEqOfDecidableEq
+
 open Dregg2.Exec
 open Dregg2.Exec.PredAlgebra
 open PredRE (der null derives leaf Matches correctness Sim sim_null sim_der sim_derives nrm

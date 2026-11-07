@@ -98,7 +98,7 @@ def xcellNext (A : KernelState) (bt : BiTurn) : KernelState := (applyHalfOut A b
 /-- **`xcellCoalg` — the executable cross-cell shared-ledger coalgebra** (the `Exec/CellProgram.lean:177`
 missing `Boundary.TurnCoalg` instance, for the contended cross-cell debit-thread). Carrier = the shared
 ledger; observation = the running `total`; transition = the totalised half-edge debit `xcellNext`. -/
-def xcellCoalg : TurnCoalg ℤ BiTurn where
+@[reducible] def xcellCoalg : TurnCoalg ℤ BiTurn where
   Carrier := KernelState
   step A := (total A, xcellNext A)
 

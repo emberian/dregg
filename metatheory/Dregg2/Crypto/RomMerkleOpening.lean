@@ -295,7 +295,8 @@ theorem merkleOpenFinder_in_romEff (Key : Type) (kF : Fintype Key) (kD : Decidab
       (fun p => openExtract_queryBounded Key kF kD kN d l p)
   · show (openExtract Key kF kD kN d l (A.run l H)).eval H
       = (OracleComp.bindComp (M l) (openExtract Key kF kD kN d l)).eval H
-    rw [OracleComp.bindComp_eval, hrun l H]
+    exact (congrArg (fun p => (openExtract Key kF kD kN d l p).eval H) (hrun l H)).trans
+      (OracleComp.bindComp_eval (M l) (openExtract Key kF kD kN d l) H).symm
 
 /-- **⚑⚑ THE MERKLE-OPENING BINDING — from the KEYED, QUERY-COUNTED floor, WHICH IS PROVED.**
 
@@ -393,7 +394,8 @@ theorem constOpenAdv_gameAdv_pos (Key : Type) (kF : Fintype Key) (kD : Decidable
     rw [List.length_ofFn] at hlen
     simp at hlen
     omega
-  rw [chainEval_const_of_ne_nil _ r₀ hne (v l), chainEval_const_of_ne_nil _ r₀ hne (w l)]
+  exact (chainEval_const_of_ne_nil _ r₀ hne (v l)).trans
+    (chainEval_const_of_ne_nil _ r₀ hne (w l)).symm
 
 /-- **(TOOTH — the admitted refuter-shape is DEFANGED, not excluded.)** The constant answerer is in
 the class and the binding applies to it: positive advantage where the game is winnable, NEGLIGIBLE

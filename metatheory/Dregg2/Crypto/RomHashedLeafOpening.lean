@@ -257,7 +257,8 @@ theorem hlPathFinder_in_romEff (d : ℕ → ℕ) (Q : ℕ → ℕ)
   · exact OracleComp.bindComp_queryBounded (hMQ l)
       (fun p => hlPathExtract_queryBounded Key kF kD kN Leaf lF lD d l p)
   · show (hlPathExtract Key kF kD kN Leaf lF lD d l (A.run l H)).eval H = _
-    rw [OracleComp.bindComp_eval, hrun l H]
+    exact (congrArg (fun p => (hlPathExtract Key kF kD kN Leaf lF lD d l p).eval H) (hrun l H)).trans
+      (OracleComp.bindComp_eval (M l) (hlPathExtract Key kF kD kN Leaf lF lD d l) H).symm
 
 /-- **⚑⚑ THE PATH BINDING, FROM THE PROVED FLOOR** — the ROM successor shape for
 `recomposeUp8_binds_or_collides`: a query-bounded forger that folds two DISTINCT starting digests
@@ -419,7 +420,8 @@ theorem hlOpenFinder_in_romEff (d : ℕ → ℕ) (Q : ℕ → ℕ)
   · exact OracleComp.bindComp_queryBounded (hMQ l)
       (fun p => hlOpenExtract_queryBounded Key kF kD kN Leaf lF lD d l p)
   · show (hlOpenExtract Key kF kD kN Leaf lF lD d l (A.run l H)).eval H = _
-    rw [OracleComp.bindComp_eval, hrun l H]
+    exact (congrArg (fun p => (hlOpenExtract Key kF kD kN Leaf lF lD d l p).eval H) (hrun l H)).trans
+      (OracleComp.bindComp_eval (M l) (hlOpenExtract Key kF kD kN Leaf lF lD d l) H).symm
 
 /-- **⚑⚑ THE HASHED-LEAF OPENING BINDING, FROM THE PROVED FLOOR** — the ROM successor shape for
 `capOpen8_binds_leaf_or_collides` / `fieldsOpen8_binds_leaf_or_collides` /
@@ -461,8 +463,8 @@ def hlOpenRootForgery (d : ℕ → ℕ) : RomForgery (hlFam Key kF kD kN Leaf lF
           (H (hlLeafPt Key kF kD kN Leaf lF lD l p.1.1 p.2.2.2)) (List.ofFn p.1.2) = p.2.1
   winsDec := fun l _ _ => by
     letI := lD l
-    letI := ((hlFam Key kF kD kN Leaf lF lD).toRomFamily).rDec l
-    exact instDecidableAnd
+    letI hR := ((hlFam Key kF kD kN Leaf lF lD).toRomFamily).rDec l
+    exact @instDecidableAnd _ _ inferInstance (@instDecidableAnd _ _ (hR _ _) (hR _ _))
 
 /-- The root-dropping map of adversaries into the opening forgery. -/
 def hlRootToOpen (d : ℕ → ℕ)
@@ -548,7 +550,7 @@ theorem hlConstOpenAdv_gameAdv_pos (d : ℕ → ℕ)
     ((hlOpenForgery Key kF kD kN Leaf lF lD d).game.instFin l) _ (fun _ => r₀) ?_
   refine ((hlConstOpenAdv Key kF kD kN Leaf lF lD d c v w).hit_eq_true l _).mpr ?_
   refine ⟨hvw, ?_⟩
-  rw [chainEval_const]
+  exact (chainEval_const _ r₀ _).trans (chainEval_const _ r₀ _).symm
 
 /-- **(TOOTH — the admitted refuter-shape is DEFANGED, not excluded.)** The constant answerer is in
 the class, wins at the constant oracle, and its advantage is NEGLIGIBLE — where against the FIXED
