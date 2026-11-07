@@ -34,7 +34,7 @@ theorem lrat_false_claim_separation :
 /-- info: 'Dregg2.Policy.cachedIdx_distinguishes' depends on axioms: [propext] -/
 #guard_msgs in
 #print axioms Dregg2.Policy.cachedIdx_distinguishes
-/-- info: 'Dregg2.Policy.cached_zero_fuel' depends on axioms: [propext] -/
+/-- info: 'Dregg2.Policy.cached_zero_fuel' depends on axioms: [propext, Quot.sound] -/
 #guard_msgs in
 #print axioms Dregg2.Policy.cached_zero_fuel
 /-- info: 'Dregg2.Policy.Certified.hdec' depends on axioms: [propext] -/

@@ -249,6 +249,40 @@ states), the whole absence phase 481 ms.
 included), run on the same box. The counted-repeat cases are now dominated by the derivative
 determinizer (`simDecide` normalization), not by the factor construction.
 
+### The derivative determinizer (2026-11-07, second pass)
+
+[MEASURED, bb2, same conditions] After the pass above, counted repeats were dominated by
+`nrm`. Its first-occurrence deduplication (`ddf`) compared disjuncts with `reEq`, and the terms
+of `\w{64}` are chains of up to 64 identical 63-element membership leaves. Two different
+chains shared a long equal prefix, so each comparison walked most of it.
+
+The fix is `nrmK` in `Policy/Compile.lean`. It carries every intermediate term's structural
+hash (`reHash`), built from its children's hashes in constant time. It compares hashes before
+calling `reEq`.
+
+- `reEq_hash_guard`: `(reKey u == reKey v && reEq u v) = reEq u v`. It holds because `reEq_sound`
+  makes a `true` answer an equality.
+- `nrmK_t`: `(nrmK R).t = nrm R` for every term.
+- The worklist and the memoized table lookup use the same guard: `cachedSeenK_eq`, `keyOf_eq`,
+  `keyedIdx_eq`.
+- The statements of `reachCached_eq`, `cachedIdx_eq` and `Compiled.memo_eq` are unchanged; only
+  their proofs go through the new lemmas.
+- Keys are compared as `Nat`: `UInt64`'s decidable equality would add `Classical.choice` to
+  `reachCached_eq`'s pin.
+
+| pattern | mode | states | before | after | bytes |
+|---|---|---:|---:|---:|---|
+| `"sk-" \w{64}` | whole-word | 69 | 4.38 s | 0.62 s | identical |
+| `"sk-" \w{64}` | absence | 192 | 4.26 s | 0.61 s | identical |
+| `"sk-" \w{20,64}` | whole-word | 69 | 1.37 s | 0.52 s | identical |
+| `"sk-" \w{20,64}` | absence | 60 | 1.37 s | 0.53 s | identical |
+| `"sk-" \w{32}` | whole-word | 37 | 0.47 s | 0.21 s | identical |
+| `"sk-" \w{32}` | absence | 96 | 0.45 s | 0.20 s | identical |
+| `"sk-" \w{16}` | absence | 48 | 0.14 s | 0.12 s | identical |
+| demo union | absence | 129 | 0.83 s | 0.82 s | identical to `absence-table.json` |
+
+"before" is the binary after the first pass. The `aws`/`pem` fixtures are also byte-identical.
+
 ## 5. What is NOT claimed
 
 - That `print (parse s) = s`. `fmt` normalizes spacing, comments, redundant parentheses, and

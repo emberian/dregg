@@ -174,10 +174,16 @@
       "witness": "Dregg2.Policy.cachedIdx_distinguishes",
       "falsifier": "Dregg2.Policy.cached_zero_fuel",
       "witness_scope": "relation-instance",
-      "scope": "Cached normalization preserves the entire established worklist result, including state order and fuel exhaustion; cached lookup is exact, not merely similar-language soundness. Positive/distinct one-byte lookup examples and explicit zero-fuel failure rule out an always-success implementation. Wall-clock performance and large-repeat success are independent measured properties.",
+      "scope": "Cached normalization preserves the entire established worklist result, including state order and fuel exhaustion; the normal forms are computed by nrmK, proved equal to nrm (nrmK_t), and each reEq comparison is guarded by a structural-hash comparison that changes no answer (reEq_hash_guard, via reEq_sound), both in the worklist (cachedSeenK_eq) and in the memoized lookup (keyedIdx_eq); cached lookup is exact, not merely similar-language soundness. Positive/distinct one-byte lookup examples and explicit zero-fuel failure rule out an always-success implementation. Wall-clock performance and large-repeat success are independent measured properties.",
       "supporting_evidence": [
         "Dregg2.Policy.cachedIdx_eq",
-        "Dregg2.Policy.Compiled.memo_eq"
+        "Dregg2.Policy.Compiled.memo_eq",
+        "Dregg2.Policy.nrmK_t",
+        "Dregg2.Policy.reEq_hash_guard",
+        "Dregg2.Policy.cachedSeenK_eq",
+        "Dregg2.Policy.keyedIdx_eq",
+        "Dregg2.Policy.KRe.beq_eq",
+        "Dregg2.Policy.ddfK_map"
       ]
     },
     {
@@ -579,7 +585,7 @@
     },
     "Dregg2.Policy.cached_zero_fuel": {
       "source": "metatheory/Dregg2/Automata/CertificateStatementAudit.lean",
-      "report": "info: 'Dregg2.Policy.cached_zero_fuel' depends on axioms: [propext]",
+      "report": "info: 'Dregg2.Policy.cached_zero_fuel' depends on axioms: [propext, Quot.sound]",
       "command": "Dregg2.Policy.cached_zero_fuel"
     },
     "Dregg2.Policy.Certified.hdec": {
@@ -1471,6 +1477,36 @@
       "source": "metatheory/Dregg2/Policy/Compile.lean",
       "report": "info: 'Dregg2.Policy.Table.materialize_eq' depends on axioms: [propext, Classical.choice, Quot.sound]",
       "command": "Table.materialize_eq"
+    },
+    "Dregg2.Policy.nrmK_t": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.nrmK_t' depends on axioms: [propext, Quot.sound]",
+      "command": "nrmK_t"
+    },
+    "Dregg2.Policy.KRe.beq_eq": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.KRe.beq_eq' depends on axioms: [propext, Quot.sound]",
+      "command": "KRe.beq_eq"
+    },
+    "Dregg2.Policy.ddfK_map": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.ddfK_map' depends on axioms: [propext, Quot.sound]",
+      "command": "ddfK_map"
+    },
+    "Dregg2.Policy.reEq_hash_guard": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.reEq_hash_guard' depends on axioms: [propext, Quot.sound]",
+      "command": "reEq_hash_guard"
+    },
+    "Dregg2.Policy.cachedSeenK_eq": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.cachedSeenK_eq' depends on axioms: [propext, Quot.sound]",
+      "command": "cachedSeenK_eq"
+    },
+    "Dregg2.Policy.keyedIdx_eq": {
+      "source": "metatheory/Dregg2/Policy/Compile.lean",
+      "report": "info: 'Dregg2.Policy.keyedIdx_eq' depends on axioms: [propext, Quot.sound]",
+      "command": "keyedIdx_eq"
     }
   },
   "source_sha256": {
@@ -1483,7 +1519,7 @@
     "metatheory/Dregg2/Authority/ClearanceGraph.lean": "daca078b4eb37a8d8f35540f329aaf317f28109f2379567b11e514d1301f2142",
     "metatheory/Dregg2/Authority/Positional.lean": "b2895cf5d663f93cb212ebafc6728f205ceeff608d6c3a9c5588fe8e85cb6c15",
     "metatheory/Dregg2/Authority/Predicate.lean": "7df3cecbb8851af7dbdeb83035923f0b6f4ff2d96961cd1b064b16268891e2c5",
-    "metatheory/Dregg2/Automata/CertificateStatementAudit.lean": "5e38384a22597434d8e5df5934a4634a30da50e293d1e9c1ef5f52aecd4d11d1",
+    "metatheory/Dregg2/Automata/CertificateStatementAudit.lean": "5e8ff9fc1ef802544e7d2cdbb3a0fe2fe39b6d1deb595d7c44fe4f56e0023e29",
     "metatheory/Dregg2/Automata/DfaBoundReference.lean": "0ac400211be5e8bd8deb0f18ff3bbda6833c824af7bb6bb7cc9012277e408d83",
     "metatheory/Dregg2/Automata/EmitterStatementAudit.lean": "8dbb1a5947ab04ba9f5cc3356dec7d791a1a16ab7bcb64e491499fd642a99897",
     "metatheory/Dregg2/Automata/StatementAudit.lean": "035b4268ec500cbe3bc7e217ff1bde5eaa20bf9084d867d1b6b0577992f11ed3",
@@ -1679,7 +1715,7 @@
     "metatheory/Dregg2/Logic/CompilationCertificateBundle.lean": "3b42110957e3320f10cee27514bfa6eac7d070c02e61aa4b91b54ddaddfbac22",
     "metatheory/Dregg2/Logic/DirectLogicProgramIR2.lean": "f0e2a391cb92f1590d816b38373e879bc644293de0adb17a0e16a36d768afece",
     "metatheory/Dregg2/Logic/FiniteLogicDescriptorIR2.lean": "999ef0a00917d341b6c8802c57eb02b7552ff60ff96a1c3a541c0bcce1b2077c",
-    "metatheory/Dregg2/Policy/Compile.lean": "96cf43090202454de4e5f159a50524b7fa0348f0f36dfd581271732ab98795b4",
+    "metatheory/Dregg2/Policy/Compile.lean": "875a132a6ddf424837f27fa1dfcacd85acc0f649550c83a71cb02bbe34848b47",
     "metatheory/Dregg2/Policy/Compositional.lean": "9663b51b5dd44986a04e9da2a94f1f0a1e00b0095e788997de9e1b9619132e34",
     "metatheory/Dregg2/Policy/Elab.lean": "429d78f09e0c3ae5e8f6d25a8477b5c1e8ebccdffcac50f077617fd130c8ee88",
     "metatheory/Dregg2/Policy/Factor.lean": "174084eef4a1c0e7fb4ef35e24c3a4348143f71982e75b44e44b3e38668cc067",

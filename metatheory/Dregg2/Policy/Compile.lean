@@ -136,15 +136,172 @@ Cache `nrm` beside each state, retaining the original state and its ordering. Th
 `reachCached_eq` identifies the entire result with the established worklist, including fuel
 exhaustion. No alternate language relation or unchecked table is introduced. -/
 
+/-- A structural hash of a predicate. Any function would be sound here: it is only used to skip
+`reEq` calls whose arguments differ (`reEq_sound`: a `true` answer is an equality, and equal
+terms have equal hashes). Field names, nested `allOf`/`anyOf` bodies and membership sets beyond
+their first two elements are not hashed (constant cost per leaf). -/
+def predHash : Pred → UInt64
+  | .tt => 1
+  | .ff => 2
+  | .symEq _ s => mixHash 11 (hash s)
+  | .symMemberOf _ set => match set with
+    | a :: b :: _ => mixHash 12 (mixHash (hash a) (hash b))
+    | [a] => mixHash 20 (hash a)
+    | [] => 21
+  | .digEq _ d => mixHash 13 (hash d)
+  | .not p => mixHash 14 (predHash p)
+  | .and a b => mixHash 15 (mixHash (predHash a) (predHash b))
+  | .or a b => mixHash 16 (mixHash (predHash a) (predHash b))
+  | .allOf ps => mixHash 17 (hash ps.length)
+  | .anyOf ps => mixHash 18 (hash ps.length)
+  | _ => 19
+
+/-- A structural hash of a regex term (see `predHash`). -/
+def reHash : PredRE → UInt64
+  | .ε => 3
+  | .sym p => mixHash 4 (predHash p)
+  | .alt a b => mixHash 5 (mixHash (reHash a) (reHash b))
+  | .inter a b => mixHash 6 (mixHash (reHash a) (reHash b))
+  | .cat a b => mixHash 7 (mixHash (reHash a) (reHash b))
+  | .star a => mixHash 8 (reHash a)
+  | .neg a => mixHash 9 (reHash a)
+
+/-- The hash as a scalar `Nat` (62 bits, so it stays unboxed); `Nat` equality keeps the guard
+lemma free of `Classical.choice`, which `UInt64`'s decidable equality would bring in. -/
+def reKey (R : PredRE) : Nat := (reHash R >>> 2).toNat
+
+/-- A hash mismatch refutes `reEq`, so testing the hash first changes no answer. -/
+theorem reEq_hash_guard (u v : PredRE) : (reKey u == reKey v && reEq u v) = reEq u v := by
+  cases h : reEq u v
+  · exact Bool.and_false _
+  · rw [reEq_sound h, Bool.and_true]
+    exact decide_eq_true rfl
+
+/-! ### The normalizer with hashes carried bottom-up.
+
+`nrmK` computes exactly `nrm` (`nrmK_t`), but every intermediate term carries its `reHash`, built
+from its children's hashes in constant time, and every `reEq` inside the deduplication is guarded
+by a hash comparison (`KRe.beq_eq`). Unequal disjuncts with long equal prefixes (the counted
+repeat `\w{64}` is a chain of 64 identical leaves) are then told apart without walking them. -/
+
+/-- A term with its structural hash. -/
+structure KRe where
+  t : PredRE
+  h : UInt64
+  h_eq : h = reHash t
+
+def KRe.leaf (t : PredRE) : KRe := ⟨t, reHash t, rfl⟩
+
+def KRe.alt (a b : KRe) : KRe :=
+  ⟨.alt a.t b.t, mixHash 5 (mixHash a.h b.h), by rw [a.h_eq, b.h_eq]; rfl⟩
+
+def KRe.inter (a b : KRe) : KRe :=
+  ⟨.inter a.t b.t, mixHash 6 (mixHash a.h b.h), by rw [a.h_eq, b.h_eq]; rfl⟩
+
+def KRe.cat (a b : KRe) : KRe :=
+  ⟨.cat a.t b.t, mixHash 7 (mixHash a.h b.h), by rw [a.h_eq, b.h_eq]; rfl⟩
+
+def KRe.star (a : KRe) : KRe := ⟨.star a.t, mixHash 8 a.h, by rw [a.h_eq]; rfl⟩
+
+def KRe.neg (a : KRe) : KRe := ⟨.neg a.t, mixHash 9 a.h, by rw [a.h_eq]; rfl⟩
+
+/-- The hash key (`reKey`) of the carried term. -/
+def KRe.key (x : KRe) : Nat := (x.h >>> 2).toNat
+
+theorem KRe.key_eq (x : KRe) : x.key = reKey x.t := by
+  unfold KRe.key reKey; rw [x.h_eq]
+
+/-- `reEq`, guarded by the carried hashes. -/
+def KRe.beq (x y : KRe) : Bool := x.key == y.key && reEq x.t y.t
+
+theorem KRe.beq_eq (x y : KRe) : x.beq y = reEq x.t y.t := by
+  unfold KRe.beq; rw [x.key_eq, y.key_eq, reEq_hash_guard]
+
+def ddfK : List KRe → List KRe
+  | []      => []
+  | x :: xs => x :: (ddfK xs).filter (fun y => !x.beq y)
+
+theorem ddfK_map : ∀ (l : List KRe), (ddfK l).map KRe.t = ddf (l.map KRe.t) := by
+  intro l
+  induction l with
+  | nil => rfl
+  | cons x xs ih =>
+    simp only [ddfK, ddf, List.map_cons, ← ih, List.filter_map, Function.comp_def, KRe.beq_eq]
+
+def foldAltK : KRe → List KRe → KRe
+  | h, []      => h
+  | h, y :: ys => foldAltK (KRe.alt h y) ys
+
+theorem foldAltK_t : ∀ (l : List KRe) (h : KRe), (foldAltK h l).t = foldAlt h.t (l.map KRe.t) := by
+  intro l
+  induction l with
+  | nil => intro h; rfl
+  | cons y ys ih => intro h; simp only [foldAltK, List.map_cons, foldAlt, ih]; rfl
+
+def foldListK : List KRe → KRe
+  | []      => KRe.leaf .ε
+  | x :: xs => foldAltK x xs
+
+theorem foldListK_t (l : List KRe) : (foldListK l).t = foldList (l.map KRe.t) := by
+  cases l with
+  | nil => rfl
+  | cons x xs => simp only [foldListK, foldAltK_t, List.map_cons, foldList]
+
+def nlistK : PredRE → List KRe
+  | .ε         => [KRe.leaf .ε]
+  | .sym p     => [KRe.leaf (.sym p)]
+  | .alt a b   => nlistK a ++ nlistK b
+  | .inter a b => [KRe.inter (foldListK (ddfK (nlistK a))) (foldListK (ddfK (nlistK b)))]
+  | .cat a b   => [KRe.cat (foldListK (ddfK (nlistK a))) (foldListK (ddfK (nlistK b)))]
+  | .star a    => [KRe.star (foldListK (ddfK (nlistK a)))]
+  | .neg a     => [KRe.neg (foldListK (ddfK (nlistK a)))]
+
+theorem nlistK_map : ∀ (R : PredRE), (nlistK R).map KRe.t = nlist R := by
+  intro R
+  induction R with
+  | ε => rfl
+  | sym p => rfl
+  | alt a b iha ihb => simp only [nlistK, nlist, List.map_append, iha, ihb]
+  | inter a b iha ihb =>
+    simp only [nlistK, nlist, List.map_cons, List.map_nil, KRe.inter, foldListK_t, ddfK_map, iha, ihb]
+  | cat a b iha ihb =>
+    simp only [nlistK, nlist, List.map_cons, List.map_nil, KRe.cat, foldListK_t, ddfK_map, iha, ihb]
+  | star a iha =>
+    simp only [nlistK, nlist, List.map_cons, List.map_nil, KRe.star, foldListK_t, ddfK_map, iha]
+  | neg a iha =>
+    simp only [nlistK, nlist, List.map_cons, List.map_nil, KRe.neg, foldListK_t, ddfK_map, iha]
+
+/-- `nrm`, carrying hashes. -/
+def nrmK (R : PredRE) : KRe := foldListK (ddfK (nlistK R))
+
+/-- ⚑ The hash-carrying normalizer computes exactly `nrm`, for every term. -/
+theorem nrmK_t (R : PredRE) : (nrmK R).t = nrm R := by
+  simp only [nrmK, foldListK_t, ddfK_map, nlistK_map, nrm]
+
 structure CachedRe where
   val : PredRE
   normal : PredRE
+  key : Nat
   normal_eq : normal = nrm val
+  key_eq : key = reKey normal
 
-def CachedRe.make (r : PredRE) : CachedRe := ⟨r, nrm r, rfl⟩
+def CachedRe.make (r : PredRE) : CachedRe :=
+  let n := nrmK r
+  ⟨r, n.t, n.key, (nrmK_t r), n.key_eq⟩
 
 def cachedSeen (seen : List CachedRe) (normal : PredRE) : Bool :=
   seen.any (fun s => reEq s.normal normal)
+
+/-- `cachedSeen`, comparing hashes before terms. -/
+def cachedSeenK (seen : List CachedRe) (normal : PredRE) (key : Nat) : Bool :=
+  seen.any (fun s => s.key == key && reEq s.normal normal)
+
+theorem cachedSeenK_eq (seen : List CachedRe) (n : PredRE) :
+    cachedSeenK seen n (reKey n) = cachedSeen seen n := by
+  simp only [cachedSeenK, cachedSeen]
+  congr 1
+  funext s
+  rw [s.key_eq, reEq_hash_guard]
 
 theorem cachedSeen_eq (seen : List CachedRe) (s : PredRE) :
     cachedSeen seen (nrm s) = seenSim (seen.map CachedRe.val) s := by
@@ -158,7 +315,7 @@ def reachCached (V : List Value) : Nat → List CachedRe → List PredRE → Opt
   | _ + 1, seen, [] => some seen
   | fuel + 1, seen, s :: pending =>
       let c := CachedRe.make s
-      if cachedSeen seen c.normal then reachCached V fuel seen pending
+      if cachedSeenK seen c.normal c.key then reachCached V fuel seen pending
       else reachCached V fuel (seen ++ [c]) (pending ++ satStepG V s)
 
 theorem reachCached_eq (V : List Value) : ∀ fuel seen pending,
@@ -172,7 +329,9 @@ theorem reachCached_eq (V : List Value) : ∀ fuel seen pending,
     cases pending with
     | nil => rfl
     | cons s pending =>
-      simp only [reachCached, CachedRe.make, cachedSeen_eq, reachFixAux]
+      have hk : cachedSeenK seen (nrmK s).t (nrmK s).key = seenSim (seen.map CachedRe.val) s := by
+        rw [KRe.key_eq, cachedSeenK_eq, nrmK_t, cachedSeen_eq]
+      simp only [reachCached, CachedRe.make, hk, reachFixAux]
       split <;> simp_all [List.map_append]
 
 /-- Pre-normalized lookup has exactly the original first-match behavior. -/
@@ -183,6 +342,23 @@ def cachedIdx (normals : List PredRE) (t : PredRE) : Nat :=
 theorem cachedIdx_eq (states : List PredRE) (t : PredRE) :
     cachedIdx (states.map nrm) t = states.findIdx (fun u => simDecide u t) := by
   simp [cachedIdx, List.findIdx_map, simDecide, Function.comp_def]
+
+/-- A state's `(hash key, normal form)`, computed by `nrmK`. -/
+def keyOf (s : PredRE) : Nat × PredRE :=
+  let n := nrmK s
+  (n.key, n.t)
+
+theorem keyOf_eq (s : PredRE) : keyOf s = (reKey (nrm s), nrm s) := by
+  simp only [keyOf, KRe.key_eq, nrmK_t]
+
+/-- `cachedIdx` over `(hash key, normal form)` pairs, comparing hashes before terms. -/
+def keyedIdx (keyed : List (Nat × PredRE)) (t : PredRE) : Nat :=
+  let n := keyOf t
+  keyed.findIdx (fun p => p.1 == n.1 && reEq p.2 n.2)
+
+theorem keyedIdx_eq (states : List PredRE) (t : PredRE) :
+    keyedIdx (states.map keyOf) t = cachedIdx (states.map nrm) t := by
+  simp only [keyedIdx, cachedIdx, keyOf_eq, List.findIdx_map, Function.comp_def, reEq_hash_guard]
 
 /-- **`compile R`** — run the determinizer on the deduplicated cover. `fuel` bounds worklist pops. -/
 def compile (R : PredRE) (fuel : Nat := 1000000) : Except String (Compiled R) :=
@@ -215,14 +391,14 @@ def Table.run (t : Table) (s : Nat) (w : List Nat) : Nat := w.foldl t.step s
 /-- The transition table at the cover symbols, computed once (each `G.step` runs `simDecide`
 against every state, so the byte table must not recompute it per byte). -/
 def Compiled.memo {R : PredRE} (c : Compiled R) : Array (Array Nat) :=
-  let normals := c.G.states.map nrm
+  let keyed := c.G.states.map keyOf
   (Array.range c.size).map fun s => (Array.range c.C.cands.length).map fun y =>
-    cachedIdx normals (der (Dregg2.Crypto.GuardToAutomatonCircuit.coverSym c.C y) (c.G.stateAt s))
+    keyedIdx keyed (der (Dregg2.Crypto.GuardToAutomatonCircuit.coverSym c.C y) (c.G.stateAt s))
 
 theorem Compiled.memo_eq {R : PredRE} (c : Compiled R) :
     c.memo = (Array.range c.size).map (fun s =>
       (Array.range c.C.cands.length).map (fun y => c.G.step s y)) := by
-  simp only [Compiled.memo, cachedIdx_eq, GuardAut.step, GuardAut.idxOf]
+  simp only [Compiled.memo, keyedIdx_eq, cachedIdx_eq, GuardAut.step, GuardAut.idxOf]
 
 def Compiled.encs {R : PredRE} (c : Compiled R) : Array Nat :=
   (Array.range 256).map fun b => enc c.C (byteFrame b)
@@ -553,7 +729,31 @@ theorem cached_zero_fuel (V : List Value) (R : PredRE) :
 #guard_msgs in
 #print axioms Table.materialize_eq
 
-#assert_all_clean [cachedSeen_eq, reachCached_eq, cachedIdx_eq, Compiled.memo_eq,
+/-- info: 'Dregg2.Policy.reEq_hash_guard' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms reEq_hash_guard
+
+/-- info: 'Dregg2.Policy.cachedSeenK_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms cachedSeenK_eq
+
+/-- info: 'Dregg2.Policy.keyedIdx_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms keyedIdx_eq
+
+/-- info: 'Dregg2.Policy.nrmK_t' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms nrmK_t
+
+/-- info: 'Dregg2.Policy.KRe.beq_eq' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms KRe.beq_eq
+
+/-- info: 'Dregg2.Policy.ddfK_map' depends on axioms: [propext, Quot.sound] -/
+#guard_msgs in
+#print axioms ddfK_map
+
+#assert_all_clean [nrmK_t, KRe.beq_eq, ddfK_map, nlistK_map, foldListK_t, keyOf_eq, reEq_hash_guard, cachedSeenK_eq, keyedIdx_eq, cachedSeen_eq, reachCached_eq, cachedIdx_eq, Compiled.memo_eq,
   cachedIdx_distinguishes, cached_zero_fuel, Compiled.run_eq, Compiled.compiled_decides, Compiled.compiled_decides_surface,
   Compiled.compiled_decides_absence, sigRepsAux_covers, simCheck_run, simCheck_verdict, Compiled.fstep_eq, Compiled.facc_eq]
 
