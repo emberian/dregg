@@ -328,10 +328,8 @@ theorem successor_row_polynomials_bridge :
         (successorCompilerValuation.matrix .table) Dregg2.Metatheory.GabbayMatrixSemantics.outputRow =
         Polynomial.X := by
   constructor
-  · rw [successorCompilerValuation, toValuation, rowPolynomial_agrees]
-    exact Dregg2.Metatheory.GabbayMatrixSemantics.successorTable_inputPolynomial
-  · rw [successorCompilerValuation, toValuation, rowPolynomial_agrees]
-    exact Dregg2.Metatheory.GabbayMatrixSemantics.successorTable_outputPolynomial
+  · exact Dregg2.Metatheory.GabbayMatrixSemantics.successorTable_inputPolynomial
+  · exact Dregg2.Metatheory.GabbayMatrixSemantics.successorTable_outputPolynomial
 
 /-- The ordinary source theorem transports to the canonical front end. -/
 theorem successor_holds_through_bridge (x : Rat) :
@@ -364,10 +362,11 @@ theorem successor_skolem_through_bridge :
   apply Dregg2.Metatheory.GabbayMatrixCompiler.Formula.rowFunction_skolem successorCompilerValuation .table
     Dregg2.Metatheory.GabbayMatrixSemantics.outputRow
   intro j
-  change ((Dregg2.Metatheory.GabbayMatrixSemantics.successorTable.cell Dregg2.Metatheory.GabbayMatrixSemantics.outputRow j : Int) : Rat) =
-    (Dregg2.Metatheory.GabbayMatrixSemantics.successorTable.cell Dregg2.Metatheory.GabbayMatrixSemantics.inputRow j : Rat) + 1
-  fin_cases j <;> norm_num [Dregg2.Metatheory.GabbayMatrixSemantics.successorTable_cell,
-    Dregg2.Metatheory.GabbayMatrixSemantics.outputRow, Dregg2.Metatheory.GabbayMatrixSemantics.inputRow]
+  change (((if (Dregg2.Metatheory.GabbayMatrixSemantics.outputRow : Fin 2).1 = 0 then (j.1 : Int)
+      else ((j.1 + 1 : Nat) : Int)) : Int) : Rat) =
+    (((if (Dregg2.Metatheory.GabbayMatrixSemantics.inputRow : Fin 2).1 = 0 then (j.1 : Int)
+      else ((j.1 + 1 : Nat) : Int)) : Int) : Rat) + 1
+  norm_num [Dregg2.Metatheory.GabbayMatrixSemantics.outputRow, Dregg2.Metatheory.GabbayMatrixSemantics.inputRow]
 
 /-- A full semantics-view bound certificate for the specimen. -/
 def successorViewCertificate (x : Rat) :
@@ -382,9 +381,8 @@ def successorViewCertificate (x : Rat) :
   entriesBound := by
     intro C row j
     cases C
-    change (Dregg2.Metatheory.GabbayMatrixSemantics.successorTable.cell row j).natAbs <= 3
-    fin_cases row <;> fin_cases j <;>
-      norm_num [Dregg2.Metatheory.GabbayMatrixSemantics.successorTable_cell]
+    change (if row.1 = 0 then (j.1 : Int) else ((j.1 + 1 : Nat) : Int)).natAbs <= 3
+    fin_cases row <;> fin_cases j <;> norm_num
   expansionCost := { atoms := 3, adds := 2 }
   expansionCost_exact := by decide
   numeratorBound := by
