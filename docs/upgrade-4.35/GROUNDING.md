@@ -58,6 +58,11 @@ Release notes: reference-manual `Manual/Releases/v4_3{1..5}_0.lean`.
   (4.35 #14953). `native_decide` already emitted per-theorem `<thm>._native.native_decide.ax_*` axioms in
   4.30; that is now the only form. `#assert_compiled` (Dregg2/Tactics.lean) loses its core-reduce
   branch, nothing else.
+- **`==` on `UInt8/16/32/64/USize` now uses `Classical.choice`.** 4.35 core adds `Std.LinearOrderPackage`
+  instances for the fixed-width integers (`Init/Data/UInt/Package.lean`); their `BEq` outranks
+  `instBEqOfDecidableEq` and is built with choice, so a `[propext, Quot.sound]` pin over byte `==`
+  gains `Classical.choice`. Fix: file-local `attribute [local instance high] instBEqOfDecidableEq`
+  (Tree.Value, Tree.Json).
 - `alias` is a keyword (4.35); `constructor` warns when several constructors fit (4.35);
   `Lean.RBMap` deprecated (unused here); `mvcgen` deprecated (unused here); `letFun` deprecated (unused).
 - **Module system**: Mathlib 56a00585 is `module`-ized. Every non-module file importing it gets a
