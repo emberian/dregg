@@ -44,6 +44,13 @@ Release notes: reference-manual `Manual/Releases/v4_3{1..5}_0.lean`.
   `isTrue`/`isFalse` remain as functions and patterns. Kernel `decide` on big instances behaves
   differently (faster on well-written instances; "failed to reduce" where an instance hid its body).
   Fixes: `decide +kernel`, or a direct proof; Batteries' `DecidableEq (Except ..)` body is module-hidden.
+- **Performance trap: `decide` is a structure projection now.** A pointwise equation
+  `f x = decide (...)` (what `simp only [f]` or a `simpa` closing step produces) makes the kernel unfold
+  the projection and whnf the `Decidable` instance over the symbolic term: Bridge.MinaVrfThreshold
+  (`Int.decLe` over a degree-10 polynomial) ran 8-18 min, past 20 GB, then hit kernel deep recursion,
+  and OOM-killed two whole-tree builds. Fix: a function-level `f_def` used by `rw`, then
+  `of_decide_eq_true`/`decide_eq_true` (9 s). Any Bool-valued `decide` definition over big symbolic
+  arithmetic can hit this.
 - **Kernel recursion is bounded by `maxRecDepth`** (4.33 #13956), deterministic across hosts:
   "(kernel) deep recursion detected" needs a `set_option maxRecDepth N in` on the declaration.
 - **`rw` closes more goals by `rfl`**, so a trailing `exact`/`rfl` after `rw` hits "no goals".
