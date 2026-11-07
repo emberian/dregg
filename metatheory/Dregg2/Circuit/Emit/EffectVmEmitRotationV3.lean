@@ -186,7 +186,7 @@ set_option maxRecDepth 16000
 /-- Project a named faithful-8 group lane from the verified layout. `Legal.groupCoverage` and
 `Legal.groupWidth` make every lane total; `getD 0` stays only at this raw-data projection boundary. -/
 def layoutGroupCol (name : GroupName) (i : Fin 8) : Nat :=
-  (rotated187.groupCol name i).getD 0
+  (rotated196.groupCol name i).getD 0
 
 -- ── THE MODE / FIELDS-ROOT AUTHORITY SUB-LIMBS ───────────────────────────────────────────────────
 -- The rotated block carries two dedicated authority sub-limbs beside the opaque `record_digest`
@@ -323,31 +323,31 @@ def CAVEAT_REGION_OFF : Nat := 2 * B_SPAN
 #guard B_VK == 34                    -- WAVE-2 committed vk-digest limb
 #guard B_MODE == 35                  -- WAVE-3 committed mode byte limb
 #guard B_FIELDS_ROOT == 36           -- WAVE-3 committed fields_root digest limb
-#guard B_IROOT == 187                -- verified pre-iroot layout, then iroot (FLAG DAY: was 184)
-#guard B_IROOT == rotated187.numPreLimbs
+#guard B_IROOT == 196                -- verified pre-iroot layout, then iroot (FLAG DAY: was 184)
+#guard B_IROOT == rotated196.numPreLimbs
 #guard B_STATE_COMMIT == B_IROOT + 1
 #guard B_COMMITTED_HEIGHT == 31      -- last SCALAR pre-iroot limb (disc/perms/vk/mode/fields-root ride past it)
-#guard B_SPAN == B_IROOT + 64        -- 187 pre-iroot + iroot + state_commit + 62 chain carriers = 251
-#guard B_SPAN == 251
+#guard B_SPAN == B_IROOT + 67        -- 196 pre-iroot + iroot + state_commit + 65 chain carriers = 263
+#guard B_SPAN == 263
 -- ⚑ THE COUNTING GATE THE KEY-NONET FLAG DAY EXISTS BECAUSE OF. `B_SPAN`'s `(n − 4)/3` is FLOOR
 -- division; the real carrier chain is `chunk31`'s `chunkCount`, which rounds UP. They agree exactly
 -- on `n ≡ 1 (mod 3)`. At n = 185 the formula says 60 carriers where the chain needs 61 and the block
 -- is silently one column short — every other guard in this file would still have passed.
 #guard rotatedNumPreLimbs % 3 == 1
 #guard APPENDIX_SPAN == 2 * B_SPAN + C_SPAN + CANON9_SPAN
-#guard CANON9_REGION_OFF == 547      -- 2·251 + 45: the canonicity aux ride PAST the caveat region
+#guard CANON9_REGION_OFF == 571      -- 2·251 + 45: the canonicity aux ride PAST the caveat region
 #guard CANON9_SPAN == 112            -- 2 blocks × 8 slots × 7 aux columns
 #guard CANON9_SPAN % (CHIP_OUT_LANES - 1) == 0   -- the registry width discipline survives
-#guard APPENDIX_SPAN == 659          -- 547 + 112 (was 651 at the 184-limb geometry)
+#guard APPENDIX_SPAN == 683          -- 547 + 112 (was 651 at the 184-limb geometry)
 #guard CAVEAT_REGION_OFF == 2 * B_SPAN
-#guard CAVEAT_REGION_OFF == 502      -- was 494
+#guard CAVEAT_REGION_OFF == 526      -- was 494
 #guard C_RC_OFF == C_MANIFEST_COMMIT + 1  -- the rc carrier rides PAST the manifest fold's digest
 #guard C_RC_CARRIER == C_RC_OFF + 4       -- ...and the two absorbing carriers ride past IT
 #guard C_COMMIT == C_RC_CARRIER + 1       -- the FINAL digest is the published caveat commitment
 #guard C_SPAN == C_COMMIT + 1             -- which closes the region
 
 /-- The pre-iroot limb list of a block at `base` — all `rotatedNumPreLimbs = 187` of them, in the
-verified `rotated187` tiling order: cells_root · r0..r23 · cap_root · nullifier_root ·
+verified `rotated196` tiling order: cells_root · r0..r23 · cap_root · nullifier_root ·
 commitments_root · heap_root · lifecycle · epoch · committed height · lifecycle_disc · perms_digest ·
 vk_digest · **mode** · **fields_root** · revoked_root · the faithful-8-felt completion limbs · the
 three carrier octets · the fields NONET lanes (`113..168` plus `176..183`) · and — 2026-08-01 — the
@@ -390,10 +390,11 @@ def preLimbsAt (base : Nat) (a : Assignment) : List ℤ :=
   , a (base + 168), a (base + 169), a (base + 170), a (base + 171), a (base + 172), a (base + 173)
   , a (base + 174), a (base + 175), a (base + 176), a (base + 177), a (base + 178), a (base + 179)
   , a (base + 180), a (base + 181), a (base + 182), a (base + 183), a (base + 184), a (base + 185)
-  , a (base + 186) ]
+  , a (base + 186), a (base + 187), a (base + 188), a (base + 189), a (base + 190), a (base + 191)
+  , a (base + 192), a (base + 193), a (base + 194), a (base + 195) ]
 
 theorem preLimbsAt_length (base : Nat) (a : Assignment) :
-    (preLimbsAt base a).length = 187 := rfl
+    (preLimbsAt base a).length = 196 := rfl
 
 /-- The literal limb list really is the verified layout's extent — the `#guard` that makes a future
 `rotatedNumPreLimbs` bump fail HERE rather than silently emit a short block. -/
@@ -436,69 +437,72 @@ producer then wrote chain digests over four pre-limbs, the iroot and state_commi
 member UNSAT. `EmitLayoutManifest` now reads `bChainBase` off this list's FIRST site rather than
 restating it; the same is required of every consumer. -/
 def rotV3SitesAt (base : Nat) : List VmHashSite :=
-  [ ⟨base + 189, [.col (base + 0), .col (base + 1), .col (base + 2), .col (base + 3)], 4⟩
-  , ⟨base + 190, [.col (base + 189), .col (base + 4), .col (base + 5), .col (base + 6)], 4⟩
-  , ⟨base + 191, [.col (base + 190), .col (base + 7), .col (base + 8), .col (base + 9)], 4⟩
-  , ⟨base + 192, [.col (base + 191), .col (base + 10), .col (base + 11), .col (base + 12)], 4⟩
-  , ⟨base + 193, [.col (base + 192), .col (base + 13), .col (base + 14), .col (base + 15)], 4⟩
-  , ⟨base + 194, [.col (base + 193), .col (base + 16), .col (base + 17), .col (base + 18)], 4⟩
-  , ⟨base + 195, [.col (base + 194), .col (base + 19), .col (base + 20), .col (base + 21)], 4⟩
-  , ⟨base + 196, [.col (base + 195), .col (base + 22), .col (base + 23), .col (base + 24)], 4⟩
-  , ⟨base + 197, [.col (base + 196), .col (base + 25), .col (base + 26), .col (base + 27)], 4⟩
-  , ⟨base + 198, [.col (base + 197), .col (base + 28), .col (base + 29), .col (base + 30)], 4⟩
-  , ⟨base + 199, [.col (base + 198), .col (base + 31), .col (base + 32), .col (base + 33)], 4⟩
-  , ⟨base + 200, [.col (base + 199), .col (base + 34), .col (base + 35), .col (base + 36)], 4⟩
-  , ⟨base + 201, [.col (base + 200), .col (base + 37), .col (base + 38), .col (base + 39)], 4⟩
-  , ⟨base + 202, [.col (base + 201), .col (base + 40), .col (base + 41), .col (base + 42)], 4⟩
-  , ⟨base + 203, [.col (base + 202), .col (base + 43), .col (base + 44), .col (base + 45)], 4⟩
-  , ⟨base + 204, [.col (base + 203), .col (base + 46), .col (base + 47), .col (base + 48)], 4⟩
-  , ⟨base + 205, [.col (base + 204), .col (base + 49), .col (base + 50), .col (base + 51)], 4⟩
-  , ⟨base + 206, [.col (base + 205), .col (base + 52), .col (base + 53), .col (base + 54)], 4⟩
-  , ⟨base + 207, [.col (base + 206), .col (base + 55), .col (base + 56), .col (base + 57)], 4⟩
-  , ⟨base + 208, [.col (base + 207), .col (base + 58), .col (base + 59), .col (base + 60)], 4⟩
-  , ⟨base + 209, [.col (base + 208), .col (base + 61), .col (base + 62), .col (base + 63)], 4⟩
-  , ⟨base + 210, [.col (base + 209), .col (base + 64), .col (base + 65), .col (base + 66)], 4⟩
-  , ⟨base + 211, [.col (base + 210), .col (base + 67), .col (base + 68), .col (base + 69)], 4⟩
-  , ⟨base + 212, [.col (base + 211), .col (base + 70), .col (base + 71), .col (base + 72)], 4⟩
-  , ⟨base + 213, [.col (base + 212), .col (base + 73), .col (base + 74), .col (base + 75)], 4⟩
-  , ⟨base + 214, [.col (base + 213), .col (base + 76), .col (base + 77), .col (base + 78)], 4⟩
-  , ⟨base + 215, [.col (base + 214), .col (base + 79), .col (base + 80), .col (base + 81)], 4⟩
-  , ⟨base + 216, [.col (base + 215), .col (base + 82), .col (base + 83), .col (base + 84)], 4⟩
-  , ⟨base + 217, [.col (base + 216), .col (base + 85), .col (base + 86), .col (base + 87)], 4⟩
-  , ⟨base + 218, [.col (base + 217), .col (base + 88), .col (base + 89), .col (base + 90)], 4⟩
-  , ⟨base + 219, [.col (base + 218), .col (base + 91), .col (base + 92), .col (base + 93)], 4⟩
-  , ⟨base + 220, [.col (base + 219), .col (base + 94), .col (base + 95), .col (base + 96)], 4⟩
-  , ⟨base + 221, [.col (base + 220), .col (base + 97), .col (base + 98), .col (base + 99)], 4⟩
-  , ⟨base + 222, [.col (base + 221), .col (base + 100), .col (base + 101), .col (base + 102)], 4⟩
-  , ⟨base + 223, [.col (base + 222), .col (base + 103), .col (base + 104), .col (base + 105)], 4⟩
-  , ⟨base + 224, [.col (base + 223), .col (base + 106), .col (base + 107), .col (base + 108)], 4⟩
-  , ⟨base + 225, [.col (base + 224), .col (base + 109), .col (base + 110), .col (base + 111)], 4⟩
-  , ⟨base + 226, [.col (base + 225), .col (base + 112), .col (base + 113), .col (base + 114)], 4⟩
-  , ⟨base + 227, [.col (base + 226), .col (base + 115), .col (base + 116), .col (base + 117)], 4⟩
-  , ⟨base + 228, [.col (base + 227), .col (base + 118), .col (base + 119), .col (base + 120)], 4⟩
-  , ⟨base + 229, [.col (base + 228), .col (base + 121), .col (base + 122), .col (base + 123)], 4⟩
-  , ⟨base + 230, [.col (base + 229), .col (base + 124), .col (base + 125), .col (base + 126)], 4⟩
-  , ⟨base + 231, [.col (base + 230), .col (base + 127), .col (base + 128), .col (base + 129)], 4⟩
-  , ⟨base + 232, [.col (base + 231), .col (base + 130), .col (base + 131), .col (base + 132)], 4⟩
-  , ⟨base + 233, [.col (base + 232), .col (base + 133), .col (base + 134), .col (base + 135)], 4⟩
-  , ⟨base + 234, [.col (base + 233), .col (base + 136), .col (base + 137), .col (base + 138)], 4⟩
-  , ⟨base + 235, [.col (base + 234), .col (base + 139), .col (base + 140), .col (base + 141)], 4⟩
-  , ⟨base + 236, [.col (base + 235), .col (base + 142), .col (base + 143), .col (base + 144)], 4⟩
-  , ⟨base + 237, [.col (base + 236), .col (base + 145), .col (base + 146), .col (base + 147)], 4⟩
-  , ⟨base + 238, [.col (base + 237), .col (base + 148), .col (base + 149), .col (base + 150)], 4⟩
-  , ⟨base + 239, [.col (base + 238), .col (base + 151), .col (base + 152), .col (base + 153)], 4⟩
-  , ⟨base + 240, [.col (base + 239), .col (base + 154), .col (base + 155), .col (base + 156)], 4⟩
-  , ⟨base + 241, [.col (base + 240), .col (base + 157), .col (base + 158), .col (base + 159)], 4⟩
-  , ⟨base + 242, [.col (base + 241), .col (base + 160), .col (base + 161), .col (base + 162)], 4⟩
-  , ⟨base + 243, [.col (base + 242), .col (base + 163), .col (base + 164), .col (base + 165)], 4⟩
-  , ⟨base + 244, [.col (base + 243), .col (base + 166), .col (base + 167), .col (base + 168)], 4⟩
-  , ⟨base + 245, [.col (base + 244), .col (base + 169), .col (base + 170), .col (base + 171)], 4⟩
-  , ⟨base + 246, [.col (base + 245), .col (base + 172), .col (base + 173), .col (base + 174)], 4⟩
-  , ⟨base + 247, [.col (base + 246), .col (base + 175), .col (base + 176), .col (base + 177)], 4⟩
-  , ⟨base + 248, [.col (base + 247), .col (base + 178), .col (base + 179), .col (base + 180)], 4⟩
-  , ⟨base + 249, [.col (base + 248), .col (base + 181), .col (base + 182), .col (base + 183)], 4⟩
-  , ⟨base + 250, [.col (base + 249), .col (base + 184), .col (base + 185), .col (base + 186)], 4⟩
-  , ⟨base + 188, [.col (base + 250), .col (base + 187)], 2⟩ ]
+  [ ⟨base + 198, [.col (base + 0), .col (base + 1), .col (base + 2), .col (base + 3)], 4⟩
+  , ⟨base + 199, [.col (base + 198), .col (base + 4), .col (base + 5), .col (base + 6)], 4⟩
+  , ⟨base + 200, [.col (base + 199), .col (base + 7), .col (base + 8), .col (base + 9)], 4⟩
+  , ⟨base + 201, [.col (base + 200), .col (base + 10), .col (base + 11), .col (base + 12)], 4⟩
+  , ⟨base + 202, [.col (base + 201), .col (base + 13), .col (base + 14), .col (base + 15)], 4⟩
+  , ⟨base + 203, [.col (base + 202), .col (base + 16), .col (base + 17), .col (base + 18)], 4⟩
+  , ⟨base + 204, [.col (base + 203), .col (base + 19), .col (base + 20), .col (base + 21)], 4⟩
+  , ⟨base + 205, [.col (base + 204), .col (base + 22), .col (base + 23), .col (base + 24)], 4⟩
+  , ⟨base + 206, [.col (base + 205), .col (base + 25), .col (base + 26), .col (base + 27)], 4⟩
+  , ⟨base + 207, [.col (base + 206), .col (base + 28), .col (base + 29), .col (base + 30)], 4⟩
+  , ⟨base + 208, [.col (base + 207), .col (base + 31), .col (base + 32), .col (base + 33)], 4⟩
+  , ⟨base + 209, [.col (base + 208), .col (base + 34), .col (base + 35), .col (base + 36)], 4⟩
+  , ⟨base + 210, [.col (base + 209), .col (base + 37), .col (base + 38), .col (base + 39)], 4⟩
+  , ⟨base + 211, [.col (base + 210), .col (base + 40), .col (base + 41), .col (base + 42)], 4⟩
+  , ⟨base + 212, [.col (base + 211), .col (base + 43), .col (base + 44), .col (base + 45)], 4⟩
+  , ⟨base + 213, [.col (base + 212), .col (base + 46), .col (base + 47), .col (base + 48)], 4⟩
+  , ⟨base + 214, [.col (base + 213), .col (base + 49), .col (base + 50), .col (base + 51)], 4⟩
+  , ⟨base + 215, [.col (base + 214), .col (base + 52), .col (base + 53), .col (base + 54)], 4⟩
+  , ⟨base + 216, [.col (base + 215), .col (base + 55), .col (base + 56), .col (base + 57)], 4⟩
+  , ⟨base + 217, [.col (base + 216), .col (base + 58), .col (base + 59), .col (base + 60)], 4⟩
+  , ⟨base + 218, [.col (base + 217), .col (base + 61), .col (base + 62), .col (base + 63)], 4⟩
+  , ⟨base + 219, [.col (base + 218), .col (base + 64), .col (base + 65), .col (base + 66)], 4⟩
+  , ⟨base + 220, [.col (base + 219), .col (base + 67), .col (base + 68), .col (base + 69)], 4⟩
+  , ⟨base + 221, [.col (base + 220), .col (base + 70), .col (base + 71), .col (base + 72)], 4⟩
+  , ⟨base + 222, [.col (base + 221), .col (base + 73), .col (base + 74), .col (base + 75)], 4⟩
+  , ⟨base + 223, [.col (base + 222), .col (base + 76), .col (base + 77), .col (base + 78)], 4⟩
+  , ⟨base + 224, [.col (base + 223), .col (base + 79), .col (base + 80), .col (base + 81)], 4⟩
+  , ⟨base + 225, [.col (base + 224), .col (base + 82), .col (base + 83), .col (base + 84)], 4⟩
+  , ⟨base + 226, [.col (base + 225), .col (base + 85), .col (base + 86), .col (base + 87)], 4⟩
+  , ⟨base + 227, [.col (base + 226), .col (base + 88), .col (base + 89), .col (base + 90)], 4⟩
+  , ⟨base + 228, [.col (base + 227), .col (base + 91), .col (base + 92), .col (base + 93)], 4⟩
+  , ⟨base + 229, [.col (base + 228), .col (base + 94), .col (base + 95), .col (base + 96)], 4⟩
+  , ⟨base + 230, [.col (base + 229), .col (base + 97), .col (base + 98), .col (base + 99)], 4⟩
+  , ⟨base + 231, [.col (base + 230), .col (base + 100), .col (base + 101), .col (base + 102)], 4⟩
+  , ⟨base + 232, [.col (base + 231), .col (base + 103), .col (base + 104), .col (base + 105)], 4⟩
+  , ⟨base + 233, [.col (base + 232), .col (base + 106), .col (base + 107), .col (base + 108)], 4⟩
+  , ⟨base + 234, [.col (base + 233), .col (base + 109), .col (base + 110), .col (base + 111)], 4⟩
+  , ⟨base + 235, [.col (base + 234), .col (base + 112), .col (base + 113), .col (base + 114)], 4⟩
+  , ⟨base + 236, [.col (base + 235), .col (base + 115), .col (base + 116), .col (base + 117)], 4⟩
+  , ⟨base + 237, [.col (base + 236), .col (base + 118), .col (base + 119), .col (base + 120)], 4⟩
+  , ⟨base + 238, [.col (base + 237), .col (base + 121), .col (base + 122), .col (base + 123)], 4⟩
+  , ⟨base + 239, [.col (base + 238), .col (base + 124), .col (base + 125), .col (base + 126)], 4⟩
+  , ⟨base + 240, [.col (base + 239), .col (base + 127), .col (base + 128), .col (base + 129)], 4⟩
+  , ⟨base + 241, [.col (base + 240), .col (base + 130), .col (base + 131), .col (base + 132)], 4⟩
+  , ⟨base + 242, [.col (base + 241), .col (base + 133), .col (base + 134), .col (base + 135)], 4⟩
+  , ⟨base + 243, [.col (base + 242), .col (base + 136), .col (base + 137), .col (base + 138)], 4⟩
+  , ⟨base + 244, [.col (base + 243), .col (base + 139), .col (base + 140), .col (base + 141)], 4⟩
+  , ⟨base + 245, [.col (base + 244), .col (base + 142), .col (base + 143), .col (base + 144)], 4⟩
+  , ⟨base + 246, [.col (base + 245), .col (base + 145), .col (base + 146), .col (base + 147)], 4⟩
+  , ⟨base + 247, [.col (base + 246), .col (base + 148), .col (base + 149), .col (base + 150)], 4⟩
+  , ⟨base + 248, [.col (base + 247), .col (base + 151), .col (base + 152), .col (base + 153)], 4⟩
+  , ⟨base + 249, [.col (base + 248), .col (base + 154), .col (base + 155), .col (base + 156)], 4⟩
+  , ⟨base + 250, [.col (base + 249), .col (base + 157), .col (base + 158), .col (base + 159)], 4⟩
+  , ⟨base + 251, [.col (base + 250), .col (base + 160), .col (base + 161), .col (base + 162)], 4⟩
+  , ⟨base + 252, [.col (base + 251), .col (base + 163), .col (base + 164), .col (base + 165)], 4⟩
+  , ⟨base + 253, [.col (base + 252), .col (base + 166), .col (base + 167), .col (base + 168)], 4⟩
+  , ⟨base + 254, [.col (base + 253), .col (base + 169), .col (base + 170), .col (base + 171)], 4⟩
+  , ⟨base + 255, [.col (base + 254), .col (base + 172), .col (base + 173), .col (base + 174)], 4⟩
+  , ⟨base + 256, [.col (base + 255), .col (base + 175), .col (base + 176), .col (base + 177)], 4⟩
+  , ⟨base + 257, [.col (base + 256), .col (base + 178), .col (base + 179), .col (base + 180)], 4⟩
+  , ⟨base + 258, [.col (base + 257), .col (base + 181), .col (base + 182), .col (base + 183)], 4⟩
+  , ⟨base + 259, [.col (base + 258), .col (base + 184), .col (base + 185), .col (base + 186)], 4⟩
+  , ⟨base + 260, [.col (base + 259), .col (base + 187), .col (base + 188), .col (base + 189)], 4⟩
+  , ⟨base + 261, [.col (base + 260), .col (base + 190), .col (base + 191), .col (base + 192)], 4⟩
+  , ⟨base + 262, [.col (base + 261), .col (base + 193), .col (base + 194), .col (base + 195)], 4⟩
+  , ⟨base + 197, [.col (base + 262), .col (base + 196)], 2⟩ ]
 
 /-- **Every rotated absorption site asks the chip for an ADMITTED arity, at EVERY base.** The list
 above is a literal spine of 4-input sites with a terminal 2-input site, so the arity is independent
@@ -543,7 +547,7 @@ def rotV3Appendix (w : Nat) : List VmHashSite :=
 -- Arity discipline: every appendix site is arity 4 or 2 (the chip refuses 3) — checked at
 -- a concrete base; the literal arities are base-independent.
 #guard (rotV3Appendix 186).all fun s => s.arity == 4 || s.arity == 2
-#guard (rotV3Appendix 186).length == 138  -- 63 (before) + 63 (after) + 12 (caveat: 10 + the rc pair)
+#guard (rotV3Appendix 186).length == 144  -- 63 (before) + 63 (after) + 12 (caveat: 10 + the rc pair)
 -- ⚑ **THE COUNTING GATE**, stated where both sources exist: pin `B_SPAN`'s FLOOR-division formula
 -- against the LITERAL site walk. A block is its limbs, its iroot, and one column per emitted site
 -- (62 chain carriers + the state-commit carrier). `(n − 4)/3` rounds DOWN while `chunk31`'s
@@ -551,8 +555,8 @@ def rotV3Appendix (w : Nat) : List VmHashSite :=
 -- said 60 carriers where the chain needs 61 and the block would have been silently one column
 -- short, with every other `#guard` in this file still passing. THIS is the one that would go red.
 #guard B_SPAN == rotatedNumPreLimbs + 1 + (rotV3SitesAt 0).length
-#guard (rotV3SitesAt 0).length == 63
-#guard (rotV3SitesAt 0).map (·.digestCol) == (List.range 62).map (· + 189) ++ [188]
+#guard (rotV3SitesAt 0).length == 66
+#guard (rotV3SitesAt 0).map (·.digestCol) == (List.range 65).map (· + 198) ++ [197]
 -- Every caveat-region site's carrier column lands INSIDE the region (`< C_SPAN`), and the two new
 -- ones land exactly on `C_RC_CARRIER` / `C_COMMIT` — the emit cannot drift off the named offsets.
 #guard (caveatV3SitesAt 0).map (·.digestCol) == [29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 43, 44]
@@ -584,69 +588,72 @@ def caveatV3SiteReads (base : Nat) : List Nat :=
 -- byte-for-byte. This is the standalone analog of the old R=24-probe cross-check, at the deployed
 -- 187-limb geometry (the R-register probe no longer matches the faithful-8-felt completion limbs).
 private def rotV3SitesDigestAt0 : List VmHashSite :=
-  [ ⟨189, [.col 0, .col 1, .col 2, .col 3], 4⟩
-  , ⟨190, [.digest 0, .col 4, .col 5, .col 6], 4⟩
-  , ⟨191, [.digest 1, .col 7, .col 8, .col 9], 4⟩
-  , ⟨192, [.digest 2, .col 10, .col 11, .col 12], 4⟩
-  , ⟨193, [.digest 3, .col 13, .col 14, .col 15], 4⟩
-  , ⟨194, [.digest 4, .col 16, .col 17, .col 18], 4⟩
-  , ⟨195, [.digest 5, .col 19, .col 20, .col 21], 4⟩
-  , ⟨196, [.digest 6, .col 22, .col 23, .col 24], 4⟩
-  , ⟨197, [.digest 7, .col 25, .col 26, .col 27], 4⟩
-  , ⟨198, [.digest 8, .col 28, .col 29, .col 30], 4⟩
-  , ⟨199, [.digest 9, .col 31, .col 32, .col 33], 4⟩
-  , ⟨200, [.digest 10, .col 34, .col 35, .col 36], 4⟩
-  , ⟨201, [.digest 11, .col 37, .col 38, .col 39], 4⟩
-  , ⟨202, [.digest 12, .col 40, .col 41, .col 42], 4⟩
-  , ⟨203, [.digest 13, .col 43, .col 44, .col 45], 4⟩
-  , ⟨204, [.digest 14, .col 46, .col 47, .col 48], 4⟩
-  , ⟨205, [.digest 15, .col 49, .col 50, .col 51], 4⟩
-  , ⟨206, [.digest 16, .col 52, .col 53, .col 54], 4⟩
-  , ⟨207, [.digest 17, .col 55, .col 56, .col 57], 4⟩
-  , ⟨208, [.digest 18, .col 58, .col 59, .col 60], 4⟩
-  , ⟨209, [.digest 19, .col 61, .col 62, .col 63], 4⟩
-  , ⟨210, [.digest 20, .col 64, .col 65, .col 66], 4⟩
-  , ⟨211, [.digest 21, .col 67, .col 68, .col 69], 4⟩
-  , ⟨212, [.digest 22, .col 70, .col 71, .col 72], 4⟩
-  , ⟨213, [.digest 23, .col 73, .col 74, .col 75], 4⟩
-  , ⟨214, [.digest 24, .col 76, .col 77, .col 78], 4⟩
-  , ⟨215, [.digest 25, .col 79, .col 80, .col 81], 4⟩
-  , ⟨216, [.digest 26, .col 82, .col 83, .col 84], 4⟩
-  , ⟨217, [.digest 27, .col 85, .col 86, .col 87], 4⟩
-  , ⟨218, [.digest 28, .col 88, .col 89, .col 90], 4⟩
-  , ⟨219, [.digest 29, .col 91, .col 92, .col 93], 4⟩
-  , ⟨220, [.digest 30, .col 94, .col 95, .col 96], 4⟩
-  , ⟨221, [.digest 31, .col 97, .col 98, .col 99], 4⟩
-  , ⟨222, [.digest 32, .col 100, .col 101, .col 102], 4⟩
-  , ⟨223, [.digest 33, .col 103, .col 104, .col 105], 4⟩
-  , ⟨224, [.digest 34, .col 106, .col 107, .col 108], 4⟩
-  , ⟨225, [.digest 35, .col 109, .col 110, .col 111], 4⟩
-  , ⟨226, [.digest 36, .col 112, .col 113, .col 114], 4⟩
-  , ⟨227, [.digest 37, .col 115, .col 116, .col 117], 4⟩
-  , ⟨228, [.digest 38, .col 118, .col 119, .col 120], 4⟩
-  , ⟨229, [.digest 39, .col 121, .col 122, .col 123], 4⟩
-  , ⟨230, [.digest 40, .col 124, .col 125, .col 126], 4⟩
-  , ⟨231, [.digest 41, .col 127, .col 128, .col 129], 4⟩
-  , ⟨232, [.digest 42, .col 130, .col 131, .col 132], 4⟩
-  , ⟨233, [.digest 43, .col 133, .col 134, .col 135], 4⟩
-  , ⟨234, [.digest 44, .col 136, .col 137, .col 138], 4⟩
-  , ⟨235, [.digest 45, .col 139, .col 140, .col 141], 4⟩
-  , ⟨236, [.digest 46, .col 142, .col 143, .col 144], 4⟩
-  , ⟨237, [.digest 47, .col 145, .col 146, .col 147], 4⟩
-  , ⟨238, [.digest 48, .col 148, .col 149, .col 150], 4⟩
-  , ⟨239, [.digest 49, .col 151, .col 152, .col 153], 4⟩
-  , ⟨240, [.digest 50, .col 154, .col 155, .col 156], 4⟩
-  , ⟨241, [.digest 51, .col 157, .col 158, .col 159], 4⟩
-  , ⟨242, [.digest 52, .col 160, .col 161, .col 162], 4⟩
-  , ⟨243, [.digest 53, .col 163, .col 164, .col 165], 4⟩
-  , ⟨244, [.digest 54, .col 166, .col 167, .col 168], 4⟩
-  , ⟨245, [.digest 55, .col 169, .col 170, .col 171], 4⟩
-  , ⟨246, [.digest 56, .col 172, .col 173, .col 174], 4⟩
-  , ⟨247, [.digest 57, .col 175, .col 176, .col 177], 4⟩
-  , ⟨248, [.digest 58, .col 178, .col 179, .col 180], 4⟩
-  , ⟨249, [.digest 59, .col 181, .col 182, .col 183], 4⟩
-  , ⟨250, [.digest 60, .col 184, .col 185, .col 186], 4⟩
-  , ⟨188, [.digest 61, .col 187], 2⟩ ]
+  [ ⟨198, [.col 0, .col 1, .col 2, .col 3], 4⟩
+  , ⟨199, [.digest 0, .col 4, .col 5, .col 6], 4⟩
+  , ⟨200, [.digest 1, .col 7, .col 8, .col 9], 4⟩
+  , ⟨201, [.digest 2, .col 10, .col 11, .col 12], 4⟩
+  , ⟨202, [.digest 3, .col 13, .col 14, .col 15], 4⟩
+  , ⟨203, [.digest 4, .col 16, .col 17, .col 18], 4⟩
+  , ⟨204, [.digest 5, .col 19, .col 20, .col 21], 4⟩
+  , ⟨205, [.digest 6, .col 22, .col 23, .col 24], 4⟩
+  , ⟨206, [.digest 7, .col 25, .col 26, .col 27], 4⟩
+  , ⟨207, [.digest 8, .col 28, .col 29, .col 30], 4⟩
+  , ⟨208, [.digest 9, .col 31, .col 32, .col 33], 4⟩
+  , ⟨209, [.digest 10, .col 34, .col 35, .col 36], 4⟩
+  , ⟨210, [.digest 11, .col 37, .col 38, .col 39], 4⟩
+  , ⟨211, [.digest 12, .col 40, .col 41, .col 42], 4⟩
+  , ⟨212, [.digest 13, .col 43, .col 44, .col 45], 4⟩
+  , ⟨213, [.digest 14, .col 46, .col 47, .col 48], 4⟩
+  , ⟨214, [.digest 15, .col 49, .col 50, .col 51], 4⟩
+  , ⟨215, [.digest 16, .col 52, .col 53, .col 54], 4⟩
+  , ⟨216, [.digest 17, .col 55, .col 56, .col 57], 4⟩
+  , ⟨217, [.digest 18, .col 58, .col 59, .col 60], 4⟩
+  , ⟨218, [.digest 19, .col 61, .col 62, .col 63], 4⟩
+  , ⟨219, [.digest 20, .col 64, .col 65, .col 66], 4⟩
+  , ⟨220, [.digest 21, .col 67, .col 68, .col 69], 4⟩
+  , ⟨221, [.digest 22, .col 70, .col 71, .col 72], 4⟩
+  , ⟨222, [.digest 23, .col 73, .col 74, .col 75], 4⟩
+  , ⟨223, [.digest 24, .col 76, .col 77, .col 78], 4⟩
+  , ⟨224, [.digest 25, .col 79, .col 80, .col 81], 4⟩
+  , ⟨225, [.digest 26, .col 82, .col 83, .col 84], 4⟩
+  , ⟨226, [.digest 27, .col 85, .col 86, .col 87], 4⟩
+  , ⟨227, [.digest 28, .col 88, .col 89, .col 90], 4⟩
+  , ⟨228, [.digest 29, .col 91, .col 92, .col 93], 4⟩
+  , ⟨229, [.digest 30, .col 94, .col 95, .col 96], 4⟩
+  , ⟨230, [.digest 31, .col 97, .col 98, .col 99], 4⟩
+  , ⟨231, [.digest 32, .col 100, .col 101, .col 102], 4⟩
+  , ⟨232, [.digest 33, .col 103, .col 104, .col 105], 4⟩
+  , ⟨233, [.digest 34, .col 106, .col 107, .col 108], 4⟩
+  , ⟨234, [.digest 35, .col 109, .col 110, .col 111], 4⟩
+  , ⟨235, [.digest 36, .col 112, .col 113, .col 114], 4⟩
+  , ⟨236, [.digest 37, .col 115, .col 116, .col 117], 4⟩
+  , ⟨237, [.digest 38, .col 118, .col 119, .col 120], 4⟩
+  , ⟨238, [.digest 39, .col 121, .col 122, .col 123], 4⟩
+  , ⟨239, [.digest 40, .col 124, .col 125, .col 126], 4⟩
+  , ⟨240, [.digest 41, .col 127, .col 128, .col 129], 4⟩
+  , ⟨241, [.digest 42, .col 130, .col 131, .col 132], 4⟩
+  , ⟨242, [.digest 43, .col 133, .col 134, .col 135], 4⟩
+  , ⟨243, [.digest 44, .col 136, .col 137, .col 138], 4⟩
+  , ⟨244, [.digest 45, .col 139, .col 140, .col 141], 4⟩
+  , ⟨245, [.digest 46, .col 142, .col 143, .col 144], 4⟩
+  , ⟨246, [.digest 47, .col 145, .col 146, .col 147], 4⟩
+  , ⟨247, [.digest 48, .col 148, .col 149, .col 150], 4⟩
+  , ⟨248, [.digest 49, .col 151, .col 152, .col 153], 4⟩
+  , ⟨249, [.digest 50, .col 154, .col 155, .col 156], 4⟩
+  , ⟨250, [.digest 51, .col 157, .col 158, .col 159], 4⟩
+  , ⟨251, [.digest 52, .col 160, .col 161, .col 162], 4⟩
+  , ⟨252, [.digest 53, .col 163, .col 164, .col 165], 4⟩
+  , ⟨253, [.digest 54, .col 166, .col 167, .col 168], 4⟩
+  , ⟨254, [.digest 55, .col 169, .col 170, .col 171], 4⟩
+  , ⟨255, [.digest 56, .col 172, .col 173, .col 174], 4⟩
+  , ⟨256, [.digest 57, .col 175, .col 176, .col 177], 4⟩
+  , ⟨257, [.digest 58, .col 178, .col 179, .col 180], 4⟩
+  , ⟨258, [.digest 59, .col 181, .col 182, .col 183], 4⟩
+  , ⟨259, [.digest 60, .col 184, .col 185, .col 186], 4⟩
+  , ⟨260, [.digest 61, .col 187, .col 188, .col 189], 4⟩
+  , ⟨261, [.digest 62, .col 190, .col 191, .col 192], 4⟩
+  , ⟨262, [.digest 63, .col 193, .col 194, .col 195], 4⟩
+  , ⟨197, [.digest 64, .col 196], 2⟩ ]
 
 #guard emitVmJson2 (graduateV1
     { name := "dregg-effectvm-rotation-v3-commitments-tripwire"
@@ -850,260 +857,272 @@ theorem rotV3SitesAt_pin (hash : List ℤ → ℤ) (env : VmRowEnv) (base : Nat)
     (h : ∀ s ∈ rotV3SitesAt base, env.loc s.digestCol = hash (s.resolvedInputs env [])) :
     env.loc (base + B_STATE_COMMIT)
       = wireCommitR hash (preLimbsAt base env.loc) (env.loc (base + B_IROOT)) := by
-  show env.loc (base + 188) = wireCommitR hash (preLimbsAt base env.loc) (env.loc (base + 187))
-  have h0 : env.loc (base + 189) = hash [env.loc (base + 0), env.loc (base + 1), env.loc (base + 2), env.loc (base + 3)] := by
+  show env.loc (base + 197) = wireCommitR hash (preLimbsAt base env.loc) (env.loc (base + 196))
+  have h0 : env.loc (base + 198) = hash [env.loc (base + 0), env.loc (base + 1), env.loc (base + 2), env.loc (base + 3)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 189, [.col (base + 0), .col (base + 1), .col (base + 2), .col (base + 3)], 4⟩
+      h ⟨base + 198, [.col (base + 0), .col (base + 1), .col (base + 2), .col (base + 3)], 4⟩
         (by simp [rotV3SitesAt])
-  have h1 : env.loc (base + 190) = hash [env.loc (base + 189), env.loc (base + 4), env.loc (base + 5), env.loc (base + 6)] := by
+  have h1 : env.loc (base + 199) = hash [env.loc (base + 198), env.loc (base + 4), env.loc (base + 5), env.loc (base + 6)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 190, [.col (base + 189), .col (base + 4), .col (base + 5), .col (base + 6)], 4⟩
+      h ⟨base + 199, [.col (base + 198), .col (base + 4), .col (base + 5), .col (base + 6)], 4⟩
         (by simp [rotV3SitesAt])
-  have h2 : env.loc (base + 191) = hash [env.loc (base + 190), env.loc (base + 7), env.loc (base + 8), env.loc (base + 9)] := by
+  have h2 : env.loc (base + 200) = hash [env.loc (base + 199), env.loc (base + 7), env.loc (base + 8), env.loc (base + 9)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 191, [.col (base + 190), .col (base + 7), .col (base + 8), .col (base + 9)], 4⟩
+      h ⟨base + 200, [.col (base + 199), .col (base + 7), .col (base + 8), .col (base + 9)], 4⟩
         (by simp [rotV3SitesAt])
-  have h3 : env.loc (base + 192) = hash [env.loc (base + 191), env.loc (base + 10), env.loc (base + 11), env.loc (base + 12)] := by
+  have h3 : env.loc (base + 201) = hash [env.loc (base + 200), env.loc (base + 10), env.loc (base + 11), env.loc (base + 12)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 192, [.col (base + 191), .col (base + 10), .col (base + 11), .col (base + 12)], 4⟩
+      h ⟨base + 201, [.col (base + 200), .col (base + 10), .col (base + 11), .col (base + 12)], 4⟩
         (by simp [rotV3SitesAt])
-  have h4 : env.loc (base + 193) = hash [env.loc (base + 192), env.loc (base + 13), env.loc (base + 14), env.loc (base + 15)] := by
+  have h4 : env.loc (base + 202) = hash [env.loc (base + 201), env.loc (base + 13), env.loc (base + 14), env.loc (base + 15)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 193, [.col (base + 192), .col (base + 13), .col (base + 14), .col (base + 15)], 4⟩
+      h ⟨base + 202, [.col (base + 201), .col (base + 13), .col (base + 14), .col (base + 15)], 4⟩
         (by simp [rotV3SitesAt])
-  have h5 : env.loc (base + 194) = hash [env.loc (base + 193), env.loc (base + 16), env.loc (base + 17), env.loc (base + 18)] := by
+  have h5 : env.loc (base + 203) = hash [env.loc (base + 202), env.loc (base + 16), env.loc (base + 17), env.loc (base + 18)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 194, [.col (base + 193), .col (base + 16), .col (base + 17), .col (base + 18)], 4⟩
+      h ⟨base + 203, [.col (base + 202), .col (base + 16), .col (base + 17), .col (base + 18)], 4⟩
         (by simp [rotV3SitesAt])
-  have h6 : env.loc (base + 195) = hash [env.loc (base + 194), env.loc (base + 19), env.loc (base + 20), env.loc (base + 21)] := by
+  have h6 : env.loc (base + 204) = hash [env.loc (base + 203), env.loc (base + 19), env.loc (base + 20), env.loc (base + 21)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 195, [.col (base + 194), .col (base + 19), .col (base + 20), .col (base + 21)], 4⟩
+      h ⟨base + 204, [.col (base + 203), .col (base + 19), .col (base + 20), .col (base + 21)], 4⟩
         (by simp [rotV3SitesAt])
-  have h7 : env.loc (base + 196) = hash [env.loc (base + 195), env.loc (base + 22), env.loc (base + 23), env.loc (base + 24)] := by
+  have h7 : env.loc (base + 205) = hash [env.loc (base + 204), env.loc (base + 22), env.loc (base + 23), env.loc (base + 24)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 196, [.col (base + 195), .col (base + 22), .col (base + 23), .col (base + 24)], 4⟩
+      h ⟨base + 205, [.col (base + 204), .col (base + 22), .col (base + 23), .col (base + 24)], 4⟩
         (by simp [rotV3SitesAt])
-  have h8 : env.loc (base + 197) = hash [env.loc (base + 196), env.loc (base + 25), env.loc (base + 26), env.loc (base + 27)] := by
+  have h8 : env.loc (base + 206) = hash [env.loc (base + 205), env.loc (base + 25), env.loc (base + 26), env.loc (base + 27)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 197, [.col (base + 196), .col (base + 25), .col (base + 26), .col (base + 27)], 4⟩
+      h ⟨base + 206, [.col (base + 205), .col (base + 25), .col (base + 26), .col (base + 27)], 4⟩
         (by simp [rotV3SitesAt])
-  have h9 : env.loc (base + 198) = hash [env.loc (base + 197), env.loc (base + 28), env.loc (base + 29), env.loc (base + 30)] := by
+  have h9 : env.loc (base + 207) = hash [env.loc (base + 206), env.loc (base + 28), env.loc (base + 29), env.loc (base + 30)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 198, [.col (base + 197), .col (base + 28), .col (base + 29), .col (base + 30)], 4⟩
+      h ⟨base + 207, [.col (base + 206), .col (base + 28), .col (base + 29), .col (base + 30)], 4⟩
         (by simp [rotV3SitesAt])
-  have h10 : env.loc (base + 199) = hash [env.loc (base + 198), env.loc (base + 31), env.loc (base + 32), env.loc (base + 33)] := by
+  have h10 : env.loc (base + 208) = hash [env.loc (base + 207), env.loc (base + 31), env.loc (base + 32), env.loc (base + 33)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 199, [.col (base + 198), .col (base + 31), .col (base + 32), .col (base + 33)], 4⟩
+      h ⟨base + 208, [.col (base + 207), .col (base + 31), .col (base + 32), .col (base + 33)], 4⟩
         (by simp [rotV3SitesAt])
-  have h11 : env.loc (base + 200) = hash [env.loc (base + 199), env.loc (base + 34), env.loc (base + 35), env.loc (base + 36)] := by
+  have h11 : env.loc (base + 209) = hash [env.loc (base + 208), env.loc (base + 34), env.loc (base + 35), env.loc (base + 36)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 200, [.col (base + 199), .col (base + 34), .col (base + 35), .col (base + 36)], 4⟩
+      h ⟨base + 209, [.col (base + 208), .col (base + 34), .col (base + 35), .col (base + 36)], 4⟩
         (by simp [rotV3SitesAt])
-  have h12 : env.loc (base + 201) = hash [env.loc (base + 200), env.loc (base + 37), env.loc (base + 38), env.loc (base + 39)] := by
+  have h12 : env.loc (base + 210) = hash [env.loc (base + 209), env.loc (base + 37), env.loc (base + 38), env.loc (base + 39)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 201, [.col (base + 200), .col (base + 37), .col (base + 38), .col (base + 39)], 4⟩
+      h ⟨base + 210, [.col (base + 209), .col (base + 37), .col (base + 38), .col (base + 39)], 4⟩
         (by simp [rotV3SitesAt])
-  have h13 : env.loc (base + 202) = hash [env.loc (base + 201), env.loc (base + 40), env.loc (base + 41), env.loc (base + 42)] := by
+  have h13 : env.loc (base + 211) = hash [env.loc (base + 210), env.loc (base + 40), env.loc (base + 41), env.loc (base + 42)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 202, [.col (base + 201), .col (base + 40), .col (base + 41), .col (base + 42)], 4⟩
+      h ⟨base + 211, [.col (base + 210), .col (base + 40), .col (base + 41), .col (base + 42)], 4⟩
         (by simp [rotV3SitesAt])
-  have h14 : env.loc (base + 203) = hash [env.loc (base + 202), env.loc (base + 43), env.loc (base + 44), env.loc (base + 45)] := by
+  have h14 : env.loc (base + 212) = hash [env.loc (base + 211), env.loc (base + 43), env.loc (base + 44), env.loc (base + 45)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 203, [.col (base + 202), .col (base + 43), .col (base + 44), .col (base + 45)], 4⟩
+      h ⟨base + 212, [.col (base + 211), .col (base + 43), .col (base + 44), .col (base + 45)], 4⟩
         (by simp [rotV3SitesAt])
-  have h15 : env.loc (base + 204) = hash [env.loc (base + 203), env.loc (base + 46), env.loc (base + 47), env.loc (base + 48)] := by
+  have h15 : env.loc (base + 213) = hash [env.loc (base + 212), env.loc (base + 46), env.loc (base + 47), env.loc (base + 48)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 204, [.col (base + 203), .col (base + 46), .col (base + 47), .col (base + 48)], 4⟩
+      h ⟨base + 213, [.col (base + 212), .col (base + 46), .col (base + 47), .col (base + 48)], 4⟩
         (by simp [rotV3SitesAt])
-  have h16 : env.loc (base + 205) = hash [env.loc (base + 204), env.loc (base + 49), env.loc (base + 50), env.loc (base + 51)] := by
+  have h16 : env.loc (base + 214) = hash [env.loc (base + 213), env.loc (base + 49), env.loc (base + 50), env.loc (base + 51)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 205, [.col (base + 204), .col (base + 49), .col (base + 50), .col (base + 51)], 4⟩
+      h ⟨base + 214, [.col (base + 213), .col (base + 49), .col (base + 50), .col (base + 51)], 4⟩
         (by simp [rotV3SitesAt])
-  have h17 : env.loc (base + 206) = hash [env.loc (base + 205), env.loc (base + 52), env.loc (base + 53), env.loc (base + 54)] := by
+  have h17 : env.loc (base + 215) = hash [env.loc (base + 214), env.loc (base + 52), env.loc (base + 53), env.loc (base + 54)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 206, [.col (base + 205), .col (base + 52), .col (base + 53), .col (base + 54)], 4⟩
+      h ⟨base + 215, [.col (base + 214), .col (base + 52), .col (base + 53), .col (base + 54)], 4⟩
         (by simp [rotV3SitesAt])
-  have h18 : env.loc (base + 207) = hash [env.loc (base + 206), env.loc (base + 55), env.loc (base + 56), env.loc (base + 57)] := by
+  have h18 : env.loc (base + 216) = hash [env.loc (base + 215), env.loc (base + 55), env.loc (base + 56), env.loc (base + 57)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 207, [.col (base + 206), .col (base + 55), .col (base + 56), .col (base + 57)], 4⟩
+      h ⟨base + 216, [.col (base + 215), .col (base + 55), .col (base + 56), .col (base + 57)], 4⟩
         (by simp [rotV3SitesAt])
-  have h19 : env.loc (base + 208) = hash [env.loc (base + 207), env.loc (base + 58), env.loc (base + 59), env.loc (base + 60)] := by
+  have h19 : env.loc (base + 217) = hash [env.loc (base + 216), env.loc (base + 58), env.loc (base + 59), env.loc (base + 60)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 208, [.col (base + 207), .col (base + 58), .col (base + 59), .col (base + 60)], 4⟩
+      h ⟨base + 217, [.col (base + 216), .col (base + 58), .col (base + 59), .col (base + 60)], 4⟩
         (by simp [rotV3SitesAt])
-  have h20 : env.loc (base + 209) = hash [env.loc (base + 208), env.loc (base + 61), env.loc (base + 62), env.loc (base + 63)] := by
+  have h20 : env.loc (base + 218) = hash [env.loc (base + 217), env.loc (base + 61), env.loc (base + 62), env.loc (base + 63)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 209, [.col (base + 208), .col (base + 61), .col (base + 62), .col (base + 63)], 4⟩
+      h ⟨base + 218, [.col (base + 217), .col (base + 61), .col (base + 62), .col (base + 63)], 4⟩
         (by simp [rotV3SitesAt])
-  have h21 : env.loc (base + 210) = hash [env.loc (base + 209), env.loc (base + 64), env.loc (base + 65), env.loc (base + 66)] := by
+  have h21 : env.loc (base + 219) = hash [env.loc (base + 218), env.loc (base + 64), env.loc (base + 65), env.loc (base + 66)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 210, [.col (base + 209), .col (base + 64), .col (base + 65), .col (base + 66)], 4⟩
+      h ⟨base + 219, [.col (base + 218), .col (base + 64), .col (base + 65), .col (base + 66)], 4⟩
         (by simp [rotV3SitesAt])
-  have h22 : env.loc (base + 211) = hash [env.loc (base + 210), env.loc (base + 67), env.loc (base + 68), env.loc (base + 69)] := by
+  have h22 : env.loc (base + 220) = hash [env.loc (base + 219), env.loc (base + 67), env.loc (base + 68), env.loc (base + 69)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 211, [.col (base + 210), .col (base + 67), .col (base + 68), .col (base + 69)], 4⟩
+      h ⟨base + 220, [.col (base + 219), .col (base + 67), .col (base + 68), .col (base + 69)], 4⟩
         (by simp [rotV3SitesAt])
-  have h23 : env.loc (base + 212) = hash [env.loc (base + 211), env.loc (base + 70), env.loc (base + 71), env.loc (base + 72)] := by
+  have h23 : env.loc (base + 221) = hash [env.loc (base + 220), env.loc (base + 70), env.loc (base + 71), env.loc (base + 72)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 212, [.col (base + 211), .col (base + 70), .col (base + 71), .col (base + 72)], 4⟩
+      h ⟨base + 221, [.col (base + 220), .col (base + 70), .col (base + 71), .col (base + 72)], 4⟩
         (by simp [rotV3SitesAt])
-  have h24 : env.loc (base + 213) = hash [env.loc (base + 212), env.loc (base + 73), env.loc (base + 74), env.loc (base + 75)] := by
+  have h24 : env.loc (base + 222) = hash [env.loc (base + 221), env.loc (base + 73), env.loc (base + 74), env.loc (base + 75)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 213, [.col (base + 212), .col (base + 73), .col (base + 74), .col (base + 75)], 4⟩
+      h ⟨base + 222, [.col (base + 221), .col (base + 73), .col (base + 74), .col (base + 75)], 4⟩
         (by simp [rotV3SitesAt])
-  have h25 : env.loc (base + 214) = hash [env.loc (base + 213), env.loc (base + 76), env.loc (base + 77), env.loc (base + 78)] := by
+  have h25 : env.loc (base + 223) = hash [env.loc (base + 222), env.loc (base + 76), env.loc (base + 77), env.loc (base + 78)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 214, [.col (base + 213), .col (base + 76), .col (base + 77), .col (base + 78)], 4⟩
+      h ⟨base + 223, [.col (base + 222), .col (base + 76), .col (base + 77), .col (base + 78)], 4⟩
         (by simp [rotV3SitesAt])
-  have h26 : env.loc (base + 215) = hash [env.loc (base + 214), env.loc (base + 79), env.loc (base + 80), env.loc (base + 81)] := by
+  have h26 : env.loc (base + 224) = hash [env.loc (base + 223), env.loc (base + 79), env.loc (base + 80), env.loc (base + 81)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 215, [.col (base + 214), .col (base + 79), .col (base + 80), .col (base + 81)], 4⟩
+      h ⟨base + 224, [.col (base + 223), .col (base + 79), .col (base + 80), .col (base + 81)], 4⟩
         (by simp [rotV3SitesAt])
-  have h27 : env.loc (base + 216) = hash [env.loc (base + 215), env.loc (base + 82), env.loc (base + 83), env.loc (base + 84)] := by
+  have h27 : env.loc (base + 225) = hash [env.loc (base + 224), env.loc (base + 82), env.loc (base + 83), env.loc (base + 84)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 216, [.col (base + 215), .col (base + 82), .col (base + 83), .col (base + 84)], 4⟩
+      h ⟨base + 225, [.col (base + 224), .col (base + 82), .col (base + 83), .col (base + 84)], 4⟩
         (by simp [rotV3SitesAt])
-  have h28 : env.loc (base + 217) = hash [env.loc (base + 216), env.loc (base + 85), env.loc (base + 86), env.loc (base + 87)] := by
+  have h28 : env.loc (base + 226) = hash [env.loc (base + 225), env.loc (base + 85), env.loc (base + 86), env.loc (base + 87)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 217, [.col (base + 216), .col (base + 85), .col (base + 86), .col (base + 87)], 4⟩
+      h ⟨base + 226, [.col (base + 225), .col (base + 85), .col (base + 86), .col (base + 87)], 4⟩
         (by simp [rotV3SitesAt])
-  have h29 : env.loc (base + 218) = hash [env.loc (base + 217), env.loc (base + 88), env.loc (base + 89), env.loc (base + 90)] := by
+  have h29 : env.loc (base + 227) = hash [env.loc (base + 226), env.loc (base + 88), env.loc (base + 89), env.loc (base + 90)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 218, [.col (base + 217), .col (base + 88), .col (base + 89), .col (base + 90)], 4⟩
+      h ⟨base + 227, [.col (base + 226), .col (base + 88), .col (base + 89), .col (base + 90)], 4⟩
         (by simp [rotV3SitesAt])
-  have h30 : env.loc (base + 219) = hash [env.loc (base + 218), env.loc (base + 91), env.loc (base + 92), env.loc (base + 93)] := by
+  have h30 : env.loc (base + 228) = hash [env.loc (base + 227), env.loc (base + 91), env.loc (base + 92), env.loc (base + 93)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 219, [.col (base + 218), .col (base + 91), .col (base + 92), .col (base + 93)], 4⟩
+      h ⟨base + 228, [.col (base + 227), .col (base + 91), .col (base + 92), .col (base + 93)], 4⟩
         (by simp [rotV3SitesAt])
-  have h31 : env.loc (base + 220) = hash [env.loc (base + 219), env.loc (base + 94), env.loc (base + 95), env.loc (base + 96)] := by
+  have h31 : env.loc (base + 229) = hash [env.loc (base + 228), env.loc (base + 94), env.loc (base + 95), env.loc (base + 96)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 220, [.col (base + 219), .col (base + 94), .col (base + 95), .col (base + 96)], 4⟩
+      h ⟨base + 229, [.col (base + 228), .col (base + 94), .col (base + 95), .col (base + 96)], 4⟩
         (by simp [rotV3SitesAt])
-  have h32 : env.loc (base + 221) = hash [env.loc (base + 220), env.loc (base + 97), env.loc (base + 98), env.loc (base + 99)] := by
+  have h32 : env.loc (base + 230) = hash [env.loc (base + 229), env.loc (base + 97), env.loc (base + 98), env.loc (base + 99)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 221, [.col (base + 220), .col (base + 97), .col (base + 98), .col (base + 99)], 4⟩
+      h ⟨base + 230, [.col (base + 229), .col (base + 97), .col (base + 98), .col (base + 99)], 4⟩
         (by simp [rotV3SitesAt])
-  have h33 : env.loc (base + 222) = hash [env.loc (base + 221), env.loc (base + 100), env.loc (base + 101), env.loc (base + 102)] := by
+  have h33 : env.loc (base + 231) = hash [env.loc (base + 230), env.loc (base + 100), env.loc (base + 101), env.loc (base + 102)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 222, [.col (base + 221), .col (base + 100), .col (base + 101), .col (base + 102)], 4⟩
+      h ⟨base + 231, [.col (base + 230), .col (base + 100), .col (base + 101), .col (base + 102)], 4⟩
         (by simp [rotV3SitesAt])
-  have h34 : env.loc (base + 223) = hash [env.loc (base + 222), env.loc (base + 103), env.loc (base + 104), env.loc (base + 105)] := by
+  have h34 : env.loc (base + 232) = hash [env.loc (base + 231), env.loc (base + 103), env.loc (base + 104), env.loc (base + 105)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 223, [.col (base + 222), .col (base + 103), .col (base + 104), .col (base + 105)], 4⟩
+      h ⟨base + 232, [.col (base + 231), .col (base + 103), .col (base + 104), .col (base + 105)], 4⟩
         (by simp [rotV3SitesAt])
-  have h35 : env.loc (base + 224) = hash [env.loc (base + 223), env.loc (base + 106), env.loc (base + 107), env.loc (base + 108)] := by
+  have h35 : env.loc (base + 233) = hash [env.loc (base + 232), env.loc (base + 106), env.loc (base + 107), env.loc (base + 108)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 224, [.col (base + 223), .col (base + 106), .col (base + 107), .col (base + 108)], 4⟩
+      h ⟨base + 233, [.col (base + 232), .col (base + 106), .col (base + 107), .col (base + 108)], 4⟩
         (by simp [rotV3SitesAt])
-  have h36 : env.loc (base + 225) = hash [env.loc (base + 224), env.loc (base + 109), env.loc (base + 110), env.loc (base + 111)] := by
+  have h36 : env.loc (base + 234) = hash [env.loc (base + 233), env.loc (base + 109), env.loc (base + 110), env.loc (base + 111)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 225, [.col (base + 224), .col (base + 109), .col (base + 110), .col (base + 111)], 4⟩
+      h ⟨base + 234, [.col (base + 233), .col (base + 109), .col (base + 110), .col (base + 111)], 4⟩
         (by simp [rotV3SitesAt])
-  have h37 : env.loc (base + 226) = hash [env.loc (base + 225), env.loc (base + 112), env.loc (base + 113), env.loc (base + 114)] := by
+  have h37 : env.loc (base + 235) = hash [env.loc (base + 234), env.loc (base + 112), env.loc (base + 113), env.loc (base + 114)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 226, [.col (base + 225), .col (base + 112), .col (base + 113), .col (base + 114)], 4⟩
+      h ⟨base + 235, [.col (base + 234), .col (base + 112), .col (base + 113), .col (base + 114)], 4⟩
         (by simp [rotV3SitesAt])
-  have h38 : env.loc (base + 227) = hash [env.loc (base + 226), env.loc (base + 115), env.loc (base + 116), env.loc (base + 117)] := by
+  have h38 : env.loc (base + 236) = hash [env.loc (base + 235), env.loc (base + 115), env.loc (base + 116), env.loc (base + 117)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 227, [.col (base + 226), .col (base + 115), .col (base + 116), .col (base + 117)], 4⟩
+      h ⟨base + 236, [.col (base + 235), .col (base + 115), .col (base + 116), .col (base + 117)], 4⟩
         (by simp [rotV3SitesAt])
-  have h39 : env.loc (base + 228) = hash [env.loc (base + 227), env.loc (base + 118), env.loc (base + 119), env.loc (base + 120)] := by
+  have h39 : env.loc (base + 237) = hash [env.loc (base + 236), env.loc (base + 118), env.loc (base + 119), env.loc (base + 120)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 228, [.col (base + 227), .col (base + 118), .col (base + 119), .col (base + 120)], 4⟩
+      h ⟨base + 237, [.col (base + 236), .col (base + 118), .col (base + 119), .col (base + 120)], 4⟩
         (by simp [rotV3SitesAt])
-  have h40 : env.loc (base + 229) = hash [env.loc (base + 228), env.loc (base + 121), env.loc (base + 122), env.loc (base + 123)] := by
+  have h40 : env.loc (base + 238) = hash [env.loc (base + 237), env.loc (base + 121), env.loc (base + 122), env.loc (base + 123)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 229, [.col (base + 228), .col (base + 121), .col (base + 122), .col (base + 123)], 4⟩
+      h ⟨base + 238, [.col (base + 237), .col (base + 121), .col (base + 122), .col (base + 123)], 4⟩
         (by simp [rotV3SitesAt])
-  have h41 : env.loc (base + 230) = hash [env.loc (base + 229), env.loc (base + 124), env.loc (base + 125), env.loc (base + 126)] := by
+  have h41 : env.loc (base + 239) = hash [env.loc (base + 238), env.loc (base + 124), env.loc (base + 125), env.loc (base + 126)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 230, [.col (base + 229), .col (base + 124), .col (base + 125), .col (base + 126)], 4⟩
+      h ⟨base + 239, [.col (base + 238), .col (base + 124), .col (base + 125), .col (base + 126)], 4⟩
         (by simp [rotV3SitesAt])
-  have h42 : env.loc (base + 231) = hash [env.loc (base + 230), env.loc (base + 127), env.loc (base + 128), env.loc (base + 129)] := by
+  have h42 : env.loc (base + 240) = hash [env.loc (base + 239), env.loc (base + 127), env.loc (base + 128), env.loc (base + 129)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 231, [.col (base + 230), .col (base + 127), .col (base + 128), .col (base + 129)], 4⟩
+      h ⟨base + 240, [.col (base + 239), .col (base + 127), .col (base + 128), .col (base + 129)], 4⟩
         (by simp [rotV3SitesAt])
-  have h43 : env.loc (base + 232) = hash [env.loc (base + 231), env.loc (base + 130), env.loc (base + 131), env.loc (base + 132)] := by
+  have h43 : env.loc (base + 241) = hash [env.loc (base + 240), env.loc (base + 130), env.loc (base + 131), env.loc (base + 132)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 232, [.col (base + 231), .col (base + 130), .col (base + 131), .col (base + 132)], 4⟩
+      h ⟨base + 241, [.col (base + 240), .col (base + 130), .col (base + 131), .col (base + 132)], 4⟩
         (by simp [rotV3SitesAt])
-  have h44 : env.loc (base + 233) = hash [env.loc (base + 232), env.loc (base + 133), env.loc (base + 134), env.loc (base + 135)] := by
+  have h44 : env.loc (base + 242) = hash [env.loc (base + 241), env.loc (base + 133), env.loc (base + 134), env.loc (base + 135)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 233, [.col (base + 232), .col (base + 133), .col (base + 134), .col (base + 135)], 4⟩
+      h ⟨base + 242, [.col (base + 241), .col (base + 133), .col (base + 134), .col (base + 135)], 4⟩
         (by simp [rotV3SitesAt])
-  have h45 : env.loc (base + 234) = hash [env.loc (base + 233), env.loc (base + 136), env.loc (base + 137), env.loc (base + 138)] := by
+  have h45 : env.loc (base + 243) = hash [env.loc (base + 242), env.loc (base + 136), env.loc (base + 137), env.loc (base + 138)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 234, [.col (base + 233), .col (base + 136), .col (base + 137), .col (base + 138)], 4⟩
+      h ⟨base + 243, [.col (base + 242), .col (base + 136), .col (base + 137), .col (base + 138)], 4⟩
         (by simp [rotV3SitesAt])
-  have h46 : env.loc (base + 235) = hash [env.loc (base + 234), env.loc (base + 139), env.loc (base + 140), env.loc (base + 141)] := by
+  have h46 : env.loc (base + 244) = hash [env.loc (base + 243), env.loc (base + 139), env.loc (base + 140), env.loc (base + 141)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 235, [.col (base + 234), .col (base + 139), .col (base + 140), .col (base + 141)], 4⟩
+      h ⟨base + 244, [.col (base + 243), .col (base + 139), .col (base + 140), .col (base + 141)], 4⟩
         (by simp [rotV3SitesAt])
-  have h47 : env.loc (base + 236) = hash [env.loc (base + 235), env.loc (base + 142), env.loc (base + 143), env.loc (base + 144)] := by
+  have h47 : env.loc (base + 245) = hash [env.loc (base + 244), env.loc (base + 142), env.loc (base + 143), env.loc (base + 144)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 236, [.col (base + 235), .col (base + 142), .col (base + 143), .col (base + 144)], 4⟩
+      h ⟨base + 245, [.col (base + 244), .col (base + 142), .col (base + 143), .col (base + 144)], 4⟩
         (by simp [rotV3SitesAt])
-  have h48 : env.loc (base + 237) = hash [env.loc (base + 236), env.loc (base + 145), env.loc (base + 146), env.loc (base + 147)] := by
+  have h48 : env.loc (base + 246) = hash [env.loc (base + 245), env.loc (base + 145), env.loc (base + 146), env.loc (base + 147)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 237, [.col (base + 236), .col (base + 145), .col (base + 146), .col (base + 147)], 4⟩
+      h ⟨base + 246, [.col (base + 245), .col (base + 145), .col (base + 146), .col (base + 147)], 4⟩
         (by simp [rotV3SitesAt])
-  have h49 : env.loc (base + 238) = hash [env.loc (base + 237), env.loc (base + 148), env.loc (base + 149), env.loc (base + 150)] := by
+  have h49 : env.loc (base + 247) = hash [env.loc (base + 246), env.loc (base + 148), env.loc (base + 149), env.loc (base + 150)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 238, [.col (base + 237), .col (base + 148), .col (base + 149), .col (base + 150)], 4⟩
+      h ⟨base + 247, [.col (base + 246), .col (base + 148), .col (base + 149), .col (base + 150)], 4⟩
         (by simp [rotV3SitesAt])
-  have h50 : env.loc (base + 239) = hash [env.loc (base + 238), env.loc (base + 151), env.loc (base + 152), env.loc (base + 153)] := by
+  have h50 : env.loc (base + 248) = hash [env.loc (base + 247), env.loc (base + 151), env.loc (base + 152), env.loc (base + 153)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 239, [.col (base + 238), .col (base + 151), .col (base + 152), .col (base + 153)], 4⟩
+      h ⟨base + 248, [.col (base + 247), .col (base + 151), .col (base + 152), .col (base + 153)], 4⟩
         (by simp [rotV3SitesAt])
-  have h51 : env.loc (base + 240) = hash [env.loc (base + 239), env.loc (base + 154), env.loc (base + 155), env.loc (base + 156)] := by
+  have h51 : env.loc (base + 249) = hash [env.loc (base + 248), env.loc (base + 154), env.loc (base + 155), env.loc (base + 156)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 240, [.col (base + 239), .col (base + 154), .col (base + 155), .col (base + 156)], 4⟩
+      h ⟨base + 249, [.col (base + 248), .col (base + 154), .col (base + 155), .col (base + 156)], 4⟩
         (by simp [rotV3SitesAt])
-  have h52 : env.loc (base + 241) = hash [env.loc (base + 240), env.loc (base + 157), env.loc (base + 158), env.loc (base + 159)] := by
+  have h52 : env.loc (base + 250) = hash [env.loc (base + 249), env.loc (base + 157), env.loc (base + 158), env.loc (base + 159)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 241, [.col (base + 240), .col (base + 157), .col (base + 158), .col (base + 159)], 4⟩
+      h ⟨base + 250, [.col (base + 249), .col (base + 157), .col (base + 158), .col (base + 159)], 4⟩
         (by simp [rotV3SitesAt])
-  have h53 : env.loc (base + 242) = hash [env.loc (base + 241), env.loc (base + 160), env.loc (base + 161), env.loc (base + 162)] := by
+  have h53 : env.loc (base + 251) = hash [env.loc (base + 250), env.loc (base + 160), env.loc (base + 161), env.loc (base + 162)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 242, [.col (base + 241), .col (base + 160), .col (base + 161), .col (base + 162)], 4⟩
+      h ⟨base + 251, [.col (base + 250), .col (base + 160), .col (base + 161), .col (base + 162)], 4⟩
         (by simp [rotV3SitesAt])
-  have h54 : env.loc (base + 243) = hash [env.loc (base + 242), env.loc (base + 163), env.loc (base + 164), env.loc (base + 165)] := by
+  have h54 : env.loc (base + 252) = hash [env.loc (base + 251), env.loc (base + 163), env.loc (base + 164), env.loc (base + 165)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 243, [.col (base + 242), .col (base + 163), .col (base + 164), .col (base + 165)], 4⟩
+      h ⟨base + 252, [.col (base + 251), .col (base + 163), .col (base + 164), .col (base + 165)], 4⟩
         (by simp [rotV3SitesAt])
-  have h55 : env.loc (base + 244) = hash [env.loc (base + 243), env.loc (base + 166), env.loc (base + 167), env.loc (base + 168)] := by
+  have h55 : env.loc (base + 253) = hash [env.loc (base + 252), env.loc (base + 166), env.loc (base + 167), env.loc (base + 168)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 244, [.col (base + 243), .col (base + 166), .col (base + 167), .col (base + 168)], 4⟩
+      h ⟨base + 253, [.col (base + 252), .col (base + 166), .col (base + 167), .col (base + 168)], 4⟩
         (by simp [rotV3SitesAt])
-  have h56 : env.loc (base + 245) = hash [env.loc (base + 244), env.loc (base + 169), env.loc (base + 170), env.loc (base + 171)] := by
+  have h56 : env.loc (base + 254) = hash [env.loc (base + 253), env.loc (base + 169), env.loc (base + 170), env.loc (base + 171)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 245, [.col (base + 244), .col (base + 169), .col (base + 170), .col (base + 171)], 4⟩
+      h ⟨base + 254, [.col (base + 253), .col (base + 169), .col (base + 170), .col (base + 171)], 4⟩
         (by simp [rotV3SitesAt])
-  have h57 : env.loc (base + 246) = hash [env.loc (base + 245), env.loc (base + 172), env.loc (base + 173), env.loc (base + 174)] := by
+  have h57 : env.loc (base + 255) = hash [env.loc (base + 254), env.loc (base + 172), env.loc (base + 173), env.loc (base + 174)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 246, [.col (base + 245), .col (base + 172), .col (base + 173), .col (base + 174)], 4⟩
+      h ⟨base + 255, [.col (base + 254), .col (base + 172), .col (base + 173), .col (base + 174)], 4⟩
         (by simp [rotV3SitesAt])
-  have h58 : env.loc (base + 247) = hash [env.loc (base + 246), env.loc (base + 175), env.loc (base + 176), env.loc (base + 177)] := by
+  have h58 : env.loc (base + 256) = hash [env.loc (base + 255), env.loc (base + 175), env.loc (base + 176), env.loc (base + 177)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 247, [.col (base + 246), .col (base + 175), .col (base + 176), .col (base + 177)], 4⟩
+      h ⟨base + 256, [.col (base + 255), .col (base + 175), .col (base + 176), .col (base + 177)], 4⟩
         (by simp [rotV3SitesAt])
-  have h59 : env.loc (base + 248) = hash [env.loc (base + 247), env.loc (base + 178), env.loc (base + 179), env.loc (base + 180)] := by
+  have h59 : env.loc (base + 257) = hash [env.loc (base + 256), env.loc (base + 178), env.loc (base + 179), env.loc (base + 180)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 248, [.col (base + 247), .col (base + 178), .col (base + 179), .col (base + 180)], 4⟩
+      h ⟨base + 257, [.col (base + 256), .col (base + 178), .col (base + 179), .col (base + 180)], 4⟩
         (by simp [rotV3SitesAt])
-  have h60 : env.loc (base + 249) = hash [env.loc (base + 248), env.loc (base + 181), env.loc (base + 182), env.loc (base + 183)] := by
+  have h60 : env.loc (base + 258) = hash [env.loc (base + 257), env.loc (base + 181), env.loc (base + 182), env.loc (base + 183)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 249, [.col (base + 248), .col (base + 181), .col (base + 182), .col (base + 183)], 4⟩
+      h ⟨base + 258, [.col (base + 257), .col (base + 181), .col (base + 182), .col (base + 183)], 4⟩
         (by simp [rotV3SitesAt])
-  have h61 : env.loc (base + 250) = hash [env.loc (base + 249), env.loc (base + 184), env.loc (base + 185), env.loc (base + 186)] := by
+  have h61 : env.loc (base + 259) = hash [env.loc (base + 258), env.loc (base + 184), env.loc (base + 185), env.loc (base + 186)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 250, [.col (base + 249), .col (base + 184), .col (base + 185), .col (base + 186)], 4⟩
+      h ⟨base + 259, [.col (base + 258), .col (base + 184), .col (base + 185), .col (base + 186)], 4⟩
         (by simp [rotV3SitesAt])
-  have h62 : env.loc (base + 188) = hash [env.loc (base + 250), env.loc (base + 187)] := by
+  have h62 : env.loc (base + 260) = hash [env.loc (base + 259), env.loc (base + 187), env.loc (base + 188), env.loc (base + 189)] := by
     simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
-      h ⟨base + 188, [.col (base + 250), .col (base + 187)], 2⟩
+      h ⟨base + 260, [.col (base + 259), .col (base + 187), .col (base + 188), .col (base + 189)], 4⟩
         (by simp [rotV3SitesAt])
-  rw [h62, h61, h60, h59, h58, h57, h56, h55, h54, h53, h52, h51, h50, h49, h48, h47, h46, h45, h44, h43, h42, h41, h40, h39, h38, h37, h36, h35, h34, h33, h32, h31, h30, h29, h28, h27, h26, h25, h24, h23, h22, h21, h20, h19, h18, h17, h16, h15, h14, h13, h12, h11, h10, h9, h8, h7, h6, h5, h4, h3, h2, h1, h0]
+  have h63 : env.loc (base + 261) = hash [env.loc (base + 260), env.loc (base + 190), env.loc (base + 191), env.loc (base + 192)] := by
+    simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
+      h ⟨base + 261, [.col (base + 260), .col (base + 190), .col (base + 191), .col (base + 192)], 4⟩
+        (by simp [rotV3SitesAt])
+  have h64 : env.loc (base + 262) = hash [env.loc (base + 261), env.loc (base + 193), env.loc (base + 194), env.loc (base + 195)] := by
+    simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
+      h ⟨base + 262, [.col (base + 261), .col (base + 193), .col (base + 194), .col (base + 195)], 4⟩
+        (by simp [rotV3SitesAt])
+  have h65 : env.loc (base + 197) = hash [env.loc (base + 262), env.loc (base + 196)] := by
+    simpa [VmHashSite.resolvedInputs, HashInput.resolve] using
+      h ⟨base + 197, [.col (base + 262), .col (base + 196)], 2⟩
+        (by simp [rotV3SitesAt])
+  rw [h65, h64, h63, h62, h61, h60, h59, h58, h57, h56, h55, h54, h53, h52, h51, h50, h49, h48, h47, h46, h45, h44, h43, h42, h41, h40, h39, h38, h37, h36, h35, h34, h33, h32, h31, h30, h29, h28, h27, h26, h25, h24, h23, h22, h21, h20, h19, h18, h17, h16, h15, h14, h13, h12, h11, h10, h9, h8, h7, h6, h5, h4, h3, h2, h1, h0]
   rfl
 
 set_option maxHeartbeats 6400000 in
@@ -2724,8 +2743,8 @@ def customV3 : EffectVmDescriptor2 :=
 -- ⚑ FLAG DAY KEY-NONET (2026-08-01, 184 → 187 limbs): 1791 → 1813. `+8` from `APPENDIX_SPAN`
 -- (two blocks × 4 columns: `B_SPAN` 247 → 251) and `+14` from graduation (the appendix gained 2
 -- sites × 7 lane columns: 136 → 138). Re-pin the Rust twin AGAIN — this literal is the review.
-#guard CUSTOM_COMMIT_TEETH_COL == 1813
-#guard CUSTOM_VK_TEETH_COL == 1817
+#guard CUSTOM_COMMIT_TEETH_COL == 1879
+#guard CUSTOM_VK_TEETH_COL == 1883
 #guard customV3.traceWidth == CUSTOM_COMMIT_TEETH_COL + 8
 
 /-! ### The note-spend nullifier PI weld (the C4 last-flip-gate close).
@@ -3180,7 +3199,7 @@ theorem noteCreateV3_grow_gate_forces_set_insert (hash : List ℤ → ℤ)
 #guard noteCreateV3.piCount == 40
 #guard (mapOpsOf noteCreateV3).length == 1
 #guard beforeCommitmentsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 27
-#guard afterCommitmentsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 251 + 27
+#guard afterCommitmentsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 263 + 27
 
 /-! ## §5.RV — the revoke REVOKED-SET GROW-GATE (the deployment-real revoked set-insert; hole #3).
 
@@ -3281,7 +3300,7 @@ theorem revokeV3_grow_gate_forces_set_insert (hash : List ℤ → ℤ)
 #guard revokedFreshOp.op.code == 2
 #guard REVOKED_KEY_PARAM_COL == 68
 #guard beforeRevokedRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 37
-#guard afterRevokedRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 251 + 37
+#guard afterRevokedRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 263 + 37
 -- Lane 0 of the revoked root group IS the scalar limb 37 (the projection the scalar writesTo forces).
 #guard revokedRootGroupCol EFFECT_VM_WIDTH 0 == EFFECT_VM_WIDTH + 37
 
@@ -3760,7 +3779,7 @@ injectivity of the encoding lives in `FieldLanes9`, and `circuit/tests/field_lan
 asserts the deployed Rust reproduces its Lean-COMPUTED vectors. The two are joined by that test, not
 by a theorem — say it at that resolution.
 
-An explicit list, in exactly `rotated187.fieldsOctet`'s order (the historical 56 first, then the
+An explicit list, in exactly `rotated196.fieldsOctet`'s order (the historical 56 first, then the
 eight ninth lanes), so the non-vacuity `fin_cases` discharges reduce and every pre-flag-day
 constraint keeps its emission position. -/
 def fieldsCompletionOffs : List Nat :=
@@ -3771,9 +3790,9 @@ def fieldsCompletionOffs : List Nat :=
    176, 177, 178, 179, 180, 181, 182, 183]
 
 -- ⚑ THE LITERAL IS THE VERIFIED LAYOUT'S, not a second copy that agrees today: this list is exactly
--- `rotated187.fieldsOctet`, whose membership in a legal (disjoint, in-bounds) tiling is
+-- `rotated196.fieldsOctet`, whose membership in a legal (disjoint, in-bounds) tiling is
 -- `native_decide`-checked in `RotatedLayout.lean`. A geometry change that forgets this list fails HERE.
-#guard fieldsCompletionOffs == rotated187.fieldsOctet
+#guard fieldsCompletionOffs == rotated196.fieldsOctet
 #guard fieldsCompletionOffs.length == 64
 -- …and it is exactly the union of the eight per-slot windows (no lane orphaned, none invented).
 #guard fieldsCompletionOffs.all (fun off => ((List.finRange 8).flatMap fieldsSlotLanes).contains off)
@@ -5582,7 +5601,7 @@ theorem refusalFieldsWriteV3_satisfiedVm_v1 (hash : List ℤ → ℤ)
 #guard refusalFieldsWriteOp.op == MapOpKind.write
 #guard REFUSAL_AUDIT_FELT_COL == 70                          -- PARAM_BASE (68) + param2 (spare)
 #guard beforeFieldsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 36
-#guard afterFieldsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 251 + 36
+#guard afterFieldsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 263 + 36
 -- BOTH POLARITIES of the write tooth's GUARD on the toy environment: the write fires under the refusal
 -- selector (col 52 = 1) and is inert without it (the gate contributes nothing on a non-refusal pad row).
 #guard (let env : VmRowEnv := ⟨fun c => if c == 52 then 1 else 0, fun _ => 0, fun _ => 0, fun _ => 0⟩;
@@ -5893,15 +5912,15 @@ theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) 
 #assert_axioms setFieldDynV3_rejects_forged
 
 -- The mode / fields-root force-cols land at AFTER limb 35 / 36 (= traceWidth + B_SPAN + 35 / +36).
-#guard afterModeCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 251 + 35
-#guard afterFieldsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 251 + 36
+#guard afterModeCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 263 + 35
+#guard afterFieldsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 263 + 36
 #guard beforeModeCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 35
 #guard declaredFieldsRootCol == prmCol 0
 #guard decide (modeHosted ≠ modeSovereign)
 
 -- The perms/vk force-cols land at AFTER limb 33 / 34 (= traceWidth + B_SPAN + 33 / +34).
-#guard afterPermsCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 251 + 33
-#guard afterVKCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 251 + 34
+#guard afterPermsCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 263 + 33
+#guard afterVKCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 263 + 34
 #guard declaredParamCol == prmCol 0
 
 -- The disc discriminants are pairwise distinct (the gate distinguishes lifecycle states).
@@ -5910,7 +5929,7 @@ theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) 
 #guard decide (discDestroyed ≠ discArchived)
 #guard decide (discLive ≠ discArchived)
 -- The disc force-cols land at AFTER limb 32 (= traceWidth + B_SPAN + 32) and BEFORE limb 32.
-#guard afterDiscCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 251 + 32
+#guard afterDiscCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 263 + 32
 #guard beforeDiscCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 32
 
 #assert_axioms graduable_rotateV3WithRecordPin
@@ -6043,13 +6062,13 @@ SIGN bit, so a key and its negation collide and the negation is a keypair the at
 They are PROJECTED from the verified layout, never re-typed: `RotatedLayout.octetLaneCol o 8`. -/
 
 /-- `child_vk`'s ninth lane (in-block limb 184). -/
-def B_CHILD_VK_NINTH_LANE : Nat := (rotated187.octetLaneCol 0 8).getD 0
+def B_CHILD_VK_NINTH_LANE : Nat := (rotated196.octetLaneCol 0 8).getD 0
 /-- `contract_hash`'s ninth lane (in-block limb 185). -/
-def B_CONTRACT_HASH_NINTH_LANE : Nat := (rotated187.octetLaneCol 1 8).getD 0
+def B_CONTRACT_HASH_NINTH_LANE : Nat := (rotated196.octetLaneCol 1 8).getD 0
 /-- ⚑ **THE OWNER KEY's ninth lane** (in-block limb 186) — the column
 `Emit.KeyCanonicity9Emit.deployedKeyCanon9Cols` puts lane 8 of the nonet on. Rust twin
 `trace_rotated::B_PUBKEY_NINTH_LANE`, generated by `EmitLayoutManifest`. -/
-def B_PUBKEY_NINTH_LANE : Nat := (rotated187.octetLaneCol 2 8).getD 0
+def B_PUBKEY_NINTH_LANE : Nat := (rotated196.octetLaneCol 2 8).getD 0
 
 -- Re-typed by hand against the committed layout: the literals ARE the review (`trace_rotated.rs`'s
 -- own doctrine, paid for when nine pins were "re-expressed" as `x == x` at the 178 → 184 flag day).
@@ -6818,7 +6837,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 -- The rotated transfer: the v1 graduation's constraints + 24 welds + 4 pins + 138 chip sites
 -- (v15: 63 per block after the key-nonet flag day, + the 12 caveat sites incl. the rc pair).
 #guard (v3Of EffectVmEmitTransfer.transferVmDescriptor).constraints.length
-        == transferVmDescriptor2.constraints.length + 24 + 4 + 138
+        == transferVmDescriptor2.constraints.length + 24 + 4 + 144
 #guard (v3Of EffectVmEmitTransfer.transferVmDescriptor).piCount == 39
 -- The graduation side conditions hold on every v1-faced member (per-instance witnesses of
 -- the parametric `graduable_rotateV3`; attenuate/setFieldDyn ride `v3OfWith` over faces

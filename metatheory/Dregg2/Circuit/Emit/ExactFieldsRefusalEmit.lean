@@ -54,8 +54,10 @@ at the KEY-NONET flag day (2026-08-01, `rotatedNumPreLimbs` 184 → 187) 1819 �
 651 → 659 and two more appendix sites, `+8 + 14 = +22` — the identical delta `CUSTOM_COMMIT_TEETH_COL`
 took, 1791 → 1813, as at all three previous flag days). The guard went RED rather than silent all
 four times — which is the whole reason the literal is allowed to exist, and the fourth time it went
-red it stayed red for a day, because this file was not re-pinned with the rest of the flag day. -/
-def BEFORE_BASE : Nat := 1841
+red it stayed red for a day, because this file was not re-pinned with the rest of the flag day.
+At the IROOT-WIDENING flag day (2026-11-07, 187 → 196) 1841 → 1907: `APPENDIX_SPAN` 659 → 683 and six
+more appendix sites, `+24 + 42 = +66`, the delta `CUSTOM_COMMIT_TEETH_COL` took (1813 → 1879). -/
+def BEFORE_BASE : Nat := 1907
 def OCC_COL : Nat := BEFORE_BASE
 def OLD_VALUE_BASE : Nat := OCC_COL + 1
 def OLD_LEAF_STATE_BASE : Nat := OLD_VALUE_BASE + VALUE_LIMBS
@@ -79,11 +81,11 @@ def TRACE_WIDTH : Nat := COUNT_COL + 1
 def AUDIT_PI_BASE : Nat := 47
 def AUDIT_PI_COUNT : Nat := 16
 
-#guard BEFORE_BASE == 1841    -- ⚑ +22 at the KEY-NONET flag day (APPENDIX_SPAN 651 → 659, +2 sites)
+#guard BEFORE_BASE == 1907    -- ⚑ +66 at the IROOT-WIDENING flag day (was 1841; +22 at the KEY-NONET one)
 #guard BEFORE_BASE == refusalV3.traceWidth   -- ⚑ the reality gate: no independent literal
-#guard AFTER_BASE == 2099
-#guard ACTIVE_COL == 2347
-#guard TRACE_WIDTH == 2349
+#guard AFTER_BASE == 2165
+#guard ACTIVE_COL == 2413
+#guard TRACE_WIDTH == 2415
 #guard AUDIT_PI_BASE == 39 + 8
 
 def ev (c : Nat) : EmittedExpr := .var c
@@ -288,7 +290,7 @@ def refusalExactFieldsWide : EffectVmDescriptor2 :=
 #guard refusalExactFieldsV4.piCount == 63
 #guard (withRecordPin8Headroom2 refusalV3).piCount == AUDIT_PI_BASE
 -- ⚑ KEY-NONET: 992 → 1008. Two wide blocks of `wideNumCarriers` 8-felt carriers, 62 → 63.
-#guard refusalExactFieldsWide.traceWidth == TRACE_WIDTH + 1008
+#guard refusalExactFieldsWide.traceWidth == TRACE_WIDTH + 1056
 -- and the same fact WELDED to the producer's derived span, so the next carrier move reds the literal.
 #guard refusalExactFieldsWide.traceWidth
   == TRACE_WIDTH + Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppendixSpan

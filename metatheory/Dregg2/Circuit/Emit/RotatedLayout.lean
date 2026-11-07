@@ -13,7 +13,7 @@ THE CURE: make the layout a first-class object with an explicit machine-checked 
 `groupCol` projection is the SINGLE SOURCE the emit reads its positions from. A flag-day becomes a new
 `def` + `native_decide`; an ill-aligned / overlapping layout becomes UNCONSTRUCTABLE.
 
-`rotated187` is the current geometry (178 until 2026-07-31's fields-nonet flag day, 184 until
+`rotated196` is the current geometry (178 until 2026-07-31's fields-nonet flag day, 184 until
 2026-08-01's KEY-nonet flag day). `EffectVmEmitRotationV3` projects its group columns from this
 object; `EmitLayoutManifest.lean` emits its `groupTable` to Rust; and both Rust producers plus the
 circuit trace generator consume that generated table. The concrete integers therefore live here once.
@@ -47,6 +47,12 @@ structure RotatedLayout where
   octetNinthLanes : List Nat
   fieldsOctet     : List Nat                    -- the 64 fields[0..7] completion lanes (8 slots x lanes 1..8)
   cellsCompletion : List Nat                    -- legacy slot, now empty (cells is a named group)
+  /-- ⚑ **IROOT-WIDENING FLAG DAY 2026-11-07.** Lanes 1..7 of the receipt-log root `iroot8`. Lane 0
+      stays at `B_IROOT` (absorbed alone last); these seven are ABSORBED PRE-LIMBS, so `wireCommitR`
+      and the wide chain fold them into `state_commit`. Before this the block had one receipt-root
+      column and the signed anchor bound the receipt log at ONE felt (a lane-0 birthday collision
+      was exhibited in 64,147 evaluations, `turn/tests/iroot_wide_old_admits_new_rejects.rs`). -/
+  irootCompletion : List Nat
   pads            : List Nat
 deriving Repr
 
@@ -58,6 +64,7 @@ def RotatedLayout.occupied (L : RotatedLayout) : List Nat :=
     ++ L.octetNinthLanes
     ++ L.fieldsOctet
     ++ L.cellsCompletion
+    ++ L.irootCompletion
     ++ L.pads
 
 /-- **THE PROJECTION** — the single source the emit reads a group's within-block column from. Lane 0 is
@@ -88,6 +95,9 @@ structure Legal (L : RotatedLayout) : Prop where
       that grows an octet without allocating its ninth lane — the shape that let the deployed owner
       key ride eight lanes at 247.26 bits against 256 — is UNCONSTRUCTABLE. -/
   octetNonets : L.octetNinthLanes.length = L.octets.length
+  /-- ⚑ **THE RECEIPT-LOG ROOT IS FAITHFUL-8.** Exactly seven completion lanes beside `B_IROOT`'s
+      lane 0, so a layout that carries the receipt root at fewer lanes is UNCONSTRUCTABLE. -/
+  irootWidth  : L.irootCompletion.length = 7
   /-- Disjointness: no two things write the same column. THE invariant that was a comment. -/
   disjoint    : L.occupied.Nodup
   /-- Bounds: every occupied column is a real pre-iroot limb. -/
@@ -150,11 +160,16 @@ ninth lanes the three carrier octets demand. Downstream: `B_SPAN` 247 → 251, `
 `B_STATE_COMMIT` 185 → 188, the chain band `186..246` → `189..250` (61 → 62 carriers),
 `CANON9_REGION_OFF` 539 → 547, `APPENDIX_SPAN` 651 → 659, `CAVEAT_REGION_OFF` 494 → 502. Every
 column `0..183` keeps its meaning; 184/185/186 are NEW. -/
-def rotatedNumPreLimbs : Nat := 187
+def rotatedNumPreLimbs : Nat := 196
 
-/-- The CURRENT deployed rotated geometry (187 pre-iroot limbs). This enumeration is a complete
-tiling of `0..186` (every column once, no pads). -/
-def rotated187 : RotatedLayout where
+/-- The CURRENT deployed rotated geometry (196 pre-iroot limbs). This enumeration is a complete
+tiling of `0..195`: every column once, the two pads 194, 195 included.
+
+⚑⚑⚑ **IROOT-WIDENING FLAG DAY 2026-11-07: 187 → 196.** The receipt-log root's lanes 1..7 take the
+new columns 187..193, and `Legal.bodyAligned` (`n ≡ 1 mod 3`) makes 194 illegal, so the extent is
+196 and 194, 195 are pads (the producers write zero; a pad is absorbed, so a nonzero pad moves the
+anchor, it cannot hide a state). Every column `0..186` keeps its meaning. -/
+def rotated196 : RotatedLayout where
   numPreLimbs := rotatedNumPreLimbs
   singles := [1, 2, 3,                       -- r0/r1/r2 = bal_lo/nonce/bal_hi (cells lane-0 is a group)
               4, 5, 6, 7, 8, 9, 10, 11,      -- r3..r10 = fields[0..7] lane-0 (welded)
@@ -189,7 +204,8 @@ def rotated187 : RotatedLayout where
   -- first two of those were the layout's only free pads; the remaining six are the extent bump.
   fieldsOctet := (List.range 56).map (· + 113) ++ (List.range 8).map (· + 176)
   cellsCompletion := []                      -- (cells is now a group; kept for structural symmetry)
-  pads := []                                 -- consumed by the ninth fields lane; nothing spare left
+  irootCompletion := [187, 188, 189, 190, 191, 192, 193]   -- iroot8 lanes 1..7 (lane 0 is B_IROOT)
+  pads := [194, 195]                         -- the 1-mod-3 body discipline's two spare columns
 
 /-- **THE NINTH-LANE PROJECTION** — the single source a consumer reads a `fields[slot]` lane column
 from. Lane 0 is the welded v1 face limb `4 + slot` (`gFieldWriteP1` / `param1` / `field_to_u64`);
@@ -205,19 +221,36 @@ def fieldLaneCol (slot : Fin 8) (lane : Fin 9) : Nat :=
 
 /-- The current layout is LEGAL — every semantic group exists exactly once at width eight, every
     carrier octet is a NONET, and the complete tiling is disjoint, in-bounds, and body-aligned. -/
-theorem rotated187_legal : Legal rotated187 where
+theorem rotated196_legal : Legal rotated196 where
   groupWidth  := by native_decide
   groupNames  := by native_decide
   groupCoverage := by intro name; cases name <;> native_decide
   octetNonets := by native_decide
+  irootWidth  := by native_decide
   disjoint    := by native_decide
   inBounds    := by native_decide
   bodyAligned := by native_decide
 
-/-- STRONGER than `Nodup`: the layout occupies EXACTLY 187 columns. With `disjoint` + `inBounds` this
-    forces a complete tiling of `0..186` — no gaps, no reuse, no wasted column, and (as at 184) no
-    pads left over. -/
-theorem rotated187_complete : rotated187.occupied.length = 187 := by native_decide
+/-- STRONGER than `Nodup`: the layout occupies EXACTLY 196 columns. With `disjoint` + `inBounds` this
+    forces a complete tiling of `0..195` — no gaps, no reuse; the only unassigned columns are the
+    two named pads. -/
+theorem rotated196_complete : rotated196.occupied.length = 196 := by native_decide
+
+/-- **THE RECEIPT-ROOT PROJECTION.** Lane 0 of `iroot8` is `B_IROOT = numPreLimbs`; lanes 1..7 are
+the layout's `irootCompletion`. -/
+def RotatedLayout.irootLaneCol (L : RotatedLayout) (lane : Fin 8) : Option Nat :=
+  if (lane : Nat) = 0 then some L.numPreLimbs else L.irootCompletion[(lane : Nat) - 1]?
+
+theorem iroot_lane_cols :
+    (List.range 8).map (fun l => (rotated196.irootLaneCol ⟨l % 8, by omega⟩).getD 0)
+      = [196, 187, 188, 189, 190, 191, 192, 193] := by native_decide
+
+/-- ⚑ **AND THEY ARE ABSORBED**: lanes 1..7 are pre-limbs, so they enter `preLimbsAt` and reach
+`state_commit` through `wireCommitR` / `wireCommitR8`; lane 0 is absorbed last at `B_IROOT`. -/
+theorem iroot_completion_absorbed :
+    ∀ c ∈ rotated196.irootCompletion, c ∈ List.range rotated196.numPreLimbs := by native_decide
+
+theorem iroot_completion_is_new : ∀ c ∈ rotated196.irootCompletion, 187 ≤ c := by native_decide
 
 /-- **THE FIELDS-NONET FLAG DAY (178 → 184) SHIFTED NOTHING**, and still does not: the ninth lane of
 `fields[j]` is `176 + j`, all eight in `176..183`, every one at or above the old 178 extent's two
@@ -234,7 +267,7 @@ theorem fields_ninth_lanes_are_new :
 72 of them (8 slots × 9 lanes) are pairwise distinct — the invariant that was a comment. -/
 theorem fieldLaneCol_occupied :
     ∀ p ∈ (List.range 8).flatMap (fun j => (List.range 9).map (fun l =>
-      fieldLaneCol ⟨j % 8, by omega⟩ ⟨l % 9, by omega⟩)), p ∈ rotated187.occupied := by
+      fieldLaneCol ⟨j % 8, by omega⟩ ⟨l % 9, by omega⟩)), p ∈ rotated196.occupied := by
   native_decide
 
 theorem fieldLaneCol_nodup :
@@ -248,39 +281,39 @@ theorem fieldLaneCol_nodup :
 `contract_hash`'s is 185, and the OWNER KEY's is 186 — read out of the layout's own
 `octetNinthLanes`, not re-spelled. -/
 theorem octet_ninth_lanes :
-    (List.range 3).map (fun o => (rotated187.octetLaneCol o 8).getD 0) = [184, 185, 186] := by
+    (List.range 3).map (fun o => (rotated196.octetLaneCol o 8).getD 0) = [184, 185, 186] := by
   native_decide
 
 /-- **THE OWNER KEY'S NINTH LANE.** `KeyCanonicity9Emit.deployedKeyCols` is instantiated at exactly
 this in-block offset; `EffectVmEmitRotationV3.B_PUBKEY_NINTH_LANE` projects it. -/
 theorem pubkey_octet_lane_cols :
-    (List.range 9).map (fun l => (rotated187.octetLaneCol 2 ⟨l % 9, by omega⟩).getD 0)
+    (List.range 9).map (fun l => (rotated196.octetLaneCol 2 ⟨l % 9, by omega⟩).getD 0)
       = [105, 106, 107, 108, 109, 110, 111, 112, 186] := by
   native_decide
 
 /-- **THE THREE NEW COLUMNS ARE NEW.** Every ninth lane is at or past the old 184-column extent, so
 no column that had a meaning at 184 acquires a second one. -/
 theorem octet_ninth_lanes_are_new :
-    ∀ c ∈ rotated187.octetNinthLanes, 184 ≤ c ∧ c < rotatedNumPreLimbs := by
+    ∀ c ∈ rotated196.octetNinthLanes, 184 ≤ c ∧ c < rotatedNumPreLimbs := by
   native_decide
 
 /-- ⚑ **AND THEY ARE ABSORBED** — every ninth lane is a PRE-LIMB (`< numPreLimbs`), so it enters
 `preLimbsAt`, is folded by `wireCommitR`, and reaches `state_commit`. An appendix column would
 satisfy every other obligation in this file and bind NOTHING. -/
 theorem octet_ninth_lanes_absorbed :
-    ∀ c ∈ rotated187.octetNinthLanes, c ∈ List.range rotated187.numPreLimbs := by
+    ∀ c ∈ rotated196.octetNinthLanes, c ∈ List.range rotated196.numPreLimbs := by
   native_decide
 
 /-- Every column the carrier-octet nonet projection names is an occupied column, and the 27 of them
 (3 octets × 9 lanes) are pairwise distinct. -/
 theorem octetLaneCol_occupied :
     ∀ p ∈ (List.range 3).flatMap (fun o => (List.range 9).map (fun l =>
-      (rotated187.octetLaneCol o ⟨l % 9, by omega⟩).getD 0)), p ∈ rotated187.occupied := by
+      (rotated196.octetLaneCol o ⟨l % 9, by omega⟩).getD 0)), p ∈ rotated196.occupied := by
   native_decide
 
 theorem octetLaneCol_nodup :
     ((List.range 3).flatMap (fun o => (List.range 9).map (fun l =>
-      (rotated187.octetLaneCol o ⟨l % 9, by omega⟩).getD 0))).Nodup := by
+      (rotated196.octetLaneCol o ⟨l % 9, by omega⟩).getD 0))).Nodup := by
   native_decide
 
 /-- ⚑ **THE COUNTING INVARIANT, WRITTEN DOWN AT LAST.** `EffectVmEmitRotationV3.B_SPAN`'s
@@ -289,14 +322,17 @@ theorem octetLaneCol_nodup :
 would have left the block one carrier column short while every `#guard` in the emit still passed. -/
 theorem the_extent_is_one_mod_three : rotatedNumPreLimbs % 3 = 1 := by native_decide
 
+theorem neither_194_nor_195_is_body_aligned :
+    (194 - 4) % 3 ≠ 0 ∧ (195 - 4) % 3 ≠ 0 ∧ (196 - 4) % 3 = 0 := by native_decide
+
 theorem neither_185_nor_186_is_body_aligned :
     (185 - 4) % 3 ≠ 0 ∧ (186 - 4) % 3 ≠ 0 ∧ (187 - 4) % 3 = 0 := by native_decide
 
 /-- Sanity: the projection agrees with the raw group data (nullifier lane 0 = limb 26, lane 1 = 68). A
-    Phase-2 bridge theorem will pin each emit `*GroupCol` to exactly `rotated187.groupCol`. -/
-example : rotated187.groupCol .nullifier 0 = some 26 := by native_decide
-example : rotated187.groupCol .nullifier 1 = some 68 := by native_decide
-example : rotated187.groupCol .fields 1 = some 66 := by native_decide  -- the non-contiguous case
+    Phase-2 bridge theorem will pin each emit `*GroupCol` to exactly `rotated196.groupCol`. -/
+example : rotated196.groupCol .nullifier 0 = some 26 := by native_decide
+example : rotated196.groupCol .nullifier 1 = some 68 := by native_decide
+example : rotated196.groupCol .fields 1 = some 66 := by native_decide  -- the non-contiguous case
 
 /-- **EMIT-READY group table** — each group as `[lane0, completion_1 .. completion_7]`, in exactly the
     shape the Rust `[[usize; 8]; N]` layout wants. `EmitLayoutManifest.lean` exports this value into
@@ -305,14 +341,14 @@ def RotatedLayout.groupTable (L : RotatedLayout) : List (List Nat) :=
   L.groups.map (fun p => p.2.lane0 :: p.2.completion)
 
 /-- The emit-ready table for the current geometry, with its length pinned (10 faithful-8-felt groups). -/
-theorem rotated187_groupTable_len : rotated187.groupTable.length = 10 := by native_decide
+theorem rotated196_groupTable_len : rotated196.groupTable.length = 10 := by native_decide
 
 /-- Every emitted row has the Rust type's exact width. This is a `Legal` obligation, not an emitter
     convention that could fail only after generation. -/
-theorem rotated187_groupTable_row_width :
-    ∀ row ∈ rotated187.groupTable, row.length = 8 := by native_decide
+theorem rotated196_groupTable_row_width :
+    ∀ row ∈ rotated196.groupTable, row.length = 8 := by native_decide
 
 /-- Ten faithful-8 groups contribute exactly 80 occupied columns. -/
-theorem rotated187_groupTable_flatten_len : rotated187.groupTable.flatten.length = 80 := by native_decide
+theorem rotated196_groupTable_flatten_len : rotated196.groupTable.flatten.length = 80 := by native_decide
 
 end Dregg2.Circuit.Emit

@@ -159,7 +159,7 @@ that is the E10 forgery restored on precisely the lane the nonet was built for: 
 bit in the AFTER block, mint a self-consistent NEW_COMMIT, and `-A` seals as `A`.
 
 Read the LAYOUT's own allocation instead. `B_PUBKEY_NINTH_LANE` is
-`(rotated187.octetLaneCol 2 8).getD 0`, i.e. where the octet table actually puts lane 8 — a
+`(rotated196.octetLaneCol 2 8).getD 0`, i.e. where the octet table actually puts lane 8 — a
 different source from the pre-limb COUNT.
 
 ⚠ That difference is what gives `ownerFreeze_welds_the_ninth_lane` (`= 9`) its teeth. It does NOT

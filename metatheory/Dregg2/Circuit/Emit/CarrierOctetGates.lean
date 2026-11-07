@@ -164,7 +164,7 @@ def AFTER_BLOCK_BASE : Nat :=
 #guard B_CHILD_VK8 == 89
 #guard B_CONTRACT_HASH8 == 97
 #guard B_PUBKEY8 == 105
--- NINTH-LANE geometry (re-derived from `RotatedLayout.rotated187`, column order): the pubkey octet
+-- NINTH-LANE geometry (re-derived from `RotatedLayout.rotated196`, column order): the pubkey octet
 -- (105..=112, 8 limbs) + the fields lanes 1..7 window (113..=168, 56 limbs) + the circuit-only
 -- cells_root completion (169..=175, 7 limbs) + the eight fields NINTH lanes (176..=183, 8 limbs —
 -- the fields-nonet run, which ATE the two former pads at 176/177 and the six new columns 178..183)
@@ -174,10 +174,11 @@ def AFTER_BLOCK_BASE : Nat :=
 -- key nonet appended THREE more columns — `child_vk` lane 8 at 184, `contract_hash` lane 8 at 185
 -- and the owner key's lane 8 (the Ed25519 sign bit) at 186 — taking the region 184 -> 187. The
 -- number is not raised: each of the three is NAMED below against the constant
--- `EffectVmEmitRotationV3` derives from `rotated187.octetLaneCol`, so this reads TWO independent
+-- `EffectVmEmitRotationV3` derives from `rotated196.octetLaneCol`, so this reads TWO independent
 -- sources and can disagree, rather than restating its own arithmetic.
---   105 + 8 + 56 + 7 + 8 + 3 = 187 = B_IROOT   (was 105 + 8 + 56 + 7 + 8 = 184).
-#guard B_PUBKEY8 + 8 + 56 + 7 + 8 + 3 == Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT
+--   105 + 8 + 56 + 7 + 8 + 3 + 7 + 2 = 196 = B_IROOT   (was 105 + 8 + 56 + 7 + 8 + 3 = 187; the
+--   `+ 7 + 2` are the receipt root's lanes 1..7 and the two pads, the iroot-widening flag day).
+#guard B_PUBKEY8 + 8 + 56 + 7 + 8 + 3 + 7 + 2 == Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT
 -- WHICH three: the key nonet opens exactly where the fields nonet ends, and its last lane is the
 -- last pre-limb — so the `+ 3` above is those columns and nothing else.
 #guard Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_CHILD_VK_NINTH_LANE
@@ -187,6 +188,8 @@ def AFTER_BLOCK_BASE : Nat :=
 #guard Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_PUBKEY_NINTH_LANE
     == Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_CONTRACT_HASH_NINTH_LANE + 1
 #guard Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_PUBKEY_NINTH_LANE + 1
+    == (Dregg2.Circuit.Emit.rotated196.irootLaneCol 1).getD 0
+#guard Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_PUBKEY_NINTH_LANE + 1 + 7 + 2
     == Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT
 #guard Dregg2.Circuit.Emit.EffectVmEmitRotationV3.AFTER_BLOCK_OFF
     == Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_SPAN

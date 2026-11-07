@@ -84,7 +84,7 @@ would still bind only 232 bits of the key. The ninth lane must be an ABSORBED PR
     `CANONICAL_STATE_SCHEMA_EPOCH` must be bumped and the chain re-genesised. (Do not transcribe a
     remembered epoch number: read the constant.)
 
-✅ **LANDED 2026-08-01 — `rotatedNumPreLimbs` IS 187.** `RotatedLayout.rotated187` allocates the
+✅ **LANDED 2026-08-01 — `rotatedNumPreLimbs` IS 187.** `RotatedLayout.rotated196` allocates the
 three ninth lanes at in-block limbs 184 (`child_vk`), 185 (`contract_hash`) and 186
 (**`public_key`**), `Legal.octetNonets` makes an octet without a ninth lane unconstructable, and
 `EffectVmEmitRotationV3.preLimbsAt` now folds all 187 — so the owner key's ninth lane is inside the

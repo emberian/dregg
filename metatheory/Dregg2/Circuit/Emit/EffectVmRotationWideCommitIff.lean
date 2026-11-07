@@ -316,25 +316,25 @@ emits — 187 pre-iroot limbs, 63 carriers. -/
 
 /-- A concrete 187-limb rotated payload (the deployed pre-iroot shape:
 `rotatedNumPreLimbs = 187` since the key nonet gave the owner key its ninth lane a column). -/
-def demoPre187 : List ℤ := (List.range 187).map (fun i => 1000 + (i : ℤ))
+def demoPreN : List ℤ := (List.range 196).map (fun i => 1000 + (i : ℤ))
 
 /-- The width-8 toy permutation the 8-felt guards ride. -/
 def refWide8 : List ℤ → List ℤ :=
   fun xs => (List.range 8).map (fun t => refSponge ((t : ℤ) :: xs))
 
-#guard demoPre187.length == 187
-#guard demoPre187.length == rotatedNumPreLimbs   -- ⚑ reality gate: no independent literal
+#guard demoPreN.length == 196
+#guard demoPreN.length == rotatedNumPreLimbs   -- ⚑ reality gate: no independent literal
 #guard (refWide8 [1, 2, 3]).length == 8
 -- the honest recompute is STABLE …
-#guard wireCommitR8 refWide8 demoPre187 7 == wireCommitR8 refWide8 demoPre187 7
+#guard wireCommitR8 refWide8 demoPreN 7 == wireCommitR8 refWide8 demoPreN 7
 -- … and every position MOVES it: the head group (absorbed first, deepest in the chain) …
-#guard wireCommitR8 refWide8 demoPre187 7 != wireCommitR8 refWide8 (demoPre187.set 0 999) 7
+#guard wireCommitR8 refWide8 demoPreN 7 != wireCommitR8 refWide8 (demoPreN.set 0 999) 7
 -- … a mid-chain body limb (the intermediate-carrier tooth: no narrow waist swallows it) …
-#guard wireCommitR8 refWide8 demoPre187 7 != wireCommitR8 refWide8 (demoPre187.set 88 999) 7
+#guard wireCommitR8 refWide8 demoPreN 7 != wireCommitR8 refWide8 (demoPreN.set 88 999) 7
 -- … the LAST pre-iroot limb (absorbed in the final body group) …
-#guard wireCommitR8 refWide8 demoPre187 7 != wireCommitR8 refWide8 (demoPre187.set 183 999) 7
+#guard wireCommitR8 refWide8 demoPreN 7 != wireCommitR8 refWide8 (demoPreN.set 183 999) 7
 -- … and the iroot, which rides its own final arity-11 site, literally last.
-#guard wireCommitR8 refWide8 demoPre187 7 != wireCommitR8 refWide8 demoPre187 8
+#guard wireCommitR8 refWide8 demoPreN 7 != wireCommitR8 refWide8 demoPreN 8
 
 /-! ## §5¾ — ⚑ NON-VACUITY: the `⟺`'s right-hand side is INHABITED (not certifying an empty set).
 
@@ -350,21 +350,21 @@ not this file's disease:
     at which `WideChain8` AND the commit equation both hold (via the flagship's `←` leg), so the
     biconditional's right side is genuinely inhabited. -/
 
-/-- The chunk list the deployed 187-limb chain absorbs after its 4-wide head: 61 three-limb body
+/-- The chunk list the deployed 196-limb chain absorbs after its 4-wide head: 64 three-limb body
 groups, then the iroot's own final `[ir, 0, 0]` site. -/
-def demoChunks : List (List ℤ) := chunk31 (demoPre187.drop 4) ++ [[7, 0, 0]]
+def demoChunks : List (List ℤ) := chunk31 (demoPreN.drop 4) ++ [[7, 0, 0]]
 
-#guard demoChunks.length == 62
+#guard demoChunks.length == 65
 #guard demoChunks.all (fun c => c.length == 3)
 
 /-- Carrier `k`'s genuine 8-felt value: the head seed folded over the first `k` chunks. Carrier 0 is
-the head; carrier 62 is the published state commitment. -/
+the head; carrier 65 is the published state commitment. -/
 def demoCarrier (k : Nat) : List ℤ :=
-  chainFrom8 refWide8 (refWide8 (demoPre187.take 4)) (demoChunks.take k)
+  chainFrom8 refWide8 (refWide8 (demoPreN.take 4)) (demoChunks.take k)
 
 -- ⚑ EXECUTED: the honest carrier-fill's FINAL carrier IS `wireCommitR8` — the fold lands exactly on
 -- the published 8-felt commitment at the deployed shape.
-#guard demoCarrier 62 == wireCommitR8 refWide8 demoPre187 7
+#guard demoCarrier 65 == wireCommitR8 refWide8 demoPreN 7
 
 /-- A width-8 constant permutation (a legitimate `List ℤ → List ℤ` of output width 8): the cheapest
 inhabitant that makes both `⟺` conjuncts hold at once, so the RHS is provably non-empty without the

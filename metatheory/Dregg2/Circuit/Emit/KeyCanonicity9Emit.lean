@@ -74,7 +74,7 @@ was not merely unproved on that axis but REFUTABLE: with the block span free, `s
 blocks' lanes on the BEFORE octet.
 
 ✅ **LANDED 2026-08-01 (b) — THE NINTH LANE NOW EXISTS.** `rotatedNumPreLimbs` went **184 → 187**
-and `RotatedLayout.rotated187.octetNinthLanes = [184, 185, 186]` allocates one ninth lane per carrier
+and `RotatedLayout.rotated196.octetNinthLanes = [184, 185, 186]` allocates one ninth lane per carrier
 octet; the owner key's is in-block limb **186**. So `lane8Off` is no longer a parameter either:
 
   * `deployedKeyCanon9Cols w := deployedKeyCols w B_PUBKEY_NINTH_LANE` leaves nothing free but the
@@ -219,7 +219,7 @@ theorem deployedLane8Off_is_186 : deployedLane8Off = 186 := rfl
 
 /-- `B_SPAN` as a numeral. Not a pin — it is a def against its own definition, which is decoration —
 but the rewrite `omega` needs to see the block stride in `deployed_nonet_cols_distinct`. -/
-private theorem b_span_is_251 : B_SPAN = 251 := rfl
+private theorem b_span_is_263 : B_SPAN = 263 := rfl
 
 theorem deployedKeyCanon9Cols_before_octet :
     (List.finRange 8).map (fun l => deployedKeyCanon9Cols 188 0 ⟨l.1, by omega⟩)
@@ -229,9 +229,9 @@ theorem deployedKeyCanon9Cols_before_lane8 : deployedKeyCanon9Cols 188 0 8 = 374
 
 theorem deployedKeyCanon9Cols_after_octet :
     (List.finRange 8).map (fun l => deployedKeyCanon9Cols 188 1 ⟨l.1, by omega⟩)
-      = [544, 545, 546, 547, 548, 549, 550, 551] := by decide
+      = [556, 557, 558, 559, 560, 561, 562, 563] := by decide
 
-theorem deployedKeyCanon9Cols_after_lane8 : deployedKeyCanon9Cols 188 1 8 = 625 := by decide
+theorem deployedKeyCanon9Cols_after_lane8 : deployedKeyCanon9Cols 188 1 8 = 637 := by decide
 
 /-- ⚑ **THE NONET OCCUPIES EIGHTEEN DISTINCT COLUMNS — AT EVERY FACE.** The general fact the `188`
 `Nodup` pin was one instance of: a column of the deployed nonet determines both its BLOCK and its
@@ -243,7 +243,7 @@ theorem deployed_nonet_cols_distinct (w : Nat) {blk blk' : Fin 2} {l l' : Fin 9}
     blk = blk' ∧ l = l' := by
   have hb := blk.isLt; have hb' := blk'.isLt
   have hl := l.isLt; have hl' := l'.isLt
-  simp only [deployedKeyCanon9Cols, deployedKeyCols, b_span_is_251, B_PUBKEY_OCTET_is_105,
+  simp only [deployedKeyCanon9Cols, deployedKeyCols, b_span_is_263, B_PUBKEY_OCTET_is_105,
     deployedLane8Off_is_186] at h
   refine ⟨Fin.ext ?_, Fin.ext ?_⟩ <;> (split_ifs at h with h1 h2 <;> omega)
 
@@ -357,13 +357,15 @@ theorem deployed_nonet_is_absorbed (w : Nat) (blk : Fin 2) (l : Fin 9) :
     subst this
     exact deployed_lane8_is_absorbed w blk
 
-/-- ⚑⚑ **THE MUTATION, BOTH DIRECTIONS.** The ninth lane's offset is load-bearing to ±1, and it
-fails in two DIFFERENT ways — which is why the allocation is a choice and not an accident.
+/-- ⚑⚑ **THE MUTATION, BOTH DIRECTIONS.** The ninth lane's offset is load-bearing to ±1, and the
+allocation is a choice and not an accident.
 
-  * `+1` is `B_IROOT` (`= rotatedNumPreLimbs = 187`), which is NOT a pre-limb. The nonet's ninth
-    lane would sit outside `preLimbsAt`, `wireCommitR` would never fold it, and the emitted lookup
-    would range-check a felt the anchor does not see — the wrap would look identical, prove
-    identical, and bind 232 bits.
+  * `+1` is `187`, lane 1 of the receipt-log root (the iroot-widening flag day, 187 -> 196, gave it
+    that column). The pubkey nonet would ALIAS the receipt root, so neither would be injective.
+    Placing the lane at `B_IROOT` (`= rotatedNumPreLimbs = 196`) instead is the other failure: that
+    column is NOT a pre-limb, `wireCommitR` would never fold it as a key lane, and the emitted lookup
+    would range-check a felt the anchor reads only as the receipt root —
+    `lane8_at_B_IROOT_is_not_absorbed`.
   * `−1` is `contract_hash`'s ninth lane (185). The pubkey nonet would ALIAS another octet's nonet,
     so two 32-byte carriers would share a committed column and neither would be injective. The
     layout's `disjoint` obligation is what refuses that, and `RotatedLayout.octetLaneCol_nodup`
@@ -372,25 +374,26 @@ fails in two DIFFERENT ways — which is why the allocation is a choice and not 
 Stated as facts a reader can check, not as prose. -/
 theorem the_ninth_lane_offset_is_load_bearing :
     deployedLane8Off < rotatedNumPreLimbs
-      ∧ ¬ (deployedLane8Off + 1 < rotatedNumPreLimbs)
-      ∧ deployedLane8Off + 1 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT
+      ∧ ¬ (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT < rotatedNumPreLimbs)
+      ∧ rotated196.irootLaneCol 1 = some (deployedLane8Off + 1)
       ∧ deployedLane8Off - 1
           = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_CONTRACT_HASH_NINTH_LANE := by
-  refine ⟨by decide, by decide, by decide, by decide⟩
+  refine ⟨by decide, by decide, rfl, by decide⟩
 
-/-- The `+1` half as the membership it actually breaks: perturb the offset by one and the ninth lane
-LEAVES the absorbed region, at every face width and both blocks. -/
-theorem lane8_offset_plus_one_is_not_absorbed (w : Nat) (blk : Fin 2) :
-    deployedKeyCols w (deployedLane8Off + 1) blk 8 ∉ preLimbColsAt (w + blk.1 * B_SPAN) := by
+/-- The membership a misplacement breaks: put the ninth lane at `B_IROOT` and it LEAVES the
+absorbed region, at every face width and both blocks. -/
+theorem lane8_at_B_IROOT_is_not_absorbed (w : Nat) (blk : Fin 2) :
+    deployedKeyCols w Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT blk 8
+      ∉ preLimbColsAt (w + blk.1 * B_SPAN) := by
   intro h
-  exact absurd ((lane8_is_absorbed_iff w (deployedLane8Off + 1) blk).mp h) (by decide)
+  exact absurd ((lane8_is_absorbed_iff w _ blk).mp h) (by decide)
 
 /-! ### The absorbed-region pins — ex-`#guard`s, and two of them were instances of theorems this
 file had already proved three lines above. -/
 
-theorem rotatedNumPreLimbs_is_187 : rotatedNumPreLimbs = 187 := rfl
+theorem rotatedNumPreLimbs_is_196 : rotatedNumPreLimbs = 196 := rfl
 
-theorem rotated187_has_no_pads : Dregg2.Circuit.Emit.rotated187.pads = [] := rfl
+theorem rotated196_pads : Dregg2.Circuit.Emit.rotated196.pads = [194, 195] := rfl
 
 /-- ⚑ **THE EXTENT, AS A `∀`.** The absorbed-column list has exactly `rotatedNumPreLimbs` entries at
 EVERY base — the guard fixed `188` and so could not tell a general fact about `preLimbColsAt` from a
@@ -398,8 +401,8 @@ coincidence at one face. -/
 theorem preLimbColsAt_length (base : Nat) : (preLimbColsAt base).length = rotatedNumPreLimbs := by
   simp [preLimbColsAt]
 
-theorem preLimbColsAt_length_188 : (preLimbColsAt 188).length = 187 := by
-  rw [preLimbColsAt_length, rotatedNumPreLimbs_is_187]
+theorem preLimbColsAt_length_188 : (preLimbColsAt 188).length = 196 := by
+  rw [preLimbColsAt_length, rotatedNumPreLimbs_is_196]
 
 /-- The whole NONET really is inside the absorbed region, at the BEFORE block — nine columns, not
 eight. The `#guard`'s exact `Bool`, now discharged FROM `deployed_nonet_is_absorbed` rather than by
@@ -419,27 +422,28 @@ theorem deployed_nonet_absorbed_after_188 :
   rintro c ⟨l, -, rfl⟩
   simpa using deployed_nonet_is_absorbed 188 1 l
 
-/-- …and the perturbed offset is NOT: the mutation, computably — the instance of
-`lane8_offset_plus_one_is_not_absorbed`. -/
-theorem lane8_plus_one_not_absorbed_188 :
-    (!(preLimbColsAt 188).contains (deployedKeyCols 188 (deployedLane8Off + 1) 0 8)) = true := by
+/-- …and the misplaced offset is NOT: the mutation, computably — the instance of
+`lane8_at_B_IROOT_is_not_absorbed`. -/
+theorem lane8_at_B_IROOT_not_absorbed_188 :
+    (!(preLimbColsAt 188).contains
+      (deployedKeyCols 188 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT 0 8)) = true := by
   simp only [Bool.not_eq_true', Bool.eq_false_iff, ne_eq, List.contains_iff_mem]
-  simpa using lane8_offset_plus_one_is_not_absorbed 188 0
+  simpa using lane8_at_B_IROOT_is_not_absorbed 188 0
 
-#assert_axioms rotatedNumPreLimbs_is_187
-#assert_axioms rotated187_has_no_pads
+#assert_axioms rotatedNumPreLimbs_is_196
+#assert_axioms rotated196_pads
 #assert_axioms preLimbColsAt_length
 #assert_axioms preLimbColsAt_length_188
 #assert_axioms deployed_nonet_absorbed_before_188
 #assert_axioms deployed_nonet_absorbed_after_188
-#assert_axioms lane8_plus_one_not_absorbed_188
+#assert_axioms lane8_at_B_IROOT_not_absorbed_188
 #assert_axioms deployedKeyCols_octet_is_absorbed
 #assert_axioms octet_cols_are_absorbed
 #assert_axioms lane8_is_absorbed_iff
 #assert_axioms deployed_lane8_is_absorbed
 #assert_axioms deployed_nonet_is_absorbed
 #assert_axioms the_ninth_lane_offset_is_load_bearing
-#assert_axioms lane8_offset_plus_one_is_not_absorbed
+#assert_axioms lane8_at_B_IROOT_is_not_absorbed
 
 /-! ## §2 — the emitted constraints. -/
 
@@ -1072,7 +1076,7 @@ theorem keyCanon9_lookup_cols_188 :
     ((keyCanon9ConstraintsAt (deployedKeyCanon9Cols 188)).filterMap (fun c => match c with
       | .lookup ⟨_, [.var c']⟩ => some c' | _ => none))
       = [293, 294, 295, 296, 297, 298, 299, 300, 374,
-         544, 545, 546, 547, 548, 549, 550, 551, 625] := by decide
+         556, 557, 558, 559, 560, 561, 562, 563, 637] := by decide
 
 #assert_axioms faceWidth_cellseal
 #assert_axioms faceWidth_transfer_avail

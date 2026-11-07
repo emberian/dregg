@@ -10,7 +10,7 @@ Epoch-1 S2 deleted the two rotated 1-felt chains; E1 (this lane) additionally de
 v1-face column bands (the retired aux band `90 .. 187` including the 60-column balance
 bit-decomposition, plus the gentian refuse tail) — 103 columns on the deployed transfer row,
 `1704 → 1601`. The deployed `transferVmDescriptor2R24` row is now
-`compactE1 (compactS2 transferAvailWideRefused 198 885) ks` where `ks = deadColsE1 (…) 90` is
+`compactE1 (compactS2 transferAvailWideRefused 198 909) ks` where `ks = deadColsE1 (…) 90` is
 the DERIVED per-member kill-set (every column at index `≥ 90` referenced by nothing surviving).
 
 This module is the CROWN COROLLARY: a `Satisfied2` witness of the DEPLOYED E1-compact row expands
@@ -100,7 +100,7 @@ theorem availability_and_exact_move_forced_deployedE1 (hash : List ℤ → ℤ)
     (hsat : Satisfied2 hash transferWideDeployedE1 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodesAvail hash minit mfin maddrs
-      (Dregg2.Circuit.Emit.RotWideCompactS2.expandTrace permOut 198 885
+      (Dregg2.Circuit.Emit.RotWideCompactS2.expandTrace permOut 198 909
         (expandTraceG (deadColsE1 transferWideDeployedC E1_FLOOR) t))
       pre post tr a) :
     tr.amt ≤ pre.kernel.bal tr.src a
@@ -122,7 +122,7 @@ theorem deployedE1_rejects_overdebit (hash : List ℤ → ℤ) {permOut : List �
     (hsat : Satisfied2 hash transferWideDeployedE1 minit mfin maddrs t)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodesAvail hash minit mfin maddrs
-      (Dregg2.Circuit.Emit.RotWideCompactS2.expandTrace permOut 198 885
+      (Dregg2.Circuit.Emit.RotWideCompactS2.expandTrace permOut 198 909
         (expandTraceG (deadColsE1 transferWideDeployedC E1_FLOOR) t))
       pre post tr a)
     (hforge : pre.kernel.bal tr.src a < tr.amt) : False := by

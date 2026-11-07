@@ -112,7 +112,7 @@ def s2LaneSpan : Nat :=
 def items : List Item :=
   [ { name := "EFFECT_VM_WIDTH", value := EFFECT_VM_WIDTH,
       doc := "the v1 EffectVM face width — the base every rotated member graduates from" }
-  , { name := "NUM_PRE_LIMBS", value := rotated187.numPreLimbs,
+  , { name := "NUM_PRE_LIMBS", value := rotated196.numPreLimbs,
       doc := "pre-iroot limbs in one rotated block — projected from the verified RotatedLayout" }
   , { name := "B_SPAN", value := B_SPAN,
       doc := "one rotated state block's span (BEFORE and AFTER each occupy B_SPAN columns)" }
@@ -248,16 +248,16 @@ def renderNatArray (xs : List Nat) : String :=
 indices into it. Reordering groups in Lean cannot silently retarget a Rust consumer because the
 name→index declarations are generated in the same pass. -/
 def renderGroupTable : String :=
-  let rows := String.intercalate ",\n" (rotated187.groupTable.map (fun row => "    " ++ renderNatArray row)) ++ ","
-  let names := String.intercalate "\n" <| rotated187.groups.zipIdx.map (fun p =>
+  let rows := String.intercalate ",\n" (rotated196.groupTable.map (fun row => "    " ++ renderNatArray row)) ++ ","
+  let names := String.intercalate "\n" <| rotated196.groups.zipIdx.map (fun p =>
     s!"pub const {groupRustName p.1.1}: Felt8Group = ROTATED_GROUP_TABLE[{p.2}];")
   s!"/// One faithful-8 group: lane 0 followed by seven completion columns.\n\
 pub type Felt8Group = [usize; 8];\n\n\
-/// Every named group, emitted verbatim from `rotated187.groupTable`.\n\
-pub const ROTATED_GROUP_TABLE: [Felt8Group; {rotated187.groupTable.length}] = [\n{rows}\n];\n\n\
+/// Every named group, emitted verbatim from `rotated196.groupTable`.\n\
+pub const ROTATED_GROUP_TABLE: [Felt8Group; {rotated196.groupTable.length}] = [\n{rows}\n];\n\n\
 {names}\n\n\
 /// Compatibility/readability alias used by the Rust disjointness tooth.\n\
-pub const ALL_FELT8_GROUPS: [Felt8Group; {rotated187.groupTable.length}] = ROTATED_GROUP_TABLE;\n"
+pub const ALL_FELT8_GROUPS: [Felt8Group; {rotated196.groupTable.length}] = ROTATED_GROUP_TABLE;\n"
 
 /-- The NON-GROUP regions of the verified tiling, emitted as data. The Rust disjointness tooth used
 to hand-list these beside the generated group table (`[176, 177]` pads, `113..168` field lanes) — so
@@ -265,28 +265,33 @@ it re-stated the 178 layout and went red on the flag day for the one region it w
 Lean. It now assembles its occupancy from these, which keeps it an artifact-integrity check on the
 EMITTED table (a dropped or duplicated region still fails) without carrying a coordinate copy. -/
 def renderRegions : String :=
-  let singles := renderNatArray rotated187.singles
-  let octets := renderNatArray rotated187.octets
-  let ninths := renderNatArray rotated187.octetNinthLanes
-  let fields := renderNatArray rotated187.fieldsOctet
-  let pads := renderNatArray rotated187.pads
-  let cellsC := renderNatArray rotated187.cellsCompletion
+  let singles := renderNatArray rotated196.singles
+  let octets := renderNatArray rotated196.octets
+  let ninths := renderNatArray rotated196.octetNinthLanes
+  let fields := renderNatArray rotated196.fieldsOctet
+  let pads := renderNatArray rotated196.pads
+  let cellsC := renderNatArray rotated196.cellsCompletion
+  let irootC := renderNatArray rotated196.irootCompletion
   s!"/// The scalar limbs that carry no faithful-8 completion group.\n\
-pub const ROTATED_SINGLES: [usize; {rotated187.singles.length}] = {singles};\n\n\
+pub const ROTATED_SINGLES: [usize; {rotated196.singles.length}] = {singles};\n\n\
 /// The carrier-material octet BASES (each occupies `base .. base + 8`).\n\
-pub const ROTATED_OCTET_BASES: [usize; {rotated187.octets.length}] = {octets};\n\n\
+pub const ROTATED_OCTET_BASES: [usize; {rotated196.octets.length}] = {octets};\n\n\
 /// The NINTH lane of each carrier octet, positionally parallel to `ROTATED_OCTET_BASES`. \
 NOT adjacent to its octet: never reconstruct with a stride. Each is an ABSORBED pre-limb, so \
 `wireCommitR` folds it into `state_commit` — which is the whole point.\n\
-pub const ROTATED_OCTET_NINTH_LANES: [usize; {rotated187.octetNinthLanes.length}] = {ninths};\n\n\
+pub const ROTATED_OCTET_NINTH_LANES: [usize; {rotated196.octetNinthLanes.length}] = {ninths};\n\n\
 /// Every `fields[0..8]` completion lane column, in layout order (lanes 1..8 of each of the 8 \
 slots — deliberately NON-CONTIGUOUS: the ninth lane of slot `j` is `176 + j`).\n\
-pub const ROTATED_FIELDS_LANE_COLS: [usize; {rotated187.fieldsOctet.length}] = {fields};\n\n\
+pub const ROTATED_FIELDS_LANE_COLS: [usize; {rotated196.fieldsOctet.length}] = {fields};\n\n\
 /// The legacy cells-completion slot (empty since `cells` became a named group).\n\
-pub const ROTATED_CELLS_COMPLETION: [usize; {rotated187.cellsCompletion.length}] = {cellsC};\n\n\
-/// Unoccupied pad columns. EMPTY at the nine-lane geometry — the two former pads (176, 177) were \
-consumed by the fields nonet.\n\
-pub const ROTATED_PADS: [usize; {rotated187.pads.length}] = {pads};\n"
+pub const ROTATED_CELLS_COMPLETION: [usize; {rotated196.cellsCompletion.length}] = {cellsC};\n\n\
+/// Lanes 1..7 of the receipt-log root `iroot8` (lane 0 is `B_IROOT`). ABSORBED pre-limbs: the \
+producers write `iroot8(..).limbs()[1..8]` here, so the signed anchor binds the receipt log at all \
+eight lanes (the iroot-widening flag day, 187 -> 196).\n\
+pub const ROTATED_IROOT_COMPLETION: [usize; {rotated196.irootCompletion.length}] = {irootC};\n\n\
+/// Unoccupied pad columns: the two the 1-mod-3 body discipline leaves at 196 (the producers write \
+zero).\n\
+pub const ROTATED_PADS: [usize; {rotated196.pads.length}] = {pads};\n"
 
 /-- **THE NONET PROJECTION, AS DATA.** `RotatedLayout.fieldLaneCol slot lane` for all 8 slots × 9
 lanes. Its own docstring says "Consumers must read THIS, never `113 + 8·slot` — the nonet is

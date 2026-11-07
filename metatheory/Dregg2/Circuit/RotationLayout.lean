@@ -48,7 +48,7 @@ named `Poseidon2SpongeCR` hypothesis.
 count off this file.** The `hash (limbs ++ [iroot])` shape and its `CommitBindsMMR` discharge are
 the deployed ones (above). The limb ENUMERATION below is the design-stage model and the deployed
 geometry has moved past it in three independent ways; the single source for any actual column is
-`Emit/RotatedLayout.rotated187` (`Emit/RotatedLayout.lean:153,157`) — see
+`Emit/RotatedLayout.rotated196` (`Emit/RotatedLayout.lean:153,157`) — see
 `RotatedLimbs.toList_length` (§1) for the reconciliation.
 -/
 import Dregg2.Lightclient.MMR
@@ -122,18 +122,18 @@ def RotatedLimbs.toList (s : RotatedLimbs) : List ℤ :=
 
 ⚠ **23 IS THE DESIGN-STAGE ROSTER, NOT A DEPLOYED COLUMN COUNT, and the two are not related by a
 single conversion factor** — a reader who needs a number must take it from
-`Emit/RotatedLayout.rotated187`, whose `rotatedNumPreLimbs = 187`
+`Emit/RotatedLayout.rotated196`, whose `rotatedNumPreLimbs = 187`
 (`Emit/RotatedLayout.lean:153,157`). The deployed geometry differs from this list in THREE
 independent ways, only the third of which is a semantic-vs-wire widening:
 
   1. **The register file is `r0..r23`, not `r0..r15`.** `r23` carries the authority residue that no
      named limb holds — permissions / VK / lifecycle-payload / delegate / delegation / program /
      mode / token_id / visibility / commitments / proved_state / side-table roots / fields[8..16] —
-     at limb-list index 24 (`RotatedCommitDifferential.lean:18-19`; `rotated187`'s `.authority`
+     at limb-list index 24 (`RotatedCommitDifferential.lean:18-19`; `rotated196`'s `.authority`
      group has lane0 = 24). So `NUM_REGISTERS = 16` here is a count this file's own
      `resolve` totality is stated against, NOT the deployed register count.
   2. **There are FOUR map roots**, `commitments_root` joining cap/nullifier/heap
-     (`rotated187.groups`), beside the perms / vk / fields / revoked / cells groups the same
+     (`rotated196.groups`), beside the perms / vk / fields / revoked / cells groups the same
      enumeration commits.
   3. **Each faithful root is an 8-felt GROUP, not a scalar limb** (lane 0 + seven completion
      columns), and each `fields[slot]` and each 32-byte carrier is a **9-lane NONET** after the
@@ -144,7 +144,7 @@ The intermediate object, for orientation: the differential states the published 
 **32**-element scalar limb list `[cells_root, r0..r23, cap_root, nullifier_root, commitments_root,
 heap_root, lifecycle, epoch, committed_height]` (`RotatedCommitDifferential.lean:11-13`) — this
 roster with (1) and (2) applied. `187` is the COLUMN TILING once (3) is applied on top, plus the
-scalars neither list names (`disc`, `mode`) and the perms / vk / revoked groups; `rotated187` is a
+scalars neither list names (`disc`, `mode`) and the perms / vk / revoked groups; `rotated196` is a
 complete tiling of `0..186` with no pads, so it is the only count that is checked. -/
 theorem RotatedLimbs.toList_length (s : RotatedLimbs) : s.toList.length = 23 := rfl
 

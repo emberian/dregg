@@ -360,8 +360,8 @@ theorem transferV3MembershipAvailWide_publishes_teeth (hash : List ℤ → ℤ)
     -- ⚑ 383 -> 386 at the 2026-08-01 key nonet (`B_STATE_COMMIT` 185 -> 188), and the teeth column
     -- is DERIVED now, so `omega` needs its value produced here. Both `decide`s are the gate: named
     -- constants against a number, red the moment the geometry moves.
-    have hbb : TR_AVAIL_BB + B_STATE_COMMIT = 386 := by decide
-    have hteeth : MEMBERSHIP_TEETH_COL_AVAIL_WIDE = 2859 := by decide
+    have hbb : TR_AVAIL_BB + B_STATE_COMMIT = 395 := by decide
+    have hteeth : MEMBERSHIP_TEETH_COL_AVAIL_WIDE = 2973 := by decide
     simp only [isLegacyCommitPin1, beq_eq_false_iff_ne, ne_eq, hbb, hteeth]
     omega
   have hin : VmConstraint2.base

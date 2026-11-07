@@ -350,10 +350,10 @@ theorem makeSovereignV3DeployedWide_publishes_key_commit (A : List ℤ → Diges
       (VmConstraint2.base (.piBinding .first (SOVEREIGN_KEY_COMMIT_COL + q.val)
         ((withDfaRcPins makeSovereignV3).piCount + q.val))) = false := by
     have hq : q.val < 4 := q.isLt
-    -- ⚑ 373 -> 376 at the 2026-08-01 key nonet (`B_STATE_COMMIT` 185 -> 188). The literal is
+    -- ⚑ 376 -> 385 at the 2026-11-07 iroot widening (`B_STATE_COMMIT` 188 -> 197; 373 -> 376 at the key nonet). The literal is
     -- load-bearing (`omega` cannot see through a `def`), but it is SELF-GATING: this `decide` is the
     -- named constants against the number, and it is what went red when the geometry moved.
-    have hbb : MS_WIDE_BB + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_STATE_COMMIT = 376 := by
+    have hbb : MS_WIDE_BB + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_STATE_COMMIT = 385 := by
       decide
     simp only [isLegacyCommitPin1, beq_eq_false_iff_ne, ne_eq, hbb, SOVEREIGN_KEY_COMMIT_COL]
     omega
@@ -546,13 +546,13 @@ theorem transferV3MembershipWide_publishes_teeth (hash : List ℤ → ℤ)
         ((withDfaRcPins transferV3).piCount + j.val))) = false := by
     have hj : j.val < 2 := j.isLt
     -- ⚑ 373 -> 376 at the key nonet; self-gating for the same reason as its makeSovereign twin.
-    have hbb : TR_WIDE_BB + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_STATE_COMMIT = 376 := by
+    have hbb : TR_WIDE_BB + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_STATE_COMMIT = 385 := by
       decide
     -- ⚑ `MEMBERSHIP_TEETH_COL_WIDE` is DERIVED now (it used to be the literal 2811, which the key
     -- nonet moved), and `omega` cannot see through a `def` — so the number is produced HERE, by a
     -- `decide` over the named constants. That `decide` is the gate: it reds if the geometry moves,
     -- and it is the only place the total appears.
-    have hteeth : MEMBERSHIP_TEETH_COL_WIDE = 2849 := by decide
+    have hteeth : MEMBERSHIP_TEETH_COL_WIDE = 2963 := by decide
     simp only [isLegacyCommitPin1, beq_eq_false_iff_ne, ne_eq, hbb, hteeth]
     omega
   have hin : VmConstraint2.base

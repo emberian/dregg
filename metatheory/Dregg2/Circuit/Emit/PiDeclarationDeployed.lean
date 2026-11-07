@@ -77,7 +77,7 @@ def burnM : EffectVmDescriptor2 :=
 /-- Non-vacuity: the lookup RESOLVED. Without this the manifest below could be admitted against
 the empty fallback (`piCount = 0` makes `piSlotsCovered` trivially true), which is the shape a
 registry rename would silently produce. -/
-theorem burnM_resolved : burnM.piCount = 43 ∧ burnM.constraints.length = 302 := by native_decide
+theorem burnM_resolved : burnM.piCount = 43 ∧ burnM.constraints.length = 308 := by native_decide
 
 /-! ### The reasons, in one place.
 
@@ -175,16 +175,16 @@ def burnDecl : PiManifest :=
         ⟨30 + i, s!"EFFECTS_HASH_GLOBAL[{i}]", .transcriptOnly rEffectsGlobal⟩)
   ++ [ ⟨34, "ACTOR_NONCE", .bound .first 56⟩
      -- the four appended ROTATED pins.
-     , ⟨35, "rot::OLD_COMMIT", .bound .first 376⟩
-     , ⟨36, "rot::NEW_COMMIT", .bound .last 627⟩
-     , ⟨37, "rot::COMMITTED_HEIGHT", .bound .last 470⟩
-     , ⟨38, "rot::CAVEAT_COMMIT", .bound .last 734⟩
+     , ⟨35, "rot::OLD_COMMIT", .bound .first 385⟩
+     , ⟨36, "rot::NEW_COMMIT", .bound .last 648⟩
+     , ⟨37, "rot::COMMITTED_HEIGHT", .bound .last 482⟩
+     , ⟨38, "rot::CAVEAT_COMMIT", .bound .last 758⟩
      -- the dsl route-commitment quartet: FORCED since the rc-FOLD flag day (absorbed into the
      -- published caveat commitment), which is why these four survive `dropUnforcedPins`.
-     , ⟨39, "dsl::RC[0]", .bound .last 729⟩
-     , ⟨40, "dsl::RC[1]", .bound .last 730⟩
-     , ⟨41, "dsl::RC[2]", .bound .last 731⟩
-     , ⟨42, "dsl::RC[3]", .bound .last 732⟩ ]
+     , ⟨39, "dsl::RC[0]", .bound .last 753⟩
+     , ⟨40, "dsl::RC[1]", .bound .last 754⟩
+     , ⟨41, "dsl::RC[2]", .bound .last 755⟩
+     , ⟨42, "dsl::RC[3]", .bound .last 756⟩ ]
 
 /-- ⚑ **THE ADOPTION.** The gate accepts the deployed member under this declaration — so the
 mechanism is applied to a real emitted object, not only to a fixture. Every `.bound` entry below

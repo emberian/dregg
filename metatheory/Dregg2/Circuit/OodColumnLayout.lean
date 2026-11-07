@@ -285,7 +285,10 @@ theorem transferV3_columnLayout_law (t : VmTrace) (ζ : BabyBear)
 -- above, where +8 of the delta WAS arithmetic (the eight fields lane-8 completion freezes): the
 -- key nonet's lanes are welded by no `colEq` at all, which is the hole `zzz_e10_freeze_owner_
 -- falsifier` exercises and which this flag day does NOT close.
-#guard transferV3.constraints.length == 299
+-- ⚑ 299 -> 305 at the 2026-11-07 IROOT-WIDENING flag day (187 -> 196): three more 3-wide body
+-- sites per block (63 -> 66, 138 -> 144 appendix sites), all chip lookups, so the arithmetic layout
+-- stays at 155.
+#guard transferV3.constraints.length == 305
 #guard (oodArithList transferV3).length == 155
 #guard (oodArithList transferV3).length < transferV3.constraints.length
 

@@ -900,9 +900,9 @@ def deployedExtractorBudget : Nat := 2 * deployedBlockCount + 2
 
 /-- The schedule's two derived totals, evaluated once.  These are the ONLY place a number appears,
 and they are consequences of `kernelPayloadWidth`, not inputs to it. -/
-theorem deployedBlockCount_eq : deployedBlockCount = 62 := by decide
+theorem deployedBlockCount_eq : deployedBlockCount = 65 := by decide
 
-theorem deployedExtractorBudget_eq : deployedExtractorBudget = 126 := by decide
+theorem deployedExtractorBudget_eq : deployedExtractorBudget = 132 := by decide
 
 /-- The deployed block count: the payload's body feeds `chunk31` chunks, then the iroot block. -/
 theorem deployed_blockCount (l : List ℤ) (ir : ℤ) (hlen : l.length = kernelPayloadWidth) :
@@ -1092,7 +1092,7 @@ theorem stateCommitRom_verdict :
       (fun l => ((((fun _ : ℕ => 124) l + deployedExtractorBudget : ℕ) : ℝ)
         * (((fun _ : ℕ => 124) l + deployedExtractorBudget : ℕ) : ℝ) + 1)) := by
     simp only [deployedExtractorBudget_eq]
-    refine ⟨0, 62501, ?_⟩   -- (124 + 126)² + 1 = 250² + 1 at the 187-limb schedule
+    refine ⟨0, 65537, ?_⟩   -- (124 + 132)² + 1 = 256² + 1 at the 196-limb schedule
     filter_upwards with n
     norm_num
   refine ⟨fun A hA => stateCommitRom_binds (fun _ => 124) hpoly A hA, ?_, ?_,

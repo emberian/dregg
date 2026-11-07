@@ -93,12 +93,12 @@ are gone.  What is left is one of three things, and each says which it is:
   real gate precisely because a widening that reached it would go red here. -/
 
 -- ⚑ CROSS-SOURCE GATE.  `ROTATED_PAYLOAD_WIDTH` derives from the SCALAR extent
--- `RotatedLayout.rotatedNumPreLimbs`; `rotated187.occupied` is the layout's independently authored
+-- `RotatedLayout.rotatedNumPreLimbs`; `rotated196.occupied` is the layout's independently authored
 -- column ENUMERATION (singles ++ groups ++ carrier octets ++ their ninth lanes ++ the fields
--- nonet).  Under `rotated187_legal`'s `disjoint` + `inBounds` the two agree only on a COMPLETE
+-- nonet).  Under `rotated196_legal`'s `disjoint` + `inBounds` the two agree only on a COMPLETE
 -- tiling, so this goes red on exactly the shape the key-nonet flag day exists to forbid: an extent
 -- bumped with no columns behind it, or a column allocated past a stale extent.
-#guard ROTATED_PAYLOAD_WIDTH == rotated187.occupied.length + 1
+#guard ROTATED_PAYLOAD_WIDTH == rotated196.occupied.length + 1
 
 -- NON-MOVEMENT PIN.  The exact-AAFI core sits BELOW both rotated blocks; a rotation flag day must
 -- not reach it.  2442 is `ExactNullifierAafiDescriptorPlan.V3_TRACE_WIDTH`, computed there from the

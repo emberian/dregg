@@ -159,8 +159,8 @@ def realRow : Assignment := fun v =>
   else if v = prmCol param.AMOUNT then 10       -- col 68
   else if v = prmCol param.DIRECTION then 1     -- col 69
   else if v = 189 then 100                       -- rotated BEFORE r0 (welded to bal_lo = 100)
-  else if v = 440 then 90                        -- rotated AFTER r0 (after bal_lo = 90; tw + B_SPAN + 1)
-  else if v = 441 then 1                         -- rotated AFTER r1 (after nonce = 1; tw + B_SPAN + 2)
+  else if v = 452 then 90                        -- rotated AFTER r0 (after bal_lo = 90; tw + B_SPAN + 1)
+  else if v = 453 then 1                         -- rotated AFTER r1 (after nonce = 1; tw + B_SPAN + 2)
   else 0                                          -- before-nonce 0, everything else 0
 
 /-- The public inputs forced by the boundary/rotated PI pins. The v1 first-row pins
@@ -237,10 +237,10 @@ theorem realRow_vals :
       state.BALANCE_HI, state.NONCE, state.CAP_ROOT, state.RESERVED, param.AMOUNT,
       param.DIRECTION] <;> norm_num
 
-/-- Off the nine named columns (`1, 54, 76, 78, 68, 69, 189, 440, 441`), `realRow` is `0`. -/
+/-- Off the nine named columns (`1, 54, 76, 78, 68, 69, 189, 452, 453`), `realRow` is `0`. -/
 theorem realRow_zero_of {v : Nat} (h1 : v ≠ 1) (h54 : v ≠ 54) (h76 : v ≠ 76)
-    (h78 : v ≠ 78) (h68 : v ≠ 68) (h69 : v ≠ 69) (h188 : v ≠ 189) (h239 : v ≠ 440)
-    (h240 : v ≠ 441) : realRow v = 0 := by
+    (h78 : v ≠ 78) (h68 : v ≠ 68) (h69 : v ≠ 69) (h188 : v ≠ 189) (h239 : v ≠ 452)
+    (h240 : v ≠ 453) : realRow v = 0 := by
   unfold realRow
   rw [if_neg (show ¬ v = sel.TRANSFER from h1), if_neg (show ¬ v = sbCol state.BALANCE_LO from h54),
     if_neg (show ¬ v = saCol state.BALANCE_LO from h76),
@@ -394,9 +394,9 @@ theorem base_constraints_hold :
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hwb
       rcases hwb with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
         · rw [colEq_holds_iff _ _ _ _ _ rfl]; rfl
-    · -- after-block welds: base 439 (tw + B_SPAN = 188 + 251, the 187 KEY NONET epoch; was 435 at
-      -- 184 limbs). r0(440)=after bal_lo(76)=90;
-      -- r1(441)=after nonce(78)=1; the
+    · -- after-block welds: base 451 (tw + B_SPAN = 188 + 263, the 196 IROOT-WIDENING epoch; 439 at 187, 435 at
+      -- 184 limbs). r0(452)=after bal_lo(76)=90;
+      -- r1(453)=after nonce(78)=1; the
       -- rest `0 = 0`. All reduce by computation.
       unfold weldsAt at hwa
       simp only [List.mem_cons, List.not_mem_nil, or_false] at hwa
