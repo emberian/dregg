@@ -118,20 +118,23 @@ set_option maxRecDepth 100000
 -- ⚑ ONE σ CLASS SPANS THE SPONGE AND THE FOLD. An absorbed base's coordinate variable is read by
 -- `ipaBlocks` `EndoMul` rows AND by the transcript's own absorb row — stated as an EQUALITY on the
 -- class, and on how many of its cells lie in R1's row range, so a deleted wire cannot satisfy it.
--- (`ipaBlocks` `EndoMul` reads + the absorb row + since §7b the three `assert_on_curve` halves,
--- which read `x` three times and `y` twice.)
--- ⚑ `+ 7` and not `+ 6` since the segment-C correction: fold round 0's base IS `sg_old[1]`,
--- so its class now also spans the INNER `hash_messages_for_next_step_proof_opt`'s absorb row.
+-- ⚑ Since §19d (`0047cb876`) an absorbed combine commitment is a Horner ADDEND, not a ladder base:
+-- the only combine base is `qT (nCombine−1)` and the running accumulator, so its class has NO
+-- `EndoMul` reads. What is left: the transcript's absorb row, the INNER
+-- `hash_messages_for_next_step_proof_opt`'s absorb row (fold round 0 is `sg_old[1]`), the three
+-- `assert_on_curve` halves (`x` three times, `y` twice) and the fold's `CompleteAdd` operand.
+-- `x`: 1 + 1 + 3 + 1 = 6; `y`: 1 + 1 + 2 + 1 = 5.
 /-- **`the_absorbed_ipa_base_is_read_once_in_the_transcript`** — ⚑ FOUR `#guard`s over ONE point,
 converted 2026-08-03 (`metatheory/docs/GUARD-DISCIPLINE.md`). Both coordinates of the ABSORBED fold
-base have a class of `ipaBlocks` `EndoMul` reads plus their `assert_on_curve` halves (`x` three
-times, `y` twice), and — the half that is the actual tooth — EXACTLY ONE of those cells lies in the
+commitment have a class of two absorb rows, their `assert_on_curve` halves (`x` three times, `y`
+twice) and the fold add that takes the commitment as its Horner addend (since §19d it is no
+ladder's base), and — the half that is the actual tooth — EXACTLY ONE of those cells lies in the
 transcript's row range. One cell is what makes it absorbed; zero would make it a pin, and more than
 one would mean the transcript reads it somewhere nobody accounted for. Stating the four together
 keeps the length and the transcript share from drifting apart. -/
 theorem the_absorbed_ipa_base_is_read_once_in_the_transcript :
-    ((classCells posS (ipx shapeSmoke (qT shapeSmoke absR0))).length == shapeSmoke.ipaBlocks + 7
-     && (classCells posS (ipy shapeSmoke (qT shapeSmoke absR0))).length == shapeSmoke.ipaBlocks + 6
+    ((classCells posS (ipx shapeSmoke (qT shapeSmoke absR0))).length == 6
+     && (classCells posS (ipy shapeSmoke (qT shapeSmoke absR0))).length == 5
      && ((classCells posS (ipx shapeSmoke (qT shapeSmoke absR0))).filter
           (fun c => c.row < nTrans)).length == 1
      && ((classCells posS (ipy shapeSmoke (qT shapeSmoke absR0))).filter
@@ -240,34 +243,34 @@ theorem the_absorbed_ipa_base_is_read_once_in_the_transcript :
 -- `Scalar_challenge.endo_inv` `exists`-es through `Inner_curve.typ` exactly as a commitment
 -- arrives. 58 → 73 at the committed shape; `shapeSmoke` has no bullet pairs, so its number is
 -- unmoved and the smoke fixtures exercise NONE of the fifteen.
+-- ⚑ …and since `16b6d9b8a` a FOURTH non-round point, segment D's own `G` (`vGaX`): 73 → 74.
 #guard nOnC shapeSmoke
-        == (absRoundList shapeSmoke).length + tCommN shapeSmoke + 3 + nBulletPairs shapeSmoke
-#guard nOnC shapeStep == 48 + 7 + 3 + 15 && nBulletPairs shapeStep == 15
+        == (absRoundList shapeSmoke).length + tCommN shapeSmoke + 4 + nBulletPairs shapeSmoke
+#guard nOnC shapeStep == 48 + 7 + 4 + 15 && nBulletPairs shapeStep == 15
         && nBulletPairs shapeSmoke == 0
 #guard nOnCRows == (3 * nOnC shapeSmoke + 1) / 2
-#guard (onCurveRows shapeStep).length == (3 * 73 + 1) / 2
--- ⚑ …and the three non-round points are `sg_old[0]`, `delta` and — since segment D — `G`, at the
--- tail of the checked list and over the very variables the fold's `~init`, the `cq + delta` add and
--- the outer hash read.
+#guard (onCurveRows shapeStep).length == (3 * 74 + 1) / 2
+-- ⚑ …and the four non-round points are `sg_old[0]`, `delta`, §19's `G` (`vGx`) and segment D's
+-- own `G` (`vGaX`, the accumulator the record publishes), at the tail of the checked list and over
+-- the very variables the fold's `~init`, the `cq + delta` add, §19's `add_fast` and the outer hash
+-- read.
 #guard onCVar shapeStep (48 + 7) == (ipx shapeStep (qInit shapeStep), ipy shapeStep (qInit shapeStep))
 #guard onCVar shapeStep (48 + 8) == (ipx shapeStep (qDel shapeStep), ipy shapeStep (qDel shapeStep))
 #guard onCVar shapeStep (48 + 9) == (vGx shapeStep, vGy shapeStep)
-        && onCVar shapeStep (48 + 10)
+        && onCVar shapeStep (48 + 10) == (vGaX shapeStep, vGaY shapeStep)
+        && onCVar shapeStep (48 + 11)
              == (ipx shapeStep (qEndoInv shapeStep 0), ipy shapeStep (qEndoInv shapeStep 0))
-        && onCVar shapeStep (48 + 24)
+        && onCVar shapeStep (48 + 25)
              == (ipx shapeStep (qEndoInv shapeStep 14), ipy shapeStep (qEndoInv shapeStep 14))
 #guard Dregg2.Bridge.MinaStepPrevCommitments.onCurve
          Dregg2.Bridge.MinaStepPrevCommitments.SG_OLD0_XY
 #guard Dregg2.Bridge.MinaStepPrevCommitments.onCurve
          Dregg2.Bridge.MinaStepPrevCommitments.DELTA_XY
 #guard onCurveA tS.gXY
--- …and the checked variables ARE the fold's own base coordinates, not a fresh copy: `x`'s class
--- gains the two `assert_on_curve` halves that read it (`x·x` and `x2·x`) on top of the
--- `ipaBlocks` `EndoMul` reads and the transcript's absorb row.
--- ⚑ `+ 7` and not `+ 6` since the segment-C correction: fold round 0's base IS `sg_old[1]`,
--- so its class now also spans the INNER `hash_messages_for_next_step_proof_opt`'s absorb row.
-#guard (classCells posS (ipx shapeSmoke (qT shapeSmoke absR0))).length == shapeSmoke.ipaBlocks + 7
-#guard (classCells posS (ipy shapeSmoke (qT shapeSmoke absR0))).length == shapeSmoke.ipaBlocks + 6
+-- …and the checked variables ARE the fold's own addend coordinates, not a fresh copy: `x`'s class
+-- holds the three `assert_on_curve` halves that read it, both absorb rows and the fold add (§19d).
+#guard (classCells posS (ipx shapeSmoke (qT shapeSmoke absR0))).length == 6
+#guard (classCells posS (ipy shapeSmoke (qT shapeSmoke absR0))).length == 5
 -- …and a CONSTANT base's class gains NOTHING from §7b — pinned, not checked, which is upstream's
 -- own split (`Inner_curve.constant` is a literal and carries no `check`). Its `ipaBlocks + 2` is the
 -- `EndoMul` reads, the pin row and segment C's index absorb, and no `assert_on_curve` half.

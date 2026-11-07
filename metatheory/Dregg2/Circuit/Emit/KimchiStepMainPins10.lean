@@ -150,11 +150,18 @@ theorem cipRows_length_is_the_unmuxed_shape_plus_four :
 #guard (classCells (posAt .msm) (vGx shapeSmoke)).length == 0
 #guard (classCells (posAt .ipa) (vGx shapeSmoke)).length == 3
 #guard (classCells (posAt .ftEval0) (vGx shapeSmoke)).length == 3
-#guard (classCells (posAt .absorb) (vGx shapeSmoke)).length == 4
--- ⚑ …and §19 adds the FIFTH: `Ops.add_fast challenge_polynomial_commitment b_u`
+-- ⚑ Since `16b6d9b8a` segment D absorbs its OWN `G` (`vGaX`, the record's accumulator), so the
+-- absorption cell moved off §19's solved `G`: `vGx` gains nothing at `r7`, and `vGaX` gains the one
+-- cell instead (its three halves plus the absorb row).
+#guard (classCells (posAt .absorb) (vGx shapeSmoke)).length == 3
+#guard (classCells (posAt .ipa) (vGaX shapeSmoke)).length == 3
+#guard (classCells (posAt .absorb) (vGaX shapeSmoke)).length == 4
+#guard (classCells (posAt .opening) (vGaX shapeSmoke)).length == 4
+-- ⚑ …and §19 adds the FOURTH (the fifth before `16b6d9b8a`):
+-- `Ops.add_fast challenge_polynomial_commitment b_u`
 -- (`step_verifier.ml:333`), which is `G`'s first occurrence inside `check_bulletproof`
 -- itself rather than in the statement hash.
-#guard (classCells (posAt .opening) (vGx shapeSmoke)).length == 5
+#guard (classCells (posAt .opening) (vGx shapeSmoke)).length == 4
 -- ⚠ ⚑ **AND `index_digest` HAS THE SAME LADDER POSITION, so say it rather than let the retirement
 -- read as unconditional.** §3c's derivation lives in R7 — the permutation is squeezed off segment
 -- C's own state, and segment C is an R7 sub-circuit — while R1 ABSORBS the result at block 0. So
