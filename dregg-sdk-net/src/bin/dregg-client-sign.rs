@@ -606,33 +606,41 @@ fn read_token_file(path: &str) -> Result<String> {
     Ok(token.to_string())
 }
 
+/// What a send or transfer says when the node wants a bearer this process was
+/// not given: the remedy the old refusal named before it ever reached the node.
+const NO_BEARER: &str = "the node's /turns/submit is bearer-protected: pass --token-file, or set \
+     DREGG_API_TOKEN_FILE or DREGG_API_TOKEN, or DREGG_NODE_PASSPHRASE to unlock";
+
 /// The bearer for the node's protected write surface. It never comes from
 /// argv, where `ps`, `/proc/*/cmdline` and shell history would show it: from
 /// the file named by `--token-file` or `DREGG_API_TOKEN_FILE`, else
 /// `DREGG_API_TOKEN`, else unlock with `DREGG_NODE_PASSPHRASE`
 /// (`POST /api/cipherclerk/unlock` — never a blind `.json()`: the node's
 /// rate-limited 429 carries an empty body).
+///
+/// With none of the three set there is no bearer, and the submit goes without
+/// one: a node with no passphrase admits a loopback caller unauthenticated
+/// (`--dev-unlock`, `require_auth`'s no-bearer branch), and a locked node answers
+/// 401/403, which the caller turns into [`NO_BEARER`]. Demanding a bearer
+/// before asking made the node's own documented dev-unlock flow unusable from
+/// this client.
 async fn ensure_token(
     http: &reqwest::Client,
     node_url: &str,
     token_file: Option<&str>,
-) -> Result<String> {
+) -> Result<Option<String>> {
     if let Some(path) = token_file
         .map(str::to_string)
         .or_else(|| env("DREGG_API_TOKEN_FILE"))
     {
-        return read_token_file(&path);
+        return read_token_file(&path).map(Some);
     }
     if let Some(t) = env("DREGG_API_TOKEN") {
-        return Ok(t);
+        return Ok(Some(t));
     }
-    let passphrase = env("DREGG_NODE_PASSPHRASE").ok_or_else(|| {
-        err(
-            "the node's /turns/submit is bearer-protected: pass --token-file, or set \
-             DREGG_API_TOKEN_FILE or DREGG_API_TOKEN, or DREGG_NODE_PASSPHRASE to unlock"
-                .to_string(),
-        )
-    })?;
+    let Some(passphrase) = env("DREGG_NODE_PASSPHRASE") else {
+        return Ok(None);
+    };
     let raw = http
         .post(format!("{node_url}/api/cipherclerk/unlock"))
         .json(&serde_json::json!({ "passphrase": passphrase }))
@@ -651,8 +659,15 @@ async fn ensure_token(
         .map_err(|e| err(format!("parse unlock response (HTTP {status}): {e}")))?;
     resp.get("bearer_token")
         .and_then(|t| t.as_str())
-        .map(String::from)
+        .map(|t| Some(String::from(t)))
         .ok_or_else(|| err(format!("unlock returned no bearer_token: {resp}")))
+}
+
+/// A submit answered 401/403 to a request that carried no bearer: definitely
+/// not admitted, and the remedy is to supply one.
+fn refused_for_want_of_bearer(bearer: &Option<String>, status: reqwest::StatusCode) -> bool {
+    bearer.is_none()
+        && (status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN)
 }
 
 #[derive(Debug)]
@@ -1116,10 +1131,13 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // EVERY EXIT FROM HERE ON IS UNKNOWN except a refusal that names this turn,
     // as in `cmd_transfer`. A send moves no value, but it pays a fee, so a blind
     // resend pays twice.
-    let resp = http
+    let mut submit = http
         .post(format!("{}/turns/submit", f.node_url))
-        .header("Content-Type", "application/octet-stream")
-        .header("Authorization", format!("Bearer {bearer}"))
+        .header("Content-Type", "application/octet-stream");
+    if let Some(bearer) = &bearer {
+        submit = submit.header("Authorization", format!("Bearer {bearer}"));
+    }
+    let resp = submit
         .body(bytes)
         .send()
         .await
@@ -1131,6 +1149,9 @@ async fn cmd_send(f: Flags) -> Result<()> {
             )
         })?;
     let status = resp.status();
+    if refused_for_want_of_bearer(&bearer, status) {
+        return Err(err(format!("{NO_BEARER} (/turns/submit returned {status})")));
+    }
     if !status.is_success() {
         return Err(unknown_after_submit(
             format!("/turns/submit returned {status}"),
@@ -1332,10 +1353,13 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         f.node_url
     );
 
-    let resp = http
+    let mut submit = http
         .post(format!("{}/turns/submit", f.node_url))
-        .header("Content-Type", "application/octet-stream")
-        .header("Authorization", format!("Bearer {bearer}"))
+        .header("Content-Type", "application/octet-stream");
+    if let Some(bearer) = &bearer {
+        submit = submit.header("Authorization", format!("Bearer {bearer}"));
+    }
+    let resp = submit
         .body(bytes)
         .send()
         .await
@@ -1348,6 +1372,9 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
             )
         })?;
     let status = resp.status();
+    if refused_for_want_of_bearer(&bearer, status) {
+        return Err(err(format!("{NO_BEARER} (/turns/submit returned {status})")));
+    }
     if !status.is_success() {
         return Err(unknown_after_submit(
             format!("/turns/submit returned {status}"),
@@ -1515,6 +1542,20 @@ mod tests {
     use dregg_turn::{Action, Authorization, CallForest, DelegationMode, turn::Turn};
 
     use super::*;
+
+    #[test]
+    fn a_submit_without_a_bearer_is_refused_only_when_the_node_wants_one() {
+        // A dev-unlocked node (no passphrase, loopback) admits the bearer-less
+        // submit; only a 401/403 to a request that carried none names the remedy.
+        use reqwest::StatusCode;
+        assert!(refused_for_want_of_bearer(&None, StatusCode::UNAUTHORIZED));
+        assert!(refused_for_want_of_bearer(&None, StatusCode::FORBIDDEN));
+        assert!(!refused_for_want_of_bearer(&None, StatusCode::OK));
+        assert!(!refused_for_want_of_bearer(&None, StatusCode::INTERNAL_SERVER_ERROR));
+        assert!(!refused_for_want_of_bearer(&Some("t".into()), StatusCode::UNAUTHORIZED));
+        assert!(NO_BEARER.contains("DREGG_NODE_PASSPHRASE to unlock"));
+        assert!(!NO_BEARER.contains("  "), "the continuation must not leave a run of spaces");
+    }
 
     fn real_chat_turn(agent: CellId, payload: &[u8]) -> Turn {
         let mut forest = CallForest::new();
