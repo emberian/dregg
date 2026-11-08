@@ -1543,6 +1543,20 @@ mod tests {
 
     use super::*;
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn with_no_bearer_source_the_send_goes_on_without_one() {
+        // Measured 2026-11-07: against a `--dev-unlock` node (which admits a
+        // bearer-less loopback submit) `send` refused HERE, before the node was
+        // ever asked. No source configured must mean no bearer, not a refusal.
+        for k in ["DREGG_API_TOKEN_FILE", "DREGG_API_TOKEN", "DREGG_NODE_PASSPHRASE"] {
+            assert!(env(k).is_none(), "{k} is set; this test needs none of the three");
+        }
+        let http = reqwest::Client::new();
+        // Port 9 (discard): with no source configured nothing may be contacted.
+        let got = ensure_token(&http, "http://127.0.0.1:9", None).await;
+        assert!(got.is_ok(), "no bearer source must mean no bearer, not a refusal");
+    }
+
     #[test]
     fn a_submit_without_a_bearer_is_refused_only_when_the_node_wants_one() {
         // A dev-unlocked node (no passphrase, loopback) admits the bearer-less
