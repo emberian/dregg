@@ -337,6 +337,21 @@ fn install_current(
     Ok(())
 }
 
+/// `(index version, compaction floor, commit cursor)` as of `read`.
+fn index_meta(read: &ReadTransaction) -> Result<(Option<u64>, u64, u64)> {
+    let meta = read.open_table(tables::METADATA)?;
+    Ok((
+        meta.get(tables::META_PER_CELL_RECEIPT_HEAD_INDEX_VERSION_V1)?
+            .map(|value| value.value()),
+        meta.get(tables::META_COMMIT_COMPACTED)?
+            .map(|value| value.value())
+            .unwrap_or(0),
+        meta.get(tables::META_COMMIT_CURSOR)?
+            .map(|value| value.value())
+            .unwrap_or(0),
+    ))
+}
+
 fn projection_from_read(
     read: &ReadTransaction,
 ) -> Result<(
@@ -346,19 +361,7 @@ fn projection_from_read(
     BTreeMap<[u8; 32], HeadValue>,
     Vec<CommitRecord>,
 )> {
-    let (version, compacted_floor, cursor) = {
-        let meta = read.open_table(tables::METADATA)?;
-        (
-            meta.get(tables::META_PER_CELL_RECEIPT_HEAD_INDEX_VERSION_V1)?
-                .map(|value| value.value()),
-            meta.get(tables::META_COMMIT_COMPACTED)?
-                .map(|value| value.value())
-                .unwrap_or(0),
-            meta.get(tables::META_COMMIT_CURSOR)?
-                .map(|value| value.value())
-                .unwrap_or(0),
-        )
-    };
+    let (version, compacted_floor, cursor) = index_meta(read)?;
     if version != Some(PER_CELL_RECEIPT_HEAD_INDEX_VERSION_V1) {
         return Err(integrity(format!(
             "per-cell receipt-head index version is {:?}, expected {}",
@@ -383,12 +386,210 @@ fn projection_from_read(
     Ok((compacted_floor, cursor, baseline, current, live_records))
 }
 
+/// The validated `current` projection as of one commit cursor, kept so the
+/// next read replays only the records appended since.
+struct CachedProjection {
+    generation: u64,
+    compacted_floor: u64,
+    cursor: u64,
+    current: BTreeMap<[u8; 32], HeadValue>,
+}
+
+/// Rewrite bookkeeping: `generation` advances when a non-append writer starts
+/// and again when it ends; `in_flight` counts writers between those points.
+#[derive(Default)]
+struct RewriteEpoch {
+    generation: u64,
+    in_flight: u64,
+}
+
+/// Process-local cache behind [`PersistentStore::per_cell_receipt_heads_v1`].
+///
+/// A fresh finalized commit only appends: it writes the record at the cursor,
+/// advances the cursor, and stages exactly that record's heads into `current`.
+/// Every other writer of the commit log or either head table (compaction,
+/// tail truncation, index rebuild, migration) holds a [`RewriteGuard`] for its
+/// whole transaction, which invalidates the cache. A cached projection is
+/// reused only when no such writer ran or is running, so replaying the
+/// appended suffix yields what the full reconstruction would.
+#[derive(Default)]
+pub(crate) struct PerCellReceiptHeadCache {
+    epoch: std::sync::Mutex<RewriteEpoch>,
+    projection: std::sync::Mutex<Option<CachedProjection>>,
+}
+
+pub(crate) struct RewriteGuard<'a>(&'a PerCellReceiptHeadCache);
+
+impl PerCellReceiptHeadCache {
+    fn lock_epoch(&self) -> std::sync::MutexGuard<'_, RewriteEpoch> {
+        self.epoch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// `Some(generation)` when no rewriting writer is in flight.
+    fn quiet_generation(&self) -> Option<u64> {
+        let epoch = self.lock_epoch();
+        (epoch.in_flight == 0).then_some(epoch.generation)
+    }
+
+    /// Mark a non-append write. Take it BEFORE `begin_write` and hold it past
+    /// `commit`.
+    pub(crate) fn begin_rewrite(&self) -> RewriteGuard<'_> {
+        let mut epoch = self.lock_epoch();
+        epoch.generation += 1;
+        epoch.in_flight += 1;
+        RewriteGuard(self)
+    }
+}
+
+impl Drop for RewriteGuard<'_> {
+    fn drop(&mut self) {
+        let mut epoch = self.0.lock_epoch();
+        epoch.generation += 1;
+        epoch.in_flight -= 1;
+    }
+}
+
+/// Advance `cached` to `cursor` by replaying only the appended records, with
+/// the same per-record checks as [`reconstruct_projection`], then require the
+/// durable `current` table to equal the cached projection exactly — one
+/// O(cells) pass over the table, not a replay of history. `Ok(false)` means
+/// "not provably an append": the caller rebuilds in full.
+fn advance_cached_projection(
+    read: &ReadTransaction,
+    cached: &mut CachedProjection,
+    compacted_floor: u64,
+    cursor: u64,
+) -> Result<bool> {
+    if compacted_floor != cached.compacted_floor || cursor < cached.cursor {
+        return Ok(false);
+    }
+    let live = cursor
+        .checked_sub(compacted_floor)
+        .ok_or_else(|| integrity("per-cell receipt-head cursor is behind compaction floor"))?;
+    bounded_len(
+        live,
+        MAX_PER_CELL_RECEIPT_LIVE_RECORDS_V1,
+        "live per-cell receipt-head commit suffix",
+    )?;
+    let log = read.open_table(tables::COMMIT_LOG)?;
+    if log.len()? != live {
+        return Ok(false);
+    }
+    let mut expected = cached.cursor;
+    for entry in log.range(cached.cursor..cursor)? {
+        let (key, bytes) =
+            entry.map_err(|error: redb::StorageError| StoreError::Database(error.to_string()))?;
+        let record = decode_commit_record(bytes.value())?;
+        if key.value() != expected || record.ordinal != expected {
+            return Ok(false);
+        }
+        let head = HeadValue {
+            writer_ordinal: record.ordinal,
+            receipt_hash: record.receipt_hash,
+        };
+        for cell in record_participants(&record)? {
+            cached.current.insert(cell, head);
+        }
+        bounded_len(
+            u64::try_from(cached.current.len()).unwrap_or(u64::MAX),
+            MAX_PER_CELL_RECEIPT_HEADS_V1,
+            "current per-cell receipt-head",
+        )?;
+        expected += 1;
+    }
+    if expected != cursor {
+        return Ok(false);
+    }
+    let durable = read.open_table(tables::PER_CELL_RECEIPT_HEAD_CURRENT_V1)?;
+    if usize::try_from(durable.len()?).ok() != Some(cached.current.len()) {
+        return Ok(false);
+    }
+    for entry in durable.iter()? {
+        let (cell, encoded) =
+            entry.map_err(|error: redb::StorageError| StoreError::Database(error.to_string()))?;
+        if cached.current.get(cell.value()) != Some(&decode_head(encoded.value())) {
+            return Ok(false);
+        }
+    }
+    cached.cursor = cursor;
+    Ok(true)
+}
+
 impl PersistentStore {
+    /// The validated `current` per-cell receipt heads, sorted by cell.
+    ///
+    /// Equal to `load_per_cell_receipt_head_recovery_v1()?.current` when it
+    /// succeeds, but a call after only fresh commits replays just the records
+    /// appended since the previous call instead of decoding the whole live
+    /// commit log, so it detects fewer corruptions than the full load. The
+    /// incremental check still compares the durable `current` table against
+    /// the cached projection in full — a forged, extra or missing row for any
+    /// cell falls back to the full validation and refuses — while corruption
+    /// of an OLD live commit-log record is detected only by the full path,
+    /// which re-decodes every record. The first call, and any call after a
+    /// compaction, truncation, index rebuild or failed incremental check,
+    /// runs the full validation.
+    pub fn per_cell_receipt_heads_v1(&self) -> Result<Vec<DurablePerCellReceiptHead>> {
+        let cache = &self.per_cell_head_cache;
+        let mut slot = cache.projection.lock().unwrap_or_else(|poisoned| {
+            let mut slot = poisoned.into_inner();
+            *slot = None;
+            slot
+        });
+        let read = self.db.begin_read()?;
+        // Read after the snapshot opens: a rewrite committed before it is
+        // either finished (generation moved) or still in flight.
+        let generation = cache.quiet_generation();
+        let (version, compacted_floor, cursor) = index_meta(&read)?;
+        let reused = match (slot.as_mut(), generation) {
+            (Some(cached), Some(generation))
+                if cached.generation == generation
+                    && version == Some(PER_CELL_RECEIPT_HEAD_INDEX_VERSION_V1) =>
+            {
+                matches!(
+                    advance_cached_projection(&read, cached, compacted_floor, cursor),
+                    Ok(true)
+                )
+            }
+            _ => false,
+        };
+        if !reused {
+            *slot = None;
+            let (compacted_floor, cursor, _, current, _) = projection_from_read(&read)?;
+            let heads = rows(&current);
+            // Cache only if no rewrite began after the snapshot opened.
+            if let Some(generation) = generation
+                && cache.quiet_generation() == Some(generation)
+            {
+                *slot = Some(CachedProjection {
+                    generation,
+                    compacted_floor,
+                    cursor,
+                    current,
+                });
+            }
+            return Ok(heads);
+        }
+        let heads = slot
+            .as_ref()
+            .map(|cached| rows(&cached.current))
+            .unwrap_or_default();
+        // A rewrite that began after the snapshot opened makes the cache stale
+        // for the next call, though this snapshot's answer stands.
+        if cache.quiet_generation() != generation {
+            *slot = None;
+        }
+        Ok(heads)
+    }
+
     /// Install the v1 index on an uncompacted legacy image, or validate an
     /// already-installed image.  A legacy store with `floor > 0` fails closed:
     /// its compacted records' write sets no longer exist, so inventing an empty
     /// baseline would irreversibly erase provenance.
     pub(crate) fn migrate_per_cell_receipt_head_index_v1(&self) -> Result<()> {
+        let _rewrite = self.per_cell_head_cache.begin_rewrite();
         let write = self.db.begin_write()?;
         let (version, compacted_floor, cursor) = {
             let meta = write.open_table(tables::METADATA)?;
@@ -724,6 +925,179 @@ mod tests {
             error
                 .to_string()
                 .contains("more than once across touched/removed")
+        );
+    }
+
+    fn full_current(store: &PersistentStore) -> Result<Vec<DurablePerCellReceiptHead>> {
+        store
+            .load_per_cell_receipt_head_recovery_v1()
+            .map(|recovery| recovery.current)
+    }
+
+    fn overwrite_current_row(store: &PersistentStore, cell: CellId, head: HeadValue) {
+        let write = store.db.begin_write().unwrap();
+        write
+            .open_table(tables::PER_CELL_RECEIPT_HEAD_CURRENT_V1)
+            .unwrap()
+            .insert(&cell.0, &encode_head(head))
+            .unwrap();
+        write.commit().unwrap();
+    }
+
+    /// After every one of N interleaved commits (with a removal) and across a
+    /// compaction and an index rebuild, the incremental heads equal the full
+    /// rebuild's.
+    #[test]
+    fn incremental_heads_equal_the_full_rebuild_after_each_commit() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        assert_eq!(store.per_cell_receipt_heads_v1().unwrap(), Vec::new());
+        let cells: Vec<Cell> = (0..4).map(|i| cell(0x50 + i)).collect();
+        for ordinal in 0..12u64 {
+            let touched = vec![
+                cells[ordinal as usize % 4].clone(),
+                cells[(ordinal as usize + 1) % 4].clone(),
+            ];
+            let removed = if ordinal == 7 {
+                vec![cells[2].id()]
+            } else {
+                vec![]
+            };
+            let touched = touched
+                .into_iter()
+                .filter(|c| !removed.contains(&c.id()))
+                .collect();
+            let marker = 0x60 + ordinal as u8;
+            store
+                .commit_finalized_turn(ordinal, &record(ordinal, marker, touched, removed))
+                .unwrap();
+            assert_eq!(
+                store.per_cell_receipt_heads_v1().unwrap(),
+                full_current(&store).unwrap(),
+                "after commit {ordinal}"
+            );
+        }
+
+        store
+            .store_ledger_checkpoint_snapshot(&crate::LedgerCheckpoint {
+                height: 6,
+                cells: Vec::new(),
+                sovereign_commitments: Vec::new(),
+                sovereign_registrations: Vec::new(),
+            })
+            .unwrap();
+        assert!(store.compact_below_with_test_poa_anchor_v1(6).unwrap() > 0);
+        assert_eq!(
+            store.per_cell_receipt_heads_v1().unwrap(),
+            full_current(&store).unwrap()
+        );
+        store
+            .commit_finalized_turn(12, &record(12, 0x7C, vec![cells[3].clone()], vec![]))
+            .unwrap();
+        store.rebuild_index_from_log().unwrap();
+        assert_eq!(
+            store.per_cell_receipt_heads_v1().unwrap(),
+            full_current(&store).unwrap()
+        );
+    }
+
+    /// A durable `current` row that disagrees with the replayed record refuses
+    /// exactly as the full rebuild does, and so does an extra row.
+    #[test]
+    fn incremental_heads_refuse_a_current_row_mismatch() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let a = cell(0x81);
+        let b = cell(0x82);
+        store
+            .commit_finalized_turn(0, &record(0, 0x90, vec![a.clone()], vec![]))
+            .unwrap();
+        store.per_cell_receipt_heads_v1().unwrap();
+        store
+            .commit_finalized_turn(1, &record(1, 0x91, vec![a.clone()], vec![]))
+            .unwrap();
+        let forged = HeadValue {
+            writer_ordinal: 1,
+            receipt_hash: [0xEE; 32],
+        };
+        overwrite_current_row(&store, a.id(), forged);
+        let full = full_current(&store).unwrap_err().to_string();
+        let incremental = store.per_cell_receipt_heads_v1().unwrap_err().to_string();
+        assert_eq!(incremental, full);
+        assert!(incremental.contains("disagrees with compacted baseline plus live suffix"));
+
+        let store = PersistentStore::open_in_memory().unwrap();
+        store
+            .commit_finalized_turn(0, &record(0, 0x92, vec![a.clone()], vec![]))
+            .unwrap();
+        store.per_cell_receipt_heads_v1().unwrap();
+        store
+            .commit_finalized_turn(1, &record(1, 0x93, vec![a], vec![]))
+            .unwrap();
+        overwrite_current_row(&store, b.id(), forged);
+        assert!(full_current(&store).is_err());
+        assert!(store.per_cell_receipt_heads_v1().is_err());
+    }
+
+    /// A forged durable `current` row for a cell NOT advanced since the cache
+    /// was warmed falls back to the full rebuild and refuses exactly as it
+    /// does; the incremental check must not accept it just because the forged
+    /// cell was not touched by the appended records.
+    #[test]
+    fn incremental_heads_fall_back_on_a_forged_row_for_a_non_advanced_cell() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let a = cell(0x83);
+        let b = cell(0x84);
+        store
+            .commit_finalized_turn(
+                0,
+                &record(0, 0x94, vec![a.clone(), b.clone()], vec![]),
+            )
+            .unwrap();
+        store.per_cell_receipt_heads_v1().unwrap();
+        // Commit 1 advances only `a`, so `b` is not advanced since the warm.
+        store
+            .commit_finalized_turn(1, &record(1, 0x95, vec![a.clone()], vec![]))
+            .unwrap();
+        let forged = HeadValue {
+            writer_ordinal: 0,
+            receipt_hash: [0xEF; 32],
+        };
+        overwrite_current_row(&store, b.id(), forged);
+        assert!(full_current(&store).is_err());
+        let full = full_current(&store).unwrap_err().to_string();
+        let incremental = store.per_cell_receipt_heads_v1().unwrap_err().to_string();
+        assert_eq!(incremental, full);
+        assert!(incremental.contains("disagrees with compacted baseline plus live suffix"));
+    }
+
+    /// The warm path decodes only appended records: an undecodable OLD live
+    /// record breaks the full load but not the incremental one. Without the
+    /// cache every call decodes the whole live log and this refuses.
+    #[test]
+    fn incremental_heads_do_not_redecode_the_live_log() {
+        let store = PersistentStore::open_in_memory().unwrap();
+        let a = cell(0xA4);
+        let b = cell(0xB4);
+        store
+            .commit_finalized_turn(0, &record(0, 0xC0, vec![a.clone()], vec![]))
+            .unwrap();
+        store.per_cell_receipt_heads_v1().unwrap();
+        let write = store.db.begin_write().unwrap();
+        write
+            .open_table(tables::COMMIT_LOG)
+            .unwrap()
+            .insert(0u64, [0xFFu8; 2].as_slice())
+            .unwrap();
+        write.commit().unwrap();
+        store
+            .commit_finalized_turn(1, &record(1, 0xC1, vec![b.clone()], vec![]))
+            .unwrap();
+        assert!(full_current(&store).is_err());
+        let heads = store.per_cell_receipt_heads_v1().unwrap();
+        assert_eq!(heads.len(), 2);
+        assert!(
+            heads
+                .iter()
+                .any(|h| h.cell == b.id() && h.writer_ordinal == 1)
         );
     }
 

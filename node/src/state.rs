@@ -68,18 +68,48 @@ fn restore_and_verify_faithful_note_tree(
 
     // The live history is node-author authenticated: reconstruct that exact
     // local hybrid identity and replay every row, so a checksum-preserving row
-    // edit or deleted suffix refuses before the node serves.
+    // edit or deleted suffix refuses before the node serves.  Rows covered by
+    // this identity's audit seal from an earlier boot are authenticated by that
+    // one seal (their exact bytes must still hash to its digest); the rest are
+    // checked one by one, and the seal is then extended over them.
     let seed = cclerk.gossip_signing_key().to_bytes();
     let local_ed = cclerk.public_key();
-    let (local_pq, _) = dregg_federation::frost::MlDsaSigningKey::from_seed(&seed);
-    store
-        .load_faithful_note_root_history_hybrid(
+    let (local_pq, local_pq_signer) = dregg_federation::frost::MlDsaSigningKey::from_seed(&seed);
+    let started = std::time::Instant::now();
+    let (_, prefix) = store
+        .load_faithful_note_root_history_hybrid_audited(
             std::slice::from_ref(&local_ed),
             std::slice::from_ref(&local_pq),
             1,
             expected,
         )
         .map_err(|e| format!("faithful note-root authenticated replay refused: {e}"))?;
+    tracing::info!(
+        records = prefix.records(),
+        sealed = prefix.sealed_records(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "faithful note-root history authenticated"
+    );
+    if prefix.sealed_records() < prefix.records() {
+        let statement = prefix.statement();
+        let quorum = local_pq_signer.sign(statement).map(|pq_signature| {
+            vec![dregg_types::HybridQuorumSig {
+                pubkey: local_ed,
+                signature: dregg_types::sign(
+                    &dregg_types::SigningKey::from_bytes(&seed),
+                    statement,
+                ),
+                ml_dsa_pubkey: local_pq.0.to_vec(),
+                pq_signature,
+            }]
+        });
+        // Best effort: without a fresh seal the next boot checks more rows.
+        match quorum.map(|quorum| store.store_faithful_note_root_audit_seal(&prefix, quorum)) {
+            Some(Ok(())) => {}
+            Some(Err(e)) => tracing::warn!(error = %e, "faithful note-root audit seal not stored"),
+            None => tracing::warn!("faithful note-root audit seal not signed"),
+        }
+    }
     Ok(tree)
 }
 
@@ -216,6 +246,73 @@ pub struct NodeState {
     /// deliberately not persisted, so a restart ends every open session rather than reviving a
     /// key from disk.
     dark_clearing: Arc<RwLock<crate::dark_clearing_service::NodeDarkClearing>>,
+    /// What `/status` reads from [`NodeStateInner`], refreshed as every state
+    /// write guard is released, so a probe never waits on the state lock.
+    status: Arc<Mutex<Option<StatusSnapshot>>>,
+    /// The last `(dag_height, block_count)` read from the blocklace, served
+    /// when the lace lock is busy.
+    lace_counts: Arc<Mutex<Option<(u64, usize)>>>,
+}
+
+/// The `/status` inputs held by [`NodeStateInner`]. Every field is cheap to
+/// clone and changes only under the state write lock.
+#[derive(Clone)]
+pub struct StatusSnapshot {
+    pub store: Arc<PersistentStore>,
+    pub blocklace: Option<crate::blocklace_sync::BlocklaceHandle>,
+    pub peer_count: usize,
+    pub solo: bool,
+    pub lean_producer: bool,
+    pub full_turn_proving: bool,
+    pub public_key: [u8; 32],
+    pub executor_federation_id: [u8; 32],
+    pub coordination_fee_exempt: bool,
+}
+
+impl StatusSnapshot {
+    pub(crate) fn of(s: &NodeStateInner) -> Self {
+        Self {
+            store: Arc::clone(&s.store),
+            blocklace: s.blocklace_handle.clone(),
+            peer_count: s.peers.len(),
+            solo: s.solo_consensus.as_ref().is_some_and(|solo| solo.is_solo),
+            lean_producer: s.lean_producer_enabled,
+            full_turn_proving: s.full_turn_proving_enabled,
+            public_key: s.cclerk.public_key().0,
+            executor_federation_id: crate::executor_setup::federation_id_for_executor(s),
+            coordination_fee_exempt: s.coordination_fee_exempt,
+        }
+    }
+}
+
+/// The state write guard. Releasing it refreshes the [`StatusSnapshot`] while
+/// the lock is still held, so the snapshot never runs ahead of the state.
+pub struct NodeStateWriteGuard<'a> {
+    guard: tokio::sync::RwLockWriteGuard<'a, NodeStateInner>,
+    status: &'a Mutex<Option<StatusSnapshot>>,
+}
+
+impl std::ops::Deref for NodeStateWriteGuard<'_> {
+    type Target = NodeStateInner;
+    fn deref(&self) -> &NodeStateInner {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for NodeStateWriteGuard<'_> {
+    fn deref_mut(&mut self) -> &mut NodeStateInner {
+        &mut self.guard
+    }
+}
+
+impl Drop for NodeStateWriteGuard<'_> {
+    fn drop(&mut self) {
+        let snapshot = StatusSnapshot::of(&self.guard);
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(snapshot);
+    }
 }
 
 /// One fixed-size, cursor-only page of the public append-only faithful note
@@ -1535,7 +1632,10 @@ impl NodeState {
             dark_clearing: Arc::new(RwLock::new(
                 crate::dark_clearing_service::NodeDarkClearing::new(),
             )),
-        })
+            status: Arc::new(Mutex::new(None)),
+            lace_counts: Arc::new(Mutex::new(None)),
+        }
+        .seed_status())
     }
 
     /// Create a NodeState with a pre-existing cipherclerk (restored from key material).
@@ -1733,7 +1833,10 @@ impl NodeState {
             dark_clearing: Arc::new(RwLock::new(
                 crate::dark_clearing_service::NodeDarkClearing::new(),
             )),
-        })
+            status: Arc::new(Mutex::new(None)),
+            lace_counts: Arc::new(Mutex::new(None)),
+        }
+        .seed_status())
     }
 
     /// Read-only handle to the node-hosted realm substrate (`realm-model`
@@ -1757,8 +1860,48 @@ impl NodeState {
     }
 
     /// Acquire a write lock on the inner state.
-    pub async fn write(&self) -> tokio::sync::RwLockWriteGuard<'_, NodeStateInner> {
-        self.inner.write().await
+    pub async fn write(&self) -> NodeStateWriteGuard<'_> {
+        NodeStateWriteGuard {
+            guard: self.inner.write().await,
+            status: &self.status,
+        }
+    }
+
+    fn seed_status(self) -> Self {
+        let snapshot = self
+            .inner
+            .try_read()
+            .expect("a just-built node state is unlocked");
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(StatusSnapshot::of(&snapshot));
+        drop(snapshot);
+        self
+    }
+
+    /// The `/status` inputs as of the last released state write, without
+    /// touching the state lock.
+    pub fn status_snapshot(&self) -> Option<StatusSnapshot> {
+        self.status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// `(dag_height, block_count)` of `handle`'s lace: read fresh when the lace
+    /// lock is free, else the last value read, so a probe never waits on it.
+    pub fn lace_counts(&self, handle: &crate::blocklace_sync::BlocklaceHandle) -> (u64, usize) {
+        let fresh = handle.try_lace_counts();
+        let mut cached = self
+            .lace_counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if fresh.is_some() {
+            *cached = fresh;
+        }
+        cached.unwrap_or_default()
     }
 
     /// Get the current cipherclerk status.
@@ -2202,7 +2345,12 @@ impl NodeState {
 
     /// Set the blocklace consensus handle.
     pub async fn set_blocklace(&self, handle: crate::blocklace_sync::BlocklaceHandle) {
-        let mut s = self.inner.write().await;
+        let counts = handle.lace_counts().await;
+        *self
+            .lace_counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(counts);
+        let mut s = self.write().await;
         s.blocklace_handle = Some(handle);
     }
 

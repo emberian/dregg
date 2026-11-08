@@ -1043,8 +1043,11 @@ pub struct AgentCipherclerk {
     receipt_chain: Vec<dregg_turn::TurnReceipt>,
     /// Dense log indices for each agent's causal receipt chain.
     receipt_indices_by_agent: HashMap<CellId, Vec<usize>>,
-    /// The immutable log index of each agent's current causal head.
-    receipt_heads_by_agent: HashMap<CellId, usize>,
+    /// The immutable log index and `receipt_hash()` of each agent's current
+    /// causal head. The hash is computed once, when the head is appended, so
+    /// reading every head (as each short-lived node executor does) costs no
+    /// rehashing of the log.
+    receipt_heads_by_agent: HashMap<CellId, (usize, [u8; 32])>,
     /// Optional durability sink for the immutable receipt log. When set (by the node,
     /// via [`Self::set_receipt_persist`]), every [`Self::append_receipt`] fires
     /// it with `(log_index, &receipt)` so the just-appended receipt is written
@@ -2301,12 +2304,13 @@ impl AgentCipherclerk {
 
         let index = index as usize;
         let agent = receipt.agent;
+        let hash = receipt.receipt_hash();
         self.receipt_chain.push(receipt);
         self.receipt_indices_by_agent
             .entry(agent)
             .or_default()
             .push(index);
-        self.receipt_heads_by_agent.insert(agent, index);
+        self.receipt_heads_by_agent.insert(agent, (index, hash));
         Ok(())
     }
 
@@ -2337,12 +2341,12 @@ impl AgentCipherclerk {
     ) -> Result<usize, ChainAppendError> {
         let mut receipt_chain: Vec<dregg_turn::TurnReceipt> = Vec::with_capacity(receipts.len());
         let mut receipt_indices_by_agent: HashMap<CellId, Vec<usize>> = HashMap::new();
-        let mut receipt_heads_by_agent: HashMap<CellId, usize> = HashMap::new();
+        let mut receipt_heads_by_agent: HashMap<CellId, (usize, [u8; 32])> = HashMap::new();
 
         for receipt in receipts {
             let expected_prev = receipt_heads_by_agent
                 .get(&receipt.agent)
-                .map(|&index| receipt_chain[index].receipt_hash());
+                .map(|&(_, hash)| hash);
             if receipt.previous_receipt_hash != expected_prev {
                 return Err(ChainAppendError::ReceiptChainMismatch {
                     expected: expected_prev,
@@ -2351,12 +2355,13 @@ impl AgentCipherclerk {
             }
             let index = receipt_chain.len();
             let agent = receipt.agent;
+            let hash = receipt.receipt_hash();
             receipt_chain.push(receipt);
             receipt_indices_by_agent
                 .entry(agent)
                 .or_default()
                 .push(index);
-            receipt_heads_by_agent.insert(agent, index);
+            receipt_heads_by_agent.insert(agent, (index, hash));
         }
 
         let loaded = receipt_chain.len();
@@ -2374,12 +2379,27 @@ impl AgentCipherclerk {
     pub fn agent_receipt_head(&self, agent: &CellId) -> Option<&dregg_turn::TurnReceipt> {
         self.receipt_heads_by_agent
             .get(agent)
-            .map(|&index| &self.receipt_chain[index])
+            .map(|&(index, _)| &self.receipt_chain[index])
     }
 
     /// Return the current causal predecessor hash for `agent`.
     pub fn agent_receipt_head_hash(&self, agent: &CellId) -> Option<[u8; 32]> {
-        self.agent_receipt_head(agent).map(|r| r.receipt_hash())
+        self.receipt_heads_by_agent
+            .get(agent)
+            .map(|&(_, hash)| hash)
+    }
+
+    /// Every agent's current causal head hash, maintained at append time.
+    ///
+    /// Equal to walking [`Self::receipt_log`] and keeping each agent's last
+    /// `receipt_hash()`, but O(agents) instead of O(log). The per-agent chain
+    /// invariant needs no re-check here: every mutation of the log
+    /// ([`Self::append_receipt_already_durable`], [`Self::restore_receipt_chain`])
+    /// refuses a receipt whose predecessor is not its agent's current head.
+    pub fn agent_receipt_head_hashes(&self) -> impl Iterator<Item = (CellId, [u8; 32])> + '_ {
+        self.receipt_heads_by_agent
+            .iter()
+            .map(|(agent, &(_, hash))| (*agent, hash))
     }
 
     /// Return the node-wide immutable-log index of `agent`'s causal head.
@@ -2391,7 +2411,7 @@ impl AgentCipherclerk {
     pub fn agent_receipt_head_log_index(&self, agent: &CellId) -> Option<u64> {
         self.receipt_heads_by_agent
             .get(agent)
-            .and_then(|&index| u64::try_from(index).ok())
+            .and_then(|&(index, _)| u64::try_from(index).ok())
     }
 
     /// Return the number of immutable receipts in `agent`'s causal chain.

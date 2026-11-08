@@ -1186,6 +1186,23 @@ impl BlocklaceHandle {
         lace.len()
     }
 
+    /// `(dag_height, block_count)` under one lace read.
+    pub async fn lace_counts(&self) -> (u64, usize) {
+        Self::counts_of(&*self.lace.read().await)
+    }
+
+    /// [`Self::lace_counts`] only if the lace lock is free right now.
+    pub fn try_lace_counts(&self) -> Option<(u64, usize)> {
+        self.lace.try_read().ok().map(|lace| Self::counts_of(&lace))
+    }
+
+    fn counts_of(lace: &Blocklace) -> (u64, usize) {
+        (
+            lace.iter().map(|(_, block)| block.seq).max().unwrap_or(0),
+            lace.len(),
+        )
+    }
+
     /// What this node can honestly say about its own ability to finalize:
     /// which committee members are still voting at us, over an OPEN transport,
     /// against the collector's live 2f+1.

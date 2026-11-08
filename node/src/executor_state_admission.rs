@@ -87,6 +87,42 @@ pub(crate) fn restore_executor_receipt_heads(
     Ok(restored)
 }
 
+/// Seed every agent-scoped receipt head into a fresh executor from the heads
+/// the cipherclerk maintains at append time.
+///
+/// O(agents) per executor rather than O(receipt log): the full walk in
+/// [`restore_executor_receipt_heads`] re-derives exactly these heads, and the
+/// cipherclerk already refuses, at every append and at boot restore, the
+/// receipt whose predecessor is not its agent's head — the only condition the
+/// walk can refuse. Unit-test builds run the walk too and require equality, so
+/// the whole node test suite keeps checking the two agree.
+pub(crate) fn seed_executor_receipt_heads(
+    executor: &TurnExecutor,
+    cclerk: &dregg_sdk::AgentCipherclerk,
+) -> Result<usize, ReceiptHeadRestoreError> {
+    let heads: HashMap<CellId, [u8; 32]> = cclerk.agent_receipt_head_hashes().collect();
+    if cfg!(test) {
+        let walked = restore_executor_receipt_heads(executor, cclerk.receipt_log())?;
+        assert_eq!(
+            walked,
+            heads.len(),
+            "maintained agent heads disagree with the log walk"
+        );
+        for (agent, head) in &heads {
+            assert_eq!(
+                executor.get_last_receipt_hash(agent),
+                Some(*head),
+                "maintained agent head disagrees with the log walk"
+            );
+        }
+    }
+    let seeded = heads.len();
+    for (agent, head) in heads {
+        executor.set_last_receipt_hash(agent, head);
+    }
+    Ok(seeded)
+}
+
 /// One per-cell provenance head together with the commit ordinal that wrote it.
 ///
 /// Persisting the ordinal is load-bearing: after a divergent live suffix is
@@ -372,39 +408,61 @@ pub(crate) fn install_executor_per_cell_receipt_heads(
 }
 
 /// Load the store-authenticated two-map image and seed a fresh executor.
+///
+/// Through the store's incremental reader: after only fresh commits it replays
+/// the appended records instead of the whole live commit log, and it refuses
+/// whenever the full recovery load would. Unit-test builds also run the full
+/// load plus this module's reconstruction oracle and require equality.
 pub(crate) fn restore_executor_per_cell_receipt_heads(
+    executor: &TurnExecutor,
+    store: &PersistentStore,
+) -> Result<usize, String> {
+    let heads: HashMap<CellId, [u8; 32]> = store
+        .per_cell_receipt_heads_v1()
+        .map_err(|error| format!("could not load durable per-cell receipt heads: {error}"))?
+        .into_iter()
+        .map(|head| (head.cell, head.receipt_hash))
+        .collect();
+    if cfg!(test) {
+        restore_executor_per_cell_receipt_heads_in_full(executor, store)?;
+        let full = executor
+            .per_cell_receipt_head
+            .lock()
+            .map_err(|_| PerCellReceiptHeadInstallError::ExecutorLockPoisoned.to_string())?
+            .clone();
+        assert_eq!(
+            full, heads,
+            "incremental per-cell heads disagree with the full rebuild"
+        );
+    }
+    let count = heads.len();
+    *executor
+        .per_cell_receipt_head
+        .lock()
+        .map_err(|_| PerCellReceiptHeadInstallError::ExecutorLockPoisoned.to_string())? = heads;
+    Ok(count)
+}
+
+/// The full rebuild: decode the whole live suffix and replay it through
+/// [`install_executor_per_cell_receipt_heads`].
+pub(crate) fn restore_executor_per_cell_receipt_heads_in_full(
     executor: &TurnExecutor,
     store: &PersistentStore,
 ) -> Result<usize, String> {
     let recovery = store
         .load_per_cell_receipt_head_recovery_v1()
         .map_err(|error| format!("could not load durable per-cell receipt heads: {error}"))?;
-    let baseline = recovery
-        .baseline
-        .into_iter()
-        .map(|head| {
-            (
-                head.cell,
-                PerCellReceiptHead {
-                    writer_ordinal: head.writer_ordinal,
-                    receipt_hash: head.receipt_hash,
-                },
-            )
-        })
-        .collect();
-    let current = recovery
-        .current
-        .into_iter()
-        .map(|head| {
-            (
-                head.cell,
-                PerCellReceiptHead {
-                    writer_ordinal: head.writer_ordinal,
-                    receipt_hash: head.receipt_hash,
-                },
-            )
-        })
-        .collect();
+    let head = |head: dregg_persist::DurablePerCellReceiptHead| {
+        (
+            head.cell,
+            PerCellReceiptHead {
+                writer_ordinal: head.writer_ordinal,
+                receipt_hash: head.receipt_hash,
+            },
+        )
+    };
+    let baseline = recovery.baseline.into_iter().map(head).collect();
+    let current = recovery.current.into_iter().map(head).collect();
     install_executor_per_cell_receipt_heads(
         executor,
         recovery.compacted_floor,
@@ -922,6 +980,54 @@ mod tests {
         );
         assert_eq!(executor.get_last_receipt_hash(&agent_a), Some(expected_a));
         assert_eq!(executor.get_last_receipt_hash(&agent_b), Some(expected_b));
+    }
+
+    /// The heads the cipherclerk maintains at append equal the full log walk
+    /// after N interleaved appends, and a receipt that does not extend its
+    /// agent's head is refused at append (the walk's only refusal) so it can
+    /// never reach the maintained heads.
+    #[test]
+    fn maintained_agent_heads_equal_the_full_walk() {
+        let agents = [CellId([0xA7; 32]), CellId([0xB7; 32]), CellId([0xC7; 32])];
+        let mut cclerk = dregg_sdk::AgentCipherclerk::new();
+        let mut heads: HashMap<CellId, [u8; 32]> = HashMap::new();
+        for n in 0..9u8 {
+            let agent = agents[usize::from(n) % 3];
+            let next = receipt(agent, n, heads.get(&agent).copied());
+            heads.insert(agent, next.receipt_hash());
+            let index = cclerk.receipt_log_next_index();
+            cclerk.append_receipt_already_durable(index, next).unwrap();
+
+            let walked = TurnExecutor::new(ComputronCosts::zero());
+            restore_executor_receipt_heads(&walked, cclerk.receipt_log()).unwrap();
+            let seeded = TurnExecutor::new(ComputronCosts::zero());
+            seed_executor_receipt_heads(&seeded, &cclerk).unwrap();
+            for agent in &agents {
+                assert_eq!(
+                    seeded.get_last_receipt_hash(agent),
+                    walked.get_last_receipt_hash(agent)
+                );
+                assert_eq!(
+                    seeded.get_last_receipt_hash(agent),
+                    heads.get(agent).copied()
+                );
+            }
+        }
+
+        let stale = receipt(agents[0], 0x40, None);
+        let index = cclerk.receipt_log_next_index();
+        assert!(
+            cclerk
+                .append_receipt_already_durable(index, stale.clone())
+                .is_err()
+        );
+        let mut forged_log = cclerk.receipt_log().to_vec();
+        forged_log.push(stale);
+        let walked = TurnExecutor::new(ComputronCosts::zero());
+        assert!(restore_executor_receipt_heads(&walked, &forged_log).is_err());
+        let mut restored = dregg_sdk::AgentCipherclerk::new();
+        assert!(restored.restore_receipt_chain(forged_log).is_err());
+        assert_eq!(restored.agent_receipt_head_hashes().count(), 0);
     }
 
     #[test]

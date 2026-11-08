@@ -3120,11 +3120,22 @@ pub(crate) fn status_healthy(facts: HealthFacts) -> bool {
     up && can_finalize && admitted && turns_finalize && committee_agrees
 }
 
+/// `/status` and `/health`. A liveness probe must answer while a finalized
+/// turn holds the state write lock or a block insert holds the lace lock, so
+/// this reads the state through [`NodeState::status_snapshot`] and the lace
+/// through [`NodeState::lace_counts`], and runs its redb reads off the async
+/// workers.
 async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
-    // Read the real blocklace DAG state first (separate lock).
-    let blocklace = state.blocklace().await;
+    let snapshot = match state.status_snapshot() {
+        Some(snapshot) => snapshot,
+        None => crate::state::StatusSnapshot::of(&*state.read().await),
+    };
+    let blocklace = snapshot.blocklace.clone();
     let (dag_height, block_count, consensus_live) = match &blocklace {
-        Some(handle) => (handle.dag_height().await, handle.block_count().await, true),
+        Some(handle) => {
+            let (dag_height, block_count) = state.lace_counts(handle);
+            (dag_height, block_count, true)
+        }
         None => (0, 0, false),
     };
     // CAN THIS NODE STILL FINALIZE? Measured from the members that are actually
@@ -3160,41 +3171,29 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         None => None,
     };
 
-    let s = state.read().await;
-
-    // Check store accessibility.
-    let store_ok = s.store.latest_attested_root().is_ok();
-
-    let latest_height = s
-        .store
-        .latest_attested_root()
-        .ok()
-        .flatten()
-        .map(|r| r.height)
-        .unwrap_or(0);
     // F-8: only surface the aggregate private-activity counters when an operator
     // has explicitly opted in (`DREGG_STATUS_EXPOSE_COUNTS=1`). Otherwise the
     // public, unauthenticated `/status` MUST NOT disclose how many credentials
     // have been revoked or how many shielded notes exist — those are a private-
     // activity-volume oracle. Default = omitted.
     let expose_counts = status_exposes_private_counts();
-    let revocation_count = if expose_counts {
-        Some(s.store.revocation_count().unwrap_or(0))
-    } else {
-        None
-    };
-    let note_count = if expose_counts {
-        Some(s.store.note_count().unwrap_or(0))
-    } else {
-        None
-    };
-    let peer_count = s.peers.len();
+    let store = Arc::clone(&snapshot.store);
+    // `store_ok` is whether the store answers at all.
+    let (store_ok, latest_height, revocation_count, note_count) =
+        tokio::task::spawn_blocking(move || {
+            let latest = store.latest_attested_root();
+            (
+                latest.is_ok(),
+                latest.ok().flatten().map(|r| r.height).unwrap_or(0),
+                expose_counts.then(|| store.revocation_count().unwrap_or(0)),
+                expose_counts.then(|| store.note_count().unwrap_or(0)),
+            )
+        })
+        .await
+        .unwrap_or((false, 0, None, None));
+    let peer_count = snapshot.peer_count;
 
-    let federation_mode = if s.solo_consensus.as_ref().is_some_and(|s| s.is_solo) {
-        "solo".to_string()
-    } else {
-        "full".to_string()
-    };
+    let federation_mode = if snapshot.solo { "solo" } else { "full" }.to_string();
 
     // Liveness: store reachable + consensus task running + DAG has produced at
     // least one real block. block_count > 0 (rather than dag_height > 0) so a
@@ -3228,8 +3227,8 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
     let turn_finality_lagging = consensus_live.then(|| turn_finality_lagging(&facts));
     let healthy = status_healthy(facts);
 
-    let lean_producer = s.lean_producer_enabled;
-    let full_turn_proving = s.full_turn_proving_enabled;
+    let lean_producer = snapshot.lean_producer;
+    let full_turn_proving = snapshot.full_turn_proving;
     let state_producer = if lean_producer { "lean" } else { "rust" }.to_string();
     // The DEFAULT-ON producer INSTALLS verified state only for the swap-safe (root-agreeing) set;
     // report that, not the wider "merely mappable" surface, so the status is honest about what the
@@ -3267,9 +3266,9 @@ async fn get_status(State(state): State<NodeState>) -> Json<StatusResponse> {
         revocation_count,
         note_count,
         federation_mode,
-        public_key: hex_encode(&s.cclerk.public_key().0),
-        executor_federation_id: hex_encode(&crate::executor_setup::federation_id_for_executor(&s)),
-        coordination_fee_exempt: s.coordination_fee_exempt,
+        public_key: hex_encode(&snapshot.public_key),
+        executor_federation_id: hex_encode(&snapshot.executor_federation_id),
+        coordination_fee_exempt: snapshot.coordination_fee_exempt,
         coordination_exempt_ceiling: dregg_turn::ComputronCosts::default()
             .coordination_exempt_ceiling,
         state_producer,
@@ -7883,11 +7882,14 @@ async fn get_block_by_height(
     }
 }
 
+/// Build the `/api/federations` listing. Only the latest root and the root
+/// count are needed, so this reads those two (O(log n)) instead of decoding
+/// every attested root under the state read lock.
 fn federation_infos(s: &crate::state::NodeStateInner) -> Vec<FederationInfo> {
-    let roots = s.store.all_attested_roots().unwrap_or_default();
-    let latest_root = roots.iter().max_by_key(|r| r.height);
-    let latest_height = latest_root.map(|r| r.height).unwrap_or(0);
-    let latest_root_hex = latest_root.map(|r| hex_encode(&r.merkle_root));
+    let (latest_root, root_count) = s.store.attested_root_summary().unwrap_or_default();
+    let latest_height = latest_root.as_ref().map(|r| r.height).unwrap_or(0);
+    let latest_root_hex = latest_root.as_ref().map(|r| hex_encode(&r.merkle_root));
+    let root_count = root_count as usize;
 
     let mut infos: Vec<FederationInfo> = s
         .known_federations
@@ -7902,7 +7904,7 @@ fn federation_infos(s: &crate::state::NodeStateInner) -> Vec<FederationInfo> {
             is_local: id.0 == s.federation_id,
             latest_height,
             latest_root: latest_root_hex.clone(),
-            num_finalized_roots: roots.len(),
+            num_finalized_roots: root_count,
         })
         .collect();
 
@@ -7919,7 +7921,7 @@ fn federation_infos(s: &crate::state::NodeStateInner) -> Vec<FederationInfo> {
             is_local: true,
             latest_height,
             latest_root: latest_root_hex,
-            num_finalized_roots: roots.len(),
+            num_finalized_roots: root_count,
         });
     }
 
@@ -11502,6 +11504,93 @@ mod tests {
         let mut s = state.write().await;
         s.federation_id = TEST_POA_AUTHORITY;
         s.federation_configured = true;
+    }
+
+    /// `/api/federations` serves exactly what the old full decode computed
+    /// (latest root by height + root count), on out-of-order roots.
+    #[tokio::test]
+    async fn federations_listing_equals_the_full_root_scan() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let root = |height: u64| dregg_persist::federation::StoredAttestedRoot {
+            merkle_root: [height as u8; 32],
+            note_tree_root: None,
+            nullifier_set_root: None,
+            height,
+            timestamp: 1000 + height as i64,
+            blocklace_block_id: None,
+            finality_round: None,
+            quorum_signatures: Vec::new(),
+            threshold_qc: None,
+            threshold: 1,
+            federation_id: dregg_types::FederationId::PLACEHOLDER,
+            receipt_stream_root: None,
+            finalization_quorum: Vec::new(),
+        };
+        let s = state.read().await;
+        for h in [3, 11, 7, 2] {
+            s.store.store_attested_root(&root(h)).expect("store root");
+        }
+        let all = s.store.all_attested_roots().expect("all roots");
+        let latest = all.iter().max_by_key(|r| r.height).expect("latest");
+        let infos = federation_infos(&s);
+        assert!(!infos.is_empty());
+        for info in &infos {
+            assert_eq!(info.latest_height, latest.height);
+            assert_eq!(info.latest_root, Some(hex_encode(&latest.merkle_root)));
+            assert_eq!(info.num_finalized_roots, all.len());
+        }
+        assert_eq!((latest.height, all.len()), (11, 4));
+    }
+
+    /// `/status` and `/health` answer while a finalized turn holds the state
+    /// write lock and a block insert holds the lace write lock. Before the
+    /// status snapshot both probes queued behind those locks.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn status_answers_while_the_state_and_lace_locks_are_held() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        {
+            let mut s = state.write().await;
+            let sk = s.cclerk.gossip_signing_key().to_bytes();
+            s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(sk));
+        }
+        let handle = crate::blocklace_sync::run_blocklace_sync_with_policy(
+            state.clone(),
+            0,
+            true,
+            100,
+            10_000,
+            50,
+            2_000,
+            0,
+            None,
+            dregg_blocklace::finality::ConsensusTimePolicyV1::new(1_700_000_000),
+        )
+        .await
+        .expect("solo blocklace handle");
+        state.set_blocklace(handle.clone()).await;
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state.clone(), false, recorder.handle());
+        let (status, open) = get_json(&app, "/status").await;
+        assert_eq!(status, StatusCode::OK);
+
+        let state_guard = state.write().await;
+        let lace_guard = handle.lace.write().await;
+        for path in ["/status", "/health"] {
+            let (status, body) =
+                tokio::time::timeout(std::time::Duration::from_secs(10), get_json(&app, path))
+                    .await
+                    .expect("a probe must not wait on the state or lace lock");
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["consensus_live"], true);
+            assert_eq!(body["federation_mode"], "solo");
+            assert_eq!(body["public_key"], open["public_key"]);
+            assert_eq!(body["block_count"], open["block_count"]);
+        }
+        drop(lace_guard);
+        drop(state_guard);
     }
 
     async fn get_json(app: &Router, uri: &str) -> (StatusCode, serde_json::Value) {
