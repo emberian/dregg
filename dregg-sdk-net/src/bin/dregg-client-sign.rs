@@ -23,6 +23,11 @@
 //!          full payload string as the turn memo (length-prefixed into
 //!          `Turn::hash`, so the signature binds it). Exit 0 only when the
 //!          node has receipted the turn.
+//!   head / prepare / submit  the same send in two steps. `prepare` signs the
+//!          send turn from a node-reported head and writes the exact
+//!          `SignedTurn` bytes to a file, printing the turn hash; `submit`
+//!          posts those bytes later. A caller binds the hash into its own
+//!          record between the two, and a retry posts the same bytes.
 //!   transfer  move `--amount` computrons from the profile's own cell to
 //!          `--to`. The signer is the SOURCE: `Effect::Transfer { from: own
 //!          cell, to, amount }` on an action whose target is that same cell,
@@ -41,7 +46,7 @@ use dregg_sdk::profiles;
 use dregg_sdk_net::NodeHttpClient;
 use dregg_sdk_net::client_sign::{
     Head, TURN_VALID_FOR_HEIGHTS, WitnessFacts, chat_fee, check_anchor_discloses, check_witness,
-    prepare_send,
+    decode_signed_turn, prepare_send,
 };
 use dregg_turn::action::Effect;
 use dregg_turn::{ComputronCosts, Turn, TurnExecutor};
@@ -233,6 +238,10 @@ enum Submitted {
     /// A send: it moves no value, but a resubmission posts the event again and
     /// pays its fee again.
     Send,
+    /// Prepared bytes. Posting THE SAME bytes again is safe: they bind one
+    /// nonce and one receipt head, so they commit at most once. What repeats
+    /// the event is preparing it again.
+    Prepared,
 }
 
 impl Submitted {
@@ -240,6 +249,7 @@ impl Submitted {
         match self {
             Submitted::Transfer { .. } => "transfer",
             Submitted::Send => "send",
+            Submitted::Prepared => "prepared turn",
         }
     }
 
@@ -248,6 +258,9 @@ impl Submitted {
             Submitted::Transfer { amount } => format!("a second transfer moves {amount} again"),
             Submitted::Send => {
                 "a second send posts the event again and pays its fee again".to_string()
+            }
+            Submitted::Prepared => {
+                "a second prepare signs a new turn that posts the event again".to_string()
             }
         }
     }
@@ -271,12 +284,117 @@ fn unknown_after_submit(
     submitted: Submitted,
     confirm_url: &str,
 ) -> Box<dyn std::error::Error> {
+    if let Submitted::Prepared = submitted {
+        return err(format!(
+            "{what}. This is UNKNOWN, not a refusal: the prepared turn may have committed. \
+             Do NOT prepare it again — {}. Running `submit` again with the SAME prepared \
+             file is safe: those bytes commit at most once, and `submit` reads the receipt \
+             before it posts. Or re-read the node with `curl '{confirm_url}'`.",
+            submitted.repeat()
+        ));
+    }
     err(format!(
         "{what}. This is UNKNOWN, not a refusal: the {} may have committed. \
          Do NOT resubmit — {}. Re-read the node with `curl '{confirm_url}'` and \
          decide from that.",
         submitted.word(),
         submitted.repeat()
+    ))
+}
+
+/// What the node decided about bytes this process posted.
+enum Posted {
+    /// The node took this exact turn. Admission, never commitment.
+    Took,
+    /// The node executed this exact turn and refused it, with its reason.
+    Refused(String),
+}
+
+/// POST signed-turn bytes to `/turns/submit` and bind the answer to
+/// `turn_hash`, the hash THIS process computed from those bytes. The one
+/// place any verb posts a turn.
+///
+/// `Ok` is a decided answer that names this turn. Every other outcome after
+/// the bytes left is `unknown_after_submit`, except a 401/403 to a request
+/// that carried no bearer, which is a definite non-admission.
+async fn post_signed(
+    http: &reqwest::Client,
+    node_url: &str,
+    bearer: &Option<String>,
+    bytes: Vec<u8>,
+    turn_hash: &str,
+    submitted: Submitted,
+    confirm_url: &str,
+) -> Result<Posted> {
+    let mut submit = http
+        .post(format!("{node_url}/turns/submit"))
+        .header("Content-Type", "application/octet-stream");
+    if let Some(bearer) = bearer {
+        submit = submit.header("Authorization", format!("Bearer {bearer}"));
+    }
+    // The bytes may have arrived and the ANSWER been lost. Ambiguous.
+    let resp = submit.body(bytes).send().await.map_err(|e| {
+        unknown_after_submit(format!("POST /turns/submit: {e}"), submitted, confirm_url)
+    })?;
+    let status = resp.status();
+    if refused_for_want_of_bearer(bearer, status) {
+        return Err(err(format!(
+            "{NO_BEARER} (/turns/submit returned {status})"
+        )));
+    }
+    if !status.is_success() {
+        return Err(unknown_after_submit(
+            format!("/turns/submit returned {status}"),
+            submitted,
+            confirm_url,
+        ));
+    }
+    let verdict: serde_json::Value = resp.json().await.map_err(|e| {
+        unknown_after_submit(
+            format!("cannot parse the submit response: {e}"),
+            submitted,
+            confirm_url,
+        )
+    })?;
+    // THE LOCAL HASH IS WHAT THE RESPONSE IS CHECKED AGAINST, never the other
+    // way round. This is the only place a submit answer is read.
+    match bind_admission(submitted.word(), turn_hash, &verdict) {
+        Admission::Took => Ok(Posted::Took),
+        Admission::Refused(why) => Ok(Posted::Refused(why)),
+        Admission::Unknown(why) => Err(unknown_after_submit(why, submitted, confirm_url)),
+    }
+}
+
+/// Poll the exact-hash receipt query until the receipt for `turn_hash` is on
+/// the chain, for 30 seconds. Finality is reported, not decided: a solo-mode
+/// node marks every committed receipt tentative, and an EmitEvent moves no
+/// balance.
+async fn await_receipt(
+    http: &reqwest::Client,
+    confirm_url: &str,
+    turn_hash: &str,
+    submitted: Submitted,
+) -> Result<serde_json::Value> {
+    for _ in 0..120 {
+        let receipts = get_json(http, confirm_url)
+            .await
+            .map_err(|e| unknown_after_submit(format!("{e}"), submitted, confirm_url))?;
+        let found = exact_receipt(turn_hash, &receipts).map_err(|why| {
+            unknown_after_submit(
+                format!("cannot tell whether turn {turn_hash} was receipted: {why}"),
+                submitted,
+                confirm_url,
+            )
+        })?;
+        if let Some(row) = found {
+            return Ok(row.clone());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    Err(unknown_after_submit(
+        format!("turn {turn_hash} was admitted but not receipted within 30s"),
+        submitted,
+        confirm_url,
     ))
 }
 
@@ -791,6 +909,7 @@ fn resolve_clerk(profile_flag: Option<&str>, create: bool) -> Result<(String, Ag
     Ok((name, clerk))
 }
 
+#[derive(Clone)]
 struct Flags {
     node_url: String,
     profile: Option<String>,
@@ -814,6 +933,12 @@ struct Flags {
     committee: Option<String>,
     require_committee: bool,
     offline: bool,
+    /// `prepare --head`: a head file, so prepare touches no network.
+    head_file: Option<String>,
+    /// `prepare --out`: where the signed turn bytes are written.
+    out: Option<String>,
+    /// `submit --prepared`: the signed turn bytes to post.
+    prepared: Option<String>,
     rest: Vec<String>,
 }
 
@@ -835,6 +960,9 @@ impl Flags {
             committee: None,
             require_committee: false,
             offline: false,
+            head_file: None,
+            out: None,
+            prepared: None,
             rest: Vec::new(),
         }
     }
@@ -852,6 +980,18 @@ fn payload_of(f: &Flags, verb: &str) -> Result<String> {
             .map_err(|e| err(format!("read the payload file {path}: {e}"))),
         (None, false) => Ok(f.rest.join(" ")),
         (None, true) => Err(err(format!("{verb} requires a payload"))),
+    }
+}
+
+/// A verb that takes no payload refuses stray words instead of ignoring them:
+/// an unknown flag lands in the positionals, and a verb that silently dropped
+/// it would run without the option the caller thought they gave.
+fn no_positionals(f: &Flags, verb: &str) -> Result<()> {
+    match f.rest.first() {
+        None => Ok(()),
+        Some(word) => Err(err(format!(
+            "{verb} takes no positional argument; '{word}' is not one of its flags"
+        ))),
     }
 }
 
@@ -914,6 +1054,9 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
             "--committee" => f.committee = Some(val("--committee")?),
             "--require-committee" => f.require_committee = true,
             "--offline" => f.offline = true,
+            "--head" => f.head_file = Some(val("--head")?),
+            "--out" => f.out = Some(val("--out")?),
+            "--prepared" => f.prepared = Some(val("--prepared")?),
             "--help" | "-h" => {
                 eprintln!("{USAGE}");
                 std::process::exit(0);
@@ -933,6 +1076,21 @@ const USAGE: &str = "dregg-client-sign: commit CLIENT-SIGNED turns to a dregg no
        ensure at least N computrons, then commit ONE hybrid-signed EmitEvent; payload\n\
        rides in the signed turn (memo + event data words). --witness-out writes the\n\
        signed turn bytes (FILE must not exist): the witness verify-anchor checks\n\
+  head [--profile P] [--node-url U]\n\
+       print the head a send turn of this profile is built from (nonce, the node's\n\
+       height, this agent's receipt head, federation id, fee class). GETs only\n\
+  prepare --out FILE [--profile P] [--topic S] [--head FILE | --node-url U]\n\
+       (PAYLOAD... | --payload-file FILE)\n\
+       sign the send turn and write its SignedTurn bytes to FILE (which must not\n\
+       exist), submitting nothing. Prints `turn_hash`. With --head FILE (the `head`\n\
+       output) it uses no network and is a function of the profile, that head, the\n\
+       topic and the payload. FILE is also the witness verify-anchor checks. Does\n\
+       not fund the cell: on a node that charges for a send, `join --fund N` first\n\
+  submit --prepared FILE [--turn-hash HEX] [--node-url U] [--token-file F]\n\
+       post prepared bytes and wait for their receipt. Exit 0 only when a receipt\n\
+       for exactly the file's turn hash is on the chain; a refusal names that hash.\n\
+       Safe to run again with the same file: an already-receipted turn is reported\n\
+       and not posted, and the same bytes commit at most once\n\
   verify-anchor --witness FILE [--topic S] [--turn-hash HEX] [--node-url U | --offline]\n\
        [--committee FILE] [--require-committee] (PAYLOAD... | --payload-file FILE)\n\
        check that a finalized turn anchored this topic and payload. The witness alone\n\
@@ -1097,47 +1255,19 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // EVERY EXIT FROM HERE ON IS UNKNOWN except a refusal that names this turn,
     // as in `cmd_transfer`. A send moves no value, but it pays a fee, so a blind
     // resend pays twice.
-    let mut submit = http
-        .post(format!("{}/turns/submit", f.node_url))
-        .header("Content-Type", "application/octet-stream");
-    if let Some(bearer) = &bearer {
-        submit = submit.header("Authorization", format!("Bearer {bearer}"));
-    }
-    let resp = submit.body(bytes).send().await.map_err(|e| {
-        unknown_after_submit(
-            format!("POST /turns/submit: {e}"),
-            Submitted::Send,
-            &confirm_url,
-        )
-    })?;
-    let status = resp.status();
-    if refused_for_want_of_bearer(&bearer, status) {
-        return Err(err(format!(
-            "{NO_BEARER} (/turns/submit returned {status})"
-        )));
-    }
-    if !status.is_success() {
-        return Err(unknown_after_submit(
-            format!("/turns/submit returned {status}"),
-            Submitted::Send,
-            &confirm_url,
-        ));
-    }
-    let verdict: serde_json::Value = resp.json().await.map_err(|e| {
-        unknown_after_submit(
-            format!("cannot parse the submit response: {e}"),
-            Submitted::Send,
-            &confirm_url,
-        )
-    })?;
-    match bind_admission("send", &turn_hash, &verdict) {
-        Admission::Took => {}
-        Admission::Refused(why) => {
-            return Err(err(format!("node refused the turn: {why}")));
-        }
-        Admission::Unknown(why) => {
-            return Err(unknown_after_submit(why, Submitted::Send, &confirm_url));
-        }
+    match post_signed(
+        &http,
+        &f.node_url,
+        &bearer,
+        bytes,
+        &turn_hash,
+        Submitted::Send,
+        &confirm_url,
+    )
+    .await?
+    {
+        Posted::Took => {}
+        Posted::Refused(why) => return Err(err(format!("node refused the turn: {why}"))),
     }
     eprintln!("[client-sign] turn accepted: {turn_hash}; awaiting receipt...");
 
@@ -1151,52 +1281,207 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // client reports a turn that DID commit as unreceipted. The exact-hash
     // query filters the whole chain, and an answer it cannot read is UNKNOWN
     // rather than a silent "not yet" that times out with the wrong reason.
-    //
-    // FINALITY IS REPORTED, NOT DECIDED, which is this verb's existing
-    // contract and is deliberately unchanged: a solo-mode node marks every
-    // committed receipt tentative, and an EmitEvent moves no balance.
-    for _ in 0..120 {
-        let receipts = get_json(&http, &confirm_url)
-            .await
-            .map_err(|e| unknown_after_submit(format!("{e}"), Submitted::Send, &confirm_url))?;
-        let found = exact_receipt(&turn_hash, &receipts).map_err(|why| {
-            unknown_after_submit(
-                format!("cannot tell whether turn {turn_hash} was receipted: {why}"),
-                Submitted::Send,
-                &confirm_url,
-            )
-        })?;
-        if let Some(r) = found {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "sent": true,
-                    "node": f.node_url,
-                    "profile": name,
-                    "agent_cell": cell_hex,
-                    "to": cell_hex,
-                    "materialized": presence.materialized,
-                    "topped_up": funding.topped_up,
-                    "joined_in_flight": funding.joined_in_flight,
-                    "balance_before_send": funding.balance,
-                    "topic": f.topic,
-                    "payload": payload,
-                    "turn_hash": turn_hash,
-                    "receipt_hash": r.get("receipt_hash"),
-                    "chain_index": r.get("chain_index"),
-                    "finality": r.get("finality"),
-                    "witness": f.witness_out,
-                })
-            );
-            return Ok(());
+    let r = await_receipt(&http, &confirm_url, &turn_hash, Submitted::Send).await?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "sent": true,
+            "node": f.node_url,
+            "profile": name,
+            "agent_cell": cell_hex,
+            "to": cell_hex,
+            "materialized": presence.materialized,
+            "topped_up": funding.topped_up,
+            "joined_in_flight": funding.joined_in_flight,
+            "balance_before_send": funding.balance,
+            "topic": f.topic,
+            "payload": payload,
+            "turn_hash": turn_hash,
+            "receipt_hash": r.get("receipt_hash"),
+            "chain_index": r.get("chain_index"),
+            "finality": r.get("finality"),
+            "witness": f.witness_out,
+        })
+    );
+    Ok(())
+}
+
+/// `head` — print what a send turn of this profile takes from the node.
+async fn cmd_head(f: Flags) -> Result<()> {
+    no_positionals(&f, "head")?;
+    let (name, clerk) = resolve_clerk(f.profile.as_deref(), false)?;
+    let cell = clerk.cell_id("default");
+    let head = Head::fetch(&NodeHttpClient::new(&f.node_url), &cell)
+        .await
+        .map_err(err)?;
+    let mut out = head.to_json();
+    out["node"] = f.node_url.clone().into();
+    out["profile"] = name.into();
+    out["agent_cell"] = hex::encode(cell.as_bytes()).into();
+    println!("{out}");
+    Ok(())
+}
+
+/// `prepare` — sign the send turn and write its exact bytes, submitting
+/// nothing.
+///
+/// With `--head FILE` (the `head` verb's output) this touches no network at
+/// all, and the result is a function of the profile, that head, the topic and
+/// the payload. Without it the head is read from the node (GETs only) and
+/// printed, so the inputs are on record either way.
+///
+/// It does not fund the cell: funding is a turn of its own. On a node that
+/// charges a fee for a send, `join --fund N` first.
+async fn cmd_prepare(f: Flags) -> Result<()> {
+    let payload = payload_of(&f, "prepare")?;
+    let out_path = f
+        .out
+        .as_deref()
+        .ok_or_else(|| err("prepare requires --out FILE for the signed turn bytes".to_string()))?;
+    let (name, clerk) = resolve_clerk(f.profile.as_deref(), false)?;
+    let cell = clerk.cell_id("default");
+    let head = match &f.head_file {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .map_err(|e| err(format!("read the head file {path}: {e}")))?;
+            let v: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| err(format!("parse the head file {path}: {e}")))?;
+            Head::from_json(&v).map_err(err)?
         }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        None => Head::fetch(&NodeHttpClient::new(&f.node_url), &cell)
+            .await
+            .map_err(err)?,
+    };
+    let prepared = prepare_send(&clerk, &head, &f.topic, &payload).map_err(err)?;
+    write_new_file(out_path, &prepared.bytes)?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "prepared": true,
+            "turn_hash": hex::encode(prepared.turn_hash),
+            "out": out_path,
+            "signed_turn_len": prepared.bytes.len(),
+            "signed_turn_blake3": blake3::hash(&prepared.bytes).to_hex().to_string(),
+            "profile": name,
+            "public_key": hex::encode(clerk.public_key().0),
+            "agent_cell": hex::encode(cell.as_bytes()),
+            "topic": f.topic,
+            "payload": payload,
+            "nonce": prepared.nonce,
+            "fee": prepared.fee,
+            "valid_until": prepared.valid_until,
+            "head": head.to_json(),
+        })
+    );
+    Ok(())
+}
+
+/// `submit` — post prepared bytes and wait for their receipt.
+///
+/// THE TURN HASH IS COMPUTED FROM THE FILE, and `--turn-hash` (the hash the
+/// caller bound into its own record) must equal it before anything is sent.
+///
+/// IDEMPOTENT ON THE BYTES. The receipt is read first: a turn that already
+/// committed is reported committed and nothing is posted. Otherwise the bytes
+/// are posted; a refusal is re-read against the chain once, because a retry
+/// whose first attempt DID commit is refused for its spent nonce, and that
+/// refusal must not be reported as "nothing happened". Exit 0 means a receipt
+/// for exactly this turn hash is on the chain. A refusal names the turn hash.
+async fn cmd_submit(f: Flags) -> Result<()> {
+    let out = submit_prepared(&f).await?;
+    println!("{out}");
+    Ok(())
+}
+
+async fn submit_prepared(f: &Flags) -> Result<serde_json::Value> {
+    no_positionals(f, "submit")?;
+    let path = f.prepared.as_deref().ok_or_else(|| {
+        err("submit requires --prepared FILE (the file `prepare --out` wrote)".to_string())
+    })?;
+    let bytes =
+        std::fs::read(path).map_err(|e| err(format!("read the prepared file {path}: {e}")))?;
+    let signed = decode_signed_turn(&bytes).map_err(|why| {
+        err(format!(
+            "the prepared file {path} is not a signed turn: {why}"
+        ))
+    })?;
+    let turn_hash = hex::encode(signed.turn.hash());
+    if let Some(expected) = &f.turn_hash {
+        let expected = hex::encode(parse_hash_hex("--turn-hash", expected)?);
+        if expected != turn_hash {
+            return Err(err(format!(
+                "the prepared file {path} is turn {turn_hash}, not the expected turn {expected}; \
+                 nothing was submitted"
+            )));
+        }
     }
-    Err(unknown_after_submit(
-        format!("turn {turn_hash} was admitted but not receipted within 30s"),
-        Submitted::Send,
+    let http = reqwest::Client::new();
+    let confirm_url = format!(
+        "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
+        f.node_url
+    );
+    let report = |row: &serde_json::Value, posted: bool, already: bool| {
+        serde_json::json!({
+            "submitted": true,
+            "posted": posted,
+            "already_committed": already,
+            "node": f.node_url,
+            "agent_cell": hex::encode(signed.turn.agent.as_bytes()),
+            "turn_hash": turn_hash,
+            "receipt_hash": row.get("receipt_hash"),
+            "chain_index": row.get("chain_index"),
+            "finality": row.get("finality"),
+        })
+    };
+
+    // Nothing has been sent yet, so a failed read here is an ordinary error.
+    let before = get_json(&http, &confirm_url).await?;
+    if let Some(row) = exact_receipt(&turn_hash, &before).map_err(|why| {
+        err(format!(
+            "cannot tell whether turn {turn_hash} is already receipted: {why}"
+        ))
+    })? {
+        return Ok(report(row, false, true));
+    }
+
+    let bearer = ensure_token(&http, &f.node_url, f.token_file.as_deref()).await?;
+    match post_signed(
+        &http,
+        &f.node_url,
+        &bearer,
+        bytes,
+        &turn_hash,
+        Submitted::Prepared,
         &confirm_url,
-    ))
+    )
+    .await?
+    {
+        Posted::Took => {
+            eprintln!("[client-sign] turn accepted: {turn_hash}; awaiting receipt...");
+            let row = await_receipt(&http, &confirm_url, &turn_hash, Submitted::Prepared).await?;
+            Ok(report(&row, true, false))
+        }
+        Posted::Refused(why) => {
+            // A concurrent submit of the same bytes may have committed between
+            // the read above and this post; the node then refuses this one for
+            // its spent nonce. The chain decides which it was.
+            let after = get_json(&http, &confirm_url).await.map_err(|e| {
+                unknown_after_submit(format!("{e}"), Submitted::Prepared, &confirm_url)
+            })?;
+            match exact_receipt(&turn_hash, &after) {
+                Ok(Some(row)) => Ok(report(row, true, true)),
+                Ok(None) => Err(err(format!("node refused turn {turn_hash}: {why}"))),
+                Err(unreadable) => Err(unknown_after_submit(
+                    format!(
+                        "node refused turn {turn_hash} ({why}), and the receipt re-read is \
+                         unreadable: {unreadable}"
+                    ),
+                    Submitted::Prepared,
+                    &confirm_url,
+                )),
+            }
+        }
+    }
 }
 
 /// `transfer` — move computrons from the profile's own cell to another cell.
@@ -1318,54 +1603,19 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
         f.node_url
     );
 
-    let mut submit = http
-        .post(format!("{}/turns/submit", f.node_url))
-        .header("Content-Type", "application/octet-stream");
-    if let Some(bearer) = &bearer {
-        submit = submit.header("Authorization", format!("Bearer {bearer}"));
-    }
-    let resp = submit.body(bytes).send().await.map_err(|e| {
-        // The bytes may have arrived and the ANSWER been lost. Ambiguous.
-        unknown_after_submit(
-            format!("POST /turns/submit: {e}"),
-            Submitted::Transfer { amount },
-            &confirm_url,
-        )
-    })?;
-    let status = resp.status();
-    if refused_for_want_of_bearer(&bearer, status) {
-        return Err(err(format!(
-            "{NO_BEARER} (/turns/submit returned {status})"
-        )));
-    }
-    if !status.is_success() {
-        return Err(unknown_after_submit(
-            format!("/turns/submit returned {status}"),
-            Submitted::Transfer { amount },
-            &confirm_url,
-        ));
-    }
-    let verdict: serde_json::Value = resp.json().await.map_err(|e| {
-        unknown_after_submit(
-            format!("cannot parse the submit response: {e}"),
-            Submitted::Transfer { amount },
-            &confirm_url,
-        )
-    })?;
-    // THE LOCAL HASH IS WHAT THE RESPONSE IS CHECKED AGAINST, never the other
-    // way round. This is the only place the submit answer is read.
-    match bind_admission("transfer", &turn_hash, &verdict) {
-        Admission::Took => {}
-        Admission::Refused(why) => {
-            return Err(err(format!("node refused the transfer: {why}")));
-        }
-        Admission::Unknown(why) => {
-            return Err(unknown_after_submit(
-                why,
-                Submitted::Transfer { amount },
-                &confirm_url,
-            ));
-        }
+    match post_signed(
+        &http,
+        &f.node_url,
+        &bearer,
+        bytes,
+        &turn_hash,
+        Submitted::Transfer { amount },
+        &confirm_url,
+    )
+    .await?
+    {
+        Posted::Took => {}
+        Posted::Refused(why) => return Err(err(format!("node refused the transfer: {why}"))),
     }
     eprintln!("[client-sign] transfer admitted: {turn_hash}; confirming commitment...");
 
@@ -1768,6 +2018,9 @@ async fn main() {
             "send" => cmd_send(flags).await,
             "transfer" => cmd_transfer(flags).await,
             "verify-anchor" => cmd_verify_anchor(flags).await,
+            "head" => cmd_head(flags).await,
+            "prepare" => cmd_prepare(flags).await,
+            "submit" => cmd_submit(flags).await,
             _ => Err(err(format!("unknown verb '{cmd}' (try --help)"))),
         }
     };
@@ -3151,6 +3404,235 @@ mod tests {
                  ML-DSA core and the Lean gate is disarmed, so this arm ran nothing. \
                  Its `ok` is not evidence."
             );
+        }
+
+        /// `prepare_send` straight to a file, for arms that need several
+        /// prepared turns without going through the verb each time.
+        fn prepared_file(
+            world: &World,
+            head: &Head,
+            payload: &str,
+            name: &str,
+        ) -> (String, String) {
+            let prepared = prepare_send(&world.clerk, head, "helm.chat", payload).unwrap();
+            let path = world.path(name);
+            std::fs::write(&path, &prepared.bytes).unwrap();
+            (path, hex::encode(prepared.turn_hash))
+        }
+
+        async fn head_of(world: &World) -> Head {
+            Head::fetch(
+                &NodeHttpClient::new(world.spawned.base_url()),
+                &world.clerk.cell_id("default"),
+            )
+            .await
+            .expect("the node serves the head")
+        }
+
+        fn submit_flags(world: &World, prepared: &str) -> Flags {
+            let mut flags = world.flags("unused", "unused");
+            flags.rest.clear();
+            flags.prepared = Some(prepared.to_string());
+            flags
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn prepared_bytes_commit_as_the_prepared_turn_hash_and_at_most_once() {
+            let Some(world) = World::new("the verified ML-DSA cores (prepare/submit)", |n| n).await
+            else {
+                return skipped("the prepare-then-submit positive");
+            };
+            let head = head_of(&world).await;
+            let head_path = world.path("head.json");
+            std::fs::write(&head_path, head.to_json().to_string()).unwrap();
+
+            // PREPARE FROM A HEAD FILE USES NO NETWORK: the node URL is a dead
+            // port, and the bytes are exactly the pure function's.
+            let out_path = world.path("p1");
+            let mut prepare = world.flags("helm.chat", "row digest 1");
+            prepare.node_url = "http://127.0.0.1:9".to_string();
+            prepare.head_file = Some(head_path);
+            prepare.out = Some(out_path.clone());
+            cmd_prepare(prepare.clone())
+                .await
+                .expect("prepare from a head file needs no node");
+            let expected = prepare_send(&world.clerk, &head, "helm.chat", "row digest 1").unwrap();
+            assert_eq!(std::fs::read(&out_path).unwrap(), expected.bytes);
+            let turn_hash = hex::encode(expected.turn_hash);
+            assert!(
+                world.spawned.lock().await.receipts().is_empty(),
+                "prepare submits nothing"
+            );
+            // A second prepare to the same file is refused: the bytes a caller
+            // bound a hash to are not replaced.
+            let e = cmd_prepare(prepare).await.unwrap_err().to_string();
+            assert!(e.contains("must not already exist"), "{e}");
+
+            // A HASH THE CALLER DID NOT BIND is refused before the node is asked.
+            let mut wrong = submit_flags(&world, &out_path);
+            wrong.node_url = "http://127.0.0.1:9".to_string();
+            wrong.turn_hash = Some("ab".repeat(32));
+            let e = submit_prepared(&wrong).await.unwrap_err().to_string();
+            assert!(
+                e.contains(&turn_hash) && e.contains("nothing was submitted"),
+                "{e}"
+            );
+
+            // SUBMIT: the receipt is for exactly the prepared hash.
+            let mut submit = submit_flags(&world, &out_path);
+            submit.turn_hash = Some(turn_hash.clone());
+            let out = submit_prepared(&submit)
+                .await
+                .expect("the prepared turn commits");
+            assert_eq!(out["turn_hash"], turn_hash.as_str());
+            assert_eq!(out["posted"], true);
+            assert_eq!(out["already_committed"], false);
+            {
+                let node = world.spawned.lock().await;
+                assert_eq!(node.receipts().len(), 1);
+                assert_eq!(node.receipts()[0].turn_hash, expected.turn_hash);
+                assert_eq!(
+                    out["receipt_hash"],
+                    hex::encode(node.receipts()[0].receipt_hash())
+                );
+            }
+
+            // A RETRY reads the receipt and posts nothing.
+            let again = submit_prepared(&submit)
+                .await
+                .expect("a retry reports the same commit");
+            assert_eq!(again["turn_hash"], turn_hash.as_str());
+            assert_eq!(again["posted"], false);
+            assert_eq!(again["already_committed"], true);
+            assert_eq!(again["receipt_hash"], out["receipt_hash"]);
+
+            // AND THE NODE ITSELF takes the same bytes at most once: posted
+            // again behind the client's back, they are refused by name and no
+            // second receipt appears.
+            let confirm_url = format!(
+                "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
+                world.spawned.base_url()
+            );
+            let direct = post_signed(
+                &reqwest::Client::new(),
+                world.spawned.base_url(),
+                &None,
+                expected.bytes.clone(),
+                &turn_hash,
+                Submitted::Prepared,
+                &confirm_url,
+            )
+            .await
+            .expect("the node answers about this turn");
+            assert!(
+                matches!(direct, Posted::Refused(_)),
+                "the same bytes must not be taken twice"
+            );
+            assert_eq!(world.spawned.lock().await.receipts().len(), 1);
+
+            // The prepared file is the anchor witness.
+            let mut verify = world.verify_flags("helm.chat", "row digest 1", &out_path);
+            verify.turn_hash = Some(turn_hash.clone());
+            let anchored = verify_anchor(&verify)
+                .await
+                .expect("the prepared file is the witness");
+            assert_eq!(anchored["turn_hash"], turn_hash.as_str());
+            world.spawned.shutdown();
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_prepared_turn_the_node_does_not_take_is_refused_by_its_hash() {
+            let Some(world) = World::new("the verified ML-DSA cores (prepare/submit)", |n| n).await
+            else {
+                return skipped("the prepared-turn refusal poles");
+            };
+            // TWO TURNS FROM ONE HEAD: the first commits, and the second is
+            // then stale (spent nonce, moved receipt head). The REAL executor
+            // path refuses it, and the refusal names the second turn's hash.
+            let head = head_of(&world).await;
+            let (first, first_hash) = prepared_file(&world, &head, "row digest 1", "a");
+            let (second, second_hash) = prepared_file(&world, &head, "row digest 2", "b");
+            assert_ne!(first_hash, second_hash);
+            submit_prepared(&submit_flags(&world, &first))
+                .await
+                .expect("the first commits");
+            let e = submit_prepared(&submit_flags(&world, &second))
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains(&format!("node refused turn {second_hash}")),
+                "{e}"
+            );
+            assert!(
+                !e.contains("UNKNOWN"),
+                "a decided refusal is not UNKNOWN: {e}"
+            );
+            assert_eq!(world.spawned.lock().await.receipts().len(), 1);
+
+            // A file that is not exactly a signed turn never reaches the node.
+            let bytes = std::fs::read(&second).unwrap();
+            let truncated = world.path("truncated");
+            std::fs::write(&truncated, &bytes[..bytes.len() - 1]).unwrap();
+            let mut dead = submit_flags(&world, &truncated);
+            dead.node_url = "http://127.0.0.1:9".to_string();
+            let e = submit_prepared(&dead).await.unwrap_err().to_string();
+            assert!(e.contains("is not a signed turn"), "{e}");
+
+            // A turn altered after signing is refused by the node, under the
+            // ALTERED turn's hash, which is not the hash the caller bound.
+            let mut signed = decode_signed_turn(&bytes).unwrap();
+            signed.turn.memo = Some("another payload".to_string());
+            let altered = world.path("altered");
+            std::fs::write(&altered, postcard::to_stdvec(&signed).unwrap()).unwrap();
+            let altered_hash = hex::encode(signed.turn.hash());
+            assert_ne!(altered_hash, second_hash);
+            let e = submit_prepared(&submit_flags(&world, &altered))
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains(&format!("node refused turn {altered_hash}")),
+                "{e}"
+            );
+            let mut bound = submit_flags(&world, &altered);
+            bound.turn_hash = Some(second_hash.clone());
+            let e = submit_prepared(&bound).await.unwrap_err().to_string();
+            assert!(e.contains("nothing was submitted"), "{e}");
+
+            // A FRESH TURN, and a node that answers without deciding: UNKNOWN,
+            // and the guidance is the prepared one. Re-running submit with the
+            // same file is safe; a blind "do not resubmit" would be wrong here.
+            let head = head_of(&world).await;
+            let (third, third_hash) = prepared_file(&world, &head, "row digest 3", "c");
+            world
+                .spawned
+                .shared()
+                .lock()
+                .await
+                .set_submit_fault(SubmitFault::HttpStatus(503));
+            let e = submit_prepared(&submit_flags(&world, &third))
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("UNKNOWN, not a refusal"), "{e}");
+            assert!(e.contains("SAME prepared file is safe"), "{e}");
+            assert!(!e.contains("Do NOT resubmit"), "{e}");
+            // A refusal the node decides without executing still names the turn.
+            world.spawned.shared().lock().await.set_submit_fault(
+                SubmitFault::RefusesNamingTheTurn("insufficient balance".into()),
+            );
+            let e = submit_prepared(&submit_flags(&world, &third))
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                e.contains(&format!(
+                    "node refused turn {third_hash}: insufficient balance"
+                )),
+                "{e}"
+            );
+            world.spawned.shutdown();
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
