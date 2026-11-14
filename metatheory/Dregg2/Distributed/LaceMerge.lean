@@ -332,17 +332,16 @@ and this module does not derive it. Stated at the resolution it deserves:
 `B₁.Canonical → B₂.Canonical → laceIds B₁ = laceIds B₂ → CrossCanonical B₁ B₂ →
 tauOrder B₁ p w = tauOrder B₂ p w`, and no theorem in this tree proves it. Two things stand in the way,
 and neither is a formality:
-* `BlocklaceFinality.computeRounds` is an `Array.qsort` fold, and this toolchain has no `qsort`
-  permutation lemma (the definition site says so). Every step of the argument has to be threaded
-  through `computeRounds`' accumulator fold and the `xsortBy` linearization. (Since `d182d10fc`,
-  `xsortBy` is a `List.mergeSort`, which DOES carry `mergeSort_perm` — that half of the obstacle
-  is materially smaller now; the `qsort` half stands.)
-* `computeRounds` sorts by `(seq, creator)`, a comparator with genuine TIES — and a tie is exactly an
-  EQUIVOCATING pair (two blocks by one creator at one seq, which is the adversary this module's witness
-  lace exhibits). So `qsort`'s output order on the tied blocks is a function of the INPUT order, and the
-  invariance claim needs a real argument that ties do not move the assigned rounds, not an appeal to "it
-  reads the multiset". `xsortBy`'s comparator breaks ties by `id` and is total on distinct ids, so it is
-  the easier half.
+* THE ROUND MAP HALF IS NOW A THEOREM. `BlocklaceFinality.computeRounds` used to fold the lace in
+  `Array.qsort` order by `(seq, creator)`; that order was not even topological (dregg issue #100),
+  and its ties — exactly EQUIVOCATING pairs — made the output a function of the input order. It now
+  folds a Kahn enumeration, and `BlocklaceFinality.roundOf_perm` proves that two listings of the
+  same blocks (distinct ids, no predecessor cycle) give every id the same round.
+* THE REST IS NOT. `tauOrder` also reads the lace's LIST ORDER through `causalPastIncl` (a BFS
+  whose output order follows the predecessor lists and `Lace.lookup`), `closureLace`,
+  `blocksAtRound`, `leaderCandidates` and the `previousRatifiedLeader` fold. Each is plausibly
+  order-insensitive on canonical laces; none is proved so, and `xsortBy`'s output depends on the
+  ids' own order (its ready ties break by `(round, id)`).
 
 The previous version of this note asserted `tauOrder` "is permutation-invariant on canonical laces" as a
 fact and called `hOrder` "true-but-unrediscovered". That was a claim, not a result, and the tie case above

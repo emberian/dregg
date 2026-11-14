@@ -539,8 +539,9 @@ The predicate would be hollow if `SettleAccepts` were unsatisfiable. We reuse `F
 realizing instance (`realAggregate` over the honest 1-step child, `realCert` over the finalized `trace3`
 wave-0 leader, `real_engine_sound`, `real_bound`) and settle it into a freshly REGISTERED L1 account,
 firing the settlement and reading off the advance + the L2-commitment binding. As in
-`FinalizedLightClient`, the concrete `CertValid realCert` is not kernel-reducible (the `qsort` finality
-rule), so it is taken parametrically (`hcert`) — its executable existence is re-witnessed by the
+`FinalizedLightClient`, the concrete `CertValid realCert` was not kernel-reducible when this was
+written (the round map rode `Array.qsort`; since dregg issue #100 it reduces, and discharging
+`hcert` by `decide` is owed), so it is taken parametrically (`hcert`) — its executable existence is re-witnessed by the
 `#guard`s below, over the node's REAL finality rule on `trace3`. -/
 
 section Realize

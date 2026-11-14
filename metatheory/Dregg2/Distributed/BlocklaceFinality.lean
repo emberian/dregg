@@ -47,10 +47,12 @@ SIMPLIFIED (a faithful PROJECTION, stated, not hidden):
 * `causalPastIncl` uses a fuel bound (the lace length) for the BFS — totalizing the DAG walk; the
   Rust `causal_past` is an unbounded BFS over the same edge set. On any concrete (finite, acyclic)
   lace the fuel = |lace| is sufficient, so the two coincide (the differential exhibits this).
-* `xsort` intra-segment tie-break is the OPEN-CM-XSORT residual (named in `ConsensusExec`); here we
-  linearize a segment by `(round, id)` — deterministic, causal-respecting on the traces we exhibit;
-  the SAFETY theorem (no conflicting leader) does NOT depend on the tie-break, only on WHICH leaders
-  anchor, exactly as `cordial_agreement` is about the anchor.
+* `xsort` is a ready-set (Kahn) sort over the segment's transitive causal past, as in the Rust; the
+  ready-set PRIORITY is the OPEN-CM-XSORT residual (named in `ConsensusExec`): `(round, id)` here,
+  min block id in the Rust `xsort`. The order is a linear extension of the causal order
+  (`anchorSegment_linear_extension`) under either priority; the two agree where the ready set is
+  one round at a time. The SAFETY theorem (no conflicting leader) does NOT depend on the priority,
+  only on WHICH leaders anchor, exactly as `cordial_agreement` is about the anchor.
 
 The safety theorems proved here — `finalLeaders_one_per_wave` / `tauOrder_deterministic` — are
 properties the NODE relies on: a wave anchors at most one leader and the order is a deterministic
@@ -75,16 +77,28 @@ open Dregg2.Authority.Blocklace (Block Lace BlockId AuthorId)
 /-! ## 1. `computeRounds` — the DAG-depth recurrence (`ordering.rs::compute_rounds`),
 OVER THE ENROLLED EDGE SET.
 
-round(b) = 1 + max over present ENROLLED predecessors of round(p); no such pred = 1. The Rust
-runs Kahn topological order; here we fold over the lace already pre-sorted by `seq` (the node also
-sorts by `(seq, creator)` before building the ordering lace — `build_ordering_blocklace`), which is
-a topological order for the honest virtual-chain discipline (`seq` strictly increases along an
-author's chain, and a pred always has strictly smaller `seq` of its own author OR is another
-author's earlier block). We memoize into an assoc list.
+round(b) = 1 + max over present ENROLLED predecessors of round(p); no such pred = 1. The Rust runs
+Kahn's algorithm, and so does this: the fold runs over `topoLace B`, an enumeration in which every
+block comes after all the predecessors the lace holds. We memoize into an assoc list.
+
+⚑ **The fold order is not a detail.** `roundOfStep` reads the rounds computed SO FAR and skips a
+predecessor that has none yet, so the map is right only if every held predecessor was folded
+first. This fold used to run over the lace sorted by `(seq, creator)`, on the claim that the sort
+is topological. It is not: another author's EARLIER block can carry a LARGER `seq`. A validator
+that joins late or lags writes a first block with `seq 0` that cites the current tips; the sort
+put it ahead of them, the fold skipped every one of its predecessors, and it got round `1`. No
+Byzantine step is involved. §9's `traceLateFirst` / `traceLateLeader` execute it, against
+`computeRoundsSeqOrder`, the old fold kept as the falsification witness.
+
+What is proved now, for a lace with distinct ids that Kahn finishes (`laceStuck B = []`, i.e. a
+DAG — `laceStuck_eq_nil_iff`): the recurrence holds at the FINISHED map
+(`computeRounds_recurrence`), any ancestor-respecting enumeration gives the same map
+(`computeRounds_enumeration_invariant`), and so does any listing of the same blocks
+(`roundOf_perm`): the round is a function of the DAG.
 
 ⚑ **Why the recurrence reads `participants` (HORIZONLOG B6's named residual, this pass).** It used
 to count EVERY present predecessor. Depth is the wave clock — `roundToWave`, `blocksAtRound`, the
-leader slot, the wave end, and `xsortBy`'s primary sort key are all read off it — so any creator who
+leader slot, the wave end, and `xsortBy`'s ready priority are all read off it — so any creator who
 could add depth could move the wave structure. A NON-PARTICIPANT chain that one honest block acks
 did exactly that, and §9's `traceOrderFork` is the measurement: two honest nodes holding the
 IDENTICAL enrolled sub-lace, differing only in whether they received two outsider blocks, finalize
@@ -149,7 +163,7 @@ def enrolledId (B : Lace) (participants : List AuthorId) (bid : BlockId) : Bool 
   | none   => true
 
 /-- One folding step of `compute_rounds`: given the rounds computed so far (`rs`) and the next
-block `b` (in topological order), assign `round(b) = 1 + max(round(p) | p ∈ b.preds, p ENROLLED and
+block `b` (in an ancestor-respecting order), assign `round(b) = 1 + max(round(p) | p ∈ b.preds, p ENROLLED and
 present in rs)`, defaulting the max to `0` (so a block with no enrolled predecessor gets round `1`).
 Mirrors `ordering.rs:82..93` with the participant filter of `compute_rounds`' `participant_set`. -/
 def roundOfStep (B : Lace) (participants : List AuthorId)
@@ -170,40 +184,624 @@ def roundOfStepPreParticipant (rs : List (BlockId × Nat)) (b : Block) : Nat :=
   let predRounds : List Nat := b.preds.filterMap (fun p => roundLookup rs p)
   1 + predRounds.foldl Nat.max 0
 
-/-- The topological pre-sort the depth fold runs over: the lace by `(seq, creator)` (the node's
-`build_ordering_blocklace` sort). Named so the fold and its theorems can speak about it.
+/-- The lace sorted by `(seq, creator)` — the order the depth fold USED to run over, and the order
+the node's wire (`finality_gate.rs::build_wire`) still lists blocks in.
 
-⚠ `Array.qsort`'s worker is well-founded and private to `Init`, and this toolchain carries NO
-`qsort` permutation lemma (`Distributed.LaceMerge` says so at length), so `sortedLace B ~ B` is
-NOT available to a proof — every theorem below that quantifies over the folded blocks quantifies
-over `sortedLace B`, not over `B`. Lean 4.30's `List.mergeSort` DOES carry `mergeSort_perm`; moving
-to it would unlock `b ∈ B`, and it is a genuine design fork (the two sorts differ exactly on
-`(seq, creator)` TIES, which are exactly equivocating pairs), so it is not folded into this pass. -/
+⚑ THIS IS NOT A TOPOLOGICAL ORDER and nothing on the rule's path folds over it any more. It is
+kept, reachable only from `computeRoundsSeqOrder` and the §9 `#guard`s, as the falsification
+witness for `topoLace`. -/
 def sortedLace (B : Lace) : List Block :=
   (B.toArray.qsort (fun a b => a.seq < b.seq || (a.seq == b.seq && a.creator < b.creator))).toList
 
-/-- The depth fold itself, over an explicit block list — hoisted out of `computeRounds` so the
-safety theorem below can be proved by induction on the list the sort produced, with no `qsort`
-permutation lemma anywhere in the argument. -/
+/-- The depth fold itself, over an explicit block list. Every statement about the map is proved by
+induction on this list, whatever produced it. -/
 def roundsFold (B : Lace) (participants : List AuthorId) (bs : List Block) : List (BlockId × Nat) :=
   bs.foldl (fun rs b => (b.id, roundOfStep B participants rs b) :: rs) []
 
-/-- **`computeRounds B participants`** — fold `roundOfStep` over the lace pre-sorted by `seq` then
-`creator`, producing the `(id, round)` map. A block with no enrolled predecessor gets round `1`;
-depth increases by one per ENROLLED causal layer. (`ordering.rs::compute_rounds`.) -/
+/-! ### The enumeration the fold runs over — Kahn's algorithm. -/
+
+/-- A held id names a member block. -/
+theorem laceHas_iff {B : Lace} {h : BlockId} : B.has h = true ↔ ∃ c ∈ B, c.id = h := by
+  unfold Lace.has Lace.lookup
+  rw [List.find?_isSome]
+  constructor
+  · rintro ⟨c, hc, hid⟩; exact ⟨c, hc, by simpa using hid⟩
+  · rintro ⟨c, hc, hid⟩; exact ⟨c, hc, by simpa using hid⟩
+
+/-- **`predsEmitted B done b`** — `b` is READY against the emitted prefix `done`: every predecessor
+the lace HOLDS has already been emitted. A predecessor the lace does not hold is an edge nothing
+traverses (`expandPreds` filters on `B.has` identically), so it imposes no constraint. -/
+def predsEmitted (B : Lace) (done : List Block) (b : Block) : Bool :=
+  b.preds.all (fun p => !B.has p || done.any (fun c => c.id == p))
+
+theorem predsEmitted_iff {B : Lace} {done : List Block} {b : Block} :
+    predsEmitted B done b = true ↔ ∀ p ∈ b.preds, B.has p = true → ∃ c ∈ done, c.id = p := by
+  unfold predsEmitted
+  simp only [List.all_eq_true, Bool.or_eq_true, Bool.not_eq_true', List.any_eq_true, beq_iff_eq]
+  constructor
+  · intro h p hp hhas
+    rcases h p hp with hn | hy
+    · rw [hn] at hhas; exact absurd hhas (by simp)
+    · exact hy
+  · intro h p hp
+    by_cases hhas : B.has p = true
+    · exact Or.inr (h p hp hhas)
+    · exact Or.inl (by simpa using hhas)
+
+/-- One step of a Kahn sweep: emit `b` if it is ready against what has been emitted so far,
+otherwise defer it to the next sweep. -/
+def kahnStep (B : Lace) (st : List Block × List Block) (b : Block) : List Block × List Block :=
+  if predsEmitted B st.1 b then (st.1 ++ [b], st.2) else (st.1, st.2 ++ [b])
+
+/-- Kahn's algorithm as repeated sweeps. Each sweep walks `pending` in list order and emits every
+block whose held predecessors are all emitted (INCLUDING ones emitted earlier in the same sweep, so
+a lace already in a causal order finishes in ONE sweep). It stops when a sweep emits nothing; what
+is left is exactly the blocks on or behind a predecessor cycle. Returns `(emitted, stuck)`. -/
+def kahnAux (B : Lace) : Nat → List Block → List Block → List Block × List Block
+  | 0,        done, pending => (done, pending)
+  | fuel + 1, done, pending =>
+      let st := pending.foldl (kahnStep B) (done, [])
+      if st.2.length < pending.length then kahnAux B fuel st.1 st.2 else st
+
+/-- The Kahn pass over a whole lace. -/
+def kahn (B : Lace) : List Block × List Block := kahnAux B B.length [] B
+
+/-- **`laceStuck B`** — the blocks Kahn could never emit: those on, or causally behind, a
+predecessor CYCLE. `[]` on every lace hash pointers can build. -/
+def laceStuck (B : Lace) : List Block := (kahn B).2
+
+/-- **`topoLace B`** — the lace in an ANCESTOR-RESPECTING order (every block after all the
+predecessors the lace holds), the enumeration the depth fold runs over. On a cyclic lace the stuck
+blocks are appended in list order, so this is always a permutation of `B`. -/
+def topoLace (B : Lace) : List Block := (kahn B).1 ++ (kahn B).2
+
+/-- **`AncestorRespecting B bs`** — `bs` lists every block after all of its held predecessors. -/
+def AncestorRespecting (B : Lace) (bs : List Block) : Prop :=
+  ∀ pre b post, bs = pre ++ b :: post → predsEmitted B pre b = true
+
+theorem AncestorRespecting.nil (B : Lace) : AncestorRespecting B [] := by
+  intro pre b post h; simp at h
+
+theorem AncestorRespecting.snoc {B : Lace} {bs : List Block} {b : Block}
+    (h : AncestorRespecting B bs) (hb : predsEmitted B bs b = true) :
+    AncestorRespecting B (bs ++ [b]) := by
+  intro pre x post heq
+  rcases List.eq_nil_or_concat post with hp | ⟨L, c, hp⟩
+  · subst hp
+    have := List.append_inj' heq rfl
+    obtain ⟨h1, h2⟩ := this
+    simp only [List.cons.injEq, and_true] at h2
+    subst h1; subst h2; exact hb
+  · subst hp
+    have heq' : bs ++ [b] = (pre ++ x :: L) ++ [c] := by simpa using heq
+    have := List.append_inj' heq' rfl
+    exact h pre x L this.1
+
+theorem AncestorRespecting.prefix {B : Lace} {bs t : List Block}
+    (h : AncestorRespecting B (bs ++ t)) : AncestorRespecting B bs := by
+  intro pre b post heq
+  exact h pre b (post ++ t) (by simp [heq])
+
+/-- In an ancestor-respecting list, every held predecessor of a listed block is itself listed. -/
+theorem AncestorRespecting.pred_mem {B : Lace} {bs : List Block} (h : AncestorRespecting B bs)
+    {x : Block} (hx : x ∈ bs) {p : BlockId} (hp : p ∈ x.preds) (hhas : B.has p = true) :
+    p ∈ bs.map (·.id) := by
+  obtain ⟨pre, post, rfl⟩ := List.append_of_mem hx
+  obtain ⟨c, hc, hid⟩ := predsEmitted_iff.mp (h pre x post rfl) p hp hhas
+  exact List.mem_map.mpr ⟨c, by simp [hc], hid⟩
+
+/-! #### The sweep keeps everything and emits only ready blocks. -/
+
+theorem kahnStep_fold_perm (B : Lace) :
+    ∀ (pending : List Block) (st : List Block × List Block),
+      ((pending.foldl (kahnStep B) st).1 ++ (pending.foldl (kahnStep B) st).2).Perm
+        (st.1 ++ st.2 ++ pending) := by
+  intro pending
+  induction pending with
+  | nil => intro st; simp
+  | cons b rest ih =>
+    intro st
+    rw [List.foldl_cons]
+    refine (ih (kahnStep B st b)).trans ?_
+    unfold kahnStep
+    split
+    · simp only
+      have : (st.1 ++ [b] ++ st.2 ++ rest).Perm (st.1 ++ st.2 ++ b :: rest) := by
+        simp only [List.append_assoc, List.singleton_append]
+        exact List.Perm.append_left _ (by
+          simpa using (List.perm_middle (a := b) (l₁ := st.2) (l₂ := rest)).symm)
+      exact this
+    · simp
+
+theorem kahnAux_perm (B : Lace) :
+    ∀ (fuel : Nat) (done pending : List Block),
+      ((kahnAux B fuel done pending).1 ++ (kahnAux B fuel done pending).2).Perm (done ++ pending) := by
+  intro fuel
+  induction fuel with
+  | zero => intro done pending; exact List.Perm.refl _
+  | succ n ih =>
+    intro done pending
+    have hf := kahnStep_fold_perm B pending (done, [])
+    simp only [List.append_nil] at hf
+    unfold kahnAux
+    simp only
+    split
+    · exact (ih _ _).trans hf
+    · exact hf
+
+/-- **`topoLace_perm`** — the enumeration is a PERMUTATION of the lace, unconditionally. -/
+theorem topoLace_perm (B : Lace) : (topoLace B).Perm B := by
+  have := kahnAux_perm B B.length [] B
+  simpa [topoLace, kahn] using this
+
+theorem mem_topoLace {B : Lace} {b : Block} : b ∈ topoLace B ↔ b ∈ B :=
+  (topoLace_perm B).mem_iff
+
+theorem kahnStep_fold_respects (B : Lace) :
+    ∀ (pending : List Block) (st : List Block × List Block),
+      AncestorRespecting B st.1 → AncestorRespecting B (pending.foldl (kahnStep B) st).1 := by
+  intro pending
+  induction pending with
+  | nil => intro st h; exact h
+  | cons b rest ih =>
+    intro st h
+    rw [List.foldl_cons]
+    apply ih
+    unfold kahnStep
+    split
+    · rename_i hb; exact h.snoc hb
+    · exact h
+
+theorem kahnAux_respects (B : Lace) :
+    ∀ (fuel : Nat) (done pending : List Block),
+      AncestorRespecting B done → AncestorRespecting B (kahnAux B fuel done pending).1 := by
+  intro fuel
+  induction fuel with
+  | zero => intro done pending h; exact h
+  | succ n ih =>
+    intro done pending h
+    have hf := kahnStep_fold_respects B pending (done, []) h
+    unfold kahnAux
+    simp only
+    split
+    · exact ih _ _ hf
+    · exact hf
+
+/-- **`topoLace_ancestorRespecting`** — when Kahn leaves nothing stuck, the enumeration puts every
+block after all of its held predecessors. -/
+theorem topoLace_ancestorRespecting {B : Lace} (hdag : laceStuck B = []) :
+    AncestorRespecting B (topoLace B) := by
+  have h := kahnAux_respects B B.length [] B (AncestorRespecting.nil B)
+  unfold topoLace
+  unfold laceStuck at hdag
+  rw [hdag, List.append_nil]
+  exact h
+
+/-! #### Kahn never sticks on a DAG. -/
+
+/-- **`LaceDag B`** — the held-predecessor relation is well-founded: some rank strictly decreases
+along every edge the lace holds. Hash pointers give one (a block's hash commits to its
+predecessors' hashes, so an edge cannot point forward in creation order); arrival order under the
+receive path's predecessor buffering is another. -/
+def LaceDag (B : Lace) : Prop :=
+  ∃ rank : BlockId → Nat, ∀ b ∈ B, ∀ p ∈ b.preds, B.has p = true → rank p < rank b.id
+
+theorem exists_min_rank {α : Type} (rank : α → Nat) :
+    ∀ (l : List α), l ≠ [] → ∃ x ∈ l, ∀ a ∈ l, rank x ≤ rank a := by
+  intro l
+  induction l with
+  | nil => intro h; exact absurd rfl h
+  | cons a t ih =>
+    intro _
+    by_cases ht : t = []
+    · subst ht; exact ⟨a, by simp, by simp⟩
+    · obtain ⟨x, hx, hmin⟩ := ih ht
+      by_cases hax : rank a ≤ rank x
+      · refine ⟨a, by simp, ?_⟩
+        intro c hc
+        rcases List.mem_cons.mp hc with rfl | hc
+        · exact le_refl _
+        · exact le_trans hax (hmin c hc)
+      · refine ⟨x, by simp [hx], ?_⟩
+        intro c hc
+        rcases List.mem_cons.mp hc with rfl | hc
+        · omega
+        · exact hmin c hc
+
+theorem kahnStep_fold_deferred_le (B : Lace) :
+    ∀ (pending : List Block) (st : List Block × List Block),
+      (pending.foldl (kahnStep B) st).2.length ≤ st.2.length + pending.length := by
+  intro pending
+  induction pending with
+  | nil => intro st; simp
+  | cons b rest ih =>
+    intro st
+    rw [List.foldl_cons]
+    refine le_trans (ih _) ?_
+    unfold kahnStep
+    split
+    · simp only [List.length_cons]; omega
+    · simp only [List.length_append, List.length_cons, List.length_nil]; omega
+
+theorem kahnStep_fold_deferred_mem (B : Lace) :
+    ∀ (pending : List Block) (st : List Block × List Block) (c : Block),
+      c ∈ (pending.foldl (kahnStep B) st).2 → c ∈ st.2 ∨ c ∈ pending := by
+  intro pending
+  induction pending with
+  | nil => intro st c h; exact Or.inl h
+  | cons b rest ih =>
+    intro st c h
+    rw [List.foldl_cons] at h
+    rcases ih _ c h with h1 | h1
+    · unfold kahnStep at h1
+      split at h1
+      · exact Or.inl h1
+      · rcases List.mem_append.mp h1 with h2 | h2
+        · exact Or.inl h2
+        · exact Or.inr (by simp at h2; simp [h2])
+    · exact Or.inr (List.mem_cons_of_mem _ h1)
+
+/-- A sweep that meets a ready block defers strictly fewer than it was given. -/
+theorem kahnStep_fold_progress (B : Lace) :
+    ∀ (pending : List Block) (st : List Block × List Block),
+      (∃ x ∈ pending, predsEmitted B st.1 x = true) →
+      (pending.foldl (kahnStep B) st).2.length < st.2.length + pending.length := by
+  intro pending
+  induction pending with
+  | nil => intro st ⟨x, hx, _⟩; simp at hx
+  | cons b rest ih =>
+    intro st ⟨x, hx, hready⟩
+    rw [List.foldl_cons]
+    by_cases hb : predsEmitted B st.1 b = true
+    · have hle := kahnStep_fold_deferred_le B rest (kahnStep B st b)
+      have : (kahnStep B st b).2 = st.2 := by unfold kahnStep; simp [hb]
+      rw [this] at hle
+      simp only [List.length_cons]; omega
+    · have hxr : x ∈ rest := by
+        rcases List.mem_cons.mp hx with rfl | h
+        · exact absurd hready hb
+        · exact h
+      have hst : kahnStep B st b = (st.1, st.2 ++ [b]) := by unfold kahnStep; simp [hb]
+      have := ih (kahnStep B st b) ⟨x, hxr, by rw [hst]; exact hready⟩
+      rw [hst] at this ⊢
+      simp only [List.length_append, List.length_cons, List.length_nil] at this ⊢
+      omega
+
+theorem kahnAux_stuck_nil {B : Lace} (hdag : LaceDag B) :
+    ∀ (fuel : Nat) (done pending : List Block),
+      (∀ c ∈ B, c ∈ done ∨ c ∈ pending) → (∀ c ∈ pending, c ∈ B) → pending.length ≤ fuel →
+      (kahnAux B fuel done pending).2 = [] := by
+  obtain ⟨rank, hrank⟩ := hdag
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro done pending _ _ hlen
+    have hnil : pending = [] := List.eq_nil_of_length_eq_zero (by omega)
+    subst hnil; rfl
+  | succ n ih =>
+    intro done pending hcov hsub hlen
+    unfold kahnAux
+    simp only
+    by_cases hp : pending = []
+    · subst hp; simp
+    · -- the rank-least pending block is ready: its held predecessors rank lower, so none is pending
+      obtain ⟨x, hx, hmin⟩ := exists_min_rank (fun b : Block => rank b.id) pending hp
+      have hready : predsEmitted B done x = true := by
+        rw [predsEmitted_iff]
+        intro p hpp hhas
+        obtain ⟨c, hc, hid⟩ := laceHas_iff.mp hhas
+        rcases hcov c hc with hd | hpend
+        · exact ⟨c, hd, hid⟩
+        · have h1 := hrank x (hsub x hx) p hpp hhas
+          have h2 := hmin c hpend
+          simp only [hid] at h2
+          omega
+      have hprog := kahnStep_fold_progress B pending (done, []) ⟨x, hx, hready⟩
+      simp only [List.length_nil, Nat.zero_add] at hprog
+      simp only [hprog, ite_true]
+      have hperm := kahnStep_fold_perm B pending (done, [])
+      simp only [List.append_nil] at hperm
+      apply ih
+      · intro c hc
+        have : c ∈ done ++ pending := by
+          rcases hcov c hc with h | h <;> simp [h]
+        exact List.mem_append.mp (hperm.mem_iff.mpr this)
+      · intro c hc
+        rcases kahnStep_fold_deferred_mem B pending (done, []) c hc with h | h
+        · simp at h
+        · exact hsub c h
+      · omega
+
+/-- Kahn leaves nothing stuck on a DAG. -/
+theorem laceStuck_eq_nil_of_dag {B : Lace} (hdag : LaceDag B) : laceStuck B = [] :=
+  kahnAux_stuck_nil hdag B.length [] B (fun _ hc => Or.inr hc) (fun _ hc => hc) (le_refl _)
+
+/-! #### The depth map is a function of the DAG, not of the enumeration. -/
+
+theorem roundLookup_cons (k : BlockId) (v : Nat) (rs : List (BlockId × Nat)) (h : BlockId) :
+    roundLookup ((k, v) :: rs) h = if k = h then some v else roundLookup rs h := by
+  unfold roundLookup
+  by_cases hk : k = h <;> simp [hk]
+
+theorem roundsFold_snoc (B : Lace) (P : List AuthorId) (bs : List Block) (b : Block) :
+    roundsFold B P (bs ++ [b])
+      = (b.id, roundOfStep B P (roundsFold B P bs) b) :: roundsFold B P bs := by
+  simp [roundsFold, List.foldl_append]
+
+/-- The fold's key set is exactly the ids it folded. -/
+theorem roundLookup_roundsFold_eq_none (B : Lace) (P : List AuthorId) :
+    ∀ (bs : List Block) (h : BlockId), h ∉ bs.map (·.id) →
+      roundLookup (roundsFold B P bs) h = none := by
+  intro bs
+  induction bs using List.reverseRecOn with
+  | nil => intro h _; rfl
+  | append_singleton bs b ih =>
+    intro h hh
+    rw [roundsFold_snoc, roundLookup_cons]
+    have h1 : b.id ≠ h := by
+      intro e; exact hh (by simp [e])
+    have h2 : h ∉ bs.map (·.id) := by
+      intro e; exact hh (by simp only [List.map_append, List.mem_append]; exact Or.inl e)
+    simp [h1, ih h h2]
+
+/-- A step reads the accumulator only at the block's own predecessors. -/
+theorem roundOfStep_congr (B : Lace) (P : List AuthorId) {rs rs' : List (BlockId × Nat)}
+    {b : Block} (h : ∀ p ∈ b.preds, roundLookup rs p = roundLookup rs' p) :
+    roundOfStep B P rs b = roundOfStep B P rs' b := by
+  unfold roundOfStep
+  have : (b.preds.filter (enrolledId B P)).filterMap (fun p => roundLookup rs p)
+       = (b.preds.filter (enrolledId B P)).filterMap (fun p => roundLookup rs' p) := by
+    apply List.filterMap_congr
+    intro p hp
+    exact h p (List.mem_filter.mp hp).1
+  simp only [this]
+
+/-- **THE RECURRENCE, AT THE FINISHED MAP.** Over an ancestor-respecting enumeration every block's
+round is `1 + max` of the FINAL rounds of its enrolled predecessors — not of whichever
+predecessors happened to be folded before it. This is the equation the `(seq, creator)` fold did
+not satisfy. -/
+theorem roundsFold_recurrence (B : Lace) (P : List AuthorId) :
+    ∀ (bs : List Block), AncestorRespecting B bs → (bs.map (·.id)).Nodup → (∀ x ∈ bs, x ∈ B) →
+      ∀ x ∈ bs, roundLookup (roundsFold B P bs) x.id
+                  = some (roundOfStep B P (roundsFold B P bs) x) := by
+  intro bs
+  induction bs using List.reverseRecOn with
+  | nil => intro _ _ _ x hx; simp at hx
+  | append_singleton bs b ih =>
+    intro hAR hnd hsub x hx
+    have hARp : AncestorRespecting B bs := hAR.prefix
+    have hnd' : (bs.map (·.id)).Nodup ∧ b.id ∉ bs.map (·.id) := by
+      rw [List.map_append, List.nodup_append] at hnd
+      refine ⟨hnd.1, ?_⟩
+      intro e
+      exact hnd.2.2 b.id e b.id (by simp) rfl
+    have hbB : B.has b.id = true := laceHas_iff.mpr ⟨b, hsub b (by simp), rfl⟩
+    -- no listed block (nor `b` itself) names `b` as a predecessor
+    have hno : ∀ y ∈ bs ++ [b], b.id ∉ y.preds := by
+      intro y hy hmem
+      rcases List.mem_append.mp hy with hyb | hyb
+      · exact hnd'.2 (hARp.pred_mem hyb hmem hbB)
+      · have hyb' : y = b := by simpa using hyb
+        subst hyb'
+        obtain ⟨c, hc, hid⟩ := predsEmitted_iff.mp (hAR bs y [] rfl) y.id hmem hbB
+        exact hnd'.2 (List.mem_map.mpr ⟨c, hc, hid⟩)
+    have hstep : ∀ y ∈ bs ++ [b],
+        roundOfStep B P (roundsFold B P (bs ++ [b])) y = roundOfStep B P (roundsFold B P bs) y := by
+      intro y hy
+      apply roundOfStep_congr
+      intro p hp
+      rw [roundsFold_snoc, roundLookup_cons]
+      have : b.id ≠ p := by intro e; exact hno y hy (e ▸ hp)
+      simp [this]
+    rw [hstep x hx, roundsFold_snoc, roundLookup_cons]
+    rcases List.mem_append.mp hx with hxb | hxb
+    · have hne : b.id ≠ x.id := by
+        intro e; exact hnd'.2 (e ▸ List.mem_map_of_mem hxb)
+      simp only [hne, ite_false]
+      exact ih hARp hnd'.1 (fun y hy => hsub y (by simp [hy])) x hxb
+    · have : x = b := by simpa using hxb
+      subst this; simp
+
+/-- **`roundsFold_enumeration_invariant`** — ANY two ancestor-respecting enumerations of the same
+blocks produce the same round for every id. The depth map is a function of the DAG. -/
+theorem roundsFold_enumeration_invariant (B : Lace) (P : List AuthorId) {bs₁ bs₂ : List Block}
+    (hperm : bs₁.Perm bs₂) (h₁ : AncestorRespecting B bs₁) (h₂ : AncestorRespecting B bs₂)
+    (hnd : (bs₁.map (·.id)).Nodup) (hsub : ∀ x ∈ bs₁, x ∈ B) (h : BlockId) :
+    roundLookup (roundsFold B P bs₁) h = roundLookup (roundsFold B P bs₂) h := by
+  have hnd₂ : (bs₂.map (·.id)).Nodup := (hperm.map _).nodup_iff.mp hnd
+  have hsub₂ : ∀ x ∈ bs₂, x ∈ B := fun x hx => hsub x (hperm.mem_iff.mpr hx)
+  have hids : ∀ q, q ∈ bs₁.map (·.id) ↔ q ∈ bs₂.map (·.id) := fun q => (hperm.map _).mem_iff
+  -- along `bs₁`, by induction on the prefix
+  have key : ∀ (pre post : List Block), bs₁ = pre ++ post →
+      ∀ x ∈ pre, roundLookup (roundsFold B P bs₁) x.id = roundLookup (roundsFold B P bs₂) x.id := by
+    intro pre
+    induction pre using List.reverseRecOn with
+    | nil => intro _ _ x hx; simp at hx
+    | append_singleton pre b ih =>
+      intro post heq x hx
+      have heq' : bs₁ = pre ++ b :: post := by simp [heq]
+      rcases List.mem_append.mp hx with hxp | hxb
+      · exact ih (b :: post) heq' x hxp
+      · have hxb' : x = b := by simpa using hxb
+        subst hxb'
+        have hx₁ : x ∈ bs₁ := by rw [heq']; simp
+        have hx₂ : x ∈ bs₂ := hperm.mem_iff.mp hx₁
+        rw [roundsFold_recurrence B P bs₁ h₁ hnd hsub x hx₁,
+            roundsFold_recurrence B P bs₂ h₂ hnd₂ hsub₂ x hx₂]
+        congr 1
+        apply roundOfStep_congr
+        intro p hp
+        by_cases hpin : p ∈ bs₁.map (·.id)
+        · obtain ⟨c, hc, hcid⟩ := List.mem_map.mp hpin
+          have hhas : B.has p = true := laceHas_iff.mpr ⟨c, hsub c hc, hcid⟩
+          obtain ⟨c', hc', hid'⟩ := predsEmitted_iff.mp (h₁ pre x post heq') p hp hhas
+          rw [← hid']
+          exact ih (x :: post) heq' c' hc'
+        · rw [roundLookup_roundsFold_eq_none B P bs₁ p hpin,
+              roundLookup_roundsFold_eq_none B P bs₂ p (fun e => hpin ((hids p).mpr e))]
+  by_cases hin : h ∈ bs₁.map (·.id)
+  · obtain ⟨c, hc, hcid⟩ := List.mem_map.mp hin
+    rw [← hcid]
+    exact key bs₁ [] (by simp) c hc
+  · rw [roundLookup_roundsFold_eq_none B P bs₁ h hin,
+        roundLookup_roundsFold_eq_none B P bs₂ h (fun e => hin ((hids h).mpr e))]
+
+
+/-- **`computeRounds B participants`** — fold `roundOfStep` over `topoLace B`, producing the
+`(id, round)` map. A block with no enrolled predecessor gets round `1`; depth increases by one per
+ENROLLED causal layer. (`ordering.rs::compute_rounds`.) -/
 def computeRounds (B : Lace) (participants : List AuthorId) : List (BlockId × Nat) :=
+  roundsFold B participants (topoLace B)
+
+/-- **`computeRoundsSeqOrder B participants`** — the depth map EXACTLY as it stood while the fold
+ran over the `(seq, creator)` sort.
+
+⚑ THIS IS NOT THE RECURRENCE. It is kept, named, and reachable from nothing but the §9 `#guard`s,
+as the FALSIFICATION WITNESS for the fold order: on `traceLateFirst` it gives an honest late
+joiner round `1` where the recurrence gives `4`. -/
+def computeRoundsSeqOrder (B : Lace) (participants : List AuthorId) : List (BlockId × Nat) :=
   roundsFold B participants (sortedLace B)
 
-/-- **`computeRoundsPreParticipant B`** — the depth map EXACTLY as it stood before this pass. The
-FALSIFICATION WITNESS; see `roundOfStepPreParticipant`. Feeding it to `tauOrderWithRounds` (§6b)
-runs the WHOLE rule with the round map as the only variable, which is what makes §9's exhibits an
-experiment rather than two anecdotes. -/
+/-- **`computeRoundsPreParticipant B`** — the depth map with EVERY present predecessor counted,
+enrolled or not. The FALSIFICATION WITNESS for the participant filter; see
+`roundOfStepPreParticipant`. It folds the same enumeration `computeRounds` does, so the
+participant filter is the only variable. Feeding it to `tauOrderWithRounds` (§6b) runs the WHOLE
+rule with the round map as the only variable, which is what makes §9's exhibits an experiment
+rather than two anecdotes. -/
 def computeRoundsPreParticipant (B : Lace) : List (BlockId × Nat) :=
-  (sortedLace B).foldl (fun rs b => (b.id, roundOfStepPreParticipant rs b) :: rs) []
+  (topoLace B).foldl (fun rs b => (b.id, roundOfStepPreParticipant rs b) :: rs) []
 
 /-- The round of a specific block id in the computed map (`0` if absent — only for ids not in `B`). -/
 def roundOf (B : Lace) (participants : List AuthorId) (h : BlockId) : Nat :=
   (roundLookup (computeRounds B participants) h).getD 0
+
+/-- In a lace with distinct ids, a member is what its id resolves to. -/
+theorem lookup_of_mem_nodup : ∀ {B : Lace}, (B.map (·.id)).Nodup → ∀ {c : Block}, c ∈ B →
+    B.lookup c.id = some c := by
+  intro B
+  induction B with
+  | nil => intro _ c hc; simp at hc
+  | cons a t ih =>
+    intro hnd c hc
+    simp only [List.map_cons, List.nodup_cons] at hnd
+    unfold Lace.lookup
+    rcases List.mem_cons.mp hc with rfl | hct
+    · simp
+    · have hne : a.id ≠ c.id := by
+        intro e; exact hnd.1 (e ▸ List.mem_map_of_mem hct)
+      simp only [List.find?_cons, hne, decide_false]
+      exact ih hnd.2 hct
+
+/-- `Lace.lookup` reads the block SET, not the list order, once ids are distinct. -/
+theorem lookup_perm {B₁ B₂ : Lace} (hperm : B₁.Perm B₂) (hnd : (B₁.map (·.id)).Nodup)
+    (h : BlockId) : B₁.lookup h = B₂.lookup h := by
+  have hnd₂ : (B₂.map (·.id)).Nodup := (hperm.map _).nodup_iff.mp hnd
+  cases h₁ : B₁.lookup h with
+  | some c =>
+    have hc : c ∈ B₁ := List.mem_of_find?_eq_some h₁
+    have hid : c.id = h := by have := List.find?_some h₁; simpa using this
+    rw [← hid]
+    exact (lookup_of_mem_nodup hnd₂ (hperm.mem_iff.mp hc)).symm
+  | none =>
+    cases h₂ : B₂.lookup h with
+    | none => rfl
+    | some c =>
+      have hc : c ∈ B₂ := List.mem_of_find?_eq_some h₂
+      have hid : c.id = h := by have := List.find?_some h₂; simpa using this
+      have := lookup_of_mem_nodup hnd (hperm.mem_iff.mpr hc)
+      rw [hid, h₁] at this
+      exact absurd this (by simp)
+
+/-- When Kahn leaves nothing stuck the lace is a DAG: position in the Kahn enumeration is a rank
+that strictly decreases along every held edge. -/
+theorem laceDag_of_stuck_nil {B : Lace} (hnd : (B.map (·.id)).Nodup) (hdag : laceStuck B = []) :
+    LaceDag B := by
+  refine ⟨fun h => ((topoLace B).map (·.id)).idxOf h, ?_⟩
+  intro b hb p hp hhas
+  have hAR := topoLace_ancestorRespecting hdag
+  have hndT : ((topoLace B).map (·.id)).Nodup := ((topoLace_perm B).map _).nodup_iff.mpr hnd
+  obtain ⟨pre, post, heq⟩ := List.append_of_mem (mem_topoLace.mpr hb)
+  obtain ⟨c, hc, hid⟩ := predsEmitted_iff.mp (hAR pre b post heq) p hp hhas
+  have hpin : p ∈ pre.map (·.id) := List.mem_map.mpr ⟨c, hc, hid⟩
+  have hbnot : b.id ∉ pre.map (·.id) := by
+    rw [heq, List.map_append, List.nodup_append] at hndT
+    intro e
+    exact hndT.2.2 b.id e b.id (by simp) rfl
+  simp only [heq, List.map_append, List.map_cons]
+  rw [List.idxOf_append_of_mem hpin, List.idxOf_append_of_notMem hbnot, List.idxOf_cons_self]
+  have := List.idxOf_lt_length_of_mem hpin
+  simp only [List.length_map] at this ⊢
+  omega
+
+/-- **`laceStuck_eq_nil_iff`** — with distinct ids, "Kahn finishes" IS "the lace is a DAG". -/
+theorem laceStuck_eq_nil_iff {B : Lace} (hnd : (B.map (·.id)).Nodup) :
+    laceStuck B = [] ↔ LaceDag B :=
+  ⟨laceDag_of_stuck_nil hnd, laceStuck_eq_nil_of_dag⟩
+
+/-- **`computeRounds_recurrence`** — on a DAG with distinct ids, every block's round is `1 + max`
+of the rounds of ALL its enrolled predecessors. -/
+theorem computeRounds_recurrence {B : Lace} (P : List AuthorId)
+    (hnd : (B.map (·.id)).Nodup) (hdag : laceStuck B = []) :
+    ∀ b ∈ B, roundLookup (computeRounds B P) b.id
+               = some (roundOfStep B P (computeRounds B P) b) := by
+  intro b hb
+  exact roundsFold_recurrence B P (topoLace B) (topoLace_ancestorRespecting hdag)
+    (((topoLace_perm B).map _).nodup_iff.mpr hnd) (fun x hx => mem_topoLace.mp hx)
+    b (mem_topoLace.mpr hb)
+
+/-- **`computeRounds_enumeration_invariant`** — folding ANY ancestor-respecting enumeration of the
+lace gives the round `computeRounds` gives. -/
+theorem computeRounds_enumeration_invariant {B : Lace} (P : List AuthorId)
+    (hnd : (B.map (·.id)).Nodup) {E : List Block} (hperm : E.Perm B)
+    (hE : AncestorRespecting B E) (h : BlockId) :
+    roundLookup (computeRounds B P) h = roundLookup (roundsFold B P E) h := by
+  have hndE : (E.map (·.id)).Nodup := (hperm.map _).nodup_iff.mpr hnd
+  -- `E` itself witnesses that the lace is a DAG
+  have hdag : LaceDag B := by
+    refine ⟨fun q => (E.map (·.id)).idxOf q, ?_⟩
+    intro b hb p hp hhas
+    obtain ⟨pre, post, heq⟩ := List.append_of_mem (hperm.mem_iff.mpr hb)
+    obtain ⟨c, hc, hid⟩ := predsEmitted_iff.mp (hE pre b post heq) p hp hhas
+    have hpin : p ∈ pre.map (·.id) := List.mem_map.mpr ⟨c, hc, hid⟩
+    have hbnot : b.id ∉ pre.map (·.id) := by
+      rw [heq, List.map_append, List.nodup_append] at hndE
+      intro e
+      exact hndE.2.2 b.id e b.id (by simp) rfl
+    simp only [heq, List.map_append, List.map_cons]
+    rw [List.idxOf_append_of_mem hpin, List.idxOf_append_of_notMem hbnot, List.idxOf_cons_self]
+    have := List.idxOf_lt_length_of_mem hpin
+    simp only [List.length_map] at this ⊢
+    omega
+  exact roundsFold_enumeration_invariant B P ((topoLace_perm B).trans hperm.symm)
+    (topoLace_ancestorRespecting (laceStuck_eq_nil_of_dag hdag)) hE
+    (((topoLace_perm B).map _).nodup_iff.mpr hnd) (fun x hx => mem_topoLace.mp hx) h
+
+/-- **`roundOf_perm`** — THE ROUND IS A FUNCTION OF THE BLOCK SET. Two listings of the same DAG —
+arrival order, the wire's `(seq, creator)` order, any other — give every id the same round. -/
+theorem roundOf_perm {B₁ B₂ : Lace} (hperm : B₁.Perm B₂) (hnd : (B₁.map (·.id)).Nodup)
+    (hdag : laceStuck B₁ = []) (P : List AuthorId) (h : BlockId) :
+    roundOf B₁ P h = roundOf B₂ P h := by
+  have hlk : B₁.lookup = B₂.lookup := funext (lookup_perm hperm hnd)
+  have hhas : B₁.has = B₂.has := by funext q; unfold Lace.has; rw [hlk]
+  have hen : enrolledId B₁ P = enrolledId B₂ P := by funext q; unfold enrolledId; rw [hlk]
+  have hstep : roundOfStep B₁ P = roundOfStep B₂ P := by
+    funext rs b; unfold roundOfStep; rw [hen]
+  have hfold : roundsFold B₁ P = roundsFold B₂ P := by
+    funext bs; unfold roundsFold; rw [hstep]
+  have hpe : predsEmitted B₁ = predsEmitted B₂ := by
+    funext d b; unfold predsEmitted; rw [hhas]
+  have hE₂ : AncestorRespecting B₁ (topoLace B₂) := by
+    obtain ⟨rank, hrank⟩ := laceDag_of_stuck_nil hnd hdag
+    have hdag₂ : laceStuck B₂ = [] := laceStuck_eq_nil_of_dag
+      ⟨rank, fun b hb p hp hh => hrank b (hperm.mem_iff.mpr hb) p hp (by rw [hhas]; exact hh)⟩
+    intro pre b post heq
+    rw [hpe]
+    exact topoLace_ancestorRespecting hdag₂ pre b post heq
+  unfold roundOf
+  rw [computeRounds_enumeration_invariant P hnd ((topoLace_perm B₂).trans hperm.symm) hE₂ h,
+      hfold]
+  rfl
+
 
 /-! ## 2. Wave arithmetic + round-robin leader (`ordering.rs:147..170`). -/
 
@@ -396,6 +994,71 @@ theorem causalPastIncl_eq_spec (B : Lace) (h : BlockId) :
     causalPastIncl B h = causalPastAux B B.length [h] [h] :=
   causalPastAuxFast_eq B B.length [h] [h]
 
+/-- Every id in a causal past other than the block itself ranks strictly below it, for any rank
+that decreases along held edges. -/
+theorem causalPastAux_rank {B : Lace} {rank : BlockId → Nat}
+    (hrank : ∀ b ∈ B, ∀ p ∈ b.preds, B.has p = true → rank p < rank b.id) (x : BlockId) :
+    ∀ (fuel : Nat) (frontier acc : List BlockId),
+      (∀ a ∈ frontier, a = x ∨ rank a < rank x) → (∀ a ∈ acc, a = x ∨ rank a < rank x) →
+      ∀ a ∈ causalPastAux B fuel frontier acc, a = x ∨ rank a < rank x := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro frontier acc _ hacc a ha
+    simp only [causalPastAux, List.mem_dedup] at ha
+    exact hacc a ha
+  | succ n ih =>
+    intro frontier acc hfr hacc a ha
+    match frontier, hfr, ha with
+    | [], _, ha =>
+      simp only [causalPastAux, List.mem_dedup] at ha
+      exact hacc a ha
+    | f :: fs, hfr, ha =>
+      simp only [causalPastAux] at ha
+      have hnxt : ∀ q ∈ (expandPreds B (f :: fs)).filter (fun p => ¬ acc.contains p),
+          q = x ∨ rank q < rank x := by
+        intro q hq
+        have hq' := (List.mem_filter.mp hq).1
+        unfold expandPreds at hq'
+        obtain ⟨c, hc, hqc⟩ := List.mem_flatMap.mp hq'
+        cases hl : B.lookup c with
+        | none => rw [hl] at hqc; simp at hqc
+        | some blk =>
+          rw [hl] at hqc
+          have hqp := List.mem_filter.mp hqc
+          have hblk : blk ∈ B := List.mem_of_find?_eq_some hl
+          have hid : blk.id = c := by have := List.find?_some hl; simpa using this
+          have hlt := hrank blk hblk q hqp.1 (by simpa using hqp.2)
+          rw [hid] at hlt
+          rcases hfr c hc with rfl | hcx
+          · exact Or.inr hlt
+          · exact Or.inr (lt_trans hlt hcx)
+      refine ih _ _ hnxt ?_ a ha
+      intro q hq
+      rcases List.mem_append.mp hq with h1 | h1
+      · exact hacc q h1
+      · exact hnxt q h1
+
+theorem causalPastIncl_rank {B : Lace} {rank : BlockId → Nat}
+    (hrank : ∀ b ∈ B, ∀ p ∈ b.preds, B.has p = true → rank p < rank b.id) {x a : BlockId}
+    (ha : a ∈ causalPastIncl B x) : a = x ∨ rank a < rank x := by
+  rw [causalPastIncl_eq_spec] at ha
+  exact causalPastAux_rank hrank x B.length [x] [x] (by simp) (by simp) a ha
+
+theorem causalPastAux_nodup (B : Lace) :
+    ∀ (fuel : Nat) (frontier acc : List BlockId), (causalPastAux B fuel frontier acc).Nodup := by
+  intro fuel
+  induction fuel with
+  | zero => intro frontier acc; simp [causalPastAux, List.nodup_dedup]
+  | succ n ih =>
+    intro frontier acc
+    match frontier with
+    | [] => simp [causalPastAux, List.nodup_dedup]
+    | f :: fs => simp only [causalPastAux]; exact ih _ _
+
+theorem causalPastIncl_nodup (B : Lace) (h : BlockId) : (causalPastIncl B h).Nodup := by
+  rw [causalPastIncl_eq_spec]; exact causalPastAux_nodup B _ _ _
+
 /-- **`closureLace B h`** — CM Def. 19's `[h]` AS A LACE: the sub-lace induced by `h`'s inclusive
 causal past.
 
@@ -415,10 +1078,9 @@ Two properties this buys, both proved in `TauPrefixMonotone`:
   filtered out; and the closure is pred-closed, so the BFS inside it cannot reach them.
 * **A depth map that does not read the live lace.** `roundOf (closureLace B h) P` folds
   `computeRounds` over the CLOSURE, not over `B`. Every block in the closure has all its present
-  predecessors in the closure, so the recurrence gives the same depth — but now the *input list to
-  the sort is literally the same list* in `B` and `B'`, so no `Array.qsort` permutation lemma is
-  needed anywhere in the stability argument. (That lemma does not exist in this toolchain —
-  `sortedLace`'s docstring says so at length — and it is what blocked the whole-lace form.) -/
+  predecessors in the closure, so the recurrence gives the same depth — and the *input list is
+  literally the same list* in `B` and `B'`, so the stability argument needs nothing about how the
+  fold enumerates it. -/
 def closureLace (B : Lace) (h : BlockId) : Lace :=
   let past := causalPastIncl B h
   B.filter (fun b => past.contains b.id)
@@ -748,55 +1410,243 @@ of nothing else, so it cannot move. The price is CM's real latency: a block at r
 by the first final leader that OBSERVES it, which is at a strictly greater round — never by a
 ratifier at its own wave's end. That is not a regression to fix, it is the property being bought.
 
-The intra-segment linearization remains the OPEN-CM-XSORT residual: we sort by `(round, id)` —
-deterministic and causal-respecting (a pred has strictly smaller round) — where the Rust `xsort`
-runs a Kahn sweep with a min-block-id ready heap. -/
+The intra-segment linearization is a ready-set (Kahn) sort over the transitive causal past, as the
+Rust `xsort` is. What remains of OPEN-CM-XSORT is the ready-set PRIORITY: `(round, id)` here, min
+block id in the Rust. -/
 
-/-- Deterministic intra-segment linearization by `(round, id)` — the OPEN-CM-XSORT stand-in. A
-predecessor has a strictly smaller round, so this respects causal order; ties (concurrent blocks)
-break by `id`, exactly the Rust `xsort`'s deterministic by-block-id tie-break.
+/-! #### The ready-set linearisation. -/
 
-⚑ **`List.mergeSort`, not `Array.qsort`** — and the swap is load-bearing, not a style choice.
-`Array.qsort`'s worker is well-founded and private to `Init`, and this toolchain carries NO `qsort`
-permutation lemma, so NOTHING could be proved about which ids the sort emits: every statement of the
-form "the finalized order contains only ids drawn from the anchor's closure" was out of reach, which
-is exactly why `Consensus.TauPrefixMonotone` had to ASSUME its former `enrollment_agrees` conjunct
-(now a theorem; that conjunct no longer exists).
-`List.mergeSort_perm` gives `mergeSort l le ~ l`, so membership transfers through the sort and that
-conjunct becomes a theorem. The comparator is `≤` on `(round, id)` — reflexive and total on the
-deduped id lists `anchorSegment` hands it — so the output is the unique sorted permutation and
-coincides with what the `qsort` form produced (§9 `#guard`s pin the orders unchanged). -/
-def xsortBy (B : Lace) (participants : List AuthorId) (ids : List BlockId) : List BlockId :=
+/-- **`readySort past fuel rest`** — emit, one at a time, the FIRST id of `rest` none of whose
+other members lies in its causal past. Fed a list already in `(round, id)` order this is Kahn's
+algorithm with a `(round, id)` ready-priority: `erase` keeps the order, so the first ready id is
+the least. `none` (no ready id) happens only on a cycle; the remainder is then emitted as is. -/
+def readySort (past : BlockId → List BlockId) : Nat → List BlockId → List BlockId
+  | 0,        rest => rest
+  | fuel + 1, rest =>
+    match rest.find? (fun x => rest.all (fun a => a == x || !(past x).contains a)) with
+    | some x => x :: readySort past fuel (rest.erase x)
+    | none   => rest
+
+theorem readySort_perm (past : BlockId → List BlockId) :
+    ∀ (fuel : Nat) (rest : List BlockId), (readySort past fuel rest).Perm rest := by
+  intro fuel
+  induction fuel with
+  | zero => intro rest; exact List.Perm.refl _
+  | succ n ih =>
+    intro rest
+    unfold readySort
+    split
+    · rename_i x hx
+      have hmem : x ∈ rest := List.mem_of_find?_eq_some hx
+      exact ((ih (rest.erase x)).cons x).trans (List.perm_cons_erase hmem).symm
+    · exact List.Perm.refl _
+
+/-- The linearisation reads `past` only at the ids it is sorting. -/
+theorem readySort_congr {past₁ past₂ : BlockId → List BlockId} :
+    ∀ (fuel : Nat) (rest : List BlockId), (∀ x ∈ rest, past₁ x = past₂ x) →
+      readySort past₁ fuel rest = readySort past₂ fuel rest := by
+  intro fuel
+  induction fuel with
+  | zero => intro rest _; rfl
+  | succ n ih =>
+    intro rest h
+    have hf : rest.find? (fun x => rest.all (fun a => a == x || !(past₁ x).contains a))
+            = rest.find? (fun x => rest.all (fun a => a == x || !(past₂ x).contains a)) := by
+      apply List.find?_congr
+      intro x hx
+      rw [h x hx]
+    unfold readySort
+    rw [hf]
+    split
+    · rename_i x hx
+      rw [ih (rest.erase x) (fun y hy => h y (List.mem_of_mem_erase hy))]
+    · rfl
+
+/-- **THE LINEAR-EXTENSION PROPERTY.** If every nonempty sub-collection of the input has a member
+with no OTHER member in its past (true whenever `past` is well-founded on the input), then nothing
+the sort emits AFTER an id lies in that id's past: every id comes after all of its ancestors. -/
+theorem readySort_linear_extension (past : BlockId → List BlockId) :
+    ∀ (fuel : Nat) (rest : List BlockId),
+      (∀ sub : List BlockId, (∀ a ∈ sub, a ∈ rest) → sub ≠ [] →
+          ∃ x ∈ sub, ∀ a ∈ sub, a = x ∨ a ∉ past x) →
+      rest.length ≤ fuel →
+      ∀ pre x post, readySort past fuel rest = pre ++ x :: post →
+        ∀ a ∈ post, a = x ∨ a ∉ past x := by
+  intro fuel
+  induction fuel with
+  | zero =>
+    intro rest _ hlen pre x post heq
+    have hnil : rest = [] := List.eq_nil_of_length_eq_zero (by omega)
+    subst hnil
+    simp [readySort] at heq
+  | succ n ih =>
+    intro rest hprog hlen pre x post heq
+    by_cases hr : rest = []
+    · subst hr; simp [readySort] at heq
+    · obtain ⟨x₀, hx₀, hready₀⟩ := hprog rest (fun a ha => ha) hr
+      have hsome : (rest.find? (fun x => rest.all (fun a => a == x || !(past x).contains a))).isSome := by
+        rw [List.find?_isSome]
+        refine ⟨x₀, hx₀, ?_⟩
+        simp only [List.all_eq_true, Bool.or_eq_true, beq_iff_eq, Bool.not_eq_true',
+          List.contains_eq_mem, decide_eq_false_iff_not]
+        exact hready₀
+      obtain ⟨y, hy⟩ := Option.isSome_iff_exists.mp hsome
+      have hymem : y ∈ rest := List.mem_of_find?_eq_some hy
+      have hyready : ∀ a ∈ rest, a = y ∨ a ∉ past y := by
+        have := List.find?_some hy
+        simpa only [List.all_eq_true, Bool.or_eq_true, beq_iff_eq, Bool.not_eq_true',
+          List.contains_eq_mem, decide_eq_false_iff_not] using this
+      have hout : readySort past (n + 1) rest = y :: readySort past n (rest.erase y) := by
+        rw [readySort, hy]
+      rw [hout] at heq
+      have hpermE := readySort_perm past n (rest.erase y)
+      cases pre with
+      | nil =>
+        simp only [List.nil_append, List.cons.injEq] at heq
+        obtain ⟨rfl, hpost⟩ := heq
+        intro a ha
+        have : a ∈ rest.erase y := hpermE.mem_iff.mp (hpost ▸ ha)
+        exact hyready a (List.mem_of_mem_erase this)
+      | cons z pre' =>
+        simp only [List.cons_append, List.cons.injEq] at heq
+        obtain ⟨_, htail⟩ := heq
+        refine ih (rest.erase y) ?_ ?_ pre' x post htail
+        · intro sub hsub hne
+          exact hprog sub (fun a ha => List.mem_of_mem_erase (hsub a ha)) hne
+        · rw [List.length_erase_of_mem hymem]; omega
+
+/-- A rank that strictly decreases into the past makes every nonempty sub-collection have a ready
+member — the rank-least one. -/
+theorem ready_of_rank {past : BlockId → List BlockId} {rank : BlockId → Nat} {ids : List BlockId}
+    (hrank : ∀ x ∈ ids, ∀ a ∈ ids, a ∈ past x → a ≠ x → rank a < rank x) :
+    ∀ sub : List BlockId, (∀ a ∈ sub, a ∈ ids) → sub ≠ [] →
+      ∃ x ∈ sub, ∀ a ∈ sub, a = x ∨ a ∉ past x := by
+  intro sub hsub hne
+  obtain ⟨x, hx, hmin⟩ := exists_min_rank rank sub hne
+  refine ⟨x, hx, ?_⟩
+  intro a ha
+  by_cases hax : a = x
+  · exact Or.inl hax
+  · refine Or.inr ?_
+    intro hpast
+    have := hrank x (hsub x hx) a (hsub a ha) hpast hax
+    have := hmin a ha
+    omega
+
+/-- **`xsortByRoundKey`** — the linearization EXACTLY as it stood: a key sort by `(round, id)`, on
+the claim that "a predecessor has a strictly smaller round, so this respects causal order".
+
+⚑ THIS IS NOT THE LINEARIZATION. The claim stopped being true when `roundOfStep` began counting
+only ENROLLED predecessors (§1) while `causalPastIncl` walks every edge: a block that reaches later
+rounds only through an unenrolled relay keeps a low round, and the key sort emits it before its own
+causal ancestors. Kept, reachable from nothing but the §9 `#guard`s, as the falsification witness
+for `xsortBy`: on `traceRelayLift6` it puts `41` ahead of `12, 22, 32`, all three in `41`'s past. -/
+def xsortByRoundKey (B : Lace) (participants : List AuthorId) (ids : List BlockId) : List BlockId :=
   ids.mergeSort (fun a b =>
     roundOf B participants a < roundOf B participants b
       || (roundOf B participants a == roundOf B participants b && a ≤ b))
 
+/-- **`xsortWith past rc ids`** — the intra-segment linearization, with the causal past and the
+round map as PARAMETERS: order `ids` by `(round, id)`, then run the ready-set sort over it. So the
+output is Kahn's algorithm over the transitive causal past restricted to `ids`, with the
+`(round, id)`-least ready id emitted at each step — the Rust `xsort` with a different ready
+priority (OPEN-CM-XSORT).
+
+`past` is a parameter so the runtime twin can hand in its memoized map (§6c) instead of re-walking
+the lace per id; `readySort_congr` is why that cannot change the value. `List.mergeSort` rather
+than `Array.qsort` because it carries `mergeSort_perm`. -/
+def xsortWith (past : BlockId → List BlockId) (rc : List (BlockId × Nat)) (ids : List BlockId) :
+    List BlockId :=
+  let r := fun h => (roundLookup rc h).getD 0
+  readySort past ids.length (ids.mergeSort (fun a b => r a < r b || (r a == r b && a ≤ b)))
+
+/-- **`xsortBy B participants ids`** — `ids` in a linear extension of `B`'s causal order, ready
+ties broken by `(round, id)`. -/
+def xsortBy (B : Lace) (participants : List AuthorId) (ids : List BlockId) : List BlockId :=
+  xsortWith (causalPastIncl B) (computeRounds B participants) ids
+
+/-- **`xsortWith_perm`** — the linearization is a PERMUTATION of its input, whatever `past` and
+`rc` are. -/
+theorem xsortWith_perm (past : BlockId → List BlockId) (rc : List (BlockId × Nat))
+    (ids : List BlockId) : (xsortWith past rc ids).Perm ids :=
+  (readySort_perm past _ _).trans (List.mergeSort_perm ids _)
+
 /-- **`xsortBy_perm`** — the linearization is a PERMUTATION of its input. The one fact every
-"the order only carries ids from the anchor's closure" argument needs, and the reason `xsortBy`
-is a `mergeSort`. -/
+"the order only carries ids from the anchor's closure" argument needs. -/
 theorem xsortBy_perm (B : Lace) (participants : List AuthorId) (ids : List BlockId) :
     (xsortBy B participants ids).Perm ids :=
-  List.mergeSort_perm ids _
+  xsortWith_perm _ _ ids
 
 /-- **`mem_xsortBy`** — membership transfers through the linearization. -/
 theorem mem_xsortBy {B : Lace} {participants : List AuthorId} {ids : List BlockId} {x : BlockId}
     (h : x ∈ xsortBy B participants ids) : x ∈ ids :=
   (xsortBy_perm B participants ids).mem_iff.mp h
 
-/-- **`anchorSegment B P prevCovered l`** — CM Alg. 2:37, `xsort(l, [l] \ [b₂])`.
+/-- The linearization reads `past` only at the ids it sorts. -/
+theorem xsortWith_congr {past₁ past₂ : BlockId → List BlockId} (rc : List (BlockId × Nat))
+    {ids : List BlockId} (h : ∀ x ∈ ids, past₁ x = past₂ x) :
+    xsortWith past₁ rc ids = xsortWith past₂ rc ids := by
+  unfold xsortWith
+  exact readySort_congr _ _ (fun x hx => h x ((List.mergeSort_perm ids _).mem_iff.mp hx))
+
+/-- **`xsortWith_linear_extension` — THE ORDER RESPECTS CAUSALITY.** On a DAG with distinct ids,
+nothing the linearization emits AFTER an id lies in that id's causal past — whatever round map
+breaks the ties. Every block comes after all of its ancestors in the segment, including the ones it
+reaches only through a block that is NOT in the segment (an unenrolled relay), because readiness
+reads the TRANSITIVE past.
+
+Premises: distinct ids is content addressing; `laceStuck B = []` is "Kahn finishes", equivalent to
+the lace being a DAG (`laceStuck_eq_nil_iff`), `#guard`ed on every §9 trace and refuted by
+`traceCycle`. Teeth: `xsortByRoundKey` violates the conclusion on `traceRelayLift6`. -/
+theorem xsortWith_linear_extension {B : Lace} (hnd : (B.map (·.id)).Nodup)
+    (hdag : laceStuck B = []) (rc : List (BlockId × Nat)) (ids : List BlockId) :
+    ∀ pre x post, xsortWith (causalPastIncl B) rc ids = pre ++ x :: post →
+      ∀ a ∈ post, a = x ∨ a ∉ causalPastIncl B x := by
+  obtain ⟨rank, hrank⟩ := laceDag_of_stuck_nil hnd hdag
+  intro pre x post heq
+  unfold xsortWith at heq
+  refine readySort_linear_extension (causalPastIncl B) ids.length _ ?_ ?_ pre x post heq
+  · apply ready_of_rank (rank := rank)
+    intro y _ a _ hpast hne
+    rcases causalPastIncl_rank hrank hpast with h | h
+    · exact absurd h hne
+    · exact h
+  · rw [List.length_mergeSort]
+
+/-- **`xsortBy_linear_extension`** — `xsortBy`'s output is a linear extension of `B`'s causal
+order restricted to its input. -/
+theorem xsortBy_linear_extension {B : Lace} (hnd : (B.map (·.id)).Nodup)
+    (hdag : laceStuck B = []) (participants : List AuthorId) (ids : List BlockId) :
+    ∀ pre x post, xsortBy B participants ids = pre ++ x :: post →
+      ∀ a ∈ post, a = x ∨ a ∉ causalPastIncl B x :=
+  xsortWith_linear_extension hnd hdag _ ids
+
+/-- **`anchorSegmentWith past keep B P prevCovered l`** — CM Alg. 2:37, `xsort(l, [l] \ [b₂])`,
+with the causal past and the creator filter as PARAMETERS. `anchorSegment` below is the rule; the
+parameters exist so the runtime twin can pass its memoized past, and so `tauOrderUnfiltered` can be
+the SAME code with the enrollment filter switched off rather than a second copy of it.
 
 `prevCovered` is `[b₂]`, the closure of the previous ratified leader (the fold below carries it).
 The `approves(l, ·)` filter is CM Alg. 1:17: membership in `[l]` is automatic because the candidate
 set IS `[l]`, so what remains is the equivocation clause, evaluated — as the paper quantifies it —
-over `[l]`, i.e. against `closureLace B l.id`.
+over `[l]`, i.e. against `closureLace B l.id`. The ready ties are broken by the closure's own depth
+map; readiness reads `past`, the causal past in the WHOLE lace, as the Rust `xsort` does.
 
-⚑ **THIS CLAUSE DOES NOT STAND ALONE — it is one half of a property split across two files, and the
-other half is `blocklace/src/finality.rs`.** `hasEquivInPast Bl P l.id c` can only fire if creator
-`c` has TWO blocks at one round inside `[l]`. Under a one-tip-per-creator dissemination rule that is
-unreachable: a receiver holding one fork half and a leader observing the other never put both in the
-same causal past, so the filter would be a no-op however faithfully written. CM Alg. 1:5 is explicit
-that a block points at **"at most two tips per miner"**, and its whole exclusion story (Alg. 1:17
-`approves`, Fig. 1.B's blue block observing both red blocks and approving neither) presupposes it.
+⚑ **`keep` is applied BEFORE the sort, and that placement is load-bearing.** A ready-set sort is
+not a key sort: an element left in the segment changes WHEN its descendants become ready relative
+to the other ready blocks, so a relay left in and filtered out afterwards would let a
+non-participant reorder honest blocks. Filtering first makes the segment identical on two nodes
+with identical enrolled sub-laces — the placement `ordering.rs::order_over_anchor_chain` uses. The
+relay still constrains the order through the transitive past of the blocks that cite it.
+
+⚑ **THE EQUIVOCATION CLAUSE DOES NOT STAND ALONE — it is one half of a property split across two
+files, and the other half is `blocklace/src/finality.rs`.** `hasEquivInPast Bl P l.id c` can only
+fire if creator `c` has TWO blocks at one round inside `[l]`. Under a one-tip-per-creator
+dissemination rule that is unreachable: a receiver holding one fork half and a leader observing the
+other never put both in the same causal past, so the filter would be a no-op however faithfully
+written. CM Alg. 1:5 is explicit that a block points at **"at most two tips per miner"**, and its
+whole exclusion story (Alg. 1:17 `approves`, Fig. 1.B's blue block observing both red blocks and
+approving neither) presupposes it.
 
 The floor EXISTS as of `89238335a`: `finality.rs::CreatorTips::Pair` pins a detected equivocating
 pair so the next locally-authored block points at BOTH halves, welding the evidence into our own
@@ -804,26 +1654,106 @@ chain and thence into later anchors' closures. So this clause is live rather tha
 only because of that, and a change that relaxes tip-pinning silently disarms an exclusion rule
 written in a different language in a different directory. Neither file is sufficient on its own;
 this note exists so a reader of either one learns that. -/
+def anchorSegmentWith (past : BlockId → List BlockId) (keep : Block → Bool) (B : Lace)
+    (participants : List AuthorId) (prevCovered : List BlockId) (l : Block) : List BlockId :=
+  let Bl := closureLace B l.id
+  let newIds := (past l.id).filter (fun bid => ¬ prevCovered.contains bid)
+  let approved := newIds.filter (fun bid => match Bl.lookup bid with
+    | some b => keep b && ¬ hasEquivInPast Bl participants l.id b.creator
+    | none   => false)
+  xsortWith past (computeRounds Bl participants) approved
+
+/-- **`anchorSegment B P prevCovered l`** — the rule's per-anchor segment: `[l] \ [b₂]`, minus
+equivocators, minus blocks whose creator is not enrolled, linearized over `B`'s causal past. -/
 def anchorSegment (B : Lace) (participants : List AuthorId)
     (prevCovered : List BlockId) (l : Block) : List BlockId :=
-  let Bl := closureLace B l.id
-  let newIds := (causalPastIncl B l.id).filter (fun bid => ¬ prevCovered.contains bid)
-  let approved := newIds.filter (fun bid => match Bl.lookup bid with
-    | some b => ¬ hasEquivInPast Bl participants l.id b.creator
-    | none   => false)
-  xsortBy Bl participants approved
+  anchorSegmentWith (causalPastIncl B) (fun b => participants.contains b.creator) B participants
+    prevCovered l
 
-/-- **`tauStep`** — one unfolding of CM Def. 6's recursion, written left-to-right over the chain:
-append `xsort(l, [l] \ [prev])`, and carry `[l]` forward as the next `prev`. -/
+/-- Every id a segment emits passed the creator filter: it resolves, in the anchor's closure, to a
+block `keep` accepts. -/
+theorem anchorSegmentWith_keep {past : BlockId → List BlockId} {keep : Block → Bool} {B : Lace}
+    {participants : List AuthorId} {prevCovered : List BlockId} {l : Block} {bid : BlockId}
+    (h : bid ∈ anchorSegmentWith past keep B participants prevCovered l) :
+    ∃ b, (closureLace B l.id).lookup bid = some b ∧ keep b = true := by
+  unfold anchorSegmentWith at h
+  have h1 := (xsortWith_perm _ _ _).mem_iff.mp h
+  have h2 := (List.mem_filter.mp h1).2
+  cases hl : (closureLace B l.id).lookup bid with
+  | none => rw [hl] at h2; simp at h2
+  | some b =>
+    rw [hl] at h2
+    simp only [Bool.and_eq_true] at h2
+    exact ⟨b, rfl, h2.1⟩
+
+/-- A segment carries no id twice. -/
+theorem anchorSegment_nodup (B : Lace) (participants : List AuthorId)
+    (prevCovered : List BlockId) (l : Block) :
+    (anchorSegment B participants prevCovered l).Nodup := by
+  unfold anchorSegment anchorSegmentWith
+  refine (xsortWith_perm _ _ _).nodup_iff.mpr ?_
+  exact ((causalPastIncl_nodup B l.id).filter _).filter _
+
+/-- **`anchorSegment_linear_extension` — WITHIN A SEGMENT, EVERY BLOCK COMES AFTER ALL ITS
+ANCESTORS.** On a DAG with distinct ids, no id an anchor's segment emits after `x` lies in `x`'s
+causal past in `B`. This is CM's `xsort` contract ("topological sort wrt ≻", Alg. 2:39–40), and it
+is what `xsortByRoundKey` broke (§9, `traceRelayLift6`). -/
+theorem anchorSegment_linear_extension {B : Lace} (hnd : (B.map (·.id)).Nodup)
+    (hdag : laceStuck B = []) (participants : List AuthorId) (prevCovered : List BlockId)
+    (l : Block) :
+    ∀ pre x post, anchorSegment B participants prevCovered l = pre ++ x :: post →
+      ∀ a ∈ post, a ∉ causalPastIncl B x := by
+  intro pre x post heq a ha
+  have hndS := anchorSegment_nodup B participants prevCovered l
+  rw [heq] at hndS
+  have hax : a ≠ x := by
+    rintro rfl
+    have := (List.nodup_append.mp hndS).2.1
+    exact (List.nodup_cons.mp this).1 ha
+  unfold anchorSegment anchorSegmentWith at heq
+  rcases xsortWith_linear_extension hnd hdag _ _ pre x post heq a ha with h | h
+  · exact absurd h hax
+  · exact h
+
+/-- **`tauStepWith`** — one unfolding of CM Def. 6's recursion, written left-to-right over the
+chain: append `xsort(l, [l] \ [prev])`, and carry `[l]` forward as the next `prev`. -/
+def tauStepWith (past : BlockId → List BlockId) (keep : Block → Bool) (B : Lace)
+    (participants : List AuthorId)
+    (acc : List BlockId × List BlockId) (l : Block) : List BlockId × List BlockId :=
+  (acc.1 ++ anchorSegmentWith past keep B participants acc.2 l, past l.id)
+
+/-- **`tauStep`** — the rule's fold step: `tauStepWith` at the lace's own causal past and the
+enrollment filter. -/
 def tauStep (B : Lace) (participants : List AuthorId)
     (acc : List BlockId × List BlockId) (l : Block) : List BlockId × List BlockId :=
-  (acc.1 ++ anchorSegment B participants acc.2 l, causalPastIncl B l.id)
+  tauStepWith (causalPastIncl B) (fun b => participants.contains b.creator) B participants acc l
+
+/-- Every id a fold of segments emits was either already accumulated or passed the creator filter
+of the segment that emitted it. -/
+theorem foldl_tauStepWith_keep {past : BlockId → List BlockId} {keep : Block → Bool} {B : Lace}
+    {participants : List AuthorId} :
+    ∀ (L : List Block) (acc : List BlockId × List BlockId) (bid : BlockId),
+      bid ∈ (L.foldl (tauStepWith past keep B participants) acc).1 →
+      bid ∈ acc.1 ∨ ∃ l ∈ L, ∃ b, (closureLace B l.id).lookup bid = some b ∧ keep b = true := by
+  intro L
+  induction L with
+  | nil => intro acc bid h; exact Or.inl h
+  | cons l L ih =>
+    intro acc bid h
+    rw [List.foldl_cons] at h
+    rcases ih _ bid h with h1 | ⟨l', hl', b, hb⟩
+    · rcases List.mem_append.mp h1 with h2 | h2
+      · exact Or.inl h2
+      · obtain ⟨b, hb⟩ := anchorSegmentWith_keep h2
+        exact Or.inr ⟨l, by simp, b, hb⟩
+    · exact Or.inr ⟨l', List.mem_cons_of_mem _ hl', b, hb⟩
 
 /-- **`tauOrderUnfiltered B participants wavelength`** — CM's τ WITHOUT the enrollment filter: the
-rule exactly as it stood before `enrolledId` was introduced.
+rule exactly as it stood before `enrolledId` was introduced, i.e. the same fold with the segment's
+creator filter switched off.
 
 ⚑ THIS IS NOT THE FINALIZATION RULE. It is kept, named, and NOT exported for one reason: it is the
-falsification witness for `tauOrder`. The §9 `#guard`s run it against `traceUnenrolled` and show it
+falsification witness for `tauOrder`. The §9 `#guard`s run it against `traceUnenrolled6` and show it
 DOES finalize a block whose creator is not in `participants` — so the filter in `tauOrder` below is
 demonstrably load-bearing rather than a no-op that "obviously" changes nothing. Nothing else may
 call it; the `@[export]`s (`FinalityGate.finalizeGate` / `tauOrderGate`) route through `tauOrder`
@@ -832,20 +1762,21 @@ def tauOrderUnfiltered (B : Lace) (participants : List AuthorId) (wavelength : N
   match lastFinalLeader B participants wavelength with
   | none    => []
   | some hd => ((ratifiedLeaderChain B participants wavelength hd).foldl
-                  (tauStep B participants) ([], [])).1
+                  (tauStepWith (causalPastIncl B) (fun _ => true) B participants) ([], [])).1
 
 /-- **`tauOrder B participants wavelength`** — the computed total order (`ordering.rs::tau`),
 RESTRICTED TO ENROLLED CREATORS.
 
-The filter is applied to the fold's output rather than inside `leaderSegment` (where the Rust
-`tau_unified` puts it). The two are the SAME VALUE, not merely the same set: `tauStep`'s second
-component is `causalPastIncl B l.id`, which does not read the segment, so the accumulator — and therefore
-every later segment — is unaffected by filtering; and the first component is a `++`-fold of
-segments, over which `List.filter` distributes. Filtering here instead buys the two theorems below
-(`tauOrder_only_enrolled` / `tauOrder_enrolled_eq_unfiltered`) without any reasoning about
-`xsortBy`'s `Array.qsort`, for which this toolchain has no permutation lemma. -/
+The enrollment filter sits INSIDE each segment, before the sort (`anchorSegmentWith`'s `keep`),
+where the Rust `order_over_anchor_chain` puts it. It used to be applied to the finished order, on
+the argument that the two placements are the same value because the linearizer was a key sort. It
+no longer is one, so they are not: `tauOrder` is NOT `tauOrderUnfiltered` filtered (§9 exhibits a
+lace where the two differ), and the filter has to come first. -/
 def tauOrder (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List BlockId :=
-  (tauOrderUnfiltered B participants wavelength).filter (enrolledId B participants)
+  match lastFinalLeader B participants wavelength with
+  | none    => []
+  | some hd => ((ratifiedLeaderChain B participants wavelength hd).foldl
+                  (tauStep B participants) ([], [])).1
 
 /-! ## 6b. THE MEMOIZED FAST PATH — the SAME `tauOrder`, with the causal past computed ONCE.
 
@@ -911,7 +1842,7 @@ theorem cachedPast_eq (B : Lace) (h : BlockId) :
 **Why.** The `PastCache` above memoized the causal past, but it did NOT touch the OTHER un-memoized
 recompute in this file: `roundOf B h` is `roundLookup (computeRounds B) h` — it folds `computeRounds`
 over the WHOLE lace on EVERY call, and `roundOf` is called pervasively (inside `maxRound`'s `B.map`,
-`blocksAtRound`'s `B.filter`, the `xsortBy` qsort comparator twice-per-comparison, and the nested
+`blocksAtRound`'s `B.filter`, and the nested
 `creatorBlocks.any (… creatorBlocks.any (… roundOf …))` of `hasEquivInPast`). So even with the past
 memoized, the fast fold re-derived `computeRounds B` (itself O(n²) over the `List`-backed lace)
 thousands of times per finalization — the EXACT `causalPast`-class sibling, on the same live
@@ -953,14 +1884,6 @@ def blocksAtRoundR (rc : RoundCache) (B : Lace) (r : Nat) : List BlockId :=
 
 theorem blocksAtRoundR_eq (B : Lace) (P : List AuthorId) (r : Nat) :
     blocksAtRoundR (mkRoundCache B P) B r = blocksAtRound B P r := rfl
-
-/-- `xsortBy` against the cache. -/
-def xsortByR (rc : RoundCache) (ids : List BlockId) : List BlockId :=
-  ids.mergeSort (fun a b =>
-    roundOfR rc a < roundOfR rc b || (roundOfR rc a == roundOfR rc b && a ≤ b))
-
-theorem xsortByR_eq (B : Lace) (P : List AuthorId) (ids : List BlockId) :
-    xsortByR (mkRoundCache B P) ids = xsortBy B P ids := rfl
 
 /-- `leaderCandidates` against the cache. -/
 def leaderCandidatesR (rc : RoundCache) (B : Lace) (participants : List AuthorId)
@@ -1079,15 +2002,13 @@ theorem lastFinalLeaderC_eq (B : Lace) (participants : List AuthorId) (wavelengt
       = lastFinalLeader B participants wavelength := by
   simp only [lastFinalLeaderC, lastFinalLeader, findAllFinalLeadersC_eq]
 
-/-- **`tauOrderFast B participants wavelength`** — the SAME finalized order as `tauOrder`, computed
-with BOTH the causal past (`mkPastCache B`) AND the round map (`mkRoundCache B`) memoized ONCE, shared
-by the whole fold. This is the function the live gate exports run; both whole-lace derived maps are
-built once instead of being re-derived per `roundOf`/`causalPastIncl` call. -/
+/-- **`tauOrderFastUnfiltered`** — `tauOrderUnfiltered` with the head selected through the memoized
+causal past (`mkPastCache B`) and round map (`mkRoundCache B`). -/
 def tauOrderFastUnfiltered (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List BlockId :=
   match lastFinalLeaderC B (mkPastCache B) (mkRoundCache B participants) participants wavelength with
   | none    => []
   | some hd => ((ratifiedLeaderChain B participants wavelength hd).foldl
-                  (tauStep B participants) ([], [])).1
+                  (tauStepWith (causalPastIncl B) (fun _ => true) B participants) ([], [])).1
 
 /-- **`tauOrderFastUnfiltered_eq`** — the memoized head selection computes EXACTLY the pure one, and
 therefore the whole order does (order-faithful, not merely set-equal). The memoization half of
@@ -1097,17 +2018,21 @@ theorem tauOrderFastUnfiltered_eq (B : Lace) (participants : List AuthorId) (wav
     tauOrderFastUnfiltered B participants wavelength = tauOrderUnfiltered B participants wavelength := by
   simp only [tauOrderFastUnfiltered, tauOrderUnfiltered, lastFinalLeaderC_eq]
 
-/-- **`tauOrderFast B participants wavelength`** — the memoized fast path with the SAME enrollment
-filter `tauOrder` applies. This is the function the live gate exports run. -/
+/-- **`tauOrderFast B participants wavelength`** — the SAME finalized order as `tauOrder`, with the
+head selected through BOTH memos (the causal past `mkPastCache B` and the round map
+`mkRoundCache B`), each built once. This is the function the live gate exports run. -/
 def tauOrderFast (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List BlockId :=
-  (tauOrderFastUnfiltered B participants wavelength).filter (enrolledId B participants)
+  match lastFinalLeaderC B (mkPastCache B) (mkRoundCache B participants) participants wavelength with
+  | none    => []
+  | some hd => ((ratifiedLeaderChain B participants wavelength hd).foldl
+                  (tauStep B participants) ([], [])).1
 
 /-- **`tauOrderFast_eq`** — the memoized fast path computes EXACTLY the pure `tauOrder` (order-faithful,
 not merely set-equal). So every theorem and `#guard` that names `tauOrder` transfers to `tauOrderFast`
 by rewriting, and the live gate may run the fast path with no loss of the verified guarantee. -/
 theorem tauOrderFast_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat) :
     tauOrderFast B participants wavelength = tauOrder B participants wavelength := by
-  simp only [tauOrderFast, tauOrder, tauOrderFastUnfiltered_eq]
+  simp only [tauOrderFast, tauOrder, lastFinalLeaderC_eq]
 
 /-- **`tauOrderWithRounds B rc participants wavelength`** — the finalization rule with the WHOLE-LACE
 round map as an explicit PARAMETER: the leader slot, the wave end, `maxRound`'s wave count and the
@@ -1125,10 +2050,10 @@ folded over the anchor's closure. A whole-lace depth perturbation can therefore 
 wave anchors — it can no longer move where an already-ordered block sits. -/
 def tauOrderWithRounds (B : Lace) (rc : RoundCache) (participants : List AuthorId)
     (wavelength : Nat) : List BlockId :=
-  (match lastFinalLeaderC B (mkPastCache B) rc participants wavelength with
-   | none    => []
-   | some hd => ((ratifiedLeaderChain B participants wavelength hd).foldl
-                   (tauStep B participants) ([], [])).1).filter (enrolledId B participants)
+  match lastFinalLeaderC B (mkPastCache B) rc participants wavelength with
+  | none    => []
+  | some hd => ((ratifiedLeaderChain B participants wavelength hd).foldl
+                  (tauStep B participants) ([], [])).1
 
 /-- **`tauOrderFast_eq_withRounds`** — the live path IS `tauOrderWithRounds` at the participant-
 filtered round map. Definitional, so the §9 pre/post pair compares the deployed rule against itself
@@ -1224,9 +2149,31 @@ def fastPastMap (B : Lace) : Std.HashMap BlockId (List BlockId) :=
   B.foldl (init := (∅ : Std.HashMap BlockId (List BlockId)))
     (fun m b => if m.contains b.id then m else m.insert b.id (fastCausalPastIncl B b.id))
 
+/-- Runtime twin of `kahnAux` (§1): the same sweeps in the same order, with the held ids and the
+emitted ids as `Std.HashSet`s in place of `Lace.has` and `done.any`. `held.contains p` is
+`B.has p`; `st.1.contains p` is "some emitted block has id `p`". Returns emitted ++ stuck, i.e.
+`topoLace`. -/
+def fastKahnAux (held : Std.HashSet BlockId) :
+    Nat → Std.HashSet BlockId → Array Block → List Block → Array Block
+  | 0,        _,       done, pending => done ++ pending.toArray
+  | fuel + 1, doneIds, done, pending =>
+      let st := pending.foldl
+        (init := (doneIds, done, (#[] : Array Block)))
+        (fun st b =>
+          if b.preds.all (fun p => !held.contains p || st.1.contains p)
+          then (st.1.insert b.id, st.2.1.push b, st.2.2)
+          else (st.1, st.2.1, st.2.2.push b))
+      if st.2.2.size < pending.length then fastKahnAux held fuel st.1 st.2.1 st.2.2.toList
+      else st.2.1 ++ st.2.2
+
+/-- Runtime twin of `topoLace`. Value-identical; §9 differential-guarded. -/
+def fastTopoLace (B : Lace) : List Block :=
+  (fastKahnAux (B.foldl (fun s b => s.insert b.id) (∅ : Std.HashSet BlockId)) B.length
+    (∅ : Std.HashSet BlockId) #[] B).toList
+
 /-- The round map as a `Std.HashMap` (O(1) lookup) — the runtime twin of `mkRoundCache`
 (`computeRounds`), built ONCE with `Std.HashMap.get?` replacing the pure fold's `roundLookup`
-`List.find?`. Same topological fold over the `(seq, creator)`-sorted lace. -/
+`List.find?`. The same fold over the same Kahn enumeration (`fastTopoLace`). -/
 def fastRoundMap (B : Lace) (participants : List AuthorId) : Std.HashMap BlockId Nat :=
   -- the enrolled BLOCK IDS as a HashSet, built ONCE: the O(1) twin of `enrolledId`'s `B.lookup`
   -- scan. First-wins on a duplicated id, matching `Lace.lookup`'s `List.find?`; an id ABSENT from
@@ -1239,8 +2186,7 @@ def fastRoundMap (B : Lace) (participants : List AuthorId) : Std.HashMap BlockId
         let (seen, acc) := st
         if seen.contains b.id then st
         else (seen.insert b.id b.creator, if ps.contains b.creator then acc.insert b.id else acc))).2
-  let sorted := B.toArray.qsort (fun a b => a.seq < b.seq || (a.seq == b.seq && a.creator < b.creator))
-  sorted.foldl (init := (∅ : Std.HashMap BlockId Nat))
+  (fastTopoLace B).foldl (init := (∅ : Std.HashMap BlockId Nat))
     (fun rm b => rm.insert b.id
       (1 + ((b.preds.filter (fun p => enrolled.contains p)).filterMap (fun p => rm.get? p)).foldl
         Nat.max 0))
@@ -1335,35 +2281,22 @@ def fastLastFinalLeader (B : Lace) (pm : Std.HashMap BlockId (List BlockId)) (rm
     (participants : List AuthorId) (wavelength : Nat) : Option Block :=
   (fastFindAllFinalLeaders B pm rm participants wavelength).getLast?
 
-/-- Runtime twin of the `enrolledId` filter pass: builds the `bid ↦ creator` map and the enrolled
-`AuthorId` set as `Std.HashMap`/`Std.HashSet` ONCE, then filters in O(1) per id. Value-identical to
-`ids.filter (enrolledId B participants)` — the creator map is FIRST-WINS (`if m.contains … then m
-else m.insert`), matching `Lace.lookup`'s `List.find?` first-hit and `fastPastMap`'s own discipline,
-and the `none` branch keeps the id exactly as `enrolledId` does. §9-guarded against the pure def. -/
-def fastEnrolledFilter (B : Lace) (participants : List AuthorId) (ids : List BlockId) : List BlockId :=
-  let ps : Std.HashSet AuthorId :=
-    participants.foldl (fun s p => s.insert p) (∅ : Std.HashSet AuthorId)
-  let cm : Std.HashMap BlockId AuthorId :=
-    B.foldl (fun m b => if m.contains b.id then m else m.insert b.id b.creator)
-      (∅ : Std.HashMap BlockId AuthorId)
-  ids.filter (fun bid => match cm.get? bid with
-                          | some c => ps.contains c
-                          | none   => true)
-
 /-- **`tauOrderFastImpl`** — the runtime twin of `tauOrderFast`: builds the past + round maps as
-`Std.HashMap`s ONCE (O(|B|) HashSet-BFS calls + one topological fold), then runs the SAME fold with
-O(1) lookups. This is the `@[implemented_by]` target for `tauOrderFast` (below) — the function the
-exported `dregg_tau_order` / `dregg_blocklace_finalize` actually execute. TRUSTED; §9-guarded. It
-applies the enrollment filter through `fastEnrolledFilter` (above), exactly as `tauOrderFast`
-applies `enrolledId`. -/
+`Std.HashMap`s ONCE (O(|B|) HashSet-BFS calls + one topological fold), selects the head with O(1)
+lookups, and runs the SAME segment fold with the memoized past handed to the linearizer
+(`tauStepWith (fastPast B pm)`), so no segment re-walks the lace per id. This is the
+`@[implemented_by]` target for `tauOrderFast` (below) — the function the exported
+`dregg_tau_order` / `dregg_blocklace_finalize` actually execute. TRUSTED; §9-guarded. The
+enrollment filter is the segment's own (`anchorSegmentWith`'s `keep`), the same one `tauOrderFast`
+applies, so there is no separate filter twin. -/
 def tauOrderFastImpl (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List BlockId :=
   let pm := fastPastMap B
   let rm := fastRoundMap B participants
-  fastEnrolledFilter B participants
-    (match fastLastFinalLeader B pm rm participants wavelength with
-     | none    => []
-     | some hd => ((ratifiedLeaderChain B participants wavelength hd).foldl
-                     (tauStep B participants) ([], [])).1)
+  match fastLastFinalLeader B pm rm participants wavelength with
+  | none    => []
+  | some hd => ((ratifiedLeaderChain B participants wavelength hd).foldl
+                  (tauStepWith (fastPast B pm) (fun b => participants.contains b.creator)
+                    B participants) ([], [])).1
 
 /-! Route the exported `tauOrderFast` (hence both `dregg_tau_order` and `dregg_blocklace_finalize`)
 through the `Std.HashMap`/`Std.HashSet` runtime twin. Proofs are unaffected (`@[implemented_by]` is
@@ -1472,6 +2405,41 @@ with no check at all. Satisfiable (`trace3`, `traceMW4`, `lagGrown`) and REFUTAB
 def EnrolledLace (B : Lace) (participants : List AuthorId) : Prop :=
   ∀ b ∈ B, participants.contains b.creator = true
 
+/-- A sub-lace selected by a predicate on ids resolves an id to the block the lace does. -/
+theorem lookup_of_filter_lookup {q : BlockId → Bool} :
+    ∀ {B : Lace} {bid : BlockId} {b : Block},
+      Lace.lookup (B.filter (fun x => q x.id)) bid = some b → B.lookup bid = some b := by
+  intro B
+  induction B with
+  | nil => intro bid b h; simp [Lace.lookup] at h
+  | cons a t ih =>
+    intro bid b h
+    have hb : b ∈ List.filter (fun x => q x.id) (a :: t) := List.mem_of_find?_eq_some h
+    have hbid : b.id = bid := by have := List.find?_some h; simpa using this
+    by_cases hq : q a.id = true
+    · by_cases ha : a.id = bid
+      · have hf : List.filter (fun x => q x.id) (a :: t) = a :: List.filter (fun x => q x.id) t := by
+          simp [hq]
+        simp only [Lace.lookup, hf, List.find?_cons, ha, decide_true] at h ⊢
+        exact h
+      · have h' : Lace.lookup (t.filter (fun x => q x.id)) bid = some b := by
+          simpa [Lace.lookup, List.filter_cons, hq, List.find?_cons, ha] using h
+        simpa [Lace.lookup, List.find?_cons, ha] using ih h'
+    · have h' : Lace.lookup (t.filter (fun x => q x.id)) bid = some b := by
+        simpa [Lace.lookup, List.filter_cons, hq] using h
+      have ha : a.id ≠ bid := by
+        intro e
+        have hqb : q b.id = true := by
+          have := (List.mem_filter.mp hb).2; simpa using this
+        rw [hbid, ← e] at hqb
+        exact hq hqb
+      simpa [Lace.lookup, List.find?_cons, ha] using ih h'
+
+/-- An id the anchor's closure resolves, the lace resolves to the same block. -/
+theorem lookup_of_closureLace_lookup {B : Lace} {h bid : BlockId} {b : Block}
+    (hl : (closureLace B h).lookup bid = some b) : B.lookup bid = some b :=
+  lookup_of_filter_lookup (q := fun i => (causalPastIncl B h).contains i) hl
+
 /-- **`tauOrder_only_enrolled` (THE SAFETY HALF).** Every block the verified rule finalizes was
 created by an ENROLLED participant. No hypothesis on the lace: this holds on a lace stuffed with
 unenrolled creators' blocks, which is precisely the case that mattered — an unenrolled node can no
@@ -1481,10 +2449,35 @@ theorem tauOrder_only_enrolled (B : Lace) (participants : List AuthorId) (wavele
     (hmem : bid ∈ tauOrder B participants wavelength)
     (hlook : B.lookup bid = some b) :
     participants.contains b.creator = true := by
-  simp only [tauOrder] at hmem
-  have h := (List.mem_filter.mp hmem).2
-  simp only [enrolledId, hlook] at h
-  exact h
+  unfold tauOrder at hmem
+  cases hhd : lastFinalLeader B participants wavelength with
+  | none => rw [hhd] at hmem; simp at hmem
+  | some hd =>
+    rw [hhd] at hmem
+    have hfun : tauStep B participants
+        = tauStepWith (causalPastIncl B) (fun b => participants.contains b.creator) B participants := by
+      funext acc l; rfl
+    simp only [hfun] at hmem
+    rcases foldl_tauStepWith_keep _ _ bid hmem with h0 | ⟨l, _, b', hb', hkeep⟩
+    · simp at h0
+    · have := lookup_of_closureLace_lookup hb'
+      rw [hlook] at this
+      rw [Option.some.inj this]
+      exact hkeep
+
+/-- A segment depends on its creator filter only through the blocks of the anchor's closure. -/
+theorem anchorSegmentWith_congr_keep {past : BlockId → List BlockId} {keep₁ keep₂ : Block → Bool}
+    {B : Lace} {participants : List AuthorId} {prevCovered : List BlockId} {l : Block}
+    (h : ∀ b ∈ closureLace B l.id, keep₁ b = keep₂ b) :
+    anchorSegmentWith past keep₁ B participants prevCovered l
+      = anchorSegmentWith past keep₂ B participants prevCovered l := by
+  simp only [anchorSegmentWith]
+  congr 1
+  apply List.filter_congr
+  intro bid _
+  cases hl : (closureLace B l.id).lookup bid with
+  | none => rfl
+  | some b => simp only [h b (List.mem_of_find?_eq_some hl)]
 
 /-- **`tauOrder_enrolled_eq_unfiltered` (THE LIVENESS HALF).** On a lace whose every block is from a
 participant — an HONEST lace, the only kind a correct federation produces — the enrollment filter
@@ -1493,19 +2486,19 @@ order, same length. So this is a pure subtraction of unenrolled blocks, not a li
 legitimate block is dropped, and no honest node's finalization is delayed by one wave.
 
 Together with `tauOrder_only_enrolled` this is the whole content of the change: OFF the enrolled
-lace it removes exactly the unenrolled blocks; ON the enrolled lace it is the identity. -/
+lace it removes the unenrolled blocks before the sort; ON the enrolled lace it is the identity. -/
 theorem tauOrder_enrolled_eq_unfiltered (B : Lace) (participants : List AuthorId) (wavelength : Nat)
     (h : EnrolledLace B participants) :
     tauOrder B participants wavelength = tauOrderUnfiltered B participants wavelength := by
-  simp only [tauOrder]
-  apply List.filter_eq_self.mpr
-  intro bid _
-  simp only [enrolledId]
-  cases hl : B.lookup bid with
-  | none => rfl
-  | some b =>
-    have hmem : b ∈ B := List.mem_of_find?_eq_some hl
-    exact h b hmem
+  have hfun : tauStep B participants
+      = tauStepWith (causalPastIncl B) (fun _ => true) B participants := by
+    funext acc l
+    unfold tauStep tauStepWith
+    rw [anchorSegmentWith_congr_keep (keep₂ := fun _ => true)]
+    intro b hb
+    exact h b (List.mem_filter.mp hb).1
+  unfold tauOrder tauOrderUnfiltered
+  rw [hfun]
 
 /-! ## 7c. THE RATIFIER-ENROLLMENT TOOTH (HORIZONLOG B6) — the supermajority counts ONLY enrolled
 creators, and on an enrolled lace the gate is the IDENTITY.
@@ -1600,7 +2593,7 @@ lace the edge filter is the IDENTITY.
 governs who may DECIDE that a wave anchors. Neither says anything about who may move the CLOCK, and
 that turned out to be the third, independent question: `computeRounds` maxed over every present
 predecessor, so a non-participant chain that one honest block acked added depth, and depth is what
-`roundToWave` / `blocksAtRound` / the leader slot / the wave end / `xsortBy`'s primary sort key are
+`roundToWave` / `blocksAtRound` / the leader slot / the wave end / `xsortBy`'s ready priority are
 all read off.
 
 Both halves, as §7b and §7c: the depth EXHIBITS an enrolled predecessor (safety, no hypothesis on
@@ -1659,7 +2652,7 @@ theorem roundOfStep_exhibits_enrolled_pred {B : Lace} {participants : List Autho
     exact ⟨p, hpf.1, hpf.2, by simpa using hlk⟩
 
 /-- Every entry the depth fold produces was produced by `roundOfStep` on one of the folded blocks —
-proved by induction on the block LIST, so no `qsort` permutation lemma appears anywhere. -/
+proved by induction on the block LIST. -/
 theorem roundsFold_entry_of_mem (B : Lace) (participants : List AuthorId) :
     ∀ (bs : List Block) (acc : List (BlockId × Nat)) (h : BlockId) (r : Nat),
       (h, r) ∈ bs.foldl (fun rs b => (b.id, roundOfStep B participants rs b) :: rs) acc →
@@ -1687,17 +2680,16 @@ Non-vacuity: the conclusion is genuinely FALSE for the pre-repair recurrence on 
 `traceOrderFork` — block `31`'s depth there is supplied entirely by the unenrolled relay `80`, and
 the `#guard` pair executes exactly that.
 
-⚠ The witness is a member of `sortedLace B`, not of `B`. That is the `Array.qsort` gap this file
-carries throughout (`sortedLace`'s docstring): the sort's output is `B` reordered, and nothing in
-this toolchain can prove it. -/
+The witness is a member of `B` itself: the fold runs over `topoLace B`, a proved permutation of the
+lace (`topoLace_perm`). -/
 theorem computeRounds_depth_exhibits_enrolled_pred {B : Lace} {participants : List AuthorId}
     {h : BlockId} {r : Nat}
     (hmem : (h, r) ∈ computeRounds B participants) (hr : 1 < r) :
-    ∃ b ∈ sortedLace B, b.id = h ∧ ∃ p ∈ b.preds, enrolledId B participants p = true := by
+    ∃ b ∈ B, b.id = h ∧ ∃ p ∈ b.preds, enrolledId B participants p = true := by
   rw [computeRounds, roundsFold] at hmem
-  rcases roundsFold_entry_of_mem B participants (sortedLace B) [] h r hmem with hnil | ⟨b, hb, hid, rs, hrs⟩
+  rcases roundsFold_entry_of_mem B participants (topoLace B) [] h r hmem with hnil | ⟨b, hb, hid, rs, hrs⟩
   · simp at hnil
-  · refine ⟨b, hb, hid, ?_⟩
+  · refine ⟨b, mem_topoLace.mp hb, hid, ?_⟩
     obtain ⟨p, hp, hen, _⟩ := roundOfStep_exhibits_enrolled_pred (B := B) (participants := participants)
       (rs := rs) (b := b) (by omega)
     exact ⟨p, hp, hen⟩
@@ -2042,6 +3034,90 @@ def traceRelayStall6 : Lace :=
 def traceRelayStall6HonestView : Lace :=
   traceRelayStall6.filter (fun b => trace3Participants.contains b.creator)
 
+/-! ### THE FOLD-ORDER AND LINEARIZATION TRACES (dregg issue #100). -/
+
+/-- Four participants; creator `4` is the one that lags or relays in the traces below. -/
+def relayP4 : List AuthorId := [1, 2, 3, 4]
+
+/-- **THE LATE-JOINER TRACE.** `trace3` plus ONE block: enrolled creator `4`'s FIRST block `41`,
+`seq 0`, citing the three round-3 tips. This is what an honest validator that joins late (or lags)
+writes. Its true round is `4`. Under the `(seq, creator)` fold it sorted ahead of the `seq 2`
+blocks it cites, every predecessor was skipped, and it got round `1`. -/
+def traceLateFirst : Lace := traceR1 ++ traceR2 ++ traceR3 ++ [⟨41,4,0,[12,22,32],true⟩]
+
+/-- **THE LATE-LEADER TRACE** — the late joiner's wrong round reaching the leader slot. Participants
+`[1, 4, 2, 3]`, so creator `4` is wave 1's round-robin leader. It joins at round 4 (`41`, `seq 0`,
+citing the round-3 tips) and from then on is an ordinary member of a fully connected committee
+(`42`, `43`). Its round-4 block is the wave-1 leader block and the round-6 layer super-ratifies it.
+
+Under the `(seq, creator)` fold `41, 42, 43` got rounds `1, 2, 3`: round 4 held no block by the
+leader, wave 1 never anchored, and the rule finalized `[10]` where the Rust finalizes eleven
+coordinates. An honest validator, and the wave it leads is lost. -/
+def traceLateLeader : Lace :=
+  traceR1 ++ traceR2 ++ traceR3 ++
+  [⟨41,4,0,[12,22,32],true⟩,
+   ⟨13,1,3,[12,22,32],true⟩, ⟨23,2,3,[12,22,32],true⟩, ⟨33,3,3,[12,22,32],true⟩,
+   ⟨14,1,4,[13,23,33,41],true⟩, ⟨24,2,4,[13,23,33,41],true⟩, ⟨34,3,4,[13,23,33,41],true⟩,
+   ⟨42,4,1,[13,23,33,41],true⟩,
+   ⟨15,1,5,[14,24,34,42],true⟩, ⟨25,2,5,[14,24,34,42],true⟩, ⟨35,3,5,[14,24,34,42],true⟩,
+   ⟨43,4,2,[14,24,34,42],true⟩]
+def lateLeaderP : List AuthorId := [1, 4, 2, 3]
+
+/-- **THE RELAY-LIFT TRACE** (the reporter's, n = 4). Creator `4`'s only block `41` acks the genesis
+layer and the UNENROLLED relay `90`, which acks the round-3 layer. So `41` sits at round `2` — the
+relay contributes no depth (§1) — with `12, 22, 32` (round 3) in its causal past, through
+`41 → 90 → {12, 22, 32}`. A `(round, id)` key sort emits `41` before all three. Every block of the
+lace is cordial. -/
+def traceRelayLift6 : Lace :=
+  traceR1 ++ traceR2 ++ traceR3 ++
+  [⟨90,9,0,[12,22,32],true⟩, ⟨41,4,0,[10,20,30,90],true⟩,
+   ⟨13,1,3,[12,22,32,41],true⟩, ⟨23,2,3,[12,22,32,41],true⟩, ⟨33,3,3,[12,22,32,41],true⟩] ++
+  traceR5 ++ traceR6
+
+/-- The same shape at n = 5 (the reporter's `traceF10`): 26 blocks, creator `5` behind relay `9`. -/
+def traceRelayLift5 : Lace :=
+  [⟨10,1,0,[],true⟩, ⟨20,2,0,[],true⟩, ⟨30,3,0,[],true⟩, ⟨40,4,0,[],true⟩,
+   ⟨11,1,1,[10,20,30,40],true⟩, ⟨21,2,1,[10,20,30,40],true⟩, ⟨31,3,1,[10,20,30,40],true⟩, ⟨41,4,1,[10,20,30,40],true⟩,
+   ⟨12,1,2,[11,21,31,41],true⟩, ⟨22,2,2,[11,21,31,41],true⟩, ⟨32,3,2,[11,21,31,41],true⟩, ⟨42,4,2,[11,21,31,41],true⟩,
+   ⟨90,9,0,[12,22,32,42],true⟩, ⟨51,5,0,[10,20,30,40,90],true⟩,
+   ⟨13,1,3,[12,22,32,42,51],true⟩, ⟨23,2,3,[12,22,32,42,51],true⟩, ⟨33,3,3,[12,22,32,42,51],true⟩, ⟨43,4,3,[12,22,32,42,51],true⟩,
+   ⟨14,1,4,[13,23,33,43],true⟩, ⟨24,2,4,[13,23,33,43],true⟩, ⟨34,3,4,[13,23,33,43],true⟩, ⟨44,4,4,[13,23,33,43],true⟩,
+   ⟨15,1,5,[14,24,34,44],true⟩, ⟨25,2,5,[14,24,34,44],true⟩, ⟨35,3,5,[14,24,34,44],true⟩, ⟨45,4,5,[14,24,34,44],true⟩]
+
+/-- **THE FILTER-PLACEMENT TRACE.** `trace6` with creator `3`'s genesis block replaced by `19`,
+which cites only the unenrolled relay `90`, which cites `10`. `19` is at round 1 (the relay adds no
+depth) and must follow `90`. With the relay LEFT IN the segment, `19` waits for it while `20` —
+ready, and ahead of the round-2 relay in `(round, id)` — goes first; with the relay filtered out
+first, `19` is ready at once and precedes `20`. So filtering the finished order and filtering the
+segment give different orders of the same enrolled blocks, which is why the filter moved. -/
+def traceFilterPlacement : Lace :=
+  [⟨10,1,0,[],true⟩, ⟨20,2,0,[],true⟩, ⟨90,9,0,[10],true⟩, ⟨19,3,0,[90],true⟩,
+   ⟨11,1,1,[10,20,19],true⟩, ⟨21,2,1,[10,20,19],true⟩, ⟨31,3,1,[10,20,19],true⟩] ++
+  traceR3 ++ traceR4 ++ traceR5 ++ traceR6
+
+/-- A lace with a predecessor CYCLE (`1 → 2 → 1`) and one block behind it. No hash-linked lace has
+this shape; it is here so `laceStuck = []` is a premise something refutes. -/
+def traceCycle : Lace :=
+  [⟨1,1,0,[2],true⟩, ⟨2,2,0,[1],true⟩, ⟨3,3,0,[1],true⟩, ⟨4,1,1,[],true⟩]
+
+/-- **`respectsCausality B order`** — no id comes before an id in its own causal past: the
+executable form of "`order` is a linear extension of `B`'s causal order". -/
+def respectsCausality (B : Lace) : List BlockId → Bool
+  | []        => true
+  | b :: rest => rest.all (fun a => !(causalPastIncl B b).contains a) && respectsCausality B rest
+
+/-- **`TauOrderCausal B P wl`** — the WHOLE finalized order is a linear extension of the causal
+order: nothing finalized after a block lies in that block's past. `anchorSegment_linear_extension`
+proves this within each segment; across segments it additionally needs each anchor's closure to be
+predecessor-closed. STATED, `#guard`ed on every trace below through `respectsCausality`, and not
+yet proved. -/
+def TauOrderCausal (B : Lace) (participants : List AuthorId) (wavelength : Nat) : Prop :=
+  ∀ pre x post, tauOrder B participants wavelength = pre ++ x :: post →
+    ∀ a ∈ post, a ∉ causalPastIncl B x
+
+/-- The ids of a lace are distinct (executable form of the `Nodup` premise). -/
+def idsDistinct (B : Lace) : Bool := decide (B.map (·.id)).Nodup
+
 /-- The pre-repair round map of `traceOrderFork`, named so the guards can read individual depths
 off it through the cache-parameterised `…R` twins (`roundOfR` / `blocksAtRoundR` /
 `hasEquivInPastC`) — the rule with ONE variable changed, never a second implementation. -/
@@ -2263,7 +3339,7 @@ depth map folded over the anchor's own closure with the participant edge filter 
 wound is no longer reachable through `rc` at all.** That is a strengthening, not a passing test, and
 the pair is restated at the two places where it is still real:
 
-* **the ORDER face**, red/green on the exact quantity `xsortBy` keys on — the CLOSURE-LOCAL depth of
+* **the ORDER face**, red/green on the quantity `xsortBy` breaks ready ties on — the CLOSURE-LOCAL depth of
   block `31` inside the wave-1 anchor's own sub-lace. Pre-participant fold: 3. Repaired fold: 2. The
   relay block `80` is genuinely inside that closure, so this is not a filtered-away subgraph.
 * **the ANCHOR face**, which `rc` does still reach: `traceRelayStall6` below, where the pre-repair
@@ -2338,6 +3414,118 @@ the pair is restated at the two places where it is still real:
         == tauOrderPreRounds traceOrderForkHonestView trace3Participants 4
 #guard tauOrder traceRelayStallHonestView trace3Participants 3
         == tauOrderPreRounds traceRelayStallHonestView trace3Participants 3
+
+/-! ### THE FOLD-ORDER `#guard`s (dregg issue #100, §2) — a round is a function of the DAG.
+
+`computeRoundsSeqOrder` is the fold exactly as it stood, over the `(seq, creator)` sort. The first
+guard of each pair EXECUTES THE WOUND: an honest validator's first block gets round `1`. -/
+
+-- the premises of §1's theorems hold on every lace in this file, and are refutable.
+#guard [trace3, trace6, traceEquiv, traceMW4, traceUnenrolled6, traceOrderFork8, traceRelayStall6,
+        traceLateFirst, traceLateLeader, traceRelayLift6, traceRelayLift5, traceFilterPlacement].all
+        (fun B => (laceStuck B).isEmpty && idsDistinct B)
+#guard (laceStuck traceCycle).map (·.id) == [1, 2, 3]
+#guard (topoLace traceCycle).map (·.id) == [4, 1, 2, 3]
+-- (RED) THE WOUND: the `(seq, creator)` sort puts the late joiner's `seq 0` block ahead of the
+-- `seq 2` blocks it cites, and the fold skips them all.
+#guard (sortedLace traceLateFirst).map (·.id) == [10, 20, 30, 41, 11, 21, 31, 12, 22, 32]
+#guard roundOfR (computeRoundsSeqOrder traceLateFirst relayP4) 41 == 1
+-- (GREEN) the recurrence: one more than its round-3 predecessors.
+#guard roundOf traceLateFirst relayP4 41 == 4
+#guard (topoLace traceLateFirst).map (·.id) == [10, 20, 30, 11, 21, 31, 12, 22, 32, 41]
+-- the recurrence, executably, at the FINISHED map — and the old fold does not satisfy it.
+#guard traceLateFirst.all (fun b =>
+        roundLookup (computeRounds traceLateFirst relayP4) b.id
+          == some (roundOfStep traceLateFirst relayP4 (computeRounds traceLateFirst relayP4) b))
+#guard !traceLateFirst.all (fun b =>
+        roundLookup (computeRoundsSeqOrder traceLateFirst relayP4) b.id
+          == some (roundOfStep traceLateFirst relayP4 (computeRoundsSeqOrder traceLateFirst relayP4) b))
+-- `roundOf_perm`, executably: the wire's `(seq, creator)` LISTING of the same blocks gets the same
+-- rounds, where the old fold's answer depended on which listing it was handed.
+#guard traceLateFirst.all (fun b =>
+        roundOf (sortedLace traceLateFirst) relayP4 b.id == roundOf traceLateFirst relayP4 b.id)
+-- the unenrolled relay of `traceRelayLift6` (seq 0, citing seq-2 blocks) had the same wrong round.
+#guard roundOfR (computeRoundsSeqOrder traceRelayLift6 relayP4) 90 == 1
+#guard roundOf traceRelayLift6 relayP4 90 == 4
+-- ── THE WRONG ROUND REACHES THE LEADER SLOT. ──
+-- (RED) wave 1's leader (creator 4) has no block at round 4 under the old map; its blocks sit at
+--       rounds 1, 2, 3.
+#guard [41, 42, 43].map (roundOfR (computeRoundsSeqOrder traceLateLeader lateLeaderP)) == [1, 2, 3]
+#guard (leaderCandidatesR (computeRoundsSeqOrder traceLateLeader lateLeaderP) traceLateLeader
+          lateLeaderP 1 3).isEmpty
+#guard tauOrderWithRounds traceLateLeader (computeRoundsSeqOrder traceLateLeader lateLeaderP)
+          lateLeaderP 3 == [10]
+-- (GREEN) the late joiner leads its wave: `41` is the wave-1 leader block, it anchors, and its
+--         closure — rounds 1 to 3 and itself — is finalized.
+#guard [41, 42, 43].map (roundOf traceLateLeader lateLeaderP) == [4, 5, 6]
+#guard (findAllFinalLeaders traceLateLeader lateLeaderP 3).map (·.id) == [10, 41]
+#guard tauOrder traceLateLeader lateLeaderP 3 == [10, 20, 30, 11, 21, 31, 12, 22, 32, 41]
+#guard tauOrderFast traceLateLeader lateLeaderP 3 == tauOrder traceLateLeader lateLeaderP 3
+
+/-! The GREEN half of the two pairs above as KERNEL theorems, not `#guard`s. The round map and the
+head selection are structural recursion now (no `Array.qsort`), so `decide` reduces them; a `#guard`
+is the compiler's word and these are the kernel's. The RED halves stay `#guard`s — they run the old
+`Array.qsort` fold, which the kernel cannot reduce — and so do the orders, since `xsortWith` goes
+through `List.mergeSort`. -/
+
+set_option maxRecDepth 1000000 in
+/-- An honest late joiner's first block sits one round above the tips it cites. -/
+theorem lateJoiner_round_is_depth : roundOf traceLateFirst relayP4 41 = 4 := by decide
+
+set_option maxRecDepth 1000000 in
+set_option maxHeartbeats 4000000 in
+/-- The wave a late joiner leads anchors on its first block. -/
+theorem lateJoiner_wave_anchors :
+    (findAllFinalLeaders traceLateLeader lateLeaderP 3).map (·.id) = [10, 41] := by decide
+
+/-! ### THE LINEARIZATION `#guard`s (dregg issue #100, §1) — the order respects causality.
+
+`xsortByRoundKey` is the `(round, id)` key sort exactly as it stood. -/
+
+-- every block of the relay lace is cordial: nothing here is refused at admission.
+#guard isCordialLace traceRelayLift6 relayP4
+-- the premise of the wound: `41` is at round 2, its ancestors `12, 22, 32` at round 3.
+#guard roundOf traceRelayLift6 relayP4 41 == 2
+#guard [12, 22, 32].all (fun a => (causalPastIncl traceRelayLift6 41).contains a
+                                    && roundOf traceRelayLift6 relayP4 a == 3)
+-- (RED) THE WOUND: the key sort emits `41` before three blocks of its own causal past.
+#guard xsortByRoundKey traceRelayLift6 relayP4 [20, 30, 11, 21, 31, 12, 22, 32, 41, 23]
+        == [20, 30, 11, 21, 31, 41, 12, 22, 32, 23]
+#guard !respectsCausality traceRelayLift6
+          (xsortByRoundKey traceRelayLift6 relayP4 [20, 30, 11, 21, 31, 12, 22, 32, 41, 23])
+-- (GREEN) the ready-set sort does not, on the same input…
+#guard xsortBy traceRelayLift6 relayP4 [20, 30, 11, 21, 31, 12, 22, 32, 41, 23]
+        == [20, 30, 11, 21, 31, 12, 22, 32, 41, 23]
+-- …and the finalized order is the reporter's expected one, on both paths.
+#guard tauOrder traceRelayLift6 relayP4 3 == [10, 20, 30, 11, 21, 31, 12, 22, 32, 41, 23]
+#guard tauOrderFast traceRelayLift6 relayP4 3 == [10, 20, 30, 11, 21, 31, 12, 22, 32, 41, 23]
+#guard respectsCausality traceRelayLift6 (tauOrder traceRelayLift6 relayP4 3)
+-- the n = 5 exhibit: `51` after all four round-3 blocks in its past.
+#guard tauOrder traceRelayLift5 [1, 2, 3, 4, 5] 3
+        == [10, 20, 30, 40, 11, 21, 31, 41, 12, 22, 32, 42, 51, 23]
+#guard tauOrderFast traceRelayLift5 [1, 2, 3, 4, 5] 3 == tauOrder traceRelayLift5 [1, 2, 3, 4, 5] 3
+#guard respectsCausality traceRelayLift5 (tauOrder traceRelayLift5 [1, 2, 3, 4, 5] 3)
+-- `TauOrderCausal`, executably, on every ordering trace in this file.
+#guard respectsCausality trace6 (tauOrder trace6 trace3Participants 3)
+#guard respectsCausality traceUnenrolled6 (tauOrder traceUnenrolled6 trace3Participants 3)
+#guard respectsCausality traceUnenrolled6 (tauOrderUnfiltered traceUnenrolled6 trace3Participants 3)
+#guard respectsCausality traceOrderFork8 (tauOrder traceOrderFork8 trace3Participants 4)
+#guard respectsCausality traceRelayStall6 (tauOrder traceRelayStall6 trace3Participants 3)
+#guard respectsCausality traceLateLeader (tauOrder traceLateLeader lateLeaderP 3)
+#guard respectsCausality traceMW4 (tauOrder traceMW4 traceMW4Participants 3)
+-- ── WHY THE ENROLLMENT FILTER MOVED INSIDE THE SEGMENT. ──
+-- both orders respect causality, and they order the same enrolled blocks DIFFERENTLY: with the
+-- relay left in the segment `20` overtakes `19`.
+#guard tauOrder traceFilterPlacement trace3Participants 3
+        == [10, 19, 20, 11, 21, 31, 12, 22, 32, 23]
+#guard (tauOrderUnfiltered traceFilterPlacement trace3Participants 3).filter
+          (enrolledId traceFilterPlacement trace3Participants)
+        == [10, 20, 19, 11, 21, 31, 12, 22, 32, 23]
+#guard respectsCausality traceFilterPlacement (tauOrder traceFilterPlacement trace3Participants 3)
+#guard respectsCausality traceFilterPlacement
+          (tauOrderUnfiltered traceFilterPlacement trace3Participants 3)
+#guard tauOrderFast traceFilterPlacement trace3Participants 3
+        == tauOrder traceFilterPlacement trace3Participants 3
 
 -- THE MEMOIZED FAST PATH agrees with the pure rule on the concrete traces (the live gate exports run
 -- `tauOrderFast`/`tauGoldenFast`; the exponential re-traversal is gone, the order is IDENTICAL).
@@ -2419,6 +3607,18 @@ theorem fast_tau_matches_the_spec_on_the_uneven_pred_lace :
 #guard tauOrderFast traceUnenrolled6 trace3Participants 3 == tauOrder traceUnenrolled6 trace3Participants 3
 #guard (tauOrderFast trace6 trace3Participants 3).length == 10
 
+-- (i') the Kahn twin enumerates the IDENTICAL list as the pure `topoLace`, and the round twin
+--      returns the pure round for every block — including the late-joiner and relay laces (more
+--      than one sweep) and the cyclic lace (the stuck tail).
+#guard [trace3, trace6, traceEquiv, traceMW4, traceUnenrolled6, traceOrderFork8, traceRelayStall6,
+        traceLateFirst, traceLateLeader, traceRelayLift6, traceRelayLift5, traceFilterPlacement,
+        traceCycle, sortedLace traceLateLeader, sortedLace traceRelayLift5].all
+        (fun B => fastTopoLace B == topoLace B)
+#guard [trace6, traceOrderFork8, traceRelayStall6, traceLateFirst, traceLateLeader, traceRelayLift6,
+        traceRelayLift5, traceFilterPlacement, sortedLace traceLateLeader].all
+        (fun B => B.all (fun b => fastROf (fastRoundMap B relayP4) b.id == roundOf B relayP4 b.id)
+                  && B.all (fun b => fastROf (fastRoundMap B trace3Participants) b.id
+                                       == roundOf B trace3Participants b.id))
 -- (ii) the full `tauOrderFast` runtime twin == the pure `tauOrder`, on the golden 3-node trace, the
 --      equivocation trace, AND the round-2-shaped multi-wave n=4 DAG.
 #guard tauOrderFast traceMW4 traceMW4Participants 3 == tauOrder traceMW4 traceMW4Participants 3
@@ -2429,7 +3629,7 @@ theorem fast_tau_matches_the_spec_on_the_uneven_pred_lace :
 #guard (findAllFinalLeaders traceMW4 traceMW4Participants 3).length ≥ 1
 
 /-! The `#guard`s above are the project's machine-checked non-vacuity teeth (the sanctioned
-mechanism for executable, `qsort`-laden defs — a false `#guard` is a BUILD ERROR, exactly like a
+mechanism for executable defs — a false `#guard` is a BUILD ERROR, exactly like a
 failed test). They establish, against a CONCRETE trace, that: (i) the model finalizes all nine blocks
 of the 3-node lace (the Rust `result.len() == 9`); (ii) there is EXACTLY ONE final leader, creator 1's
 genesis (the single-anchor `finalLeaders_one_per_wave` is witnessed non-vacuously); (iii) the golden
@@ -2464,3 +3664,22 @@ constrain a REAL, non-trivial finalized order, and the model reproduces the node
 #assert_axioms computeRounds_eq_pre_of_enrolled
 #assert_axioms tauOrder_eq_preRounds_of_enrolled
 #assert_axioms tauOrderFast_eq_withRounds
+#assert_axioms topoLace_perm
+#assert_axioms topoLace_ancestorRespecting
+#assert_axioms laceStuck_eq_nil_iff
+#assert_axioms roundsFold_recurrence
+#assert_axioms roundsFold_enumeration_invariant
+#assert_axioms computeRounds_recurrence
+#assert_axioms computeRounds_enumeration_invariant
+#assert_axioms roundOf_perm
+#assert_axioms causalPastIncl_rank
+#assert_axioms readySort_perm
+#assert_axioms readySort_linear_extension
+#assert_axioms xsortBy_perm
+#assert_axioms xsortWith_congr
+#assert_axioms xsortWith_linear_extension
+#assert_axioms xsortBy_linear_extension
+#assert_axioms anchorSegment_linear_extension
+#assert_axioms lateJoiner_round_is_depth
+#assert_axioms lateJoiner_wave_anchors
+#assert_axioms anchorSegmentWith_congr_keep

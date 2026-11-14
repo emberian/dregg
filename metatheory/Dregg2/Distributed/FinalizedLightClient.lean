@@ -218,9 +218,11 @@ end Cert
 /-! ## 5. NON-VACUITY — the three legs FIRE on a real, finalized chain.
 
 The headline would be hollow if `CertValid` were unsatisfiable or the legs could not co-occur. Two
-complementary witnesses, exactly as `BlocklaceFinality` does (its finality rule is `qsort`-laden, so
-kernel `decide` does not reduce `finalLeaderAt` — the SANCTIONED non-vacuity tooth for an executable
-`def` is `#guard`, a false `#guard` being a build error like a failed test):
+complementary witnesses, exactly as `BlocklaceFinality` does (when this was written its round map
+rode `Array.qsort`, so kernel `decide` did not reduce `finalLeaderAt` and the tooth for an
+executable `def` was `#guard`, a false `#guard` being a build error like a failed test. Since
+dregg issue #100 `decide` DOES reduce `finalLeaderAt` on `trace3`; restating the `#guard`s below
+as theorems is owed):
 
   * **§5a (the `Prop` headline FIRES).** For ANY cert whose validity + root-seam hold, the headline
     concludes `FinalizedHistoryAttested` over the realizing aggregate of `RecursiveAggregation` (whose
@@ -260,8 +262,8 @@ def realCert : FinalityCert where
 These `#guard`s evaluate the node's REAL finality rule on `trace3`: the cert's anchor IS the final
 leader (`CertValid realCert` holds, executably), the super-ratification quorum IS present
 (`CertQuorum realCert = true`), and the anchor is creator-1's genesis (the wave-0 round-robin leader).
-A false `#guard` is a build error — so these are machine-checked non-vacuity, the sanctioned tooth for
-the `qsort`-laden rule. -/
+A false `#guard` is a build error — so these are compiler-checked non-vacuity (see §5's note: they
+could now be kernel theorems). -/
 
 #guard finalLeaderAt realCert.lace realCert.participants realCert.wave realCert.wavelength
         == some realAnchor                                   -- CertValid realCert (executable)
@@ -276,7 +278,7 @@ realizing aggregate (whose `real_engine_sound` discharges legs 1+2). Composed wi
 witness that such a cert EXISTS (`realCert` over `trace3`), this shows
 `light_client_accepts_finalized_history` is non-vacuous — it fires on a real chain finalized by a real
 quorum and delivers a real attestation. (We keep the cert/root abstract so the firing is kernel-clean;
-the `qsort` finality rule's concrete satisfaction is the executable §5b witness, per the codebase's
+the finality rule's concrete satisfaction is the executable §5b witness, per the codebase's
 `#guard` discipline.) -/
 theorem finalized_light_client_fires_for
     (cert : FinalityCert) (hcert : CertValid cert)

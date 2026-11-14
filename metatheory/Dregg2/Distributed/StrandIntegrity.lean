@@ -191,12 +191,17 @@ The lemma we need from the existing theory: an honest chain has no incomparable 
 distinct blocks at one seq that are concurrent. We additionally use that two DISTINCT same-author
 same-seq blocks are necessarily incomparable in any acyclic lace where `≺` strictly increases
 `seq` — captured here as the hypothesis `seqStrictMono` (the §-free semantic content of "an ack
-edge goes to a strictly-earlier feed position"), matching `computeRounds`' strict `seq` increase. -/
+edge goes to a strictly-earlier feed position"). -/
 
 /-- **`SeqStrictMono B`** — along any `≺` (causal-ack) step the source sits at a strictly smaller
 `seq` than the target. This is the honest virtual-chain layout (`add_block` acks the prior tip, so
-`seq` strictly increases down the chain) and the `seq`-sorted topological order
-`BlocklaceFinality.computeRounds` relies on. A semantic order fact (no crypto). -/
+`seq` strictly increases down the chain). A semantic order fact (no crypto).
+
+⚠ It is a hypothesis about ONE author's chain read across authors, and across authors it is false
+on ordinary laces: a validator that joins late writes `seq 0` citing blocks with `seq 2`
+(`BlocklaceFinality.traceLateFirst`). `BlocklaceFinality.computeRounds` used to assume exactly
+this — it folded in `(seq, creator)` order — and gave that block the wrong round (dregg issue
+#100); it no longer relies on `seq` at all. -/
 def SeqStrictMono (B : Lace) : Prop :=
   ∀ a b, Dregg2.Authority.Blocklace.precedes B a b → a.seq < b.seq
 

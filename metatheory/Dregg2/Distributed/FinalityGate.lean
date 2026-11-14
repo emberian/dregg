@@ -60,9 +60,9 @@ is now, by construction, one the verified model finalizes.
   runs (the `node` `receive_block` path); the gate's job is the FINALITY-RULE check, not crypto.
 
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}) for the spec theorems;
-concrete-trace instances are `native_decide` + `#assert_compiled` (`tauGolden`/`tauOrder` ride
-`sortedLace`'s `Array.qsort`, which does not kernel-reduce under `decide` — the boundary
-`BlocklaceFinality` §9 records for its own trace pins).
+concrete-trace instances are `native_decide` + `#assert_compiled` (`tauGolden`/`tauOrder` do not
+kernel-reduce under `decide`: the linearization goes through `List.mergeSort`, which is
+well-founded recursion — the boundary `BlocklaceFinality` §9 records for its own trace pins).
 Verified with `lake build Dregg2.Distributed.FinalityGate`.
 -/
 import Dregg2.Distributed.BlocklaceFinality
@@ -222,8 +222,8 @@ verified `tauOrder` rule (head from `findAllFinalLeaders`/`lastFinalLeader`, cha
 `previousRatifiedLeader` since `d182d10fc`) whose safety (`finalLeaderAt_needs_unique_candidate`:
 an equivocating leader anchors nothing) is proved in `BlocklaceFinality`. So the gate inherits, by the
 iff, the rule's equivocation exclusion. We state the inheritance generally and witness it at n=3 via
-the NAMED `native_decide` theorems below (`qsort`-laden `tauGolden` does not kernel-reduce under
-`decide`, so each concrete exclusion is a named compiled pin + `#assert_compiled`, per
+the NAMED `native_decide` theorems below (`tauGolden` does not kernel-reduce under
+`decide` — `List.mergeSort` — so each concrete exclusion is a named compiled pin + `#assert_compiled`, per
 `metatheory/docs/GUARD-DISCIPLINE.md` — a false pin is a build error, and now it has a name and an
 axiom record too). -/
 
@@ -249,8 +249,9 @@ being a function (any wire ambiguity would surface as a failed round-trip pin). 
 
 /-! ## 6. NON-VACUITY — NAMED, not `#guard`ed. The gate reproduces the verified rule at n=3, on the
 wire, in both polarities. These were seven `#guard`s; each is now a theorem with a name, a term and
-an axiom record, per `metatheory/docs/GUARD-DISCIPLINE.md` (the concrete traces ride `Array.qsort`,
-so they are `native_decide` + `#assert_compiled`, the same boundary `BlocklaceFinality` §9 records).
+an axiom record, per `metatheory/docs/GUARD-DISCIPLINE.md` (the concrete orders ride
+`List.mergeSort`, so they are `native_decide` + `#assert_compiled`, the same boundary
+`BlocklaceFinality` §9 records).
 
 ⚑ **THE EXPECTATIONS MOVED 2026-08-08, WITH THE RULE.** τ is CM Alg. 2's ANCHOR CHAIN now
 (`BlocklaceFinality` §5b): the head is the DEEPEST final leader and the delivered history is that

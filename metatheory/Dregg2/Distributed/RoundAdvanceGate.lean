@@ -84,9 +84,9 @@ not switching to the async one, is the design choice; the async instance needs a
 shared coin this tree does not have), does not touch τ / finalization, and does not measure time.
 
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}) for the spec theorems;
-concrete-trace instances are `native_decide` + `#assert_compiled` (the round map rides
-`sortedLace`'s `Array.qsort`, which does not kernel-reduce under `decide` — the same boundary
-`FinalityGate` §4 records). Verified with `lake build Dregg2.Distributed.RoundAdvanceGate`.
+concrete-trace instances are `native_decide` + `#assert_compiled` (chosen when the round map rode
+`Array.qsort`, which does not kernel-reduce under `decide`; since dregg issue #100 it is a
+structural Kahn fold that does, so these could be restated with `decide` — not done here). Verified with `lake build Dregg2.Distributed.RoundAdvanceGate`.
 -/
 import Dregg2.Distributed.BlocklaceFinality
 import Dregg2.Distributed.FinalityGate

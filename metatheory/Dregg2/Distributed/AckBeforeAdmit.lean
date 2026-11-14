@@ -88,7 +88,7 @@ drains to colluders**, who by Def. 5.2 never produce an acknowledging head. This
 — under the paper's own hypotheses (Node Liveness Def. 5.1, connected correct nodes) and the
 `byz = eqvc` narrowing above. The count is assembled from the per-step theorems below; the
 induction over ingest RUNS (a trace semantics for the buffer loop) is prose, not yet a theorem —
-the same class of named boundary as `sortedLace`'s qsort-permutation note in
+the same class of named boundary as `TauOrderCausal` (stated, `#guard`ed, not proved) in
 `BlocklaceFinality`.
 
 ## Composition with the other admission-adjacent rules (three rules, one order, no fight)

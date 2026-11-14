@@ -141,12 +141,15 @@ What is here now:
 4. **The model is a toy.** `n = 4, f = 1`, one wave, one leader, six blocks. It settles
    satisfiability and refutability; it is not a scale claim. (The BRIDGE theorem itself is fully
    general in `n`, `f`, `B` and `participants`; only its models are at those parameters.)
-5. **No Lean THEOREM in this tree can evaluate the deployed finalizer on a concrete lace.**
-   `roundOf` → `computeRounds` → `Array.qsort`, whose worker is well-founded-recursive and
-   private to `Init`, so the kernel cannot reduce it and `unseal` cannot reach it (measured
-   2026-07-28). Every `#guard` about `tauOrder` / `isSuperRatified` / `finalLeaderAt` — including
-   the two in `SuperRatifyBridge.Model` — runs in the COMPILER, outside the kernel. They are
-   tests, not proofs. The bridge's own models are built round-FREE for exactly this reason.
+5. **No Lean THEOREM in this tree evaluates the deployed finalizer on a concrete lace.** When
+   this was written none could: `roundOf` → `computeRounds` → `Array.qsort`, which the kernel
+   cannot reduce (measured 2026-07-28). Every `#guard` about `tauOrder` / `isSuperRatified` /
+   `finalLeaderAt` — including the two in `SuperRatifyBridge.Model` — runs in the COMPILER,
+   outside the kernel. They are tests, not proofs, and the bridge's own models are built
+   round-FREE for that reason. Since dregg issue #100 the round map is a structural Kahn fold and
+   `decide` DOES reduce `roundOf` / `isSuperRatified` / `finalLeaderAt` (measured 2026-11-13;
+   `tauOrder` still does not, through `List.mergeSort`) — so those `#guard`s could now be
+   theorems. They have not been restated; that is owed.
 
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}).
 Verified with `lake build Dregg2.Consensus.Safety`.

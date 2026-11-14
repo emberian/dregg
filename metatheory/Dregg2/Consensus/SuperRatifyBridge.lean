@@ -55,14 +55,20 @@ disagree on a finalized wave's leader** — the apex, reached from the deployed 
 
 ## WHAT THE KERNEL CANNOT SEE — read before trusting a `#guard`.
 
-`roundOf` → `computeRounds` → `Array.qsort`, which is well-founded-recursive and whose worker
-(`_private.Init.Data.Array.QSort.Basic.0.Array.qsort.sort`) is private to `Init`, so it is
-irreducible and **unsealable from here**. Measured 2026-07-28: `decide` gets stuck on
-`roundOf pB 100 = 1`. Consequence: **no Lean THEOREM in this tree can evaluate the deployed
-finalizer on a concrete lace** — every `#guard` about `tauOrder`/`isSuperRatified` runs in the
-COMPILER, outside the kernel, and is a test, not a proof. §4's models are therefore built to be
-round-FREE where they are theorems (they turn on `Lace`-structural facts and `causalPastIncl`,
-both of which DO reduce), and the round-dependent facts appear only as `#guard`s, labelled.
+When this module was written `roundOf` → `computeRounds` → `Array.qsort`, whose worker is
+well-founded-recursive and private to `Init`, so the kernel could not reduce it (measured
+2026-07-28: `decide` stuck on `roundOf pB 100 = 1`) and no Lean THEOREM could evaluate the
+deployed finalizer on a concrete lace. §4's models were therefore built to be round-FREE where
+they are theorems (they turn on `Lace`-structural facts and `causalPastIncl`, both of which DO
+reduce), and the round-dependent facts appear only as `#guard`s, labelled — COMPILER checks,
+outside the kernel, tests and not proofs.
+
+⚑ That obstacle is gone for the round map and the head selection. Since dregg issue #100
+`computeRounds` folds a structural Kahn enumeration (`BlocklaceFinality.topoLace`), and `decide`
+reduces `roundOf`, `isSuperRatified`, `finalLeaderAt` and `findAllFinalLeaders` on
+`BlocklaceFinality`'s traces (measured 2026-11-13). It still does not reduce `tauOrder`, whose
+linearization goes through `List.mergeSort`. The `#guard`s below have NOT been re-stated as
+theorems; that is owed, not done.
 
 ## SCOPE — what this does NOT do.
 
@@ -551,9 +557,9 @@ theorem deployed_nodes_no_conflicting_history
 
 /-! ## §4. MODELS — satisfiability, and the refutations. `n = 4, f = 1`, one wave.
 
-Everything here that is a THEOREM is round-FREE: `roundOf` goes through `Array.qsort`, which the
-kernel cannot reduce (see the header). The round-dependent facts are `#guard`s — COMPILER checks,
-not proofs — and are labelled as such. -/
+Everything here that is a THEOREM is round-FREE, because `roundOf` did not kernel-reduce when
+these were written (see the header: it does now). The round-dependent facts are `#guard`s —
+COMPILER checks, not proofs — and are labelled as such. -/
 
 namespace Model
 
@@ -638,7 +644,7 @@ theorem bridge_fires :
 
 -- Compiler-level (NOT kernel) confirmation that the honest model is a real run of the deployed
 -- rule: the node's own per-wave decision returns this leader. `#guard` evaluates OUTSIDE the
--- kernel — see the header on `Array.qsort`. This is a test, not a proof.
+-- kernel — see the header. This is a test, not a proof.
 #guard finalLeaderAt honest parts 0 3 == some leader
 
 /-! ### 4b. REFUTATION — the node still ratifies; `Committed` is FALSE.

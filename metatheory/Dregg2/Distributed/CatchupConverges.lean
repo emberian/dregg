@@ -50,8 +50,8 @@ ASSUMED (stated, not hidden — inherited from `LaceMerge`):
 * The `tauOrder`-agreement seam (`hOrder`) is taken as an explicit hypothesis and is NOT derived. The
   earlier version of this note called it "TRUE because `BlocklaceFinality.tauOrder` is permutation-invariant
   on canonical laces" — that permutation-invariance is a CLAIM, not a result in this tree, and
-  `LaceMerge` §6 now states precisely why it is not obvious (`Array.qsort` has no permutation lemma here,
-  and `computeRounds`' `(seq, creator)` comparator ties exactly on equivocating pairs). For the
+  `LaceMerge` §6 states precisely what is and is not established (the round map is permutation-invariant,
+  `BlocklaceFinality.roundOf_perm`; the rest of `tauOrder` is not proved so). For the
   identical-representative case `hOrder` is `tauOrder_deterministic` (`rfl`); at n>1 it is assumed.
 * `LaceMerge.CrossCanonical` — CROSS-lace canonicity, that the leader and the caught-up laggard resolve any
   shared content-address to the SAME block. This was an ANONYMOUS binder `hagree` here until 2026-07-27; it

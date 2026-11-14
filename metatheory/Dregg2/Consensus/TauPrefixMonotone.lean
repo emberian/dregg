@@ -39,7 +39,7 @@ insert-valid honest laggard can no longer reorder finalized history.
 | former field | what it said | status now |
 |---|---|---|
 | `fold_agrees` | replaying the old anchors in the grown lace reproduces the same segments | **THEOREM** (`tauStep_stable`), from `ClosedExtension` alone |
-| `enrollment_agrees` | the growth does not reclassify an already-ordered block's creator | **THEOREM** (`enrolledId_stable` + `tauOrderUnfiltered_mem`), from `ClosedExtension` alone |
+| `enrollment_agrees` | the growth does not reclassify an already-ordered block's creator | **THEOREM**: the creator filter sits inside the segment and reads the anchor's closure, so it is part of `anchorSegment_stable`; `enrolledId_stable` is the same fact for the whole-lace predicate |
 | `leaders_extend` | the anchor list only extends | **SURVIVES**, as `ChainExtends` — see below |
 
 `ClosedExtension` is not a restatement of the conclusion. It is three STRUCTURAL facts about the
@@ -398,19 +398,27 @@ former `fold_agrees` hypothesis, which no longer exists. -/
 /-- Every segment an anchor appends is unchanged by the growth. This is the former `fold_agrees`
 hypothesis — deleted — as a theorem:
 `anchorSegment` reads `closureLace B l.id` and `causalPastIncl B l.id`, both of which are pinned by
-`l`'s own pointers. -/
+`l`'s own pointers; and its linearization reads the causal past only of ids in `[l]`, each pinned by
+its own pointers the same way (`xsortWith_congr`). -/
 theorem anchorSegment_stable {B B' : Lace} (h : ClosedExtension B B') (P : List AuthorId)
     (prev : List BlockId) {l : Block} (hl : B.has l.id = true) :
     anchorSegment B' P prev l = anchorSegment B P prev l := by
-  unfold anchorSegment
+  simp only [anchorSegment, anchorSegmentWith]
   rw [closureLace_stable h hl, causalPastIncl_stable h hl]
+  apply xsortWith_congr
+  intro x hx
+  have h2 := (List.mem_filter.mp hx).1
+  have h3 := (List.mem_filter.mp h2).1
+  exact causalPastIncl_stable h (causalPastIncl_has B hl x h3)
 
 /-- …hence one fold step is unchanged. -/
 theorem tauStep_stable {B B' : Lace} (h : ClosedExtension B B') (P : List AuthorId)
     (acc : List BlockId × List BlockId) {l : Block} (hl : B.has l.id = true) :
     tauStep B' P acc l = tauStep B P acc l := by
-  unfold tauStep
-  rw [anchorSegment_stable h P acc.2 hl, causalPastIncl_stable h hl]
+  have hseg := anchorSegment_stable h P acc.2 hl
+  unfold anchorSegment at hseg
+  unfold tauStep tauStepWith
+  rw [hseg, causalPastIncl_stable h hl]
 
 /-- The anchor CHAIN is unchanged too: `previousRatifiedLeader` quantifies over `[b1]` and nothing
 else (CM Alg. 2:41-43). -/
@@ -471,8 +479,8 @@ hypothesis, deleted with the rest of `FinalizedRegionStable`.
 
 The old field assumed the growth does not reclassify an already-ordered block's creator. It cannot:
 `enrolledId` reads `Lace.lookup`, and §2 pinned that. What was missing was the OTHER half — that
-every id the fold emits is one the lace already holds — and that needed membership to survive the
-intra-segment sort, which is why `xsortBy` is now a `List.mergeSort` (`mem_xsortBy`). -/
+every id the fold emits is one the lace already holds — and that needs membership to survive the
+intra-segment sort (`xsortWith_perm`). -/
 
 theorem enrolledId_stable {B B' : Lace} (h : ClosedExtension B B') (P : List AuthorId)
     {bid : BlockId} (hb : B.has bid = true) : enrolledId B P bid = enrolledId B' P bid := by
@@ -483,8 +491,8 @@ theorem enrolledId_stable {B B' : Lace} (h : ClosedExtension B B') (P : List Aut
 theorem anchorSegment_mem (B : Lace) (P : List AuthorId) (prev : List BlockId) {l : Block}
     (hl : B.has l.id = true) : ∀ bid ∈ anchorSegment B P prev l, B.has bid = true := by
   intro bid hbid
-  unfold anchorSegment at hbid
-  have h1 := mem_xsortBy hbid
+  unfold anchorSegment anchorSegmentWith at hbid
+  have h1 := (xsortWith_perm _ _ _).mem_iff.mp hbid
   have h2 := (List.mem_filter.mp h1).1
   have h3 := (List.mem_filter.mp h2).1
   exact causalPastIncl_has B hl bid h3
@@ -657,39 +665,28 @@ theorem tau_finalized_prefix_monotone {B B' : Lace} {P : List AuthorId} {wl : Na
   classical
   cases hhd : lastFinalLeader B P wl with
   | none =>
-    have hnil : tauOrderUnfiltered B P wl = [] := by
-      unfold tauOrderUnfiltered; rw [hhd]
-    unfold tauOrder
+    have hnil : tauOrder B P wl = [] := by
+      unfold tauOrder; rw [hhd]
     rw [hnil]
-    simpa using List.nil_prefix (l := List.filter (enrolledId B' P) (tauOrderUnfiltered B' P wl))
+    exact List.nil_prefix
   | some hd =>
     obtain ⟨hd', hhd', T, hT⟩ := hchain.head_chain hd hhd
     have hheld : B.has hd.id = true := lastFinalLeader_has hhd
     have hchainHas : ∀ l ∈ ratifiedLeaderChain B P wl hd, B.has l.id = true :=
       ratifiedLeaderChain_has B P wl hheld
     -- the OLD fold, replayed in the GROWN lace, is the old fold (the former `fold_agrees`
-    -- hypothesis, deleted and discharged).
+    -- hypothesis, deleted and discharged). The enrollment verdict rides inside each segment, so
+    -- the former `enrollment_agrees` hypothesis is discharged by the same replay.
     have hreplay := foldl_tauStep_stable hext P (ratifiedLeaderChain B P wl hd) hchainHas ([], [])
     -- the grown fold is the old fold followed by the extra anchors, which only APPEND.
     obtain ⟨rest, hrest⟩ :=
       foldl_tauStep_fst_extend B' P T
         ((ratifiedLeaderChain B P wl hd).foldl (tauStep B' P) ([], []))
-    have hunf : tauOrderUnfiltered B' P wl = tauOrderUnfiltered B P wl ++ rest := by
-      unfold tauOrderUnfiltered
+    have hgrown : tauOrder B' P wl = tauOrder B P wl ++ rest := by
+      unfold tauOrder
       simp only [hhd, hhd']
       rw [← hT, List.foldl_append, hrest, hreplay]
-    -- the enrollment verdict is unchanged on every id the old fold emitted (the former
-    -- `enrollment_agrees` hypothesis, deleted and discharged).
-    have hmem : ∀ bid ∈ tauOrderUnfiltered B P wl, B.has bid = true := by
-      intro bid hbid
-      unfold tauOrderUnfiltered at hbid
-      simp only [hhd] at hbid
-      exact foldl_tauStep_mem B P (ratifiedLeaderChain B P wl hd) hchainHas ([], [])
-        (by intro x hx; simp at hx) bid hbid
-    refine ⟨rest.filter (enrolledId B' P), ?_⟩
-    unfold tauOrder
-    rw [hunf, List.filter_append,
-      List.filter_congr (fun bid hbid => enrolledId_stable hext P (hmem bid hbid))]
+    exact ⟨rest, hgrown.symm⟩
 
 /-- **`tau_executed_prefix_fixed`** — the node-shaped corollary: the first `(tauOrder B).length`
 entries of the grown order are EXACTLY the old order. This is what `ExecutionCursor`'s cached prefix
