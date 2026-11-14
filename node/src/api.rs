@@ -1360,6 +1360,25 @@ pub struct StarbridgeQuery {
     pub app: Option<String>,
 }
 
+/// Read-only digest: BLAKE3(domain || field count u64 LE || raw 32-byte fields).
+#[derive(Serialize)]
+pub struct StarbridgeEventInfo {
+    pub topic: String,
+    pub data_digest: String,
+}
+fn starbridge_event_info(event: &dregg_turn::EmittedEvent) -> StarbridgeEventInfo {
+    let mut h = blake3::Hasher::new();
+    h.update(b"dregg-api-event-data-v1");
+    h.update(&(event.data.len() as u64).to_le_bytes());
+    for field in &event.data {
+        h.update(field);
+    }
+    StarbridgeEventInfo {
+        topic: hex_encode(&event.topic),
+        data_digest: h.finalize().to_hex().to_string(),
+    }
+}
+
 #[derive(Serialize)]
 pub struct StarbridgeReceiptInfo {
     #[serde(flatten)]
@@ -1367,6 +1386,7 @@ pub struct StarbridgeReceiptInfo {
     pub effects_hash: String,
     pub federation_id: String,
     pub emitted_event_count: usize,
+    pub emitted_events: Vec<StarbridgeEventInfo>,
     pub routing_directive_count: usize,
     pub derivation_record_count: usize,
     pub source: &'static str,
@@ -2008,7 +2028,7 @@ impl PoaSignalIngressLimits {
 /// operator runs `set-passphrase` MUST NOT be able to drive any endpoint.
 async fn require_auth(
     State(state): State<NodeState>,
-    req: Request<axum::body::Body>,
+    mut req: Request<axum::body::Body>,
     next: middleware::Next,
 ) -> Result<Response, StatusCode> {
     let s = state.read().await;
@@ -2062,6 +2082,27 @@ async fn require_auth(
             // Constant-time comparison to prevent timing attacks on the bearer token.
             if token.as_bytes().ct_eq(expected_token.as_bytes()).into() {
                 Ok(next.run(req).await)
+            } else if token.starts_with("em2_")
+                && req.method() == Method::POST
+                && matches!(
+                    req.uri().path(),
+                    "/turns/submit" | "/api/turns/submit-signed"
+                )
+            {
+                // Authenticate here; clear every semantic caveat against the decoded
+                // turn below. No other operator route accepts attenuated tokens.
+                if dregg_macaroon::Macaroon::decode(token)
+                    .and_then(|m| m.verify(&expected_token_bytes, &[]))
+                    .is_err()
+                {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+                let credential = token.to_owned();
+                req.extensions_mut().insert(IngressCredential {
+                    key: expected_token_bytes,
+                    token: credential,
+                });
+                Ok(next.run(req).await)
             } else {
                 Err(StatusCode::UNAUTHORIZED)
             }
@@ -2071,6 +2112,50 @@ async fn require_auth(
             Err(StatusCode::UNAUTHORIZED)
         }
     }
+}
+
+#[derive(Clone)]
+struct IngressCredential {
+    key: [u8; 32],
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct MintIngressRequest {
+    agent: String,
+    topic: String,
+    expires: u64,
+}
+
+async fn mint_ingress_bearer(
+    State(state): State<NodeState>,
+    Json(req): Json<MintIngressRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let agent: [u8; 32] = hex::decode(&req.agent)
+        .ok()
+        .and_then(|v| v.try_into().ok())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .as_secs();
+    if req.expires <= now {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let s = state.read().await;
+    let seed = s.bearer_seed.ok_or(StatusCode::FORBIDDEN)?;
+    let key = blake3::derive_key("dregg-api-bearer-v1", &seed);
+    let token = dregg_macaroon::ingress::mint(
+        &key,
+        agent,
+        dregg_turn::action::symbol(&req.topic),
+        req.expires,
+    )
+    .encode()
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(
+        serde_json::json!({"token": token, "expires": req.expires}),
+    ))
 }
 
 // =============================================================================
@@ -2711,8 +2796,8 @@ pub fn router_with_cors(
             "/turns/submit",
             post({
                 let limiter = turn_limiter.clone();
-                move |connect_info, headers, state, body| {
-                    post_submit_signed_turn(connect_info, headers, state, body, limiter)
+                move |credential, connect_info, headers, state, body| {
+                    post_submit_signed_turn(credential, connect_info, headers, state, body, limiter)
                 }
             }),
         )
@@ -2733,6 +2818,7 @@ pub fn router_with_cors(
         .route("/cells/make-sovereign", post(post_make_sovereign))
         .route("/programs/deploy", post(post_deploy_program))
         .route("/turns/bearer-auth", post(post_bearer_auth))
+        .route("/api/auth/mint-ingress", post(mint_ingress_bearer))
         // ⚑ DELETED 2026-08-06: `/proofs/compose` and `/turns/peer-exchange`.
         // Both answered `success: true` over inputs nothing read.
         //
@@ -2852,8 +2938,8 @@ pub fn router_with_cors(
             "/api/turns/submit-signed",
             post({
                 let limiter = turn_limiter.clone();
-                move |connect_info, headers, state, body| {
-                    post_submit_signed_turn(connect_info, headers, state, body, limiter)
+                move |credential, connect_info, headers, state, body| {
+                    post_submit_signed_turn(credential, connect_info, headers, state, body, limiter)
                 }
             }),
         )
@@ -4645,6 +4731,7 @@ async fn get_starbridge_receipts(
                 effects_hash: hex_encode(&r.effects_hash),
                 federation_id: hex_encode(&r.federation_id),
                 emitted_event_count: r.emitted_events.len(),
+                emitted_events: r.emitted_events.iter().map(starbridge_event_info).collect(),
                 routing_directive_count: r.routing_directives.len(),
                 derivation_record_count: r.derivation_records.len(),
                 source: "receipt_chain",
@@ -5720,6 +5807,32 @@ async fn post_poa_signal_claim(
     submit_signed_turn(state, signed).await
 }
 
+// Balance deltas are another mutation channel, separate from Effect::Transfer.
+// Empty actions must not disappear while flattening the forest.
+fn ingress_turn_effects(turn: &Turn) -> Vec<Option<([u8; 32], [u8; 32])>> {
+    turn.call_forest
+        .iter_dfs()
+        .flat_map(|tree| {
+            if tree.action.target != turn.agent
+                || tree.action.balance_change.unwrap_or(0) != 0
+                || tree.action.effects.is_empty()
+            {
+                return vec![None];
+            }
+            tree.action
+                .effects
+                .iter()
+                .map(|effect| match effect {
+                    dregg_turn::action::Effect::EmitEvent { cell, event } => {
+                        Some((cell.0, event.topic))
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// POST /turns/submit — accept a caller-signed canonical `SignedTurn`.
 ///
 /// Wire format: `Content-Type: application/octet-stream`, body =
@@ -5727,6 +5840,7 @@ async fn post_poa_signal_claim(
 /// used by rich clients that build app actions with `AppCipherclerk` and need
 /// the node to execute, gossip, and order them without re-signing as the node.
 async fn post_submit_signed_turn(
+    credential: Option<axum::Extension<IngressCredential>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
     State(state): State<NodeState>,
@@ -5743,6 +5857,31 @@ async fn post_submit_signed_turn(
         Err(_) => return Err(StatusCode::BAD_REQUEST),
     };
 
+    if let Some(axum::Extension(credential)) = credential {
+        let effects = ingress_turn_effects(&signed.turn);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .as_secs();
+        if let Err(caveat) = dregg_macaroon::ingress::authorize(
+            &credential.key,
+            &credential.token,
+            &signed.turn.agent.0,
+            &effects,
+            now,
+        ) {
+            return Ok(Json(SubmitSignedTurnResponse {
+                accepted: false,
+                turn_hash: Some(hex_encode(&signed.turn.hash())),
+                signer: Some(hex_encode(&signed.signer.0)),
+                action_count: signed.turn.call_forest.action_count(),
+                proof_status: ActivityProofStatus::NotCommitted,
+                has_witness: false,
+                witness_count: 0,
+                error: Some(format!("ingress-caveat-failed:{caveat}")),
+            }));
+        }
+    }
     submit_signed_turn(state, signed).await
 }
 
@@ -10995,6 +11134,261 @@ struct QueueAtomicTxResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ingress_operator_balance_and_empty_action_cannot_hide() {
+        let agent = gate_actor();
+        let topic = [3; 32];
+        let turn = gate_turn_with(vec![Effect::EmitEvent {
+            cell: agent,
+            event: dregg_turn::Event::new(topic, vec![]),
+        }]);
+        let action = turn.call_forest.iter_dfs().next().unwrap().action.clone();
+        for balance in [Some(-1), Some(1)] {
+            let mut changed = turn.clone();
+            let mut bad = action.clone();
+            bad.balance_change = balance;
+            changed.call_forest = CallForest::new();
+            changed.call_forest.add_root(bad);
+            assert!(ingress_turn_effects(&changed).contains(&None));
+        }
+        let mut changed = turn.clone();
+        let mut empty = action;
+        empty.effects.clear();
+        changed.call_forest.add_root(empty);
+        assert!(ingress_turn_effects(&changed).contains(&None));
+        assert_eq!(ingress_turn_effects(&turn), vec![Some((agent.0, topic))]);
+    }
+
+    #[tokio::test]
+    async fn ingress_operator_full_bearer_and_mint_boundary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = NodeState::new(tmp.path(), vec![]).unwrap();
+        let seed = [0xb7; 32];
+        state.write().await.bearer_seed = Some(seed);
+        let app = Router::new()
+            .route("/api/auth/mint-ingress", post(mint_ingress_bearer))
+            .route("/operator", post(|| async { StatusCode::NO_CONTENT }))
+            .route_layer(middleware::from_fn_with_state(state.clone(), require_auth))
+            .with_state(state);
+        let full = api_bearer_token(seed);
+        let token = dregg_macaroon::ingress::mint(
+            &blake3::derive_key("dregg-api-bearer-v1", &seed),
+            [2; 32],
+            [3; 32],
+            u64::MAX,
+        )
+        .encode()
+        .unwrap();
+        for (bearer, expected) in [
+            (&full, StatusCode::NO_CONTENT),
+            (&token, StatusCode::UNAUTHORIZED),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/operator")
+                        .header("authorization", format!("Bearer {bearer}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        for (bearer, expected) in [(&full, StatusCode::OK), (&token, StatusCode::UNAUTHORIZED)] {
+            let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/auth/mint-ingress")
+                .header("authorization",format!("Bearer {bearer}"))
+                .header("content-type","application/json")
+                .body(Body::from(serde_json::json!({"agent":hex::encode([2;32]),"topic":"audit","expires":u64::MAX}).to_string())).unwrap()).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn ingress_operator_caveats_check_decoded_turn_before_admission() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = NodeState::new(tmp.path(), vec![]).unwrap();
+        let seed = [0xb7; 32];
+        state.write().await.bearer_seed = Some(seed);
+        state.write().await.unlocked = true;
+        let key = blake3::derive_key("dregg-api-bearer-v1", &seed);
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+        let agent = gate_actor();
+        let topic = dregg_turn::action::symbol("audit");
+        let event = Effect::EmitEvent {
+            cell: agent,
+            event: dregg_turn::Event::new(topic, vec![]),
+        };
+        let token = dregg_macaroon::ingress::mint(&key, agent.0, topic, u64::MAX)
+            .encode()
+            .unwrap();
+        let cases = [
+            (
+                dregg_macaroon::ingress::mint(&key, [9; 32], topic, u64::MAX)
+                    .encode()
+                    .unwrap(),
+                vec![event.clone()],
+                "agent",
+            ),
+            (
+                token.clone(),
+                vec![Effect::EmitEvent {
+                    cell: agent,
+                    event: dregg_turn::Event::new([9; 32], vec![]),
+                }],
+                "topic",
+            ),
+            (token.clone(), vec![], "effect"),
+            (
+                token.clone(),
+                vec![Effect::Transfer {
+                    from: agent,
+                    to: gate_other(),
+                    amount: 1,
+                }],
+                "effect",
+            ),
+            (
+                dregg_macaroon::ingress::mint(&key, agent.0, topic, 0)
+                    .encode()
+                    .unwrap(),
+                vec![event.clone()],
+                "expires",
+            ),
+            (
+                dregg_macaroon::ingress::mint(&[8; 32], agent.0, topic, u64::MAX)
+                    .encode()
+                    .unwrap(),
+                vec![event],
+                "macaroon-signature",
+            ),
+        ];
+        for path in ["/turns/submit", "/api/turns/submit-signed"] {
+            for (token, effects, caveat) in &cases {
+                let signed = SignedTurn {
+                    turn: gate_turn_with(effects.clone()),
+                    signer: dregg_types::PublicKey([0; 32]),
+                    signature: dregg_types::Signature([0; 64]),
+                    pq_signature: vec![],
+                    pq_signer: vec![],
+                };
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(path)
+                            .extension(ConnectInfo(
+                                "127.0.0.1:4444".parse::<std::net::SocketAddr>().unwrap(),
+                            ))
+                            .header("authorization", format!("Bearer {token}"))
+                            .header("content-type", "application/octet-stream")
+                            .body(Body::from(postcard::to_stdvec(&signed).unwrap()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                if *caveat == "macaroon-signature" {
+                    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                    continue;
+                }
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.into_body().collect().await.unwrap().to_bytes();
+                let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(json["accepted"], false);
+                assert_eq!(json["error"], format!("ingress-caveat-failed:{caveat}"));
+            }
+        }
+        // A valid transport credential cannot turn an invalid signature into authority.
+        let signed = SignedTurn {
+            turn: gate_turn_with(vec![Effect::EmitEvent {
+                cell: agent,
+                event: dregg_turn::Event::new(topic, vec![]),
+            }]),
+            signer: dregg_types::PublicKey([0; 32]),
+            signature: dregg_types::Signature([0; 64]),
+            pq_signature: vec![],
+            pq_signer: vec![],
+        };
+        for bearer in [token.clone(), api_bearer_token(seed)] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/turns/submit")
+                        .extension(ConnectInfo(
+                            "127.0.0.1:4444".parse::<std::net::SocketAddr>().unwrap(),
+                        ))
+                        .header("authorization", format!("Bearer {bearer}"))
+                        .body(Body::from(postcard::to_stdvec(&signed).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(json["accepted"], false);
+            assert!(
+                json["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("invalid turn signature")
+            );
+        }
+        // The similarly named unsigned endpoint must never accept this token.
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/turns/submit")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn ingress_operator_receipts_include_topics_and_data_digests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = NodeState::new(tmp.path(), vec![]).unwrap();
+        let event = dregg_turn::EmittedEvent {
+            cell: CellId([2; 32]),
+            topic: [3; 32],
+            data: vec![[4; 32]],
+        };
+        let receipt = dregg_turn::TurnReceipt {
+            emitted_events: vec![event.clone()],
+            ..Default::default()
+        };
+        state.write().await.cclerk.append_receipt(receipt).unwrap();
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+        let (status, body) = get_json(&app, "/api/starbridge/receipts").await;
+        assert_eq!(status, StatusCode::OK);
+        let mut encoded = b"dregg-api-event-data-v1".to_vec();
+        encoded.extend_from_slice(&1u64.to_le_bytes());
+        encoded.extend_from_slice(&[4; 32]);
+        assert_eq!(body[0]["emitted_events"][0]["topic"], hex::encode([3; 32]));
+        assert_eq!(
+            body[0]["emitted_events"][0]["data_digest"],
+            blake3::hash(&encoded).to_hex().to_string()
+        );
+        let mut altered = event.clone();
+        altered.data[0][0] ^= 1;
+        assert_ne!(
+            starbridge_event_info(&event).data_digest,
+            starbridge_event_info(&altered).data_digest
+        );
+    }
 
     /// ⚑ THE JOINER POLE OF `/status`. Measured 2026-08-09 on port 8465: a node
     /// that asked to join and was refused for 345 s reported `"healthy": true`

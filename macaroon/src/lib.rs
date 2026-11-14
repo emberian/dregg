@@ -78,3 +78,6 @@ pub use format::{decode_token, encode_token};
 #[cfg(feature = "crypto")]
 pub use macaroon::{Macaroon, Nonce, create_discharge};
 pub use resource::ResourceSet;
+
+#[cfg(feature = "crypto")]
+pub mod ingress;

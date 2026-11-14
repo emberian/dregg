@@ -396,3 +396,5 @@ fn hex_decode_bytes(s: &str) -> Result<Vec<u8>, ()> {
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ()))
         .collect()
 }
+
+pub mod merkle_anchor;

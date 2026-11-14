@@ -73,6 +73,7 @@ pub fn open_permissions() -> Permissions {
 pub struct TestNode {
     ledger: Ledger,
     receipts: Vec<TurnReceipt>,
+    submit_requests: usize,
     fed_id: [u8; 32],
     node_public_key: [u8; 32],
     /// Every `POST /api/faucet` body, in arrival order.
@@ -137,6 +138,7 @@ impl TestNode {
         let mut node = TestNode {
             ledger: Ledger::new(),
             receipts: Vec::new(),
+            submit_requests: 0,
             fed_id,
             node_public_key,
             faucet_requests: Vec::new(),
@@ -254,6 +256,11 @@ impl TestNode {
     /// Every `POST /api/faucet` body this node received, in arrival order.
     pub fn faucet_requests(&self) -> &[serde_json::Value] {
         &self.faucet_requests
+    }
+
+    /// Number of HTTP submit attempts, including refused requests.
+    pub fn submit_requests(&self) -> usize {
+        self.submit_requests
     }
 
     /// The receipt chain (one entry per committed turn).
@@ -703,6 +710,9 @@ fn route(
             }
             _ => (401, serde_json::json!({"error": "wrong passphrase"})),
         };
+    }
+    if method == "POST" && path == "/turns/submit" {
+        node.submit_requests += 1;
     }
     if method == "POST"
         && path == "/turns/submit"

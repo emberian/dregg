@@ -60,6 +60,10 @@ use dregg_sdk_net::client_sign::{
 use dregg_turn::action::Effect;
 use dregg_turn::{ComputronCosts, Turn, TurnExecutor};
 
+#[cfg(unix)]
+#[path = "client_sign_daemon/mod.rs"]
+mod signer_daemon;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn err(msg: String) -> Box<dyn std::error::Error> {
@@ -1061,6 +1065,12 @@ struct Flags {
     public_key: Option<String>,
     /// `verify-bytes --ml-dsa-public-key`: the ML-DSA-65 key the verifier expects.
     ml_dsa_public_key: Option<String>,
+    merkle_proof: Option<String>,
+    socket: Option<String>,
+    batch_window_ms: u64,
+    max_batch: usize,
+    expires: Option<u64>,
+    agent: Option<String>,
     rest: Vec<String>,
 }
 
@@ -1100,6 +1110,12 @@ impl Flags {
             sig: None,
             public_key: None,
             ml_dsa_public_key: None,
+            merkle_proof: None,
+            socket: None,
+            batch_window_ms: 100,
+            max_batch: 256,
+            expires: None,
+            agent: None,
             rest: Vec::new(),
         }
     }
@@ -1156,6 +1172,12 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
                 .ok_or_else(|| err(format!("{name} requires a value")))
         };
         match flag.as_str() {
+            "--merkle-proof" => f.merkle_proof = Some(val("--merkle-proof")?),
+            "--socket" => f.socket = Some(val("--socket")?),
+            "--batch-window-ms" => f.batch_window_ms = val("--batch-window-ms")?.parse()?,
+            "--max-batch" => f.max_batch = val("--max-batch")?.parse()?,
+            "--agent" => f.agent = Some(val("--agent")?),
+            "--expires" => f.expires = Some(val("--expires")?.parse()?),
             "--node-url" => f.node_url = val("--node-url")?,
             "--profile" => f.profile = Some(val("--profile")?),
             "--token-file" => f.token_file = Some(val("--token-file")?),
@@ -1234,6 +1256,10 @@ const USAGE: &str = "dregg-client-sign: commit CLIENT-SIGNED turns to a dregg no
        ensure at least N computrons, then commit ONE hybrid-signed EmitEvent; payload\n\
        rides in the signed turn (memo + event data words). --witness-out writes the\n\
        signed turn bytes (FILE must not exist): the witness verify-anchor checks\n\
+  daemon --socket PATH --batch-window-ms N [--max-batch K] [--profile P] [--topic S]\n\
+       accept JSON lines {id, topic, digest} (digest hex32); journal retries by id\n\
+  mint-bearer --expires UNIX [--agent HEX | --profile P] [--topic S] [--token-file F]\n\
+       mint an ingress-only macaroon using the full operator bearer\n\
   head [--profile P] [--node-url U]\n\
        print the head a send turn of this profile is built from (nonce, the node's\n\
        height, this agent's receipt head, federation id, fee class). GETs only\n\
@@ -1249,7 +1275,7 @@ const USAGE: &str = "dregg-client-sign: commit CLIENT-SIGNED turns to a dregg no
        for exactly the file's turn hash is on the chain; a refusal names that hash.\n\
        Safe to run again with the same file: an already-receipted turn is reported\n\
        and not posted, and the same bytes commit at most once\n\
-  verify-anchor --witness FILE [--topic S] [--turn-hash HEX] [--node-url U | --offline]\n\
+  verify-anchor --witness FILE [--merkle-proof FILE] [--topic S] [--turn-hash HEX] [--node-url U | --offline]\n\
        [--committee FILE] [--require-committee] (PAYLOAD... | --payload-file FILE)\n\
        check that a finalized turn anchored this topic and payload. The witness alone\n\
        binds them to a turn hash (`binds`); the node's receipt for that hash is the\n\
@@ -1483,6 +1509,59 @@ async fn cmd_send(f: Flags) -> Result<()> {
             "witness": f.witness_out,
         })
     );
+    Ok(())
+}
+
+/// Keep one profile warm and serialize its batched nonce stream.
+async fn cmd_daemon(f: Flags) -> Result<()> {
+    #[cfg(unix)]
+    {
+        signer_daemon::run(f).await
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = f;
+        Err(err("daemon requires Unix domain sockets".into()))
+    }
+}
+
+fn mint_agent(f: &Flags) -> Result<[u8; 32]> {
+    if let Some(agent) = &f.agent {
+        if f.profile.is_some() {
+            return Err(err(
+                "mint-bearer takes --agent or --profile, not both".into()
+            ));
+        }
+        parse_hash_hex("--agent", agent)
+    } else {
+        let (_, clerk) = resolve_clerk(f.profile.as_deref(), false)?;
+        Ok(*clerk.cell_id("default").as_bytes())
+    }
+}
+
+async fn cmd_mint_bearer(f: Flags) -> Result<()> {
+    no_positionals(&f, "mint-bearer")?;
+    let agent = mint_agent(&f)?;
+    let http = reqwest::Client::new();
+    let token = ensure_token(&http, &f.node_url, f.bearer_flags())
+        .await?
+        .ok_or_else(|| err("mint-bearer requires full bearer".into()))?;
+    let expires = f
+        .expires
+        .ok_or_else(|| err("mint-bearer requires --expires UNIX".into()))?;
+    let response = http
+        .post(format!("{}/api/auth/mint-ingress", f.node_url))
+        .bearer_auth(token)
+        .json(&serde_json::json!({
+            "agent": hex::encode(agent),
+            "topic": f.topic, "expires": expires,
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+    println!("{response}");
     Ok(())
 }
 
@@ -2038,7 +2117,20 @@ async fn cmd_verify_anchor(f: Flags) -> Result<()> {
 }
 
 async fn verify_anchor(f: &Flags) -> Result<serde_json::Value> {
-    let payload = payload_of(f, "verify-anchor")?;
+    let (payload, merkle_proof) = if let Some(path) = &f.merkle_proof {
+        no_positionals(f, "verify-anchor --merkle-proof")?;
+        if f.payload_file.is_some() {
+            return Err(err("proof and payload are mutually exclusive".into()));
+        }
+        let proof: dregg_sdk_net::merkle_anchor::Proof =
+            serde_json::from_slice(&std::fs::read(path)?)?;
+        proof
+            .verify()
+            .map_err(|e| err(format!("merkle-proof:{e}")))?;
+        (hex::encode(proof.root), Some(proof))
+    } else {
+        (payload_of(f, "verify-anchor")?, None)
+    };
     let witness_path = f
         .witness
         .as_deref()
@@ -2077,6 +2169,9 @@ async fn verify_anchor(f: &Flags) -> Result<serde_json::Value> {
         "agent_cell": hex::encode(facts.agent.as_bytes()),
         "nonce": facts.nonce,
     });
+    if let Some(proof) = merkle_proof {
+        out["merkle_proof"] = serde_json::to_value(proof)?;
+    }
     if f.offline {
         out["finalized"] = Finalized::NotChecked.word().into();
         return Ok(out);
@@ -2340,6 +2435,8 @@ async fn main() {
             "send" => cmd_send(flags).await,
             "transfer" => cmd_transfer(flags).await,
             "verify-anchor" => cmd_verify_anchor(flags).await,
+            "daemon" => cmd_daemon(flags).await,
+            "mint-bearer" => cmd_mint_bearer(flags).await,
             "head" => cmd_head(flags).await,
             "prepare" => cmd_prepare(flags).await,
             "submit" => cmd_submit(flags).await,
@@ -2368,6 +2465,54 @@ mod tests {
     use dregg_turn::{Action, Authorization, CallForest, DelegationMode, turn::Turn};
 
     use super::*;
+
+    #[test]
+    fn mint_bearer_explicit_agent_does_not_need_profile_keys() {
+        let mut flags = parse_flags(vec!["--agent".into(), "ab".repeat(32)]).unwrap();
+        assert_eq!(mint_agent(&flags).unwrap(), [0xab; 32]);
+        flags.profile = Some("unused-profile".into());
+        assert!(mint_agent(&flags).is_err());
+        flags.profile = None;
+        flags.agent = Some("not-a-cell".into());
+        assert!(mint_agent(&flags).is_err());
+    }
+
+    #[tokio::test]
+    async fn merkle_anchor_cli_checks_the_proof_before_loading_the_witness() {
+        use dregg_sdk_net::merkle_anchor::{Leaf, proofs};
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("proof.json");
+        let mut proof = proofs(&[Leaf {
+            topic: "document".into(),
+            digest: [1; 32],
+        }])
+        .unwrap()
+        .remove(0);
+        std::fs::write(&path, serde_json::to_vec(&proof).unwrap()).unwrap();
+        let flags = parse_flags(vec![
+            "--merkle-proof".into(),
+            path.to_str().unwrap().into(),
+            "--topic".into(),
+            "anchors".into(),
+        ])
+        .unwrap();
+        assert!(
+            verify_anchor(&flags)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("requires --witness")
+        );
+        proof.root[0] ^= 1;
+        std::fs::write(&path, serde_json::to_vec(&proof).unwrap()).unwrap();
+        assert!(
+            verify_anchor(&flags)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("merkle-proof:root")
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn with_no_bearer_source_the_send_goes_on_without_one() {
@@ -3519,6 +3664,102 @@ mod tests {
                 flags.witness = Some(witness.to_string());
                 flags
             }
+        }
+
+        /// Run on a host with the verified ML-DSA archive, with
+        /// DREGG_TEST_REQUIRE_LEAN=1. This counts actual HTTP POSTs.
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn daemon_composed_one_post_proofs_exact_retry_and_interrupted_window() {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+            async fn connect(socket: &str) -> tokio::net::UnixStream {
+                tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        if let Ok(stream) = tokio::net::UnixStream::connect(socket).await {
+                            return stream;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("daemon socket becomes available")
+            }
+            async fn rpc(socket: &str, id: &str) -> serde_json::Value {
+                tokio::time::timeout(std::time::Duration::from_secs(40), async {
+                    let mut stream = connect(socket).await;
+                    let request =
+                        serde_json::json!({"id":id,"topic":"document","digest":"11".repeat(32)});
+                    stream
+                        .write_all(format!("{request}\n").as_bytes())
+                        .await
+                        .unwrap();
+                    let mut response = String::new();
+                    tokio::io::BufReader::new(stream)
+                        .read_line(&mut response)
+                        .await
+                        .unwrap();
+                    serde_json::from_str(&response).unwrap()
+                })
+                .await
+                .expect("daemon response")
+            }
+            fn start(flags: Flags) -> tokio::task::JoinHandle<std::result::Result<(), String>> {
+                tokio::task::spawn_local(async move {
+                    signer_daemon::run(flags).await.map_err(|e| e.to_string())
+                })
+            }
+            let Some(world) = World::new("verified ML-DSA cores (daemon composed)", |n| n).await
+            else {
+                return skipped("daemon composed requires verified signing cores");
+            };
+            let socket = world.path("daemon.sock");
+            let mut flags = world.flags("anchors", "");
+            flags.rest.clear();
+            flags.socket = Some(socket.clone());
+            flags.max_batch = 2;
+            flags.batch_window_ms = 500;
+            tokio::task::LocalSet::new().run_until(async {
+                let task = start(flags.clone());
+                let (a,b) = tokio::join!(rpc(&socket,"first"),rpc(&socket,"second"));
+                assert_eq!(a["outcome"],"receipted"); assert_eq!(b["outcome"],"receipted");
+                assert_eq!(a["turn_hash"],b["turn_hash"]); assert_ne!(a["leaf_index"],b["leaf_index"]);
+                {
+                    let node = world.spawned.lock().await;
+                    assert_eq!(node.submit_requests(),1); assert_eq!(node.receipts().len(),1);
+                    assert_eq!(node.receipts()[0].emitted_events.len(),1);
+                }
+                for (i,response) in [&a,&b].into_iter().enumerate() {
+                    let path = world.path(&format!("proof-{i}.json"));
+                    std::fs::write(&path,serde_json::to_vec(&response["merkle_proof"]).unwrap()).unwrap();
+                    let mut verify = world.verify_flags("anchors","",response["witness"].as_str().unwrap());
+                    verify.rest.clear(); verify.merkle_proof = Some(path); verify.offline = true;
+                    assert_eq!(verify_anchor(&verify).await.unwrap()["binds"],true);
+                }
+                assert_eq!(rpc(&socket,"first").await,a);
+                assert_eq!(world.spawned.lock().await.submit_requests(),1);
+                task.abort(); let _ = task.await;
+                let mut pending_flags = flags.clone(); pending_flags.batch_window_ms = 60_000;
+                let task = start(pending_flags);
+                assert_eq!(rpc(&socket,"second").await,b);
+                let mut pending = connect(&socket).await;
+                let request = serde_json::json!({"id":"pending","topic":"document","digest":"11".repeat(32)});
+                pending.write_all(format!("{request}\n").as_bytes()).await.unwrap();
+                let journal = profiles::profiles_dir().join(format!("daemon-{}",hex::encode(world.clerk.public_key().0))).join("journal.json");
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        let stored:serde_json::Value = serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+                        if stored.get("pending").is_some() { break; }
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                }).await.expect("pending request reaches durable journal");
+                task.abort(); let _ = task.await; drop(pending);
+                let task = start(flags);
+                assert_eq!(rpc(&socket,"pending").await["outcome"],"undecided");
+                assert_eq!(rpc(&socket,"new-batch").await["error"],"profile-has-undecided-batch");
+                assert_eq!(world.spawned.lock().await.submit_requests(),1);
+                task.abort(); let _ = task.await;
+            }).await;
+            world.spawned.shutdown();
         }
 
         const COMMITTEE: [[u8; 32]; 2] = [[0xC1; 32], [0xC2; 32]];
