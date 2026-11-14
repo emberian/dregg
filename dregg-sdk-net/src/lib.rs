@@ -47,6 +47,7 @@ dregg_pq_testkit::install_at_process_start!();
 pub mod captp_client;
 pub mod channels;
 pub mod client;
+pub mod client_sign;
 pub mod deos_server;
 pub mod discharge;
 pub mod discovery;

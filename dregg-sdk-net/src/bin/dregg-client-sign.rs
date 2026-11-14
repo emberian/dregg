@@ -39,7 +39,11 @@
 use dregg_sdk::AgentCipherclerk;
 use dregg_sdk::profiles;
 use dregg_sdk_net::NodeHttpClient;
-use dregg_turn::action::{Action, Authorization, Effect, Event, symbol};
+use dregg_sdk_net::client_sign::{
+    Head, TURN_VALID_FOR_HEIGHTS, WitnessFacts, chat_fee, check_anchor_discloses, check_witness,
+    prepare_send,
+};
+use dregg_turn::action::Effect;
 use dregg_turn::{ComputronCosts, Turn, TurnExecutor};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
@@ -48,39 +52,14 @@ fn err(msg: String) -> Box<dyn std::error::Error> {
     msg.into()
 }
 
-/// The low-lane payload packing: 8 bytes per 32-byte word, in `word[24..32]`.
-/// A value confined to the low 8 bytes is a valid element of ANY field the
-/// executors interpret words in (< 2^64), the same discipline the node's
-/// Lean-authoritative state projection enforces for `SetField` lanes.
-const LANE_LO: usize = 24;
-const LANE_BYTES: usize = 8;
 /// The node accepts at most 10,000 computrons in one funded faucet request.
 const FAUCET_MAX_GRANT: u64 = 10_000;
 /// One refill must cover a bounded burst inside the faucet's 60-second per-cell window.
 const SEND_FUNDING_HORIZON: u64 = 6;
-/// How many block heights past the node's `latest_height` a signed turn stays
-/// admissible. `Turn::valid_until` is a block HEIGHT (the unit the verified
-/// kernel reads, `Exec/Admission.lean`), so both verbs stamp
-/// `latest_height + TURN_VALID_FOR_HEIGHTS`: a transfer refused for a reason
-/// that leaves the nonce and head unchanged cannot be replayed once the node
-/// has moved this far on. The node's height advances on turn-bearing finality,
-/// so the window is counted in committed heights, not wall-clock time.
-const TURN_VALID_FOR_HEIGHTS: u64 = 64;
 /// The exit status when this build's linked archive does not export the
 /// verified ML-DSA sign or keygen core, so no turn can be signed or identity
 /// created. Distinct from `1` (a refusal or UNKNOWN) and `2` (usage).
 const EXIT_NO_VERIFIED_PQ_CORE: i32 = 3;
-
-fn pack_payload(payload: &[u8]) -> Vec<[u8; 32]> {
-    payload
-        .chunks(LANE_BYTES)
-        .map(|chunk| {
-            let mut word = [0u8; 32];
-            word[LANE_LO..LANE_LO + chunk.len()].copy_from_slice(chunk);
-            word
-        })
-        .collect()
-}
 
 /// Parse a 32-byte cell id in the 64-character lowercase hex every dregg
 /// surface spells cells with. A short, long, odd-length or non-hex value is a
@@ -99,6 +78,18 @@ fn parse_cell_hex(what: &str, value: &str) -> Result<dregg_sdk::CellId> {
         ))
     })?;
     Ok(dregg_sdk::CellId(id))
+}
+
+/// Parse a 32-byte hash in 64 hex characters.
+fn parse_hash_hex(what: &str, value: &str) -> Result<[u8; 32]> {
+    let bytes = hex::decode(value.trim())
+        .map_err(|e| err(format!("{what} must be 64 hex characters: {e}")))?;
+    bytes.as_slice().try_into().map_err(|_| {
+        err(format!(
+            "{what} must be 64 hex characters; got {} bytes",
+            bytes.len()
+        ))
+    })
 }
 
 /// Resolve a transfer's destination against the signer's own cell, returning
@@ -154,78 +145,6 @@ fn build_transfer_turn(
     turn.memo = None;
     turn.valid_until = Some(valid_until);
     turn
-}
-
-/// The chat send's single action, UNSIGNED: one `EmitEvent` on `cell`.
-fn chat_action(cell: dregg_sdk::CellId, topic: &str, payload: &str) -> Action {
-    let effect = Effect::EmitEvent {
-        cell,
-        event: Event {
-            topic: symbol(topic),
-            data: pack_payload(payload.as_bytes()),
-        },
-    };
-    dregg_sdk::raw::unsigned_action_named(cell, topic, vec![effect])
-}
-
-/// Wrap an already-authorized chat action in the send's turn envelope.
-/// No signing happens here.
-fn chat_turn(
-    clerk: &AgentCipherclerk,
-    cell: dregg_sdk::CellId,
-    action: Action,
-    nonce: u64,
-    payload: &str,
-    valid_until: i64,
-) -> Turn {
-    let mut turn = clerk.make_turn_with_actions(vec![action]);
-    turn.agent = cell;
-    turn.nonce = nonce;
-    turn.memo = Some(payload.to_string());
-    turn.valid_until = Some(valid_until);
-    turn
-}
-
-fn build_chat_turn(
-    clerk: &AgentCipherclerk,
-    cell: dregg_sdk::CellId,
-    topic: &str,
-    payload: &str,
-    federation_id: &[u8; 32],
-    nonce: u64,
-    valid_until: i64,
-) -> Turn {
-    let action = clerk.sign_action_hybrid(chat_action(cell, topic, payload), federation_id, nonce);
-    chat_turn(clerk, cell, action, nonce, payload, valid_until)
-}
-
-/// The fee `build_chat_turn` would declare, computed WITHOUT signing.
-///
-/// `TurnExecutor::estimate_cost` reads the coordination class (effects and
-/// `balance_change`), then per action `action_base`, the authorization
-/// VARIANT (`HybridSignature` costs `2 * signature_verify`) and each effect's
-/// cost. It never reads the nonce, the federation id, the memo, the deadline or
-/// any signature byte. So a `HybridSignature` with empty placeholder halves
-/// estimates exactly what the signed turn estimates, at any nonce. The test
-/// `unsigned_fee_estimate_equals_the_signed_turns_fee` holds that equality
-/// against a really signed turn, so a future fee rule that reads signature
-/// bytes fails there, not in production.
-fn chat_fee(
-    clerk: &AgentCipherclerk,
-    costs: ComputronCosts,
-    cell: dregg_sdk::CellId,
-    topic: &str,
-    payload: &str,
-) -> u64 {
-    let placeholder = Action {
-        authorization: Authorization::HybridSignature {
-            ed25519: [0u8; 64],
-            ml_dsa: Vec::new(),
-            ml_dsa_pk: Vec::new(),
-        },
-        ..chat_action(cell, topic, payload)
-    };
-    TurnExecutor::new(costs).estimate_cost(&chat_turn(clerk, cell, placeholder, 0, payload, 0))
 }
 
 /// The cost model the CLIENT estimates its declared `turn.fee` against: the
@@ -883,21 +802,76 @@ struct Flags {
     fund: u64,
     amount: Option<u64>,
     accept_tentative: bool,
+    /// `--payload-file`: the payload read from a file instead of argv.
+    payload_file: Option<String>,
+    /// `send --witness-out`: where the signed turn bytes are written.
+    witness_out: Option<String>,
+    /// `verify-anchor --witness`: the signed turn bytes to check.
+    witness: Option<String>,
+    /// `verify-anchor --turn-hash`: the hash the auditor already holds.
+    turn_hash: Option<String>,
+    /// `verify-anchor --committee`: a roster file the auditor trusts.
+    committee: Option<String>,
+    require_committee: bool,
+    offline: bool,
     rest: Vec<String>,
 }
 
+impl Flags {
+    fn defaults() -> Self {
+        Flags {
+            node_url: node_url_default(),
+            profile: None,
+            token_file: None,
+            topic: "client-sign".to_string(),
+            to: None,
+            fund: 5000,
+            amount: None,
+            accept_tentative: false,
+            payload_file: None,
+            witness_out: None,
+            witness: None,
+            turn_hash: None,
+            committee: None,
+            require_committee: false,
+            offline: false,
+            rest: Vec::new(),
+        }
+    }
+}
+
+/// The payload of a verb that carries one: the positional words joined by one
+/// space, or the exact contents of `--payload-file`. Never both, never
+/// neither. The payload is the turn memo, so it must be UTF-8.
+fn payload_of(f: &Flags, verb: &str) -> Result<String> {
+    match (&f.payload_file, f.rest.is_empty()) {
+        (Some(_), false) => Err(err(format!(
+            "{verb} takes the payload from --payload-file or from the command line, not both"
+        ))),
+        (Some(path), true) => std::fs::read_to_string(path)
+            .map_err(|e| err(format!("read the payload file {path}: {e}"))),
+        (None, false) => Ok(f.rest.join(" ")),
+        (None, true) => Err(err(format!("{verb} requires a payload"))),
+    }
+}
+
+/// Write `bytes` to a file that must not exist yet. A witness or a prepared
+/// turn is written once; overwriting one silently would let a retry replace
+/// the bytes a caller already bound a hash to.
+fn write_new_file(path: &str, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| err(format!("create {path} (it must not already exist): {e}")))?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| err(format!("write {path}: {e}")))
+}
+
 fn parse_flags(argv: Vec<String>) -> Result<Flags> {
-    let mut f = Flags {
-        node_url: node_url_default(),
-        profile: None,
-        token_file: None,
-        topic: "client-sign".to_string(),
-        to: None,
-        fund: 5000,
-        amount: None,
-        accept_tentative: false,
-        rest: Vec::new(),
-    };
+    let mut f = Flags::defaults();
     let mut it = argv.into_iter();
     while let Some(flag) = it.next() {
         let mut val = |name: &str| {
@@ -933,6 +907,13 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
                 )
             }
             "--accept-tentative" => f.accept_tentative = true,
+            "--payload-file" => f.payload_file = Some(val("--payload-file")?),
+            "--witness-out" => f.witness_out = Some(val("--witness-out")?),
+            "--witness" => f.witness = Some(val("--witness")?),
+            "--turn-hash" => f.turn_hash = Some(val("--turn-hash")?),
+            "--committee" => f.committee = Some(val("--committee")?),
+            "--require-committee" => f.require_committee = true,
+            "--offline" => f.offline = true,
             "--help" | "-h" => {
                 eprintln!("{USAGE}");
                 std::process::exit(0);
@@ -947,9 +928,18 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
 const USAGE: &str = "dregg-client-sign: commit CLIENT-SIGNED turns to a dregg node as a named profile\n\n\
   join [--profile P] [--node-url U] [--fund N]\n\
        ensure the profile identity + a cell funded to at least N computrons\n\
-  send [--profile P] [--node-url U] [--token-file F] [--fund N] [--topic S] PAYLOAD...\n\
+  send [--profile P] [--node-url U] [--token-file F] [--fund N] [--topic S]\n\
+       [--witness-out FILE] (PAYLOAD... | --payload-file FILE)\n\
        ensure at least N computrons, then commit ONE hybrid-signed EmitEvent; payload\n\
-       rides in the signed turn (memo + event data words)\n\
+       rides in the signed turn (memo + event data words). --witness-out writes the\n\
+       signed turn bytes (FILE must not exist): the witness verify-anchor checks\n\
+  verify-anchor --witness FILE [--topic S] [--turn-hash HEX] [--node-url U | --offline]\n\
+       [--committee FILE] [--require-committee] (PAYLOAD... | --payload-file FILE)\n\
+       check that a finalized turn anchored this topic and payload. The witness alone\n\
+       binds them to a turn hash (`binds`); the node's receipt for that hash is the\n\
+       node's word (`finalized: node-asserted`); a turn anchor verified against the\n\
+       roster in --committee is the committee's (`finalized: committee-verified`).\n\
+       --committee FILE is {\"federation_id\": hex, \"threshold\": n, \"ed25519\": [hex]}\n\
   transfer --to CELL_HEX --amount N [--profile P] [--node-url U] [--token-file F]\n\
            [--fund N] [--accept-tentative]\n\
        move N computrons from the profile's own cell to another cell. Exit 0 only\n\
@@ -1024,10 +1014,7 @@ async fn cmd_join(f: Flags) -> Result<()> {
 }
 
 async fn cmd_send(f: Flags) -> Result<()> {
-    if f.rest.is_empty() {
-        return Err(err("send requires a payload".to_string()));
-    }
-    let payload = f.rest.join(" ");
+    let payload = payload_of(&f, "send")?;
     let http = reqwest::Client::new();
     let node = NodeHttpClient::new(&f.node_url);
     let (name, clerk) = resolve_clerk(f.profile.as_deref(), false)?;
@@ -1048,15 +1035,11 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // profile can immediately receive the fee-sized positive top-up below.
     let presence = ensure_cell(&http, &f.node_url, &cell_hex, 0, 0).await?;
 
-    let federation_id = node
-        .fetch_executor_federation_id()
-        .await
-        .map_err(|e| err(format!("fetch executor federation id: {e}")))?;
     // The fee depends on neither the nonce nor any signature byte (see
     // `chat_fee`), so it is sized here without signing. The one signed build
-    // happens below, at the nonce fetched after funding.
+    // happens below, from the head fetched after funding.
     let costs = fee_cost_model(&node).await?;
-    let fee = chat_fee(&clerk, costs.clone(), cell, &f.topic, &payload);
+    let fee = chat_fee(&clerk, costs, cell, &f.topic, &payload);
 
     // Funding is SEND correctness, not a one-time join convenience. One grant
     // reserves a bounded six-send burst inside the faucet's 60-second window;
@@ -1072,43 +1055,18 @@ async fn cmd_send(f: Flags) -> Result<()> {
     let funding = ensure_cell(&http, &f.node_url, &cell_hex, fee, target).await?;
 
     // Funding can wait up to 10s and another same-profile sender can commit in
-    // that window. Fetch the nonce immediately before signing, because
-    // dregg-action-sig-v3 binds it.
-    let nonce = node
-        .fetch_cell_nonce(&cell)
-        .await
-        .map_err(|e| err(format!("fetch own-cell nonce after funding: {e}")))?;
-    let valid_until = turn_deadline(&node).await?;
-    let mut turn = build_chat_turn(
-        &clerk,
-        cell,
-        &f.topic,
-        &payload,
-        &federation_id,
-        nonce,
-        valid_until,
-    );
-    turn.fee = TurnExecutor::new(costs).estimate_cost(&turn);
-    if turn.fee > funding.balance {
+    // that window. The head (nonce, deadline height, this agent's own receipt
+    // head) is read immediately before signing, because the signatures bind it.
+    // From here the turn is `prepare_send`'s: the same function `prepare` runs.
+    let head = Head::fetch(&node, &cell).await.map_err(err)?;
+    let prepared = prepare_send(&clerk, &head, &f.topic, &payload).map_err(err)?;
+    if prepared.fee > funding.balance {
         return Err(err(format!(
             "final turn fee {} exceeds the observed funded balance {}",
-            turn.fee, funding.balance
+            prepared.fee, funding.balance
         )));
     }
-    // THE AGENT'S OWN RECEIPT HEAD, not the node-wide tip. The node admits a
-    // signed turn only when `previous_receipt_hash` equals the head of THIS
-    // agent's chain, and the node-wide tip is another seat's receipt whenever
-    // another seat committed since, so threading it is refused with "receipt
-    // chain mismatch" (see `NodeHttpClient::fetch_agent_receipt_head`).
-    turn.previous_receipt_hash = node
-        .fetch_agent_receipt_head(&cell)
-        .await
-        .map_err(|e| err(format!("fetch own-cell receipt head after funding: {e}")))?;
     let bearer = ensure_token(&http, &f.node_url, f.token_file.as_deref()).await?;
-
-    let signed = clerk.sign_turn(&turn);
-    let bytes =
-        postcard::to_stdvec(&signed).map_err(|e| err(format!("serialize SignedTurn: {e}")))?;
 
     // THE OPERATION'S IDENTITY IS COMPUTED HERE, FROM THE TURN THIS PROCESS
     // SIGNED, and never taken from the answer — the same rule the transfer
@@ -1122,11 +1080,19 @@ async fn cmd_send(f: Flags) -> Result<()> {
     // prints `sent: true` beside THIS turn's topic and payload. A cure for one
     // defect made another reachable, which is the cost of fixing an instance
     // and leaving its sibling.
-    let turn_hash = hex::encode(signed.turn.hash());
+    let turn_hash = hex::encode(prepared.turn_hash);
     let confirm_url = format!(
         "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
         f.node_url
     );
+
+    // THE WITNESS IS WRITTEN BEFORE THE SUBMISSION, so a caller whose process
+    // dies between the POST and the receipt still holds the bytes that prove
+    // what the turn carried. They are the bytes about to be submitted.
+    if let Some(path) = &f.witness_out {
+        write_new_file(path, &prepared.bytes)?;
+    }
+    let bytes = prepared.bytes;
 
     // EVERY EXIT FROM HERE ON IS UNKNOWN except a refusal that names this turn,
     // as in `cmd_transfer`. A send moves no value, but it pays a fee, so a blind
@@ -1137,20 +1103,18 @@ async fn cmd_send(f: Flags) -> Result<()> {
     if let Some(bearer) = &bearer {
         submit = submit.header("Authorization", format!("Bearer {bearer}"));
     }
-    let resp = submit
-        .body(bytes)
-        .send()
-        .await
-        .map_err(|e| {
-            unknown_after_submit(
-                format!("POST /turns/submit: {e}"),
-                Submitted::Send,
-                &confirm_url,
-            )
-        })?;
+    let resp = submit.body(bytes).send().await.map_err(|e| {
+        unknown_after_submit(
+            format!("POST /turns/submit: {e}"),
+            Submitted::Send,
+            &confirm_url,
+        )
+    })?;
     let status = resp.status();
     if refused_for_want_of_bearer(&bearer, status) {
-        return Err(err(format!("{NO_BEARER} (/turns/submit returned {status})")));
+        return Err(err(format!(
+            "{NO_BEARER} (/turns/submit returned {status})"
+        )));
     }
     if !status.is_success() {
         return Err(unknown_after_submit(
@@ -1221,6 +1185,7 @@ async fn cmd_send(f: Flags) -> Result<()> {
                     "receipt_hash": r.get("receipt_hash"),
                     "chain_index": r.get("chain_index"),
                     "finality": r.get("finality"),
+                    "witness": f.witness_out,
                 })
             );
             return Ok(());
@@ -1359,21 +1324,19 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
     if let Some(bearer) = &bearer {
         submit = submit.header("Authorization", format!("Bearer {bearer}"));
     }
-    let resp = submit
-        .body(bytes)
-        .send()
-        .await
-        .map_err(|e| {
-            // The bytes may have arrived and the ANSWER been lost. Ambiguous.
-            unknown_after_submit(
-                format!("POST /turns/submit: {e}"),
-                Submitted::Transfer { amount },
-                &confirm_url,
-            )
-        })?;
+    let resp = submit.body(bytes).send().await.map_err(|e| {
+        // The bytes may have arrived and the ANSWER been lost. Ambiguous.
+        unknown_after_submit(
+            format!("POST /turns/submit: {e}"),
+            Submitted::Transfer { amount },
+            &confirm_url,
+        )
+    })?;
     let status = resp.status();
     if refused_for_want_of_bearer(&bearer, status) {
-        return Err(err(format!("{NO_BEARER} (/turns/submit returned {status})")));
+        return Err(err(format!(
+            "{NO_BEARER} (/turns/submit returned {status})"
+        )));
     }
     if !status.is_success() {
         return Err(unknown_after_submit(
@@ -1483,6 +1446,283 @@ async fn cmd_transfer(f: Flags) -> Result<()> {
     ))
 }
 
+/// How strongly `verify-anchor` established that the witnessed turn finalized.
+#[derive(Debug, PartialEq, Eq)]
+enum Finalized {
+    /// `--offline`: no node was asked. The witness binds the payload to the
+    /// turn hash and nothing is said about finality.
+    NotChecked,
+    /// A node served a receipt row for exactly this turn hash. The node's word.
+    NodeAsserted,
+    /// A `TurnAnchorV1` verified against a committee roster, and the receipt
+    /// the committee signed lists the event.
+    CommitteeVerified,
+}
+
+impl Finalized {
+    fn word(&self) -> &'static str {
+        match self {
+            Finalized::NotChecked => "not-checked",
+            Finalized::NodeAsserted => "node-asserted",
+            Finalized::CommitteeVerified => "committee-verified",
+        }
+    }
+}
+
+/// Read a committee roster file: `{"federation_id": hex, "threshold": n,
+/// "ed25519": [hex, ...], "ml_dsa": [hex, ...]}` (`ml_dsa` optional, aligned
+/// with `ed25519` when present). This is the auditor's trust root, so every
+/// field is read strictly.
+fn read_committee(path: &str) -> Result<dregg_federation::turn_anchor::AnchorCommittee> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| err(format!("read the committee file {path}: {e}")))?;
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| err(format!("parse the committee file {path}: {e}")))?;
+    let key32 = |what: &str, value: &serde_json::Value| -> Result<[u8; 32]> {
+        let text = value
+            .as_str()
+            .ok_or_else(|| err(format!("committee {what} is not a hex string")))?;
+        let bytes = hex::decode(text).map_err(|e| err(format!("committee {what}: {e}")))?;
+        bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| err(format!("committee {what} is {} bytes, not 32", bytes.len())))
+    };
+    let federation_id = key32(
+        "federation_id",
+        v.get("federation_id").unwrap_or(&serde_json::Value::Null),
+    )?;
+    let threshold = v
+        .get("threshold")
+        .and_then(|t| t.as_u64())
+        .ok_or_else(|| err("committee threshold is not an unsigned integer".to_string()))?
+        as usize;
+    let ed25519 = v
+        .get("ed25519")
+        .and_then(|k| k.as_array())
+        .ok_or_else(|| err("committee ed25519 is not an array".to_string()))?
+        .iter()
+        .map(|k| key32("ed25519 key", k).map(dregg_sdk::PublicKey))
+        .collect::<Result<Vec<_>>>()?;
+    let ml_dsa = match v.get("ml_dsa") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(keys) => keys
+            .as_array()
+            .ok_or_else(|| err("committee ml_dsa is not an array".to_string()))?
+            .iter()
+            .map(|k| {
+                k.as_str()
+                    .ok_or_else(|| err("committee ml_dsa key is not a hex string".to_string()))
+                    .and_then(|t| {
+                        hex::decode(t).map_err(|e| err(format!("committee ml_dsa key: {e}")))
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    if ed25519.is_empty() || threshold == 0 || threshold > ed25519.len() {
+        return Err(err(format!(
+            "committee file {path} names {} members with threshold {threshold}: not a quorum",
+            ed25519.len()
+        )));
+    }
+    Ok(dregg_federation::turn_anchor::AnchorCommittee {
+        ed25519,
+        ml_dsa,
+        threshold,
+        federation_id: dregg_federation::FederationId(federation_id),
+    })
+}
+
+/// What `GET /api/turn/{hash}/anchor` answered.
+enum AnchorAnswer {
+    /// The node served an anchor to verify.
+    Served(Box<dregg_federation::turn_anchor::TurnAnchorV1>),
+    /// The node has no anchor for this turn, and why. Not evidence either way.
+    Unavailable(String),
+}
+
+async fn fetch_anchor(
+    http: &reqwest::Client,
+    node_url: &str,
+    turn_hash: &str,
+) -> Result<AnchorAnswer> {
+    let url = format!("{node_url}/api/turn/{turn_hash}/anchor");
+    let resp = http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| err(format!("GET {url}: {e}")))?;
+    let status = resp.status();
+    let body: serde_json::Value = match resp.json().await {
+        Ok(body) => body,
+        Err(e) => {
+            return Ok(AnchorAnswer::Unavailable(format!(
+                "{url} answered {status} with a body that is not JSON: {e}"
+            )));
+        }
+    };
+    let Some(anchor_hex) = body.get("anchor_hex").and_then(|a| a.as_str()) else {
+        let said = body
+            .get("anchor_status")
+            .and_then(|a| a.as_str())
+            .unwrap_or("no anchor_status");
+        return Ok(AnchorAnswer::Unavailable(format!(
+            "the node serves no anchor for this turn ({status}, {said})"
+        )));
+    };
+    // AN ANCHOR THAT WAS SERVED AND CANNOT BE READ IS AN ERROR, not an absence:
+    // falling back to the node's word here would let a node that serves a
+    // broken anchor be reported exactly like one that serves none.
+    let bytes = hex::decode(anchor_hex)
+        .map_err(|e| err(format!("the served anchor_hex is not hex: {e}")))?;
+    match postcard::take_from_bytes::<dregg_federation::turn_anchor::TurnAnchorV1>(&bytes) {
+        Ok((anchor, [])) => Ok(AnchorAnswer::Served(Box::new(anchor))),
+        Ok((_, rest)) => Err(err(format!(
+            "the served anchor has {} trailing bytes",
+            rest.len()
+        ))),
+        Err(e) => Err(err(format!("the served anchor does not decode: {e}"))),
+    }
+}
+
+/// `verify-anchor` — check that a finalized turn anchored `(topic, payload)`.
+///
+/// Three questions, kept apart in the output:
+///
+/// 1. Does the witness bind this topic and payload to a turn hash? Decided
+///    offline by `check_witness`, from the signed turn bytes alone.
+/// 2. Does a node hold a receipt for exactly that turn hash? The node's word.
+/// 3. Does a committee-signed receipt for that turn hash list the event?
+///    Decided by `TurnAnchorV1::verify` against a roster. Only a roster the
+///    caller supplied (`--committee`) makes this independent of the node;
+///    with the roster the node served, the node names its own judges and the
+///    output says so.
+///
+/// Exit 0 means 1 held, and 2 held unless `--offline`, and 3 held when an
+/// anchor was served or `--require-committee` was given. `finalized` says
+/// which of the three strengths was reached.
+async fn cmd_verify_anchor(f: Flags) -> Result<()> {
+    let out = verify_anchor(&f).await?;
+    println!("{out}");
+    Ok(())
+}
+
+async fn verify_anchor(f: &Flags) -> Result<serde_json::Value> {
+    let payload = payload_of(f, "verify-anchor")?;
+    let witness_path = f
+        .witness
+        .as_deref()
+        .ok_or_else(|| err("verify-anchor requires --witness FILE".to_string()))?;
+    if f.require_committee && f.committee.is_none() {
+        return Err(err(
+            "--require-committee needs --committee FILE: a roster the node serves is the node \
+             naming its own judges"
+                .to_string(),
+        ));
+    }
+    if f.offline && (f.require_committee || f.committee.is_some()) {
+        return Err(err(
+            "--offline asks no node, so there is no anchor to check a committee against"
+                .to_string(),
+        ));
+    }
+    let expected = match &f.turn_hash {
+        Some(hex_hash) => Some(parse_hash_hex("--turn-hash", hex_hash)?),
+        None => None,
+    };
+    let committee = f.committee.as_deref().map(read_committee).transpose()?;
+    let witness = std::fs::read(witness_path)
+        .map_err(|e| err(format!("read the witness {witness_path}: {e}")))?;
+
+    // 1. THE BINDING, offline.
+    let facts: WitnessFacts = check_witness(&witness, &f.topic, &payload, expected.as_ref())
+        .map_err(|e| err(e.to_string()))?;
+    let turn_hash = hex::encode(facts.turn_hash);
+    let mut out = serde_json::json!({
+        "binds": true,
+        "turn_hash": turn_hash,
+        "topic": f.topic,
+        "payload": payload,
+        "signer": hex::encode(facts.signer),
+        "agent_cell": hex::encode(facts.agent.as_bytes()),
+        "nonce": facts.nonce,
+    });
+    if f.offline {
+        out["finalized"] = Finalized::NotChecked.word().into();
+        return Ok(out);
+    }
+
+    // 2. THE NODE'S RECEIPT, by exact turn hash over the whole chain.
+    let http = reqwest::Client::new();
+    let confirm_url = format!(
+        "{}/api/starbridge/receipts?limit=2&turn_hash={turn_hash}",
+        f.node_url
+    );
+    let receipts = get_json(&http, &confirm_url).await?;
+    let row = exact_receipt(&turn_hash, &receipts)
+        .map_err(|why| {
+            err(format!(
+                "cannot tell whether turn {turn_hash} was receipted: {why}"
+            ))
+        })?
+        .ok_or_else(|| {
+            err(format!(
+                "the witness binds this payload to turn {turn_hash}, but node {} holds no \
+                 receipt for that turn",
+                f.node_url
+            ))
+        })?;
+    out["node"] = f.node_url.clone().into();
+    out["receipt_hash"] = row.get("receipt_hash").cloned().unwrap_or_default();
+    out["chain_index"] = row.get("chain_index").cloned().unwrap_or_default();
+    out["receipt_finality"] = row.get("finality").cloned().unwrap_or_default();
+    let mut finalized = Finalized::NodeAsserted;
+
+    // 3. THE COMMITTEE'S SIGNATURE over a receipt that lists the event.
+    match fetch_anchor(&http, &f.node_url, &turn_hash).await? {
+        AnchorAnswer::Unavailable(why) => {
+            if f.require_committee {
+                return Err(err(format!(
+                    "--require-committee: {why}. The node's receipt row alone is the node's word"
+                )));
+            }
+            out["committee"] = serde_json::json!({ "verified": false, "unavailable": why });
+        }
+        AnchorAnswer::Served(anchor) => {
+            // A SERVED ANCHOR THAT FAILS IS A FAILURE, whichever roster judged
+            // it: it is the node's own evidence contradicting its receipt row.
+            let (roster, judged_by) = match &committee {
+                Some(c) => (c, "the caller's committee file"),
+                None => (anchor.served_committee(), "the roster the node served"),
+            };
+            let anchored = check_anchor_discloses(&anchor, roster, &facts).map_err(err)?;
+            let anchored_receipt = hex::encode(anchored.receipt_hash);
+            if let Some(row_receipt) = row.get("receipt_hash").and_then(|h| h.as_str())
+                && !row_receipt.eq_ignore_ascii_case(&anchored_receipt)
+            {
+                return Err(err(format!(
+                    "the node's receipt row names receipt {row_receipt}, but the receipt the \
+                     committee signed for this turn hashes to {anchored_receipt}"
+                )));
+            }
+            out["committee"] = serde_json::json!({
+                "verified": true,
+                "roster": judged_by,
+                "signers": anchored.signers,
+                "threshold": anchored.threshold,
+                "height": anchored.height,
+                "receipt_hash": anchored_receipt,
+            });
+            // Only a roster the caller brought moves the trust off the node.
+            if committee.is_some() {
+                finalized = Finalized::CommitteeVerified;
+            }
+        }
+    }
+    out["finalized"] = finalized.word().into();
+    Ok(out)
+}
+
 #[tokio::main]
 async fn main() {
     // Route this process's ML-DSA through the Lean-verified cores exported by
@@ -1527,6 +1767,7 @@ async fn main() {
             "join" => cmd_join(flags).await,
             "send" => cmd_send(flags).await,
             "transfer" => cmd_transfer(flags).await,
+            "verify-anchor" => cmd_verify_anchor(flags).await,
             _ => Err(err(format!("unknown verb '{cmd}' (try --help)"))),
         }
     };
@@ -1539,6 +1780,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use dregg_cell::CellId;
+    use dregg_sdk_net::client_sign::{build_chat_turn, pack_payload};
+    use dregg_turn::action::{Event, symbol};
     use dregg_turn::{Action, Authorization, CallForest, DelegationMode, turn::Turn};
 
     use super::*;
@@ -1548,13 +1791,23 @@ mod tests {
         // Measured 2026-11-07: against a `--dev-unlock` node (which admits a
         // bearer-less loopback submit) `send` refused HERE, before the node was
         // ever asked. No source configured must mean no bearer, not a refusal.
-        for k in ["DREGG_API_TOKEN_FILE", "DREGG_API_TOKEN", "DREGG_NODE_PASSPHRASE"] {
-            assert!(env(k).is_none(), "{k} is set; this test needs none of the three");
+        for k in [
+            "DREGG_API_TOKEN_FILE",
+            "DREGG_API_TOKEN",
+            "DREGG_NODE_PASSPHRASE",
+        ] {
+            assert!(
+                env(k).is_none(),
+                "{k} is set; this test needs none of the three"
+            );
         }
         let http = reqwest::Client::new();
         // Port 9 (discard): with no source configured nothing may be contacted.
         let got = ensure_token(&http, "http://127.0.0.1:9", None).await;
-        assert!(got.is_ok(), "no bearer source must mean no bearer, not a refusal");
+        assert!(
+            got.is_ok(),
+            "no bearer source must mean no bearer, not a refusal"
+        );
     }
 
     #[test]
@@ -1565,10 +1818,19 @@ mod tests {
         assert!(refused_for_want_of_bearer(&None, StatusCode::UNAUTHORIZED));
         assert!(refused_for_want_of_bearer(&None, StatusCode::FORBIDDEN));
         assert!(!refused_for_want_of_bearer(&None, StatusCode::OK));
-        assert!(!refused_for_want_of_bearer(&None, StatusCode::INTERNAL_SERVER_ERROR));
-        assert!(!refused_for_want_of_bearer(&Some("t".into()), StatusCode::UNAUTHORIZED));
+        assert!(!refused_for_want_of_bearer(
+            &None,
+            StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        assert!(!refused_for_want_of_bearer(
+            &Some("t".into()),
+            StatusCode::UNAUTHORIZED
+        ));
         assert!(NO_BEARER.contains("DREGG_NODE_PASSPHRASE to unlock"));
-        assert!(!NO_BEARER.contains("  "), "the continuation must not leave a run of spaces");
+        assert!(
+            !NO_BEARER.contains("  "),
+            "the continuation must not leave a run of spaces"
+        );
     }
 
     fn real_chat_turn(agent: CellId, payload: &[u8]) -> Turn {
@@ -2504,6 +2766,254 @@ mod tests {
 
         const PROFILE: &str = "hc2-transfer-test";
 
+        // DREGG_HOME AND DREGG_PROFILE ARE PROCESS-GLOBAL, so the composed arms
+        // are serialized: cargo runs tests on threads, and two of them setting
+        // the same variables would make each one read the other's identity.
+        static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+        /// A running `TestNode` holding the temp profile's funded cell, with
+        /// the env seams held. Fields drop in order: the env is restored, the
+        /// home removed, the lock released.
+        struct World {
+            spawned: dregg_sdk_net::test_support::SpawnedNode,
+            token_file: std::path::PathBuf,
+            clerk: AgentCipherclerk,
+            _env: EnvRestore,
+            home: tempfile::TempDir,
+            _held: std::sync::MutexGuard<'static, ()>,
+        }
+
+        impl World {
+            /// `None` only when the verified cores are absent and the Lean gate
+            /// was explicitly disarmed, as `run_transfer` documents.
+            async fn new(
+                what: &str,
+                configure: impl FnOnce(TestNode) -> TestNode,
+            ) -> Option<World> {
+                let held = ENV.lock().unwrap_or_else(|e| e.into_inner());
+                let sign = dregg_sdk::install_verified_mldsa_sign_core_real();
+                let keygen = dregg_sdk::install_verified_mldsa_keygen_core_real();
+                dregg_sdk::install_verified_mldsa_verify_core();
+                if !dregg_lean_ffi::demand_lean(cores_are_healthy(sign, keygen), what) {
+                    return None;
+                }
+                let home = tempfile::TempDir::new().expect("temp DREGG_HOME");
+                std::fs::create_dir_all(home.path().join("profiles")).expect("profiles dir");
+                let env = EnvRestore::set(&[
+                    ("DREGG_HOME", home.path().as_os_str()),
+                    ("DREGG_PROFILE", std::ffi::OsStr::new(PROFILE)),
+                ]);
+                dregg_sdk::profiles::create(PROFILE).expect("create the temp profile");
+                let token_file = home.path().join("bearer");
+                std::fs::write(&token_file, "test-bearer\n").expect("write the bearer file");
+                let clerk = dregg_sdk::profiles::load(PROFILE).expect("load the temp profile");
+                let (mut node, _) = TestNode::genesis([0x11; 32], [0x22; 32], 0);
+                node.seed_open_cell(clerk.public_key().0, 1_000_000);
+                let spawned = configure(node).spawn().await;
+                Some(World {
+                    spawned,
+                    token_file,
+                    clerk,
+                    _env: env,
+                    home,
+                    _held: held,
+                })
+            }
+
+            fn flags(&self, topic: &str, payload: &str) -> Flags {
+                Flags {
+                    node_url: self.spawned.base_url().trim_end_matches('/').to_string(),
+                    profile: Some(PROFILE.to_string()),
+                    token_file: Some(self.token_file.to_string_lossy().into_owned()),
+                    topic: topic.to_string(),
+                    rest: vec![payload.to_string()],
+                    ..Flags::defaults()
+                }
+            }
+
+            fn path(&self, name: &str) -> String {
+                self.home.path().join(name).to_string_lossy().into_owned()
+            }
+
+            /// `send` the payload, writing the witness; the witness path.
+            async fn send_with_witness(&self, topic: &str, payload: &str, name: &str) -> String {
+                let witness = self.path(name);
+                let mut flags = self.flags(topic, payload);
+                flags.witness_out = Some(witness.clone());
+                cmd_send(flags).await.expect("the honest send commits");
+                witness
+            }
+
+            fn verify_flags(&self, topic: &str, payload: &str, witness: &str) -> Flags {
+                let mut flags = self.flags(topic, payload);
+                flags.witness = Some(witness.to_string());
+                flags
+            }
+        }
+
+        const COMMITTEE: [[u8; 32]; 2] = [[0xC1; 32], [0xC2; 32]];
+
+        fn committee_file(
+            world: &World,
+            name: &str,
+            seeds: &[[u8; 32]],
+            federation: [u8; 32],
+        ) -> String {
+            let path = world.path(name);
+            let keys: Vec<String> = seeds
+                .iter()
+                .map(|s| hex::encode(dregg_types::SigningKey::from_bytes(s).public_key().0))
+                .collect();
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "federation_id": hex::encode(federation),
+                    "threshold": seeds.len(),
+                    "ed25519": keys,
+                })
+                .to_string(),
+            )
+            .expect("write the committee file");
+            path
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_sent_payload_is_verified_against_the_committee_by_a_third_party() {
+            let Some(world) = World::new("the verified ML-DSA cores (verify-anchor)", |n| {
+                n.with_anchor_committee(&COMMITTEE)
+            })
+            .await
+            else {
+                return skipped("the committee-verified anchor positive");
+            };
+            let witness = world
+                .send_with_witness("helm.chat", "row digest 1", "w1")
+                .await;
+            let fed = world.spawned.fed_id();
+
+            // THE POSITIVE, at full strength: the auditor's own roster.
+            let mut flags = world.verify_flags("helm.chat", "row digest 1", &witness);
+            flags.committee = Some(committee_file(&world, "committee", &COMMITTEE, fed));
+            flags.require_committee = true;
+            let out = verify_anchor(&flags)
+                .await
+                .expect("the honest anchor verifies");
+            assert_eq!(out["binds"], true);
+            assert_eq!(out["finalized"], "committee-verified");
+            assert_eq!(out["committee"]["signers"], 2);
+            let receipts = world.spawned.lock().await.receipts().to_vec();
+            assert_eq!(receipts.len(), 1);
+            assert_eq!(out["turn_hash"], hex::encode(receipts[0].turn_hash));
+            assert_eq!(out["receipt_hash"], hex::encode(receipts[0].receipt_hash()));
+            assert_eq!(out["committee"]["receipt_hash"], out["receipt_hash"]);
+
+            // The auditor holding the turn hash from its row: same answer; a
+            // different hash is refused before the node is asked.
+            flags.turn_hash = Some(hex::encode(receipts[0].turn_hash));
+            verify_anchor(&flags).await.expect("the held hash matches");
+            flags.turn_hash = Some("ab".repeat(32));
+            let e = verify_anchor(&flags).await.unwrap_err().to_string();
+            assert!(e.contains("not the expected turn"), "{e}");
+            flags.turn_hash = None;
+
+            // WITHOUT A ROSTER OF ITS OWN the checker reports the node's word,
+            // even though the served anchor verified against the served roster.
+            let mut unrostered = world.verify_flags("helm.chat", "row digest 1", &witness);
+            let out = verify_anchor(&unrostered).await.expect("verifies");
+            assert_eq!(out["finalized"], "node-asserted");
+            assert_eq!(out["committee"]["verified"], true);
+            assert_eq!(out["committee"]["roster"], "the roster the node served");
+
+            // ANOTHER PAYLOAD OR TOPIC under the same witness is refused offline.
+            unrostered.rest = vec!["row digest 2".to_string()];
+            let e = verify_anchor(&unrostered).await.unwrap_err().to_string();
+            assert!(e.contains("no action of the witness turn emits"), "{e}");
+            let other_topic = world.verify_flags("helm.chat2", "row digest 1", &witness);
+            assert!(verify_anchor(&other_topic).await.is_err());
+
+            // A ROSTER THE SIGNERS ARE NOT IN, or one for another federation.
+            let mut strangers = world.verify_flags("helm.chat", "row digest 1", &witness);
+            strangers.committee = Some(committee_file(
+                &world,
+                "strangers",
+                &[[0xD1; 32], [0xD2; 32]],
+                fed,
+            ));
+            let e = verify_anchor(&strangers).await.unwrap_err().to_string();
+            assert!(e.contains("does not verify against the committee"), "{e}");
+            strangers.committee = Some(committee_file(&world, "elsewhere", &COMMITTEE, [0xFE; 32]));
+            let e = verify_anchor(&strangers).await.unwrap_err().to_string();
+            assert!(e.contains("does not verify against the committee"), "{e}");
+
+            // A WITNESS FOR A TURN THE NODE NEVER COMMITTED binds offline and
+            // is not finalized.
+            let head = Head::fetch(
+                &NodeHttpClient::new(world.spawned.base_url()),
+                &world.clerk.cell_id("default"),
+            )
+            .await
+            .unwrap();
+            let unsent = prepare_send(&world.clerk, &head, "helm.chat", "never sent").unwrap();
+            let unsent_path = world.path("unsent");
+            std::fs::write(&unsent_path, &unsent.bytes).unwrap();
+            let mut never = world.verify_flags("helm.chat", "never sent", &unsent_path);
+            let e = verify_anchor(&never).await.unwrap_err().to_string();
+            assert!(e.contains("holds no receipt for that turn"), "{e}");
+            never.offline = true;
+            let out = verify_anchor(&never)
+                .await
+                .expect("the binding alone holds offline");
+            assert_eq!(out["finalized"], "not-checked");
+            assert_eq!(out["turn_hash"], hex::encode(unsent.turn_hash));
+            world.spawned.shutdown();
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_node_that_attests_nothing_gives_only_its_word() {
+            let Some(world) = World::new("the verified ML-DSA cores (verify-anchor)", |n| n).await
+            else {
+                return skipped("the node-asserted anchor level");
+            };
+            let witness = world
+                .send_with_witness("helm.chat", "row digest 1", "w1")
+                .await;
+            let mut flags = world.verify_flags("helm.chat", "row digest 1", &witness);
+            let out = verify_anchor(&flags)
+                .await
+                .expect("the receipt row is there");
+            assert_eq!(out["finalized"], "node-asserted");
+            assert_eq!(out["committee"]["verified"], false);
+            assert!(
+                out["committee"]["unavailable"]
+                    .as_str()
+                    .unwrap()
+                    .contains("no_attestation"),
+                "{out}"
+            );
+            // Asking for the committee's signature must not be satisfied by it.
+            flags.committee = Some(committee_file(
+                &world,
+                "committee",
+                &COMMITTEE,
+                world.spawned.fed_id(),
+            ));
+            flags.require_committee = true;
+            let e = verify_anchor(&flags).await.unwrap_err().to_string();
+            assert!(e.contains("--require-committee"), "{e}");
+            assert!(e.contains("the node's word"), "{e}");
+            // The witness file is written once.
+            let mut again = world.flags("helm.chat", "row digest 2");
+            again.witness_out = Some(witness);
+            let e = cmd_send(again).await.unwrap_err().to_string();
+            assert!(e.contains("must not already exist"), "{e}");
+            assert_eq!(
+                world.spawned.lock().await.receipts().len(),
+                1,
+                "a send that cannot write its witness submits nothing"
+            );
+            world.spawned.shutdown();
+        }
+
         fn transfer_flags(url: &str, to: &str, token_file: &std::path::Path) -> Flags {
             Flags {
                 node_url: url.trim_end_matches('/').to_string(),
@@ -2514,7 +3024,7 @@ mod tests {
                 fund: 5000,
                 amount: Some(100),
                 accept_tentative: true,
-                rest: Vec::new(),
+                ..Flags::defaults()
             }
         }
 
@@ -2557,10 +3067,6 @@ mod tests {
         /// default, or `DREGG_TEST_REQUIRE_LEAN=1`), an absent core PANICS,
         /// because an arm that returns early reports `ok` having run nothing.
         async fn run_transfer(fault: Option<SubmitFault>) -> Option<Result<()>> {
-            // DREGG_HOME AND DREGG_PROFILE ARE PROCESS-GLOBAL, so these arms are
-            // serialized: cargo runs tests on threads, and two of them setting
-            // the same variables would make each one read the other's identity.
-            static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let _held = ENV.lock().unwrap_or_else(|e| e.into_inner());
             // The same install `main` performs, keygen included: creating the
             // temp identity below IS a keygen.
