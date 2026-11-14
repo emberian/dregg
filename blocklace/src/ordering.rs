@@ -702,9 +702,14 @@ fn ratified_leader_chain(
 /// Deterministic topological sort of a subset of blocks.
 ///
 /// Respects causal order (if A is in B's causal past, A comes first).
-/// For concurrent blocks (no causal relationship), ties are broken by block ID
-/// (lexicographic byte comparison), giving a deterministic total order.
-fn xsort(cache: &PastCache, blocklace: &Blocklace, blocks: &HashSet<BlockId>) -> Vec<BlockId> {
+/// Among ready blocks choose the least `(round, sequence, creator bytes, source id)`.
+/// All fields are intrinsic to the block given its round; arrival order is irrelevant.
+fn xsort(
+    cache: &PastCache,
+    blocklace: &Blocklace,
+    rounds: &HashMap<BlockId, u64>,
+    blocks: &HashSet<BlockId>,
+) -> Vec<BlockId> {
     if blocks.is_empty() {
         return vec![];
     }
@@ -723,7 +728,7 @@ fn xsort(cache: &PastCache, blocklace: &Blocklace, blocks: &HashSet<BlockId>) ->
         local_predecessors.insert(block_id, ancestors_in_set);
     }
 
-    // Kahn's algorithm with deterministic tie-breaking by block ID.
+    // Kahn's algorithm with the shared consensus priority.
     let mut in_degree: HashMap<BlockId, usize> = HashMap::new();
     let mut dependents: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
 
@@ -734,25 +739,33 @@ fn xsort(cache: &PastCache, blocklace: &Blocklace, blocks: &HashSet<BlockId>) ->
         }
     }
 
-    // Collect zero in-degree nodes, sorted by block ID for determinism.
-    let mut ready: std::collections::BinaryHeap<std::cmp::Reverse<BlockId>> =
-        std::collections::BinaryHeap::new();
+    // Content-derived priority, independent of insertion and HashMap iteration order.
+    let key = |id: BlockId| {
+        let block = blocklace.get(&id).expect("segment block is held");
+        std::cmp::Reverse((
+            rounds.get(&id).copied().unwrap_or(0),
+            block.sequence,
+            block.creator,
+            id,
+        ))
+    };
+    let mut ready = std::collections::BinaryHeap::new();
     for (id, deg) in &in_degree {
         if *deg == 0 {
-            ready.push(std::cmp::Reverse(*id));
+            ready.push(key(*id));
         }
     }
 
     let mut result = Vec::with_capacity(blocks.len());
 
-    while let Some(std::cmp::Reverse(block_id)) = ready.pop() {
+    while let Some(std::cmp::Reverse((_, _, _, block_id))) = ready.pop() {
         result.push(block_id);
         if let Some(deps) = dependents.get(&block_id) {
             for &dep in deps {
                 if let Some(deg) = in_degree.get_mut(&dep) {
                     *deg -= 1;
                     if *deg == 0 {
-                        ready.push(std::cmp::Reverse(dep));
+                        ready.push(key(dep));
                     }
                 }
             }
@@ -822,16 +835,9 @@ pub fn tau(blocklace: &Blocklace, participants: &[[u8; 32]]) -> Vec<BlockId> {
 /// before its own causal ancestors whenever it reached them only through an unenrolled relay —
 /// `BlocklaceFinality.traceRelayLift6`. This function never had that defect.)
 ///
-/// ⚠ NAMED RESIDUAL, NOT closed: both linearizers are now ready-set sorts over the same causal
-/// subgraph and both are linear extensions of it, but the READY PRIORITY differs — min block id
-/// here, `(round, id)` in `xsortBy`, and the ids are different schemes besides (a blake3 hash
-/// here, the wire's `(seq, creator)` index there). That is OPEN-CM-XSORT, named in the Lean
-/// header, and it belongs in its own pass. It is not confined to sparse laces: measured
-/// 2026-11-13, the two SEQUENCES already differ on a round-synchronous lace as soon as a second
-/// wave anchors (`node/tests/verified_order_budget.rs`'s exact-sequence gate is red at n=3,
-/// rounds=6), because inside one round every block is ready at once and the two priorities
-/// order them differently. What both sides do satisfy, and what that file's second gate
-/// asserts, is the same finalized set with each order a linear extension of the causal order.
+/// Ready ties use `(round, sequence, creator bytes, source block id)`, matching Lean's
+/// `(round, seq, canonical wire id)`. Node projections preserve source ids rather than
+/// rehashing unsigned skeletons. The exact-sequence differential covers both paths.
 ///
 /// VERIFIED MODEL: `BlocklaceFinality.anchorSegment` / `tauStep` / `tauOrder`.
 fn order_over_anchor_chain(
@@ -840,6 +846,7 @@ fn order_over_anchor_chain(
     equiv: &EquivocationIndex,
     participant_set: &HashSet<[u8; 32]>,
     chain: &[BlockId],
+    rounds: &HashMap<BlockId, u64>,
 ) -> Vec<BlockId> {
     let mut ordered = Vec::new();
     // `[b₂]` of CM Alg. 2:37 — empty before the first anchor.
@@ -860,7 +867,7 @@ fn order_over_anchor_chain(
             })
             .collect();
 
-        ordered.extend(xsort(cache, blocklace, &segment));
+        ordered.extend(xsort(cache, blocklace, rounds, &segment));
         prev = anchor_past;
     }
 
@@ -917,7 +924,7 @@ pub fn tau_with_config(
         head,
     );
 
-    order_over_anchor_chain(&cache, blocklace, &equiv, &participant_set, &chain)
+    order_over_anchor_chain(&cache, blocklace, &equiv, &participant_set, &chain, &rounds)
 }
 
 // ─── Cordiality Check ────────────────────────────────────────────────────────
@@ -1171,10 +1178,7 @@ fn compute_rounds_filtered(
 ///     (`BlocklaceFinality.traceOrderFork`) or one of them finalized nothing at all
 ///     (`traceRelayStall`) — a fork and a stall, not a delay.
 ///
-/// ⚑ **(3) is what remains** — leader selection is already participant-only in `tau`, but the two
-/// functions' LINEARIZERS still differ: both are Kahn sweeps over the segment's causal subgraph,
-/// but [`xsort`] pops the min block id and the Lean `xsortBy` pops the least `(round, id)`. That
-/// is OPEN-CM-XSORT, named in the Lean header, and it is a different defect from this one.
+/// Both linearizers use the same content-derived ready priority (see [`xsort`]).
 ///
 /// The algorithm is the same as `tau_with_config` — CM Def. 6's head selection, backward anchor
 /// chain and closure-difference fold, sharing [`ratified_leader_chain`] and
@@ -1230,7 +1234,7 @@ pub fn tau_unified(
         head,
     );
 
-    order_over_anchor_chain(&cache, blocklace, &equiv, &participant_set, &chain)
+    order_over_anchor_chain(&cache, blocklace, &equiv, &participant_set, &chain, &rounds)
 }
 
 // ─── Constitution-Aware Ordering ─────────────────────────────────────────────
@@ -1669,9 +1673,8 @@ mod tests {
     ///   tauGolden = [(1,0),(2,0),(3,0),(1,1),(2,1),(3,1),(1,2),(2,2),(3,2),(2,3)]
     ///
     /// The absolute `BlockId` differs (blake3 hash here vs. an abstract `Nat` in Lean), and the
-    /// *within-cohort* tie-break is the named OPEN-CM-XSORT residual (Rust breaks by block-id, Lean
-    /// by `(round,id)`), so the load-bearing differential is at the SEQ-COHORT level: the sequence
-    /// of seq cohorts, and each cohort's `{creator}` set, must match the Lean golden exactly. Note
+    /// wire ids encode creator-byte order. This fixture compares the complete coordinate
+    /// sequence; `verified_order_budget` additionally compares exact source ids. Note
     /// the cohorts are no longer uniform — `[1] [3] [3] [3]` — which is itself the shape of the
     /// anchor-chain fold and would not survive a return to the coverage rule.
     #[test]
@@ -1701,56 +1704,8 @@ mod tests {
         ];
 
         assert_eq!(
-            projected.len(),
-            lean_golden.len(),
-            "same number of finalized blocks as the Lean model, got {projected:?}"
-        );
-
-        // SET agreement first: exactly the Lean model's coordinates, no more, no fewer.
-        let mut sorted_rust = projected.clone();
-        sorted_rust.sort();
-        let mut sorted_lean = lean_golden.clone();
-        sorted_lean.sort();
-        assert_eq!(
-            sorted_rust, sorted_lean,
-            "Rust tau must finalize exactly the Lean model's (creator, seq) coordinates"
-        );
-
-        // SEQ-COHORT agreement: group CONSECUTIVE equal-seq entries (a cohort is emitted
-        // contiguously by both implementations) and compare the cohort sequence.
-        let cohorts = |v: &[(u8, u64)]| -> Vec<(u64, Vec<u8>)> {
-            let mut out: Vec<(u64, Vec<u8>)> = Vec::new();
-            for &(creator, seq) in v {
-                match out.last_mut() {
-                    Some((s, creators)) if *s == seq => creators.push(creator),
-                    _ => out.push((seq, vec![creator])),
-                }
-            }
-            for (_, creators) in &mut out {
-                creators.sort();
-            }
-            out
-        };
-        let rust_seqs: Vec<u64> = projected.iter().map(|(_, s)| *s).collect();
-        assert!(
-            rust_seqs.windows(2).all(|w| w[0] <= w[1]),
-            "Rust tau is round-major (seq non-decreasing), matching the Lean model's order"
-        );
-        assert_eq!(
-            cohorts(&projected),
-            cohorts(&lean_golden),
-            "Rust ordering::tau seq-cohorts must equal the verified Lean model's tauGolden cohorts \
-             (consensus model⟺node differential)"
-        );
-        // The anchor-chain fold made visible: wave 0's anchor IS a segment of its own, so it leads
-        // the order regardless of block-id. Under the coverage rule the first segment was the whole
-        // wave-0 coverage in one `xsort`, whose leading element was whichever genesis block
-        // happened to carry the smallest blake3 id.
-        assert_eq!(
-            projected[0],
-            (1, 0),
-            "wave 0's anchor must lead the order — it is a one-block segment, not the min-id \
-             element of a coverage sweep"
+            projected, lean_golden,
+            "Rust tau must match the complete Lean golden sequence, not just cohorts"
         );
     }
 
@@ -2313,14 +2268,64 @@ mod tests {
         }
     }
 
-    /// Concurrent blocks INSIDE one segment are linearized by block ID.
+    /// Concurrent blocks INSIDE one segment use the shared content-derived priority.
     ///
     /// RE-ARMED for CM Def. 6, and the cohort moved deliberately. This used to read the tie-break
     /// off the three GENESIS blocks, which no longer exhibits it: wave 0's anchor is a segment of
     /// its own, so creator 1's genesis is emitted first regardless of its id and its two concurrent
     /// siblings land in the NEXT segment. A segment boundary is not a tie-break. The round-2 cohort
     /// is three concurrent blocks that all sit inside wave 1's single segment, which is where
-    /// `xsort`'s min-block-id ready heap actually decides.
+    /// `xsort`'s content-priority ready heap actually decides.
+    /// Every component wins against all later components; input order cannot affect the result.
+    #[test]
+    fn ready_priority_is_round_sequence_creator_source_id() {
+        let mut lace = Blocklace::new();
+        let rows = [
+            (9u8, 1, 9, 9u8),
+            (8, 2, 0, 9),
+            (7, 2, 1, 0),
+            (6, 2, 1, 1),
+            (5, 2, 1, 1),
+        ];
+        let mut rounds = HashMap::new();
+        for &(id, round, seq, creator) in &rows {
+            lace.insert_ordering_projection(
+                [id; 32],
+                Block::new([creator; 32], seq, vec![], vec![]),
+            )
+            .unwrap();
+            rounds.insert([id; 32], round);
+        }
+        let expected = vec![[9; 32], [8; 32], [7; 32], [5; 32], [6; 32]];
+        for ids in [
+            rows.iter().map(|r| [r.0; 32]).collect::<Vec<_>>(),
+            rows.iter().rev().map(|r| [r.0; 32]).collect(),
+        ] {
+            assert_eq!(
+                xsort(
+                    &PastCache::new(),
+                    &lace,
+                    &rounds,
+                    &ids.into_iter().collect()
+                ),
+                expected
+            );
+        }
+        // Readiness outranks the entire priority tuple, including a lower round through a relay.
+        lace.insert_ordering_projection([0; 32], Block::new([0; 32], 0, vec![[9; 32]], vec![]))
+            .unwrap();
+        rounds.insert([0; 32], 0);
+        assert_eq!(
+            xsort(
+                &PastCache::new(),
+                &lace,
+                &rounds,
+                &HashSet::from([[0; 32], [9; 32]])
+            ),
+            vec![[9; 32], [0; 32]]
+        );
+    }
+
     #[test]
     fn test_concurrent_blocks_deterministic_tiebreaker() {
         let participants = vec![make_key(1), make_key(2), make_key(3)];
@@ -2330,7 +2335,7 @@ mod tests {
         let result2 = tau(&bl, &participants);
         assert_eq!(result, result2, "tau must be deterministic");
 
-        // The three round-2 blocks are concurrent AND in one segment. Verify they appear in ID
+        // The three round-2 blocks are concurrent AND in one segment. Verify they appear in creator
         // order, consecutively.
         let cohort_ids = &blocks_by_round[1];
         let mut cohort_positions: Vec<(usize, BlockId)> = cohort_ids
@@ -2351,8 +2356,8 @@ mod tests {
                 "concurrent blocks should maintain consistent order"
             );
             assert!(
-                window[0].1 < window[1].1,
-                "concurrent blocks should be sorted by block ID"
+                bl.get(&window[0].1).unwrap().creator < bl.get(&window[1].1).unwrap().creator,
+                "same-round same-sequence blocks must be sorted by creator bytes"
             );
         }
     }

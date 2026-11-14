@@ -30,40 +30,9 @@
 //! `scripts/federation-local.sh` builds, and the shape whose growth drove the observed
 //! over-budget warnings at `lace_size` 773–981.
 //!
-//! ## ⚑ Status of that gate, measured 2026-11-13
-//!
-//! On an archive built from this checkout's Lean (hbox, Lean 4.35),
-//! [`the_two_orders_the_node_swaps_between_agree_exactly`] is **RED** at n=3, rounds=6 — the
-//! first lace where a second wave anchors — and it was red at `origin/main` too. It had not been
-//! seen because the test self-skips without an archive. The two orders finalize the same SET;
-//! the SEQUENCES differ inside each round, where every block is ready at once and the two
-//! linearizers break the tie differently (OPEN-CM-XSORT: Rust pops the min block id, a blake3
-//! hash; Lean pops the least `(round, id)`, and its `id` is the wire's `(seq, creator)` index).
-//! So the over-budget fallback does substitute a different order. The gate is left as it is: it
-//! states the property the fallback needs, and making it true means giving the two linearizers
-//! one ready priority.
-//!
-//! ## ⚑ What the round-synchronous shape cannot see (dregg issue #100)
-//!
-//! A round-synchronous lace has two properties no real federation is guaranteed: every creator's
-//! `seq` equals its DAG depth, and every block reaches its ancestors through enrolled blocks.
-//! Two defects in the verified rule lived exactly in the complement:
-//!
-//! * **a late joiner** — a validator whose first block (`seq 0`) cites the current tips. The
-//!   Lean round map folded blocks in `(seq, creator)` order and skipped predecessors it had not
-//!   folded yet, so that block got round 1. [`late_joiner_lace`] makes the late joiner the
-//!   leader of the wave it joins in: with the wrong round the wave never anchors and the
-//!   verified rule finalizes one coordinate where `ordering::tau` finalizes ten.
-//! * **an unenrolled relay** — a block that reaches a later round only through a
-//!   non-participant's block keeps a low round, and the Lean `(round, id)` key sort emitted it
-//!   BEFORE its own causal ancestors. [`relay_lace`] is that shape; the finalized SET was right
-//!   and the ORDER was not a linear extension of the causal order.
-//!
-//! [`the_verified_order_survives_a_late_joiner_and_a_relay`] runs both. It asserts what both
-//! orders must satisfy whatever the tie-break: the same finalized set, and each order a linear
-//! extension of the lace's causal order. Run against the Lean of `origin/main` it fails on all
-//! three counts (one coordinate instead of ten; different sets; a block ahead of an ancestor);
-//! against this checkout's it passes.
+//! The regression was a same-set/different-sequence result once a second wave anchored.
+//! The common ready priority is now `(round, seq, creator bytes, source block id)`;
+//! these gates compare source ids exactly, including late-joiner and relay laces.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -195,6 +164,10 @@ fn the_two_orders_the_node_swaps_between_agree_exactly() {
                 .expect("raw-order gate ran (archive present + wire non-ERR)");
             let rust = node_rust_order(&lace, &participants);
 
+            assert_eq!(
+                lean, rust,
+                "n={n} rounds={rounds}: exact source block ids differ"
+            );
             let lean_seq = coords_in_order(&lace, &lean);
             let rust_seq = coords_in_order(&lace, &rust);
 
@@ -398,7 +371,7 @@ fn causal_inversion(
 /// * the relay left the set intact and put a block ahead of three of its ancestors — only the
 ///   linear-extension assertion sees that.
 ///
-/// The sequences are deliberately NOT compared here; see the module header.
+/// Exact source-id sequences are compared too; coordinates alone cannot distinguish twins.
 #[test]
 fn the_verified_order_survives_a_late_joiner_and_a_relay() {
     if !dregg_lean_ffi::demand_lean(
@@ -438,6 +411,9 @@ fn the_verified_order_survives_a_late_joiner_and_a_relay() {
             ));
         }
 
+        if lean != rust {
+            failures.push(format!("{name}: exact source block sequences differ"));
+        }
         let mut lean_set = coords_in_order(&lace, &lean);
         let mut rust_set = coords_in_order(&lace, &rust);
         lean_set.sort_unstable();
@@ -560,11 +536,11 @@ fn verified_order_cost_curve() {
         let rust = node_rust_order(&lace, &participants);
         let rust_ms = t1.elapsed().as_secs_f64() * 1000.0;
 
-        // Agreement, re-checked at every measured size — at the level the two linearizers are
-        // required to agree at: the finalized SET. The exact SEQUENCE is the gate above, and it
-        // is RED as soon as a second wave anchors (OPEN-CM-XSORT: the two break ready ties
-        // differently), so asserting it here made the instrument stop at its second row and
-        // print no curve. `seq_agree` reports it instead.
+        // Keep measuring at larger sizes, with exact sequence agreement as a hard gate.
+        assert_eq!(
+            lean, rust,
+            "blocks={blocks}: exact source sequences diverged"
+        );
         let lean_seq = coords_in_order(&lace, &lean);
         let rust_seq = coords_in_order(&lace, &rust);
         let seq_agree = lean_seq == rust_seq;
