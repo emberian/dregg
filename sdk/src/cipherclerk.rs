@@ -3148,6 +3148,24 @@ impl AgentCipherclerk {
         self.ml_dsa_key().public_bytes()
     }
 
+    /// The ML-DSA-65 half of a signature OUTSIDE the turn path: `message` signed
+    /// under the caller's FIPS 204 `ctx`, deterministically, with the public key
+    /// that verifies it. The key is the one [`Self::ml_dsa_key`] derives; it is
+    /// derived again here because that memo holds the turn-context newtype,
+    /// which signs under `HYBRID_TURN_PQ_CTX` only. `crate::domain_sig` is the
+    /// one caller and passes its own context.
+    pub(crate) fn ml_dsa_sign_under(
+        &self,
+        ctx: &[u8],
+        message: &[u8],
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        crate::runtime::install_verified_pq_cores();
+        let seed = Zeroizing::new(self.signing_key.to_bytes());
+        let key = dregg_pq::MlDsaKey::from_ed25519_seed(&seed);
+        let signature = key.try_sign_deterministic(ctx, message)?;
+        Some((signature, key.public_bytes()))
+    }
+
     /// Sign arbitrary bytes with this cipherclerk's identity.
     ///
     /// Useful for custom authorization schemes outside the turn model.

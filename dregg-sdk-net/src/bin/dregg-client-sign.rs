@@ -28,6 +28,10 @@
 //!          `SignedTurn` bytes to a file, printing the turn hash; `submit`
 //!          posts those bytes later. A caller binds the hash into its own
 //!          record between the two, and a retry posts the same bytes.
+//!   keygen / pubkey / sign-bytes / verify-bytes  the identity's keys and
+//!          domain-tagged signatures over application bytes, on the SDK's own
+//!          key path (`dregg_sdk::domain_sig`). `--domain` is required, and a
+//!          signature made here is not a turn signature, nor the reverse.
 //!   transfer  move `--amount` computrons from the profile's own cell to
 //!          `--to`. The signer is the SOURCE: `Effect::Transfer { from: own
 //!          cell, to, amount }` on an action whose target is that same cell,
@@ -939,6 +943,16 @@ struct Flags {
     out: Option<String>,
     /// `submit --prepared`: the signed turn bytes to post.
     prepared: Option<String>,
+    /// `sign-bytes` / `verify-bytes --domain`: the required domain tag.
+    domain: Option<String>,
+    /// `sign-bytes` / `verify-bytes --in`: the message file (stdin without it).
+    input: Option<String>,
+    /// `verify-bytes --sig`: the JSON `sign-bytes` printed.
+    sig: Option<String>,
+    /// `verify-bytes --public-key`: the Ed25519 key the verifier expects.
+    public_key: Option<String>,
+    /// `verify-bytes --ml-dsa-public-key`: the ML-DSA-65 key the verifier expects.
+    ml_dsa_public_key: Option<String>,
     rest: Vec<String>,
 }
 
@@ -963,6 +977,11 @@ impl Flags {
             head_file: None,
             out: None,
             prepared: None,
+            domain: None,
+            input: None,
+            sig: None,
+            public_key: None,
+            ml_dsa_public_key: None,
             rest: Vec::new(),
         }
     }
@@ -1057,6 +1076,11 @@ fn parse_flags(argv: Vec<String>) -> Result<Flags> {
             "--head" => f.head_file = Some(val("--head")?),
             "--out" => f.out = Some(val("--out")?),
             "--prepared" => f.prepared = Some(val("--prepared")?),
+            "--domain" => f.domain = Some(val("--domain")?),
+            "--in" => f.input = Some(val("--in")?),
+            "--sig" => f.sig = Some(val("--sig")?),
+            "--public-key" => f.public_key = Some(val("--public-key")?),
+            "--ml-dsa-public-key" => f.ml_dsa_public_key = Some(val("--ml-dsa-public-key")?),
             "--help" | "-h" => {
                 eprintln!("{USAGE}");
                 std::process::exit(0);
@@ -1098,6 +1122,21 @@ const USAGE: &str = "dregg-client-sign: commit CLIENT-SIGNED turns to a dregg no
        node's word (`finalized: node-asserted`); a turn anchor verified against the\n\
        roster in --committee is the committee's (`finalized: committee-verified`).\n\
        --committee FILE is {\"federation_id\": hex, \"threshold\": n, \"ed25519\": [hex]}\n\
+  keygen --profile NAME\n\
+       create a profile with a fresh seed; print its public keys. Never replaces one\n\
+  pubkey [--profile P]\n\
+       print the profile's Ed25519 and ML-DSA-65 public keys and its cell\n\
+  sign-bytes --domain TAG [--profile P] [--in FILE]\n\
+       sign a message (FILE, or stdin) under a REQUIRED domain tag, Ed25519 and\n\
+       ML-DSA-65, with the profile's identity keys. Prints the signature JSON. The\n\
+       signed bytes are \"dregg-domain-sig-v1:\" + len(TAG) + TAG + BLAKE3(message),\n\
+       never 32 bytes, so the result is not a turn signature and a turn signature\n\
+       is not a result. TAG is 1..255 printable non-space ASCII bytes\n\
+  verify-bytes --domain TAG --sig FILE --public-key HEX [--ml-dsa-public-key HEX]\n\
+       [--in FILE]\n\
+       check a sign-bytes signature over a message against the Ed25519 key the\n\
+       caller expects. --ml-dsa-public-key pins the ML-DSA half too (`pq_key:\n\
+       pinned`); without it that half is checked against the key in FILE (`carried`)\n\
   transfer --to CELL_HEX --amount N [--profile P] [--node-url U] [--token-file F]\n\
            [--fund N] [--accept-tentative]\n\
        move N computrons from the profile's own cell to another cell. Exit 0 only\n\
@@ -1973,6 +2012,148 @@ async fn verify_anchor(f: &Flags) -> Result<serde_json::Value> {
     Ok(out)
 }
 
+/// The identity JSON `keygen` and `pubkey` print.
+fn identity_json(name: &str, clerk: &AgentCipherclerk) -> serde_json::Value {
+    serde_json::json!({
+        "profile": name,
+        "public_key": hex::encode(clerk.public_key().0),
+        "ml_dsa_public_key": hex::encode(clerk.ml_dsa_public_bytes()),
+        "agent_cell": hex::encode(clerk.cell_id("default").as_bytes()),
+    })
+}
+
+/// `keygen` — create a named profile with a fresh seed and print its public
+/// keys. Refuses a name that exists: this verb never replaces a key.
+fn cmd_keygen(f: Flags) -> Result<()> {
+    no_positionals(&f, "keygen")?;
+    let name = f
+        .profile
+        .as_deref()
+        .ok_or_else(|| err("keygen requires --profile NAME".to_string()))?;
+    profiles::create(name).map_err(|e| err(format!("create profile '{name}': {e}")))?;
+    let clerk = profiles::load(name).map_err(|e| err(format!("load profile '{name}': {e}")))?;
+    let mut out = identity_json(name, &clerk);
+    out["created"] = true.into();
+    println!("{out}");
+    Ok(())
+}
+
+/// `pubkey` — print an existing profile's public keys and cell.
+fn cmd_pubkey(f: Flags) -> Result<()> {
+    no_positionals(&f, "pubkey")?;
+    let (name, clerk) = resolve_clerk(f.profile.as_deref(), false)?;
+    println!("{}", identity_json(&name, &clerk));
+    Ok(())
+}
+
+/// The message of `sign-bytes` / `verify-bytes`: the exact bytes of `--in`, or
+/// of stdin when `--in` is not given.
+fn read_message(f: &Flags) -> Result<Vec<u8>> {
+    use std::io::Read;
+    match &f.input {
+        Some(path) => {
+            std::fs::read(path).map_err(|e| err(format!("read the message file {path}: {e}")))
+        }
+        None => {
+            let mut message = Vec::new();
+            std::io::stdin()
+                .read_to_end(&mut message)
+                .map_err(|e| err(format!("read the message from stdin: {e}")))?;
+            Ok(message)
+        }
+    }
+}
+
+fn required_domain<'a>(f: &'a Flags, verb: &str) -> Result<&'a str> {
+    f.domain.as_deref().ok_or_else(|| {
+        err(format!(
+            "{verb} requires --domain TAG: a signature with no domain could be replayed as \
+             a signature for any other purpose"
+        ))
+    })
+}
+
+/// `sign-bytes` — a domain-tagged hybrid signature over a message.
+fn sign_bytes(f: &Flags, message: &[u8]) -> Result<serde_json::Value> {
+    no_positionals(f, "sign-bytes")?;
+    let domain = required_domain(f, "sign-bytes")?;
+    let (name, clerk) = resolve_clerk(f.profile.as_deref(), false)?;
+    let sig = clerk
+        .sign_domain_tagged(domain, message)
+        .map_err(|e| err(e.to_string()))?;
+    Ok(serde_json::json!({
+        "scheme": "dregg-domain-sig-v1",
+        "domain": domain,
+        "message_blake3": blake3::hash(message).to_hex().to_string(),
+        "profile": name,
+        "public_key": hex::encode(sig.public_key.0),
+        "ml_dsa_public_key": hex::encode(&sig.ml_dsa_public_key),
+        "signature": hex::encode(sig.ed25519.0),
+        "ml_dsa_signature": hex::encode(&sig.ml_dsa),
+    }))
+}
+
+/// `verify-bytes` — check a `sign-bytes` signature against keys the CALLER
+/// names.
+///
+/// `--public-key` is required: the Ed25519 key in the signature file is the
+/// signer's claim, not the verifier's expectation. `--ml-dsa-public-key` pins
+/// the ML-DSA half the same way. Without it the ML-DSA half is checked against
+/// the key carried in the file, so only the Ed25519 half is tied to a signer
+/// the verifier expected; the output says which.
+fn verify_bytes(f: &Flags, message: &[u8]) -> Result<serde_json::Value> {
+    no_positionals(f, "verify-bytes")?;
+    let domain = required_domain(f, "verify-bytes")?;
+    let sig_path = f.sig.as_deref().ok_or_else(|| {
+        err("verify-bytes requires --sig FILE (the JSON sign-bytes printed)".to_string())
+    })?;
+    let expected_pk = f.public_key.as_deref().ok_or_else(|| {
+        err("verify-bytes requires --public-key HEX: the signer this verifier expects".to_string())
+    })?;
+    let public_key = dregg_sdk::PublicKey(parse_hash_hex("--public-key", expected_pk)?);
+    let raw = std::fs::read_to_string(sig_path)
+        .map_err(|e| err(format!("read the signature file {sig_path}: {e}")))?;
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| err(format!("parse the signature file {sig_path}: {e}")))?;
+    let field = |name: &str| -> Result<Vec<u8>> {
+        let text = v
+            .get(name)
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| err(format!("the signature file has no string {name}")))?;
+        hex::decode(text).map_err(|e| err(format!("the signature file's {name}: {e}")))
+    };
+    let ed25519: [u8; 64] = field("signature")?
+        .as_slice()
+        .try_into()
+        .map_err(|_| err("the signature file's signature is not 64 bytes".to_string()))?;
+    let ml_dsa = field("ml_dsa_signature")?;
+    let (ml_dsa_public_key, pq_key) = match &f.ml_dsa_public_key {
+        Some(pinned) => (
+            hex::decode(pinned.trim())
+                .map_err(|e| err(format!("--ml-dsa-public-key must be hex: {e}")))?,
+            "pinned",
+        ),
+        None => (field("ml_dsa_public_key")?, "carried"),
+    };
+    dregg_sdk::domain_sig::verify_domain_tagged(
+        domain,
+        message,
+        &public_key,
+        &ml_dsa_public_key,
+        &dregg_sdk::Signature(ed25519),
+        &ml_dsa,
+    )
+    .map_err(|e| err(e.to_string()))?;
+    Ok(serde_json::json!({
+        "valid": true,
+        "scheme": "dregg-domain-sig-v1",
+        "domain": domain,
+        "message_blake3": blake3::hash(message).to_hex().to_string(),
+        "public_key": hex::encode(public_key.0),
+        "pq_key": pq_key,
+    }))
+}
+
 #[tokio::main]
 async fn main() {
     // Route this process's ML-DSA through the Lean-verified cores exported by
@@ -2021,6 +2202,14 @@ async fn main() {
             "head" => cmd_head(flags).await,
             "prepare" => cmd_prepare(flags).await,
             "submit" => cmd_submit(flags).await,
+            "keygen" => cmd_keygen(flags),
+            "pubkey" => cmd_pubkey(flags),
+            "sign-bytes" => read_message(&flags)
+                .and_then(|message| sign_bytes(&flags, &message))
+                .map(|out| println!("{out}")),
+            "verify-bytes" => read_message(&flags)
+                .and_then(|message| verify_bytes(&flags, &message))
+                .map(|out| println!("{out}")),
             _ => Err(err(format!("unknown verb '{cmd}' (try --help)"))),
         }
     };
@@ -3632,6 +3821,136 @@ mod tests {
                 )),
                 "{e}"
             );
+            world.spawned.shutdown();
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn sign_bytes_needs_a_domain_and_its_signature_is_not_a_turn_signature() {
+            let Some(world) = World::new("the verified ML-DSA cores (sign-bytes)", |n| n).await
+            else {
+                return skipped("the sign-bytes / verify-bytes arms");
+            };
+            let message = b"a chat row, canonical bytes";
+            let mut sign = world.flags("unused", "unused");
+            sign.rest.clear();
+
+            // NO DOMAIN, NO SIGNATURE; and a stray word is not ignored.
+            let e = sign_bytes(&sign, message).unwrap_err().to_string();
+            assert!(e.contains("requires --domain"), "{e}");
+            sign.domain = Some("fleet.chat-row.v1".to_string());
+            let mut stray = sign.clone();
+            stray.rest = vec!["--domian".to_string()];
+            assert!(sign_bytes(&stray, message).is_err());
+
+            let sig = sign_bytes(&sign, message).expect("signs under a domain");
+            let pk = hex::encode(world.clerk.public_key().0);
+            assert_eq!(sig["public_key"], pk.as_str());
+            assert_eq!(
+                sig["ml_dsa_public_key"],
+                hex::encode(world.clerk.ml_dsa_public_bytes()).as_str()
+            );
+            // The identity verbs print the same keys.
+            let identity = identity_json(PROFILE, &world.clerk);
+            assert_eq!(identity["public_key"], sig["public_key"]);
+            assert_eq!(identity["ml_dsa_public_key"], sig["ml_dsa_public_key"]);
+            let sig_path = world.path("sig.json");
+            std::fs::write(&sig_path, sig.to_string()).unwrap();
+
+            let mut verify = world.flags("unused", "unused");
+            verify.rest.clear();
+            verify.domain = Some("fleet.chat-row.v1".to_string());
+            verify.sig = Some(sig_path.clone());
+            // The verifier must name the signer it expects.
+            let e = verify_bytes(&verify, message).unwrap_err().to_string();
+            assert!(e.contains("requires --public-key"), "{e}");
+            verify.public_key = Some(pk.clone());
+            let ok = verify_bytes(&verify, message).expect("the honest signature verifies");
+            assert_eq!(ok["valid"], true);
+            assert_eq!(ok["pq_key"], "carried");
+            let mut pinned = verify.clone();
+            pinned.ml_dsa_public_key = Some(hex::encode(world.clerk.ml_dsa_public_bytes()));
+            assert_eq!(verify_bytes(&pinned, message).unwrap()["pq_key"], "pinned");
+
+            // Another domain, message, expected signer or pinned PQ key: refused.
+            let mut other_domain = verify.clone();
+            other_domain.domain = Some("fleet.chat-row.v2".to_string());
+            assert!(verify_bytes(&other_domain, message).is_err());
+            assert!(verify_bytes(&verify, b"another row").is_err());
+            let stranger = AgentCipherclerk::from_seed([0x5B; 64]);
+            let mut other_signer = verify.clone();
+            other_signer.public_key = Some(hex::encode(stranger.public_key().0));
+            assert!(verify_bytes(&other_signer, message).is_err());
+            let mut other_pq = verify.clone();
+            other_pq.ml_dsa_public_key = Some(hex::encode(stranger.ml_dsa_public_bytes()));
+            let e = verify_bytes(&other_pq, message).unwrap_err().to_string();
+            assert!(e.contains("ML-DSA-65 half"), "{e}");
+            let mut no_domain = verify.clone();
+            no_domain.domain = None;
+            assert!(verify_bytes(&no_domain, message).is_err());
+
+            // A TURN'S ENVELOPE SIGNATURES, dressed as a sign-bytes file over the
+            // turn hash: refused under any domain.
+            let head = Head {
+                federation_id: world.spawned.fed_id(),
+                nonce: 0,
+                latest_height: 0,
+                previous_receipt_hash: None,
+                coordination_exempt: false,
+                coordination_exempt_ceiling: 0,
+            };
+            let prepared = prepare_send(&world.clerk, &head, "helm.chat", "row").unwrap();
+            let signed = decode_signed_turn(&prepared.bytes).unwrap();
+            let dressed = world.path("dressed.json");
+            std::fs::write(
+                &dressed,
+                serde_json::json!({
+                    "signature": hex::encode(signed.signature.0),
+                    "ml_dsa_signature": hex::encode(&signed.pq_signature),
+                    "ml_dsa_public_key": hex::encode(&signed.pq_signer),
+                })
+                .to_string(),
+            )
+            .unwrap();
+            for domain in ["fleet.chat-row.v1", "dregg-turn-v3:"] {
+                let mut replay = verify.clone();
+                replay.domain = Some(domain.to_string());
+                replay.sig = Some(dressed.clone());
+                assert!(
+                    verify_bytes(&replay, &prepared.turn_hash).is_err(),
+                    "a turn signature must not verify as a sign-bytes signature"
+                );
+            }
+            // AND THE OTHER WAY: a sign-bytes signature over the turn hash put in
+            // the envelope does not make a turn the witness check accepts.
+            let over_hash = world
+                .clerk
+                .sign_domain_tagged("fleet.chat-row.v1", &prepared.turn_hash)
+                .unwrap();
+            let mut forged = signed.clone();
+            forged.signature = over_hash.ed25519;
+            forged.pq_signature = over_hash.ml_dsa;
+            assert!(
+                check_witness(
+                    &postcard::to_stdvec(&forged).unwrap(),
+                    "helm.chat",
+                    "row",
+                    None
+                )
+                .is_err(),
+                "a sign-bytes signature must not verify as a turn signature"
+            );
+
+            // keygen creates once and never replaces.
+            let mut keygen = world.flags("unused", "unused");
+            keygen.rest.clear();
+            keygen.profile = Some("fresh-identity".to_string());
+            cmd_keygen(keygen.clone()).expect("keygen creates a new profile");
+            let e = cmd_keygen(keygen).unwrap_err().to_string();
+            assert!(e.contains("fresh-identity"), "{e}");
+            let mut nameless = world.flags("unused", "unused");
+            nameless.rest.clear();
+            nameless.profile = None;
+            assert!(cmd_keygen(nameless).is_err());
             world.spawned.shutdown();
         }
 

@@ -125,6 +125,7 @@ pub mod cipherclerk;
 pub mod committed_turn;
 pub mod council_seal;
 pub mod device_pairing;
+pub mod domain_sig;
 pub mod guardian_rotation;
 pub mod sealed_governance;
 // `embed` houses the no-I/O `DreggEngine` (executor + ledger + token core,
