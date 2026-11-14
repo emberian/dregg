@@ -20,10 +20,15 @@ boot, the HTTP API, consensus — lives in the `dregg_node` library. The command
   `--port`/`--bind` (`:108`, `:113`), `--federation-peers`, `--data-dir`/`--key-file`,
   `--gossip-port`, `--federation-mode` (`solo`|`full`, default `solo`, `:235`), `--consensus`
   (`blocklace`, the only engine, `:240`), `--prove-turns` (prove + verify-gate every finalized
-  turn, also `DREGG_PROVE_TURNS=1`, `:160`), `--enable-faucet`, `--enable-pruning`, the
+  turn, also `DREGG_PROVE_TURNS=1`, `:160`), `--enable-faucet`, the
   block-cadence / idle-heartbeat / min-block-interval timers (`:189`–`:220`), the blocklace
   checkpoint/wave tuning (`:174`, `:178`), `--groups`, `--auto-approve-joins`,
   `--cors-origin`, and `--deos-program` (`:285`).
+  The async prover that attests API-committed turns (`node/src/prove_pool.rs`) reads three
+  environment knobs: `DREGG_PROVE_WORKERS` (concurrent proofs, default 2; `0` turns async
+  proving off and leaves receipts committed-but-unattested), `DREGG_PROVE_THREADS` (rayon
+  threads per proof in a dedicated `dregg-prove-N` pool; unset = the global pool, one thread
+  per logical CPU) and `DREGG_PROVE_QUEUE_DEPTH` (default 256).
 - **`init`** — create the data dir and generate a node keypair, writing `node.key` at mode
   `0600` and printing the public key (`node/src/lib.rs:289`, `:1793`).
 - **`status`** — raw TCP liveness probe of the HTTP port (no HTTP client dep;

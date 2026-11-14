@@ -23,9 +23,9 @@ services:
       run --data-dir /data
       --bind 0.0.0.0 --port 8420 --gossip-port 9420
       --key-file node-0.key
-      --morpheus --node-index 0 --federation-size 3
+      --node-index 0 --federation-size 3
       --federation-peers node-1:9420,node-2:9420
-      --enable-pruning --enable-faucet
+      --enable-faucet
     volumes:
       - node0-data:/data
       - ./devnet-config/node-0.key:/data/node-0.key:ro
@@ -53,7 +53,7 @@ services:
       run --data-dir /data
       --bind 0.0.0.0 --port 8420 --gossip-port 9420
       --key-file node-1.key
-      --morpheus --node-index 1 --federation-size 3
+      --node-index 1 --federation-size 3
       --federation-peers node-0:9420,node-2:9420
     volumes:
       - node1-data:/data
@@ -82,7 +82,7 @@ services:
       run --data-dir /data
       --bind 0.0.0.0 --port 8420 --gossip-port 9420
       --key-file node-2.key
-      --morpheus --node-index 2 --federation-size 3
+      --node-index 2 --federation-size 3
       --federation-peers node-0:9420,node-1:9420
     volumes:
       - node2-data:/data

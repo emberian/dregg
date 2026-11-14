@@ -250,11 +250,6 @@ pub enum Command {
         #[arg(long, default_value = "4")]
         federation_size: usize,
 
-        /// Enable automatic pruning of old blocks/roots below the latest checkpoint.
-        /// Off by default (archival mode). Turn on to bound storage growth.
-        #[arg(long)]
-        enable_pruning: bool,
-
         /// Prove EVERY finalized turn on the commit path. When set, each
         /// committed turn produces a real full-turn STARK proof and acceptance
         /// is gated on the proof verifying (verify→accept). This is what makes
@@ -1332,7 +1327,6 @@ pub async fn run(cli: Cli) {
             gossip_port,
             node_index,
             federation_size,
-            enable_pruning,
             prove_turns,
             checkpoint_interval,
             blocklace_checkpoint_interval,
@@ -1359,7 +1353,6 @@ pub async fn run(cli: Cli) {
                 gossip_port,
                 node_index,
                 federation_size,
-                enable_pruning,
                 prove_turns,
                 checkpoint_interval,
                 blocklace_checkpoint_interval,
@@ -1896,7 +1889,6 @@ pub async fn run(cli: Cli) {
                 gossip_port,
                 0,
                 0,
-                false,
                 prove_turns,
                 1000,
                 100,
@@ -2169,7 +2161,6 @@ async fn run_node(
     gossip_port: u16,
     _node_index: usize,
     _federation_size: usize,
-    enable_pruning: bool,
     prove_turns: bool,
     checkpoint_interval: u64,
     blocklace_checkpoint_interval: u64,
@@ -2846,10 +2837,9 @@ async fn run_node(
         }
     };
 
-    // Configure pruning and solo state.
+    // Configure solo state.
     {
         let mut s = node_state.write().await;
-        s.pruning_enabled = enable_pruning;
         s.checkpoint_interval = checkpoint_interval;
 
         // Full-turn proving on the commit path (--prove-turns or
@@ -3070,7 +3060,6 @@ async fn run_node(
     info!(
         port = port,
         data_dir = %data_path.display(),
-        pruning = enable_pruning,
         checkpoint_interval = checkpoint_interval,
         blocklace_checkpoint_interval,
         blocklace_wave_timeout_ms,
