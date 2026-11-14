@@ -380,12 +380,14 @@ pub const STORE_CACHE_MB_ENV: &str = "DREGG_STORE_CACHE_MB";
 /// everything else; the kernel page cache still serves reads below it.
 pub const DEFAULT_STORE_CACHE_MB: usize = 1024;
 
-/// The store cache size in bytes: [`STORE_CACHE_MB_ENV`] when it parses, else
-/// [`DEFAULT_STORE_CACHE_MB`].
+/// The store cache size in bytes: [`STORE_CACHE_MB_ENV`] when it parses to a
+/// positive number, else [`DEFAULT_STORE_CACHE_MB`]. `0` is not a size: a
+/// zero-byte cache would send every page read to the file.
 pub fn store_cache_bytes() -> usize {
     std::env::var(STORE_CACHE_MB_ENV)
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|mb| *mb > 0)
         .unwrap_or(DEFAULT_STORE_CACHE_MB)
         .saturating_mul(1024 * 1024)
 }
@@ -1291,7 +1293,10 @@ impl PersistentStore {
 
     /// Visit every stored witness entry in key order, one at a time, so a caller
     /// that only needs a summary never holds the whole table in memory.
-    pub fn for_each_witnessed_receipt_raw(&self, mut visit: impl FnMut([u8; 32], &[u8])) -> Result<()> {
+    pub fn for_each_witnessed_receipt_raw(
+        &self,
+        mut visit: impl FnMut([u8; 32], &[u8]),
+    ) -> Result<()> {
         let read_txn = self.db.begin_read()?;
         let table = read_txn.open_table(tables::WITNESSED_RECEIPTS)?;
         for entry in table.iter()? {
