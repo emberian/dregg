@@ -124,8 +124,15 @@ impl VerifiedFinality {
     /// Build the wire + interning tables ONCE — shared by `compute` (projection) and `compute_order`
     /// (raw total order), so both gates hand the verified rule byte-identical input. Interns creators
     /// to the participant index (the round-robin `participants[w % n]` leader, matching BOTH `tau` and
-    /// the Lean `waveLeader`) and block ids to first-seen order over the SAME `(seq, creator)` sort
-    /// `tau` uses (so the wire's `BlockId`s are a faithful relabeling of the lace).
+    /// the Lean `waveLeader`) and block ids to their index in a `(seq, creator)` sort of the lace
+    /// (so the wire's `BlockId`s are a faithful relabeling of it).
+    ///
+    /// ⚑ That sort is NOT a causal order — a late joiner's `seq 0` block precedes the blocks it
+    /// cites — and the verified rule must not treat it as one. `BlocklaceFinality.computeRounds`
+    /// did, until dregg issue #100; it now enumerates the wire's blocks with Kahn's algorithm and
+    /// its rounds are proved independent of the listing (`roundOf_perm`). What the sort still
+    /// decides is the Lean tie-break: `xsortBy` breaks ready ties by `(round, id)`, and `id` is
+    /// this index.
     fn build_wire(lace: &Blocklace, participants: &[[u8; 32]]) -> LaceWire {
         let mut creator_ids: HashMap<[u8; 32], u64> = HashMap::new();
         for (i, p) in participants.iter().enumerate() {
@@ -356,7 +363,11 @@ mod tests {
             let preds: Vec<dregg_blocklace::BlockId> = b
                 .predecessors
                 .iter()
-                .map(|p| *fin_to_ord.get(p).expect("seq-major insert holds every predecessor"))
+                .map(|p| {
+                    *fin_to_ord
+                        .get(p)
+                        .expect("seq-major insert holds every predecessor")
+                })
                 .collect();
             let ob = dregg_blocklace::Block::new(b.creator, b.seq, preds, vec![]);
             let oid = ob.id();
@@ -634,11 +645,15 @@ mod tests {
         let short = cross_linked_lace(&keys, 3, 3);
         let short_vf = VerifiedFinality::compute(&short, &participants)
             .expect("verified gate ran (archive present + wire non-ERR)");
-        let short_rust: std::collections::HashSet<(u64, u64)> = rust_tau_order(&short, &participants)
-            .iter()
-            .map(|(c, s)| (cid(c), *s))
-            .collect();
-        assert_eq!(short_vf.finalized, short_rust, "trace3: verified gate must agree with Rust tau");
+        let short_rust: std::collections::HashSet<(u64, u64)> =
+            rust_tau_order(&short, &participants)
+                .iter()
+                .map(|(c, s)| (cid(c), *s))
+                .collect();
+        assert_eq!(
+            short_vf.finalized, short_rust,
+            "trace3: verified gate must agree with Rust tau"
+        );
         assert_eq!(
             short_vf.finalized,
             [(0u64, 0u64)].into_iter().collect(),
@@ -662,8 +677,9 @@ mod tests {
             verified, rust_finalized,
             "verified finality gate must agree with Rust tau on the (creator, seq) finalized set"
         );
-        let wave0: std::collections::HashSet<(u64, u64)> =
-            (0u64..3).flat_map(|c| (0u64..3).map(move |s| (c, s))).collect();
+        let wave0: std::collections::HashSet<(u64, u64)> = (0u64..3)
+            .flat_map(|c| (0u64..3).map(move |s| (c, s)))
+            .collect();
         assert!(
             wave0.is_subset(&verified),
             "3-node lace finalizes all nine wave-0 (creator, seq) blocks; got {verified:?}"

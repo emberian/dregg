@@ -807,22 +807,31 @@ pub fn tau(blocklace: &Blocklace, participants: &[[u8; 32]]) -> Vec<BlockId> {
 /// `[l]` is automatic because the candidate set IS `[l]`, so what remains is the equivocation
 /// clause, evaluated against `[l]`.
 ///
-/// ⚑ THE ENROLLMENT FILTER SITS HERE, INSIDE THE SEGMENT, NOT ON THE FINISHED ORDER — and that is
-/// where this mirror legitimately differs in *shape* from the Lean. In Lean the two placements are
-/// the SAME VALUE (`tauOrder`'s docstring proves it: the fold's carried closure never reads the
-/// segment, and `List.filter` distributes over the `++`-fold). That argument needs the linearizer
-/// to be a KEY sort, insensitive to which other elements are present — Lean's `xsortBy` sorts by
-/// `(round, id)`, so it is. **Rust's [`xsort`] is not**: it is a Kahn sweep over the segment's own
-/// causal subgraph with a min-block-id ready heap, so an extra element can change WHEN a block
+/// ⚑ THE ENROLLMENT FILTER SITS HERE, INSIDE THE SEGMENT, NOT ON THE FINISHED ORDER, and the Lean
+/// puts it in the same place (`BlocklaceFinality.anchorSegmentWith`'s `keep`). [`xsort`] is a Kahn
+/// sweep over the segment's own causal subgraph, so an extra element can change WHEN a block
 /// becomes ready and therefore the relative order of the blocks around it. Leaving a
 /// non-participant's block in the segment would let it reorder honest blocks even with the wave
 /// clock filtered. Filtering before `xsort` makes the segment (and its `local_predecessors`)
-/// identical on two nodes with identical enrolled sub-laces.
+/// identical on two nodes with identical enrolled sub-laces. The relay still constrains the order:
+/// `local_predecessors` is read off the TRANSITIVE causal past, so a block waits for an ancestor
+/// it reaches only through a filtered-out relay.
 ///
-/// ⚠ NAMED RESIDUAL, NOT closed: `xsort` (Kahn-min-id) and `xsortBy` (`(round, id)`) are still
-/// different linearizers — OPEN-CM-XSORT, named in the Lean header — and they coincide only on
-/// traces where every block acks all of the previous layer, which is what the differential tests
-/// use. That is a separate defect and belongs in its own pass.
+/// (Until dregg issue #100 the Lean filtered the finished order instead and linearized with a
+/// `(round, id)` KEY sort, for which the two placements coincide. That key sort emitted a block
+/// before its own causal ancestors whenever it reached them only through an unenrolled relay —
+/// `BlocklaceFinality.traceRelayLift6`. This function never had that defect.)
+///
+/// ⚠ NAMED RESIDUAL, NOT closed: both linearizers are now ready-set sorts over the same causal
+/// subgraph and both are linear extensions of it, but the READY PRIORITY differs — min block id
+/// here, `(round, id)` in `xsortBy`, and the ids are different schemes besides (a blake3 hash
+/// here, the wire's `(seq, creator)` index there). That is OPEN-CM-XSORT, named in the Lean
+/// header, and it belongs in its own pass. It is not confined to sparse laces: measured
+/// 2026-11-13, the two SEQUENCES already differ on a round-synchronous lace as soon as a second
+/// wave anchors (`node/tests/verified_order_budget.rs`'s exact-sequence gate is red at n=3,
+/// rounds=6), because inside one round every block is ready at once and the two priorities
+/// order them differently. What both sides do satisfy, and what that file's second gate
+/// asserts, is the same finalized set with each order a linear extension of the causal order.
 ///
 /// VERIFIED MODEL: `BlocklaceFinality.anchorSegment` / `tauStep` / `tauOrder`.
 fn order_over_anchor_chain(
@@ -1163,10 +1172,9 @@ fn compute_rounds_filtered(
 ///     (`traceRelayStall`) — a fork and a stall, not a delay.
 ///
 /// ⚑ **(3) is what remains** — leader selection is already participant-only in `tau`, but the two
-/// functions' LINEARIZERS still differ: [`xsort`] is a Kahn sweep with a min-block-id ready heap
-/// and the Lean `xsortBy` is a `(round, id)` key sort. They coincide only where every block acks
-/// all of the previous layer. That is OPEN-CM-XSORT, named in the Lean header, and it is a
-/// different defect from this one.
+/// functions' LINEARIZERS still differ: both are Kahn sweeps over the segment's causal subgraph,
+/// but [`xsort`] pops the min block id and the Lean `xsortBy` pops the least `(round, id)`. That
+/// is OPEN-CM-XSORT, named in the Lean header, and it is a different defect from this one.
 ///
 /// The algorithm is the same as `tau_with_config` — CM Def. 6's head selection, backward anchor
 /// chain and closure-difference fold, sharing [`ratified_leader_chain`] and

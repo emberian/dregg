@@ -30,23 +30,42 @@
 //! `scripts/federation-local.sh` builds, and the shape whose growth drove the observed
 //! over-budget warnings at `lace_size` 773–981.
 //!
-//! ## ⚠ Wall-clock is machine- and LOAD-dependent
+//! ## ⚑ Status of that gate, measured 2026-11-13
 //!
-//! Absolute milliseconds price the box, not the code. The `#[ignore]`d
-//! [`verified_order_cost_curve`] is a MEASUREMENT INSTRUMENT, not a gate — run it explicitly
-//! on a quiet box and read the printed table. The GATE in this file is
-//! [`the_two_orders_the_node_swaps_between_agree_exactly`], which asserts a machine-independent
-//! property: the verified Lean order and the Rust `ordering::tau` order the node substitutes
-//! for it are the SAME SEQUENCE, not merely the same set.
+//! On an archive built from this checkout's Lean (hbox, Lean 4.35),
+//! [`the_two_orders_the_node_swaps_between_agree_exactly`] is **RED** at n=3, rounds=6 — the
+//! first lace where a second wave anchors — and it was red at `origin/main` too. It had not been
+//! seen because the test self-skips without an archive. The two orders finalize the same SET;
+//! the SEQUENCES differ inside each round, where every block is ready at once and the two
+//! linearizers break the tie differently (OPEN-CM-XSORT: Rust pops the min block id, a blake3
+//! hash; Lean pops the least `(round, id)`, and its `id` is the wire's `(seq, creator)` index).
+//! So the over-budget fallback does substitute a different order. The gate is left as it is: it
+//! states the property the fallback needs, and making it true means giving the two linearizers
+//! one ready priority.
 //!
-//! ## The set/sequence distinction is the point
+//! ## ⚑ What the round-synchronous shape cannot see (dregg issue #100)
 //!
-//! `poll_finalized_blocks`'s own differential (`blocklace_sync.rs`, the `coord` closure)
-//! compares `Vec<(seq, creator)>` **after `sort_unstable()`** — it compares the finalized
-//! SET. The fallback substitutes one ORDER for another. A differential that sorts before
-//! comparing cannot, even in principle, see the property the substitution needs. This test
-//! asserts the SEQUENCE.
+//! A round-synchronous lace has two properties no real federation is guaranteed: every creator's
+//! `seq` equals its DAG depth, and every block reaches its ancestors through enrolled blocks.
+//! Two defects in the verified rule lived exactly in the complement:
+//!
+//! * **a late joiner** — a validator whose first block (`seq 0`) cites the current tips. The
+//!   Lean round map folded blocks in `(seq, creator)` order and skipped predecessors it had not
+//!   folded yet, so that block got round 1. [`late_joiner_lace`] makes the late joiner the
+//!   leader of the wave it joins in: with the wrong round the wave never anchors and the
+//!   verified rule finalizes one coordinate where `ordering::tau` finalizes ten.
+//! * **an unenrolled relay** — a block that reaches a later round only through a
+//!   non-participant's block keeps a low round, and the Lean `(round, id)` key sort emitted it
+//!   BEFORE its own causal ancestors. [`relay_lace`] is that shape; the finalized SET was right
+//!   and the ORDER was not a linear extension of the causal order.
+//!
+//! [`the_verified_order_survives_a_late_joiner_and_a_relay`] runs both. It asserts what both
+//! orders must satisfy whatever the tie-break: the same finalized set, and each order a linear
+//! extension of the lace's causal order. Run against the Lean of `origin/main` it fails on all
+//! three counts (one coordinate instead of ten; different sets; a block ahead of an ancestor);
+//! against this checkout's it passes.
 
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use dregg_blocklace::finality::{Block, BlockId, Blocklace, Payload};
@@ -217,6 +236,257 @@ fn the_two_orders_the_node_swaps_between_agree_exactly() {
     }
 }
 
+/// One block by `signer` at `seq` citing `preds`, received by `lace`. Returns its id.
+fn put(lace: &mut Blocklace, signer: &HybridBlockSigner, seq: u64, preds: &[BlockId]) -> BlockId {
+    let b = Block::new_signed_by(
+        signer,
+        seq,
+        Payload::Turn(vec![seq as u8, preds.len() as u8]),
+        preds.to_vec(),
+    );
+    let id = b.id();
+    lace.receive_block(b).expect("causally closed insert");
+    id
+}
+
+/// `rounds` round-synchronous layers over `signers`, the first layer citing `below`. Returns the
+/// last layer's ids. `first_seq` is the `seq` of the first layer.
+fn layers(
+    lace: &mut Blocklace,
+    signers: &[&HybridBlockSigner],
+    first_seq: u64,
+    rounds: u64,
+    below: &[BlockId],
+) -> Vec<BlockId> {
+    let mut prev = below.to_vec();
+    for r in 0..rounds {
+        prev = signers
+            .iter()
+            .map(|s| put(lace, s, first_seq + r, &prev))
+            .collect();
+    }
+    prev
+}
+
+/// **THE LATE-JOINER LACE** — `BlocklaceFinality.traceLateLeader`.
+///
+/// Four enrolled validators. Three of them run rounds 1–3 alone. The fourth JOINS at round 4:
+/// its first block has `seq 0` and cites the three round-3 tips. From then on all four are an
+/// ordinary fully connected committee through round 6. The participant order puts the late
+/// joiner SECOND, so it is wave 1's round-robin leader (`participants[1 % 4]`, wavelength 3):
+/// its round-4 block is the wave-1 leader block and the round-6 layer super-ratifies it.
+///
+/// Every block is honest. The only unusual thing is a `seq` that lags depth, which is what a
+/// validator that joins late or falls behind produces.
+fn late_joiner_lace(signers: &[HybridBlockSigner]) -> (Blocklace, Vec<[u8; 32]>) {
+    assert_eq!(signers.len(), 4);
+    let (early, late) = (&signers[..3], &signers[3]);
+    let early: Vec<&HybridBlockSigner> = early.iter().collect();
+    let participants = vec![
+        early[0].creator(),
+        late.creator(), // wave 1's leader
+        early[1].creator(),
+        early[2].creator(),
+    ];
+    let mut lace = Blocklace::new(SigningKey::from_bytes(&[1u8; 32]), 3);
+
+    let r3 = layers(&mut lace, &early, 0, 3, &[]);
+    // round 4: the three early validators' `seq 3`, and the late joiner's `seq 0`.
+    let mut r4: Vec<BlockId> = early.iter().map(|s| put(&mut lace, s, 3, &r3)).collect();
+    r4.push(put(&mut lace, late, 0, &r3));
+    // rounds 5 and 6: everyone, fully connected.
+    let mut prev = r4;
+    for r in 0..2u64 {
+        let mut next: Vec<BlockId> = early
+            .iter()
+            .map(|s| put(&mut lace, s, 4 + r, &prev))
+            .collect();
+        next.push(put(&mut lace, late, 1 + r, &prev));
+        prev = next;
+    }
+    (lace, participants)
+}
+
+/// **THE RELAY LACE** — `BlocklaceFinality.traceRelayLift6`, the reporter's exhibit.
+///
+/// Four enrolled validators and one UNENROLLED relay. Three validators run rounds 1–3. The relay
+/// cites the three round-3 tips. The fourth validator's only block cites the genesis layer AND
+/// the relay — so it sits at round 2 (a non-participant contributes no depth) while the round-3
+/// layer is in its causal past, through the relay. The three then cite it from round 4 and run
+/// on to round 6, where wave 1's leader (the second participant's round-4 block) anchors.
+///
+/// Every block passes the admission checks; nothing here needs a Byzantine validator.
+fn relay_lace(
+    signers: &[HybridBlockSigner],
+    relay: &HybridBlockSigner,
+) -> (Blocklace, Vec<[u8; 32]>) {
+    assert_eq!(signers.len(), 4);
+    let core: Vec<&HybridBlockSigner> = signers[..3].iter().collect();
+    let lifted = &signers[3];
+    let participants: Vec<[u8; 32]> = signers.iter().map(|s| s.creator()).collect();
+    assert!(
+        !participants.contains(&relay.creator()),
+        "the relay must not be enrolled — else this lace has no relay"
+    );
+    let mut lace = Blocklace::new(SigningKey::from_bytes(&[1u8; 32]), 3);
+
+    let r1 = layers(&mut lace, &core, 0, 1, &[]);
+    let r3 = layers(&mut lace, &core, 1, 2, &r1);
+    let relay_id = put(&mut lace, relay, 0, &r3);
+    let mut lifted_preds = r1.clone();
+    lifted_preds.push(relay_id);
+    let lifted_id = put(&mut lace, lifted, 0, &lifted_preds);
+    let mut below = r3.clone();
+    below.push(lifted_id);
+    layers(&mut lace, &core, 3, 3, &below);
+    (lace, participants)
+}
+
+/// Every block's inclusive causal past, by reachability over the predecessors the lace holds.
+/// This is the DEFINITION the order is checked against, not a mirror of either implementation.
+fn causal_pasts(lace: &Blocklace) -> HashMap<BlockId, HashSet<BlockId>> {
+    let mut out = HashMap::new();
+    for (id, _) in lace.iter() {
+        let mut seen: HashSet<BlockId> = HashSet::new();
+        let mut stack = vec![*id];
+        while let Some(x) = stack.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            if let Some(b) = lace.get(&x) {
+                stack.extend(
+                    b.predecessors
+                        .iter()
+                        .filter(|p| lace.get(p).is_some())
+                        .copied(),
+                );
+            }
+        }
+        out.insert(*id, seen);
+    }
+    out
+}
+
+/// The first pair `(earlier, later)` in `order` where `later` is a causal ancestor of `earlier`
+/// — i.e. the witness that `order` is NOT a linear extension of the causal order.
+fn causal_inversion(
+    lace: &Blocklace,
+    pasts: &HashMap<BlockId, HashSet<BlockId>>,
+    order: &[BlockId],
+) -> Option<(([u8; 32], u64), ([u8; 32], u64))> {
+    let coord = |id: &BlockId| lace.get(id).map(|b| (b.creator, b.seq)).expect("held id");
+    for (i, x) in order.iter().enumerate() {
+        for a in &order[i + 1..] {
+            if a != x && pasts[x].contains(a) {
+                return Some((coord(x), coord(a)));
+            }
+        }
+    }
+    None
+}
+
+/// ── THE SHAPES THE ROUND-SYNCHRONOUS GATE CANNOT SEE (dregg issue #100) ────────────────────
+///
+/// On a late-joiner lace and on a relay lace, the verified Lean order and the Rust
+/// `ordering::tau` order must finalize the SAME SET, and EACH must be a linear extension of the
+/// causal order (no block before one of its own ancestors).
+///
+/// Both halves are needed, and each catches one defect:
+///
+/// * the late joiner's wrong round changed WHICH wave anchors, so the two finalized SETS
+///   differed (one coordinate against ten) — the set assertion;
+/// * the relay left the set intact and put a block ahead of three of its ancestors — only the
+///   linear-extension assertion sees that.
+///
+/// The sequences are deliberately NOT compared here; see the module header.
+#[test]
+fn the_verified_order_survives_a_late_joiner_and_a_relay() {
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::tau_order_available(),
+        "the Lean raw tau-order export (tau_order_available()==false)",
+    ) {
+        return;
+    }
+
+    let signers = committee(4);
+    let relay = HybridBlockSigner::new(SigningKey::from_bytes(&[0x77; 32]));
+    let cases: [(&str, (Blocklace, Vec<[u8; 32]>), usize); 2] = [
+        // ten: the wave-0 anchor, then rounds 1-3 minus that anchor (eight) and the wave-1
+        // leader block itself — the late joiner's.
+        ("late joiner", late_joiner_lace(&signers), 10),
+        // eleven: the wave-0 anchor, then rounds 1-3 minus it (eight), the lifted block, and the
+        // wave-1 leader block. The relay's own block is not enrolled and is not ordered.
+        ("relay", relay_lace(&signers, &relay), 11),
+    ];
+
+    // Every case runs and every violated property is collected, so one run names BOTH defects
+    // rather than stopping at the first.
+    let mut failures: Vec<String> = Vec::new();
+    for (name, (lace, participants), expected_len) in cases {
+        let lean = VerifiedFinality::compute_order(&lace, &participants)
+            .expect("raw-order gate ran (archive present + wire non-ERR)");
+        let rust = node_rust_order(&lace, &participants);
+        let pasts = causal_pasts(&lace);
+
+        // ANTI-VACUITY, and the late joiner's tooth: the wave the late joiner leads must anchor.
+        if lean.len() != expected_len {
+            failures.push(format!(
+                "{name}: the verified rule finalized {} coordinates, expected {expected_len}. On \
+                 the late-joiner lace a short order means the joiner's first block got the wrong \
+                 round and its wave never anchored (the `(seq, creator)` fold of dregg issue #100).",
+                lean.len(),
+            ));
+        }
+
+        let mut lean_set = coords_in_order(&lace, &lean);
+        let mut rust_set = coords_in_order(&lace, &rust);
+        lean_set.sort_unstable();
+        rust_set.sort_unstable();
+        if lean_set != rust_set {
+            failures.push(format!(
+                "{name}: the verified Lean rule and `ordering::tau` finalized DIFFERENT SETS \
+                 (lean_len={} rust_len={})",
+                lean.len(),
+                rust.len(),
+            ));
+        }
+
+        // The relay's tooth: neither order may put a block before one of its own ancestors.
+        if let Some((earlier, later)) = causal_inversion(&lace, &pasts, &lean) {
+            failures.push(format!(
+                "{name}: the verified Lean order is NOT a linear extension of the causal order — \
+                 it emits (creator {:02x?}.., seq {}) before (creator {:02x?}.., seq {}), which \
+                 is in its causal past",
+                &earlier.0[..4],
+                earlier.1,
+                &later.0[..4],
+                later.1,
+            ));
+        }
+        if causal_inversion(&lace, &pasts, &rust).is_some() {
+            failures.push(format!(
+                "{name}: the Rust `ordering::tau` order is NOT a linear extension of the causal order"
+            ));
+        }
+
+        // No unenrolled creator is ordered, on either side.
+        if lean
+            .iter()
+            .chain(rust.iter())
+            .any(|id| !participants.contains(&lace.get(id).expect("ordered id is held").creator))
+        {
+            failures.push(format!(
+                "{name}: an unenrolled creator's block was finalized"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "the verified order and its Rust twin disagree with the causal order or with each other:\n  - {}",
+        failures.join("\n  - ")
+    );
+}
+
 /// ── THE MEASUREMENT INSTRUMENT (not a gate) ─────────────────────────────────────────────────
 ///
 /// Print the verified-Lean τ-order FFI cost against lace size, alongside the Rust `ordering::tau`
@@ -234,8 +504,9 @@ fn the_two_orders_the_node_swaps_between_agree_exactly() {
 /// (comma-separated round counts), `ORDER_BUDGET_CEILING_MS` (stop growing once one FFI call
 /// exceeds this, default 120000).
 ///
-/// The order-agreement assertion runs at EVERY size here too — so the agreement evidence is not
-/// confined to the small laces the gate above can afford.
+/// Set agreement is asserted at EVERY size here too, and each row says whether the two SEQUENCES
+/// agreed — so the agreement evidence is not confined to the small laces the gate above can
+/// afford.
 #[test]
 #[ignore = "measurement instrument: wall-clock, minutes long, run explicitly on a quiet box"]
 fn verified_order_cost_curve() {
@@ -271,7 +542,9 @@ fn verified_order_cost_curve() {
         DEFAULT_PER_POLL_BUDGET.as_millis()
     );
     eprintln!("#");
-    eprintln!("#   blocks   lean_ms   rust_ms   lean/rust   vs_budget   growth_exp   finalized");
+    eprintln!(
+        "#   blocks   lean_ms   rust_ms   lean/rust   vs_budget   growth_exp   finalized  sequence"
+    );
 
     let mut prev: Option<(f64, f64)> = None; // (blocks, lean_ms)
     for rounds in rounds_list {
@@ -287,14 +560,23 @@ fn verified_order_cost_curve() {
         let rust = node_rust_order(&lace, &participants);
         let rust_ms = t1.elapsed().as_secs_f64() * 1000.0;
 
-        // The agreement property, re-asserted at every measured size.
+        // Agreement, re-checked at every measured size — at the level the two linearizers are
+        // required to agree at: the finalized SET. The exact SEQUENCE is the gate above, and it
+        // is RED as soon as a second wave anchors (OPEN-CM-XSORT: the two break ready ties
+        // differently), so asserting it here made the instrument stop at its second row and
+        // print no curve. `seq_agree` reports it instead.
         let lean_seq = coords_in_order(&lace, &lean);
         let rust_seq = coords_in_order(&lace, &rust);
+        let seq_agree = lean_seq == rust_seq;
+        let mut lean_set = lean_seq.clone();
+        let mut rust_set = rust_seq.clone();
+        lean_set.sort_unstable();
+        rust_set.sort_unstable();
         assert_eq!(
-            lean_seq,
-            rust_seq,
-            "blocks={blocks}: verified Lean order and Rust `ordering::tau` order DIVERGED IN \
-             SEQUENCE at scale (lean_len={} rust_len={})",
+            lean_set,
+            rust_set,
+            "blocks={blocks}: verified Lean order and Rust `ordering::tau` finalized DIFFERENT \
+             SETS at scale (lean_len={} rust_len={})",
             lean_seq.len(),
             rust_seq.len()
         );
@@ -317,13 +599,14 @@ fn verified_order_cost_curve() {
             "under"
         };
         eprintln!(
-            "  {blocks:>8}  {lean_ms:>8.1}  {rust_ms:>8.2}  {:>9.1}x  {verdict:>9}  {exp}  {:>9}",
+            "  {blocks:>8}  {lean_ms:>8.1}  {rust_ms:>8.2}  {:>9.1}x  {verdict:>9}  {exp}  {:>9}  {}",
             if rust_ms > 0.0 {
                 lean_ms / rust_ms
             } else {
                 0.0
             },
             lean_seq.len(),
+            if seq_agree { "same-seq" } else { "SEQ-DIFFERS" },
         );
         prev = Some((blocks as f64, lean_ms));
 

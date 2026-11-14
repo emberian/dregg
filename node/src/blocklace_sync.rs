@@ -2630,6 +2630,11 @@ impl BlocklaceHandle {
             //     `node/tests/verified_order_budget.rs::the_two_orders_the_node_swaps_between_agree_exactly`,
             //     which compares the SEQUENCE (the differential below sorts, so it compares only the
             //     finalized SET and is blind to a pure reordering).
+            //     ⚑ THAT PIN IS RED, measured 2026-11-13 on an archive built from this checkout
+            //     (it self-skips without one, which is how it went unseen): at n=3, rounds=6 the
+            //     two orders finalize the same set in DIFFERENT SEQUENCES, because the two
+            //     linearizers break ready ties differently (OPEN-CM-XSORT). So under this flag an
+            //     over-budget poll does execute a different order than a verified one would.
             //   * Otherwise (a Lean-linked PoA node; `scripts/poa-devnet.sh` pins the escape to `0`):
             //     the poll FINALIZES NOTHING. Repeated misses are a finality HALT, not a silent swap.
             //
@@ -4396,13 +4401,24 @@ pub fn build_ordering_blocklace(
     // DAG-depth round); the `(seq, creator)` sort then places it BEFORE its
     // predecessors, dropping those edges and collapsing the projected DAG depth.
     // Rust `ordering::tau` then finds no super-ratified leader and returns
-    // `rust_len = 0` while the verified Lean order — which runs on the FULL edge
-    // set — returns hundreds: the 291 false `DIFFERENTIAL DIVERGENCE lean_len=180
-    // rust_len=0` alarms (docs/CROSS-MACHINE-FINALITY-FINDING.md §2).
+    // `rust_len = 0` while the verified Lean order returns hundreds: the 291
+    // `DIFFERENTIAL DIVERGENCE lean_len=180 rust_len=0` alarms
+    // (docs/CROSS-MACHINE-FINALITY-FINDING.md §2).
+    //
+    // ⚑ WHAT THE LEAN SIDE DID WITH THE SAME BLOCK (dregg issue #100). This comment used to
+    // say the Lean order "runs on the FULL edge set". Its WIRE does (`finality_gate.rs::
+    // build_wire` keeps every in-lace predecessor), but its round map did not use it: the
+    // wire lists blocks in the same `(seq, creator)` order, `BlocklaceFinality.computeRounds`
+    // folded them in that order, and `roundOfStep` skipped any predecessor not yet folded. So
+    // the late block kept its edges for the causal past and got round 1 for the wave clock —
+    // the same defect, one block wide instead of lace wide, which is why Lean still returned
+    // an order here. The Lean fold now runs over a Kahn enumeration
+    // (`BlocklaceFinality.topoLace`) and the round is proved independent of the listing
+    // (`roundOf_perm`); `node/tests/verified_order_budget.rs` carries a late-joiner lace.
     //
     // Insert in TOPOLOGICAL order instead: every in-lace predecessor lands before
     // its dependent, so NO in-lace edge is ever dropped and the Rust projection
-    // carries the SAME edge set as the Lean authority. Ties (blocks whose
+    // carries the SAME edge set as the Lean wire. Ties (blocks whose
     // predecessors are all satisfied at the same frontier) break by
     // `(seq, creator, id)` for a deterministic linearization. Predecessors NOT
     // present in the lace are edges NEITHER order traverses (the Lean wire-build
@@ -12434,7 +12450,11 @@ mod tests {
         assert_eq!(parse_retained_checkpoints(Some(" 1 ")), 1);
         assert_eq!(parse_retained_checkpoints(Some("12")), 12);
         for bad in ["0", "", "-1", "two", "2.5"] {
-            assert_eq!(parse_retained_checkpoints(Some(bad)), MAX_RETAINED_CHECKPOINTS, "{bad:?}");
+            assert_eq!(
+                parse_retained_checkpoints(Some(bad)),
+                MAX_RETAINED_CHECKPOINTS,
+                "{bad:?}"
+            );
         }
     }
 

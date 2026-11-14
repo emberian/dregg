@@ -130,6 +130,16 @@ until the frontier fills in, and over-includes once it does. Single-machine on a
 clean round-synchronous DAG, `seq` ≈ round ≈ topo order, no edges drop, and
 Rust == Lean — exactly why `docs/N3-ROOTCAUSE.md` saw **"no divergence, ever."**
 
+> **Correction, 2026-11-13 (dregg issue #100).** The reading above cleared the Lean side too
+> quickly. The Lean order did receive every edge, but its ROUND MAP folded the wire's blocks in
+> the same `(seq, creator)` order and skipped predecessors it had not folded yet
+> (`BlocklaceFinality.roundOfStep`'s `filterMap`). So in exactly this catch-up case the lagging
+> creator's late block got round 1 in the AUTHORITY as well: one block's round wrong rather than
+> the whole projection's depth, which is why Lean still returned an order. If that creator led
+> the wave it rejoined in, the verified rule never anchored that wave. The Lean fold is now a
+> Kahn enumeration (`topoLace`), with the round proved independent of the listing
+> (`roundOf_perm`).
+
 **Crucially this is the DIFFERENTIAL sibling, not the authority.** The node
 finalizes over the **Lean** order (`ordered_from_lean = true`, `:1181`;
 `ordered = lean_order`, `:1182`). So `rust_len=0` does **not** withhold any block
