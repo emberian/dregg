@@ -1328,12 +1328,15 @@ mod tests {
 
     #[test]
     fn propose_leave_threshold_approvals_member_removed() {
-        let participants = make_participants(4);
+        // Five members: a leave from four is refused by the roster floor
+        // (`ratified_leave_from_four_is_refused_by_name_and_mutates_nothing`),
+        // so the smallest roster a member can leave is five.
+        let participants = make_participants(5);
         let mut mgr =
             ConstitutionManager::from_participants(participants.clone(), TEST_TIMEOUT_WAVES);
 
-        // threshold for 4 = 3
-        assert_eq!(mgr.threshold(), 3);
+        // threshold for 5 = 4
+        assert_eq!(mgr.threshold(), 4);
 
         let leaving_node = make_node_key(4);
         let proposal = MembershipProposal::Leave {
@@ -1350,12 +1353,13 @@ mod tests {
 
         mgr.submit_vote(&vote, make_node_key(1));
         mgr.submit_vote(&vote, make_node_key(2));
-        let result = mgr.submit_vote(&vote, make_node_key(3));
+        assert_eq!(mgr.submit_vote(&vote, make_node_key(3)), None);
+        let result = mgr.submit_vote(&vote, make_node_key(5));
         assert_eq!(result, Some(proposal_block));
 
         assert!(mgr.apply_if_passed(&proposal_block).unwrap());
         assert!(!mgr.current.is_participant(&leaving_node));
-        assert_eq!(mgr.current.participant_count(), 3);
+        assert_eq!(mgr.current.participant_count(), 4);
         assert_eq!(mgr.current.version, 1);
     }
 
@@ -1515,7 +1519,7 @@ mod tests {
 
     /// Refusal at the APPLY level, both poles, mutation asserted present: a
     /// ratified Leave from n=4 gathers a real quorum (the mutation is live —
-    /// the same votes at n=5 would install), and the roster floor refuses it
+    /// at n=5, with the one further approval that roster needs, it installs), and the roster floor refuses it
     /// by name with NOTHING mutated; `Err` is distinct from the not-passed
     /// `Ok(false)`, so a refused proposal can never read as "still pending".
     #[test]
@@ -1575,8 +1579,16 @@ mod tests {
         );
         assert_eq!(mgr.participants().len(), 5);
 
-        // The refused leave is still ratified in the tracker; at n=5 the same
-        // apply now clears the floor and installs.
+        // The join raised the threshold to 4, so the leave's three approvals
+        // no longer ratify it: not passed, which is `Ok(false)` and not the
+        // floor's `Err`. One more approval (the new member's) ratifies it, and
+        // at n=5 the apply clears the floor and installs.
+        assert_eq!(mgr.threshold(), 4);
+        assert_eq!(mgr.apply_if_passed(&proposal_block), Ok(false));
+        assert_eq!(
+            mgr.submit_vote(&vote, make_node_key(5)),
+            Some(proposal_block)
+        );
         assert!(mgr.apply_if_passed(&proposal_block).unwrap());
         assert_eq!(mgr.participants().len(), 4);
         assert!(!mgr.current.is_participant(&make_node_key(4)));
