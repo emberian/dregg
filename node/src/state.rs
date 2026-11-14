@@ -656,7 +656,7 @@ pub struct NodeStateInner {
     /// MCP/devnet mutation paths can produce `WitnessedReceipt`s at commit time.
     /// Keeping them here lets later HTTP, explorer, and verifier flows retrieve
     /// the same artifact instead of relying on the original tool response.
-    pub witnessed_receipts: HashMap<[u8; 32], Vec<WitnessedReceipt>>,
+    pub witnessed_receipts: WitnessedReceiptIndex,
     witnessed_receipt_order: VecDeque<[u8; 32]>,
 
     /// Receipt hashes whose state is COMMITTED but whose async STARK
@@ -775,47 +775,104 @@ fn apply_overlay_op(ledger: &mut Ledger, op: dregg_persist::CellOverlayOp) {
     }
 }
 
-fn load_witnessed_receipts(
-    store: &PersistentStore,
-) -> (HashMap<[u8; 32], Vec<WitnessedReceipt>>, VecDeque<[u8; 32]>) {
-    let mut witnessed_receipts = HashMap::new();
-    let mut witnessed_receipt_order = VecDeque::new();
-    match store.load_witnessed_receipts_raw() {
-        Ok(entries) => {
-            let mut raw_by_hash: HashMap<[u8; 32], Vec<u8>> = entries.into_iter().collect();
-            let ordered_hashes = store
-                .get_config(WITNESSED_RECEIPT_ORDER_CONFIG)
-                .ok()
-                .flatten()
-                .and_then(|bytes| postcard::from_bytes::<Vec<[u8; 32]>>(&bytes).ok())
-                .filter(|order| !order.is_empty())
-                .unwrap_or_else(|| raw_by_hash.keys().copied().collect());
-            let skip = ordered_hashes.len().saturating_sub(MAX_WITNESSED_RECEIPTS);
-            for receipt_hash in ordered_hashes.into_iter().skip(skip) {
-                let Some(encoded) = raw_by_hash.remove(&receipt_hash) else {
-                    continue;
-                };
-                match decode_witnessed_receipt_artifacts(&encoded) {
-                    Ok(witnesses) => {
-                        witnessed_receipt_order.push_back(receipt_hash);
-                        witnessed_receipts.insert(receipt_hash, witnesses);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            receipt_hash = ?receipt_hash,
-                            error = %e,
-                            "skipping corrupt persisted witnessed receipt artifact"
-                        );
-                    }
-                }
+/// Node-local witness artifacts by receipt hash, read from the store on demand.
+///
+/// Only the per-receipt witness COUNT stays in memory. The artifacts carry
+/// proofs (about 1.3 MB per receipt measured on the chat node), and holding the
+/// last [`MAX_WITNESSED_RECEIPTS`] of them decoded kept about 1.3 GB resident
+/// for the node's whole life whether or not anything read them.
+pub struct WitnessedReceiptIndex {
+    store: Arc<PersistentStore>,
+    counts: HashMap<[u8; 32], usize>,
+}
+
+impl WitnessedReceiptIndex {
+    fn new(store: Arc<PersistentStore>) -> Self {
+        Self { store, counts: HashMap::new() }
+    }
+
+    /// The stored witnesses for `receipt_hash`, or `None` when it has none. A
+    /// stored entry that no longer decodes is reported and treated as none.
+    pub fn get(&self, receipt_hash: &[u8; 32]) -> Option<Vec<WitnessedReceipt>> {
+        if !self.counts.contains_key(receipt_hash) {
+            return None;
+        }
+        let read = self
+            .store
+            .load_witnessed_receipt_raw(receipt_hash)
+            .map_err(|e| e.to_string())
+            .and_then(|raw| raw.ok_or_else(|| "missing from the store".to_string()))
+            .and_then(|raw| decode_witnessed_receipt_artifacts(&raw));
+        match read {
+            Ok(witnesses) => Some(witnesses),
+            Err(e) => {
+                tracing::warn!(
+                    receipt_hash = ?receipt_hash,
+                    error = %e,
+                    "persisted witnessed receipt artifacts unreadable"
+                );
+                None
             }
         }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "failed to load persisted witnessed receipt artifacts"
-            );
+    }
+
+    pub fn count(&self, receipt_hash: &[u8; 32]) -> usize {
+        self.counts.get(receipt_hash).copied().unwrap_or(0)
+    }
+
+    pub fn contains_key(&self, receipt_hash: &[u8; 32]) -> bool {
+        self.counts.contains_key(receipt_hash)
+    }
+
+    pub fn len(&self) -> usize {
+        self.counts.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.counts.is_empty()
+    }
+}
+
+fn load_witnessed_receipts(store: &Arc<PersistentStore>) -> (WitnessedReceiptIndex, VecDeque<[u8; 32]>) {
+    let mut witnessed_receipts = WitnessedReceiptIndex::new(store.clone());
+    let mut witnessed_receipt_order = VecDeque::new();
+    // One entry decoded at a time, kept only as its witness count.
+    let mut counts: HashMap<[u8; 32], usize> = HashMap::new();
+    let scanned = store.for_each_witnessed_receipt_raw(|receipt_hash, encoded| {
+        match decode_witnessed_receipt_artifacts(encoded) {
+            Ok(witnesses) => {
+                counts.insert(receipt_hash, witnesses.len());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    receipt_hash = ?receipt_hash,
+                    error = %e,
+                    "skipping corrupt persisted witnessed receipt artifact"
+                );
+            }
         }
+    });
+    if let Err(e) = scanned {
+        tracing::warn!(
+            error = %e,
+            "failed to load persisted witnessed receipt artifacts"
+        );
+        return (witnessed_receipts, witnessed_receipt_order);
+    }
+    let ordered_hashes = store
+        .get_config(WITNESSED_RECEIPT_ORDER_CONFIG)
+        .ok()
+        .flatten()
+        .and_then(|bytes| postcard::from_bytes::<Vec<[u8; 32]>>(&bytes).ok())
+        .filter(|order| !order.is_empty())
+        .unwrap_or_else(|| counts.keys().copied().collect());
+    let skip = ordered_hashes.len().saturating_sub(MAX_WITNESSED_RECEIPTS);
+    for receipt_hash in ordered_hashes.into_iter().skip(skip) {
+        let Some(count) = counts.remove(&receipt_hash) else {
+            continue;
+        };
+        witnessed_receipt_order.push_back(receipt_hash);
+        witnessed_receipts.counts.insert(receipt_hash, count);
     }
     (witnessed_receipts, witnessed_receipt_order)
 }
@@ -2412,11 +2469,13 @@ impl NodeStateInner {
     /// keys at capacity. Multiple witnesses may share one receipt hash, e.g. a
     /// bilateral turn with per-side witnessed receipts.
     pub fn push_witnessed_receipt(&mut self, receipt_hash: [u8; 32], witnessed: WitnessedReceipt) {
-        if !self.witnessed_receipts.contains_key(&receipt_hash) {
+        let mut witnesses = if self.witnessed_receipts.contains_key(&receipt_hash) {
+            self.witnessed_receipts.get(&receipt_hash).unwrap_or_default()
+        } else {
             if self.witnessed_receipt_order.len() >= MAX_WITNESSED_RECEIPTS
                 && let Some(oldest) = self.witnessed_receipt_order.pop_front()
             {
-                self.witnessed_receipts.remove(&oldest);
+                self.witnessed_receipts.counts.remove(&oldest);
                 if let Err(e) = self.store.remove_witnessed_receipts_raw(&oldest) {
                     tracing::warn!(
                         receipt_hash = ?oldest,
@@ -2427,41 +2486,32 @@ impl NodeStateInner {
             }
             self.witnessed_receipt_order.push_back(receipt_hash);
             persist_witnessed_receipt_order(&self.store, &self.witnessed_receipt_order);
-        }
-        self.witnessed_receipts
-            .entry(receipt_hash)
-            .or_default()
-            .push(witnessed);
-        if let Some(witnesses) = self.witnessed_receipts.get(&receipt_hash) {
-            match encode_witnessed_receipt_artifacts(witnesses) {
-                Ok(encoded) => {
-                    if let Err(e) = self
-                        .store
-                        .store_witnessed_receipts_raw(&receipt_hash, &encoded)
-                    {
-                        tracing::warn!(
-                            receipt_hash = ?receipt_hash,
-                            error = %e,
-                            "failed to persist witnessed receipt artifacts"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        receipt_hash = ?receipt_hash,
-                        error = %e,
-                        "failed to serialize witnessed receipt artifacts"
-                    );
-                }
+            Vec::new()
+        };
+        witnesses.push(witnessed);
+        // The store is where witnesses are served from, so a witness that is not
+        // stored is not counted either.
+        let stored = encode_witnessed_receipt_artifacts(&witnesses).and_then(|encoded| {
+            self.store
+                .store_witnessed_receipts_raw(&receipt_hash, &encoded)
+                .map_err(|e| e.to_string())
+        });
+        match stored {
+            Ok(()) => {
+                self.witnessed_receipts.counts.insert(receipt_hash, witnesses.len());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    receipt_hash = ?receipt_hash,
+                    error = %e,
+                    "failed to persist witnessed receipt artifacts; this witness is not served"
+                );
             }
         }
     }
 
     pub fn witnessed_receipt_count(&self, receipt_hash: &[u8; 32]) -> usize {
-        self.witnessed_receipts
-            .get(receipt_hash)
-            .map(Vec::len)
-            .unwrap_or(0)
+        self.witnessed_receipts.count(receipt_hash)
     }
 
     /// Mark a committed receipt as awaiting its async STARK attestation

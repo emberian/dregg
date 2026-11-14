@@ -3999,11 +3999,7 @@ async fn get_receipt_witnesses(
     let bytes = hex_decode(&hash).map_err(|_| StatusCode::BAD_REQUEST)?;
     let receipt_hash: [u8; 32] = bytes.try_into().map_err(|_| StatusCode::BAD_REQUEST)?;
     let s = state.read().await;
-    let witnessed = s
-        .witnessed_receipts
-        .get(&receipt_hash)
-        .cloned()
-        .unwrap_or_default();
+    let witnessed = s.witnessed_receipts.get(&receipt_hash).unwrap_or_default();
     let witness_artifacts = witnessed
         .iter()
         .map(|witness| {
@@ -4586,9 +4582,13 @@ async fn get_starbridge_receipts(
     State(state): State<NodeState>,
 ) -> Json<Vec<StarbridgeReceiptInfo>> {
     let limit = starbridge_limit(params.limit);
-    let cell = params.cell.as_deref().map(str::to_ascii_lowercase);
-    let turn_hash = params.turn_hash.as_deref().map(str::to_ascii_lowercase);
-    let effects_hash = params.effects_hash.as_deref().map(str::to_ascii_lowercase);
+    // Each filter is decoded once and compared as bytes. Hex-encoding three
+    // fields of every receipt per request made a `turn_hash` lookup, which a
+    // signer polls until its turn commits, allocate O(chain) strings per poll.
+    // A filter that is not 32 bytes of hex matches nothing, as before.
+    let cell = starbridge_hex32_filter(params.cell.as_deref());
+    let turn_hash = starbridge_hex32_filter(params.turn_hash.as_deref());
+    let effects_hash = starbridge_hex32_filter(params.effects_hash.as_deref());
 
     let s = state.read().await;
     let chain = s.cclerk.receipt_chain();
@@ -4598,14 +4598,9 @@ async fn get_starbridge_receipts(
         .enumerate()
         .rev()
         .filter(|(_, r)| {
-            cell.as_ref()
-                .is_none_or(|want| hex_encode(&r.agent.0).eq_ignore_ascii_case(want))
-                && turn_hash
-                    .as_ref()
-                    .is_none_or(|want| hex_encode(&r.turn_hash).eq_ignore_ascii_case(want))
-                && effects_hash
-                    .as_ref()
-                    .is_none_or(|want| hex_encode(&r.effects_hash).eq_ignore_ascii_case(want))
+            cell.is_none_or(|want| want == Some(r.agent.0))
+                && turn_hash.is_none_or(|want| want == Some(r.turn_hash))
+                && effects_hash.is_none_or(|want| want == Some(r.effects_hash))
         })
         .take(limit)
         .map(|(idx, r)| {
@@ -4651,6 +4646,12 @@ async fn get_starbridge_receipts(
 /// Does the node hold a persisted full-turn STARK proof for this turn hash
 /// (the blocklace finalized-turn proving leg persists under
 /// [`crate::turn_proving::turn_proof_config_key`])?
+/// A receipt filter as bytes: `None` when absent, `Some(None)` when it is not
+/// exactly 32 bytes of hex (so it matches no receipt).
+fn starbridge_hex32_filter(want: Option<&str>) -> Option<Option<[u8; 32]>> {
+    want.map(|w| hex::decode(w).ok().and_then(|b| <[u8; 32]>::try_from(b).ok()))
+}
+
 fn stored_full_turn_proof_exists(s: &crate::state::NodeStateInner, turn_hash_hex: &str) -> bool {
     let key = crate::turn_proving::turn_proof_config_key(turn_hash_hex);
     matches!(s.store.get_config(&key), Ok(Some(_)))
