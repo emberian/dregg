@@ -1034,6 +1034,15 @@ impl Receipt {
         self.str_field("receipt_hash")
     }
 
+    /// Node policy hint; not_required is signature attestation only.
+    #[getter]
+    fn proof_status(&self) -> Option<String> {
+        self.data
+            .get("proof_status")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    }
+
     /// Whether a proof was already attached at the time this receipt was
     /// observed (`.proof()` may still fetch one that landed later).
     #[getter]
@@ -1072,7 +1081,19 @@ impl Receipt {
                 Err(e) => Err(format!("GET {url}: {e}")),
             });
             match fetched.map_err(err)? {
-                Some(v) => self.proof = Some(v),
+                Some(v) => {
+                    if v["proof_status"] == "not_required" {
+                        return Err(err(
+                            "coordination turn has signature attestation only; no validity proof",
+                        ));
+                    }
+                    if v["proof_status"] != "proved"
+                        || v["proof_hex"].as_str().is_none_or(str::is_empty)
+                    {
+                        return Err(err("node returned no proved artifact"));
+                    }
+                    self.proof = Some(v);
+                }
                 None => return Ok(None),
             }
         }

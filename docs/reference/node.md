@@ -20,7 +20,7 @@ boot, the HTTP API, consensus — lives in the `dregg_node` library. The command
   `--port`/`--bind` (`:108`, `:113`), `--federation-peers`, `--data-dir`/`--key-file`,
   `--gossip-port`, `--federation-mode` (`solo`|`full`, default `solo`, `:235`), `--consensus`
   (`blocklace`, the only engine, `:240`), `--prove-turns` (prove + verify-gate every finalized
-  turn, also `DREGG_PROVE_TURNS=1`, `:160`), `--enable-faucet`, `--enable-pruning`, the
+  turn, also `DREGG_PROVE_TURNS=1`, `:160`), `--enable-faucet`, `--force-prove-all`, the
   block-cadence / idle-heartbeat / min-block-interval timers (`:189`–`:220`), the blocklace
   checkpoint/wave tuning (`:174`, `:178`), `--groups`, `--auto-approve-joins`,
   `--cors-origin`, and `--deos-program` (`:285`).
@@ -425,3 +425,54 @@ and re-reads the changed board. **The over-reach**: B firing `touch-private` ove
 cell is refused by the executor's authority gate (a receipted refusal leaving the cell
 unchanged). This is a demonstrative harness surface consumed by the `shared_world_e2e`
 integration proof, not a `--bin` entry point (`node/src/shared_world.rs:31`–`:36`).
+
+### Proving policy and offline storage maintenance
+
+API/MCP commits enqueue asynchronous STARK proofs for stateful turns. A coordination
+turn uses exactly `Turn::is_coordination`: a nonempty call forest, every action with
+at least one own-cell `EmitEvent`, no declared balance change, and the same rule
+recursively for children. These turns skip proving and report `proof_status:
+"not_required"`. Foreign-cell effects, empty actions, and even `balance_change:
+Some(0)` do **not** qualify. Unsupported proof projections report failure, not an
+exemption.
+
+`--force-prove-all` also enqueues coordination proofs. `--prove-turns` (or
+`DREGG_PROVE_TURNS=1`) retains its stronger finalized-turn proof gate and also forces
+async coordination proving. `DREGG_PROVE_WORKERS=0` disables the asynchronous pool;
+force does not override an explicitly disabled pool. `/status` reports
+`async_proving_enabled` and `force_prove_all`. `DREGG_PROVE_THREADS` bounds the dedicated
+rayon pool shared by async workers; unset/zero uses the global pool. Workers default
+to 2 and queue depth (`DREGG_PROVE_QUEUE_DEPTH`) to 256.
+
+Receipt rows, SSE, identity views, witness lookup, activity, proof lookup, and anchors
+expose proof status. `has_proof` still means actual attached proof material.
+`not_required` is a node-local policy disposition, persisted by turn hash: the turn
+has executor/committee attestation, **not a validity proof**. A light client requiring
+a validity proof must fetch and verify the artifact; a signature or policy hint
+cannot substitute. Missing jobs are `unattested`; recorded failures remain failures.
+Old rows with no recorded policy are never retroactively called exempt. Policy hints
+are outside the signed anchor and canonical receipt bytes. No consensus, signature,
+proof, VK, or checkpoint wire encoding changes.
+
+`--enable-pruning` remains accepted as a hidden deprecated no-op and warns. It does
+not prune history. `--blocklace-checkpoint-interval 0` (also
+`DREGG_BLOCKLACE_CHECKPOINT_INTERVAL=0`) disables checkpoint production: this node
+never gossips a checkpoint. `DREGG_STORE_CACHE_MB` defaults to 1024 MiB; zero is clamped
+to 1 MiB. Blocks share immutable allocations across lace clones; restart consumes
+owned checkpoint bytes, and witness artifacts are decoded from storage on demand.
+
+Run `dregg-node compact --data-dir DIR` against a **stopped** node. It opens the
+existing `dregg.redb` with the same exclusive database lock and PoA trust checks used
+at startup, then invokes physical store compaction. A live node's lock refuses the
+operation. This reclaims unused pages; it does not prune logical history or run a
+PoA history-compaction ceremony.
+
+Consumer boundaries: `lightclient` accepts proof-required history envelopes, not
+receipt-status JSON; its strict envelope parser rejects `not_required` metadata.
+`federation::TurnAnchorV1` continues to authenticate committee statements without
+claiming a validity proof. Rust SDK receipts preserve the disposition as an untrusted
+hint and keep `has_proof()` tied to an actual attached artifact. TypeScript/Python
+proof fetchers and the bot verifier explicitly refuse signature-only responses.
+Starbridge, SSE mirrors, the extension, CLI/TUI, and the live explorer preserve or
+render the disposition. Static captured atlas data and archived site snapshots are
+historical artifacts, not live proof consumers.

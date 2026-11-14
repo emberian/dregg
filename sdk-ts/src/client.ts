@@ -124,6 +124,7 @@ export interface ReceiptInfo {
   was_encrypted: boolean;
   was_burn: boolean;
   has_proof: boolean;
+  proof_status?: string;
 }
 
 /** The node rejected a request / a turn. */
@@ -377,6 +378,7 @@ export class NodeClient {
           wasBurn: hit.was_burn,
           chainIndex: hit.chain_index,
           hasProofHint: hit.has_proof,
+          proofStatus: hit.proof_status,
         });
       }
       await new Promise((r) => setTimeout(r, delayMs));
@@ -392,9 +394,15 @@ export class NodeClient {
    */
   async turnProof(turnHashHex: string): Promise<TurnProof | undefined> {
     try {
-      const res = await this.request<{ turn_hash: string; proof_hex: string }>(
+      const res = await this.request<{ turn_hash: string; proof_hex: string | null; proof_status?: string }>(
         `/api/turn/${turnHashHex}/proof`,
       );
+      if (res.proof_status === "not_required") {
+        throw new NodeError("coordination turn: executor/committee attestation only; validity proof required by this caller");
+      }
+      if (res.proof_status !== "proved" || !res.proof_hex || !/^(?:[0-9a-fA-F]{2})+$/.test(res.proof_hex)) {
+        throw new NodeError("node did not return a proved artifact");
+      }
       const bytes = new Uint8Array(res.proof_hex.length / 2);
       for (let i = 0; i < bytes.length; i++) {
         bytes[i] = parseInt(res.proof_hex.slice(i * 2, i * 2 + 2), 16);

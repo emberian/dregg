@@ -237,6 +237,10 @@ impl LiveReflection {
             Field::count("chain_index", ev.chain_index),
             Field::count("height", ev.height),
             Field::boolean("has_proof", ev.has_proof),
+            Field::text(
+                "proof_status",
+                ev.proof_status.as_deref().unwrap_or("unknown"),
+            ),
             Field::text("finality", ev.finality.clone()),
             Field::text("timestamp", ev.timestamp.to_string()),
             Field::count("cells_touched", ev.cells.len() as u64),
@@ -588,6 +592,7 @@ mod tests {
             kinds: vec!["transfer".into()],
             height: 1880 + idx,
             has_proof: idx.is_multiple_of(2),
+            proof_status: None,
             finality: "final".into(),
             timestamp: 1_718_000_000 + idx as i64,
         }

@@ -1,3 +1,8 @@
+//! Coordination turns may deliberately have `proof_status: "not_required"`.
+//! An authenticated anchor then attests committee agreement only; proof-required
+//! consumers must still require and verify a full-turn proof. The policy hint is
+//! not part of this signed wire object and cannot grant proof validity.
+//!
 //! **THE PER-TURN ANCHOR** — the committee-signed statement a stranger obtains so that
 //! re-verifying a served full-turn STARK is a check against something, instead of a check
 //! against the artifact's own claims.

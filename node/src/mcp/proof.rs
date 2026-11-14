@@ -312,8 +312,8 @@ pub(super) fn require_effect_cells_for_commit(
 /// | `proof_status`            | means | HTTP twin ([`crate::state::ActivityProofStatus`]) |
 /// |---|---|---|
 /// | `attestation_pending`     | job ACCEPTED by the async prove pool; the WitnessedReceipt attaches when it lands | `proof_pending` |
-/// | `attestation_unattested`  | there IS a transition to attest but no pool took it (none installed, or queue full) | *(none — HTTP reports `proof_pending` here regardless, a named residual of that surface)* |
-/// | `attestation_not_required`| no effect in the turn touches the ACTOR cell, so there is no actor transition to prove | `not_required` |
+/// | `attestation_unattested`  | there IS a transition to attest but no pool took it (none installed, or queue full) | `unattested` |
+/// | `not_required`| own-cell event-only coordination; signature attestation, no validity proof | `not_required` |
 /// | `attestation_unprovable`  | the CHECKED producer projection refuses this turn BY NAME (a verb with no AIR row, or a `SetField` key wider than the u32 index lane) | `proof_generation_failed` |
 ///
 /// The `attestation_` prefix is deliberate: this surface used to answer `proved` (meaning
@@ -355,8 +355,9 @@ pub(super) fn plan_attestation(
     after_cell: Option<&dregg_cell::Cell>,
     receipt_hash: [u8; 32],
     turn_hash: &str,
+    s: &crate::state::NodeStateInner,
 ) -> crate::api::HttpWitnessOutcome {
-    match crate::api::prepare_rotatable_turn(turn, before_cell, after_cell, receipt_hash) {
+    match crate::api::prepare_turn_attestation(turn, before_cell, after_cell, receipt_hash, s) {
         Ok(outcome) => outcome,
         Err(err) => {
             tracing::warn!(
@@ -418,10 +419,9 @@ pub(super) async fn attest_committed_turn(
                 detail: Some(why),
             },
             None => CommittedAttestation {
-                proof_status: "attestation_not_required",
+                proof_status: "not_required",
                 detail: Some(
-                    "no effect in this turn touches the actor cell, so there is no actor \
-                     state transition to attest"
+                    "coordination-only turn: executor/committee attestation, not a validity proof"
                         .to_string(),
                 ),
             },

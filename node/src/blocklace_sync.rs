@@ -12164,6 +12164,10 @@ async fn execute_finalized_turn(
                 }
             }
 
+            if let Err(error) = crate::api::record_proof_policy(&s, &signed_turn.turn) {
+                tracing::error!(%error, "proof policy persistence failed");
+            }
+            let actual_proof_status = crate::api::receipt_proof_status(&s, &receipt);
             crate::api::push_committed_event_enriched(
                 &mut s,
                 receipt_hash_hex.clone(),
@@ -12176,7 +12180,7 @@ async fn execute_finalized_turn(
                 if full_turn_proof_failure.is_some() {
                     crate::state::ActivityProofStatus::ProofGenerationFailed
                 } else {
-                    crate::state::ActivityProofStatus::ProofPending
+                    actual_proof_status
                 },
             );
 
@@ -20223,11 +20227,28 @@ async fn persist_blocklace_state(state: &NodeState, handle: &BlocklaceHandle) {
 /// availability via gossip.
 ///
 /// Called from the finality executor after each batch of finalized turns.
+fn checkpoint_due(executed_count: u64, interval: u64) -> bool {
+    interval != 0 && executed_count != 0 && executed_count.is_multiple_of(interval)
+}
+
+#[test]
+fn checkpoint_zero_never_produces() {
+    for count in [0, 1, 100, u64::MAX] {
+        assert!(!checkpoint_due(count, 0));
+    }
+    assert!(!checkpoint_due(0, 100));
+    assert!(!checkpoint_due(99, 100));
+    assert!(checkpoint_due(100, 100));
+}
+
 async fn maybe_produce_checkpoint(state: &NodeState, handle: &BlocklaceHandle) {
     let executed_count = { handle.cursor.read().await.executed_count() as u64 };
 
-    // Only produce checkpoints at interval boundaries. (uses the configured value for this run)
-    if executed_count == 0 || executed_count % handle.checkpoint_interval != 0 {
+    // Only produce checkpoints at interval boundaries (the configured value for
+    // this run). Interval 0 turns production off: each checkpoint serializes and
+    // stores the WHOLE lace, so its cost grows with history, and every block it
+    // holds is already stored on its own in `blocklace_blocks`.
+    if !checkpoint_due(executed_count, handle.checkpoint_interval) {
         return;
     }
 

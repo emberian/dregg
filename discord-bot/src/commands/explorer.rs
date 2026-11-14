@@ -890,7 +890,9 @@ struct TurnProofWire {
     #[serde(default)]
     proof_len: u64,
     #[serde(default)]
-    proof_hex: String,
+    proof_hex: Option<String>,
+    #[serde(default)]
+    proof_status: String,
 }
 
 async fn handle_proof(ctx: &Context, command: &CommandInteraction, state: &BotState) {
@@ -956,6 +958,19 @@ async fn handle_proof(ctx: &Context, command: &CommandInteraction, state: &BotSt
 
     match resp.json::<TurnProofWire>().await {
         Ok(proof) => {
+            if proof.proof_status == "not_required"
+                || proof.proof_hex.as_ref().is_none_or(|p| p.is_empty())
+            {
+                let embed = embeds::error_embed(
+                    "No Validity Proof",
+                    "Coordination policy or missing artifact: the anchor is signature attestation only. Proof verification requires an actual STARK.",
+                );
+                let _ = command
+                    .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                    .await;
+                return;
+            }
+            let proof_hex = proof.proof_hex.as_ref().expect("checked above");
             let kib = proof.proof_len as f64 / 1024.0;
             // ⚑ THE ANCHOR FIRST, AND IT IS REQUIRED — the same forcing shape `/proof turn`
             // takes. No committee-signed anchor, no verdict; see `proof_verify`'s docblock.
@@ -982,11 +997,9 @@ async fn handle_proof(ctx: &Context, command: &CommandInteraction, state: &BotSt
             // the turn hash the COMMITTEE signed AND the state-commit pair the node derived at
             // commit time, and report the verdict — never an "Attached ✅" trust-me. Every seam
             // is in the Verification field below.
-            let check = crate::commands::proof_verify::check_proof_hex_blocking(
-                proof.proof_hex.clone(),
-                anchor,
-            )
-            .await;
+            let check =
+                crate::commands::proof_verify::check_proof_hex_blocking(proof_hex.clone(), anchor)
+                    .await;
             // THREE outcomes, not two. `Err` is a REFUSAL (no bindable pair to judge against) and
             // must not be painted as "the bytes failed" — that reads as evidence against the
             // artifact when it is evidence about what this bot could obtain.
@@ -1017,7 +1030,7 @@ async fn handle_proof(ctx: &Context, command: &CommandInteraction, state: &BotSt
                 )
                 .field(
                     "Proof (head)",
-                    format!("`{}...`", truncate(&proof.proof_hex, 32)),
+                    format!("`{}...`", truncate(proof_hex, 32)),
                     false,
                 )
                 .field(

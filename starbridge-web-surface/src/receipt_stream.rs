@@ -161,11 +161,14 @@ impl StreamedReceipt {
 /// adds exactly the field the forge-check needs that the summary row omits: the
 /// full canonical `receipt`. So the envelope NAMES the query crate's row shape and
 /// the genuine `TurnReceipt`; it invents no parallel summary. (`turn_hash` /
-/// `has_proof` / `finality` / `timestamp` the wire also carries are derivable from
-/// `receipt` and are not load-bearing for the primitive, so they stay `#[serde(default)]`-
-/// tolerant via the `receipt` itself rather than duplicated here.)
+/// `has_proof` is not derivable from a signature. This primitive verifies receipt
+/// identity only, never validity-proof coverage; `not_required` cannot grant it.)
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReceiptEnvelope {
+    /// Node policy hint, outside the canonical receipt and never verification evidence.
+    /// `not_required` means signature attestation only.
+    #[serde(default)]
+    pub proof_status: Option<String>,
     /// The canonical summary fields — the EXACT [`ReceiptEventRow`] shape, flattened
     /// so the wire JSON deserializes into it directly.
     #[serde(flatten)]
@@ -190,6 +193,7 @@ impl ReceiptEnvelope {
         receipt: TurnReceipt,
     ) -> Self {
         ReceiptEnvelope {
+            proof_status: None,
             row: ReceiptEventRow {
                 chain_index,
                 receipt_hash: receipt_hash_hex,
@@ -245,14 +249,20 @@ impl core::fmt::Display for IngestError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             IngestError::OutOfOrder { expected, got } => {
-                write!(f, "out-of-order receipt: expected chain_index {expected}, got {got}")
+                write!(
+                    f,
+                    "out-of-order receipt: expected chain_index {expected}, got {got}"
+                )
             }
             IngestError::Forged { chain_index } => write!(
                 f,
                 "forged receipt at chain_index {chain_index}: body does not hash to claimed receipt_hash"
             ),
             IngestError::MalformedHash { chain_index } => {
-                write!(f, "malformed receipt_hash at chain_index {chain_index}: not 32 hex bytes")
+                write!(
+                    f,
+                    "malformed receipt_hash at chain_index {chain_index}: not 32 hex bytes"
+                )
             }
         }
     }

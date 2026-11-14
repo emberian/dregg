@@ -85,6 +85,7 @@ pub struct LiveStep {
     pub kinds: Vec<String>,
     /// Whether the turn carried a proof (the light-client face of this step).
     pub has_proof: bool,
+    pub proof_status: Option<String>,
 }
 
 impl LiveStep {
@@ -99,6 +100,7 @@ impl LiveStep {
             turn_hash: ev.turn_hash.clone(),
             kinds: ev.kinds.clone(),
             has_proof: ev.has_proof,
+            proof_status: ev.proof_status.clone(),
         }
     }
 }
@@ -277,6 +279,7 @@ mod tests {
             kinds: kinds.iter().map(|s| s.to_string()).collect(),
             height,
             has_proof: true,
+            proof_status: None,
             finality: "final".to_string(),
             timestamp: 0,
         }

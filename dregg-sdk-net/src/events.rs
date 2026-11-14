@@ -109,6 +109,8 @@ impl NodeEvents {
 #[derive(Deserialize)]
 struct WireReceiptEvent {
     receipt: TurnReceipt,
+    #[serde(default)]
+    proof_status: Option<String>,
 }
 
 async fn run_subscription(
@@ -141,7 +143,14 @@ async fn run_subscription(
                         let Ok(wire) = serde_json::from_str::<WireReceiptEvent>(&event.data) else {
                             continue;
                         };
-                        if tx.send(Receipt::new(wire.receipt)).await.is_err() {
+                        if tx
+                            .send(
+                                Receipt::new(wire.receipt)
+                                    .with_proof_status_hint(wire.proof_status),
+                            )
+                            .await
+                            .is_err()
+                        {
                             return; // consumer dropped the stream
                         }
                         backoff = Duration::from_millis(500);

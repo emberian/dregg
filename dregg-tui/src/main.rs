@@ -141,6 +141,8 @@ struct ReceiptInfo {
     #[serde(default)]
     has_proof: bool,
     #[serde(default)]
+    proof_status: Option<String>,
+    #[serde(default)]
     has_witness: bool,
     #[serde(default)]
     witness_count: usize,
@@ -728,6 +730,8 @@ fn draw_receipts(f: &mut Frame, app: &mut App, area: Rect) {
             let head = if r.chain_head { "►" } else { " " };
             let mark = if r.has_witness {
                 Span::styled("◆ witness", Style::default().fg(Color::Green))
+            } else if r.proof_status.as_deref() == Some("not_required") {
+                Span::styled("signature only", Style::default().fg(Color::Yellow))
             } else if r.has_proof {
                 Span::styled("◇ proof  ", Style::default().fg(Color::Yellow))
             } else {

@@ -279,7 +279,9 @@ function proofStatusPill(s) {
     case "proof_pending":
       return '<span class="pill warn" title="committed and witness-revalidated inline; the succinct attestation is still being generated off the commit path">proof pending</span>';
     case "not_required":
-      return '<span class="pill mute" title="this node does not require a proof for this turn">not required</span>';
+      return '<span class="pill mute" title="coordination turn: executor/committee signature attestation, not a validity proof">not required</span>';
+    case "unattested":
+      return '<span class="pill mute">unattested</span>';
     case "missing_pre_state":
       return '<span class="pill bad">missing pre-state</span>';
     case "proof_generation_failed":
@@ -428,6 +430,7 @@ function groupAndCheckChains(receipts) {
 
 function proofPill(r) {
   if (r.has_proof) return '<span class="pill ok">proof attached</span>';
+  if (r.proof_status) return proofStatusPill(r.proof_status);
   return '<span class="pill mute">no proof attached</span>';
 }
 

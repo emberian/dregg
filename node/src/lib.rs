@@ -194,6 +194,8 @@ pub mod trustline_service;
 pub mod turn_proving;
 pub mod ws;
 
+mod compact;
+
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
@@ -216,6 +218,11 @@ const ZERO_ACTIVATION_PREDECESSOR: &str =
 /// The `dregg-node` subcommands.
 #[derive(Subcommand)]
 pub enum Command {
+    /// Compact an existing stopped node store; refuses a store locked by a running node.
+    Compact {
+        #[arg(long)]
+        data_dir: PathBuf,
+    },
     /// Run the node daemon (HTTP API + federation sync).
     Run {
         /// Port for the localhost HTTP API.
@@ -250,9 +257,8 @@ pub enum Command {
         #[arg(long, default_value = "4")]
         federation_size: usize,
 
-        /// Enable automatic pruning of old blocks/roots below the latest checkpoint.
-        /// Off by default (archival mode). Turn on to bound storage growth.
-        #[arg(long)]
+        /// Deprecated no-op; automatic pruning is not implemented.
+        #[arg(long, hide = true)]
         enable_pruning: bool,
 
         /// Prove EVERY finalized turn on the commit path. When set, each
@@ -273,6 +279,10 @@ pub enum Command {
         #[arg(long)]
         prove_turns: bool,
 
+        /// Also enqueue validity proofs for coordination turns (requires async proving enabled).
+        #[arg(long)]
+        force_prove_all: bool,
+
         /// Checkpoint interval in blocks (default: 1000).
         #[arg(long, default_value = "1000")]
         checkpoint_interval: u64,
@@ -284,7 +294,14 @@ pub enum Command {
         /// Disable path: solo + no peers (or future --solo-only).
 
         /// Blocklace checkpoint interval in finalized blocks (default 100, matches devnet genesis).
-        #[arg(long, default_value = "100")]
+        /// 0 = produce none: this node never gossips a checkpoint. Each checkpoint serializes and stores the whole lace, so
+        /// its CPU, transient memory and store growth scale with history; a node that
+        /// no peer bootstraps from (solo) can turn it off.
+        #[arg(
+            long,
+            default_value = "100",
+            env = "DREGG_BLOCKLACE_CHECKPOINT_INTERVAL"
+        )]
         blocklace_checkpoint_interval: u64,
 
         /// Blocklace constitution wave timeout in milliseconds (default 10000).
@@ -1243,6 +1260,18 @@ pub fn install_verified_executor_oracles() {
 /// facilities (the rustls crypto provider, the verified-Lean distributed gates,
 /// and tracing) and then dispatches the chosen subcommand.
 pub async fn run(cli: Cli) {
+    // Physical maintenance does not boot an executor or a network stack.
+    if let Command::Compact { ref data_dir } = cli.command {
+        match compact::compact_store(data_dir) {
+            Ok(changed) => println!("Store compacted (pages relocated: {changed})"),
+            Err(error) => {
+                eprintln!("Compaction refused: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     // ⚑ THE PLAYER'S VERIFIER RUNS BEFORE THE NODE PREAMBLE, and must.
     //
     // `poa-verify-slot-reveal` exists so a person who does not trust this operator
@@ -1323,6 +1352,7 @@ pub async fn run(cli: Cli) {
         .init();
 
     match cli.command {
+        Command::Compact { .. } => unreachable!("handled before executor initialization"),
         Command::Run {
             port,
             bind,
@@ -1334,6 +1364,7 @@ pub async fn run(cli: Cli) {
             federation_size,
             enable_pruning,
             prove_turns,
+            force_prove_all,
             checkpoint_interval,
             blocklace_checkpoint_interval,
             blocklace_wave_timeout_ms,
@@ -1361,6 +1392,7 @@ pub async fn run(cli: Cli) {
                 federation_size,
                 enable_pruning,
                 prove_turns,
+                force_prove_all,
                 checkpoint_interval,
                 blocklace_checkpoint_interval,
                 blocklace_wave_timeout_ms,
@@ -1898,6 +1930,7 @@ pub async fn run(cli: Cli) {
                 0,
                 false,
                 prove_turns,
+                false,
                 1000,
                 100,
                 10000,
@@ -2171,6 +2204,7 @@ async fn run_node(
     _federation_size: usize,
     enable_pruning: bool,
     prove_turns: bool,
+    force_prove_all: bool,
     checkpoint_interval: u64,
     blocklace_checkpoint_interval: u64,
     blocklace_wave_timeout_ms: u64,
@@ -2849,7 +2883,12 @@ async fn run_node(
     // Configure pruning and solo state.
     {
         let mut s = node_state.write().await;
-        s.pruning_enabled = enable_pruning;
+        s.pruning_enabled = false;
+        if enable_pruning {
+            tracing::warn!(
+                "--enable-pruning is deprecated and has no effect; automatic pruning is not implemented"
+            );
+        }
         s.checkpoint_interval = checkpoint_interval;
 
         // Full-turn proving on the commit path (--prove-turns or
@@ -2859,6 +2898,7 @@ async fn run_node(
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
         s.full_turn_proving_enabled = prove_turns || prove_turns_env;
+        s.force_prove_all = force_prove_all;
         if s.full_turn_proving_enabled {
             info!(
                 "full-turn proving ENABLED: every committed turn produces a \
@@ -3070,7 +3110,7 @@ async fn run_node(
     info!(
         port = port,
         data_dir = %data_path.display(),
-        pruning = enable_pruning,
+        legacy_pruning_requested = enable_pruning,
         checkpoint_interval = checkpoint_interval,
         blocklace_checkpoint_interval,
         blocklace_wave_timeout_ms,

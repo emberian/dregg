@@ -639,7 +639,13 @@ pub fn receipt_row_text(ev: &ReceiptEvent) -> String {
             ev.kinds.join(", ")
         },
         ev.finality,
-        if ev.has_proof { " · proof" } else { "" },
+        if ev.has_proof {
+            " · proof"
+        } else if ev.proof_status.as_deref() == Some("not_required") {
+            " · signature only"
+        } else {
+            " · unattested"
+        },
     )
 }
 

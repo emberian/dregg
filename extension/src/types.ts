@@ -489,6 +489,8 @@ export interface ReceiptEventSummary {
   height: number;
   /** Whether a STARK attestation was attached at send time. */
   hasProof: boolean;
+  /** Policy hint only; not_required is signature attestation, not a validity proof. */
+  proofStatus?: string;
   finality: string;
   timestamp: number;
   /** When the extension observed it (ms). */

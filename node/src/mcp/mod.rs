@@ -1089,7 +1089,7 @@ mod tests {
     // because the standalone v1 `EffectVmAir` attestation is retired, and `require_effect_vm_proof`
     // turned that into an early return from the TOOL. Five tools therefore could not commit at
     // all. That helper is now DELETED: the tools commit and report the attestation truthfully
-    // (`attestation_pending` / `attestation_unattested` / `attestation_not_required` /
+    // (`attestation_pending` / `attestation_unattested` / `not_required` /
     // `attestation_unprovable`), routed to the SAME async prove pool the HTTP submit path uses.
     //
     // The ninth, `exercise_handoff_cert_forged_introducer_pk_rejected`, was a FAKE SECURITY POLE:
@@ -1113,7 +1113,7 @@ mod tests {
     // `proof_status` on a committed response is an ATTESTATION disposition, not a gate:
     // these tests install no prove pool, so the honest answer is `attestation_unattested`
     // (there is a transition to attest and nothing took the job) or
-    // `attestation_not_required` (no effect touches the actor cell). Both are COMMITTED.
+    // `not_required` (coordination-only signature attestation). Both are COMMITTED.
     // =====================================================================
 
     /// Every committed MCP tool response must carry an attestation disposition that
@@ -1129,7 +1129,7 @@ mod tests {
                 status,
                 "attestation_pending"
                     | "attestation_unattested"
-                    | "attestation_not_required"
+                    | "not_required"
                     | "attestation_unprovable"
             ),
             "a committed tool response must report an attestation disposition, got '{status}': {j}"

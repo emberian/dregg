@@ -298,7 +298,9 @@ fn render_submit_response(ctx: &Context, data: &serde_json::Value) {
 fn render_proof_status(s: &str) -> String {
     let label = match s {
         "Proved" | "proved" => "PROVED (real STARK verified)",
-        "NotRequired" | "not_required" => "not required (no provable activity)",
+        "NotRequired" | "not_required" => {
+            "not required (coordination; signature attestation only, no validity proof)"
+        }
         "ProofGenerationFailed" | "proof_generation_failed" => "PROOF GENERATION FAILED",
         "NotCommitted" | "not_committed" => "not committed",
         other => other,
@@ -352,7 +354,17 @@ async fn status(
             ctx.kv("Computrons", &crate::output::format_number(computrons));
             ctx.kv("Pre-state", &abbrev_hex(pre, 8, 4));
             ctx.kv("Post-state", &abbrev_hex(post, 8, 4));
-            ctx.kv("Proof", if has_proof { "present" } else { "none" });
+            let proof_label = receipt["proof_status"]
+                .as_str()
+                .map(render_proof_status)
+                .unwrap_or_else(|| {
+                    if has_proof {
+                        "present".into()
+                    } else {
+                        "unknown".into()
+                    }
+                });
+            ctx.kv("Proof", &proof_label);
             ctx.kv("Witnessed", if has_witness { "yes" } else { "no" });
             if witness_count > 0 {
                 ctx.kv("Witness count", &witness_count.to_string());
