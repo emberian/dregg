@@ -8,7 +8,7 @@
 //! HTTP/1.1 loop — the routes [`crate::node_world_sink::NodeHttpClient`] and
 //! the client signer speak (`/turns/submit`, `/api/cells`, `/api/cell/{id}`,
 //! `/api/receipts`, `/api/starbridge/receipts?turn_hash=`, `/status`,
-//! `/api/faucet`).
+//! `/api/faucet`, `/api/turn/{hash}/anchor`).
 //!
 //! A test that needs the node to answer WRONGLY (a lost answer, a foreign hash,
 //! a failed receipt query, a rate-limited grant already in flight) sets a
@@ -85,6 +85,10 @@ pub struct TestNode {
     /// Faucet grants accepted while rate-limited, credited when the next
     /// request arrives (the in-flight grant finalizing).
     pending_grants: Vec<(CellId, u64)>,
+    /// Ed25519 seeds of the committee that attests each committed receipt on
+    /// `/api/turn/{hash}/anchor`. Empty: the node attests nothing and the
+    /// route answers `no_attestation`.
+    anchor_committee_seeds: Vec<[u8; 32]>,
 }
 
 /// A deliberately wrong answer from `POST /turns/submit` or the exact-hash
@@ -137,6 +141,7 @@ impl TestNode {
             submit_fault: None,
             faucet_fault: None,
             pending_grants: Vec::new(),
+            anchor_committee_seeds: Vec::new(),
         };
         let agent = node.seed_open_cell(agent_public_key, balance);
         (node, agent)
@@ -157,6 +162,29 @@ impl TestNode {
     pub fn with_coordination_fee_exempt(mut self) -> Self {
         self.coordination_fee_exempt = true;
         self
+    }
+
+    /// Attest every committed receipt with a committee whose Ed25519 keys are
+    /// derived from `seeds`, and serve the result on `/api/turn/{hash}/anchor`
+    /// in the node's shape (`dregg_federation::TurnAnchorV1`, postcard-hex).
+    pub fn with_anchor_committee(mut self, seeds: &[[u8; 32]]) -> Self {
+        self.anchor_committee_seeds = seeds.to_vec();
+        self
+    }
+
+    /// The roster [`Self::with_anchor_committee`] configured: what a checker
+    /// that already trusts this committee holds.
+    pub fn anchor_committee(&self) -> dregg_federation::turn_anchor::AnchorCommittee {
+        dregg_federation::turn_anchor::AnchorCommittee {
+            ed25519: self
+                .anchor_committee_seeds
+                .iter()
+                .map(|seed| dregg_types::SigningKey::from_bytes(seed).public_key())
+                .collect(),
+            ml_dsa: Vec::new(),
+            threshold: self.anchor_committee_seeds.len(),
+            federation_id: dregg_types::FederationId(self.fed_id),
+        }
     }
 
     /// Answer `/turns/submit` (or the receipt query) wrongly, as `fault` says,
@@ -399,6 +427,12 @@ fn handle_submit(node: &mut TestNode, body: &[u8]) -> (u16, serde_json::Value) {
     // The height a node's submit executor runs at: the attested height `/status` serves, plus
     // one (`executor_setup::BlockHeightMode::Next`). `valid_until` is checked against it.
     executor.set_block_height(node.receipts.len() as u64 + 1);
+    // A fresh executor knows no agent's receipt head; the node seeds it from its chain, so an
+    // agent's second turn (threading its first receipt) is admitted rather than refused as a
+    // chain mismatch against `None`.
+    if let Some(head) = node.agent_receipt_head(&signed.turn.agent) {
+        executor.set_last_receipt_hash(signed.turn.agent, head);
+    }
     match executor.execute(&signed.turn, &mut node.ledger) {
         TurnResult::Committed { receipt, .. } => {
             node.receipts.push(receipt);
@@ -541,6 +575,75 @@ fn exact_receipts_json(query: &str, node: &TestNode) -> serde_json::Value {
     serde_json::Value::Array(rows)
 }
 
+/// `GET /api/turn/{hash}/anchor`, as `node::api::get_turn_anchor` answers it:
+/// 404 `not_committed` for a hash with no receipt, 409 `no_attestation` when
+/// no committee attests, else the receipt whole under an attested root whose
+/// `receipt_stream_root` is the singleton root of that receipt's hash, signed
+/// by every configured committee member.
+fn turn_anchor_json(hash_hex: &str, node: &TestNode) -> (u16, serde_json::Value) {
+    let Some((index, receipt)) = node
+        .receipts
+        .iter()
+        .enumerate()
+        .find(|(_, r)| dregg_types::hex_encode(&r.turn_hash).eq_ignore_ascii_case(hash_hex))
+    else {
+        return (
+            404,
+            serde_json::json!({"turn_hash": hash_hex, "anchor_status": "not_committed"}),
+        );
+    };
+    if node.anchor_committee_seeds.is_empty() {
+        return (
+            409,
+            serde_json::json!({"turn_hash": hash_hex, "anchor_status": "no_attestation"}),
+        );
+    }
+    let height = index as u64 + 1;
+    let block_id = *blake3::hash(&height.to_le_bytes()).as_bytes();
+    let mut attested = dregg_types::AttestedRoot {
+        merkle_root: [0u8; 32],
+        note_tree_root: None,
+        nullifier_set_root: None,
+        height,
+        timestamp: 0,
+        blocklace_block_id: Some(block_id),
+        finality_round: None,
+        quorum_signatures: Vec::new(),
+        threshold_qc: None,
+        threshold: node.anchor_committee_seeds.len(),
+        federation_id: dregg_types::FederationId(node.fed_id),
+        receipt_stream_root: Some(dregg_types::merkle_root_of_receipt_hashes(&[
+            receipt.receipt_hash()
+        ])),
+        hybrid_quorum: Vec::new(),
+    };
+    let message = attested.signing_message();
+    for seed in &node.anchor_committee_seeds {
+        let key = dregg_types::SigningKey::from_bytes(seed);
+        attested
+            .quorum_signatures
+            .push((key.public_key(), dregg_types::sign(&key, &message)));
+    }
+    let anchor = dregg_federation::turn_anchor::TurnAnchorV1 {
+        protocol: dregg_federation::turn_anchor::TURN_ANCHOR_PROTOCOL_V1.to_string(),
+        turn_hash: receipt.turn_hash,
+        receipt: receipt.clone(),
+        height,
+        block_id,
+        attested,
+        served_committee: node.anchor_committee(),
+    };
+    let bytes = postcard::to_stdvec(&anchor).expect("encode the anchor");
+    (
+        200,
+        serde_json::json!({
+            "turn_hash": hash_hex,
+            "anchor_status": "anchored",
+            "anchor_hex": hex::encode(bytes),
+        }),
+    )
+}
+
 fn receipts_json(node: &TestNode) -> serde_json::Value {
     let last = node.receipts.len().saturating_sub(1);
     let arr: Vec<serde_json::Value> = node
@@ -580,6 +683,13 @@ fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> (u16, se
             );
         }
         return (200, exact_receipts_json(query, node));
+    }
+    if method == "GET"
+        && let Some(hash) = path
+            .strip_prefix("/api/turn/")
+            .and_then(|rest| rest.strip_suffix("/anchor"))
+    {
+        return turn_anchor_json(hash, node);
     }
     let json = match (method, path) {
         ("GET", "/api/cells") => {
