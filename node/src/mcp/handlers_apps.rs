@@ -493,6 +493,7 @@ pub(super) async fn run_starbridge_action(
                 s.ledger.get(&agent_cell_id),
                 receipt_hash,
                 &turn_hash,
+                &s,
             );
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");

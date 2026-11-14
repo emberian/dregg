@@ -119,6 +119,8 @@ impl Cursor {
 /// gates passed.
 #[derive(Clone, Debug)]
 pub struct StreamedReceipt {
+    /// Unauthenticated policy hint, never validity evidence.
+    pub proof_status: Option<String>,
     /// The dense chain position — the cursor / `Last-Event-ID` of this receipt.
     pub chain_index: u64,
     /// The canonical 32-byte receipt commitment (`TurnReceipt::receipt_hash()`),
@@ -161,11 +163,14 @@ impl StreamedReceipt {
 /// adds exactly the field the forge-check needs that the summary row omits: the
 /// full canonical `receipt`. So the envelope NAMES the query crate's row shape and
 /// the genuine `TurnReceipt`; it invents no parallel summary. (`turn_hash` /
-/// `has_proof` / `finality` / `timestamp` the wire also carries are derivable from
-/// `receipt` and are not load-bearing for the primitive, so they stay `#[serde(default)]`-
-/// tolerant via the `receipt` itself rather than duplicated here.)
+/// `has_proof` is not derivable from a signature. This primitive verifies receipt
+/// identity only, never validity-proof coverage; `not_required` cannot grant it.)
 #[derive(Clone, Debug, Deserialize)]
 pub struct ReceiptEnvelope {
+    /// Node policy hint, outside the canonical receipt and never verification evidence.
+    /// `not_required` means signature attestation only.
+    #[serde(default)]
+    pub proof_status: Option<String>,
     /// The canonical summary fields — the EXACT [`ReceiptEventRow`] shape, flattened
     /// so the wire JSON deserializes into it directly.
     #[serde(flatten)]
@@ -190,6 +195,7 @@ impl ReceiptEnvelope {
         receipt: TurnReceipt,
     ) -> Self {
         ReceiptEnvelope {
+            proof_status: None,
             row: ReceiptEventRow {
                 chain_index,
                 receipt_hash: receipt_hash_hex,
@@ -345,6 +351,7 @@ impl ReceiptStream {
         if chain_index == expected {
             // The next dense position — admit + advance.
             let sr = StreamedReceipt {
+                proof_status: env.proof_status,
                 chain_index,
                 receipt_hash: recomputed,
                 height: env.row.height,
@@ -568,6 +575,18 @@ mod tests {
     /// An HONEST frame at `idx` carrying `receipt(seed)`.
     fn frame(idx: u64, seed: u8) -> ReceiptEnvelope {
         ReceiptEnvelope::honest(idx, 1880 + idx, receipt(seed))
+    }
+
+    #[test]
+    fn coordination_policy_survives_ingest_without_changing_receipt_identity() {
+        let mut envelope = frame(0, 7);
+        let hash = envelope.receipt.receipt_hash();
+        envelope.proof_status = Some("not_required".into());
+        let mut stream = ReceiptStream::new(4);
+        assert_eq!(stream.ingest(envelope).unwrap(), Admitted::New);
+        let row = stream.next_ready().unwrap();
+        assert_eq!(row.proof_status.as_deref(), Some("not_required"));
+        assert_eq!(row.receipt_hash, hash);
     }
 
     // ── Guarantee 1: a subscriber sees committed receipts IN ORDER. ──

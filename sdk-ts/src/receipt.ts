@@ -92,6 +92,8 @@ export interface ReceiptFields {
   chainIndex?: number;
   /** Whether the node reported an attached attestation at serve time. */
   hasProofHint?: boolean;
+  /** Node policy hint, never proof verification. `not_required` means attestation only. */
+  proofStatus?: string;
   /** The full canonical wire receipt, when available (SSE path). */
   raw?: TurnReceiptJson;
 }
@@ -118,6 +120,7 @@ export class Receipt {
   readonly wasBurn?: boolean;
   readonly chainIndex?: number;
   readonly hasProofHint?: boolean;
+  readonly proofStatus?: string;
   readonly raw?: TurnReceiptJson;
 
   private attached: TurnProof | undefined;
@@ -137,6 +140,7 @@ export class Receipt {
     this.wasBurn = fields.wasBurn;
     this.chainIndex = fields.chainIndex;
     this.hasProofHint = fields.hasProofHint;
+    this.proofStatus = fields.proofStatus;
     this.raw = fields.raw;
   }
 

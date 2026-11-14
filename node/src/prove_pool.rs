@@ -55,7 +55,7 @@
 //!
 //! * `DREGG_PROVE_WORKERS` — concurrent proving jobs (default 2). **`0` turns
 //!   async proving OFF**: no worker is spawned, `enqueue` accepts nothing, and
-//!   every committed receipt stays committed-but-unattested. That is the same
+//!   proof-required receipts stay committed-but-unattested. That is the same
 //!   sound state a dropped job leaves (see above), chosen up front by a node
 //!   whose consumers never read the attestation. Each proof costs whole
 //!   CPU-seconds (measured ~16-25 CPU-s per turn on a 24-thread laptop), so a
@@ -232,6 +232,13 @@ impl ProvePool {
         Self { tx: Some(tx) }
     }
 
+    /// Capture the real queue handoff without starting a cryptographic worker.
+    #[cfg(test)]
+    pub(crate) fn capture_jobs() -> (Self, mpsc::Receiver<ProveJob>) {
+        let (tx, rx) = mpsc::channel(8);
+        (Self { tx: Some(tx) }, rx)
+    }
+
     /// Whether this pool proves at all (`false` under `DREGG_PROVE_WORKERS=0`).
     pub fn is_enabled(&self) -> bool {
         self.tx.is_some()
@@ -365,6 +372,7 @@ async fn run_job(
                 error = %e,
                 "async proof generation failed; receipt stays committed-but-unattested"
             );
+            record_failure(state, receipt_hash, &turn_hash_hex, &e).await;
             return;
         }
         Err(join_err) => {
@@ -375,15 +383,37 @@ async fn run_job(
                 error = %join_err,
                 "async proving task panicked/cancelled; receipt stays committed-but-unattested"
             );
+            record_failure(state, receipt_hash, &turn_hash_hex, &join_err.to_string()).await;
             return;
         }
     };
 
     // Brief write-lock ONLY to store the finished attestation + clear pending.
-    {
+    let attached = {
         let mut s = state.write().await;
         s.push_witnessed_receipt(receipt_hash, witnessed);
         s.clear_proof_pending(&receipt_hash);
+        let attached = s.witnessed_receipt_count(&receipt_hash) > 0;
+        if attached {
+            for event in &mut s.event_log {
+                if event.turn_hash == turn_hash_hex
+                    || event.turn_hash == dregg_types::hex_encode(&receipt_hash)
+                {
+                    event.proof_status = crate::state::ActivityProofStatus::Proved;
+                }
+            }
+        }
+        attached
+    };
+    if !attached {
+        record_failure(
+            state,
+            receipt_hash,
+            &turn_hash_hex,
+            "proof artifact persistence failed",
+        )
+        .await;
+        return;
     }
     crate::metrics::inc_async_proofs_completed();
     crate::metrics::record_async_proof_duration(started.elapsed().as_secs_f64());
@@ -401,6 +431,60 @@ async fn run_job(
         elapsed_ms = started.elapsed().as_millis(),
         "async proof attached to committed receipt (has_proof flips true)"
     );
+}
+
+async fn record_failure(state: &NodeState, receipt_hash: [u8; 32], turn_hash: &str, reason: &str) {
+    let mut s = state.write().await;
+    s.clear_proof_pending(&receipt_hash);
+    if let Err(error) = s.store.set_config(
+        &crate::turn_proving::turn_proof_failure_config_key(turn_hash),
+        reason.as_bytes(),
+    ) {
+        tracing::error!(%error, turn_hash, "could not persist proof failure");
+    }
+    for event in &mut s.event_log {
+        if event.turn_hash == turn_hash || event.turn_hash == dregg_types::hex_encode(&receipt_hash)
+        {
+            event.proof_status = crate::state::ActivityProofStatus::ProofGenerationFailed;
+        }
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn failed_job_is_terminal_and_durable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = NodeState::new(tmp.path(), vec![]).unwrap();
+        let receipt = dregg_turn::TurnReceipt::default();
+        let hash = receipt.receipt_hash();
+        let turn_hash = dregg_types::hex_encode(&receipt.turn_hash);
+        state.write().await.mark_proof_pending(hash);
+        record_failure(&state, hash, &turn_hash, "test failure").await;
+        let s = state.read().await;
+        assert!(!s.is_proof_pending(&hash));
+        assert_eq!(
+            crate::api::receipt_proof_status(&s, &receipt),
+            crate::state::ActivityProofStatus::ProofGenerationFailed
+        );
+        assert!(
+            s.store
+                .get_config(&crate::turn_proving::turn_proof_failure_config_key(
+                    &turn_hash
+                ))
+                .unwrap()
+                .is_some()
+        );
+        drop(s);
+        drop(state);
+        let reopened = NodeState::new(tmp.path(), vec![]).unwrap();
+        assert_eq!(
+            crate::api::receipt_proof_status(&*reopened.read().await, &receipt),
+            crate::state::ActivityProofStatus::ProofGenerationFailed
+        );
+    }
 }
 
 #[cfg(test)]
@@ -439,7 +523,10 @@ mod tests {
 
     #[test]
     fn zero_depth_and_zero_threads_fall_back() {
-        let c = config(&[("DREGG_PROVE_QUEUE_DEPTH", "0"), ("DREGG_PROVE_THREADS", "0")]);
+        let c = config(&[
+            ("DREGG_PROVE_QUEUE_DEPTH", "0"),
+            ("DREGG_PROVE_THREADS", "0"),
+        ]);
         assert_eq!(c.queue_depth, DEFAULT_QUEUE_DEPTH);
         assert_eq!(c.threads, None);
         assert_eq!(config(&[("DREGG_PROVE_THREADS", " 4 ")]).threads, Some(4));
@@ -555,8 +642,8 @@ mod tests {
         f: impl FnOnce(),
         sample: F,
     ) -> (usize, usize) {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
         let sample = Arc::new(sample);
         let stop = Arc::new(AtomicBool::new(false));

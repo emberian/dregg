@@ -141,6 +141,8 @@ struct ReceiptInfo {
     #[serde(default)]
     has_proof: bool,
     #[serde(default)]
+    proof_status: Option<String>,
+    #[serde(default)]
     has_witness: bool,
     #[serde(default)]
     witness_count: usize,
@@ -720,19 +722,25 @@ fn draw_cells(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(table, area);
 }
 
+fn receipt_proof_marker(r: &ReceiptInfo) -> Span<'static> {
+    if r.has_witness {
+        Span::styled("◆ witness", Style::default().fg(Color::Green))
+    } else if r.proof_status.as_deref() == Some("not_required") {
+        Span::styled("signature only", Style::default().fg(Color::Yellow))
+    } else if r.has_proof {
+        Span::styled("◇ proof  ", Style::default().fg(Color::Yellow))
+    } else {
+        Span::styled("·        ", Style::default().fg(Color::DarkGray))
+    }
+}
+
 fn draw_receipts(f: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app
         .receipts
         .iter()
         .map(|r| {
             let head = if r.chain_head { "►" } else { " " };
-            let mark = if r.has_witness {
-                Span::styled("◆ witness", Style::default().fg(Color::Green))
-            } else if r.has_proof {
-                Span::styled("◇ proof  ", Style::default().fg(Color::Yellow))
-            } else {
-                Span::styled("·        ", Style::default().fg(Color::DarkGray))
-            };
+            let mark = receipt_proof_marker(r);
             ListItem::new(Line::from(vec![
                 Span::styled(
                     format!("{head} #{:<3} ", r.chain_index),
@@ -1127,6 +1135,23 @@ mod tests {
         assert!(
             report.outcome == VerifyOutcome::Rejected,
             "a swapped artifact is a detected break, not a missing verdict"
+        );
+    }
+}
+
+#[cfg(test)]
+mod coordination_policy_tests {
+    use super::*;
+    #[test]
+    fn receipt_marker_exposes_signature_only_status() {
+        let receipt = ReceiptInfo {
+            proof_status: Some("not_required".into()),
+            ..Default::default()
+        };
+        assert_eq!(receipt_proof_marker(&receipt).content, "signature only");
+        assert_ne!(
+            receipt_proof_marker(&ReceiptInfo::default()).content,
+            "signature only"
         );
     }
 }

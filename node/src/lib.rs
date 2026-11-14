@@ -194,6 +194,8 @@ pub mod trustline_service;
 pub mod turn_proving;
 pub mod ws;
 
+mod compact;
+
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
@@ -216,6 +218,11 @@ const ZERO_ACTIVATION_PREDECESSOR: &str =
 /// The `dregg-node` subcommands.
 #[derive(Subcommand)]
 pub enum Command {
+    /// Reclaim free pages in an existing stopped node store (does not prune history).
+    Compact {
+        #[arg(long)]
+        data_dir: PathBuf,
+    },
     /// Run the node daemon (HTTP API + federation sync).
     Run {
         /// Port for the localhost HTTP API.
@@ -267,6 +274,10 @@ pub enum Command {
         /// canonical revocation root).
         #[arg(long)]
         prove_turns: bool,
+
+        /// Also prove coordination turns; requires async proving enabled.
+        #[arg(long)]
+        force_prove_all: bool,
 
         /// Checkpoint interval in blocks (default: 1000).
         #[arg(long, default_value = "1000")]
@@ -1246,6 +1257,17 @@ pub fn install_verified_executor_oracles() {
 /// facilities (the rustls crypto provider, the verified-Lean distributed gates,
 /// and tracing) and then dispatches the chosen subcommand.
 pub async fn run(cli: Cli) {
+    if let Command::Compact { ref data_dir } = cli.command {
+        match compact::compact_store(data_dir) {
+            Ok(changed) => println!("Store compacted (pages relocated: {changed})"),
+            Err(error) => {
+                eprintln!("Compaction refused: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     // ⚑ THE PLAYER'S VERIFIER RUNS BEFORE THE NODE PREAMBLE, and must.
     //
     // `poa-verify-slot-reveal` exists so a person who does not trust this operator
@@ -1326,6 +1348,7 @@ pub async fn run(cli: Cli) {
         .init();
 
     match cli.command {
+        Command::Compact { .. } => unreachable!("handled before node initialization"),
         Command::Run {
             port,
             bind,
@@ -1336,6 +1359,7 @@ pub async fn run(cli: Cli) {
             node_index,
             federation_size,
             prove_turns,
+            force_prove_all,
             checkpoint_interval,
             blocklace_checkpoint_interval,
             blocklace_wave_timeout_ms,
@@ -1362,6 +1386,7 @@ pub async fn run(cli: Cli) {
                 node_index,
                 federation_size,
                 prove_turns,
+                force_prove_all,
                 checkpoint_interval,
                 blocklace_checkpoint_interval,
                 blocklace_wave_timeout_ms,
@@ -1898,6 +1923,7 @@ pub async fn run(cli: Cli) {
                 0,
                 0,
                 prove_turns,
+                false,
                 1000,
                 100,
                 10000,
@@ -2170,6 +2196,7 @@ async fn run_node(
     _node_index: usize,
     _federation_size: usize,
     prove_turns: bool,
+    force_prove_all: bool,
     checkpoint_interval: u64,
     blocklace_checkpoint_interval: u64,
     blocklace_wave_timeout_ms: u64,
@@ -2857,6 +2884,7 @@ async fn run_node(
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
         s.full_turn_proving_enabled = prove_turns || prove_turns_env;
+        s.force_prove_all = force_prove_all;
         if s.full_turn_proving_enabled {
             info!(
                 "full-turn proving ENABLED: every committed turn produces a \

@@ -1247,6 +1247,18 @@ impl PersistentStore {
         Ok(())
     }
 
+    /// Offline physical maintenance of an existing database, without schema initialization,
+    /// migration or logical pruning. The existing-file open never creates a missing store,
+    /// and holds redb's exclusive lock throughout compaction. Live rows are preserved.
+    pub fn compact_file(path: &Path) -> Result<bool> {
+        let mut db = Database::builder()
+            .set_cache_size(store_cache_bytes())
+            .open(path)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        db.compact()
+            .map_err(|e| StoreError::Database(e.to_string()))
+    }
+
     /// Compact the database file, reclaiming unused space.
     pub fn compact(&mut self) -> Result<bool> {
         self.db
@@ -2209,5 +2221,68 @@ fn hex_nibble(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod offline_compaction_tests {
+    use super::*;
+
+    #[test]
+    fn offline_compaction_requires_existing_unlocked_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dregg.redb");
+        assert!(PersistentStore::compact_file(&path).is_err());
+        assert!(!path.exists(), "maintenance must never create a store");
+        let store = PersistentStore::open(&path).unwrap();
+        store.set_config("retained", b"unchanged").unwrap();
+        assert!(
+            PersistentStore::compact_file(&path).is_err(),
+            "live lock must refuse maintenance"
+        );
+        drop(store);
+        PersistentStore::compact_file(&path).unwrap();
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(store.get_config("retained").unwrap().unwrap(), b"unchanged");
+    }
+
+    #[test]
+    fn offline_compaction_reclaims_deleted_pages_without_pruning_live_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dregg.redb");
+        let store = PersistentStore::open(&path).unwrap();
+        let payload = vec![42; 1024 * 1024];
+        for i in 0..16u8 {
+            store
+                .store_witnessed_receipts_raw(&[i; 32], &payload)
+                .unwrap();
+        }
+        for i in 0..15u8 {
+            store.remove_witnessed_receipts_raw(&[i; 32]).unwrap();
+        }
+        drop(store);
+        let before = std::fs::metadata(&path).unwrap().len();
+        PersistentStore::compact_file(&path).unwrap();
+        let after = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            after < before,
+            "free space was not reclaimed: {before} -> {after}"
+        );
+        let store = PersistentStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .load_witnessed_receipt_raw(&[15; 32])
+                .unwrap()
+                .unwrap(),
+            payload
+        );
+        for i in 0..15u8 {
+            assert!(
+                store
+                    .load_witnessed_receipt_raw(&[i; 32])
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 }

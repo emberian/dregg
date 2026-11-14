@@ -1268,6 +1268,7 @@ pub(super) async fn tool_bilateral_action(params: &Value, state: &NodeState) -> 
                 s.ledger.get(&agent_cell_id),
                 receipt_hash,
                 &turn_hash,
+                &s,
             );
             (Some((receipt, receipt_hash, planned)), None)
         }

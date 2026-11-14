@@ -349,7 +349,7 @@ async function loadReceipts(): Promise<void> {
     const short = r.receiptHash ? r.receiptHash.slice(0, 12) + "..." : "?";
     const kinds = r.kinds && r.kinds.length > 0 ? r.kinds.join(", ") : "(no effect summary)";
     const time = r.timestamp ? new Date(r.timestamp * 1000).toLocaleTimeString() : "";
-    const proof = r.hasProof ? " ✓proof" : "";
+    const proof = r.hasProof ? " ✓proof" : r.proofStatus === "not_required" ? " · signature only" : "";
     const hashSpan = makeEl("span", {
       cssText: "font-family:monospace;color:#a78bfa;",
       title: r.receiptHash || "",

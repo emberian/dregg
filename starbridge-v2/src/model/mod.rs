@@ -94,6 +94,9 @@ pub struct ReceiptInfo {
     pub was_encrypted: bool,
     pub was_burn: bool,
     pub has_proof: bool,
+    /// Node policy hint: not_required means signature attestation only.
+    #[serde(default)]
+    pub proof_status: Option<String>,
     pub executor_signed: bool,
     pub has_witness: bool,
     pub witness_count: usize,
@@ -114,6 +117,9 @@ pub struct ReceiptEvent {
     pub kinds: Vec<String>,
     pub height: u64,
     pub has_proof: bool,
+    /// Node policy hint: not_required means signature attestation only.
+    #[serde(default)]
+    pub proof_status: Option<String>,
     pub finality: String,
     pub timestamp: i64,
 }

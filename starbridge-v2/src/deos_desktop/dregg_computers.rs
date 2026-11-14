@@ -639,7 +639,13 @@ pub fn receipt_row_text(ev: &ReceiptEvent) -> String {
             ev.kinds.join(", ")
         },
         ev.finality,
-        if ev.has_proof { " · proof" } else { "" },
+        if ev.has_proof {
+            " · proof"
+        } else if ev.proof_status.as_deref() == Some("not_required") {
+            " · signature only"
+        } else {
+            " · unattested"
+        },
     )
 }
 
@@ -817,5 +823,28 @@ mod tests {
         assert_eq!(vat_state_color("running"), NT_OK);
         assert_eq!(vat_state_color("sleeping"), NT_WARN);
         assert_eq!(vat_state_color("created"), NT_DIM);
+    }
+}
+
+#[cfg(test)]
+mod coordination_policy_tests {
+    use super::*;
+    #[test]
+    fn coordination_policy_receipt_row_is_signature_only() {
+        let event = ReceiptEvent {
+            chain_index: 0,
+            receipt_hash: "00".into(),
+            turn_hash: "11".into(),
+            cells: vec![],
+            kinds: vec!["emit_event".into()],
+            height: 1,
+            has_proof: false,
+            proof_status: Some("not_required".into()),
+            finality: "final".into(),
+            timestamp: 0,
+        };
+        let row = receipt_row_text(&event);
+        assert!(row.contains("signature only"));
+        assert!(!row.contains(" · proof"));
     }
 }

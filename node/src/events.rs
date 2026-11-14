@@ -14,6 +14,8 @@
 //! stream resumes from the next chain entry (exactly-once per connection,
 //! at-least-once across reconnects). `has_proof` is the value at send time;
 //! proofs attach asynchronously (re-check `/api/receipts/{hash}/witnesses`).
+//! `proof_status: "not_required"` explicitly identifies coordination turns with
+//! signature attestation only; these do not promise a future validity proof.
 //!
 //! Filtering: `?cell=<hex id>` (agent cell or any cell named by the
 //! receipt's emitted events / commit record) and `?kind=<effect kind>`
@@ -141,13 +143,14 @@ pub struct ReceiptEvent {
     /// Whether a STARK attestation is attached *right now* (witnessed
     /// receipt or persisted full-turn proof). Proofs land asynchronously.
     pub has_proof: bool,
+    pub proof_status: crate::state::ActivityProofStatus,
     pub finality: String,
     pub timestamp: i64,
     /// The full canonical receipt.
     pub receipt: dregg_turn::TurnReceipt,
 }
 
-fn receipt_event_at(s: &NodeStateInner, idx: usize) -> Option<ReceiptEvent> {
+pub(crate) fn receipt_event_at(s: &NodeStateInner, idx: usize) -> Option<ReceiptEvent> {
     let r = s.cclerk.receipt_chain().get(idx)?;
     let receipt_hash = r.receipt_hash();
     let turn_hash = hex_encode(&r.turn_hash);
@@ -185,6 +188,7 @@ fn receipt_event_at(s: &NodeStateInner, idx: usize) -> Option<ReceiptEvent> {
         kinds,
         height,
         has_proof,
+        proof_status: crate::api::receipt_proof_status(s, r),
         finality: format!("{:?}", r.finality).to_lowercase(),
         timestamp: r.timestamp,
         receipt: r.clone(),

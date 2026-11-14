@@ -412,6 +412,7 @@ def test_proof_lazy_fetch(mock_node):
         "turn_hash": "ab" * 32,
         "proof_len": 4,
         "proof_hex": "deadbeef",
+        "proof_status": "proved",
     }
     proof = receipt.proof()
     assert proof["proof_hex"] == "deadbeef"
@@ -593,3 +594,16 @@ def test_kernel_probe_reports_executor():
         assert k["build"] == "light"
         assert k["lean"] is False
         assert k["verified_step_ok"] is False
+
+
+def test_coordination_proof_is_refused(mock_node):
+    ident = dregg.Identity.create("policy-test")
+    receipt = ident.turn(mock_node).write_u64(0, 1).sign().submit()
+    MockNode.proof_for["ab" * 32] = {
+        "turn_hash": "ab" * 32, "proof_status": "not_required", "proof_hex": None,
+    }
+    with pytest.raises(Exception, match="signature attestation only"):
+        receipt.proof()
+
+    with pytest.raises(Exception, match="signature attestation only"):
+        dregg.AttestedQuery(mock_node).turn_proof("ab" * 32)

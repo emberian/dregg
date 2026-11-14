@@ -10553,6 +10553,9 @@ async fn execute_finalized_turn(
     // cells — the service inserts / the atomic-coordinator commit). This changes
     // only WHERE/HOW the verified executor runs; the Lean executor stays
     // authoritative and its post-state is installed verbatim.
+    let attestation_pre_cell = claimed_actor_cell
+        .clone()
+        .or_else(|| s.ledger.get(&signed_turn.turn.agent).cloned());
     let pre_ledger = s.ledger.clone();
     let mut exec_ledger = s.ledger.clone();
     // Every value the remainder of this function needs from the pre-state has
@@ -12202,6 +12205,29 @@ async fn execute_finalized_turn(
                 }
             }
 
+            // Prepare only against the canonical committed before/after images.
+            // Inline full-turn proving already handled its own artifacts/failures.
+            let pending_proof = if s.full_turn_proving_enabled {
+                if let Err(error) = crate::api::record_proof_policy(&s, &signed_turn.turn) {
+                    tracing::error!(%error, "proof policy persistence failed");
+                }
+                None
+            } else {
+                match crate::api::prepare_turn_attestation(
+                    &signed_turn.turn,
+                    attestation_pre_cell.as_ref(),
+                    exec_ledger.get(&signed_turn.turn.agent),
+                    receipt.receipt_hash(),
+                    &s,
+                ) {
+                    Ok(outcome) => outcome.split(&turn_hash_hex).1,
+                    Err(error) => {
+                        tracing::error!(%error, "finalized attestation preparation failed");
+                        None
+                    }
+                }
+            };
+            let actual_proof_status = crate::api::receipt_proof_status(&s, &receipt);
             crate::api::push_committed_event_enriched(
                 &mut s,
                 receipt_hash_hex.clone(),
@@ -12214,7 +12240,7 @@ async fn execute_finalized_turn(
                 if full_turn_proof_failure.is_some() {
                     crate::state::ActivityProofStatus::ProofGenerationFailed
                 } else {
-                    crate::state::ActivityProofStatus::ProofPending
+                    actual_proof_status
                 },
             );
 
@@ -12258,6 +12284,16 @@ async fn execute_finalized_turn(
             }
 
             drop(s);
+            if let Some(job) = pending_proof {
+                crate::api::enqueue_async_proof(
+                    state,
+                    job,
+                    receipt.clone(),
+                    receipt.receipt_hash(),
+                    turn_hash_hex.clone(),
+                )
+                .await;
+            }
 
             for evidence in invalid_bundle_evidence {
                 warn!(

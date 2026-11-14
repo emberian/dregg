@@ -109,6 +109,14 @@ impl NodeEvents {
 #[derive(Deserialize)]
 struct WireReceiptEvent {
     receipt: TurnReceipt,
+    #[serde(default)]
+    proof_status: Option<String>,
+}
+
+impl WireReceiptEvent {
+    fn into_receipt(self) -> Receipt {
+        Receipt::new(self.receipt).with_proof_status_hint(self.proof_status)
+    }
 }
 
 async fn run_subscription(
@@ -141,7 +149,7 @@ async fn run_subscription(
                         let Ok(wire) = serde_json::from_str::<WireReceiptEvent>(&event.data) else {
                             continue;
                         };
-                        if tx.send(Receipt::new(wire.receipt)).await.is_err() {
+                        if tx.send(wire.into_receipt()).await.is_err() {
                             return; // consumer dropped the stream
                         }
                         backoff = Duration::from_millis(500);
@@ -242,5 +250,20 @@ impl futures_core::Stream for ReceiptStream {
 impl Drop for ReceiptStream {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+    #[test]
+    fn coordination_event_preserves_hint_without_a_proof() {
+        let wire: WireReceiptEvent = serde_json::from_value(serde_json::json!({
+            "receipt": TurnReceipt::default(), "proof_status": "not_required"
+        }))
+        .unwrap();
+        let receipt = wire.into_receipt();
+        assert_eq!(receipt.proof_status_hint(), Some("not_required"));
+        assert!(!receipt.has_proof());
     }
 }

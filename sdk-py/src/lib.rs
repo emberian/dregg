@@ -997,6 +997,22 @@ impl AuthorizedTurn {
     }
 }
 
+// Shared by both Python proof-fetch surfaces; a policy hint cannot become an artifact.
+fn require_proved_artifact(value: &serde_json::Value) -> Result<(), &'static str> {
+    if value["proof_status"] == "not_required" {
+        return Err("coordination turn has signature attestation only; no validity proof");
+    }
+    let hex = value["proof_hex"].as_str().unwrap_or("");
+    if value["proof_status"] != "proved"
+        || hex.is_empty()
+        || hex.len() % 2 != 0
+        || !hex.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("node returned no proved artifact");
+    }
+    Ok(())
+}
+
 // ─── Receipt ───
 
 /// **The receipt noun** — proof-of-execution for one committed turn,
@@ -1032,6 +1048,15 @@ impl Receipt {
     #[getter]
     fn receipt_hash(&self) -> Option<String> {
         self.str_field("receipt_hash")
+    }
+
+    /// Node policy hint; not_required is signature attestation only.
+    #[getter]
+    fn proof_status(&self) -> Option<String> {
+        self.data
+            .get("proof_status")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
     }
 
     /// Whether a proof was already attached at the time this receipt was
@@ -1072,7 +1097,10 @@ impl Receipt {
                 Err(e) => Err(format!("GET {url}: {e}")),
             });
             match fetched.map_err(err)? {
-                Some(v) => self.proof = Some(v),
+                Some(v) => {
+                    require_proved_artifact(&v).map_err(err)?;
+                    self.proof = Some(v);
+                }
                 None => return Ok(None),
             }
         }
@@ -2204,7 +2232,10 @@ impl AttestedQuery {
             Err(e) => Err(format!("GET {url}: {e}")),
         });
         match fetched.map_err(err)? {
-            Some(v) => Ok(Some(json_to_py(py, &v)?)),
+            Some(v) => {
+                require_proved_artifact(&v).map_err(err)?;
+                Ok(Some(json_to_py(py, &v)?))
+            }
             None => Ok(None),
         }
     }
@@ -3284,4 +3315,39 @@ fn dregg(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         .set_item("dregg.lightclient", &lightclient)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod proving_policy_tests {
+    use super::*;
+    #[test]
+    fn proof_required_python_paths_reject_exempt_and_malformed_responses() {
+        for (status, bytes) in [
+            ("not_required", "abcd"),
+            ("unattested", "abcd"),
+            ("proved", ""),
+            ("proved", "xyz"),
+            ("proved", "abc"),
+        ] {
+            assert!(
+                require_proved_artifact(&serde_json::json!({
+                    "proof_status": status, "proof_hex": bytes
+                }))
+                .is_err()
+            );
+        }
+        assert!(
+            require_proved_artifact(&serde_json::json!({
+                "proof_status": "proved", "proof_hex": "abcd"
+            }))
+            .is_ok()
+        );
+        let receipt = Receipt {
+            data: serde_json::json!({"proof_status": "not_required"}),
+            node_url: None,
+            proof: None,
+        };
+        assert_eq!(receipt.proof_status().as_deref(), Some("not_required"));
+        assert!(!receipt.has_proof());
+    }
 }

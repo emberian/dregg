@@ -80,6 +80,12 @@ function renderProofBadge(r) {
   const el = $('proofBadge');
   if (!el) return;
   const proof = r.proof || {}, rc = r.receipt || {};
+  const policy = rc.proofStatus || rc.proof_status || proof.proof_status;
+  if (policy === 'not_required' && !proof.present && !rc.hasProof) {
+    el.textContent = 'Coordination turn · signature attestation only · no validity proof';
+    el.classList.add('show');
+    return;
+  }
   const proven = !!(proof.present || (rc && rc.hasProof));
   if (!proven) { el.classList.remove('show'); el.textContent = ''; return; }
   const h = r.turnHash || '';

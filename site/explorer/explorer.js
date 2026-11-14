@@ -268,7 +268,7 @@ function renderPosture(status, producer) {
  * The typed proof status, rendered without laundering.
  *
  * `node/src/state.rs` is explicit that "null/absent proof material must not be
- * read as proved", and the enum has six variants — only ONE of which is
+ * read as proved", and the enum has seven variants — only ONE of which is
  * `proved`. Collapsing them into a "verified" tick is precisely the claim this
  * repo keeps deleting, so each variant gets its own words.
  */
@@ -277,9 +277,11 @@ function proofStatusPill(s) {
     case "proved":
       return '<span class="pill ok" title="a STARK attestation is attached to this committed turn">proved</span>';
     case "proof_pending":
-      return '<span class="pill warn" title="committed and witness-revalidated inline; the succinct attestation is still being generated off the commit path">proof pending</span>';
+      return '<span class="pill warn" title="committed; an accepted async job is generating the succinct attestation">proof pending</span>';
     case "not_required":
-      return '<span class="pill mute" title="this node does not require a proof for this turn">not required</span>';
+      return '<span class="pill mute" title="coordination turn: executor/committee signature attestation, not a validity proof">not required</span>';
+    case "unattested":
+      return '<span class="pill mute">unattested</span>';
     case "missing_pre_state":
       return '<span class="pill bad">missing pre-state</span>';
     case "proof_generation_failed":
@@ -298,7 +300,7 @@ function renderEvents(events) {
       `The node answered and its committed-event log is empty. No turn has been applied here.`,
       [
         `one row per committed turn: which cell it touched and which effects it applied`,
-        `a typed proof status — <code>proved</code> is one of six values, and the other five are
+        `a typed proof status — <code>proved</code> is one of seven values, and the other six are
          not it`,
         `the block height the turn committed at`,
       ],
@@ -428,6 +430,7 @@ function groupAndCheckChains(receipts) {
 
 function proofPill(r) {
   if (r.has_proof) return '<span class="pill ok">proof attached</span>';
+  if (r.proof_status) return proofStatusPill(r.proof_status);
   return '<span class="pill mute">no proof attached</span>';
 }
 

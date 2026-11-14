@@ -143,6 +143,7 @@ interface WireReceiptEvent {
   kinds: string[];
   height: number;
   has_proof: boolean;
+  proof_status?: string;
   finality: string;
   timestamp: number;
   receipt: TurnReceiptJson;
@@ -216,6 +217,7 @@ export class ReceiptStream implements AsyncIterable<Receipt> {
                   receiptHash: wire.receipt_hash,
                   chainIndex: wire.chain_index,
                   hasProofHint: wire.has_proof,
+                  proofStatus: wire.proof_status,
                   finality: wire.finality,
                 }),
               );

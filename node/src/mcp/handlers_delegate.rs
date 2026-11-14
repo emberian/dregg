@@ -162,6 +162,7 @@ pub(super) async fn tool_grant_capability(params: &Value, state: &NodeState) -> 
                 s.ledger.get(&agent_cell_id),
                 receipt_hash,
                 &turn_hash,
+                &s,
             );
 
             let turn_data = postcard::to_stdvec(&signed).expect("SignedTurn serialization");
@@ -838,6 +839,7 @@ pub(super) async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) 
                 s.ledger.get(&agent_cell_id),
                 receipt_hash,
                 &turn_hash,
+                &s,
             );
             drop(s);
 
@@ -1305,6 +1307,7 @@ pub(super) async fn tool_exercise_handoff_cert(params: &Value, state: &NodeState
                 s.ledger.get(&agent_cell_id),
                 receipt_hash,
                 &turn_hash,
+                &s,
             );
             drop(s);
 
