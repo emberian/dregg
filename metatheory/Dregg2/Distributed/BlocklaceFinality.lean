@@ -87,8 +87,9 @@ first. This fold used to run over the lace sorted by `(seq, creator)`, on the cl
 is topological. It is not: another author's EARLIER block can carry a LARGER `seq`. A validator
 that joins late or lags writes a first block with `seq 0` that cites the current tips; the sort
 put it ahead of them, the fold skipped every one of its predecessors, and it got round `1`. No
-Byzantine step is involved. §9's `traceLateFirst` / `traceLateLeader` execute it, against
-`computeRoundsSeqOrder`, the old fold kept as the falsification witness.
+Byzantine step is needed; §9's `traceLateFirst` / `traceLateLeader` execute it against
+`computeRoundsSeqOrder`, the old fold kept as the falsification witness. With one, it was worse:
+`traceSeqGapFilled` is a single enrolled validator retracting an anchored wave without equivocating.
 
 What is proved now, for a lace with distinct ids that Kahn finishes (`laceStuck B = []`, i.e. a
 DAG — `laceStuck_eq_nil_iff`): the recurrence holds at the FINISHED map
@@ -380,9 +381,9 @@ theorem topoLace_ancestorRespecting {B : Lace} (hdag : laceStuck B = []) :
 /-! #### Kahn never sticks on a DAG. -/
 
 /-- **`LaceDag B`** — the held-predecessor relation is well-founded: some rank strictly decreases
-along every edge the lace holds. Hash pointers give one (a block's hash commits to its
-predecessors' hashes, so an edge cannot point forward in creation order); arrival order under the
-receive path's predecessor buffering is another. -/
+along every edge the lace holds. Arrival order under the receive path's predecessor buffering is
+such a rank; that a hash-linked lace has one at all is collision resistance, a §8 seam, and is NOT
+proved here. `laceStuck B = []` is the executable form (`laceStuck_eq_nil_iff`). -/
 def LaceDag (B : Lace) : Prop :=
   ∃ rank : BlockId → Nat, ∀ b ∈ B, ∀ p ∈ b.preds, B.has p = true → rank p < rank b.id
 
@@ -1087,6 +1088,21 @@ def closureLace (B : Lace) (h : BlockId) : Lace :=
 
 /-! ## 4. Equivocation-in-past, approval, ratification, super-ratification (`ordering.rs:120..278`). -/
 
+/-- The equivocation scan with the observer's causal past and the round map SUPPLIED: `creator` has
+two distinct blocks of `past` at one round of `rc`. ONE body for the three callers — the rule
+(`hasEquivInPast`), the memoized head selection (`hasEquivInPastC`) and the per-anchor segment
+(`anchorSegmentWith`, which asks about every creator from one observer and so builds the past and
+the map once, not once per block). -/
+def hasEquivInPastWith (B : Lace) (past : List BlockId) (rc : List (BlockId × Nat))
+    (creator : AuthorId) : Bool :=
+  let r := fun h => (roundLookup rc h).getD 0
+  let creatorBlocks : List Block :=
+    past.filterMap (fun bid => match B.lookup bid with
+                                | some b => if b.creator = creator then some b else none
+                                | none   => none)
+  -- two distinct creator-blocks sharing a round ⇒ equivocation visible from observer.
+  creatorBlocks.any (fun a => creatorBlocks.any (fun b => a.id ≠ b.id && r a.id == r b.id))
+
 /-- **`hasEquivInPast`** — a creator has two DISTINCT blocks at the SAME round, both in the
 observer's causal past (`ordering.rs::EquivocationIndex::equivocates_in_past` — renamed from
 `has_equivocation_in_past` when the equivocator scan was memoized into a precomputed index; the
@@ -1094,15 +1110,7 @@ per-observer predicate is unchanged. Corrected 2026-07-16). The exact equivocati
 node's `approves`/`tau` consult to repel a forking creator. -/
 def hasEquivInPast (B : Lace) (participants : List AuthorId)
     (observer : BlockId) (creator : AuthorId) : Bool :=
-  let past := causalPastIncl B observer
-  let creatorBlocks : List Block :=
-    past.filterMap (fun bid => match B.lookup bid with
-                                | some b => if b.creator = creator then some b else none
-                                | none   => none)
-  -- two distinct creator-blocks sharing a round ⇒ equivocation visible from observer.
-  creatorBlocks.any (fun a =>
-    creatorBlocks.any (fun b =>
-      a.id ≠ b.id && roundOf B participants a.id == roundOf B participants b.id))
+  hasEquivInPastWith B (causalPastIncl B observer) (computeRounds B participants) creator
 
 /-- **`approves`** — observer block `o` approves leader `l`: `l` is in `o`'s causal past AND no
 equivocation by `l.creator` is visible from `o` (`ordering.rs:184..200`). -/
@@ -1629,7 +1637,8 @@ the SAME code with the enrollment filter switched off rather than a second copy 
 `prevCovered` is `[b₂]`, the closure of the previous ratified leader (the fold below carries it).
 The `approves(l, ·)` filter is CM Alg. 1:17: membership in `[l]` is automatic because the candidate
 set IS `[l]`, so what remains is the equivocation clause, evaluated — as the paper quantifies it —
-over `[l]`, i.e. against `closureLace B l.id`. The ready ties are broken by the closure's own depth
+over `[l]`, i.e. against `closureLace B l.id` (`hasEquivInPastWith Bl pastL rc c` is
+`hasEquivInPast Bl P l.id c`, by `rfl`). The ready ties are broken by the closure's own depth
 map; readiness reads `past`, the causal past in the WHOLE lace, as the Rust `xsort` does.
 
 ⚑ **`keep` is applied BEFORE the sort, and that placement is load-bearing.** A ready-set sort is
@@ -1657,11 +1666,14 @@ this note exists so a reader of either one learns that. -/
 def anchorSegmentWith (past : BlockId → List BlockId) (keep : Block → Bool) (B : Lace)
     (participants : List AuthorId) (prevCovered : List BlockId) (l : Block) : List BlockId :=
   let Bl := closureLace B l.id
+  -- the closure's depth map and the anchor's past inside it, each built ONCE per segment
+  let rc := computeRounds Bl participants
+  let pastL := causalPastIncl Bl l.id
   let newIds := (past l.id).filter (fun bid => ¬ prevCovered.contains bid)
   let approved := newIds.filter (fun bid => match Bl.lookup bid with
-    | some b => keep b && ¬ hasEquivInPast Bl participants l.id b.creator
+    | some b => keep b && ¬ hasEquivInPastWith Bl pastL rc b.creator
     | none   => false)
-  xsortWith past (computeRounds Bl participants) approved
+  xsortWith past rc approved
 
 /-- **`anchorSegment B P prevCovered l`** — the rule's per-anchor segment: `[l] \ [b₂]`, minus
 equivocators, minus blocks whose creator is not enrolled, linearized over `B`'s causal past. -/
@@ -1900,18 +1912,12 @@ theorem leaderCandidatesR_eq (B : Lace) (participants : List AuthorId) (wave wav
 
 /-- `hasEquivInPast` with both caches (`§4`). -/
 def hasEquivInPastC (B : Lace) (cache : PastCache) (rc : RoundCache) (observer : BlockId) (creator : AuthorId) : Bool :=
-  let past := cachedPast B cache observer
-  let creatorBlocks : List Block :=
-    past.filterMap (fun bid => match B.lookup bid with
-                                | some b => if b.creator = creator then some b else none
-                                | none   => none)
-  creatorBlocks.any (fun a =>
-    creatorBlocks.any (fun b => a.id ≠ b.id && roundOfR rc a.id == roundOfR rc b.id))
+  hasEquivInPastWith B (cachedPast B cache observer) rc creator
 
 theorem hasEquivInPastC_eq (B : Lace) (P : List AuthorId) (observer : BlockId) (creator : AuthorId) :
     hasEquivInPastC B (mkPastCache B) (mkRoundCache B P) observer creator
       = hasEquivInPast B P observer creator := by
-  simp only [hasEquivInPastC, hasEquivInPast, cachedPast_eq, roundOfR_eq]
+  simp only [hasEquivInPastC, hasEquivInPast, cachedPast_eq, mkRoundCache]
 
 /-- `approves` with both caches (`§4`). -/
 def approvesC (B : Lace) (cache : PastCache) (rc : RoundCache) (o l : Block) : Bool :=
@@ -3063,6 +3069,27 @@ def traceLateLeader : Lace :=
    ⟨43,4,2,[14,24,34,42],true⟩]
 def lateLeaderP : List AuthorId := [1, 4, 2, 3]
 
+/-- **THE SEQ-GAP TRACE** — the same defect in an adversary's hands. `trace6`, except that creator
+`2` (wave 1's leader) numbers its round-5 and round-6 blocks `seq 5` and `seq 6`, leaving `seq 4`
+unused. Nothing checks `seq` for gaps: the receive path's equivocation test is causal
+incomparability (`finality.rs::detect_equivocation`). The rule finalizes ten coordinates. -/
+def traceSeqGap : Lace :=
+  trace3 ++ traceR4 ++
+  [⟨14,1,4,[13,23,33],true⟩, ⟨24,2,5,[13,23,33],true⟩, ⟨34,3,4,[13,23,33],true⟩,
+   ⟨15,1,5,[14,24,34],true⟩, ⟨25,2,6,[14,24,34],true⟩, ⟨35,3,5,[14,24,34],true⟩]
+
+/-- **`traceSeqGapFilled`** — one block later. Creator `2` fills the gap: block `99`, `seq 4`, citing
+the round-3 layer and the current tips (its own `25` among them, so it extends its own chain and is
+NOT an equivocation). Its true round is `7`.
+
+Under the `(seq, creator)` fold it sorted among the `seq 4` blocks, ahead of the `seq 5, 6` tips it
+cites; they were skipped and it got round `4` — the wave-1 leader slot, beside `23`. Two candidates
+at a leader slot forfeit the wave, so the ALREADY ANCHORED wave 1 was retracted and the verified
+order shrank from ten coordinates to one, while the DAG holds no equivocation and the Rust rule
+saw nothing. The old map also marked creator `2` an equivocator, which drops its blocks from every
+later segment. -/
+def traceSeqGapFilled : Lace := traceSeqGap ++ [⟨99,2,4,[12,22,32,15,25,35],true⟩]
+
 /-- **THE RELAY-LIFT TRACE** (the reporter's, n = 4). Creator `4`'s only block `41` acks the genesis
 layer and the UNENROLLED relay `90`, which acks the round-3 layer. So `41` sits at round `2` — the
 relay contributes no depth (§1) — with `12, 22, 32` (round 3) in its causal past, through
@@ -3422,7 +3449,8 @@ guard of each pair EXECUTES THE WOUND: an honest validator's first block gets ro
 
 -- the premises of §1's theorems hold on every lace in this file, and are refutable.
 #guard [trace3, trace6, traceEquiv, traceMW4, traceUnenrolled6, traceOrderFork8, traceRelayStall6,
-        traceLateFirst, traceLateLeader, traceRelayLift6, traceRelayLift5, traceFilterPlacement].all
+        traceLateFirst, traceLateLeader, traceSeqGap, traceSeqGapFilled, traceRelayLift6,
+        traceRelayLift5, traceFilterPlacement].all
         (fun B => (laceStuck B).isEmpty && idsDistinct B)
 #guard (laceStuck traceCycle).map (·.id) == [1, 2, 3]
 #guard (topoLace traceCycle).map (·.id) == [4, 1, 2, 3]
@@ -3461,6 +3489,30 @@ guard of each pair EXECUTES THE WOUND: an honest validator's first block gets ro
 #guard (findAllFinalLeaders traceLateLeader lateLeaderP 3).map (·.id) == [10, 41]
 #guard tauOrder traceLateLeader lateLeaderP 3 == [10, 20, 30, 11, 21, 31, 12, 22, 32, 41]
 #guard tauOrderFast traceLateLeader lateLeaderP 3 == tauOrder traceLateLeader lateLeaderP 3
+
+-- ── ONE ENROLLED VALIDATOR RETRACTS AN ANCHORED WAVE WITHOUT EQUIVOCATING. ──
+-- before the gap is filled, both maps finalize the same ten coordinates.
+#guard tauOrderWithRounds traceSeqGap (computeRoundsSeqOrder traceSeqGap trace3Participants)
+          trace3Participants 3 == [10, 20, 30, 11, 21, 31, 12, 22, 32, 23]
+#guard tauOrder traceSeqGap trace3Participants 3 == [10, 20, 30, 11, 21, 31, 12, 22, 32, 23]
+-- (RED) THE WOUND: the gap-filling block lands in the wave-1 leader slot beside `23`, the creator
+--       is read as an equivocator, and nine finalized coordinates are WITHDRAWN.
+#guard roundOfR (computeRoundsSeqOrder traceSeqGapFilled trace3Participants) 99 == 4
+#guard (leaderCandidatesR (computeRoundsSeqOrder traceSeqGapFilled trace3Participants)
+          traceSeqGapFilled trace3Participants 1 3).map (·.id) == [23, 99]
+#guard hasEquivInPastC traceSeqGapFilled (mkPastCache traceSeqGapFilled)
+          (computeRoundsSeqOrder traceSeqGapFilled trace3Participants) 99 2
+#guard tauOrderWithRounds traceSeqGapFilled
+          (computeRoundsSeqOrder traceSeqGapFilled trace3Participants) trace3Participants 3 == [10]
+-- (GREEN) the block is at round 7, where it is; nobody equivocated; the order stands, and the
+--         shorter lace's order is a prefix of the longer one's.
+#guard roundOf traceSeqGapFilled trace3Participants 99 == 7
+#guard !hasEquivInPast traceSeqGapFilled trace3Participants 99 2
+#guard tauOrder traceSeqGapFilled trace3Participants 3 == [10, 20, 30, 11, 21, 31, 12, 22, 32, 23]
+#guard (tauOrder traceSeqGap trace3Participants 3).isPrefixOf
+          (tauOrder traceSeqGapFilled trace3Participants 3)
+#guard tauOrderFast traceSeqGapFilled trace3Participants 3
+        == tauOrder traceSeqGapFilled trace3Participants 3
 
 /-! The GREEN half of the two pairs above as KERNEL theorems, not `#guard`s. The round map and the
 head selection are structural recursion now (no `Array.qsort`), so `decide` reduces them; a `#guard`
