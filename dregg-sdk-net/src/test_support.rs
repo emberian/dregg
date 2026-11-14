@@ -89,6 +89,9 @@ pub struct TestNode {
     /// `/api/turn/{hash}/anchor`. Empty: the node attests nothing and the
     /// route answers `no_attestation`.
     anchor_committee_seeds: Vec<[u8; 32]>,
+    /// When set, `/turns/submit` requires the bearer that
+    /// `POST /api/cipherclerk/unlock` hands out for this passphrase.
+    passphrase: Option<String>,
 }
 
 /// A deliberately wrong answer from `POST /turns/submit` or the exact-hash
@@ -142,6 +145,7 @@ impl TestNode {
             faucet_fault: None,
             pending_grants: Vec::new(),
             anchor_committee_seeds: Vec::new(),
+            passphrase: None,
         };
         let agent = node.seed_open_cell(agent_public_key, balance);
         (node, agent)
@@ -162,6 +166,22 @@ impl TestNode {
     pub fn with_coordination_fee_exempt(mut self) -> Self {
         self.coordination_fee_exempt = true;
         self
+    }
+
+    /// Lock the write surface as a node with a passphrase set does:
+    /// `/turns/submit` answers 401 without the bearer, and
+    /// `POST /api/cipherclerk/unlock` hands the bearer out for `passphrase`
+    /// and answers 401 for any other.
+    pub fn with_passphrase(mut self, passphrase: &str) -> Self {
+        self.passphrase = Some(passphrase.to_string());
+        self
+    }
+
+    /// The bearer a locked node accepts (`None` when it is not locked).
+    pub fn bearer(&self) -> Option<String> {
+        self.passphrase
+            .as_ref()
+            .map(|p| hex::encode(blake3::derive_key("dregg-test-node-bearer", p.as_bytes())))
     }
 
     /// Attest every committed receipt with a committee whose Ed25519 keys are
@@ -662,7 +682,35 @@ fn receipts_json(node: &TestNode) -> serde_json::Value {
     serde_json::Value::Array(arr)
 }
 
-fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> (u16, serde_json::Value) {
+fn route(
+    method: &str,
+    path: &str,
+    authorization: Option<&str>,
+    body: &[u8],
+    node: &mut TestNode,
+) -> (u16, serde_json::Value) {
+    if method == "POST" && path == "/api/cipherclerk/unlock" {
+        let given = serde_json::from_slice::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| {
+                v.get("passphrase")
+                    .and_then(|p| p.as_str())
+                    .map(str::to_string)
+            });
+        return match (&node.passphrase, given) {
+            (Some(want), Some(got)) if *want == got => {
+                (200, serde_json::json!({"bearer_token": node.bearer()}))
+            }
+            _ => (401, serde_json::json!({"error": "wrong passphrase"})),
+        };
+    }
+    if method == "POST"
+        && path == "/turns/submit"
+        && let Some(bearer) = node.bearer()
+        && authorization != Some(format!("Bearer {bearer}").as_str())
+    {
+        return (401, serde_json::json!({"error": "unauthorized"}));
+    }
     // A grant accepted while rate-limited finalizes before the next request.
     for (cell, amount) in std::mem::take(&mut node.pending_grants) {
         if let Some(c) = node.ledger.get_mut(&cell) {
@@ -753,13 +801,18 @@ async fn handle_conn(mut sock: tokio::net::TcpStream, node: Arc<Mutex<TestNode>>
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let path = parts.next().unwrap_or("").to_string();
-    let content_length = lines
-        .find_map(|l| {
-            let l = l.to_ascii_lowercase();
-            l.strip_prefix("content-length:")
-                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-        })
-        .unwrap_or(0);
+    let mut content_length = 0usize;
+    let mut authorization: Option<String> = None;
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        match name.to_ascii_lowercase().as_str() {
+            "content-length" => content_length = value.trim().parse().unwrap_or(0),
+            "authorization" => authorization = Some(value.trim().to_string()),
+            _ => {}
+        }
+    }
 
     let mut body = buf[header_end + 4..].to_vec();
     while body.len() < content_length {
@@ -772,7 +825,7 @@ async fn handle_conn(mut sock: tokio::net::TcpStream, node: Arc<Mutex<TestNode>>
 
     let (code, json) = {
         let mut guard = node.lock().await;
-        route(&method, &path, &body, &mut guard)
+        route(&method, &path, authorization.as_deref(), &body, &mut guard)
     };
     let payload = serde_json::to_vec(&json).unwrap();
     let head = format!(
