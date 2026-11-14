@@ -217,6 +217,20 @@ impl PersistentStore {
         Ok(blocks)
     }
 
+    /// Load every persisted block's stored bytes, undecoded and unordered.
+    pub fn load_all_block_bytes(&self) -> Result<Vec<Vec<u8>>> {
+        let txn = self.db.begin_read()?;
+        let table = txn.open_table(tables::BLOCKLACE_BLOCKS)?;
+        table
+            .iter()?
+            .map(|entry| {
+                entry
+                    .map(|(_, bytes)| bytes.value().to_vec())
+                    .map_err(|e: redb::StorageError| StoreError::Database(e.to_string()))
+            })
+            .collect()
+    }
+
     /// Load blocklace metadata from the store.
     ///
     /// Returns `None` if no metadata has been persisted yet (first run).
@@ -262,7 +276,12 @@ impl PersistentStore {
         signing_key: ed25519_dalek::SigningKey,
         quorum_threshold: usize,
     ) -> Result<Option<(Blocklace, usize)>> {
-        let blocks = self.load_all_blocks()?;
+        // The stored bytes go to `from_checkpoint` as they are: it decodes and
+        // authenticates every one itself. Decoding them here and re-encoding
+        // held three copies of the whole lace at once (decoded blocks, their
+        // re-encoded bytes, and the restored lace), the boot peak that grows
+        // with history.
+        let blocks = self.load_all_block_bytes()?;
         if blocks.is_empty() {
             return Ok(None);
         }
@@ -272,7 +291,7 @@ impl PersistentStore {
 
         // Build a CheckpointData from our persisted state.
         let checkpoint = CheckpointData {
-            blocks: blocks.iter().map(|b| b.to_bytes()).collect(),
+            blocks,
             tips: meta.as_ref().map(|m| m.tips.clone()).unwrap_or_default(),
             equivocators: meta
                 .as_ref()
@@ -293,7 +312,7 @@ impl PersistentStore {
         // can write this redb), so the restart path runs the same signature +
         // closure + equivocation checks the live receive path runs. A refusal
         // here is a STORE INTEGRITY EVENT and the node must not start on it.
-        let blocklace = Blocklace::from_checkpoint(&checkpoint, signing_key, quorum_threshold)
+        let blocklace = Blocklace::from_checkpoint_owned(checkpoint, signing_key, quorum_threshold)
             .map_err(StoreError::Integrity)?;
 
         Ok(Some((blocklace, executed_up_to)))
