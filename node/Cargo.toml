@@ -11,6 +11,8 @@ description = "Federation node daemon — hosts an agent cipherclerk, participat
 
 [dependencies]
 dregg-types = { path = "../types" }
+# The async prover's dedicated pool (`prove_pool.rs`, `DREGG_PROVE_THREADS`).
+rayon = "1"
 dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
 # Lean is UNCONDITIONAL on native (polarity-inverted, .docs-history-noclaude/FEATURE-HYGIENE.md §Lean): the
