@@ -492,7 +492,7 @@ theorem anchorSegment_mem (B : Lace) (P : List AuthorId) (prev : List BlockId) {
     (hl : B.has l.id = true) : ∀ bid ∈ anchorSegment B P prev l, B.has bid = true := by
   intro bid hbid
   unfold anchorSegment anchorSegmentWith at hbid
-  have h1 := (xsortWith_perm _ _ _).mem_iff.mp hbid
+  have h1 := (xsortWith_perm _ _ _ _).mem_iff.mp hbid
   have h2 := (List.mem_filter.mp h1).1
   have h3 := (List.mem_filter.mp h2).1
   exact causalPastIncl_has B hl bid h3

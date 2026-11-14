@@ -4374,7 +4374,7 @@ fn belt_gate_fault_injected() -> bool {
 /// operates on the simpler `Blocklace` from `lib.rs`.
 ///
 /// Returns the ordering blocklace and a mapping from ordering BlockIds to
-/// finality BlockIds (needed because the two types use different hash schemes).
+/// finality BlockIds. Source id bytes are retained; the map only converts wrapper types.
 /// ⚑ `pub` (was `pub(crate)`) so `node/tests/verified_order_budget.rs` can measure and
 /// differentially compare the REAL projection the node runs. A test that rebuilds this
 /// construction itself would be testing its own mirror, not the node's path — and the
@@ -4386,15 +4386,12 @@ pub fn build_ordering_blocklace(
     HashMap<dregg_blocklace::BlockId, BlockId>,
 ) {
     let mut ordering_lace = dregg_blocklace::Blocklace::new();
-    // Mapping from finality block ID -> ordering block ID (for predecessor translation)
-    let mut finality_to_ordering: HashMap<BlockId, dregg_blocklace::BlockId> = HashMap::new();
     // Reverse mapping: ordering block ID -> finality block ID (for result translation)
     let mut ordering_to_finality: HashMap<dregg_blocklace::BlockId, BlockId> = HashMap::new();
 
     // ── TOPOLOGICAL (CAUSAL) INSERTION — Kahn's algorithm ───────────────────────
-    // `insert_unverified` enforces causal closure: a block whose predecessors are
-    // not YET inserted has those edges DROPPED (`filter_map(finality_to_ordering.get)`
-    // below only keeps already-inserted preds). The prior code inserted sorted by
+    // Projection insertion enforces causal closure. The old rehashing projection
+    // dropped edges to not-yet-inserted blocks. It inserted sorted by
     // `(seq, creator)`, which equals topological order ONLY on a clean round-
     // synchronous single-machine DAG. In the CROSS-MACHINE CATCH-UP case a lagging
     // creator's late block has a LOW `seq` but cites the current tips (a HIGH
@@ -4463,7 +4460,8 @@ pub fn build_ordering_blocklace(
         let predecessors: Vec<dregg_blocklace::BlockId> = block
             .predecessors
             .iter()
-            .filter_map(|p| finality_to_ordering.get(p).copied())
+            .filter(|p| finality_lace.get(p).is_some())
+            .map(|p| p.0)
             .collect();
         let payload = match &block.payload {
             Payload::Turn(data) => data.clone(),
@@ -4485,17 +4483,18 @@ pub fn build_ordering_blocklace(
         };
         // These are unsigned mirror skeletons of already-authenticated finality
         // blocks, rebuilt purely to run `ordering::tau` — the unsigned ORDERING
-        // PROJECTION path (`insert_unverified`), which enforces only causal
+        // PROJECTION path (`insert_ordering_projection`), which enforces only causal
         // closure. Feed-integrity (signatures/seq/equivocation) was already
         // discharged on the source `finality_lace`; verified `insert` would
         // (correctly) reject these unsigned skeletons.
         let ordering_block =
             dregg_blocklace::Block::new(block.creator, block.seq, predecessors, payload);
-        let ordering_id = ordering_block.id();
-        let _ = ordering_lace.insert_unverified(ordering_block);
+        let ordering_id = finality_id.0;
+        ordering_lace
+            .insert_ordering_projection(ordering_id, ordering_block)
+            .expect("Kahn projection inserts every held predecessor first");
 
-        // Record the bidirectional mapping.
-        finality_to_ordering.insert(finality_id, ordering_id);
+        // The map now only converts the two id wrapper types; bytes are preserved.
         ordering_to_finality.insert(ordering_id, finality_id);
 
         // Relax successors: once all of a block's in-lace predecessors are

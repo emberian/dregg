@@ -47,12 +47,11 @@ SIMPLIFIED (a faithful PROJECTION, stated, not hidden):
 * `causalPastIncl` uses a fuel bound (the lace length) for the BFS — totalizing the DAG walk; the
   Rust `causal_past` is an unbounded BFS over the same edge set. On any concrete (finite, acyclic)
   lace the fuel = |lace| is sufficient, so the two coincide (the differential exhibits this).
-* `xsort` is a ready-set (Kahn) sort over the segment's transitive causal past, as in the Rust; the
-  ready-set PRIORITY is the OPEN-CM-XSORT residual (named in `ConsensusExec`): `(round, id)` here,
-  min block id in the Rust `xsort`. The order is a linear extension of the causal order
-  (`anchorSegment_linear_extension`) under either priority; the two agree where the ready set is
-  one round at a time. The SAFETY theorem (no conflicting leader) does NOT depend on the priority,
-  only on WHICH leaders anchor, exactly as `cordial_agreement` is about the anchor.
+* `xsort` is a ready-set (Kahn) sort over the segment's transitive causal past. Its
+  `(round, seq, canonicalId)` priority matches Rust's `(round, seq, creator bytes, source id)`:
+  the node interns ids in `(seq, creator bytes, source id)` order. Committee positions are
+  not creator-byte ranks. `anchorSegment_linear_extension` proves causal ordering regardless
+  of priority; safety's no-conflicting-leader theorem is unchanged.
 
 The safety theorems proved here — `finalLeaders_one_per_wave` / `tauOrder_deterministic` — are
 properties the NODE relies on: a wave anchors at most one leader and the order is a deterministic
@@ -1419,7 +1418,7 @@ by the first final leader that OBSERVES it, which is at a strictly greater round
 ratifier at its own wave's end. That is not a regression to fix, it is the property being bought.
 
 The intra-segment linearization is a ready-set (Kahn) sort over the transitive causal past, as the
-Rust `xsort` is. What remains of OPEN-CM-XSORT is the ready-set PRIORITY: `(round, id)` here, min
+Rust `xsort` is. The shared priority is specified by `xsortWith`; historically it was `(round, id)` here, min
 block id in the Rust. -/
 
 /-! #### The ready-set linearisation. -/
@@ -1554,36 +1553,54 @@ def xsortByRoundKey (B : Lace) (participants : List AuthorId) (ids : List BlockI
     roundOf B participants a < roundOf B participants b
       || (roundOf B participants a == roundOf B participants b && a ≤ b))
 
-/-- **`xsortWith past rc ids`** — the intra-segment linearization, with the causal past and the
-round map as PARAMETERS: order `ids` by `(round, id)`, then run the ready-set sort over it. So the
-output is Kahn's algorithm over the transitive causal past restricted to `ids`, with the
-`(round, id)`-least ready id emitted at each step — the Rust `xsort` with a different ready
-priority (OPEN-CM-XSORT).
+/-- Kahn linearization with `(round, seq, canonicalId)` priority. The node assigns
+`canonicalId` by sorting `(seq, creator bytes, source block id)`, so this is exactly
+Rust's `(round, seq, creator bytes, source block id)` order, including equivocation ties.
+AuthorId is a committee position and MUST NOT be used as a creator-byte ordering.
 
-`past` is a parameter so the runtime twin can hand in its memoized map (§6c) instead of re-walking
-the lace per id; `readySort_congr` is why that cannot change the value. `List.mergeSort` rather
-than `Array.qsort` because it carries `mergeSort_perm`. -/
-def xsortWith (past : BlockId → List BlockId) (rc : List (BlockId × Nat)) (ids : List BlockId) :
-    List BlockId :=
+The rank may shift when new blocks arrive, but its comparison between any two held
+blocks cannot change. `keys` is the anchor's closure, so sequence lookup is also
+independent of arrival order. Readiness always precedes priority. -/
+def readyBefore (keys : Lace) (rc : List (BlockId × Nat)) (a b : BlockId) : Bool :=
   let r := fun h => (roundLookup rc h).getD 0
-  readySort past ids.length (ids.mergeSort (fun a b => r a < r b || (r a == r b && a ≤ b)))
+  let seq := fun h => ((keys.lookup h).map (·.seq)).getD 0
+  r a < r b || (r a == r b && (seq a < seq b || (seq a == seq b && a ≤ b)))
+
+/-- The priority is total even for missing keys (which consistently default to zero). -/
+theorem readyBefore_total (keys : Lace) (rc : List (BlockId × Nat)) (a b : BlockId) :
+    readyBefore keys rc a b = true ∨ readyBefore keys rc b a = true := by
+  simp only [readyBefore, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq]
+  rcases lt_trichotomy ((roundLookup rc a).getD 0) ((roundLookup rc b).getD 0) with hr | hr | hr
+  · exact Or.inl (Or.inl hr)
+  · rcases lt_trichotomy (((keys.lookup a).map (·.seq)).getD 0)
+        (((keys.lookup b).map (·.seq)).getD 0) with hs | hs | hs
+    · exact Or.inl (Or.inr ⟨hr, Or.inl hs⟩)
+    · rcases Nat.le_total a b with hab | hba
+      · exact Or.inl (Or.inr ⟨hr, Or.inr ⟨hs, hab⟩⟩)
+      · exact Or.inr (Or.inr ⟨hr.symm, Or.inr ⟨hs.symm, hba⟩⟩)
+    · exact Or.inr (Or.inr ⟨hr.symm, Or.inl hs⟩)
+  · exact Or.inr (Or.inl hr)
+
+def xsortWith (keys : Lace) (past : BlockId → List BlockId) (rc : List (BlockId × Nat))
+    (ids : List BlockId) : List BlockId :=
+  readySort past ids.length (ids.mergeSort (readyBefore keys rc))
 
 /-- **`xsortBy B participants ids`** — `ids` in a linear extension of `B`'s causal order, ready
-ties broken by `(round, id)`. -/
+ties broken by `(round, seq, canonicalId)`. -/
 def xsortBy (B : Lace) (participants : List AuthorId) (ids : List BlockId) : List BlockId :=
-  xsortWith (causalPastIncl B) (computeRounds B participants) ids
+  xsortWith B (causalPastIncl B) (computeRounds B participants) ids
 
 /-- **`xsortWith_perm`** — the linearization is a PERMUTATION of its input, whatever `past` and
 `rc` are. -/
-theorem xsortWith_perm (past : BlockId → List BlockId) (rc : List (BlockId × Nat))
-    (ids : List BlockId) : (xsortWith past rc ids).Perm ids :=
+theorem xsortWith_perm (keys : Lace) (past : BlockId → List BlockId) (rc : List (BlockId × Nat))
+    (ids : List BlockId) : (xsortWith keys past rc ids).Perm ids :=
   (readySort_perm past _ _).trans (List.mergeSort_perm ids _)
 
 /-- **`xsortBy_perm`** — the linearization is a PERMUTATION of its input. The one fact every
 "the order only carries ids from the anchor's closure" argument needs. -/
 theorem xsortBy_perm (B : Lace) (participants : List AuthorId) (ids : List BlockId) :
     (xsortBy B participants ids).Perm ids :=
-  xsortWith_perm _ _ ids
+  xsortWith_perm _ _ _ ids
 
 /-- **`mem_xsortBy`** — membership transfers through the linearization. -/
 theorem mem_xsortBy {B : Lace} {participants : List AuthorId} {ids : List BlockId} {x : BlockId}
@@ -1591,9 +1608,9 @@ theorem mem_xsortBy {B : Lace} {participants : List AuthorId} {ids : List BlockI
   (xsortBy_perm B participants ids).mem_iff.mp h
 
 /-- The linearization reads `past` only at the ids it sorts. -/
-theorem xsortWith_congr {past₁ past₂ : BlockId → List BlockId} (rc : List (BlockId × Nat))
+theorem xsortWith_congr (keys : Lace) {past₁ past₂ : BlockId → List BlockId} (rc : List (BlockId × Nat))
     {ids : List BlockId} (h : ∀ x ∈ ids, past₁ x = past₂ x) :
-    xsortWith past₁ rc ids = xsortWith past₂ rc ids := by
+    xsortWith keys past₁ rc ids = xsortWith keys past₂ rc ids := by
   unfold xsortWith
   exact readySort_congr _ _ (fun x hx => h x ((List.mergeSort_perm ids _).mem_iff.mp hx))
 
@@ -1607,8 +1624,8 @@ Premises: distinct ids is content addressing; `laceStuck B = []` is "Kahn finish
 the lace being a DAG (`laceStuck_eq_nil_iff`), `#guard`ed on every §9 trace and refuted by
 `traceCycle`. Teeth: `xsortByRoundKey` violates the conclusion on `traceRelayLift6`. -/
 theorem xsortWith_linear_extension {B : Lace} (hnd : (B.map (·.id)).Nodup)
-    (hdag : laceStuck B = []) (rc : List (BlockId × Nat)) (ids : List BlockId) :
-    ∀ pre x post, xsortWith (causalPastIncl B) rc ids = pre ++ x :: post →
+    (hdag : laceStuck B = []) (keys : Lace) (rc : List (BlockId × Nat)) (ids : List BlockId) :
+    ∀ pre x post, xsortWith keys (causalPastIncl B) rc ids = pre ++ x :: post →
       ∀ a ∈ post, a = x ∨ a ∉ causalPastIncl B x := by
   obtain ⟨rank, hrank⟩ := laceDag_of_stuck_nil hnd hdag
   intro pre x post heq
@@ -1627,7 +1644,7 @@ theorem xsortBy_linear_extension {B : Lace} (hnd : (B.map (·.id)).Nodup)
     (hdag : laceStuck B = []) (participants : List AuthorId) (ids : List BlockId) :
     ∀ pre x post, xsortBy B participants ids = pre ++ x :: post →
       ∀ a ∈ post, a = x ∨ a ∉ causalPastIncl B x :=
-  xsortWith_linear_extension hnd hdag _ ids
+  xsortWith_linear_extension hnd hdag _ _ ids
 
 /-- **`anchorSegmentWith past keep B P prevCovered l`** — CM Alg. 2:37, `xsort(l, [l] \ [b₂])`,
 with the causal past and the creator filter as PARAMETERS. `anchorSegment` below is the rule; the
@@ -1673,7 +1690,7 @@ def anchorSegmentWith (past : BlockId → List BlockId) (keep : Block → Bool) 
   let approved := newIds.filter (fun bid => match Bl.lookup bid with
     | some b => keep b && ¬ hasEquivInPastWith Bl pastL rc b.creator
     | none   => false)
-  xsortWith past rc approved
+  xsortWith Bl past rc approved
 
 /-- **`anchorSegment B P prevCovered l`** — the rule's per-anchor segment: `[l] \ [b₂]`, minus
 equivocators, minus blocks whose creator is not enrolled, linearized over `B`'s causal past. -/
@@ -1689,7 +1706,7 @@ theorem anchorSegmentWith_keep {past : BlockId → List BlockId} {keep : Block �
     (h : bid ∈ anchorSegmentWith past keep B participants prevCovered l) :
     ∃ b, (closureLace B l.id).lookup bid = some b ∧ keep b = true := by
   unfold anchorSegmentWith at h
-  have h1 := (xsortWith_perm _ _ _).mem_iff.mp h
+  have h1 := (xsortWith_perm _ _ _ _).mem_iff.mp h
   have h2 := (List.mem_filter.mp h1).2
   cases hl : (closureLace B l.id).lookup bid with
   | none => rw [hl] at h2; simp at h2
@@ -1703,7 +1720,7 @@ theorem anchorSegment_nodup (B : Lace) (participants : List AuthorId)
     (prevCovered : List BlockId) (l : Block) :
     (anchorSegment B participants prevCovered l).Nodup := by
   unfold anchorSegment anchorSegmentWith
-  refine (xsortWith_perm _ _ _).nodup_iff.mpr ?_
+  refine (xsortWith_perm _ _ _ _).nodup_iff.mpr ?_
   exact ((causalPastIncl_nodup B l.id).filter _).filter _
 
 /-- **`anchorSegment_linear_extension` — WITHIN A SEGMENT, EVERY BLOCK COMES AFTER ALL ITS
@@ -1723,9 +1740,25 @@ theorem anchorSegment_linear_extension {B : Lace} (hnd : (B.map (·.id)).Nodup)
     have := (List.nodup_append.mp hndS).2.1
     exact (List.nodup_cons.mp this).1 ha
   unfold anchorSegment anchorSegmentWith at heq
-  rcases xsortWith_linear_extension hnd hdag _ _ pre x post heq a ha with h | h
+  rcases xsortWith_linear_extension hnd hdag _ _ _ pre x post heq a ha with h | h
   · exact absurd h hax
   · exact h
+
+/-- Predecessor-closed coverage is the cross-segment invariant: once `x` is covered,
+no ancestor of `x` can appear in the next segment, even if `x` was filtered out.
+Together with `anchorSegment_linear_extension`, this is the cross-boundary step
+needed by `TauOrderCausal`; the anchor-chain fold must preserve closed coverage. -/
+theorem anchorSegment_excludes_covered_ancestors (B : Lace) (participants : List AuthorId)
+    (covered : List BlockId) (l : Block)
+    (hclosed : ∀ x ∈ covered, ∀ a ∈ causalPastIncl B x, a ∈ covered)
+    {x a : BlockId} (hx : x ∈ covered)
+    (ha : a ∈ anchorSegment B participants covered l) :
+    a ∉ causalPastIncl B x := by
+  intro hpast
+  unfold anchorSegment anchorSegmentWith at ha
+  have hmem := (xsortWith_perm _ _ _ _).mem_iff.mp ha
+  have hf := (List.mem_filter.mp (List.mem_filter.mp hmem).1).2
+  simpa [hclosed x hx a hpast] using hf
 
 /-- **`tauStepWith`** — one unfolding of CM Def. 6's recursion, written left-to-right over the
 chain: append `xsort(l, [l] \ [prev])`, and carry `[l]` forward as the next `prev`. -/
@@ -3534,6 +3567,18 @@ theorem lateJoiner_wave_anchors :
 
 `xsortByRoundKey` is the `(round, id)` key sort exactly as it stood. -/
 
+-- Priority teeth: same-round sequence beats canonical id; round beats sequence.
+#guard xsortWith [{ id := 0, creator := 1, seq := 9, preds := [] },
+                  { id := 1, creator := 0, seq := 0, preds := [] }]
+    (fun _ => []) [(0, 1), (1, 1)] [0, 1] == [1, 0]
+#guard xsortWith [{ id := 0, creator := 1, seq := 9, preds := [] },
+                  { id := 1, creator := 0, seq := 0, preds := [] }]
+    (fun _ => []) [(0, 1), (1, 2)] [1, 0] == [0, 1]
+#guard xsortWith [{ id := 0, creator := 1, seq := 9, preds := [] },
+                  { id := 1, creator := 0, seq := 0, preds := [] }]
+    (fun _ => []) [(0, 1), (1, 2)] [0, 1] == [0, 1]
+#guard xsortWith [] (fun _ => []) [(0, 1), (1, 1)] [1, 0] == [0, 1]
+
 -- every block of the relay lace is cordial: nothing here is refused at admission.
 #guard isCordialLace traceRelayLift6 relayP4
 -- the premise of the wound: `41` is at round 2, its ancestors `12, 22, 32` at round 3.
@@ -3727,11 +3772,13 @@ constrain a REAL, non-trivial finalized order, and the model reproduces the node
 #assert_axioms causalPastIncl_rank
 #assert_axioms readySort_perm
 #assert_axioms readySort_linear_extension
+#assert_axioms readyBefore_total
 #assert_axioms xsortBy_perm
 #assert_axioms xsortWith_congr
 #assert_axioms xsortWith_linear_extension
 #assert_axioms xsortBy_linear_extension
 #assert_axioms anchorSegment_linear_extension
+#assert_axioms anchorSegment_excludes_covered_ancestors
 #assert_axioms lateJoiner_round_is_depth
 #assert_axioms lateJoiner_wave_anchors
 #assert_axioms anchorSegmentWith_congr_keep

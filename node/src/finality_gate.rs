@@ -120,19 +120,29 @@ struct LaceWire {
     id_to_block: HashMap<u64, BlockId>,
 }
 
+/// Canonical id ranking; a stable sort without the final comparison is insufficient for twins.
+fn sort_wire_blocks(blocks: &mut [(&BlockId, &Block)]) {
+    blocks.sort_by(|(ai, a), (bi, b)| {
+        a.seq
+            .cmp(&b.seq)
+            .then_with(|| a.creator.cmp(&b.creator))
+            .then_with(|| ai.cmp(bi))
+    });
+}
+
 impl VerifiedFinality {
     /// Build the wire + interning tables ONCE — shared by `compute` (projection) and `compute_order`
     /// (raw total order), so both gates hand the verified rule byte-identical input. Interns creators
     /// to the participant index (the round-robin `participants[w % n]` leader, matching BOTH `tau` and
-    /// the Lean `waveLeader`) and block ids to their index in a `(seq, creator)` sort of the lace
+    /// the Lean `waveLeader`) and block ids to their index in a `(seq, creator, source id)` sort of the lace
     /// (so the wire's `BlockId`s are a faithful relabeling of it).
     ///
     /// ⚑ That sort is NOT a causal order — a late joiner's `seq 0` block precedes the blocks it
     /// cites — and the verified rule must not treat it as one. `BlocklaceFinality.computeRounds`
     /// did, until dregg issue #100; it now enumerates the wire's blocks with Kahn's algorithm and
     /// its rounds are proved independent of the listing (`roundOf_perm`). What the sort still
-    /// decides is the Lean tie-break: `xsortBy` breaks ready ties by `(round, id)`, and `id` is
-    /// this index.
+    /// decides is the Lean tie-break: `xsortBy` breaks ready ties by `(round, seq, id)`, and `id` is
+    /// this canonical `(seq, creator bytes, source block id)` rank.
     fn build_wire(lace: &Blocklace, participants: &[[u8; 32]]) -> LaceWire {
         let mut creator_ids: HashMap<[u8; 32], u64> = HashMap::new();
         for (i, p) in participants.iter().enumerate() {
@@ -141,7 +151,7 @@ impl VerifiedFinality {
         let mut next_extra = participants.len() as u64;
 
         let mut blocks: Vec<(&BlockId, &Block)> = lace.iter().collect();
-        blocks.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
+        sort_wire_blocks(&mut blocks);
 
         let mut id_ids: HashMap<BlockId, u64> = HashMap::new();
         let mut id_to_block: HashMap<u64, BlockId> = HashMap::new();
@@ -351,35 +361,61 @@ mod tests {
         lace
     }
 
-    /// The Rust `dregg_blocklace::ordering::tau` order over `lace`, as `(creator, seq)` in order.
-    /// The node lace is re-inserted into an ordering lace seq-major, so every predecessor is present.
-    fn rust_tau_order(lace: &Blocklace, participants: &[[u8; 32]]) -> Vec<([u8; 32], u64)> {
-        let mut ordering_lace = dregg_blocklace::Blocklace::new();
-        let mut fin_to_ord: HashMap<BlockId, dregg_blocklace::BlockId> = HashMap::new();
-        let mut blocks: Vec<_> = lace.iter().collect();
-        blocks.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
-        let mut ord_to_cs: HashMap<dregg_blocklace::BlockId, ([u8; 32], u64)> = HashMap::new();
-        for (fin_id, b) in &blocks {
-            let preds: Vec<dregg_blocklace::BlockId> = b
-                .predecessors
-                .iter()
-                .map(|p| {
-                    *fin_to_ord
-                        .get(p)
-                        .expect("seq-major insert holds every predecessor")
-                })
-                .collect();
-            let ob = dregg_blocklace::Block::new(b.creator, b.seq, preds, vec![]);
-            let oid = ob.id();
-            ordering_lace
-                .insert_unverified(ob)
-                .expect("ordering-lace insert");
-            fin_to_ord.insert(**fin_id, oid);
-            ord_to_cs.insert(oid, (b.creator, b.seq));
+    #[test]
+    fn wire_ids_break_equivocating_twins_by_source_id() {
+        crate::install_verified_pq_cores();
+        let signer = key(73);
+        let twins = [
+            Block::new(&signer, 0, Payload::Turn(vec![1]), vec![]),
+            Block::new(&signer, 0, Payload::Data(vec![1]), vec![]),
+        ];
+        let mut expected: Vec<_> = twins.iter().map(Block::id).collect();
+        expected.sort();
+        let ids: Vec<_> = twins.iter().map(Block::id).collect();
+        let mut reversed: Vec<_> = ids.iter().zip(&twins).collect();
+        reversed.sort_by_key(|(id, _)| std::cmp::Reverse(**id));
+        sort_wire_blocks(&mut reversed);
+        assert_eq!(
+            reversed.iter().map(|(id, _)| **id).collect::<Vec<_>>(),
+            expected
+        );
+        for reverse in [false, true] {
+            for _ in 0..2 {
+                let mut lace = Blocklace::new(signer.clone(), 1);
+                for i in if reverse { [1, 0] } else { [0, 1] } {
+                    // Equivocation may report an error, but both evidence blocks must be stored.
+                    let _ = lace.receive_block(twins[i].clone());
+                }
+                let wire = VerifiedFinality::build_wire(&lace, &[twins[0].creator]);
+                assert_eq!(wire.id_to_block.len(), 2);
+                assert_eq!(wire.id_to_block[&0], expected[0]);
+                assert_eq!(wire.id_to_block[&1], expected[1]);
+                let (projection, mapping) = crate::blocklace_sync::build_ordering_blocklace(&lace);
+                assert_eq!(
+                    projection.len(),
+                    2,
+                    "distinct source blocks must not collapse"
+                );
+                for id in &expected {
+                    assert_eq!(
+                        mapping[&id.0], *id,
+                        "projection must preserve source identity"
+                    );
+                    assert!(projection.get(&id.0).is_some());
+                }
+            }
         }
+    }
+
+    /// Exercise the production projection, including its causal insertion and source identities.
+    fn rust_tau_order(lace: &Blocklace, participants: &[[u8; 32]]) -> Vec<([u8; 32], u64)> {
+        let (ordering_lace, ids) = crate::blocklace_sync::build_ordering_blocklace(lace);
         dregg_blocklace::ordering::tau(&ordering_lace, participants)
             .iter()
-            .map(|oid| ord_to_cs[oid])
+            .map(|id| {
+                let b = lace.get(&ids[id]).expect("ordered source block");
+                (b.creator, b.seq)
+            })
             .collect()
     }
 

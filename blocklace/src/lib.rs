@@ -23,7 +23,8 @@
 //! - Dissemination is best-effort (liveness) but does not affect safety
 //!
 //! ## Key Invariants
-//! 1. A block's ID is a deterministic function of its content (content-addressed)
+//! 1. Authenticated block IDs are content-addressed. Ordering-only projections retain the
+//!    authenticated source id even when their unsigned skeleton has a different encoding.
 //! 2. Blocks are inserted only if all predecessors are present (causal closure)
 //! 3. Finalized blocks form an immutable prefix of the DAG
 //! 4. The topological order is a valid linearization of the causal DAG
@@ -629,7 +630,18 @@ impl Blocklace {
     /// it overwrites the tip — acceptable here because the source lace already
     /// enforced integrity.
     pub fn insert_unverified(&mut self, block: Block) -> Result<BlockId, Vec<BlockId>> {
-        let block_id = block.id();
+        self.insert_ordering_projection(block.id(), block)
+    }
+
+    /// Store an authenticated source block's unsigned ordering projection under its SOURCE id.
+    /// The source id, not the hash of the lossy skeleton, is the consensus tie-break.
+    /// Callers must authenticate the source first; this is never a reception API.
+    /// Predecessors must use source ids too. No signature or content-hash check is performed.
+    pub fn insert_ordering_projection(
+        &mut self,
+        block_id: BlockId,
+        block: Block,
+    ) -> Result<BlockId, Vec<BlockId>> {
         if self.blocks.contains_key(&block_id) {
             return Ok(block_id);
         }
