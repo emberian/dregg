@@ -78,7 +78,16 @@ struct TurnProofWire {
     #[serde(default)]
     proof_len: u64,
     #[serde(default)]
-    proof_hex: String,
+    proof_hex: Option<String>,
+    #[serde(default)]
+    proof_status: String,
+}
+
+impl TurnProofWire {
+    fn has_validity_artifact(&self) -> bool {
+        self.proof_status != "not_required"
+            && self.proof_hex.as_ref().is_some_and(|p| !p.is_empty())
+    }
 }
 
 /// Fetch the full `/status` producer picture off the real node route.
@@ -366,8 +375,19 @@ pub async fn handle_proof(ctx: &Context, command: &CommandInteraction, state: &B
 
     match resp.json::<TurnProofWire>().await {
         Ok(proof) => {
+            if !proof.has_validity_artifact() {
+                let embed = embeds::error_embed(
+                    "No Validity Proof",
+                    "Coordination policy or missing artifact: the anchor is signature attestation only. Proof verification requires an actual STARK.",
+                );
+                let _ = command
+                    .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                    .await;
+                return;
+            }
+            let proof_hex = proof.proof_hex.as_ref().expect("checked above");
             let kib = proof.proof_len as f64 / 1024.0;
-            let preview = short(&proof.proof_hex, 32);
+            let preview = short(proof_hex, 32);
             // ⚑ THE ANCHOR FIRST, AND IT IS REQUIRED. Without a committee-signed anchor this
             // command has nothing external to judge the artifact against, so it REFUSES to
             // report a verdict rather than comparing the artifact against itself. See
@@ -397,11 +417,9 @@ pub async fn handle_proof(ctx: &Context, command: &CommandInteraction, state: &B
             // The TITLE says "legs verify", not "verifies": the state anchors compared are
             // still the proof's own (seam 1), so the bytes are not tied to the chain's state
             // transition. Every seam is spelled out in the Verification field below.
-            let check = crate::commands::proof_verify::check_proof_hex_blocking(
-                proof.proof_hex.clone(),
-                anchor,
-            )
-            .await;
+            let check =
+                crate::commands::proof_verify::check_proof_hex_blocking(proof_hex.clone(), anchor)
+                    .await;
             // THREE outcomes, not two. `Err` is a REFUSAL (this bot could not obtain a
             // state-commit pair to judge the artifact against — a `cipherclerk`-minted or
             // proof-carrying turn) and must not be painted as "the bytes failed", which reads as
@@ -524,4 +542,24 @@ async fn defer_ephemeral(ctx: &Context, command: &CommandInteraction) {
             ),
         )
         .await;
+}
+
+#[cfg(test)]
+mod coordination_policy_tests {
+    use super::TurnProofWire;
+    #[test]
+    fn signature_only_response_never_reaches_proof_verification() {
+        for hex in [serde_json::Value::Null, serde_json::json!("abcd")] {
+            let response: TurnProofWire = serde_json::from_value(serde_json::json!({
+                "turn_hash": "00", "proof_status": "not_required", "proof_hex": hex
+            }))
+            .unwrap();
+            assert!(!response.has_validity_artifact());
+        }
+        let response: TurnProofWire = serde_json::from_value(serde_json::json!({
+            "turn_hash": "00", "proof_status": "proved", "proof_hex": "abcd"
+        }))
+        .unwrap();
+        assert!(response.has_validity_artifact());
+    }
 }

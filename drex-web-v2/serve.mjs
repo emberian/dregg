@@ -261,14 +261,16 @@ async function settleOnNode(cleared) {
   // full-turn proof in ~4–15s on a --prove-turns node; poll up to ~24s).
   let proof = null, r = null;
   for (let i = 0; i < 40; i++) {
-    if (!proof) { const p = await nodeGet('/api/turn/' + turnHash + '/proof'); if (p && !p.__status && p.proof_len) proof = { present: true, len: p.proof_len, mode: 'stark_full_turn' }; }
+    if (!proof) { const p = await nodeGet('/api/turn/' + turnHash + '/proof'); if (p && !p.__status && p.proof_status === 'proved' && p.proof_len) proof = { present: true, len: p.proof_len, mode: 'stark_full_turn' }; }
     const recs = await nodeGet('/api/starbridge/receipts?turn_hash=' + turnHash);
     if (Array.isArray(recs) && recs.length) r = recs[0].receipt || recs[0];
-    if (proof || (r && (r.witness_count > 0 || r.has_proof))) break;
+    if (proof || (r && (r.witness_count > 0 || r.has_proof || r.proof_status === 'not_required'))) break;
     await new Promise(x => setTimeout(x, 600));
   }
   if (!proof && r && (r.witness_count > 0 || r.has_proof)) proof = { present: true, len: null, mode: 'witnessed_receipt', witnessCount: r.witness_count };
-  const proofNote = proof ? null : 'prove_pool enqueued the async STARK job; no proof attached yet (committed-but-unattested)';
+  const proofNote = proof ? null : r?.proof_status === 'not_required'
+    ? 'Coordination turn: signature attestation only, no validity proof'
+    : 'No validity proof attached; consult the receipt proof disposition';
   const cell = await nodeGet('/api/cell/' + operator);
   // Read each trader's cell balance back FROM the node — the per-trader
   // allocation is a real ledger state change, not a synthesized number.
@@ -283,7 +285,7 @@ async function settleOnNode(cleared) {
   }));
   return {
     nodeUp: true, accepted: true, node: NODE, operator, turnHash,
-    proofStatus: submit.proof_status, witnessCount: submit.witness_count,
+    proofStatus: r?.proof_status || submit.proof_status, witnessCount: submit.witness_count,
     proof: proof || { present: false }, proofNote,
     settle: { mode: 'per_trader_transfer', traders: fills.length, settledTotal, scaled: scale < 1, scale: Number(scale.toFixed(6)) },
     perTrader,
@@ -291,7 +293,7 @@ async function settleOnNode(cleared) {
       chainIndex: r.chain_index, finality: r.finality,
       preState: r.pre_state, postState: r.post_state,
       computronsUsed: r.computrons_used, actionCount: r.action_count,
-      hasProof: r.has_proof, witnessCount: r.witness_count,
+      hasProof: r.has_proof, proofStatus: r.proof_status, witnessCount: r.witness_count,
       executorSigned: r.executor_signed,
     },
     cell: cell && !cell.__status && cell.found ? {

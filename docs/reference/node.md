@@ -430,3 +430,49 @@ and re-reads the changed board. **The over-reach**: B firing `touch-private` ove
 cell is refused by the executor's authority gate (a receipted refusal leaving the cell
 unchanged). This is a demonstrative harness surface consumed by the `shared_world_e2e`
 integration proof, not a `--bin` entry point (`node/src/shared_world.rs:31`–`:36`).
+
+
+## Proving disposition and offline maintenance
+
+A turn classified by `Turn::is_coordination()` (nonempty own-cell event effects,
+no balance-change declaration, recursively through every child) defaults to
+`proof_status: "not_required"`. This means executor/committee signature
+attestation only. It is not a validity proof, and proof-required consumers must
+still obtain and verify an actual proof. An executor signature alone never sets
+`has_proof` or `proof_status: "proved"`.
+
+`dregg-node run --force-prove-all` removes the coordination exemption for this
+run; it does not backfill historical receipts. It does not enable a disabled async pool: `DREGG_PROVE_WORKERS=0` still
+means no async jobs. `--prove-turns` also overrides the exemption through the
+existing inline finalized-turn prover. Balance changes (including an explicit
+zero), foreign-cell effects and empty actions are never exempt. If the current
+prover cannot cover a required turn it reports failure, not `not_required`.
+
+Signed-turn admission is provisional: required turns report `not_committed`;
+finalization prepares async jobs against the canonical before/after images and
+receipt after durable commit. Only an accepted job is `proof_pending`. A disabled
+or full pool reports `unattested`; a failed job reports `proof_generation_failed`.
+The proof endpoint retains its existing `410 generation_failed` spelling for
+failure, and returns `200 not_required` with `proof_hex: null` for an exemption.
+Receipt, witness, anchor and SSE responses preserve the disposition. Policy hints
+are local metadata outside the signed receipt and anchor bytes. Historical turns
+without policy metadata remain `unattested`, not retroactively exempt.
+
+Stop the node, then run:
+
+```sh
+dregg-node compact --data-dir /path/to/node-data
+```
+
+This opens **only an existing** `dregg.redb` under redb's exclusive file lock and
+runs redb 2.6.3 physical compaction. It refuses a missing store or a store held by
+a running node. It does not initialize tables, migrate schemas, install an
+executor, or start networking. Free pages left by replacement/deletion can be
+relocated and the file shrunk; live receipts, blocks, checkpoints and proof
+artifacts remain. Retained full-history checkpoints cannot be deduplicated by
+physical compaction. redb also refuses outstanding transactions or savepoints.
+
+`--enable-pruning` remains removed: automatic pruning is not implemented. Remove
+that argument from existing service units before restarting. Physical compaction
+is separate from logical history retention; `--blocklace-checkpoint-interval 0`
+can prevent future local checkpoint production but does not delete old data.

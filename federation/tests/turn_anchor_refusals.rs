@@ -316,3 +316,20 @@ fn the_anchor_round_trips_the_wire_and_still_verifies() {
         .expect("a wire round-trip must not change the verdict");
     assert_eq!(verified.turn_hash, turn_hash);
 }
+
+#[test]
+fn coordination_hint_never_bypasses_committee_authentication() {
+    let signers = vec![signer(1)];
+    let anchor = anchor_signed_by([0xAB; 32], &signers);
+    let bytes = postcard::to_stdvec(&anchor).unwrap();
+    let mut json = serde_json::to_value(&anchor).unwrap();
+    json["proof_status"] = serde_json::json!("not_required");
+    let mut decoded: TurnAnchorV1 = serde_json::from_value(json).unwrap();
+    assert_eq!(postcard::to_stdvec(&decoded).unwrap(), bytes);
+    assert!(decoded.verify(&committee_of(&signers, 1)).is_ok());
+    decoded.attested.quorum_signatures.clear();
+    assert!(
+        decoded.verify(&committee_of(&signers, 1)).is_err(),
+        "an exempt policy hint must never replace committee signatures"
+    );
+}

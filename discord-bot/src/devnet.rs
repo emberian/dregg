@@ -136,6 +136,9 @@ struct ReceiptInfo {
     pub action_count: usize,
     pub finality: String,
     pub has_proof: bool,
+    /// Node policy hint: not_required means signature attestation only.
+    #[serde(default)]
+    pub proof_status: Option<String>,
     pub executor_signed: bool,
     #[serde(default)]
     pub has_witness: bool,
@@ -770,7 +773,9 @@ impl DevnetClient {
             }],
             fee: receipt.computrons_used,
             result: receipt.finality,
-            proof_type: if receipt.executor_signed || receipt.has_proof {
+            proof_type: if receipt.proof_status.as_deref() == Some("not_required") {
+                "coordination: signature attestation only, no validity proof".to_string()
+            } else if receipt.executor_signed || receipt.has_proof {
                 if receipt.has_witness {
                     format!(
                         "executor-signed receipt, {} witness artifact(s)",

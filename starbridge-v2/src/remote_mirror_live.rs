@@ -85,6 +85,7 @@ pub struct LiveStep {
     pub kinds: Vec<String>,
     /// Whether the turn carried a proof (the light-client face of this step).
     pub has_proof: bool,
+    pub proof_status: Option<String>,
 }
 
 impl LiveStep {
@@ -99,6 +100,7 @@ impl LiveStep {
             turn_hash: ev.turn_hash.clone(),
             kinds: ev.kinds.clone(),
             has_proof: ev.has_proof,
+            proof_status: ev.proof_status.clone(),
         }
     }
 }
@@ -277,9 +279,20 @@ mod tests {
             kinds: kinds.iter().map(|s| s.to_string()).collect(),
             height,
             has_proof: true,
+            proof_status: None,
             finality: "final".to_string(),
             timestamp: 0,
         }
+    }
+
+    #[test]
+    fn coordination_policy_survives_live_step_projection() {
+        let mut event = ev(0, 1, &[], &["emit_event"]);
+        event.has_proof = false;
+        event.proof_status = Some("not_required".into());
+        let step = LiveStep::from_event(&event);
+        assert_eq!(step.proof_status.as_deref(), Some("not_required"));
+        assert!(!step.has_proof);
     }
 
     /// A feed pre-loaded with a sequence of streamed receipts (the live tail).

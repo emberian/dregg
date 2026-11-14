@@ -99,6 +99,9 @@ pub struct RemoteReceiptInfo {
     /// Whether an attestation (witness/proof) is attached.
     #[serde(default)]
     pub has_proof: bool,
+    /// Node policy hint: not_required means signature attestation only.
+    #[serde(default)]
+    pub proof_status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

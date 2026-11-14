@@ -6589,6 +6589,7 @@ async function handleReceiptStreamEvent(data: string): Promise<void> {
     kinds: Array.isArray(raw.kinds) ? raw.kinds.map(String) : [],
     height: Number(raw.height ?? 0),
     hasProof: !!raw.has_proof,
+    proofStatus: typeof raw.proof_status === "string" ? raw.proof_status : undefined,
     finality: String(raw.finality ?? ""),
     timestamp: Number(raw.timestamp ?? 0),
     seenAt: Date.now(),
@@ -6605,6 +6606,7 @@ async function handleReceiptStreamEvent(data: string): Promise<void> {
     kinds: summary.kinds,
     height: summary.height,
     hasProof: summary.hasProof,
+    proofStatus: summary.proofStatus,
     finality: summary.finality,
   });
   pushActivity("turn_lifecycle", {

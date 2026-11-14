@@ -580,6 +580,7 @@ function SettleResult({ s }) {
   if (!s.accepted) return html`<div class="settle warn"><b>Node is up — settlement not landed</b> (${s.stage || 'settle'}): ${s.error || 'unknown'}.${s.faucetDisabled ? html` <span class="hint">this node runs without a faucet; fund the settle operator out of band, or point the terminal at a --enable-faucet dev node.</span>` : ''} <span class="hint">The clearing above is the real verified solver and stands; it was not finalized on-chain this run.</span></div>`;
   const proof = s.proof || {}, rc = s.receipt || {};
   const proven = !!(proof.present || rc.hasProof);
+  const exempt = !proven && (rc.proofStatus || s.proofStatus) === "not_required";
   const h = s.turnHash || '';
   const st = s.settle || {};
   const copyHash = (e) => {
@@ -590,8 +591,8 @@ function SettleResult({ s }) {
     <div class="pc-crest">
       <div class=${'pc-seal ' + (proven ? 'ok' : '')} aria-hidden="true">${proven ? '✓' : '…'}</div>
       <div>
-        <div class="pc-title">${proven ? html`Settled · <span class="pc-proven">proven</span>` : 'Committed · proof pending'}</div>
-        <div class="pc-say">${proven ? 'The batch cleared as real per-trader turns on the live node — and math itself signed the receipt.' : (s.proofNote || 'the async prove_pool has not attached the STARK yet — committed-but-unattested, surfaced honestly')}</div>
+        <div class="pc-title">${proven ? html`Settled · <span class="pc-proven">proven</span>` : exempt ? 'Committed · signature only' : 'Committed · unattested'}</div>
+        <div class="pc-say">${proven ? 'The batch cleared as real per-trader turns on the live node — and math itself signed the receipt.' : exempt ? 'Coordination turn: signature attestation only, no validity proof' : (s.proofNote || 'the async prove_pool has not attached the STARK yet — committed-but-unattested, surfaced honestly')}</div>
       </div>
     </div>
     <div class="pc-rows">

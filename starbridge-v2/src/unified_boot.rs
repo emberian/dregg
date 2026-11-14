@@ -788,6 +788,7 @@ fn raw_receipt_inspectable(raw: &serde_json::Value) -> Inspectable {
         Field::count("action_count", n("action_count")),
         Field::count("computrons_used", n("computrons_used")),
         Field::boolean("has_proof", b("has_proof")),
+        Field::text("proof_status", s("proof_status")),
         Field::boolean("executor_signed", b("executor_signed")),
         Field::boolean("has_witness", b("has_witness")),
         Field::text("finality", s("finality")),

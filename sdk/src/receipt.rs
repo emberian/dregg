@@ -111,6 +111,7 @@ impl From<FullTurnProof> for TurnProof {
 pub struct Receipt {
     receipt: TurnReceipt,
     proof: OnceLock<TurnProof>,
+    proof_status_hint: Option<String>,
 }
 
 impl Receipt {
@@ -119,7 +120,19 @@ impl Receipt {
         Receipt {
             receipt,
             proof: OnceLock::new(),
+            proof_status_hint: None,
         }
+    }
+
+    /// Preserve the node's policy hint without treating it as verified evidence.
+    /// In particular, `not_required` never satisfies `has_proof` or verification.
+    pub fn with_proof_status_hint(mut self, status: Option<String>) -> Self {
+        self.proof_status_hint = status;
+        self
+    }
+
+    pub fn proof_status_hint(&self) -> Option<&str> {
+        self.proof_status_hint.as_deref()
     }
 
     /// The attached proof, if one has been attached (lazily — receipts are
@@ -129,7 +142,8 @@ impl Receipt {
         self.proof.get()
     }
 
-    /// Whether a proof has been attached.
+    /// Whether a proof has been attached. A node policy of `not_required` is
+    /// signature attestation only and never satisfies this check.
     pub fn has_proof(&self) -> bool {
         self.proof.get().is_some()
     }
@@ -219,6 +233,21 @@ impl<'de> serde::Deserialize<'de> for Receipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn not_required_hint_is_never_a_validity_proof() {
+        let receipt = Receipt::new(TurnReceipt::default())
+            .with_proof_status_hint(Some("not_required".into()));
+        assert_eq!(receipt.proof_status_hint(), Some("not_required"));
+        assert!(!receipt.has_proof());
+        assert!(receipt.proof().is_none());
+        let plain = Receipt::new(TurnReceipt::default());
+        assert_eq!(receipt.receipt_hash(), plain.receipt_hash());
+        assert_eq!(
+            postcard::to_stdvec(&receipt).unwrap(),
+            postcard::to_stdvec(&plain).unwrap()
+        );
+    }
 
     #[test]
     fn receipt_derefs_and_roundtrips() {

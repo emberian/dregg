@@ -282,7 +282,9 @@ fn render_turn(ctx: &Context, data: &serde_json::Value, action: &str) -> bool {
     let lowered = proof_status.to_lowercase();
     let proof_line = match lowered.as_str() {
         "proved" => "PROVED (real STARK verified)",
-        "not_required" => "not required (no provable activity)",
+        "not_required" => {
+            "not required (coordination; signature attestation only, no validity proof)"
+        }
         other => other,
     };
     ctx.kv("Proof", proof_line);

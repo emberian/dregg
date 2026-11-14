@@ -470,6 +470,8 @@ pub struct NodeStateInner {
     /// Maps CellId -> reachable peers, enabling three-party introductions to
     /// produce actual network-level connectivity.
     pub routing_table: RoutingTable,
+    /// Override the coordination-only proof exemption.
+    pub force_prove_all: bool,
     /// Checkpoint interval in blocks. Defaults to 1000.
     pub checkpoint_interval: u64,
     /// Whether to generate STARK proofs of block state transitions (--prove-transitions).
@@ -784,7 +786,10 @@ pub struct WitnessedReceiptIndex {
 
 impl WitnessedReceiptIndex {
     fn new(store: Arc<PersistentStore>) -> Self {
-        Self { store, counts: HashMap::new() }
+        Self {
+            store,
+            counts: HashMap::new(),
+        }
     }
 
     /// The stored witnesses for `receipt_hash`, or `None` when it has none. A
@@ -829,7 +834,9 @@ impl WitnessedReceiptIndex {
     }
 }
 
-fn load_witnessed_receipts(store: &Arc<PersistentStore>) -> (WitnessedReceiptIndex, VecDeque<[u8; 32]>) {
+fn load_witnessed_receipts(
+    store: &Arc<PersistentStore>,
+) -> (WitnessedReceiptIndex, VecDeque<[u8; 32]>) {
     let mut witnessed_receipts = WitnessedReceiptIndex::new(store.clone());
     let mut witnessed_receipt_order = VecDeque::new();
     // One entry decoded at a time, kept only as its witness count.
@@ -1152,14 +1159,17 @@ pub enum ActivityStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ActivityProofStatus {
     Proved,
-    /// The turn is COMMITTED and was witness-revalidated inline (sound), but its
+    /// The turn is COMMITTED by the executor, but its
     /// succinct STARK attestation is being generated asynchronously off the
     /// commit path (F-DOS-1). The receipt is final/Tentative as usual; only the
     /// proof artifact is in flight and will be attached when the prove pool
     /// finishes. Light-clients/cross-trust peers poll the witnessed-receipt
     /// endpoint until the attestation lands.
     ProofPending,
+    /// Coordination-only policy exemption. This is not a validity proof.
     NotRequired,
+    /// No proof job is known to be running; no proof material is attached.
+    Unattested,
     MissingPreState,
     ProofGenerationFailed,
     NotCommitted,
@@ -1525,6 +1535,7 @@ impl NodeState {
                 checkpoint_interval: dregg_federation::DEFAULT_CHECKPOINT_INTERVAL,
                 prove_transitions: false,
                 full_turn_proving_enabled: false,
+                force_prove_all: false,
                 lean_producer_enabled: lean_producer_effective(
                     lean_producer_env_enabled(),
                     dregg_lean_ffi::lean_available(),
@@ -1722,6 +1733,7 @@ impl NodeState {
                 checkpoint_interval: dregg_federation::DEFAULT_CHECKPOINT_INTERVAL,
                 prove_transitions: false,
                 full_turn_proving_enabled: false,
+                force_prove_all: false,
                 lean_producer_enabled: lean_producer_effective(
                     lean_producer_env_enabled(),
                     dregg_lean_ffi::lean_available(),
@@ -2464,7 +2476,9 @@ impl NodeStateInner {
     /// bilateral turn with per-side witnessed receipts.
     pub fn push_witnessed_receipt(&mut self, receipt_hash: [u8; 32], witnessed: WitnessedReceipt) {
         let mut witnesses = if self.witnessed_receipts.contains_key(&receipt_hash) {
-            self.witnessed_receipts.get(&receipt_hash).unwrap_or_default()
+            self.witnessed_receipts
+                .get(&receipt_hash)
+                .unwrap_or_default()
         } else {
             if self.witnessed_receipt_order.len() >= MAX_WITNESSED_RECEIPTS
                 && let Some(oldest) = self.witnessed_receipt_order.pop_front()
@@ -2492,7 +2506,9 @@ impl NodeStateInner {
         });
         match stored {
             Ok(()) => {
-                self.witnessed_receipts.counts.insert(receipt_hash, witnesses.len());
+                self.witnessed_receipts
+                    .counts
+                    .insert(receipt_hash, witnesses.len());
             }
             Err(e) => {
                 tracing::warn!(
